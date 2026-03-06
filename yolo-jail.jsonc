@@ -1,0 +1,13 @@
+{
+  // Lifecycle development environment
+  "runtime": "podman",
+  "packages": [
+    "jujutsu",
+    "golangci-lint"
+  ],
+  "mounts": [],
+  "network": {
+    "mode": "bridge",
+    "ports": ["3847:3847"]
+  }
+}

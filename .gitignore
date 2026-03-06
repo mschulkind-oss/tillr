@@ -1,0 +1,30 @@
+# Binaries
+bin/
+/lifecycle
+
+# Environment
+.env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+coverage.out
+coverage.html
+
+# Project data (gitignored — each user has their own)
+context/
+
+# Lifecycle databases (created at runtime)
+*.db
+*.db-wal
+*.db-shm
+
+# Node modules (for web dev tooling if needed)
+node_modules/
