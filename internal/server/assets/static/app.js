@@ -259,11 +259,32 @@ const App = {
                 <div class="stat-card stat-card--warning"><div class="stat-card-info"><div class="stat-value">${counts.implementing||0}</div><div class="stat-label">In Progress</div></div><div class="stat-icon" aria-hidden="true">🔨</div></div>
                 <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${status.active_cycles||0}</div><div class="stat-label">Active Cycles</div></div><div class="stat-icon" aria-hidden="true">🔄</div></div>
             </div>
-            <div class="card" style="margin-bottom:24px;overflow:visible"><div class="card-title" style="margin-bottom:14px;font-size:1.05rem">Feature Board</div><div class="kanban">${kanbanCols}</div></div>
+            ${total > 0 ? this.renderStatusBar(counts, total) : ''}
+            <div class="card" style="margin-bottom:12px;overflow:visible"><div class="card-title" style="margin-bottom:10px;font-size:0.95rem">Feature Board</div><div class="kanban">${kanbanCols}</div></div>
             <div class="two-col">
-                <div><div class="card"><div class="card-title" style="margin-bottom:12px">Milestones</div>${milestoneCards}</div></div>
-                <div><div class="card"><div class="card-title" style="margin-bottom:12px">Recent Activity</div>${events}</div></div>
+                <div><div class="card"><div class="card-title" style="margin-bottom:8px">Milestones</div>${milestoneCards}</div></div>
+                <div><div class="card"><div class="card-title" style="margin-bottom:8px">Recent Activity</div>${events}</div></div>
             </div>`;
+    },
+
+    renderStatusBar(counts, total) {
+        const segments = [
+            { key: 'done', label: 'Done', color: 'var(--success)' },
+            { key: 'human-qa', label: 'Human QA', color: 'var(--warning)' },
+            { key: 'agent-qa', label: 'Agent QA', color: '#39d2c0' },
+            { key: 'implementing', label: 'Building', color: 'var(--accent)' },
+            { key: 'planning', label: 'Planning', color: 'var(--purple)' },
+            { key: 'draft', label: 'Draft', color: 'var(--text-muted)' },
+            { key: 'blocked', label: 'Blocked', color: 'var(--danger)' },
+        ].filter(s => counts[s.key] > 0);
+        const bar = segments.map(s => {
+            const pct = ((counts[s.key] / total) * 100).toFixed(1);
+            return `<div class="roadmap-bar-segment" style="width:${pct}%;background:${s.color}" title="${s.label}: ${counts[s.key]}"></div>`;
+        }).join('');
+        const legend = segments.map(s =>
+            `<span class="roadmap-legend-item"><span class="roadmap-legend-dot" style="background:${s.color}"></span><span class="roadmap-legend-label">${s.label}</span><span class="roadmap-legend-count">${counts[s.key]}</span></span>`
+        ).join('');
+        return `<div class="roadmap-category-chart" style="margin-bottom:12px"><div class="roadmap-bar">${bar}</div><div class="roadmap-legend">${legend}</div></div>`;
     },
 
     // ── Features ──
