@@ -311,17 +311,17 @@ func ListEvents(db *sql.DB, projectID, featureID, eventType, since string, limit
 
 func CreateRoadmapItem(db *sql.DB, r *models.RoadmapItem) error {
 	_, err := db.Exec(
-		`INSERT INTO roadmap_items (id, project_id, title, description, category, priority, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.ProjectID, r.Title, r.Description, r.Category, r.Priority, r.SortOrder,
+		`INSERT INTO roadmap_items (id, project_id, title, description, category, priority, sort_order, effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.ProjectID, r.Title, r.Description, r.Category, r.Priority, r.SortOrder, r.Effort,
 	)
 	return err
 }
 
 func GetRoadmapItem(db *sql.DB, id string) (*models.RoadmapItem, error) {
-	row := db.QueryRow(`SELECT id, project_id, title, description, COALESCE(category,''), priority, status, sort_order, created_at, updated_at
+	row := db.QueryRow(`SELECT id, project_id, title, description, COALESCE(category,''), priority, status, COALESCE(effort,''), sort_order, created_at, updated_at
 		FROM roadmap_items WHERE id = ?`, id)
 	r := &models.RoadmapItem{}
-	err := row.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Category, &r.Priority, &r.Status, &r.SortOrder, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Category, &r.Priority, &r.Status, &r.Effort, &r.SortOrder, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +329,7 @@ func GetRoadmapItem(db *sql.DB, id string) (*models.RoadmapItem, error) {
 }
 
 func ListRoadmapItems(db *sql.DB, projectID string) ([]models.RoadmapItem, error) {
-	rows, err := db.Query(`SELECT id, project_id, title, description, COALESCE(category,''), priority, status, sort_order, created_at, updated_at
+	rows, err := db.Query(`SELECT id, project_id, title, description, COALESCE(category,''), priority, status, COALESCE(effort,''), sort_order, created_at, updated_at
 		FROM roadmap_items WHERE project_id = ? ORDER BY sort_order, created_at`, projectID)
 	if err != nil {
 		return nil, err
@@ -339,7 +339,61 @@ func ListRoadmapItems(db *sql.DB, projectID string) ([]models.RoadmapItem, error
 	var out []models.RoadmapItem
 	for rows.Next() {
 		var r models.RoadmapItem
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Category, &r.Priority, &r.Status, &r.SortOrder, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Category, &r.Priority, &r.Status, &r.Effort, &r.SortOrder, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func ListRoadmapItemsFiltered(database *sql.DB, projectID, category, priority, status, sort string) ([]models.RoadmapItem, error) {
+	q := `SELECT id, project_id, title, description, COALESCE(category,''), priority, status, COALESCE(effort,''), sort_order, created_at, updated_at
+		FROM roadmap_items WHERE project_id = ?`
+	args := []any{projectID}
+
+	if category != "" {
+		q += " AND category = ?"
+		args = append(args, category)
+	}
+	if priority != "" {
+		q += " AND priority = ?"
+		args = append(args, priority)
+	}
+	if status != "" {
+		q += " AND status = ?"
+		args = append(args, status)
+	}
+
+	switch sort {
+	case "title":
+		q += " ORDER BY title ASC, created_at ASC"
+	case "category":
+		q += " ORDER BY category ASC, created_at ASC"
+	case "created_at":
+		q += " ORDER BY created_at ASC"
+	default:
+		// Sort by priority weight: critical first, then high, medium, low, nice-to-have
+		q += ` ORDER BY CASE priority
+			WHEN 'critical' THEN 1
+			WHEN 'high' THEN 2
+			WHEN 'medium' THEN 3
+			WHEN 'low' THEN 4
+			WHEN 'nice-to-have' THEN 5
+			ELSE 99
+		END ASC, created_at ASC`
+	}
+
+	rows, err := database.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying filtered roadmap items: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.RoadmapItem
+	for rows.Next() {
+		var r models.RoadmapItem
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Category, &r.Priority, &r.Status, &r.Effort, &r.SortOrder, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -364,6 +418,105 @@ func UpdateRoadmapItem(db *sql.DB, id string, updates map[string]any) error {
 		args...,
 	)
 	return err
+}
+
+func UpdateRoadmapItemStatus(db *sql.DB, id, status string) error {
+	res, err := db.Exec(
+		`UPDATE roadmap_items SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+		status, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating roadmap item status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// --- Roadmap Stats ---
+
+// RoadmapStats holds aggregated roadmap statistics.
+type RoadmapStats struct {
+	Total      int            `json:"total"`
+	ByPriority map[string]int `json:"by_priority"`
+	ByCategory map[string]int `json:"by_category"`
+	ByStatus   map[string]int `json:"by_status"`
+}
+
+// GetRoadmapStats returns aggregated counts for roadmap items.
+func GetRoadmapStats(d *sql.DB, projectID string) (*RoadmapStats, error) {
+	stats := &RoadmapStats{
+		ByPriority: make(map[string]int),
+		ByCategory: make(map[string]int),
+		ByStatus:   make(map[string]int),
+	}
+
+	// Total count
+	row := d.QueryRow(`SELECT COUNT(*) FROM roadmap_items WHERE project_id = ?`, projectID)
+	if err := row.Scan(&stats.Total); err != nil {
+		return nil, fmt.Errorf("counting roadmap items: %w", err)
+	}
+
+	// By priority
+	rows, err := d.Query(`SELECT priority, COUNT(*) FROM roadmap_items WHERE project_id = ? GROUP BY priority`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying priority counts: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var key string
+		var count int
+		if err := rows.Scan(&key, &count); err != nil {
+			return nil, err
+		}
+		stats.ByPriority[key] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// By category
+	rows2, err := d.Query(`SELECT COALESCE(NULLIF(category,''),'uncategorized'), COUNT(*) FROM roadmap_items WHERE project_id = ? GROUP BY COALESCE(NULLIF(category,''),'uncategorized')`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying category counts: %w", err)
+	}
+	defer rows2.Close() //nolint:errcheck
+	for rows2.Next() {
+		var key string
+		var count int
+		if err := rows2.Scan(&key, &count); err != nil {
+			return nil, err
+		}
+		stats.ByCategory[key] = count
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// By status
+	rows3, err := d.Query(`SELECT status, COUNT(*) FROM roadmap_items WHERE project_id = ? GROUP BY status`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying status counts: %w", err)
+	}
+	defer rows3.Close() //nolint:errcheck
+	for rows3.Next() {
+		var key string
+		var count int
+		if err := rows3.Scan(&key, &count); err != nil {
+			return nil, err
+		}
+		stats.ByStatus[key] = count
+	}
+	if err := rows3.Err(); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
 }
 
 // --- QA Results ---

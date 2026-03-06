@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -48,7 +49,12 @@ func migrate(db *sql.DB) error {
 	for i, m := range migrations {
 		if i+1 > version {
 			if _, err := db.Exec(m); err != nil {
-				return fmt.Errorf("migration %d: %w", i+1, err)
+				// ALTER TABLE ADD COLUMN is idempotent: skip if column already exists.
+				if strings.Contains(m, "ADD COLUMN") && strings.Contains(err.Error(), "duplicate column") {
+					// Column already exists — safe to skip.
+				} else {
+					return fmt.Errorf("migration %d: %w", i+1, err)
+				}
 			}
 			if _, err := db.Exec("INSERT INTO schema_version (version) VALUES (?)", i+1); err != nil {
 				return err
@@ -185,4 +191,10 @@ var migrations = []string{
 	CREATE INDEX idx_cycles_feature ON cycle_instances(feature_id);
 	CREATE INDEX idx_cycles_status ON cycle_instances(status);
 	CREATE INDEX idx_scores_cycle ON cycle_scores(cycle_id);`,
+
+	// Migration 3: Add effort column to roadmap_items
+	`ALTER TABLE roadmap_items ADD COLUMN effort TEXT NOT NULL DEFAULT '' CHECK(effort IN ('', 'xs', 's', 'm', 'l', 'xl'));`,
+
+	// Migration 4: Add status column to roadmap_items (may already exist from migration 1)
+	`ALTER TABLE roadmap_items ADD COLUMN status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','accepted','in-progress','completed','deferred'));`,
 }
