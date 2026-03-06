@@ -69,6 +69,7 @@ type RoadmapItem struct {
 	Category    string `json:"category,omitempty"`
 	Priority    string `json:"priority"` // critical, high, medium, low, nice-to-have
 	Status      string `json:"status"`   // proposed, accepted, in-progress, done, deferred, rejected
+	Effort      string `json:"effort"`   // xs, s, m, l, xl (t-shirt sizes)
 	SortOrder   int    `json:"sort_order"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`

@@ -26,6 +26,7 @@ func Start(database *sql.DB, port int) error {
 	mux.HandleFunc("/api/features", apiHandler(database, handleFeatures))
 	mux.HandleFunc("/api/milestones", apiHandler(database, handleMilestones))
 	mux.HandleFunc("/api/roadmap", apiHandler(database, handleRoadmap))
+	mux.HandleFunc("/api/roadmap/", apiHandler(database, handleRoadmapStatus))
 	mux.HandleFunc("/api/cycles", apiHandler(database, handleCycles))
 	mux.HandleFunc("/api/history", apiHandler(database, handleHistory))
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
@@ -131,12 +132,18 @@ func handleMilestones(database *sql.DB, w http.ResponseWriter, _ *http.Request) 
 	return writeJSON(w, milestones)
 }
 
-func handleRoadmap(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+func handleRoadmap(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	p, err := db.GetProject(database)
 	if err != nil {
 		return err
 	}
-	items, err := db.ListRoadmapItems(database, p.ID)
+
+	category := r.URL.Query().Get("category")
+	priority := r.URL.Query().Get("priority")
+	status := r.URL.Query().Get("status")
+	sort := r.URL.Query().Get("sort")
+
+	items, err := db.ListRoadmapItemsFiltered(database, p.ID, category, priority, status, sort)
 	if err != nil {
 		return err
 	}
@@ -241,4 +248,56 @@ func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusBadRequest)
 		return writeJSON(w, map[string]string{"error": "unknown action: " + action})
 	}
+}
+
+var validRoadmapStatuses = map[string]bool{
+	"proposed":    true,
+	"accepted":    true,
+	"in-progress": true,
+	"completed":   true,
+	"deferred":    true,
+}
+
+func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	if r.Method == "OPTIONS" {
+		w.Header().Set("Access-Control-Allow-Methods", "PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		return nil
+	}
+	if r.Method != "PATCH" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return writeJSON(w, map[string]string{"error": "PATCH required"})
+	}
+
+	// Parse /api/roadmap/{id}/status
+	path := strings.TrimPrefix(r.URL.Path, "/api/roadmap/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "status" || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "invalid path, expected /api/roadmap/{id}/status"})
+	}
+	id := parts[0]
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "invalid request body"})
+	}
+
+	if !validRoadmapStatuses[body.Status] {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "invalid status: " + body.Status})
+	}
+
+	if err := db.UpdateRoadmapItemStatus(database, id, body.Status); err != nil {
+		if err == sql.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return writeJSON(w, map[string]string{"error": "roadmap item not found"})
+		}
+		return fmt.Errorf("updating roadmap item status: %w", err)
+	}
+
+	return writeJSON(w, map[string]bool{"ok": true})
 }

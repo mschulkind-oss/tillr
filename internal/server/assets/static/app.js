@@ -377,6 +377,9 @@ const App = {
                 <div class="empty-state-cta"><span class="cta-icon">$</span> lifecycle roadmap add &lt;title&gt;</div>
             </div>`;
 
+        this._roadmapData = items;
+        if (!this.roadmapFilters) this.roadmapFilters = { category: 'all', status: 'all' };
+
         const pris = ['critical','high','medium','low','nice-to-have'];
         const icons = {critical:'🔴',high:'🟠',medium:'🟡',low:'🟢','nice-to-have':'🔵'};
         const grouped = {};
@@ -389,6 +392,10 @@ const App = {
         const accepted = sCounts['accepted'] || 0;
         const pct = items.length > 0 ? Math.round((done / items.length) * 100) : 0;
 
+        const catCounts = {};
+        items.forEach(r => { const c = r.category || 'uncategorized'; catCounts[c] = (catCounts[c] || 0) + 1; });
+        const catBarColors = {0:'var(--accent)',1:'var(--purple)',2:'var(--warning)',3:'var(--success)',4:'var(--danger)',5:'#38d4c7'};
+
         function catCls(c) {
             if (!c) return 'roadmap-cat-0';
             let h = 0;
@@ -396,30 +403,74 @@ const App = {
             return 'roadmap-cat-' + (Math.abs(h) % 6);
         }
 
+        // Build filter bar
+        const categories = [...new Set(items.map(r => r.category || 'uncategorized'))].sort();
+        const catFilterCounts = { all: items.length };
+        categories.forEach(c => { catFilterCounts[c] = catCounts[c] || 0; });
+        const catPills = ['all', ...categories].map(c => {
+            const active = this.roadmapFilters.category === c ? ' active' : '';
+            const label = c === 'all' ? 'All' : esc(c);
+            return `<button class="roadmap-filter-pill${active}" data-filter-type="category" data-filter-value="${esc(c)}">${label}<span class="pill-count">${catFilterCounts[c]}</span></button>`;
+        }).join('');
+
+        const statusOrder = ['proposed','accepted','in-progress','done','deferred'];
+        const statusFilterCounts = { all: items.length };
+        items.forEach(r => { statusFilterCounts[r.status] = (statusFilterCounts[r.status] || 0) + 1; });
+        const statusLabels = { all:'All', proposed:'Proposed', accepted:'Accepted', 'in-progress':'In Progress', done:'Completed', deferred:'Deferred' };
+        const stPills = ['all', ...statusOrder].filter(s => s === 'all' || statusFilterCounts[s]).map(s => {
+            const active = this.roadmapFilters.status === s ? ' active' : '';
+            return `<button class="roadmap-filter-pill${active}" data-filter-type="status" data-filter-value="${s}">${statusLabels[s] || s}<span class="pill-count">${statusFilterCounts[s]}</span></button>`;
+        }).join('');
+
+        const filterBar = `<div class="roadmap-filters">
+            <div class="roadmap-filter-group"><span class="roadmap-filter-label">Category</span><div class="roadmap-filter-pills">${catPills}</div></div>
+            <div class="roadmap-filter-group"><span class="roadmap-filter-label">Status</span><div class="roadmap-filter-pills">${stPills}</div></div>
+        </div>`;
+
         let rank = 0;
         const sections = pris.filter(p => grouped[p]).map(pri => {
             const ritems = grouped[pri];
             return `<div class="roadmap-section pri-${pri}">
                 <div class="roadmap-priority-header pri-${pri}"><span class="roadmap-priority-icon" aria-hidden="true">${icons[pri]}</span><span class="roadmap-priority-label">${pri.replace('-',' ')}</span><span class="roadmap-priority-count">${ritems.length} item${ritems.length !== 1 ? 's' : ''}</span></div>
-                <div class="roadmap-items">${ritems.map((r,i) => {
+                <div class="roadmap-items" role="list">${ritems.map((r,i) => {
                     rank++;
-                    return `<div class="roadmap-item st-${r.status}" style="animation-delay:${i*0.06}s">
+                    const itemCat = r.category || 'uncategorized';
+                    return `<div class="roadmap-item st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" style="animation-delay:${i*0.06}s">
                         <div class="roadmap-item-number">${rank}</div>
                         <div class="roadmap-item-content"><div class="roadmap-item-title">${esc(r.title)}</div>${r.description?`<div class="roadmap-item-desc">${esc(r.description)}</div>`:''}</div>
-                        <div class="roadmap-item-meta">${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}<span class="badge badge-${r.status}">${r.status}</span></div>
+                        <div class="roadmap-item-meta">${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}${r.effort?`<span class="effort-badge effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>`:''}<span class="badge badge-${r.status}">${r.status}</span></div>
                     </div>`;
                 }).join('')}</div>
             </div>`;
         }).join('');
 
-        return `<div class="page-header"><h2 class="page-title">Roadmap</h2><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p></div>
+        const catEntries = Object.entries(catCounts).sort((a,b) => b[1] - a[1]);
+        const catBarSegments = catEntries.map(([cat, count]) => {
+            const idx = Math.abs(catCls(cat).replace('roadmap-cat-','')) % 6;
+            const color = catBarColors[idx];
+            const widthPct = ((count / items.length) * 100).toFixed(1);
+            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${color}" title="${esc(cat)}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"></div>`;
+        }).join('');
+        const catLegendItems = catEntries.map(([cat, count]) => {
+            const idx = Math.abs(catCls(cat).replace('roadmap-cat-','')) % 6;
+            const color = catBarColors[idx];
+            return `<div class="roadmap-legend-item"><span class="roadmap-legend-dot" style="background:${color}"></span><span class="roadmap-legend-label">${esc(cat)}</span><span class="roadmap-legend-count">${count}</span></div>`;
+        }).join('');
+        const categoryChart = `<div class="roadmap-category-chart">
+            <div class="roadmap-bar">${catBarSegments}</div>
+            <div class="roadmap-legend">${catLegendItems}</div>
+        </div>`;
+
+        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2><button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p></div>
             <div class="roadmap-summary">
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value">${items.length}</div><div class="roadmap-summary-label">Total Items</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-warning">${inProg}</div><div class="roadmap-summary-label">In Progress</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-success">${done}</div><div class="roadmap-summary-label">Completed</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-accent">${accepted}</div><div class="roadmap-summary-label">Accepted</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-purple">${pct}%</div><div class="roadmap-summary-label">Progress</div></div>
-            </div>${sections}`;
+            </div>${categoryChart}${filterBar}
+            <div id="roadmapSections">${sections}</div>
+            <div class="roadmap-keyboard-hint" aria-hidden="true">Tip: Use ↑↓ to navigate, Enter to expand</div>`;
     },
 
     // ── Cycles ──
@@ -631,6 +682,73 @@ const App = {
                     btn.textContent = `Load more (${remaining} remaining)`;
                 }
             });
+        }
+        if (page === 'roadmap') {
+            const toggleItem = (item) => {
+                const wasExpanded = item.classList.contains('expanded');
+                document.querySelectorAll('.roadmap-item.expanded').forEach(el => {
+                    el.classList.remove('expanded');
+                    const ch = el.querySelector('.roadmap-item-chevron');
+                    if (ch) ch.textContent = '▸';
+                });
+                if (!wasExpanded) {
+                    item.classList.add('expanded');
+                    const ch = item.querySelector('.roadmap-item-chevron');
+                    if (ch) ch.textContent = '▾';
+                }
+            };
+            document.querySelectorAll('.roadmap-item').forEach(item => {
+                item.addEventListener('click', () => toggleItem(item));
+            });
+            const content = document.getElementById('content');
+            if (content) content.addEventListener('keydown', (e) => {
+                const items = Array.from(content.querySelectorAll('.roadmap-item'));
+                if (!items.length) return;
+                const idx = items.indexOf(document.activeElement);
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const next = idx < items.length - 1 ? idx + 1 : 0;
+                    items[next].focus();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const prev = idx > 0 ? idx - 1 : items.length - 1;
+                    items[prev].focus();
+                } else if (e.key === 'Enter' || e.key === ' ') {
+                    if (idx < 0) return;
+                    e.preventDefault();
+                    toggleItem(items[idx]);
+                } else if (e.key === 'Escape') {
+                    items.forEach(it => {
+                        it.classList.remove('expanded');
+                        const ch = it.querySelector('.roadmap-item-chevron');
+                        if (ch) ch.textContent = '▸';
+                    });
+                    if (idx >= 0) items[idx].blur();
+                }
+            });
+            // Roadmap filter pills
+            const applyRoadmapFilters = () => {
+                const cf = this.roadmapFilters.category;
+                const sf = this.roadmapFilters.status;
+                document.querySelectorAll('.roadmap-item').forEach(item => {
+                    const matchCat = cf === 'all' || item.dataset.category === cf;
+                    const matchSt = sf === 'all' || item.dataset.status === sf;
+                    item.style.display = (matchCat && matchSt) ? '' : 'none';
+                });
+                document.querySelectorAll('.roadmap-section').forEach(section => {
+                    const visible = section.querySelectorAll('.roadmap-item:not([style*="display: none"])');
+                    section.style.display = visible.length ? '' : 'none';
+                });
+            };
+            document.querySelectorAll('.roadmap-filter-pill').forEach(btn => btn.addEventListener('click', () => {
+                const type = btn.dataset.filterType;
+                const value = btn.dataset.filterValue;
+                this.roadmapFilters[type] = value;
+                document.querySelectorAll(`.roadmap-filter-pill[data-filter-type="${type}"]`).forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                applyRoadmapFilters();
+            }));
+            applyRoadmapFilters();
         }
         if (page === 'qa') {
             document.querySelectorAll('.qa-approve').forEach(btn => btn.addEventListener('click', async () => {
