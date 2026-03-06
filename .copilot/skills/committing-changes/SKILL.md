@@ -1,3 +1,11 @@
+---
+name: Committing Changes
+description: >
+  How to commit changes in this project using Jujutsu (jj) with
+  the public/private two-remote model. Public changes squash into
+  staging; private changes squash into dev.
+---
+
 # Committing Changes — Lifecycle Project
 
 This project uses **jj (Jujutsu)** colocated with git, and a **public/private two-remote** model for open-source development.

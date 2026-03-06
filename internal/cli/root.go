@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/mschulkind/lifecycle/internal/config"
+	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/spf13/cobra"
 )
+
+var jsonOutput bool
 
 var rootCmd = &cobra.Command{
 	Use:   "lifecycle",
@@ -23,65 +29,44 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(nextCmd)
 	rootCmd.AddCommand(doneCmd)
+	rootCmd.AddCommand(failCmd)
+	rootCmd.AddCommand(heartbeatCmd)
+	rootCmd.AddCommand(featureCmd)
+	rootCmd.AddCommand(milestoneCmd)
+	rootCmd.AddCommand(roadmapCmd)
+	rootCmd.AddCommand(cycleCmd)
+	rootCmd.AddCommand(qaCmd)
+	rootCmd.AddCommand(historyCmd)
+	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(logCmd)
 	rootCmd.AddCommand(serveCmd)
-	rootCmd.AddCommand(doctorCmd)
 }
 
-var initCmd = &cobra.Command{
-	Use:   "init [project-name]",
-	Short: "Initialize a new lifecycle project",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("Initializing project: %s\n", args[0])
-		return nil
-	},
+func openDB() (*sql.DB, *config.Config, error) {
+	root, err := config.FindProjectRoot()
+	if err != nil {
+		return nil, nil, fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
+	database, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening database: %w", err)
+	}
+	return database, cfg, nil
 }
 
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show project status overview",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Project status: not yet implemented")
-		return nil
-	},
-}
-
-var nextCmd = &cobra.Command{
-	Use:   "next",
-	Short: "Get the next work item for an agent to work on",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Next work item: not yet implemented")
-		return nil
-	},
-}
-
-var doneCmd = &cobra.Command{
-	Use:   "done",
-	Short: "Mark current work item as complete",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Done: not yet implemented")
-		return nil
-	},
-}
-
-var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the web viewer with live reload",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Web viewer: not yet implemented")
-		return nil
-	},
-}
-
-var doctorCmd = &cobra.Command{
-	Use:   "doctor",
-	Short: "Validate environment and project setup",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Doctor: not yet implemented")
-		return nil
-	},
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
