@@ -9,12 +9,13 @@
 <body>
     <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <h1 class="logo">⚡ Lifecycle</h1>
+            <h1 class="logo"><span class="logo-icon">⚡</span>Lifecycle</h1>
         </div>
         <ul class="nav-links">
             <li><a href="#" class="nav-link active" data-page="dashboard">
                 <span class="nav-icon">📊</span> Dashboard
             </a></li>
+            <li class="nav-section">Workspace</li>
             <li><a href="#" class="nav-link" data-page="features">
                 <span class="nav-icon">✨</span> Features
             </a></li>
@@ -24,6 +25,7 @@
             <li><a href="#" class="nav-link" data-page="cycles">
                 <span class="nav-icon">🔄</span> Cycles
             </a></li>
+            <li class="nav-section">Review</li>
             <li><a href="#" class="nav-link" data-page="history">
                 <span class="nav-icon">📜</span> History
             </a></li>
@@ -32,7 +34,14 @@
             </a></li>
         </ul>
         <div class="sidebar-footer">
-            <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+            <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+                <div class="theme-toggle-track">
+                    <span class="theme-toggle-icon">🌙</span>
+                    <span class="theme-toggle-icon dim">☀️</span>
+                </div>
+                <div class="theme-toggle-thumb"></div>
+            </button>
+            <div class="sidebar-version">Lifecycle v0.1.0</div>
         </div>
     </nav>
 
