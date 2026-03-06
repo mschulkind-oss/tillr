@@ -1,0 +1,221 @@
+package cli
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/mschulkind/lifecycle/internal/db"
+	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/spf13/cobra"
+)
+
+var featureCmd = &cobra.Command{
+	Use:   "feature",
+	Short: "Manage features",
+}
+
+func init() {
+	featureCmd.AddCommand(featureAddCmd)
+	featureCmd.AddCommand(featureListCmd)
+	featureCmd.AddCommand(featureShowCmd)
+	featureCmd.AddCommand(featureEditCmd)
+	featureCmd.AddCommand(featureRemoveCmd)
+
+	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
+	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")
+	featureAddCmd.Flags().StringSlice("depends-on", nil, "Feature dependencies")
+	featureAddCmd.Flags().String("description", "", "Feature description")
+
+	featureListCmd.Flags().String("status", "", "Filter by status")
+	featureListCmd.Flags().String("milestone", "", "Filter by milestone")
+
+	featureEditCmd.Flags().String("name", "", "New name")
+	featureEditCmd.Flags().String("description", "", "New description")
+	featureEditCmd.Flags().String("status", "", "New status")
+	featureEditCmd.Flags().String("milestone", "", "New milestone")
+	featureEditCmd.Flags().Int("priority", -1, "New priority")
+}
+
+var featureAddCmd = &cobra.Command{
+	Use:   "add <name>",
+	Short: "Add a new feature",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		milestone, _ := cmd.Flags().GetString("milestone")
+		priority, _ := cmd.Flags().GetInt("priority")
+		deps, _ := cmd.Flags().GetStringSlice("depends-on")
+		desc, _ := cmd.Flags().GetString("description")
+
+		f, err := engine.AddFeature(database, p.ID, args[0], desc, milestone, priority, deps)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(f)
+		}
+		fmt.Printf("✓ Added feature %q (id: %s)\n", f.Name, f.ID)
+		return nil
+	},
+}
+
+var featureListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List features",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		status, _ := cmd.Flags().GetString("status")
+		milestone, _ := cmd.Flags().GetString("milestone")
+
+		features, err := db.ListFeatures(database, p.ID, status, milestone)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(features)
+		}
+
+		if len(features) == 0 {
+			fmt.Println("No features found.")
+			return nil
+		}
+
+		fmt.Printf("%-20s %-14s %-4s %s\n", "ID", "STATUS", "PRI", "NAME")
+		fmt.Println(strings.Repeat("─", 60))
+		for _, f := range features {
+			fmt.Printf("%-20s %-14s %-4d %s\n", f.ID, f.Status, f.Priority, f.Name)
+		}
+		return nil
+	},
+}
+
+var featureShowCmd = &cobra.Command{
+	Use:   "show <id>",
+	Short: "Show feature details",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		f, err := db.GetFeature(database, args[0])
+		if err != nil {
+			return fmt.Errorf("feature not found: %s", args[0])
+		}
+
+		if jsonOutput {
+			return printJSON(f)
+		}
+
+		fmt.Printf("Feature: %s\n", f.Name)
+		fmt.Printf("  ID:        %s\n", f.ID)
+		fmt.Printf("  Status:    %s\n", f.Status)
+		fmt.Printf("  Priority:  %d\n", f.Priority)
+		if f.MilestoneID != "" {
+			fmt.Printf("  Milestone: %s (%s)\n", f.MilestoneName, f.MilestoneID)
+		}
+		if f.AssignedCycle != "" {
+			fmt.Printf("  Cycle:     %s\n", f.AssignedCycle)
+		}
+		if len(f.DependsOn) > 0 {
+			fmt.Printf("  Depends:   %s\n", strings.Join(f.DependsOn, ", "))
+		}
+		if f.Description != "" {
+			fmt.Printf("  Desc:      %s\n", f.Description)
+		}
+		fmt.Printf("  Created:   %s\n", f.CreatedAt)
+		return nil
+	},
+}
+
+var featureEditCmd = &cobra.Command{
+	Use:   "edit <id>",
+	Short: "Edit feature properties",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		updates := make(map[string]any)
+		if v, _ := cmd.Flags().GetString("name"); v != "" {
+			updates["name"] = v
+		}
+		if v, _ := cmd.Flags().GetString("description"); v != "" {
+			updates["description"] = v
+		}
+		if v, _ := cmd.Flags().GetString("status"); v != "" {
+			updates["status"] = v
+		}
+		if v, _ := cmd.Flags().GetString("milestone"); v != "" {
+			updates["milestone_id"] = v
+		}
+		if v, _ := cmd.Flags().GetInt("priority"); v >= 0 && cmd.Flags().Changed("priority") {
+			updates["priority"] = v
+		}
+
+		if len(updates) == 0 {
+			return fmt.Errorf("no changes specified")
+		}
+
+		if err := db.UpdateFeature(database, args[0], updates); err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			f, _ := db.GetFeature(database, args[0])
+			return printJSON(f)
+		}
+		fmt.Printf("✓ Updated feature %s\n", args[0])
+		return nil
+	},
+}
+
+var featureRemoveCmd = &cobra.Command{
+	Use:   "remove <id>",
+	Short: "Remove a feature",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		if err := db.DeleteFeature(database, args[0]); err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]string{"deleted": args[0]})
+		}
+		fmt.Printf("✓ Removed feature %s\n", args[0])
+		return nil
+	},
+}

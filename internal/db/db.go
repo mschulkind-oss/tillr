@@ -22,7 +22,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	}
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
@@ -159,4 +159,30 @@ var migrations = []string{
 	CREATE INDEX idx_events_created ON events(created_at);
 	CREATE INDEX idx_roadmap_project ON roadmap_items(project_id);
 	CREATE INDEX idx_heartbeats_feature ON heartbeats(feature_id);`,
+
+	// Migration 2: Cycle tables
+	`CREATE TABLE cycle_instances (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		feature_id TEXT NOT NULL REFERENCES features(id),
+		cycle_type TEXT NOT NULL,
+		current_step INTEGER NOT NULL DEFAULT 0,
+		iteration INTEGER NOT NULL DEFAULT 1,
+		status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','failed')),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE cycle_scores (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		cycle_id INTEGER NOT NULL REFERENCES cycle_instances(id),
+		step INTEGER NOT NULL,
+		iteration INTEGER NOT NULL,
+		score REAL NOT NULL,
+		notes TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE INDEX idx_cycles_feature ON cycle_instances(feature_id);
+	CREATE INDEX idx_cycles_status ON cycle_instances(status);
+	CREATE INDEX idx_scores_cycle ON cycle_scores(cycle_id);`,
 }
