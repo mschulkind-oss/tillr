@@ -1,0 +1,6 @@
+[tools]
+go = "1.24"
+node = "lts"
+
+[env]
+_.file = ".env"
