@@ -28,3 +28,6 @@ context/
 
 # Node modules (for web dev tooling if needed)
 node_modules/
+
+# Lifecycle project config (created by `lifecycle init`)
+.lifecycle.json
