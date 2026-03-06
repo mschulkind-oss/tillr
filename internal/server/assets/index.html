@@ -7,37 +7,46 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <nav class="sidebar" id="sidebar">
+    <a href="#content" class="skip-link">Skip to main content</a>
+
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+        <span class="hamburger-line"></span>
+        <span class="hamburger-line"></span>
+        <span class="hamburger-line"></span>
+    </button>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <nav class="sidebar" id="sidebar" aria-label="Main navigation">
         <div class="sidebar-header">
-            <h1 class="logo"><span class="logo-icon">⚡</span>Lifecycle</h1>
+            <h1 class="logo"><span class="logo-icon" aria-hidden="true">⚡</span>Lifecycle</h1>
         </div>
-        <ul class="nav-links">
-            <li><a href="#" class="nav-link active" data-page="dashboard">
-                <span class="nav-icon">📊</span> Dashboard
+        <ul class="nav-links" role="list">
+            <li><a href="#" class="nav-link active" data-page="dashboard" aria-current="page">
+                <span class="nav-icon" aria-hidden="true">📊</span> Dashboard
             </a></li>
-            <li class="nav-section">Workspace</li>
+            <li class="nav-section" role="presentation" aria-hidden="true">Workspace</li>
             <li><a href="#" class="nav-link" data-page="features">
-                <span class="nav-icon">✨</span> Features
+                <span class="nav-icon" aria-hidden="true">✨</span> Features
             </a></li>
             <li><a href="#" class="nav-link" data-page="roadmap">
-                <span class="nav-icon">🗺️</span> Roadmap
+                <span class="nav-icon" aria-hidden="true">🗺️</span> Roadmap
             </a></li>
             <li><a href="#" class="nav-link" data-page="cycles">
-                <span class="nav-icon">🔄</span> Cycles
+                <span class="nav-icon" aria-hidden="true">🔄</span> Cycles
             </a></li>
-            <li class="nav-section">Review</li>
+            <li class="nav-section" role="presentation" aria-hidden="true">Review</li>
             <li><a href="#" class="nav-link" data-page="history">
-                <span class="nav-icon">📜</span> History
+                <span class="nav-icon" aria-hidden="true">📜</span> History
             </a></li>
             <li><a href="#" class="nav-link" data-page="qa">
-                <span class="nav-icon">✅</span> QA
+                <span class="nav-icon" aria-hidden="true">✅</span> QA
             </a></li>
         </ul>
         <div class="sidebar-footer">
-            <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+            <button class="theme-toggle" id="themeToggle" aria-label="Switch to light theme">
                 <div class="theme-toggle-track">
-                    <span class="theme-toggle-icon">🌙</span>
-                    <span class="theme-toggle-icon dim">☀️</span>
+                    <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
+                    <span class="theme-toggle-icon dim" aria-hidden="true">☀️</span>
                 </div>
                 <div class="theme-toggle-thumb"></div>
             </button>
@@ -45,7 +54,7 @@
         </div>
     </nav>
 
-    <main class="content" id="content">
+    <main class="content" id="content" aria-live="polite">
     </main>
 
     <script src="/static/app.js"></script>
