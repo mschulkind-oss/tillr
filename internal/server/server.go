@@ -68,14 +68,16 @@ func Start(database *sql.DB, port int) error {
 
 // StartWithDBPath launches the server and watches the given DB file for changes.
 func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
-	// Ignore SIGPIPE to prevent server termination on broken connections
-	signal.Ignore(syscall.SIGPIPE)
-	// Ensure SIGINT/SIGTERM are handled gracefully
+	// Ignore signals that could terminate the server unexpectedly
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG,
+		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGWINCH,
+		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU)
+	// Only SIGINT/SIGTERM cause graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		log.Printf("Received %v, shutting down gracefully", sig)
+		log.Printf("Received %v, shutting down", sig)
 		os.Exit(0)
 	}()
 
@@ -550,13 +552,46 @@ func handleStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error
 }
 
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/qa/")
+
+	// GET /api/qa/pending — list features awaiting QA
+	if r.Method == "GET" && path == "pending" {
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+		// Features in human-qa or agent-qa status
+		humanQA, err := db.ListFeatures(database, p.ID, "human-qa", "")
+		if err != nil {
+			return err
+		}
+		agentQA, err := db.ListFeatures(database, p.ID, "agent-qa", "")
+		if err != nil {
+			return err
+		}
+		pending := append(humanQA, agentQA...)
+		return writeJSON(w, pending)
+	}
+
+	// GET /api/qa/history — QA-related events
+	if r.Method == "GET" && path == "history" {
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+		events, err := db.ListEvents(database, p.ID, "", "qa", "", 50)
+		if err != nil {
+			return err
+		}
+		return writeJSON(w, events)
+	}
+
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return writeJSON(w, map[string]string{"error": "POST required"})
 	}
 
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/api/qa/"), "/")
+	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
 		w.WriteHeader(http.StatusBadRequest)
 		return writeJSON(w, map[string]string{"error": "invalid path"})
