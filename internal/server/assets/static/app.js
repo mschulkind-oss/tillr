@@ -983,59 +983,22 @@ const App = {
             const scores = scoresMap[c.id] || [];
             const avgScore = scores.length ? (scores.reduce((s, x) => s + x.score, 0) / scores.length) : null;
             const scoreCls = avgScore != null ? (avgScore >= 7 ? 'score-high' : avgScore >= 4 ? 'score-mid' : 'score-low') : '';
+            const latestScore = scores.length ? scores[scores.length - 1].score : null;
+            const latestCls = latestScore != null ? App.scoreColorClass(latestScore) : '';
+            const curStep = steps[c.current_step] || '';
 
-            const pipeline = steps.map((s, i) => {
-                const state = i < c.current_step ? 'done' : i === c.current_step ? 'active' : '';
-                const stepScore = scores.find(sc => sc.step === i);
-                const indicator = state === 'done' ? '✓' : (i + 1);
-                const scoreTag = stepScore ? `<div class="cycle-node-score">${stepScore.score.toFixed(1)}</div>` : '';
-                return `<div class="cycle-node ${state}"><div class="cycle-node-indicator">${indicator}</div><div class="cycle-node-label">${s.replace(/-/g, ' ')}</div>${scoreTag}</div>`;
-            }).join('');
-
-            // Score sparkline
-            let sparkline = '';
-            if (scores.length >= 2) {
-                const w = 180, h = 44, pad = 2;
-                const maxS = 10, minS = 0;
-                const points = scores.map((s, i) => {
-                    const x = pad + (i / (scores.length - 1)) * (w - 2 * pad);
-                    const y = h - pad - ((s.score - minS) / (maxS - minS)) * (h - 2 * pad);
-                    return `${x},${y}`;
-                }).join(' ');
-                const areaPoints = `${pad},${h} ${points} ${w-pad},${h}`;
-                sparkline = `<svg class="score-sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polygon points="${areaPoints}" fill="url(#sparkGrad)" opacity="0.3"/><defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)"/><stop offset="100%" stop-color="transparent"/></linearGradient></defs><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${scores.map((s, i) => { const x = pad + (i / (scores.length - 1)) * (w - 2 * pad); const y = h - pad - ((s.score - minS) / (maxS - minS)) * (h - 2 * pad); return `<circle cx="${x}" cy="${y}" r="3" fill="var(--accent)" opacity="0.6"/>`; }).join('')}</svg>`;
-            }
-
-            // Build score detail rows for expanded view
-            const scoreDetailRows = scores.map(s => {
-                const stepName = (steps[s.step] || `Step ${s.step}`).replace(/-/g, ' ');
-                const cls = App.scoreColorClass(s.score);
-                return `<tr>
-                    <td class="cycle-detail-step">${esc(stepName)}</td>
-                    <td><span class="score-badge ${cls}">${s.score.toFixed(1)}</span></td>
-                    <td class="cycle-detail-notes">${esc(s.notes || '—')}</td>
-                    <td class="cycle-detail-time">${fmtTime(s.created_at)}</td>
-                </tr>`;
-            }).join('');
-
-            return `<div class="card cycle-card" data-cycle-id="${c.id}" style="cursor:pointer">
-                <div class="card-header"><span class="card-title clickable-feature" data-feature-id="${esc(c.feature_id)}" style="cursor:pointer">${esc(c.feature_id)}</span><span class="badge badge-${c.status}">${c.status}</span></div>
-                <div class="cycle-meta">
+            return `<div class="card cycle-card cycle-card-compact" data-cycle-id="${c.id}" style="cursor:pointer">
+                <div class="cc-row">
+                    <span class="cc-feature clickable-feature" data-feature-id="${esc(c.feature_id)}">${esc(c.feature_id)}</span>
+                    <span class="badge badge-${c.status}">${c.status}</span>
+                </div>
+                <div class="cc-row cc-info">
                     <span class="cycle-type-name">${c.cycle_type.replace(/-/g, ' ')}</span>
-                    <span class="cycle-iteration-badge">⟳ Iteration ${c.iteration}</span>
-                    ${avgScore != null ? `<span class="cycle-score ${scoreCls}">★ ${avgScore.toFixed(1)} avg</span>` : ''}
-                    <span class="cycle-step-count">${c.current_step}/${totalSteps} steps</span>
+                    <span class="cc-step-pill">${c.current_step}/${totalSteps}${curStep ? ' · ' + curStep.replace(/-/g, ' ') : ''}</span>
+                    ${avgScore != null ? `<span class="cycle-score ${scoreCls}">★ ${avgScore.toFixed(1)}</span>` : ''}
+                    ${latestScore != null ? `<span class="score-badge ${latestCls}" style="font-size:0.7rem">latest ${latestScore.toFixed(1)}</span>` : ''}
                 </div>
-                <div class="cycle-pipeline">${pipeline}</div>
                 <div class="cycle-progress"><div class="cycle-progress-fill" style="width:${pct}%"></div></div>
-                ${sparkline ? `<div class="cycle-sparkline-row">${sparkline}<span class="sparkline-label">${scores.length} scores</span></div>` : ''}
-                <div class="cycle-detail" style="display:none">
-                    ${scores.length ? `<div class="cycle-detail-section">
-                        <div class="cycle-detail-title">★ Judge Scores</div>
-                        <table class="table cycle-scores-table"><thead><tr><th>Step</th><th>Score</th><th>Notes / Reasoning</th><th>Time</th></tr></thead><tbody>${scoreDetailRows}</tbody></table>
-                    </div>` : '<div class="cycle-detail-section"><div class="cycle-detail-title">No scores yet</div></div>'}
-                    <div class="cycle-work-items" data-cycle-id="${c.id}"></div>
-                </div>
             </div>`;
         };
 
@@ -1043,10 +1006,10 @@ const App = {
         html += App.renderSearchBox('cyclesSearch', 'Search cycles…');
 
         if (activeCycles.length) {
-            html += `<h3 class="section-title">Active Cycles</h3>` + activeCycles.map(renderCycleCard).join('');
+            html += `<h3 class="section-title">Active Cycles</h3><div class="cycle-card-grid">${activeCycles.map(renderCycleCard).join('')}</div>`;
         }
         if (completedCycles.length) {
-            html += `<h3 class="section-title" style="margin-top:20px">Completed Cycles</h3>` + completedCycles.map(renderCycleCard).join('');
+            html += `<details class="cycle-completed-toggle" id="cyclesCompletedToggle"><summary class="section-title" style="margin-top:20px;cursor:pointer">Completed Cycles <span class="cc-toggle-count">(${completedCycles.length})</span></summary><div class="cycle-card-grid">${completedCycles.map(renderCycleCard).join('')}</div></details>`;
         }
 
         // Cycle type reference

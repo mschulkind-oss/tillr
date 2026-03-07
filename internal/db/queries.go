@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -1852,17 +1853,24 @@ func ListStatusUpdates(db *sql.DB, agentSessionID string) ([]models.StatusUpdate
 // --- Idea Queue ---
 
 func InsertIdea(db *sql.DB, idea *models.IdeaQueueItem) error {
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	idea.CreatedAt = now
+	idea.UpdatedAt = now
 	res, err := db.Exec(
-		`INSERT INTO idea_queue (project_id, title, raw_input, idea_type, status, spec_md, auto_implement, submitted_by, assigned_agent, feature_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO idea_queue (project_id, title, raw_input, idea_type, status, spec_md, auto_implement, submitted_by, assigned_agent, feature_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		idea.ProjectID, idea.Title, idea.RawInput, idea.IdeaType, idea.Status,
 		nullStr(idea.SpecMD), boolToInt(idea.AutoImplement), idea.SubmittedBy,
 		nullStr(idea.AssignedAgent), nullStr(idea.FeatureID),
+		idea.CreatedAt, idea.UpdatedAt,
 	)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("getting last insert id: %w", err)
+	}
 	idea.ID = int(id)
 	return nil
 }
@@ -3454,4 +3462,160 @@ func ListAllPRs(db *sql.DB) ([]models.FeaturePR, error) {
 		out = append(out, pr)
 	}
 	return out, rows.Err()
+}
+
+// --- Cycle Templates ---
+
+func InsertCycleTemplate(db *sql.DB, name, description string, steps []string) error {
+	stepsJSON, err := json.Marshal(steps)
+	if err != nil {
+		return fmt.Errorf("marshaling steps: %w", err)
+	}
+	_, err = db.Exec(
+		`INSERT INTO cycle_templates (name, description, steps, is_builtin) VALUES (?, ?, ?, 0)`,
+		name, description, string(stepsJSON),
+	)
+	return err
+}
+
+func ListCycleTemplates(db *sql.DB) ([]models.CycleTemplate, error) {
+	rows, err := db.Query(`SELECT name, description, steps, is_builtin, created_at FROM cycle_templates ORDER BY is_builtin DESC, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.CycleTemplate
+	for rows.Next() {
+		var t models.CycleTemplate
+		var stepsJSON string
+		var isBuiltin int
+		if err := rows.Scan(&t.Name, &t.Description, &stepsJSON, &isBuiltin, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		t.IsBuiltin = isBuiltin != 0
+		if err := json.Unmarshal([]byte(stepsJSON), &t.Steps); err != nil {
+			return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func GetCycleTemplate(db *sql.DB, name string) (*models.CycleTemplate, error) {
+	row := db.QueryRow(`SELECT name, description, steps, is_builtin, created_at FROM cycle_templates WHERE name = ?`, name)
+	var t models.CycleTemplate
+	var stepsJSON string
+	var isBuiltin int
+	if err := row.Scan(&t.Name, &t.Description, &stepsJSON, &isBuiltin, &t.CreatedAt); err != nil {
+		return nil, err
+	}
+	t.IsBuiltin = isBuiltin != 0
+	if err := json.Unmarshal([]byte(stepsJSON), &t.Steps); err != nil {
+		return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, err)
+	}
+	return &t, nil
+}
+
+func DeleteCycleTemplate(db *sql.DB, name string) error {
+	res, err := db.Exec(`DELETE FROM cycle_templates WHERE name = ? AND is_builtin = 0`, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("template %q not found or is built-in", name)
+	}
+	return nil
+}
+
+// InsertCommandMetric records a CLI command execution metric.
+func InsertCommandMetric(database *sql.DB, command string, durationMs float64, success bool, dbQueries int) error {
+	s := 0
+	if success {
+		s = 1
+	}
+	_, err := database.Exec(
+		`INSERT INTO command_metrics (command, duration_ms, success, db_queries) VALUES (?, ?, ?, ?)`,
+		command, durationMs, s, dbQueries,
+	)
+	return err
+}
+
+// GetPerfSummary returns aggregated performance metrics.
+func GetPerfSummary(database *sql.DB, limit int) (*models.PerfSummary, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	summary := &models.PerfSummary{}
+
+	// Overall stats
+	err := database.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(AVG(duration_ms), 0),
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1.0 ELSE 0.0 END) / NULLIF(COUNT(*), 0) * 100, 0)
+		FROM command_metrics
+	`).Scan(&summary.TotalCommands, &summary.AvgDurationMs, &summary.SuccessRate)
+	if err != nil {
+		return nil, fmt.Errorf("querying perf summary: %w", err)
+	}
+
+	// P95
+	_ = database.QueryRow(`
+		SELECT COALESCE(duration_ms, 0)
+		FROM command_metrics
+		ORDER BY duration_ms ASC
+		LIMIT 1 OFFSET (SELECT MAX(CAST(COUNT(*) * 0.95 AS INTEGER) - 1, 0) FROM command_metrics)
+	`).Scan(&summary.P95DurationMs)
+
+	// Per-command breakdown
+	rows, err := database.Query(`
+		SELECT
+			command,
+			COUNT(*),
+			COALESCE(AVG(duration_ms), 0),
+			COALESCE(MAX(duration_ms), 0),
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1.0 ELSE 0.0 END) / NULLIF(COUNT(*), 0) * 100, 0)
+		FROM command_metrics
+		GROUP BY command
+		ORDER BY COUNT(*) DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("querying per-command stats: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	for rows.Next() {
+		var s models.CommandPerfStats
+		if err := rows.Scan(&s.Command, &s.Count, &s.AvgDurationMs, &s.MaxDurationMs, &s.SuccessRate); err != nil {
+			return nil, err
+		}
+		summary.ByCommand = append(summary.ByCommand, s)
+	}
+
+	// Recent slow commands (top 10 by duration)
+	slowRows, err := database.Query(`
+		SELECT id, command, duration_ms, success, db_queries, created_at
+		FROM command_metrics
+		ORDER BY duration_ms DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying slow commands: %w", err)
+	}
+	defer slowRows.Close() //nolint:errcheck
+
+	for slowRows.Next() {
+		var m models.CommandMetric
+		var success int
+		if err := slowRows.Scan(&m.ID, &m.Command, &m.DurationMs, &success, &m.DBQueries, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		m.Success = success == 1
+		summary.RecentSlow = append(summary.RecentSlow, m)
+	}
+
+	return summary, nil
 }

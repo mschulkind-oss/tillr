@@ -433,4 +433,37 @@ var migrations = []string{
 	CREATE INDEX idx_sprints_project ON sprints(project_id);
 	CREATE INDEX idx_sprints_status ON sprints(status);
 	CREATE INDEX idx_sprint_features_feature ON sprint_features(feature_id);`,
+
+	// Migration 21: Custom cycle templates
+	`CREATE TABLE IF NOT EXISTS cycle_templates (
+		name TEXT PRIMARY KEY,
+		description TEXT NOT NULL DEFAULT '',
+		steps TEXT NOT NULL,
+		is_builtin INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
+
+	// Migration 22: Command performance metrics
+	`CREATE TABLE IF NOT EXISTS command_metrics (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		command TEXT NOT NULL,
+		duration_ms REAL NOT NULL,
+		success INTEGER NOT NULL DEFAULT 1,
+		db_queries INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_command_metrics_command ON command_metrics(command);
+	CREATE INDEX IF NOT EXISTS idx_command_metrics_created ON command_metrics(created_at);`,
+
+	// Migration 23: Webhooks table (was created at runtime but never in migrations)
+	`CREATE TABLE IF NOT EXISTS webhooks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		url TEXT NOT NULL,
+		secret TEXT NOT NULL DEFAULT '',
+		events TEXT NOT NULL DEFAULT '["*"]',
+		active INTEGER NOT NULL DEFAULT 1,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_webhooks_project ON webhooks(project_id);`,
 }

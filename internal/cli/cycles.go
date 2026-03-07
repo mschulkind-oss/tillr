@@ -215,6 +215,13 @@ func getStepName(cycleType string, step int) string {
 			return ct.Steps[step]
 		}
 	}
+	// Check custom templates in DB.
+	if database, _, err := openDB(); err == nil {
+		defer database.Close() //nolint:errcheck
+		if t, err := db.GetCycleTemplate(database, cycleType); err == nil && step < len(t.Steps) {
+			return t.Steps[step]
+		}
+	}
 	return "unknown"
 }
 
@@ -222,6 +229,13 @@ func getTotalSteps(cycleType string) int {
 	for _, ct := range models.CycleTypes {
 		if ct.Name == cycleType {
 			return len(ct.Steps)
+		}
+	}
+	// Check custom templates in DB.
+	if database, _, err := openDB(); err == nil {
+		defer database.Close() //nolint:errcheck
+		if t, err := db.GetCycleTemplate(database, cycleType); err == nil {
+			return len(t.Steps)
 		}
 	}
 	return 0

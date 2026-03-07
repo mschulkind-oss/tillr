@@ -10,6 +10,25 @@ import (
 	"github.com/mschulkind/lifecycle/internal/models"
 )
 
+// findCycleType resolves a cycle type by name, checking built-in types first,
+// then custom templates stored in the database.
+func findCycleType(database *sql.DB, name string) *models.CycleType {
+	for i := range models.CycleTypes {
+		if models.CycleTypes[i].Name == name {
+			return &models.CycleTypes[i]
+		}
+	}
+	// Fall back to custom templates in the DB.
+	if t, err := db.GetCycleTemplate(database, name); err == nil {
+		return &models.CycleType{
+			Name:        t.Name,
+			Description: t.Description,
+			Steps:       t.Steps,
+		}
+	}
+	return nil
+}
+
 // InitProject creates a new project with its config and DB entry.
 func InitProject(database *sql.DB, name string) (*models.Project, error) {
 	id := slug(name)
@@ -278,12 +297,7 @@ func GetWorkContext(database *sql.DB, w *models.WorkItem) (*models.WorkContext, 
 	// Load active cycle
 	if c, err := db.GetActiveCycle(database, w.FeatureID); err == nil {
 		ctx.Cycle = c
-		for i := range models.CycleTypes {
-			if models.CycleTypes[i].Name == c.CycleType {
-				ctx.CycleType = &models.CycleTypes[i]
-				break
-			}
-		}
+		ctx.CycleType = findCycleType(database, c.CycleType)
 		// Load cycle scores
 		if scores, err := db.ListCycleScores(database, c.ID); err == nil {
 			ctx.CycleScores = scores
@@ -365,13 +379,7 @@ func CompleteWorkItemAndReturn(database *sql.DB, result string) (*models.WorkIte
 	// Auto-advance cycle to next step and create work item
 	if w.FeatureID != "" {
 		if c, cErr := db.GetActiveCycle(database, w.FeatureID); cErr == nil {
-			var ct *models.CycleType
-			for i := range models.CycleTypes {
-				if models.CycleTypes[i].Name == c.CycleType {
-					ct = &models.CycleTypes[i]
-					break
-				}
-			}
+			ct := findCycleType(database, c.CycleType)
 			if ct != nil {
 				// Only advance if current step matches the completed work type
 				if c.CurrentStep < len(ct.Steps) && ct.Steps[c.CurrentStep] == w.WorkType {
@@ -435,13 +443,7 @@ func ReclaimStaleWorkItems(database *sql.DB, staleMins int) (int, error) {
 // StartCycle starts a new iteration cycle for a feature.
 func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*models.CycleInstance, error) {
 	// Validate cycle type
-	var ct *models.CycleType
-	for i := range models.CycleTypes {
-		if models.CycleTypes[i].Name == cycleType {
-			ct = &models.CycleTypes[i]
-			break
-		}
-	}
+	ct := findCycleType(database, cycleType)
 	if ct == nil {
 		return nil, fmt.Errorf("unknown cycle type: %s", cycleType)
 	}
@@ -489,13 +491,7 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 		return fmt.Errorf("no active cycle for feature %s", featureID)
 	}
 
-	var ct *models.CycleType
-	for i := range models.CycleTypes {
-		if models.CycleTypes[i].Name == c.CycleType {
-			ct = &models.CycleTypes[i]
-			break
-		}
-	}
+	ct := findCycleType(database, c.CycleType)
 	if ct == nil {
 		return fmt.Errorf("unknown cycle type: %s", c.CycleType)
 	}
