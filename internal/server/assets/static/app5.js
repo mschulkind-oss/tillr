@@ -1,4 +1,64 @@
-// app5.js — Timeline View, Batch Feature Operations, Activity Heatmap & Idea History
+// app5.js — Timeline View, Batch Feature Operations, Activity Heatmap, Idea History & Roadmap CLS fixes
+
+// =====================================================
+// ROADMAP CLS (Cumulative Layout Shift) PREVENTION
+// =====================================================
+
+// Roadmap-specific skeleton shown while data loads
+App._roadmapSkeleton = function() {
+    var cards = '';
+    for (var s = 0; s < 2; s++) {
+        var items = '';
+        for (var i = 0; i < 3; i++) items += '<div class="roadmap-skeleton-card"></div>';
+        cards += '<div class="roadmap-skeleton-section"><div class="roadmap-skeleton-header"></div>' + items + '</div>';
+    }
+    var pills = '';
+    for (var p = 0; p < 4; p++) pills += '<div class="roadmap-skeleton-pill"></div>';
+    return '<div class="roadmap-skeleton">' +
+        '<div class="skeleton skeleton-text" style="width:180px;height:24px;margin-bottom:8px"></div>' +
+        '<div class="skeleton skeleton-text" style="width:300px;height:14px;margin-bottom:20px"></div>' +
+        '<div class="roadmap-skeleton-banner"></div>' +
+        '<div class="roadmap-skeleton-filters">' + pills + '</div>' +
+        cards + '</div>';
+};
+
+// Wrap renderSkeleton to show roadmap-specific skeleton on roadmap page
+(function() {
+    var origSkeleton = App.renderSkeleton.bind(App);
+    App.renderSkeleton = function(page) {
+        if (App._currentPage === 'roadmap') return App._roadmapSkeleton();
+        return origSkeleton(page);
+    };
+})();
+
+// Stable sort: sort roadmap items deterministically by sort_order then id
+// so WebSocket refreshes don't re-arrange cards
+App._stableRoadmapSort = function(items) {
+    if (!items || !items.length) return items;
+    items.sort(function(a, b) {
+        var sa = typeof a.sort_order === 'number' ? a.sort_order : 9999;
+        var sb = typeof b.sort_order === 'number' ? b.sort_order : 9999;
+        if (sa !== sb) return sa - sb;
+        if (a.id < b.id) return -1;
+        if (a.id > b.id) return 1;
+        return 0;
+    });
+    return items;
+};
+
+// Patch the api() call to stable-sort roadmap items on fetch
+(function() {
+    var origApi = App.api.bind(App);
+    App.api = function(endpoint) {
+        var result = origApi(endpoint);
+        if (endpoint === 'roadmap') {
+            return result.then(function(items) {
+                return App._stableRoadmapSort(items);
+            });
+        }
+        return result;
+    };
+})();
 
 // =====================================================
 // IDEA HISTORY VIEW

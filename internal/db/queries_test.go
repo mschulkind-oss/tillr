@@ -815,3 +815,59 @@ func TestSearchFeaturesFTS(t *testing.T) {
 		t.Errorf("expected name 'Authentication Module', got %q", results[0].Name)
 	}
 }
+
+func TestInsertAndGetPerfMetrics(t *testing.T) {
+	database := openTestDB(t)
+
+	// Insert some command metrics
+	if err := db.InsertCommandMetric(database, "feature list", 45.2, true, 3); err != nil {
+		t.Fatalf("inserting metric: %v", err)
+	}
+	if err := db.InsertCommandMetric(database, "feature add", 120.5, true, 5); err != nil {
+		t.Fatalf("inserting metric: %v", err)
+	}
+	if err := db.InsertCommandMetric(database, "feature list", 38.1, true, 3); err != nil {
+		t.Fatalf("inserting metric: %v", err)
+	}
+	if err := db.InsertCommandMetric(database, "status", 200.0, false, 2); err != nil {
+		t.Fatalf("inserting metric: %v", err)
+	}
+
+	summary, err := db.GetPerfSummary(database, 10)
+	if err != nil {
+		t.Fatalf("getting perf summary: %v", err)
+	}
+
+	if summary.TotalCommands != 4 {
+		t.Errorf("expected 4 total commands, got %d", summary.TotalCommands)
+	}
+	if summary.SuccessRate < 74 || summary.SuccessRate > 76 {
+		t.Errorf("expected ~75%% success rate, got %.1f%%", summary.SuccessRate)
+	}
+	if len(summary.ByCommand) == 0 {
+		t.Error("expected per-command breakdown")
+	}
+	if len(summary.RecentSlow) == 0 {
+		t.Error("expected recent slow commands")
+	}
+
+	// Verify the slowest command is first
+	if summary.RecentSlow[0].Command != "status" {
+		t.Errorf("expected slowest command to be 'status', got %q", summary.RecentSlow[0].Command)
+	}
+	if summary.RecentSlow[0].DurationMs != 200.0 {
+		t.Errorf("expected 200ms for slowest, got %.1f", summary.RecentSlow[0].DurationMs)
+	}
+}
+
+func TestGetPerfSummaryEmpty(t *testing.T) {
+	database := openTestDB(t)
+
+	summary, err := db.GetPerfSummary(database, 10)
+	if err != nil {
+		t.Fatalf("getting perf summary on empty DB: %v", err)
+	}
+	if summary.TotalCommands != 0 {
+		t.Errorf("expected 0 commands, got %d", summary.TotalCommands)
+	}
+}

@@ -5,7 +5,9 @@ App.drawScoreTrendChart = function(canvasId, scores) {
     var container = canvas.parentElement;
     var dpr = window.devicePixelRatio || 1;
     var w = container.clientWidth || 400;
-    var h = container.clientHeight || 260;
+    // Use 3:1 aspect ratio with min/max bounds for consistent proportions
+    var h = Math.max(160, Math.min(300, Math.round(w / 3)));
+    container.style.height = h + 'px';
 
     canvas.width = w * dpr;
     canvas.height = h * dpr;

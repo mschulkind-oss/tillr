@@ -71,6 +71,39 @@
 
 ---
 
+### OQ-005: Idea Priority in Agent Workflow
+**Status:** Active  
+**Raised:** 2026-03-07  
+**Context:** User feedback (idea #13): "ideas should be the highest priority piece of work in the system." Currently, ideas are processed but implementation priority is based on roadmap effective priority scoring. Should ideas from the idea queue automatically get elevated priority when converted to features?
+
+**Question:** Should features created from user ideas automatically receive higher priority than other roadmap items?
+
+**Options:**
+- Auto-elevate: ideas become high-priority features by default
+- Manual triage: ideas get normal priority, human decides elevation
+- Separate queue: ideas bypass roadmap priority entirely, always processed first
+- Weighted boost: ideas get +2 priority score bonus but still compete with roadmap
+
+**Dependencies:** Affects `lifecycle next` work ordering and agent dispatch.
+
+---
+
+### OQ-006: Agent Workflow Visualization Scope
+**Status:** Active  
+**Raised:** 2026-03-07  
+**Context:** Idea #1 requests an animated flowchart showing agent `next → work → done/fail` flow. This could range from a simple static diagram to a full real-time animated visualization with WebSocket updates.
+
+**Question:** What level of agent workflow visualization is desired?
+
+**Options:**
+- Static Mermaid diagram showing the lifecycle flow (simplest, already have diagram export)
+- Interactive page with current agent status and work item flow (medium)
+- Full animated real-time visualization with WebSocket-driven state transitions (complex)
+
+**Dependencies:** Affects whether a new JS file/page is needed and WebSocket message types.
+
+---
+
 ## Answered Questions
 
 _No answered questions yet._

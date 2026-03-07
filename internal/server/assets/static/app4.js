@@ -372,41 +372,19 @@ App.renderIdeas = async function() {
 
     html += App.renderSearchBox('ideasSearch', 'Search ideas…');
 
-    // Modal (hidden by default)
-    html += `<div id="ideaModal" class="app4-modal-overlay">
-        <div class="card app4-modal-card">
-            <div class="app4-modal-header">
-                <h3 class="app4-modal-title">Submit New Idea</h3>
-                <button class="app4-modal-close" id="ideaCancelBtn" aria-label="Close">✕</button>
+    // Modal — simplified to match feedback modal design
+    html += `<div id="ideaModal" class="feedback-modal-overlay">
+        <div class="feedback-modal" role="dialog" aria-modal="true" aria-label="Submit Idea">
+            <div class="feedback-modal-header">
+                <span class="feedback-modal-title">Submit Idea</span>
+                <button type="button" class="feedback-modal-close" id="ideaCancelBtn" aria-label="Close">&times;</button>
             </div>
-            <div class="app4-modal-body">
-                <div class="app4-form-group">
-                    <label class="app4-form-label" for="ideaTitle">Title <span class="app4-required">*</span></label>
-                    <input type="text" id="ideaTitle" class="app4-form-input" placeholder="What's the idea?">
+            <form id="ideaForm" autocomplete="off">
+                <textarea id="ideaText" class="feedback-textarea" placeholder="First line becomes the title.\nDescribe your idea below (markdown supported)" rows="10"></textarea>
+                <div class="feedback-actions">
+                    <button type="submit" class="feedback-submit-btn" id="ideaSubmitBtn">Submit Idea</button>
                 </div>
-                <div class="app4-form-group">
-                    <label class="app4-form-label" for="ideaDesc">Description</label>
-                    <textarea id="ideaDesc" rows="5" class="app4-form-input app4-form-textarea" placeholder="Describe the idea (markdown supported)"></textarea>
-                </div>
-                <div class="app4-form-row">
-                    <div class="app4-form-group" style="flex:1">
-                        <label class="app4-form-label" for="ideaType">Type</label>
-                        <select id="ideaType" class="app4-form-input">
-                            <option value="feature">✨ Feature</option>
-                            <option value="bug">🐛 Bug</option>
-                        </select>
-                    </div>
-                    <div class="app4-form-group app4-form-checkbox-group">
-                        <label class="app4-checkbox-label">
-                            <input type="checkbox" id="ideaAuto" class="app4-checkbox"> Auto-implement
-                        </label>
-                    </div>
-                </div>
-            </div>
-            <div class="app4-modal-footer">
-                <button class="app4-btn app4-btn-ghost" id="ideaCancelBtn2">Cancel</button>
-                <button class="app4-btn app4-btn-primary" id="ideaSubmitBtn">Submit Idea</button>
-            </div>
+            </form>
         </div>
     </div>`;
 
@@ -480,25 +458,56 @@ App._bindIdeasEvents = function() {
     const modal = document.getElementById('ideaModal');
     const openBtn = document.getElementById('submitIdeaBtn');
     const cancelBtn = document.getElementById('ideaCancelBtn');
-    const cancelBtn2 = document.getElementById('ideaCancelBtn2');
-    const submitBtn = document.getElementById('ideaSubmitBtn');
+    const ideaForm = document.getElementById('ideaForm');
 
-    if (openBtn) openBtn.addEventListener('click', () => { if (modal) modal.style.display = 'flex'; });
-    if (cancelBtn) cancelBtn.addEventListener('click', () => { if (modal) modal.style.display = 'none'; });
-    if (cancelBtn2) cancelBtn2.addEventListener('click', () => { if (modal) modal.style.display = 'none'; });
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+    function showIdeaModal() {
+        if (!modal) return;
+        modal.classList.add('visible');
+        modal.setAttribute('aria-hidden', 'false');
+        var ta = document.getElementById('ideaText');
+        var draft = localStorage.getItem('lifecycle_idea_draft');
+        if (ta && draft) ta.value = draft;
+        if (ta) setTimeout(function() { ta.focus(); }, 50);
+    }
+    function hideIdeaModal() {
+        if (!modal) return;
+        modal.classList.remove('visible');
+        modal.setAttribute('aria-hidden', 'true');
+    }
 
-    if (submitBtn) submitBtn.addEventListener('click', async () => {
-        const title = document.getElementById('ideaTitle')?.value?.trim();
-        if (!title) return alert('Title is required');
-        const desc = document.getElementById('ideaDesc')?.value?.trim() || '';
-        const type = document.getElementById('ideaType')?.value || 'feature';
-        const auto = document.getElementById('ideaAuto')?.checked || false;
+    if (openBtn) openBtn.addEventListener('click', showIdeaModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', hideIdeaModal);
+    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) hideIdeaModal(); });
+
+    // Save idea draft to localStorage on keystroke
+    var ideaTextarea = document.getElementById('ideaText');
+    if (ideaTextarea) {
+        ideaTextarea.addEventListener('input', function() {
+            localStorage.setItem('lifecycle_idea_draft', ideaTextarea.value);
+        });
+    }
+
+    if (ideaForm) ideaForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        var ta = document.getElementById('ideaText');
+        var text = (ta && ta.value || '').trim();
+        if (!text) return;
+        var btn = document.getElementById('ideaSubmitBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+        var lines = text.split('\n');
+        var title = lines[0].substring(0, 100);
+        var description = lines.slice(1).join('\n').trim();
         try {
-            await App.apiPost('ideas', { title, raw_input: desc, idea_type: type, auto_implement: auto });
-            if (modal) modal.style.display = 'none';
+            await App.apiPost('ideas', { title: title, raw_input: description, idea_type: 'feature', submitted_by: 'human' });
+            localStorage.removeItem('lifecycle_idea_draft');
+            if (ta) ta.value = '';
+            hideIdeaModal();
             App.navigate('ideas');
-        } catch(e) { alert('Error: ' + e.message); }
+        } catch(err) {
+            App.toast('Error: ' + (err.message || 'Submit failed'), 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Submit Idea'; }
+        }
     });
 
     document.querySelectorAll('.idea-approve-btn').forEach(btn => {
@@ -522,11 +531,118 @@ App._bindIdeasEvents = function() {
             } catch(e2) { alert('Error: ' + e2.message); }
         });
     });
+
+    // Idea card click → detail panel
+    document.querySelectorAll('.app4-idea-card').forEach(card => {
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.idea-approve-btn, .idea-reject-btn, .clickable-feature, .app4-idea-spec-details')) return;
+            const id = card.dataset.ideaId;
+            if (id) App._showIdeaDetail(id);
+        });
+    });
 };
 
-// =====================================================
-// CONTEXT LIBRARY PAGE
-// =====================================================
+// Idea detail panel — overlay modal
+App._showIdeaDetail = async function(ideaId) {
+    let idea;
+    try { idea = await App.api('ideas/' + ideaId); }
+    catch(e) { App.toast('Failed to load idea: ' + e.message, 'error'); return; }
+
+    const typeBadge = idea.idea_type === 'bug' ? '🐛 Bug' : '✨ Feature';
+    const badgeMap = { pending: 'planning', processing: 'implementing', 'spec-ready': 'human-qa', approved: 'done', rejected: 'blocked' };
+    const badgeCls = badgeMap[idea.status] || 'planning';
+    const canAct = idea.status === 'pending' || idea.status === 'spec-ready';
+
+    let html = `<div class="idea-detail-overlay" id="ideaDetailOverlay">
+    <div class="idea-detail-panel" role="dialog" aria-modal="true" aria-label="Idea Detail">
+        <div class="idea-detail-header">
+            <div class="idea-detail-title-row">
+                <span class="idea-detail-type">${typeBadge}</span>
+                <h2 class="idea-detail-title">${esc(idea.title)}</h2>
+                <span class="badge badge-${badgeCls}">${esc(idea.status)}</span>
+            </div>
+            <button type="button" class="feedback-modal-close" id="ideaDetailClose" aria-label="Close">&times;</button>
+        </div>
+        <div class="idea-detail-body">
+            <div class="idea-detail-meta">
+                <span>👤 ${esc(idea.submitted_by || 'human')}</span>
+                <span>🕐 ${timeAgo(idea.created_at)}</span>
+                ${idea.auto_implement ? '<span>🤖 Auto-implement</span>' : ''}
+                ${idea.assigned_agent ? '<span>🔧 Agent: ' + esc(idea.assigned_agent) + '</span>' : ''}
+            </div>`;
+
+    if (idea.raw_input) {
+        html += `<div class="idea-detail-section">
+            <h3 class="idea-detail-section-title">Description</h3>
+            <div class="idea-detail-desc md-content">${renderMD(idea.raw_input)}</div>
+        </div>`;
+    }
+
+    if (idea.spec_md) {
+        html += `<div class="idea-detail-section">
+            <h3 class="idea-detail-section-title">Generated Spec</h3>
+            <div class="idea-detail-spec md-content">${renderMD(idea.spec_md)}</div>
+        </div>`;
+    }
+
+    if (idea.feature_id) {
+        html += `<div class="idea-detail-section">
+            <h3 class="idea-detail-section-title">Linked Feature</h3>
+            <div class="idea-detail-feature-link clickable-feature" data-feature-id="${esc(idea.feature_id)}">→ ${esc(idea.feature_id)}</div>
+        </div>`;
+    }
+
+    if (canAct) {
+        html += `<div class="idea-detail-actions">
+            <button class="app4-btn app4-btn-approve" id="ideaDetailApprove">✅ Approve</button>
+            <button class="app4-btn app4-btn-reject" id="ideaDetailReject">❌ Reject</button>
+        </div>`;
+    }
+
+    html += `</div></div></div>`;
+
+    // Insert overlay
+    const existing = document.getElementById('ideaDetailOverlay');
+    if (existing) existing.remove();
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    const overlay = document.getElementById('ideaDetailOverlay');
+    requestAnimationFrame(() => overlay.classList.add('visible'));
+
+    function closeDetail() {
+        overlay.classList.remove('visible');
+        setTimeout(() => overlay.remove(), 200);
+    }
+
+    document.getElementById('ideaDetailClose').addEventListener('click', closeDetail);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDetail(); });
+
+    // Escape key
+    function onKey(e) { if (e.key === 'Escape') { closeDetail(); document.removeEventListener('keydown', onKey); } }
+    document.addEventListener('keydown', onKey);
+
+    // Clickable feature link
+    overlay.querySelectorAll('.clickable-feature').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            closeDetail();
+            App.navigateTo('features', el.dataset.featureId);
+        });
+    });
+
+    // Approve / reject buttons
+    const approveBtn = document.getElementById('ideaDetailApprove');
+    const rejectBtn = document.getElementById('ideaDetailReject');
+    if (approveBtn) approveBtn.addEventListener('click', async () => {
+        try { await App.apiPost('ideas/' + ideaId + '/approve', {}); closeDetail(); App.navigate('ideas'); }
+        catch(e2) { App.toast('Error: ' + e2.message, 'error'); }
+    });
+    if (rejectBtn) rejectBtn.addEventListener('click', async () => {
+        try { await App.apiPost('ideas/' + ideaId + '/reject', {}); closeDetail(); App.navigate('ideas'); }
+        catch(e2) { App.toast('Error: ' + e2.message, 'error'); }
+    });
+};
 App.renderContext = async function() {
     let entries = await App.api('context');
     const typeFilter = App._contextTypeFilter || 'all';
@@ -880,11 +996,26 @@ document.addEventListener('submit', function(e) {
     var lines = text.split('\n');
     var title = lines[0].substring(0, 100);
     var description = lines.slice(1).join('\n').trim();
+    // Capture page context
+    var sourcePage = window.location.hash || '#dashboard';
+    var context = { page: sourcePage };
+    try {
+        var featureEls = document.querySelectorAll('[data-feature-id]');
+        if (featureEls.length > 0) {
+            context.visible_feature_ids = Array.from(featureEls).map(function(el) { return el.dataset.featureId; }).filter(Boolean).slice(0, 20);
+        }
+        var cycleEls = document.querySelectorAll('[data-cycle-id]');
+        if (cycleEls.length > 0) {
+            context.visible_cycle_ids = Array.from(cycleEls).map(function(el) { return el.dataset.cycleId; }).filter(Boolean).slice(0, 20);
+        }
+    } catch(_e) {}
     App.apiPost('ideas', {
         title: title,
         raw_input: description,
         idea_type: 'feedback',
-        submitted_by: 'human'
+        submitted_by: 'human',
+        source_page: sourcePage,
+        context: JSON.stringify(context)
     }).then(function() {
         // Clear localStorage on successful submit
         localStorage.removeItem(FEEDBACK_LS_KEY);

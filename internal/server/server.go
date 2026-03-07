@@ -317,6 +317,24 @@ func watchDBFile(dbPath string, hub *wsHub) {
 
 type apiFunc func(*sql.DB, http.ResponseWriter, *http.Request) error
 
+// statusTrackingWriter wraps http.ResponseWriter to track whether a status code has been written.
+type statusTrackingWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *statusTrackingWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (w *statusTrackingWriter) Write(b []byte) (int, error) {
+	w.wroteHeader = true // implicit 200 on first Write
+	return w.ResponseWriter.Write(b)
+}
+
 func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -326,9 +344,14 @@ func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			return
 		}
-		if err := fn(database, w, r); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		sw := &statusTrackingWriter{ResponseWriter: w}
+		if err := fn(database, sw, r); err != nil {
+			if !sw.wroteHeader {
+				sw.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(sw).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+			} else {
+				log.Printf("API error (response already started): %v", err)
+			}
 		}
 	}
 }
@@ -1614,12 +1637,8 @@ func handleIdeas(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 		if err := db.InsertIdea(database, idea); err != nil {
 			return fmt.Errorf("creating idea: %w", err)
 		}
-		created, err := db.GetIdea(database, idea.ID)
-		if err != nil {
-			return fmt.Errorf("fetching created idea: %w", err)
-		}
 		w.WriteHeader(http.StatusCreated)
-		return writeJSON(w, created)
+		return writeJSON(w, idea)
 	}
 
 	status := r.URL.Query().Get("status")

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -14,6 +16,7 @@ import (
 )
 
 var jsonOutput bool
+var cmdStartTime time.Time
 
 var rootCmd = &cobra.Command{
 	Use:   "lifecycle",
@@ -93,6 +96,14 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 
+	// Record command execution timing for perf metrics.
+	rootCmd.PersistentPreRun = func(_ *cobra.Command, _ []string) {
+		cmdStartTime = time.Now()
+	}
+	rootCmd.PersistentPostRun = func(cmd *cobra.Command, _ []string) {
+		recordCommandMetric(cmd, true)
+	}
+
 	// Wire up webhook dispatch so every InsertEvent triggers matching webhooks.
 	db.WebhookDispatchFunc = func(database *sql.DB, event *models.Event) {
 		server.DispatchWebhooks(database, event)
@@ -137,6 +148,7 @@ func init() {
 	rootCmd.AddCommand(restoreCmd)
 	rootCmd.AddCommand(sprintCmd)
 	rootCmd.AddCommand(prCmd)
+	rootCmd.AddCommand(perfCmd)
 
 	// Short aliases for common commands (CLI Aliases roadmap item)
 	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))
@@ -178,4 +190,34 @@ func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// commandPath returns the full subcommand path (e.g. "feature add").
+func commandPath(cmd *cobra.Command) string {
+	var parts []string
+	root := cmd.Root()
+	for c := cmd; c != nil && c != root; c = c.Parent() {
+		parts = append([]string{c.Name()}, parts...)
+	}
+	return strings.Join(parts, " ")
+}
+
+// recordCommandMetric silently records command timing to the metrics table.
+// Failures are swallowed to avoid disrupting the user's workflow.
+func recordCommandMetric(cmd *cobra.Command, success bool) {
+	if cmdStartTime.IsZero() {
+		return
+	}
+	durationMs := float64(time.Since(cmdStartTime).Microseconds()) / 1000.0
+	name := commandPath(cmd)
+	if name == "" || name == "perf show" {
+		return
+	}
+
+	database, _, err := openDB()
+	if err != nil {
+		return
+	}
+	defer database.Close() //nolint:errcheck
+	_ = db.InsertCommandMetric(database, name, durationMs, success, 0)
 }

@@ -581,3 +581,41 @@ type FeaturePR struct {
 	Status    string `json:"status"` // open, closed, merged
 	CreatedAt string `json:"created_at"`
 }
+
+// CycleTemplate is a user-defined or built-in iteration cycle template.
+type CycleTemplate struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Steps       []string `json:"steps"`
+	IsBuiltin   bool     `json:"is_builtin"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+}
+
+// CommandMetric records a single CLI command execution with timing data.
+type CommandMetric struct {
+	ID         int     `json:"id"`
+	Command    string  `json:"command"`
+	DurationMs float64 `json:"duration_ms"`
+	Success    bool    `json:"success"`
+	DBQueries  int     `json:"db_queries"`
+	CreatedAt  string  `json:"created_at"`
+}
+
+// PerfSummary holds aggregated performance metrics.
+type PerfSummary struct {
+	TotalCommands int                `json:"total_commands"`
+	AvgDurationMs float64            `json:"avg_duration_ms"`
+	P95DurationMs float64            `json:"p95_duration_ms"`
+	SuccessRate   float64            `json:"success_rate"`
+	ByCommand     []CommandPerfStats `json:"by_command"`
+	RecentSlow    []CommandMetric    `json:"recent_slow,omitempty"`
+}
+
+// CommandPerfStats holds per-command aggregated stats.
+type CommandPerfStats struct {
+	Command       string  `json:"command"`
+	Count         int     `json:"count"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+	MaxDurationMs float64 `json:"max_duration_ms"`
+	SuccessRate   float64 `json:"success_rate"`
+}
