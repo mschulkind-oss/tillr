@@ -79,6 +79,8 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/history", apiHandler(database, handleHistory))
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
+	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
+	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -430,4 +432,47 @@ func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Reques
 	}
 
 	return writeJSON(w, map[string]bool{"ok": true})
+}
+
+func handleDiscussions(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	featureID := r.URL.Query().Get("feature")
+	status := r.URL.Query().Get("status")
+
+	discussions, err := db.ListDiscussions(database, p.ID, featureID, status)
+	if err != nil {
+		return err
+	}
+
+	return writeJSON(w, discussions)
+}
+
+func handleDiscussionDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/discussions/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "discussion ID required"})
+	}
+
+	id := 0
+	for _, c := range parts[0] {
+		if c >= '0' && c <= '9' {
+			id = id*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+
+	d, err := db.GetDiscussion(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "discussion not found"})
+	}
+
+	return writeJSON(w, d)
 }

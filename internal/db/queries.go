@@ -725,7 +725,115 @@ func SearchEvents(db *sql.DB, projectID, query string) ([]models.Event, error) {
 	return out, rows.Err()
 }
 
+// --- Discussions ---
+
+func CreateDiscussion(db *sql.DB, d *models.Discussion) error {
+	res, err := db.Exec(
+		`INSERT INTO discussions (project_id, feature_id, title, author) VALUES (?, ?, ?, ?)`,
+		d.ProjectID, nullStr(d.FeatureID), d.Title, d.Author,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	d.ID = int(id)
+	return nil
+}
+
+func GetDiscussion(db *sql.DB, id int) (*models.Discussion, error) {
+	row := db.QueryRow(`SELECT id, project_id, COALESCE(feature_id,''), title, status, author, created_at, updated_at
+		FROM discussions WHERE id = ?`, id)
+	d := &models.Discussion{}
+	err := row.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Status, &d.Author, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	comments, _ := ListDiscussionComments(db, d.ID)
+	d.Comments = comments
+	d.CommentCount = len(comments)
+	return d, nil
+}
+
+func ListDiscussions(db *sql.DB, projectID, featureID, status string) ([]models.Discussion, error) {
+	q := `SELECT d.id, d.project_id, COALESCE(d.feature_id,''), d.title, d.status, d.author, d.created_at, d.updated_at,
+			(SELECT COUNT(*) FROM discussion_comments WHERE discussion_id = d.id) as comment_count
+		FROM discussions d WHERE d.project_id = ?`
+	args := []any{projectID}
+	if featureID != "" {
+		q += " AND d.feature_id = ?"
+		args = append(args, featureID)
+	}
+	if status != "" {
+		q += " AND d.status = ?"
+		args = append(args, status)
+	}
+	q += " ORDER BY d.updated_at DESC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Discussion
+	for rows.Next() {
+		var d models.Discussion
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Status, &d.Author,
+			&d.CreatedAt, &d.UpdatedAt, &d.CommentCount); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func UpdateDiscussionStatus(db *sql.DB, id int, status string) error {
+	_, err := db.Exec("UPDATE discussions SET status = ?, updated_at = datetime('now') WHERE id = ?", status, id)
+	return err
+}
+
+func AddDiscussionComment(db *sql.DB, c *models.DiscussionComment) error {
+	res, err := db.Exec(
+		`INSERT INTO discussion_comments (discussion_id, author, content, parent_id, comment_type) VALUES (?, ?, ?, ?, ?)`,
+		c.DiscussionID, c.Author, c.Content, nullInt(c.ParentID), c.CommentType,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	c.ID = int(id)
+	// Touch discussion updated_at
+	_, _ = db.Exec("UPDATE discussions SET updated_at = datetime('now') WHERE id = ?", c.DiscussionID)
+	return nil
+}
+
+func ListDiscussionComments(db *sql.DB, discussionID int) ([]models.DiscussionComment, error) {
+	rows, err := db.Query(`SELECT id, discussion_id, author, content, COALESCE(parent_id,0), comment_type, created_at
+		FROM discussion_comments WHERE discussion_id = ? ORDER BY created_at`, discussionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.DiscussionComment
+	for rows.Next() {
+		var c models.DiscussionComment
+		if err := rows.Scan(&c.ID, &c.DiscussionID, &c.Author, &c.Content, &c.ParentID, &c.CommentType, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // --- Helpers ---
+
+func nullInt(i int) any {
+	if i == 0 {
+		return nil
+	}
+	return i
+}
 
 func nullStr(s string) any {
 	if s == "" {

@@ -194,6 +194,7 @@ const App = {
             case 'roadmap': return this.renderRoadmap();
             case 'cycles': return this.renderCycles();
             case 'history': return this.renderHistory();
+            case 'discussions': return this.renderDiscussions();
             case 'qa': return this.renderQA();
             default: return `<div class="empty-state">
                 <div class="empty-state-icon">🧭</div>
@@ -220,9 +221,10 @@ const App = {
 
     // ── Dashboard ──
     async renderDashboard() {
-        const [status, features, milestones, roadmap, cycles] = await Promise.all([
+        const [status, features, milestones, roadmap, cycles, discussions] = await Promise.all([
             this.api('status'), this.api('features'), this.api('milestones'),
             this.api('roadmap'), this.api('cycles'),
+            this.api('discussions').catch(() => []),
         ]);
         const counts = status.feature_counts || {};
         const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -320,6 +322,24 @@ const App = {
             </div>`;
         }).join('');
 
+        // Project stats
+        const totalEvents = (status.recent_events || []).length;
+        const totalDiscussions = (discussions || []).length;
+        const allScores = [];
+        (cycles || []).forEach(c => { if (c.scores) c.scores.forEach(s => allScores.push(s.score)); });
+        const avgCycleScore = allScores.length ? (allScores.reduce((a,b) => a+b, 0) / allScores.length).toFixed(1) : null;
+        const withSpec = features.filter(f => f.spec && f.spec.trim()).length;
+        const withoutSpec = total - withSpec;
+        const statsCard = `<div class="card"><div class="card-title" style="margin-bottom:8px">📊 Project Stats</div>
+            <div class="project-stats-grid">
+                <div class="project-stat-item"><span class="project-stat-value">${totalEvents}</span><span class="project-stat-label">Total Events</span></div>
+                <div class="project-stat-item"><span class="project-stat-value">${totalDiscussions}</span><span class="project-stat-label">Discussions</span></div>
+                <div class="project-stat-item"><span class="project-stat-value">${avgCycleScore ?? '—'}</span><span class="project-stat-label">Avg Cycle Score</span></div>
+                <div class="project-stat-item"><span class="project-stat-value">${withSpec}/${total}</span><span class="project-stat-label">With Specs</span></div>
+            </div>
+            ${total > 0 ? `<div style="margin-top:8px"><div style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px"><span>Spec coverage</span><span>${total > 0 ? Math.round((withSpec/total)*100) : 0}%</span></div><div class="progress-bar"><div class="progress-fill${withSpec===total?' success':''}" style="width:${total > 0 ? Math.round((withSpec/total)*100) : 0}%"></div></div></div>` : ''}
+        </div>`;
+
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
                 <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
@@ -334,6 +354,7 @@ const App = {
                 <div class="card"><div class="card-title" style="margin-bottom:8px">Recent Activity</div>${events}</div>
                 <div class="card" style="cursor:pointer" onclick="App.navigate('roadmap')"><div class="card-title" style="margin-bottom:8px">📋 Roadmap Highlights</div>${roadmapPreview}</div>
                 <div class="card"><div class="card-title" style="margin-bottom:8px">Priority Distribution</div>${priChart}${activeCycles.length ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px"><div class="card-title" style="margin-bottom:8px">Active Cycles</div>' + cycleCards + '</div>' : ''}</div>
+                ${statsCard}
             </div>`;
     },
 
@@ -415,13 +436,16 @@ const App = {
         </tr>
         <tr class="ft-detail-row" data-detail-for="${esc(f.id)}" style="display:none">
           <td colspan="6">
-            <div class="roadmap-item-details" style="max-height:300px;opacity:1;padding:8px 16px">
+            <div class="roadmap-item-details" style="max-height:none;opacity:1;padding:8px 16px">
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(f.id)}</span></div>
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Status</span><span class="roadmap-detail-value">${esc(f.status)}</span></div>
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Priority</span><span class="roadmap-detail-value">${this.priorityLabel(f.priority)}</span></div>
               ${f.milestone_name ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Milestone</span><span class="roadmap-detail-value">${esc(f.milestone_name)}</span></div>` : ''}
               ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(f.description)}</span></div>` : ''}
+              ${f.roadmap_item_id ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Roadmap Item</span><span class="roadmap-detail-value"><a href="#" class="feature-roadmap-link" data-roadmap-id="${esc(f.roadmap_item_id)}">${esc(f.roadmap_item_id)}</a></span></div>` : ''}
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(f.created_at)}</span></div>
+              ${f.spec ? `<div class="feature-spec-section"><div class="feature-spec-header">Spec</div><pre class="feature-spec-block"><code>${esc(f.spec)}</code></pre></div>` : ''}
+              <div class="feature-discussions-section" data-discussions-for="${esc(f.id)}"><div class="feature-discussions-loading" style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading discussions…</div></div>
             </div>
           </td>
         </tr>`;
@@ -824,6 +848,91 @@ const App = {
             </div>`;
     },
 
+    // ── Discussions ──
+    async renderDiscussions() {
+        const discussions = await this.api('discussions');
+        if (!discussions.length) return `<div class="page-header"><h2 class="page-title">Discussions</h2><p class="page-subtitle">Project discussions and decisions</p></div>
+            <div class="empty-state">
+                <div class="empty-state-icon">💬</div>
+                <div class="empty-state-text">No discussions yet</div>
+                <div class="empty-state-hint">Discussions help track proposals, decisions, and team conversations.</div>
+            </div>`;
+
+        this._discussionsData = discussions;
+
+        const statusColors = { open: 'var(--success)', resolved: 'var(--accent)', merged: 'var(--purple)', closed: 'var(--text-muted)' };
+        const rows = discussions.map(d => {
+            const statusCls = 'disc-status-' + (d.status || 'open');
+            return `<tr class="disc-row" data-disc-id="${d.id}" style="cursor:pointer">
+                <td><span class="disc-id">#${d.id}</span></td>
+                <td><span class="badge ${statusCls}">${esc(d.status || 'open')}</span></td>
+                <td><span class="disc-title">${esc(d.title)}</span></td>
+                <td>${esc(d.author || '—')}</td>
+                <td><span class="disc-comment-count">${d.comment_count || 0}</span></td>
+                <td>${d.feature_id ? `<a href="#" class="disc-feature-link" data-feature-id="${esc(d.feature_id)}">${esc(d.feature_id)}</a>` : '—'}</td>
+                <td style="color:var(--text-muted)">${fmtDate(d.created_at)}</td>
+            </tr>
+            <tr class="disc-detail-row" data-disc-detail="${d.id}" style="display:none">
+              <td colspan="7">
+                <div class="disc-comments-wrap" id="discComments${d.id}">
+                  <div style="font-size:0.8rem;color:var(--text-muted);padding:8px">Loading comments…</div>
+                </div>
+              </td>
+            </tr>`;
+        }).join('');
+
+        const statusCounts = {};
+        discussions.forEach(d => { statusCounts[d.status || 'open'] = (statusCounts[d.status || 'open'] || 0) + 1; });
+
+        return `<div class="page-header"><h2 class="page-title">Discussions</h2><p class="page-subtitle">${discussions.length} discussion${discussions.length !== 1 ? 's' : ''}</p></div>
+            <div class="stats-grid" style="margin-bottom:16px">
+                <div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value">${statusCounts.open || 0}</div><div class="stat-label">Open</div></div><div class="stat-icon" aria-hidden="true">🟢</div></div>
+                <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${statusCounts.resolved || 0}</div><div class="stat-label">Resolved</div></div><div class="stat-icon" aria-hidden="true">🔵</div></div>
+                <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${statusCounts.merged || 0}</div><div class="stat-label">Merged</div></div><div class="stat-icon" aria-hidden="true">🟣</div></div>
+                <div class="stat-card"><div class="stat-card-info"><div class="stat-value">${statusCounts.closed || 0}</div><div class="stat-label">Closed</div></div><div class="stat-icon" aria-hidden="true">⚪</div></div>
+            </div>
+            <div class="card"><table class="table"><thead><tr><th>ID</th><th>Status</th><th>Title</th><th>Author</th><th>Comments</th><th>Feature</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    },
+
+    renderDiscussionComments(comments) {
+        if (!comments || !comments.length) return '<div style="font-size:0.8rem;color:var(--text-muted);padding:8px">No comments</div>';
+        const typeColors = { proposal: 'disc-type-proposal', approval: 'disc-type-approval', objection: 'disc-type-objection', revision: 'disc-type-revision', decision: 'disc-type-decision', comment: 'disc-type-comment' };
+        return comments.map(c => {
+            const indent = (c.parent_id && c.parent_id > 0) ? ' disc-comment-reply' : '';
+            const ctype = c.comment_type || c.type || 'comment';
+            const typeCls = typeColors[ctype] || 'disc-type-comment';
+            return `<div class="disc-comment${indent}">
+                <div class="disc-comment-header">
+                    <span class="disc-comment-author">${esc(c.author || 'Unknown')}</span>
+                    <span class="badge ${typeCls}">${esc(ctype)}</span>
+                    <span class="disc-comment-time">${fmtTime(c.created_at)}</span>
+                </div>
+                <div class="disc-comment-body">${esc(c.content || '')}</div>
+            </div>`;
+        }).join('');
+    },
+
+    async loadFeatureDiscussions(featureId, container) {
+        try {
+            const discussions = await this.api('discussions?feature=' + encodeURIComponent(featureId));
+            if (!discussions || !discussions.length) {
+                container.innerHTML = '';
+                return;
+            }
+            container.innerHTML = `<div class="feature-discussions-header">Linked Discussions</div>
+                <div class="feature-discussions-list">${discussions.map(d => {
+                    const statusCls = 'disc-status-' + (d.status || 'open');
+                    return `<div class="feature-disc-item" data-disc-id="${d.id}" style="cursor:pointer">
+                        <span class="badge ${statusCls}">${esc(d.status || 'open')}</span>
+                        <span class="feature-disc-title">${esc(d.title)}</span>
+                        <span class="disc-comment-count">${d.comment_count || 0} 💬</span>
+                    </div>`;
+                }).join('')}</div>`;
+        } catch {
+            container.innerHTML = '';
+        }
+    },
+
     bindPageEvents(page) {
         if (page === 'dashboard') {
             document.querySelectorAll('.kanban-card').forEach(card => {
@@ -853,9 +962,14 @@ const App = {
                             if (!isVisible) {
                                 detail.style.display = 'table-row';
                                 row.classList.add('expanded');
+                                const discSection = detail.querySelector(`[data-discussions-for="${fid}"]`);
+                                if (discSection) this.loadFeatureDiscussions(fid, discSection);
                             }
                         }
                     });
+                });
+                document.querySelectorAll('.feature-roadmap-link').forEach(link => {
+                    link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigate('roadmap'); });
                 });
             };
             const refresh = () => {
@@ -974,6 +1088,35 @@ const App = {
                 applyRoadmapFilters();
             }));
             applyRoadmapFilters();
+        }
+        if (page === 'discussions') {
+            document.querySelectorAll('.disc-row').forEach(row => {
+                row.addEventListener('click', async () => {
+                    const did = row.dataset.discId;
+                    const detail = document.querySelector(`.disc-detail-row[data-disc-detail="${did}"]`);
+                    if (detail) {
+                        const isVisible = detail.style.display !== 'none';
+                        document.querySelectorAll('.disc-detail-row').forEach(d => d.style.display = 'none');
+                        document.querySelectorAll('.disc-row').forEach(r => r.classList.remove('expanded'));
+                        if (!isVisible) {
+                            detail.style.display = 'table-row';
+                            row.classList.add('expanded');
+                            const wrap = document.getElementById('discComments' + did);
+                            if (wrap) {
+                                try {
+                                    const disc = await this.api('discussions/' + did);
+                                    wrap.innerHTML = this.renderDiscussionComments(disc.comments || []);
+                                } catch {
+                                    wrap.innerHTML = '<div style="font-size:0.8rem;color:var(--danger);padding:8px">Failed to load comments</div>';
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+            document.querySelectorAll('.disc-feature-link').forEach(link => {
+                link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigate('features'); });
+            });
         }
         if (page === 'qa') {
             document.querySelectorAll('.qa-approve').forEach(btn => btn.addEventListener('click', async () => {
