@@ -9,7 +9,26 @@ const App = {
         this.bindHamburger();
         this.loadTheme();
         this.connectWebSocket();
-        await this.navigate('dashboard');
+        this._navContext = {};
+        window.addEventListener('hashchange', () => {
+            const parsed = this.parseHash();
+            if (parsed.page) {
+                this._navContext = parsed.context || {};
+                this.navigate(parsed.page);
+            }
+        });
+        const initial = this.parseHash();
+        if (initial.context) this._navContext = initial.context;
+        await this.navigate(initial.page || 'dashboard');
+    },
+
+    parseHash() {
+        const hash = window.location.hash.replace(/^#/, '');
+        if (!hash) return { page: null, context: {} };
+        const parts = hash.split('/');
+        const page = parts[0];
+        const context = parts.slice(1).length ? { id: decodeURIComponent(parts.slice(1).join('/')) } : {};
+        return { page, context };
     },
 
     connectWebSocket() {
@@ -20,6 +39,11 @@ const App = {
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'refresh') {
+                    // Preserve expanded state across re-render
+                    const expandedFeature = document.querySelector('.ft-row.expanded');
+                    if (expandedFeature) this._expandedFeatureId = expandedFeature.dataset.featureId;
+                    const expandedRoadmap = document.querySelector('.roadmap-item.expanded');
+                    if (expandedRoadmap) this._expandedRoadmapId = expandedRoadmap.dataset.roadmapId;
                     this.navigate(this.currentPage);
                 }
             } catch { /* ignore non-JSON */ }
@@ -104,8 +128,12 @@ const App = {
         }
     },
 
-    async navigate(page) {
+    async navigate(page, context) {
+        if (context) this._navContext = context;
         this.currentPage = page;
+        const ctxId = this._navContext?.id ? '/' + encodeURIComponent(this._navContext.id) : '';
+        const newHash = '#' + page + ctxId;
+        if (window.location.hash !== newHash) history.replaceState(null, '', newHash);
         document.querySelectorAll('.nav-link').forEach(l => {
             const isActive = l.dataset.page === page;
             l.classList.toggle('active', isActive);
@@ -187,6 +215,35 @@ const App = {
         });
     },
 
+    navigateTo(page, id) {
+        this._navContext = id ? { id } : {};
+        this.navigate(page);
+    },
+
+    scoreColorClass(score) {
+        if (score >= 8) return 'score-green';
+        if (score >= 6) return 'score-yellow';
+        return 'score-red';
+    },
+
+    renderSpecContent(spec) {
+        if (!spec) return '';
+        const lines = spec.split('\n');
+        let inList = false, html = '';
+        for (const line of lines) {
+            const m = line.match(/^\s*(\d+)[.)]\s+(.+)/);
+            if (m) {
+                if (!inList) { html += '<ol class="spec-criteria-list">'; inList = true; }
+                html += `<li>${esc(m[2])}</li>`;
+            } else {
+                if (inList) { html += '</ol>'; inList = false; }
+                if (line.trim()) html += `<p class="spec-text">${esc(line)}</p>`;
+            }
+        }
+        if (inList) html += '</ol>';
+        return html || `<pre class="feature-spec-block"><code>${esc(spec)}</code></pre>`;
+    },
+
     async renderPage(page) {
         switch (page) {
             case 'dashboard': return this.renderDashboard();
@@ -245,7 +302,7 @@ const App = {
             const items = features.filter(f => f.status === s);
             return `<div class="kanban-column kanban-column-${s}">
                 <div class="kanban-header"><span class="kanban-title">${statusLabels[s]||s}</span><span class="kanban-count">${items.length}</span></div>
-                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty"><div class="kanban-empty-icon">○</div>No items</div>'}
+                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-id="${esc(f.id)}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty"><div class="kanban-empty-icon">○</div>No items</div>'}
             </div>`;
         }).join('');
 
@@ -281,10 +338,10 @@ const App = {
         const roadmapPreview = topRoadmap.length ? topRoadmap.map((r, i) => {
             const priColors = {critical:'var(--danger)',high:'var(--warning)',medium:'var(--accent)',low:'var(--success)','nice-to-have':'var(--purple)'};
             const stIcons = {proposed:'○','accepted':'◐','in-progress':'◑',completed:'●',deferred:'◌'};
-            return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+            return `<div class="dash-roadmap-item" data-roadmap-id="${esc(r.id)}" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
                 <span style="color:${priColors[r.priority]||'var(--text-muted)'};font-size:0.7rem;font-weight:700;min-width:18px;text-align:center">${i+1}</span>
-                <span style="font-size:0.85rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title)}</span>
-                <span style="font-size:0.7rem;color:var(--text-muted)">${stIcons[r.status]||'○'} ${r.status}</span>
+                <span style="font-size:0.8rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title)}</span>
+                <span style="font-size:0.65rem;color:var(--text-muted)">${stIcons[r.status]||'○'} ${r.status}</span>
                 ${r.effort ? `<span class="effort-badge effort-${r.effort}">${r.effort.toUpperCase()}</span>` : ''}
             </div>`;
         }).join('') : '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">No roadmap items yet</div>';
@@ -340,6 +397,16 @@ const App = {
             ${total > 0 ? `<div style="margin-top:8px"><div style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px"><span>Spec coverage</span><span>${total > 0 ? Math.round((withSpec/total)*100) : 0}%</span></div><div class="progress-bar"><div class="progress-fill${withSpec===total?' success':''}" style="width:${total > 0 ? Math.round((withSpec/total)*100) : 0}%"></div></div></div>` : ''}
         </div>`;
 
+        // Cycle scores dots for dashboard
+        const recentScores = [];
+        (cycles || []).forEach(c => { if (c.scores) c.scores.forEach(s => recentScores.push({ score: s.score, feature: c.feature_id, step: s.step, created: s.created_at, notes: s.notes })); });
+        recentScores.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+        const scoreDots = recentScores.slice(0, 24).map(s => {
+            const cls = this.scoreColorClass(s.score);
+            return `<span class="score-dot ${cls}" title="${s.score.toFixed(1)} — ${esc(s.feature)}${s.notes ? '\n' + s.notes : ''}">${s.score.toFixed(1)}</span>`;
+        }).join('');
+        const scoresCard = recentScores.length ? `<div class="card"><div class="card-title" style="margin-bottom:8px">🎯 Cycle Scores</div><div class="score-dots-wrap">${scoreDots}</div></div>` : '';
+
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
                 <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
@@ -354,6 +421,7 @@ const App = {
                 <div class="card"><div class="card-title" style="margin-bottom:8px">Recent Activity</div>${events}</div>
                 <div class="card" style="cursor:pointer" onclick="App.navigate('roadmap')"><div class="card-title" style="margin-bottom:8px">📋 Roadmap Highlights</div>${roadmapPreview}</div>
                 <div class="card"><div class="card-title" style="margin-bottom:8px">Priority Distribution</div>${priChart}${activeCycles.length ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px"><div class="card-title" style="margin-bottom:8px">Active Cycles</div>' + cycleCards + '</div>' : ''}</div>
+                ${scoresCard}
                 ${statsCard}
             </div>`;
     },
@@ -417,6 +485,9 @@ const App = {
             const prog = this.featureProgress(f.status);
             const pClass = f.priority <= 5 ? f.priority : 5;
             const desc = f.description ? esc(f.description).substring(0, 80) + (f.description.length > 80 ? '…' : '') : '';
+            const rmItem = f.roadmap_item_id && this._roadmapData ? this._roadmapData.find(r => r.id === f.roadmap_item_id) : null;
+            const rmDisplay = rmItem ? rmItem.title : f.roadmap_item_id;
+            const specHtml = f.spec ? `<div class="feature-spec-section"><div class="feature-spec-header">Spec</div><div class="feature-spec-card">${this.renderSpecContent(f.spec)}</div></div>` : '';
             return `<tr class="ft-row status-${f.status}" data-feature-id="${esc(f.id)}" style="cursor:pointer">
             <td>
                 <span class="ft-name">${esc(f.name)}</span>
@@ -442,9 +513,12 @@ const App = {
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Priority</span><span class="roadmap-detail-value">${this.priorityLabel(f.priority)}</span></div>
               ${f.milestone_name ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Milestone</span><span class="roadmap-detail-value">${esc(f.milestone_name)}</span></div>` : ''}
               ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(f.description)}</span></div>` : ''}
-              ${f.roadmap_item_id ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Roadmap Item</span><span class="roadmap-detail-value"><a href="#" class="feature-roadmap-link" data-roadmap-id="${esc(f.roadmap_item_id)}">${esc(f.roadmap_item_id)}</a></span></div>` : ''}
+              ${f.roadmap_item_id ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Roadmap Item</span><span class="roadmap-detail-value"><a href="#" class="feature-roadmap-link" data-roadmap-id="${esc(f.roadmap_item_id)}">${esc(rmDisplay)}</a></span></div>` : ''}
+              ${f.depends_on && f.depends_on.length ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Depends On</span><span class="roadmap-detail-value">${f.depends_on.map(d => `<a href="#" class="clickable-feature" data-feature-id="${esc(d)}">${esc(d)}</a>`).join(', ')}</span></div>` : ''}
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(f.created_at)}</span></div>
-              ${f.spec ? `<div class="feature-spec-section"><div class="feature-spec-header">Spec</div><pre class="feature-spec-block"><code>${esc(f.spec)}</code></pre></div>` : ''}
+              ${specHtml}
+              <div class="feature-enriched-section" data-enriched-for="${esc(f.id)}"></div>
+              <div class="feature-history-section" data-history-for="${esc(f.id)}"></div>
               <div class="feature-discussions-section" data-discussions-for="${esc(f.id)}"><div class="feature-discussions-loading" style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading discussions…</div></div>
             </div>
           </td>
@@ -464,8 +538,12 @@ const App = {
     },
 
     async renderFeatures() {
-        const features = await this.api('features');
+        const [features, roadmapItems] = await Promise.all([
+            this.api('features'),
+            this.api('roadmap').catch(() => []),
+        ]);
         this._featuresData = features;
+        this._roadmapData = roadmapItems;
         this._featuresFilter = 'all';
         this._featuresSearch = '';
 
@@ -495,7 +573,7 @@ const App = {
 
     // ── Roadmap ──
     async renderRoadmap() {
-        const items = await this.api('roadmap');
+        const [items, features] = await Promise.all([this.api('roadmap'), this.api('features')]);
         if (!items.length) return `<div class="page-header"><h2 class="page-title">Roadmap</h2><p class="page-subtitle">Product vision and prioritized backlog</p></div>
             <div class="empty-state">
                 <div class="empty-state-icon">🗺️</div>
@@ -505,12 +583,23 @@ const App = {
             </div>`;
 
         this._roadmapData = items;
+        this._roadmapFeatures = features;
         if (!this.roadmapFilters) this.roadmapFilters = { category: 'all', status: 'all' };
+        if (!this._roadmapView) this._roadmapView = 'priority';
 
         const pris = ['critical','high','medium','low','nice-to-have'];
-        const icons = {critical:'🔴',high:'🟠',medium:'🟡',low:'🟢','nice-to-have':'🔵'};
+        const priIcons = {critical:'🔴',high:'🟠',medium:'🟡',low:'🟢','nice-to-have':'🔵'};
+        const priColors = {critical:'var(--danger)',high:'var(--warning)',medium:'var(--accent)',low:'var(--success)','nice-to-have':'var(--purple)'};
         const grouped = {};
         items.forEach(r => { (grouped[r.priority] = grouped[r.priority] || []).push(r); });
+
+        // Build feature lookup by roadmap_item_id
+        const featuresByRoadmap = {};
+        features.forEach(f => {
+            if (f.roadmap_item_id) {
+                (featuresByRoadmap[f.roadmap_item_id] = featuresByRoadmap[f.roadmap_item_id] || []).push(f);
+            }
+        });
 
         const sCounts = {};
         items.forEach(r => { sCounts[r.status] = (sCounts[r.status] || 0) + 1; });
@@ -554,23 +643,73 @@ const App = {
             <div class="roadmap-filter-group"><span class="roadmap-filter-label">Status</span><div class="roadmap-filter-pills">${stPills}</div></div>
         </div>`;
 
+        // Helper: render linked features inline
+        const renderLinkedFeatures = (roadmapId) => {
+            const linked = featuresByRoadmap[roadmapId] || [];
+            if (!linked.length) return '';
+            return `<div class="roadmap-inline-features">${linked.map(f =>
+                `<span class="roadmap-inline-feature clickable-feature" data-feature-id="${esc(f.id)}"><span class="badge badge-${f.status}" style="font-size:0.6rem;padding:1px 6px">${f.status}</span> ${esc(f.name)}${(f.depends_on && f.depends_on.length) ? `<span class="dep-indicator" title="Depends on: ${f.depends_on.map(d => esc(d)).join(', ')}">⛓️</span>` : ''}</span>`
+            ).join('')}</div>`;
+        };
+
+        // Helper: render a single roadmap item card
+        const renderItem = (r, rank, i) => {
+            const itemCat = r.category || 'uncategorized';
+            const linkedHtml = renderLinkedFeatures(r.id);
+            return `<div class="roadmap-item st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" data-roadmap-id="${esc(r.id)}" data-priority="${r.priority}" style="animation-delay:${i*0.06}s">
+                <div class="roadmap-item-number">${rank}</div>
+                <div class="roadmap-item-content">
+                    <div class="roadmap-item-title">${esc(r.title)}</div>
+                    ${r.description?`<div class="roadmap-item-desc">${esc(r.description)}</div>`:''}
+                    ${linkedHtml}
+                </div>
+                <div class="roadmap-item-meta">
+                    <span class="priority-badge pri-${r.priority}">${priIcons[r.priority] || '⚪'} ${(r.priority || '').replace('-',' ')}</span>
+                    ${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}
+                    ${r.effort?`<span class="effort-badge effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>`:''}
+                    <span class="badge badge-${r.status}">${r.status}</span>
+                </div>
+                <div class="roadmap-item-details">
+                    <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(r.id)}</span></div>
+                    ${r.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(r.description)}</span></div>` : ''}
+                    ${r.category ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Category</span><span class="roadmap-detail-value">${esc(r.category)}</span></div>` : ''}
+                    ${r.effort ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Effort</span><span class="roadmap-detail-value">${r.effort.toUpperCase()}</span></div>` : ''}
+                    <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(r.created_at)}</span></div>
+                    <div class="roadmap-linked-features" data-roadmap-id="${esc(r.id)}"></div>
+                </div>
+            </div>`;
+        };
+
+        // Priority-grouped sections
         let rank = 0;
-        const sections = pris.filter(p => grouped[p]).map(pri => {
+        const prioritySections = pris.filter(p => grouped[p]).map(pri => {
             const ritems = grouped[pri];
             return `<div class="roadmap-section pri-${pri}">
-                <div class="roadmap-priority-header pri-${pri}"><span class="roadmap-priority-icon" aria-hidden="true">${icons[pri]}</span><span class="roadmap-priority-label">${pri.replace('-',' ')}</span><span class="roadmap-priority-count">${ritems.length} item${ritems.length !== 1 ? 's' : ''}</span></div>
-                <div class="roadmap-items" role="list">${ritems.map((r,i) => {
-                    rank++;
-                    const itemCat = r.category || 'uncategorized';
-                    return `<div class="roadmap-item st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" style="animation-delay:${i*0.06}s">
-                        <div class="roadmap-item-number">${rank}</div>
-                        <div class="roadmap-item-content"><div class="roadmap-item-title">${esc(r.title)}</div>${r.description?`<div class="roadmap-item-desc">${esc(r.description)}</div>`:''}</div>
-                        <div class="roadmap-item-meta">${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}${r.effort?`<span class="effort-badge effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>`:''}<span class="badge badge-${r.status}">${r.status}</span></div>
-                    </div>`;
-                }).join('')}</div>
+                <div class="roadmap-priority-header pri-${pri}"><span class="roadmap-priority-icon" aria-hidden="true">${priIcons[pri]}</span><span class="roadmap-priority-label">${pri.replace('-',' ')}</span><span class="roadmap-priority-count">${ritems.length} item${ritems.length !== 1 ? 's' : ''}</span></div>
+                <div class="roadmap-items" role="list">${ritems.map((r,i) => { rank++; return renderItem(r, rank, i); }).join('')}</div>
             </div>`;
         }).join('');
 
+        // Category-grouped sections
+        const catGrouped = {};
+        items.forEach(r => { const c = r.category || 'uncategorized'; (catGrouped[c] = catGrouped[c] || []).push(r); });
+        const catSortedKeys = Object.keys(catGrouped).sort();
+        let catRank = 0;
+        const categorySections = catSortedKeys.map(cat => {
+            const catItems = catGrouped[cat];
+            const cls = catCls(cat);
+            return `<div class="roadmap-section roadmap-cat-section" data-cat-group="${esc(cat)}">
+                <div class="roadmap-category-header ${cls}" data-collapsible="true">
+                    <span class="roadmap-cat-header-icon">📁</span>
+                    <span class="roadmap-cat-header-label">${esc(cat)}</span>
+                    <span class="roadmap-priority-count">${catItems.length} item${catItems.length !== 1 ? 's' : ''}</span>
+                    <span class="roadmap-cat-chevron">▾</span>
+                </div>
+                <div class="roadmap-items roadmap-cat-items" role="list">${catItems.map((r,i) => { catRank++; return renderItem(r, catRank, i); }).join('')}</div>
+            </div>`;
+        }).join('');
+
+        // Category distribution chart
         const catEntries = Object.entries(catCounts).sort((a,b) => b[1] - a[1]);
         const catBarSegments = catEntries.map(([cat, count]) => {
             const idx = Math.abs(catCls(cat).replace('roadmap-cat-','')) % 6;
@@ -588,15 +727,102 @@ const App = {
             <div class="roadmap-legend">${catLegendItems}</div>
         </div>`;
 
-        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2><button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p></div>
+        // Priority distribution chart (horizontal stacked bar)
+        const priCounts = {};
+        items.forEach(r => { priCounts[r.priority] = (priCounts[r.priority] || 0) + 1; });
+        const priBarSegments = pris.filter(p => priCounts[p]).map(p => {
+            const count = priCounts[p];
+            const widthPct = ((count / items.length) * 100).toFixed(1);
+            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${priColors[p]}" title="${p.replace('-',' ')}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"></div>`;
+        }).join('');
+        const priLegendItems = pris.filter(p => priCounts[p]).map(p => {
+            return `<div class="roadmap-legend-item"><span class="roadmap-legend-dot" style="background:${priColors[p]}"></span><span class="roadmap-legend-label">${p.replace('-',' ')}</span><span class="roadmap-legend-count">${priCounts[p]}</span></div>`;
+        }).join('');
+        const priorityChart = `<div class="roadmap-priority-chart">
+            <div class="roadmap-chart-label">Priority Distribution</div>
+            <div class="roadmap-bar">${priBarSegments}</div>
+            <div class="roadmap-legend">${priLegendItems}</div>
+        </div>`;
+
+        // Dependency flow visualization
+        const depFeatures = features.filter(f => (f.depends_on && f.depends_on.length) || features.some(o => o.depends_on && o.depends_on.includes(f.id)));
+        let depGraphHtml = '';
+        if (depFeatures.length) {
+            const featureMap = {};
+            features.forEach(f => { featureMap[f.id] = f; });
+            // Topological layer assignment
+            const layers = {};
+            const assigned = new Set();
+            const getLayer = (fid, visited) => {
+                if (layers[fid] !== undefined) return layers[fid];
+                if (visited.has(fid)) return 0;
+                visited.add(fid);
+                const f = featureMap[fid];
+                if (!f || !f.depends_on || !f.depends_on.length) { layers[fid] = 0; return 0; }
+                let maxDep = 0;
+                f.depends_on.forEach(d => { if (featureMap[d]) maxDep = Math.max(maxDep, getLayer(d, visited) + 1); });
+                layers[fid] = maxDep;
+                return maxDep;
+            };
+            depFeatures.forEach(f => getLayer(f.id, new Set()));
+            const maxLayer = Math.max(0, ...Object.values(layers));
+            const statusColor = {done:'dep-done',implementing:'dep-implementing',draft:'dep-draft',blocked:'dep-blocked',planning:'dep-planning','agent-qa':'dep-implementing','human-qa':'dep-implementing'};
+
+            // Build columns
+            const columns = [];
+            for (let l = 0; l <= maxLayer; l++) {
+                const colFeatures = depFeatures.filter(f => (layers[f.id] || 0) === l);
+                columns.push(colFeatures);
+            }
+
+            const depNodes = columns.map((col, ci) =>
+                `<div class="dep-column">${col.map(f =>
+                    `<div class="dep-node ${statusColor[f.status] || 'dep-draft'} clickable-feature" data-feature-id="${esc(f.id)}" title="${esc(f.name)} (${f.status})${f.depends_on && f.depends_on.length ? '\\nDepends on: ' + f.depends_on.join(', ') : ''}">
+                        <div class="dep-node-name">${esc(f.name)}</div>
+                        <div class="dep-node-status">${f.status}</div>
+                    </div>`
+                ).join('')}</div>${ci < columns.length - 1 ? '<div class="dep-arrow-col"><div class="dep-arrow">→</div></div>' : ''}`
+            ).join('');
+
+            // Build dependency edges list
+            const depEdges = [];
+            depFeatures.forEach(f => {
+                if (f.depends_on) f.depends_on.forEach(d => {
+                    if (featureMap[d]) depEdges.push(`<div class="dep-edge"><span class="dep-edge-from">${esc(featureMap[d].name)}</span><span class="dep-edge-arrow">→</span><span class="dep-edge-to">${esc(f.name)}</span></div>`);
+                });
+            });
+
+            depGraphHtml = `<div class="dep-graph-container" id="depGraphContainer" style="display:none">
+                <div class="dep-graph-legend">
+                    <span class="dep-legend-item"><span class="dep-legend-dot dep-done"></span>Done</span>
+                    <span class="dep-legend-item"><span class="dep-legend-dot dep-implementing"></span>In Progress</span>
+                    <span class="dep-legend-item"><span class="dep-legend-dot dep-draft"></span>Draft</span>
+                    <span class="dep-legend-item"><span class="dep-legend-dot dep-blocked"></span>Blocked</span>
+                </div>
+                <div class="dep-graph">${depNodes}</div>
+                ${depEdges.length ? `<div class="dep-edges-list"><div class="dep-edges-title">Dependency Edges</div>${depEdges.join('')}</div>` : ''}
+            </div>`;
+        }
+
+        // View toggle buttons
+        const viewToggle = `<div class="roadmap-view-toggle">
+            <button class="roadmap-view-btn${this._roadmapView === 'priority' ? ' active' : ''}" data-view="priority" title="Group by priority">📊 Priority</button>
+            <button class="roadmap-view-btn${this._roadmapView === 'category' ? ' active' : ''}" data-view="category" title="Group by category">📁 Category</button>
+            ${depFeatures.length ? `<button class="roadmap-view-btn${this._roadmapView === 'dependencies' ? ' active' : ''}" data-view="dependencies" title="Dependency flow">🔗 Dependencies</button>` : ''}
+        </div>`;
+
+        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p></div>
             <div class="roadmap-summary">
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value">${items.length}</div><div class="roadmap-summary-label">Total Items</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-warning">${inProg}</div><div class="roadmap-summary-label">In Progress</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-success">${done}</div><div class="roadmap-summary-label">Completed</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-accent">${accepted}</div><div class="roadmap-summary-label">Accepted</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-purple">${pct}%</div><div class="roadmap-summary-label">Progress</div></div>
-            </div>${categoryChart}${filterBar}
-            <div id="roadmapSections">${sections}</div>
+            </div>
+            ${priorityChart}${categoryChart}${filterBar}
+            <div id="roadmapSections" class="roadmap-view-priority">${prioritySections}</div>
+            <div id="roadmapCategorySections" class="roadmap-view-category" style="display:none">${categorySections}</div>
+            ${depGraphHtml}
             <div class="roadmap-keyboard-hint" aria-hidden="true">Tip: Use ↑↓ to navigate, Enter to expand</div>`;
     },
 
@@ -663,8 +889,20 @@ const App = {
                 sparkline = `<svg class="score-sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>`;
             }
 
-            return `<div class="card cycle-card" data-cycle-id="${c.id}">
-                <div class="card-header"><span class="card-title">${esc(c.feature_id)}</span><span class="badge badge-${c.status}">${c.status}</span></div>
+            // Build score detail rows for expanded view
+            const scoreDetailRows = scores.map(s => {
+                const stepName = (steps[s.step] || `Step ${s.step}`).replace(/-/g, ' ');
+                const cls = App.scoreColorClass(s.score);
+                return `<tr>
+                    <td class="cycle-detail-step">${esc(stepName)}</td>
+                    <td><span class="score-badge ${cls}">${s.score.toFixed(1)}</span></td>
+                    <td class="cycle-detail-notes">${esc(s.notes || '—')}</td>
+                    <td class="cycle-detail-time">${fmtTime(s.created_at)}</td>
+                </tr>`;
+            }).join('');
+
+            return `<div class="card cycle-card" data-cycle-id="${c.id}" style="cursor:pointer">
+                <div class="card-header"><span class="card-title clickable-feature" data-feature-id="${esc(c.feature_id)}" style="cursor:pointer">${esc(c.feature_id)}</span><span class="badge badge-${c.status}">${c.status}</span></div>
                 <div class="cycle-meta">
                     <span class="cycle-type-name">${c.cycle_type.replace(/-/g, ' ')}</span>
                     <span class="cycle-iteration-badge">⟳ Iteration ${c.iteration}</span>
@@ -674,6 +912,13 @@ const App = {
                 <div class="cycle-pipeline">${pipeline}</div>
                 <div class="cycle-progress"><div class="cycle-progress-fill" style="width:${pct}%"></div></div>
                 ${sparkline ? `<div class="cycle-sparkline-row">${sparkline}<span class="sparkline-label">${scores.length} scores</span></div>` : ''}
+                <div class="cycle-detail" style="display:none">
+                    ${scores.length ? `<div class="cycle-detail-section">
+                        <div class="cycle-detail-title">★ Judge Scores</div>
+                        <table class="table cycle-scores-table"><thead><tr><th>Step</th><th>Score</th><th>Notes / Reasoning</th><th>Time</th></tr></thead><tbody>${scoreDetailRows}</tbody></table>
+                    </div>` : '<div class="cycle-detail-section"><div class="cycle-detail-title">No scores yet</div></div>'}
+                    <div class="cycle-work-items" data-cycle-id="${c.id}"></div>
+                </div>
             </div>`;
         };
 
@@ -755,19 +1000,22 @@ const App = {
             const rows = items.map(e => {
                 const delay = Math.min(idx++ * 0.04, 1.2);
                 let detailHtml = '';
+                let dataJson = '';
                 if (e.data) {
                     try {
                         const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
                         detailHtml = Object.entries(d).map(([k,v]) =>
                             `<span class="detail-badge"><span class="detail-badge-key">${esc(k)}</span><span class="detail-badge-val">${esc(String(v))}</span></span>`
                         ).join('');
-                    } catch(_) { detailHtml = `<span class="detail-badge"><span class="detail-badge-val">${esc(e.data)}</span></span>`; }
+                        dataJson = JSON.stringify(d, null, 2);
+                    } catch(_) { detailHtml = `<span class="detail-badge"><span class="detail-badge-val">${esc(e.data)}</span></span>`; dataJson = String(e.data); }
                 }
-                return `<div class="timeline-item ${eventClass(e.event_type)}" style="animation-delay:${delay}s">
+                return `<div class="timeline-item ${eventClass(e.event_type)}" style="animation-delay:${delay}s;cursor:pointer" data-event-idx="${idx-1}">
                     <div class="timeline-dot">${eventIcon(e.event_type)}</div>
                     <div class="timeline-time">${fmtRelTime(e.created_at)}</div>
-                    <div class="timeline-event"><span>${fmtEvent(e.event_type)}</span>${e.feature_id ? '<span class="badge badge-implementing">' + esc(e.feature_id) + '</span>' : ''}</div>
+                    <div class="timeline-event"><span>${fmtEvent(e.event_type)}</span>${e.feature_id ? `<span class="badge badge-implementing clickable-feature" data-feature-id="${esc(e.feature_id)}" style="cursor:pointer">${esc(e.feature_id)}</span>` : ''}</div>
                     ${detailHtml ? `<div class="timeline-detail">${detailHtml}</div>` : ''}
+                    ${dataJson ? `<div class="event-expand" style="display:none"><pre class="event-json">${esc(dataJson)}</pre></div>` : ''}
                 </div>`;
             }).join('');
             return `<div class="timeline-date-group"><div class="timeline-date-sep"><hr class="timeline-date-line"/><span class="timeline-date-label">${esc(date)}</span><hr class="timeline-date-line"/></div>${rows}</div>`;
@@ -922,73 +1170,83 @@ const App = {
             container.innerHTML = `<div class="feature-discussions-header">Linked Discussions</div>
                 <div class="feature-discussions-list">${discussions.map(d => {
                     const statusCls = 'disc-status-' + (d.status || 'open');
-                    return `<div class="feature-disc-item" data-disc-id="${d.id}" style="cursor:pointer">
+                    return `<div class="feature-disc-item clickable-discussion" data-disc-id="${d.id}" style="cursor:pointer">
                         <span class="badge ${statusCls}">${esc(d.status || 'open')}</span>
                         <span class="feature-disc-title">${esc(d.title)}</span>
                         <span class="disc-comment-count">${d.comment_count || 0} 💬</span>
                     </div>`;
                 }).join('')}</div>`;
+            container.querySelectorAll('.clickable-discussion').forEach(el => {
+                el.addEventListener('click', (e) => { e.stopPropagation(); App.navigateTo('discussions', el.dataset.discId); });
+            });
         } catch {
             container.innerHTML = '';
         }
     },
 
+    async loadFeatureHistory(featureId, container) {
+        try {
+            const events = await this.api('history');
+            const featureEvents = (events || []).filter(e => e.feature_id === featureId).slice(0, 15);
+            if (!featureEvents.length) { container.innerHTML = ''; return; }
+            const rows = featureEvents.map(e => {
+                let detail = '';
+                if (e.data) {
+                    try {
+                        const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+                        if (d.score !== undefined) detail = `<span class="score-badge ${App.scoreColorClass(d.score)}">${Number(d.score).toFixed(1)}</span>`;
+                        else if (d.result) detail = `<span class="feature-history-result">${esc(String(d.result).substring(0, 80))}</span>`;
+                        else if (d.new_status) detail = `<span class="badge badge-${d.new_status}">${esc(d.new_status)}</span>`;
+                    } catch(e) { /* ignore */ }
+                }
+                return `<div class="feature-history-item">
+                    <span class="feature-history-icon">${eventIcon(e.event_type)}</span>
+                    <span class="feature-history-event">${fmtEvent(e.event_type)}</span>
+                    ${detail}
+                    <span class="feature-history-time">${fmtRelTime(e.created_at)}</span>
+                </div>`;
+            }).join('');
+            container.innerHTML = `<div class="feature-discussions-header">History</div><div class="feature-history-list">${rows}</div>`;
+        } catch {
+            container.innerHTML = '';
+        }
+    },
+
+    // loadFeatureEnrichedData assigned after object literal (see below)
+
     bindPageEvents(page) {
+        // Global: bind clickable features anywhere
+        const bindClickableFeatures = (root) => {
+            (root || document).querySelectorAll('.clickable-feature').forEach(el => {
+                if (el.dataset.bound) return;
+                el.dataset.bound = '1';
+                el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigateTo('features', el.dataset.featureId); });
+            });
+        };
+
         if (page === 'dashboard') {
             document.querySelectorAll('.kanban-card').forEach(card => {
                 card.addEventListener('click', () => {
-                    const status = card.dataset.status;
-                    App._featuresFilter = status;
-                    App.navigate('features');
+                    const fid = card.dataset.featureId;
+                    if (fid) App.navigateTo('features', fid);
+                    else { App._featuresFilter = card.dataset.status; App.navigate('features'); }
                 });
             });
             document.querySelectorAll('.activity-item[data-feature-id]').forEach(item => {
-                item.addEventListener('click', () => { App.navigate('features'); });
+                item.addEventListener('click', () => { App.navigateTo('features', item.dataset.featureId); });
             });
             document.querySelectorAll('[data-milestone]').forEach(card => {
                 card.addEventListener('click', () => { App.navigate('features'); });
             });
+            document.querySelectorAll('.dash-roadmap-item[data-roadmap-id]').forEach(item => {
+                item.addEventListener('click', () => { App.navigateTo('roadmap', item.dataset.roadmapId); });
+            });
+            bindClickableFeatures();
         }
         if (page === 'features') {
-            const bindFeatureRows = () => {
-                document.querySelectorAll('.ft-row').forEach(row => {
-                    row.addEventListener('click', () => {
-                        const fid = row.dataset.featureId;
-                        const detail = document.querySelector(`.ft-detail-row[data-detail-for="${fid}"]`);
-                        if (detail) {
-                            const isVisible = detail.style.display !== 'none';
-                            document.querySelectorAll('.ft-detail-row').forEach(d => d.style.display = 'none');
-                            document.querySelectorAll('.ft-row').forEach(r => r.classList.remove('expanded'));
-                            if (!isVisible) {
-                                detail.style.display = 'table-row';
-                                row.classList.add('expanded');
-                                const discSection = detail.querySelector(`[data-discussions-for="${fid}"]`);
-                                if (discSection) this.loadFeatureDiscussions(fid, discSection);
-                            }
-                        }
-                    });
-                });
-                document.querySelectorAll('.feature-roadmap-link').forEach(link => {
-                    link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigate('roadmap'); });
-                });
-            };
-            const refresh = () => {
-                const wrap = document.getElementById('featuresTableWrap');
-                if (wrap) wrap.innerHTML = this.buildFeaturesTable(this.getFilteredFeatures());
-                bindFeatureRows();
-            };
-            document.querySelectorAll('.filter-pill').forEach(btn => btn.addEventListener('click', () => {
-                document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this._featuresFilter = btn.dataset.status;
-                refresh();
-            }));
-            const searchInput = document.getElementById('featuresSearch');
-            if (searchInput) searchInput.addEventListener('input', (e) => { this._featuresSearch = e.target.value; refresh(); });
-            bindFeatureRows();
+            App._setupFeaturePage.call(this);
         }
         if (page === 'history') {
-            // Filter buttons
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     this._historyFilter = btn.dataset.filter;
@@ -1013,6 +1271,8 @@ const App = {
                     const tmp = document.createElement('div');
                     tmp.innerHTML = this.buildHistoryItems(filtered.slice(prev, this._historyShown), prev);
                     while (tmp.firstChild) timeline.appendChild(tmp.firstChild);
+                    bindClickableFeatures(timeline);
+                    this.bindHistoryExpand(timeline);
                 }
                 const remaining = filtered.length - this._historyShown;
                 if (remaining <= 0) {
@@ -1021,9 +1281,12 @@ const App = {
                     btn.textContent = `Load more (${remaining} remaining)`;
                 }
             });
+            // Expandable event items + clickable features
+            bindClickableFeatures();
+            this.bindHistoryExpand(document);
         }
         if (page === 'roadmap') {
-            const toggleItem = (item) => {
+            const toggleItem = async (item) => {
                 const wasExpanded = item.classList.contains('expanded');
                 document.querySelectorAll('.roadmap-item.expanded').forEach(el => {
                     el.classList.remove('expanded');
@@ -1034,11 +1297,32 @@ const App = {
                     item.classList.add('expanded');
                     const ch = item.querySelector('.roadmap-item-chevron');
                     if (ch) ch.textContent = '▾';
+                    // Load linked features on expand
+                    const linkedDiv = item.querySelector('.roadmap-linked-features');
+                    if (linkedDiv && !linkedDiv.dataset.loaded) {
+                        const rid = item.dataset.roadmapId;
+                        try {
+                            const features = this._roadmapFeatures || await App.api('features');
+                            const linked = features.filter(f => f.roadmap_item_id === rid);
+                            if (linked.length) {
+                                linkedDiv.innerHTML = `<div class="roadmap-detail-label" style="margin-top:8px;margin-bottom:4px">Linked Features</div>` +
+                                    linked.map(f => `<div class="roadmap-linked-feature clickable-feature" data-feature-id="${esc(f.id)}" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:4px 0">
+                                        <span class="badge badge-${f.status}">${f.status}</span>
+                                        <span style="font-size:0.82rem">${esc(f.name)}</span>
+                                        ${(f.depends_on && f.depends_on.length) ? `<span class="dep-indicator" title="Depends on: ${f.depends_on.join(', ')}">⛓️</span>` : ''}
+                                    </div>`).join('');
+                                bindClickableFeatures(linkedDiv);
+                            }
+                        } catch(e) { /* ignore */ }
+                        linkedDiv.dataset.loaded = 'true';
+                    }
                 }
             };
             document.querySelectorAll('.roadmap-item').forEach(item => {
                 item.addEventListener('click', () => toggleItem(item));
             });
+            // Make inline features clickable
+            bindClickableFeatures(document.getElementById('content'));
             const content = document.getElementById('content');
             if (content) content.addEventListener('keydown', (e) => {
                 const items = Array.from(content.querySelectorAll('.roadmap-item'));
@@ -1088,6 +1372,47 @@ const App = {
                 applyRoadmapFilters();
             }));
             applyRoadmapFilters();
+
+            // View toggle (Priority / Category / Dependencies)
+            const switchView = (view) => {
+                this._roadmapView = view;
+                document.querySelectorAll('.roadmap-view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+                const priSections = document.getElementById('roadmapSections');
+                const catSections = document.getElementById('roadmapCategorySections');
+                const depGraph = document.getElementById('depGraphContainer');
+                const filters = document.querySelector('.roadmap-filters');
+                if (priSections) priSections.style.display = view === 'priority' ? '' : 'none';
+                if (catSections) catSections.style.display = view === 'category' ? '' : 'none';
+                if (depGraph) depGraph.style.display = view === 'dependencies' ? '' : 'none';
+                if (filters) filters.style.display = view === 'dependencies' ? 'none' : '';
+            };
+            document.querySelectorAll('.roadmap-view-btn').forEach(btn => btn.addEventListener('click', () => {
+                switchView(btn.dataset.view);
+            }));
+            switchView(this._roadmapView);
+
+            // Category collapsible headers
+            document.querySelectorAll('.roadmap-category-header[data-collapsible]').forEach(header => {
+                header.addEventListener('click', () => {
+                    const section = header.closest('.roadmap-cat-section');
+                    const catItems = section?.querySelector('.roadmap-cat-items');
+                    const chevron = header.querySelector('.roadmap-cat-chevron');
+                    if (catItems) {
+                        const collapsed = catItems.style.display === 'none';
+                        catItems.style.display = collapsed ? '' : 'none';
+                        if (chevron) chevron.textContent = collapsed ? '▾' : '▸';
+                    }
+                });
+            });
+
+            // Auto-expand roadmap item from navigation context or WS refresh
+            const roadmapAutoId = this._navContext?.id || this._expandedRoadmapId;
+            if (roadmapAutoId) {
+                const item = document.querySelector(`.roadmap-item[data-roadmap-id="${roadmapAutoId}"]`);
+                if (item) { toggleItem(item); setTimeout(() => item.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100); }
+                this._navContext = {};
+                this._expandedRoadmapId = null;
+            }
         }
         if (page === 'discussions') {
             document.querySelectorAll('.disc-row').forEach(row => {
@@ -1115,8 +1440,51 @@ const App = {
                 });
             });
             document.querySelectorAll('.disc-feature-link').forEach(link => {
-                link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigate('features'); });
+                link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigateTo('features', link.dataset.featureId); });
             });
+            // Auto-expand discussion from navigation context
+            if (this._navContext?.id) {
+                const did = this._navContext.id;
+                const row = document.querySelector(`.disc-row[data-disc-id="${did}"]`);
+                if (row) { row.click(); setTimeout(() => row.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100); }
+                this._navContext = {};
+            }
+        }
+        if (page === 'cycles') {
+            document.querySelectorAll('.cycle-card').forEach(card => {
+                card.addEventListener('click', async (e) => {
+                    // Don't toggle if clicking a clickable-feature link
+                    if (e.target.closest('.clickable-feature')) return;
+                    const detail = card.querySelector('.cycle-detail');
+                    if (!detail) return;
+                    const isVisible = detail.style.display !== 'none';
+                    document.querySelectorAll('.cycle-detail').forEach(d => d.style.display = 'none');
+                    document.querySelectorAll('.cycle-card').forEach(c => c.classList.remove('expanded'));
+                    if (!isVisible) {
+                        detail.style.display = 'block';
+                        card.classList.add('expanded');
+                        // Fetch work items
+                        const workWrap = detail.querySelector('.cycle-work-items');
+                        if (workWrap && !workWrap.dataset.loaded) {
+                            const cid = card.dataset.cycleId;
+                            try {
+                                const history = await App.api(`cycles/${cid}/history`);
+                                const items = Array.isArray(history) ? history : (history.work_items || []);
+                                if (items.length) {
+                                    workWrap.innerHTML = `<div class="cycle-detail-title">Work Items</div>` +
+                                        items.map(w => `<div class="cycle-work-item">
+                                            <span class="badge badge-${w.status || 'completed'}">${esc(w.status || 'done')}</span>
+                                            <span class="cycle-work-step">${esc((w.step_name || w.step || '').toString().replace(/-/g, ' '))}</span>
+                                            ${w.result ? `<div class="cycle-work-result">${esc(w.result)}</div>` : ''}
+                                        </div>`).join('');
+                                }
+                            } catch { /* no history data */ }
+                            workWrap.dataset.loaded = 'true';
+                        }
+                    }
+                });
+            });
+            bindClickableFeatures();
         }
         if (page === 'qa') {
             document.querySelectorAll('.qa-approve').forEach(btn => btn.addEventListener('click', async () => {
@@ -1134,6 +1502,21 @@ const App = {
         }
     },
 
+    bindHistoryExpand(root) {
+        root.querySelectorAll('.timeline-item[data-event-idx]').forEach(item => {
+            if (item.dataset.boundExpand) return;
+            item.dataset.boundExpand = '1';
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.clickable-feature')) return;
+                const expand = item.querySelector('.event-expand');
+                if (expand) {
+                    const isVisible = expand.style.display !== 'none';
+                    expand.style.display = isVisible ? 'none' : 'block';
+                }
+            });
+        });
+    },
+
     toast(msg, type) {
         let c = document.querySelector('.toast-container');
         if (!c) { c = document.createElement('div'); c.className = 'toast-container'; c.setAttribute('role', 'status'); c.setAttribute('aria-live', 'polite'); document.body.appendChild(c); }
@@ -1143,6 +1526,163 @@ const App = {
         c.appendChild(t);
         setTimeout(() => { t.classList.add('toast-exit'); t.addEventListener('animationend', () => t.remove()); }, 3000);
     },
+};
+
+// Feature page setup — assigned outside object literal to avoid V8 parsing quirk
+App._setupFeaturePage = function() {
+    const self = this;
+    const expandFeature = function(fid) {
+        const row = document.querySelector('.ft-row[data-feature-id="' + fid + '"]');
+        const detail = document.querySelector('.ft-detail-row[data-detail-for="' + fid + '"]');
+        if (!row || !detail) return;
+        document.querySelectorAll('.ft-detail-row').forEach(function(d) { d.style.display = 'none'; });
+        document.querySelectorAll('.ft-row').forEach(function(r) { r.classList.remove('expanded'); });
+        detail.style.display = 'table-row';
+        row.classList.add('expanded');
+        // Ensure enriched section exists
+        var enrichedSection = detail.querySelector('[data-enriched-for="' + fid + '"]');
+        if (!enrichedSection) {
+            var container = detail.querySelector('.roadmap-item-details');
+            if (container) {
+                var histSection = detail.querySelector('[data-history-for="' + fid + '"]');
+                enrichedSection = document.createElement('div');
+                enrichedSection.className = 'feature-enriched-section';
+                enrichedSection.setAttribute('data-enriched-for', fid);
+                if (histSection) container.insertBefore(enrichedSection, histSection);
+                else container.appendChild(enrichedSection);
+            }
+        }
+        if (enrichedSection && !enrichedSection.getAttribute('data-loaded')) {
+            App.loadFeatureEnrichedData(fid, enrichedSection);
+            enrichedSection.setAttribute('data-loaded', '1');
+        }
+        var discSection = detail.querySelector('[data-discussions-for="' + fid + '"]');
+        if (discSection) App.loadFeatureDiscussions(fid, discSection);
+        var hSection = detail.querySelector('[data-history-for="' + fid + '"]');
+        if (hSection && !hSection.getAttribute('data-loaded')) {
+            App.loadFeatureHistory(fid, hSection);
+            hSection.setAttribute('data-loaded', '1');
+        }
+    };
+    var bindClickableFeatures = function(root) {
+        (root || document).querySelectorAll('.clickable-feature').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                App.navigateTo('features', el.dataset.featureId);
+            });
+        });
+    };
+    var bindFeatureRows = function() {
+        document.querySelectorAll('.ft-row').forEach(function(row) {
+            row.addEventListener('click', function() {
+                var fid = row.dataset.featureId;
+                var detail = document.querySelector('.ft-detail-row[data-detail-for="' + fid + '"]');
+                if (detail) {
+                    var isVisible = detail.style.display !== 'none';
+                    document.querySelectorAll('.ft-detail-row').forEach(function(d) { d.style.display = 'none'; });
+                    document.querySelectorAll('.ft-row').forEach(function(r) { r.classList.remove('expanded'); });
+                    if (!isVisible) expandFeature(fid);
+                }
+            });
+        });
+        document.querySelectorAll('.feature-roadmap-link').forEach(function(link) {
+            link.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); App.navigateTo('roadmap', link.dataset.roadmapId); });
+        });
+        bindClickableFeatures();
+    };
+    var refresh = function() {
+        var expandedRow = document.querySelector('.ft-row.expanded');
+        var savedId = expandedRow ? expandedRow.dataset.featureId : null;
+        var wrap = document.getElementById('featuresTableWrap');
+        if (wrap) wrap.innerHTML = self.buildFeaturesTable(self.getFilteredFeatures());
+        bindFeatureRows();
+        if (savedId) {
+            var r = document.querySelector('.ft-row[data-feature-id="' + savedId + '"]');
+            if (r) expandFeature(savedId);
+        }
+    };
+    document.querySelectorAll('.filter-pill').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.filter-pill').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            self._featuresFilter = btn.dataset.status;
+            refresh();
+        });
+    });
+    var searchInput = document.getElementById('featuresSearch');
+    if (searchInput) searchInput.addEventListener('input', function(e) { self._featuresSearch = e.target.value; refresh(); });
+    bindFeatureRows();
+    var autoExpandId = (self._navContext && self._navContext.id) || self._expandedFeatureId;
+    if (autoExpandId) {
+        var r = document.querySelector('.ft-row[data-feature-id="' + autoExpandId + '"]');
+        if (r) {
+            expandFeature(autoExpandId);
+            setTimeout(function() { r.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
+        }
+        self._navContext = {};
+        self._expandedFeatureId = null;
+    }
+};
+
+// Assigned outside object literal to avoid Chrome parsing quirk
+App.loadFeatureEnrichedData = async function(featureId, container) {
+    try {
+        const data = await App.api('features/' + encodeURIComponent(featureId));
+        let html = '';
+
+        if (data.work_items && data.work_items.length) {
+            const wiRows = data.work_items.map(wi => {
+                const statusIcon = wi.status === 'done' ? '✅' : wi.status === 'active' ? '🔄' : wi.status === 'failed' ? '❌' : '⏳';
+                return `<div class="enriched-work-item">
+                    <span class="enriched-wi-icon">${statusIcon}</span>
+                    <span class="badge badge-${wi.status}">${esc(wi.status)}</span>
+                    <span class="enriched-wi-type">${esc(wi.work_type)}</span>
+                    ${wi.result ? `<span class="enriched-wi-result">${esc(String(wi.result).substring(0, 100))}</span>` : ''}
+                    <span class="enriched-wi-time">${fmtRelTime(wi.created_at)}</span>
+                </div>`;
+            }).join('');
+            html += `<div class="enriched-section"><div class="enriched-section-header">Work Items</div>${wiRows}</div>`;
+        }
+
+        if (data.cycles && data.cycles.length) {
+            const cycleRows = data.cycles.map(c => {
+                const statusIcon = c.status === 'completed' ? '✅' : c.status === 'active' ? '🔄' : '❌';
+                return `<div class="enriched-cycle-item">
+                    <span class="enriched-cycle-icon">${statusIcon}</span>
+                    <span class="badge badge-${c.status}">${esc(c.status)}</span>
+                    <span class="enriched-cycle-type">${esc(c.cycle_type)}</span>
+                    ${c.step_name ? `<span class="enriched-cycle-step">Step: ${esc(c.step_name)}</span>` : ''}
+                    <span class="enriched-cycle-iter">Iter ${c.iteration}</span>
+                    <span class="enriched-wi-time">${fmtRelTime(c.created_at)}</span>
+                </div>`;
+            }).join('');
+            html += `<div class="enriched-section"><div class="enriched-section-header">Cycle History</div>${cycleRows}</div>`;
+        }
+
+        if (data.scores && data.scores.length) {
+            const scoreRows = data.scores.map(s => {
+                const cls = App.scoreColorClass(s.score);
+                return `<div class="enriched-score-item">
+                    <span class="score-badge ${cls}">${Number(s.score).toFixed(1)}</span>
+                    <span class="enriched-score-step">Step ${s.step}</span>
+                    <span class="enriched-cycle-iter">Iter ${s.iteration}</span>
+                    ${s.notes ? `<span class="enriched-score-notes">${esc(s.notes)}</span>` : ''}
+                    <span class="enriched-wi-time">${fmtRelTime(s.created_at)}</span>
+                </div>`;
+            }).join('');
+            html += `<div class="enriched-section"><div class="enriched-section-header">Scores</div>${scoreRows}</div>`;
+        }
+
+        const parent = container.closest('.feature-detail-row') || container.closest('.roadmap-item-details');
+        if (data.feature && data.feature.spec && parent && !parent.querySelector('.feature-spec-section')) {
+            html += `<div class="feature-spec-section"><div class="feature-spec-header">Spec</div><div class="feature-spec-card">${App.renderSpecContent(data.feature.spec)}</div></div>`;
+        }
+
+        container.innerHTML = html;
+    } catch(e) {
+        container.innerHTML = '';
+    }
 };
 
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }

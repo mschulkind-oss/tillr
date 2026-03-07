@@ -136,7 +136,31 @@ func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.F
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Bulk-load dependencies for all features
+	if len(out) > 0 {
+		depRows, err := db.Query("SELECT feature_id, depends_on FROM feature_deps")
+		if err == nil {
+			defer depRows.Close() //nolint:errcheck
+			depMap := make(map[string][]string)
+			for depRows.Next() {
+				var fid, dep string
+				if err := depRows.Scan(&fid, &dep); err == nil {
+					depMap[fid] = append(depMap[fid], dep)
+				}
+			}
+			for i := range out {
+				if deps, ok := depMap[out[i].ID]; ok {
+					out[i].DependsOn = deps
+				}
+			}
+		}
+	}
+
+	return out, nil
 }
 
 func UpdateFeature(db *sql.DB, id string, updates map[string]any) error {

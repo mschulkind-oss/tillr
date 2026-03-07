@@ -188,4 +188,5 @@ var CycleTypes = []CycleType{
 	{Name: "architecture-review", Description: "Architecture Review", Steps: []string{"analyze", "propose", "discuss", "decide", "implement"}},
 	{Name: "release", Description: "Release", Steps: []string{"freeze", "qa", "fix", "staging", "verify", "ship"}},
 	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []string{"try", "friction-log", "improve", "verify", "document"}},
+	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []string{"research", "draft-spec", "review", "judge", "human-review"}},
 }
