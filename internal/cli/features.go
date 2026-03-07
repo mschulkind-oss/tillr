@@ -21,6 +21,7 @@ func init() {
 	featureCmd.AddCommand(featureEditCmd)
 	featureCmd.AddCommand(featureRemoveCmd)
 	featureCmd.AddCommand(featureDepsCmd)
+	featureCmd.AddCommand(featureBatchCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
 	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")
@@ -40,6 +41,11 @@ func init() {
 	featureEditCmd.Flags().String("milestone", "", "New milestone")
 	featureEditCmd.Flags().String("roadmap-item", "", "Link to roadmap item ID")
 	featureEditCmd.Flags().Int("priority", -1, "New priority")
+
+	featureBatchCmd.Flags().StringSlice("ids", nil, "Feature IDs to update (comma-separated)")
+	featureBatchCmd.Flags().String("status", "", "Set status for all features")
+	featureBatchCmd.Flags().String("milestone", "", "Set milestone for all features")
+	featureBatchCmd.Flags().Int("priority", -1, "Set priority for all features")
 }
 
 var featureAddCmd = &cobra.Command{
@@ -363,6 +369,66 @@ var featureDepsCmd = &cobra.Command{
 			}
 		}
 
+		return nil
+	},
+}
+
+var featureBatchCmd = &cobra.Command{
+	Use:   "batch",
+	Short: "Batch update multiple features",
+	Example: `  # Set status for multiple features
+  lifecycle feature batch --ids f1,f2,f3 --status implementing
+
+  # Set milestone for multiple features
+  lifecycle feature batch --ids f1,f2 --milestone v1.0-mvp
+
+  # Set priority for multiple features
+  lifecycle feature batch --ids f1,f2,f3 --priority 8`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		ids, _ := cmd.Flags().GetStringSlice("ids")
+		if len(ids) == 0 {
+			return fmt.Errorf("--ids is required")
+		}
+
+		status, _ := cmd.Flags().GetString("status")
+		milestone, _ := cmd.Flags().GetString("milestone")
+		priority, _ := cmd.Flags().GetInt("priority")
+		priorityChanged := cmd.Flags().Changed("priority")
+
+		var field, value string
+		switch {
+		case status != "":
+			validStatuses := map[string]bool{
+				"draft": true, "planning": true, "implementing": true,
+				"agent-qa": true, "human-qa": true, "done": true, "blocked": true,
+			}
+			if !validStatuses[status] {
+				return fmt.Errorf("invalid status %q", status)
+			}
+			field, value = "status", status
+		case milestone != "":
+			field, value = "milestone_id", milestone
+		case priorityChanged && priority >= 0:
+			field, value = "priority", fmt.Sprintf("%d", priority)
+		default:
+			return fmt.Errorf("specify one of --status, --milestone, or --priority")
+		}
+
+		updated, err := db.BatchUpdateFeatures(database, ids, field, value)
+		if err != nil {
+			return fmt.Errorf("batch update: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]any{"updated": updated, "field": field, "value": value, "ids": ids})
+		}
+		fmt.Printf("✓ Updated %d feature(s): %s = %s\n", updated, field, value)
 		return nil
 	},
 }

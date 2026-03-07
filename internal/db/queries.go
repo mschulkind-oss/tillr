@@ -207,6 +207,39 @@ func DeleteFeature(db *sql.DB, id string) error {
 	return tx.Commit()
 }
 
+func BatchUpdateFeatures(database *sql.DB, featureIDs []string, field, value string) (int, error) {
+	validFields := map[string]string{
+		"status":       "status",
+		"milestone_id": "milestone_id",
+		"priority":     "priority",
+	}
+	col, ok := validFields[field]
+	if !ok {
+		return 0, fmt.Errorf("invalid field for batch update: %s", field)
+	}
+	if len(featureIDs) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, len(featureIDs))
+	args := make([]any, 0, len(featureIDs)+1)
+	args = append(args, value)
+	for i, id := range featureIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	q := fmt.Sprintf("UPDATE features SET %s = ?, updated_at = datetime('now') WHERE id IN (%s)",
+		col, strings.Join(placeholders, ","))
+
+	result, err := database.Exec(q, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
 func AddFeatureDep(db *sql.DB, featureID, dependsOn string) error {
 	_, err := db.Exec("INSERT OR IGNORE INTO feature_deps (feature_id, depends_on) VALUES (?, ?)", featureID, dependsOn)
 	return err
