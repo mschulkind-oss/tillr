@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(doneCmd)
 	rootCmd.AddCommand(failCmd)
 	rootCmd.AddCommand(heartbeatCmd)
+	rootCmd.AddCommand(advanceCmd)
 	rootCmd.AddCommand(featureCmd)
 	rootCmd.AddCommand(milestoneCmd)
 	rootCmd.AddCommand(roadmapCmd)

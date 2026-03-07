@@ -339,12 +339,18 @@ func buildAgentGuidance(ctx *models.WorkContext) string {
 
 // CompleteWorkItem marks the active work item as done.
 func CompleteWorkItem(database *sql.DB, result string) error {
+	_, err := CompleteWorkItemAndReturn(database, result)
+	return err
+}
+
+// CompleteWorkItemAndReturn completes the active work item and returns it.
+func CompleteWorkItemAndReturn(database *sql.DB, result string) (*models.WorkItem, error) {
 	w, err := db.GetActiveWorkItem(database)
 	if err != nil {
-		return fmt.Errorf("no active work item")
+		return nil, fmt.Errorf("no active work item")
 	}
 	if err := db.UpdateWorkItemStatus(database, w.ID, "done", result); err != nil {
-		return fmt.Errorf("completing work item: %w", err)
+		return nil, fmt.Errorf("completing work item: %w", err)
 	}
 	p, _ := db.GetProject(database)
 	if p != nil {
@@ -405,7 +411,7 @@ func CompleteWorkItem(database *sql.DB, result string) error {
 			_ = TransitionFeature(database, p.ID, w.FeatureID, "human-qa")
 		}
 	}
-	return nil
+	return w, nil
 }
 
 // FailWorkItem marks the active work item as failed.
