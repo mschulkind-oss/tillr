@@ -14,6 +14,7 @@ func init() {
 	doneCmd.Flags().String("result", "", "Work result description")
 	failCmd.Flags().String("reason", "", "Failure reason")
 	heartbeatCmd.Flags().String("message", "", "Status message")
+	advanceCmd.Flags().String("result", "", "Work result description")
 }
 
 var nextCmd = &cobra.Command{
@@ -143,6 +144,71 @@ var heartbeatCmd = &cobra.Command{
 			return printJSON(map[string]string{"status": "ok", "feature": w.FeatureID})
 		}
 		fmt.Println("♥ Heartbeat recorded.")
+		return nil
+	},
+}
+
+var advanceCmd = &cobra.Command{
+	Use:   "advance",
+	Short: "Complete current work and get next assignment in one call",
+	Long: `Atomically marks the current work item as done and returns the next
+work item. This is the preferred agent command — it eliminates the
+gap between "done" and "next" where another agent could steal work.
+
+Returns the same enriched WorkContext as "lifecycle next --json" but
+also includes a "completed" field showing what was just finished.`,
+	Example: `  # Agent loop using advance:
+  WORK=$(lifecycle next --json)     # bootstrap first item
+  # ... do the work ...
+  WORK=$(lifecycle advance --result "Implemented X" --json)
+  # WORK now contains the next assignment`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		result, _ := cmd.Flags().GetString("result")
+
+		// Step 1: Complete current work item
+		completedItem, completeErr := engine.CompleteWorkItemAndReturn(database, result)
+		if completeErr != nil {
+			return fmt.Errorf("completing work: %w", completeErr)
+		}
+
+		// Step 2: Get next work item
+		next, nextErr := engine.GetNextWorkItem(database)
+
+		if jsonOutput {
+			response := map[string]any{
+				"completed": map[string]any{
+					"id":        completedItem.ID,
+					"feature":   completedItem.FeatureID,
+					"work_type": completedItem.WorkType,
+					"result":    result,
+				},
+			}
+			if nextErr == nil {
+				ctx, ctxErr := engine.GetWorkContext(database, next)
+				if ctxErr == nil {
+					response["next"] = ctx
+				} else {
+					response["next"] = next
+				}
+			} else {
+				response["next"] = nil
+				response["status"] = "no_more_work"
+			}
+			return printJSON(response)
+		}
+
+		fmt.Printf("✓ Completed: %s (#%d)\n", completedItem.WorkType, completedItem.ID)
+		if nextErr == nil {
+			fmt.Printf("→ Next: %s for %s (#%d)\n", next.WorkType, next.FeatureID, next.ID)
+		} else {
+			fmt.Println("  No more work items available.")
+		}
 		return nil
 	},
 }
