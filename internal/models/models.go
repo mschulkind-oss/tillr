@@ -134,6 +134,7 @@ type Discussion struct {
 	ProjectID string `json:"project_id"`
 	FeatureID string `json:"feature_id,omitempty"`
 	Title     string `json:"title"`
+	Body      string `json:"body,omitempty"`
 	Status    string `json:"status"` // open, resolved, merged, closed
 	Author    string `json:"author"`
 	CreatedAt string `json:"created_at"`
@@ -176,6 +177,13 @@ type WorkContext struct {
 	PriorResults  []WorkItem     `json:"prior_results,omitempty"`
 	CycleScores   []CycleScore   `json:"cycle_scores,omitempty"`
 	AgentGuidance string         `json:"agent_guidance"`
+}
+
+// CycleDetail is the enriched response for GET /api/cycles/{id}.
+type CycleDetail struct {
+	Cycle  CycleInstance `json:"cycle"`
+	Scores []CycleScore  `json:"scores"`
+	Steps  []string      `json:"steps"`
 }
 
 // Predefined cycle types

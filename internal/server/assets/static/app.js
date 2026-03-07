@@ -1502,39 +1502,9 @@ const App = {
             }
         }
         if (page === 'cycles') {
-            document.querySelectorAll('.cycle-card').forEach(card => {
-                card.addEventListener('click', async (e) => {
-                    // Don't toggle if clicking a clickable-feature link
-                    if (e.target.closest('.clickable-feature')) return;
-                    const detail = card.querySelector('.cycle-detail');
-                    if (!detail) return;
-                    const isVisible = detail.style.display !== 'none';
-                    document.querySelectorAll('.cycle-detail').forEach(d => d.style.display = 'none');
-                    document.querySelectorAll('.cycle-card').forEach(c => c.classList.remove('expanded'));
-                    if (!isVisible) {
-                        detail.style.display = 'block';
-                        card.classList.add('expanded');
-                        // Fetch work items
-                        const workWrap = detail.querySelector('.cycle-work-items');
-                        if (workWrap && !workWrap.dataset.loaded) {
-                            const cid = card.dataset.cycleId;
-                            try {
-                                const history = await App.api(`cycles/${cid}/history`);
-                                const items = Array.isArray(history) ? history : (history.work_items || []);
-                                if (items.length) {
-                                    workWrap.innerHTML = `<div class="cycle-detail-title">Work Items</div>` +
-                                        items.map(w => `<div class="cycle-work-item">
-                                            <span class="badge badge-${w.status || 'completed'}">${esc(w.status || 'done')}</span>
-                                            <span class="cycle-work-step">${esc((w.step_name || w.step || '').toString().replace(/-/g, ' '))}</span>
-                                            ${w.result ? `<div class="cycle-work-result">${esc(w.result)}</div>` : ''}
-                                        </div>`).join('');
-                                }
-                            } catch { /* no history data */ }
-                            workWrap.dataset.loaded = 'true';
-                        }
-                    }
-                });
-            });
+            if (typeof App.bindCycleCardClicks === 'function') {
+                App.bindCycleCardClicks();
+            }
             bindClickableFeatures();
         }
         if (page === 'qa') {

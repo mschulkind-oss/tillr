@@ -637,6 +637,17 @@ func GetActiveCycle(db *sql.DB, featureID string) (*models.CycleInstance, error)
 	return c, nil
 }
 
+func GetCycleByID(db *sql.DB, id int) (*models.CycleInstance, error) {
+	row := db.QueryRow(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
+		FROM cycle_instances WHERE id = ?`, id)
+	c := &models.CycleInstance{}
+	err := row.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 func ListActiveCycles(db *sql.DB) ([]models.CycleInstance, error) {
 	rows, err := db.Query(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
 		FROM cycle_instances WHERE status = 'active' ORDER BY created_at`)
@@ -753,8 +764,8 @@ func SearchEvents(db *sql.DB, projectID, query string) ([]models.Event, error) {
 
 func CreateDiscussion(db *sql.DB, d *models.Discussion) error {
 	res, err := db.Exec(
-		`INSERT INTO discussions (project_id, feature_id, title, author) VALUES (?, ?, ?, ?)`,
-		d.ProjectID, nullStr(d.FeatureID), d.Title, d.Author,
+		`INSERT INTO discussions (project_id, feature_id, title, body, author) VALUES (?, ?, ?, ?, ?)`,
+		d.ProjectID, nullStr(d.FeatureID), d.Title, d.Body, d.Author,
 	)
 	if err != nil {
 		return err
@@ -765,10 +776,10 @@ func CreateDiscussion(db *sql.DB, d *models.Discussion) error {
 }
 
 func GetDiscussion(db *sql.DB, id int) (*models.Discussion, error) {
-	row := db.QueryRow(`SELECT id, project_id, COALESCE(feature_id,''), title, status, author, created_at, updated_at
+	row := db.QueryRow(`SELECT id, project_id, COALESCE(feature_id,''), title, body, status, author, created_at, updated_at
 		FROM discussions WHERE id = ?`, id)
 	d := &models.Discussion{}
-	err := row.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Status, &d.Author, &d.CreatedAt, &d.UpdatedAt)
+	err := row.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Body, &d.Status, &d.Author, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -779,7 +790,7 @@ func GetDiscussion(db *sql.DB, id int) (*models.Discussion, error) {
 }
 
 func ListDiscussions(db *sql.DB, projectID, featureID, status string) ([]models.Discussion, error) {
-	q := `SELECT d.id, d.project_id, COALESCE(d.feature_id,''), d.title, d.status, d.author, d.created_at, d.updated_at,
+	q := `SELECT d.id, d.project_id, COALESCE(d.feature_id,''), d.title, d.body, d.status, d.author, d.created_at, d.updated_at,
 			(SELECT COUNT(*) FROM discussion_comments WHERE discussion_id = d.id) as comment_count
 		FROM discussions d WHERE d.project_id = ?`
 	args := []any{projectID}
@@ -802,7 +813,7 @@ func ListDiscussions(db *sql.DB, projectID, featureID, status string) ([]models.
 	var out []models.Discussion
 	for rows.Next() {
 		var d models.Discussion
-		if err := rows.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Status, &d.Author,
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.FeatureID, &d.Title, &d.Body, &d.Status, &d.Author,
 			&d.CreatedAt, &d.UpdatedAt, &d.CommentCount); err != nil {
 			return nil, err
 		}
