@@ -385,3 +385,63 @@ func TestGetBlockedFeatures(t *testing.T) {
 		t.Errorf("expected 0 blocked features after f1 is done, got %v", ids)
 	}
 }
+
+func TestGetBurndownData(t *testing.T) {
+	database := openTestDB(t)
+	p := &models.Project{ID: "bd-proj", Name: "Burndown Test"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Insert feature-created events
+	events := []models.Event{
+		{ProjectID: p.ID, FeatureID: "f1", EventType: "feature.created", Data: `{"name":"f1"}`},
+		{ProjectID: p.ID, FeatureID: "f2", EventType: "feature.created", Data: `{"name":"f2"}`},
+		{ProjectID: p.ID, FeatureID: "f3", EventType: "feature.created", Data: `{"name":"f3"}`},
+	}
+	for _, e := range events {
+		if err := db.InsertEvent(database, &e); err != nil {
+			t.Fatalf("inserting event: %v", err)
+		}
+	}
+
+	// Insert a status change to done
+	doneEvt := models.Event{
+		ProjectID: p.ID, FeatureID: "f1",
+		EventType: "feature.status_changed",
+		Data:      `{"from":"implementing","to":"done"}`,
+	}
+	if err := db.InsertEvent(database, &doneEvt); err != nil {
+		t.Fatalf("inserting done event: %v", err)
+	}
+
+	data, err := db.GetBurndownData(database, p.ID)
+	if err != nil {
+		t.Fatalf("GetBurndownData: %v", err)
+	}
+
+	if len(data.Points) == 0 {
+		t.Fatal("expected burndown points, got none")
+	}
+
+	// Last point should show: total=3, done=1, remaining=2
+	last := data.Points[len(data.Points)-1]
+	if last.Total != 3 {
+		t.Errorf("expected total=3, got %d", last.Total)
+	}
+	if last.Done != 1 {
+		t.Errorf("expected done=1, got %d", last.Done)
+	}
+	if last.Remaining != 2 {
+		t.Errorf("expected remaining=2, got %d", last.Remaining)
+	}
+
+	// Empty project should return empty data
+	emptyData, err := db.GetBurndownData(database, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetBurndownData for empty: %v", err)
+	}
+	if len(emptyData.Points) != 0 {
+		t.Errorf("expected 0 points for empty project, got %d", len(emptyData.Points))
+	}
+}

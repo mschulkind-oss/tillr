@@ -1207,3 +1207,159 @@ func GetBlockedFeatures(database *sql.DB) ([]models.Feature, error) {
 	}
 	return result, nil
 }
+
+// BurndownPoint represents a single day's data for burndown/velocity charts.
+type BurndownPoint struct {
+	Date      string `json:"date"`
+	Remaining int    `json:"remaining"`
+	Done      int    `json:"done"`
+	Total     int    `json:"total"`
+}
+
+// BurndownData contains all data needed for burndown and velocity charts.
+type BurndownData struct {
+	Points   []BurndownPoint `json:"points"`
+	Velocity []WeekVelocity  `json:"velocity"`
+}
+
+// WeekVelocity represents features completed in a given week.
+type WeekVelocity struct {
+	Week      string `json:"week"`
+	Completed int    `json:"completed"`
+}
+
+// GetBurndownData computes burndown chart data from feature events.
+func GetBurndownData(database *sql.DB, projectID string) (*BurndownData, error) {
+	rows, err := database.Query(
+		`SELECT event_type, COALESCE(data,''), created_at FROM events
+		 WHERE project_id = ? AND event_type IN ('feature.created','feature.status_changed')
+		 ORDER BY created_at ASC`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying burndown events: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	type dayEvent struct {
+		date      string
+		eventType string
+		data      string
+	}
+	var events []dayEvent
+	for rows.Next() {
+		var ev dayEvent
+		var ts string
+		if err := rows.Scan(&ev.eventType, &ev.data, &ts); err != nil {
+			return nil, fmt.Errorf("scanning event: %w", err)
+		}
+		if len(ts) >= 10 {
+			ev.date = ts[:10]
+		} else {
+			ev.date = ts
+		}
+		events = append(events, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating events: %w", err)
+	}
+
+	if len(events) == 0 {
+		return &BurndownData{Points: []BurndownPoint{}, Velocity: []WeekVelocity{}}, nil
+	}
+
+	total := 0
+	done := 0
+	dayMap := make(map[string]BurndownPoint)
+	var dateOrder []string
+
+	for _, ev := range events {
+		if _, exists := dayMap[ev.date]; !exists {
+			dateOrder = append(dateOrder, ev.date)
+		}
+
+		switch ev.eventType {
+		case "feature.created":
+			total++
+		case "feature.status_changed":
+			from := extractJSONField(ev.data, "from")
+			to := extractJSONField(ev.data, "to")
+			if to == "done" && from != "done" {
+				done++
+			} else if from == "done" && to != "done" {
+				done--
+			}
+		}
+
+		dayMap[ev.date] = BurndownPoint{
+			Date:      ev.date,
+			Remaining: total - done,
+			Done:      done,
+			Total:     total,
+		}
+	}
+
+	// Fill gaps between dates and extend to today
+	points := make([]BurndownPoint, 0, len(dateOrder)+30)
+	today := time.Now().Format("2006-01-02")
+
+	if len(dateOrder) > 0 {
+		startDate, _ := time.Parse("2006-01-02", dateOrder[0])
+		endDate, _ := time.Parse("2006-01-02", today)
+		if endDate.Before(startDate) {
+			endDate = startDate
+		}
+
+		lastPoint := BurndownPoint{Date: dateOrder[0], Total: 0, Done: 0, Remaining: 0}
+		for d := startDate; !d.After(endDate); d = d.AddDate(0, 0, 1) {
+			ds := d.Format("2006-01-02")
+			if p, ok := dayMap[ds]; ok {
+				lastPoint = p
+			} else {
+				lastPoint = BurndownPoint{Date: ds, Remaining: lastPoint.Remaining, Done: lastPoint.Done, Total: lastPoint.Total}
+			}
+			points = append(points, lastPoint)
+		}
+	}
+
+	// Compute weekly velocity
+	weeklyDone := make(map[string]int)
+	var weekOrder []string
+	prevDone := 0
+	for _, p := range points {
+		t, err := time.Parse("2006-01-02", p.Date)
+		if err != nil {
+			continue
+		}
+		year, week := t.ISOWeek()
+		weekKey := fmt.Sprintf("%d-W%02d", year, week)
+		if _, exists := weeklyDone[weekKey]; !exists {
+			weekOrder = append(weekOrder, weekKey)
+			weeklyDone[weekKey] = 0
+		}
+		if p.Done > prevDone {
+			weeklyDone[weekKey] += p.Done - prevDone
+		}
+		prevDone = p.Done
+	}
+
+	velocity := make([]WeekVelocity, 0, len(weekOrder))
+	for _, wk := range weekOrder {
+		velocity = append(velocity, WeekVelocity{Week: wk, Completed: weeklyDone[wk]})
+	}
+
+	return &BurndownData{Points: points, Velocity: velocity}, nil
+}
+
+// extractJSONField extracts a simple string field value from a JSON string.
+func extractJSONField(data, field string) string {
+	key := `"` + field + `":"`
+	idx := strings.Index(data, key)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(key)
+	end := strings.Index(data[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return data[start : start+end]
+}
