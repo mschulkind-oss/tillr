@@ -897,6 +897,174 @@ func SetFeatureStatus(db *sql.DB, featureID, status string) error {
 	return err
 }
 
+// ProjectStats holds all aggregated statistics for the project overview.
+type ProjectStats struct {
+	FeatureStats   FeatureStats    `json:"feature_stats"`
+	CycleStats     CycleStatsData  `json:"cycle_stats"`
+	RoadmapStats   *RoadmapStats   `json:"roadmap_stats"`
+	MilestoneStats []MilestoneStat `json:"milestone_stats"`
+	Activity       ActivityStats   `json:"activity"`
+}
+
+type FeatureStats struct {
+	Total          int            `json:"total"`
+	ByStatus       map[string]int `json:"by_status"`
+	CompletionRate float64        `json:"completion_rate"`
+}
+
+type CycleStatsData struct {
+	TotalCycles     int              `json:"total_cycles"`
+	TotalIterations int              `json:"total_iterations"`
+	AvgScore        float64          `json:"avg_score"`
+	ScoresOverTime  []ScoreDataPoint `json:"scores_over_time"`
+}
+
+type ScoreDataPoint struct {
+	Date  string  `json:"date"`
+	Score float64 `json:"score"`
+	Cycle string  `json:"cycle"`
+}
+
+type MilestoneStat struct {
+	Name     string  `json:"name"`
+	Total    int     `json:"total"`
+	Done     int     `json:"done"`
+	Progress float64 `json:"progress"`
+}
+
+type ActivityStats struct {
+	TotalEvents      int `json:"total_events"`
+	EventsLast7Days  int `json:"events_last_7_days"`
+	EventsLast30Days int `json:"events_last_30_days"`
+}
+
+// GetProjectStats returns aggregated project statistics for the stats page.
+func GetProjectStats(database *sql.DB, projectID string) (*ProjectStats, error) {
+	stats := &ProjectStats{}
+
+	// Feature stats
+	featureCounts, err := FeatureCounts(database, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("getting feature counts: %w", err)
+	}
+	total := 0
+	for _, c := range featureCounts {
+		total += c
+	}
+	done := featureCounts["done"]
+	completionRate := 0.0
+	if total > 0 {
+		completionRate = float64(done) / float64(total) * 100
+	}
+	stats.FeatureStats = FeatureStats{
+		Total:          total,
+		ByStatus:       featureCounts,
+		CompletionRate: completionRate,
+	}
+
+	// Cycle stats
+	var totalCycles, totalIterations int
+	var avgScore sql.NullFloat64
+	err = database.QueryRow(`SELECT COUNT(*), COALESCE(SUM(iteration), 0) FROM cycle_instances WHERE feature_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&totalCycles, &totalIterations)
+	if err != nil {
+		return nil, fmt.Errorf("getting cycle counts: %w", err)
+	}
+	err = database.QueryRow(`SELECT AVG(cs.score) FROM cycle_scores cs JOIN cycle_instances ci ON cs.cycle_id = ci.id WHERE ci.feature_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&avgScore)
+	if err != nil {
+		return nil, fmt.Errorf("getting avg score: %w", err)
+	}
+	avg := 0.0
+	if avgScore.Valid {
+		avg = avgScore.Float64
+	}
+
+	// Scores over time
+	scoreRows, err := database.Query(`SELECT date(cs.created_at) AS d, cs.score, ci.cycle_type
+		FROM cycle_scores cs
+		JOIN cycle_instances ci ON cs.cycle_id = ci.id
+		WHERE ci.feature_id IN (SELECT id FROM features WHERE project_id = ?)
+		ORDER BY cs.created_at`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("getting scores over time: %w", err)
+	}
+	defer scoreRows.Close() //nolint:errcheck
+	var scoresOverTime []ScoreDataPoint
+	for scoreRows.Next() {
+		var s ScoreDataPoint
+		if err := scoreRows.Scan(&s.Date, &s.Score, &s.Cycle); err != nil {
+			return nil, err
+		}
+		scoresOverTime = append(scoresOverTime, s)
+	}
+	if err := scoreRows.Err(); err != nil {
+		return nil, err
+	}
+	if scoresOverTime == nil {
+		scoresOverTime = []ScoreDataPoint{}
+	}
+
+	stats.CycleStats = CycleStatsData{
+		TotalCycles:     totalCycles,
+		TotalIterations: totalIterations,
+		AvgScore:        avg,
+		ScoresOverTime:  scoresOverTime,
+	}
+
+	// Roadmap stats (reuse existing function)
+	roadmapStats, err := GetRoadmapStats(database, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("getting roadmap stats: %w", err)
+	}
+	stats.RoadmapStats = roadmapStats
+
+	// Milestone stats
+	milestones, err := ListMilestones(database, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("getting milestones: %w", err)
+	}
+	var milestoneStats []MilestoneStat
+	for _, m := range milestones {
+		progress := 0.0
+		if m.TotalFeatures > 0 {
+			progress = float64(m.DoneFeatures) / float64(m.TotalFeatures) * 100
+		}
+		milestoneStats = append(milestoneStats, MilestoneStat{
+			Name:     m.Name,
+			Total:    m.TotalFeatures,
+			Done:     m.DoneFeatures,
+			Progress: progress,
+		})
+	}
+	if milestoneStats == nil {
+		milestoneStats = []MilestoneStat{}
+	}
+	stats.MilestoneStats = milestoneStats
+
+	// Activity stats
+	var totalEvents int
+	err = database.QueryRow(`SELECT COUNT(*) FROM events WHERE project_id = ?`, projectID).Scan(&totalEvents)
+	if err != nil {
+		return nil, fmt.Errorf("getting total events: %w", err)
+	}
+	var events7 int
+	err = database.QueryRow(`SELECT COUNT(*) FROM events WHERE project_id = ? AND created_at >= datetime('now', '-7 days')`, projectID).Scan(&events7)
+	if err != nil {
+		return nil, fmt.Errorf("getting 7-day events: %w", err)
+	}
+	var events30 int
+	err = database.QueryRow(`SELECT COUNT(*) FROM events WHERE project_id = ? AND created_at >= datetime('now', '-30 days')`, projectID).Scan(&events30)
+	if err != nil {
+		return nil, fmt.Errorf("getting 30-day events: %w", err)
+	}
+	stats.Activity = ActivityStats{
+		TotalEvents:      totalEvents,
+		EventsLast7Days:  events7,
+		EventsLast30Days: events30,
+	}
+
+	return stats, nil
+}
+
 // CountFeaturesWithoutSpecs returns the number of features missing specs.
 func CountFeaturesWithoutSpecs(db *sql.DB, projectID string) (int, int, error) {
 	var total, withSpecs int
@@ -930,4 +1098,101 @@ func CountMilestones(db *sql.DB, projectID string) (int, error) {
 	var count int
 	err := db.QueryRow(`SELECT COUNT(*) FROM milestones WHERE project_id = ?`, projectID).Scan(&count)
 	return count, err
+}
+
+// GetFeatureDependencyTree returns a feature and all its transitive dependencies.
+// It walks the feature_deps graph breadth-first to collect the full tree.
+func GetFeatureDependencyTree(database *sql.DB, featureID string) ([]models.Feature, error) {
+	seen := map[string]bool{}
+	queue := []string{featureID}
+	var result []models.Feature
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if seen[current] {
+			continue
+		}
+		seen[current] = true
+
+		f, err := GetFeature(database, current)
+		if err != nil {
+			continue // skip missing features
+		}
+		result = append(result, *f)
+
+		for _, dep := range f.DependsOn {
+			if !seen[dep] {
+				queue = append(queue, dep)
+			}
+		}
+	}
+	return result, nil
+}
+
+// GetFeatureDependents returns features that directly depend on the given feature.
+func GetFeatureDependents(database *sql.DB, featureID string) ([]models.Feature, error) {
+	rows, err := database.Query(`SELECT feature_id FROM feature_deps WHERE depends_on = ?`, featureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var result []models.Feature
+	for _, id := range ids {
+		f, err := GetFeature(database, id)
+		if err != nil {
+			continue
+		}
+		result = append(result, *f)
+	}
+	return result, nil
+}
+
+// GetBlockedFeatures returns features that have incomplete dependencies.
+// A feature is considered blocked if any of its dependencies are not "done".
+func GetBlockedFeatures(database *sql.DB) ([]models.Feature, error) {
+	rows, err := database.Query(`
+		SELECT DISTINCT fd.feature_id
+		FROM feature_deps fd
+		JOIN features f ON fd.depends_on = f.id
+		WHERE f.status != 'done'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var result []models.Feature
+	for _, id := range ids {
+		f, err := GetFeature(database, id)
+		if err != nil {
+			continue
+		}
+		result = append(result, *f)
+	}
+	return result, nil
 }

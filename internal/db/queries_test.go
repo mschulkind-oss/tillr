@@ -296,3 +296,92 @@ func TestFeatureCountsAndPendingQA(t *testing.T) {
 		t.Errorf("got %+v", pending)
 	}
 }
+
+func TestGetFeatureDependencyTree(t *testing.T) {
+	database := openTestDB(t)
+	db.CreateProject(database, &models.Project{ID: "p1", Name: "P1"})                  //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f1", ProjectID: "p1", Name: "F1"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f2", ProjectID: "p1", Name: "F2"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f3", ProjectID: "p1", Name: "F3"}) //nolint:errcheck
+
+	db.AddFeatureDep(database, "f3", "f2") //nolint:errcheck
+	db.AddFeatureDep(database, "f2", "f1") //nolint:errcheck
+
+	tree, err := db.GetFeatureDependencyTree(database, "f3")
+	if err != nil {
+		t.Fatalf("getting tree: %v", err)
+	}
+	if len(tree) != 3 {
+		t.Errorf("got %d nodes, want 3", len(tree))
+	}
+	ids := map[string]bool{}
+	for _, f := range tree {
+		ids[f.ID] = true
+	}
+	for _, want := range []string{"f1", "f2", "f3"} {
+		if !ids[want] {
+			t.Errorf("tree missing %s", want)
+		}
+	}
+}
+
+func TestGetFeatureDependents(t *testing.T) {
+	database := openTestDB(t)
+	db.CreateProject(database, &models.Project{ID: "p1", Name: "P1"})                  //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f1", ProjectID: "p1", Name: "F1"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f2", ProjectID: "p1", Name: "F2"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f3", ProjectID: "p1", Name: "F3"}) //nolint:errcheck
+
+	db.AddFeatureDep(database, "f2", "f1") //nolint:errcheck
+	db.AddFeatureDep(database, "f3", "f1") //nolint:errcheck
+
+	dependents, err := db.GetFeatureDependents(database, "f1")
+	if err != nil {
+		t.Fatalf("getting dependents: %v", err)
+	}
+	if len(dependents) != 2 {
+		t.Errorf("got %d dependents, want 2", len(dependents))
+	}
+	ids := map[string]bool{}
+	for _, f := range dependents {
+		ids[f.ID] = true
+	}
+	if !ids["f2"] || !ids["f3"] {
+		t.Errorf("expected f2 and f3 as dependents, got %v", ids)
+	}
+}
+
+func TestGetBlockedFeatures(t *testing.T) {
+	database := openTestDB(t)
+	db.CreateProject(database, &models.Project{ID: "p1", Name: "P1"})                  //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f1", ProjectID: "p1", Name: "F1"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f2", ProjectID: "p1", Name: "F2"}) //nolint:errcheck
+	db.CreateFeature(database, &models.Feature{ID: "f3", ProjectID: "p1", Name: "F3"}) //nolint:errcheck
+
+	db.AddFeatureDep(database, "f2", "f1") //nolint:errcheck
+	db.AddFeatureDep(database, "f3", "f1") //nolint:errcheck
+
+	// f1 is draft (default), so f2 and f3 are blocked
+	blocked, err := db.GetBlockedFeatures(database)
+	if err != nil {
+		t.Fatalf("getting blocked: %v", err)
+	}
+	if len(blocked) != 2 {
+		t.Errorf("expected 2 blocked features, got %d", len(blocked))
+	}
+
+	// Make f1 done
+	db.UpdateFeature(database, "f1", map[string]any{"status": "done"}) //nolint:errcheck
+
+	blocked, err = db.GetBlockedFeatures(database)
+	if err != nil {
+		t.Fatalf("getting blocked after f1 done: %v", err)
+	}
+	if len(blocked) != 0 {
+		ids := make([]string, len(blocked))
+		for i, b := range blocked {
+			ids[i] = b.ID
+		}
+		t.Errorf("expected 0 blocked features after f1 is done, got %v", ids)
+	}
+}

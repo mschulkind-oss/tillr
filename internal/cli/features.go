@@ -20,6 +20,7 @@ func init() {
 	featureCmd.AddCommand(featureShowCmd)
 	featureCmd.AddCommand(featureEditCmd)
 	featureCmd.AddCommand(featureRemoveCmd)
+	featureCmd.AddCommand(featureDepsCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
 	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")

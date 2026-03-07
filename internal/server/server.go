@@ -79,9 +79,11 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/cycles/", apiHandler(database, handleCycles))
 	mux.HandleFunc("/api/history", apiHandler(database, handleHistory))
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
+	mux.HandleFunc("/api/stats", apiHandler(database, handleStats))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
 	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
 	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
+	mux.HandleFunc("/api/dependencies", apiHandler(database, handleDependencies))
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +209,11 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 	// Check if it's a feature detail request: /api/features/{id}
 	path := r.URL.Path
 	if id := strings.TrimPrefix(path, "/api/features/"); id != "" && id != path {
+		// Check for /api/features/{id}/deps endpoint
+		if rest, found := strings.CutSuffix(id, "/deps"); found && rest != "" {
+			return handleFeatureDeps(database, w, rest)
+		}
+
 		f, err := db.GetFeature(database, id)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -252,6 +259,66 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 		features = []models.Feature{}
 	}
 	return writeJSON(w, features)
+}
+
+func handleFeatureDeps(database *sql.DB, w http.ResponseWriter, featureID string) error {
+	f, err := db.GetFeature(database, featureID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "feature not found"})
+	}
+
+	type depInfo struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+
+	// Direct dependencies
+	var dependsOn []depInfo
+	for _, depID := range f.DependsOn {
+		dep, err := db.GetFeature(database, depID)
+		if err != nil {
+			dependsOn = append(dependsOn, depInfo{ID: depID, Name: depID, Status: "unknown"})
+			continue
+		}
+		dependsOn = append(dependsOn, depInfo{ID: dep.ID, Name: dep.Name, Status: dep.Status})
+	}
+	if dependsOn == nil {
+		dependsOn = []depInfo{}
+	}
+
+	// Features that depend on this one
+	dependents, _ := db.GetFeatureDependents(database, featureID)
+	var dependedBy []depInfo
+	for _, dep := range dependents {
+		dependedBy = append(dependedBy, depInfo{ID: dep.ID, Name: dep.Name, Status: dep.Status})
+	}
+	if dependedBy == nil {
+		dependedBy = []depInfo{}
+	}
+
+	// Build blocking chain: transitive deps that aren't done
+	tree, _ := db.GetFeatureDependencyTree(database, featureID)
+	var blockingChain []string
+	for _, node := range tree {
+		if node.ID == featureID {
+			continue
+		}
+		if node.Status != "done" {
+			blockingChain = append(blockingChain, fmt.Sprintf("%s (%s)", node.ID, node.Status))
+		}
+	}
+	if blockingChain == nil {
+		blockingChain = []string{}
+	}
+
+	return writeJSON(w, map[string]any{
+		"feature":        f,
+		"depends_on":     dependsOn,
+		"depended_by":    dependedBy,
+		"blocking_chain": blockingChain,
+	})
 }
 
 func handleMilestones(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
@@ -376,6 +443,18 @@ func handleSearch(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	return writeJSON(w, events)
+}
+
+func handleStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	stats, err := db.GetProjectStats(database, p.ID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, stats)
 }
 
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
@@ -514,4 +593,40 @@ func handleDiscussionDetail(database *sql.DB, w http.ResponseWriter, r *http.Req
 	}
 
 	return writeJSON(w, d)
+}
+
+func handleDependencies(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	features, err := db.ListFeatures(database, p.ID, "", "")
+	if err != nil {
+		return err
+	}
+
+	type node struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	type edge struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+
+	var nodes []node
+	var edges []edge
+	for _, f := range features {
+		nodes = append(nodes, node{ID: f.ID, Name: f.Name, Status: f.Status})
+		for _, dep := range f.DependsOn {
+			edges = append(edges, edge{From: f.ID, To: dep})
+		}
+	}
+
+	return writeJSON(w, map[string]any{
+		"nodes": nodes,
+		"edges": edges,
+	})
 }
