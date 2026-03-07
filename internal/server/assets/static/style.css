@@ -826,6 +826,24 @@ body {
 }
 .timeline-load-more:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-hover); }
 
+/* History filters */
+.history-filters {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; align-items: center;
+}
+.filter-btn {
+    padding: 4px 12px; border-radius: 14px; font-size: 0.75rem; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: var(--bg-tertiary);
+    color: var(--text-secondary); transition: all var(--transition); text-transform: capitalize;
+}
+.filter-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filter-count { font-weight: 400; opacity: 0.7; margin-left: 2px; }
+.filter-select {
+    padding: 4px 8px; border-radius: 6px; font-size: 0.75rem;
+    border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
+    margin-left: auto;
+}
+
 /* Staggered fade-in */
 @keyframes timelineFadeIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
 
@@ -915,6 +933,35 @@ body {
 }
 .cycle-node.active .cycle-node-label { color: var(--accent); font-weight: 700; }
 .cycle-node.done .cycle-node-label { color: var(--success); }
+
+.cycle-node-score {
+    font-size: 0.65rem; font-weight: 700; color: var(--accent);
+    margin-top: 1px;
+}
+
+.cycle-sparkline-row {
+    display: flex; align-items: center; gap: 8px; margin-top: 8px;
+}
+.score-sparkline { flex-shrink: 0; }
+.sparkline-label { font-size: 0.75rem; color: var(--text-muted); }
+
+.cycle-step-count {
+    font-size: 0.75rem; color: var(--text-muted);
+}
+
+.cycle-types-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 10px;
+}
+.cycle-type-ref { padding: 10px !important; }
+.cycle-type-ref .card-title { font-size: 0.85rem; font-weight: 700; text-transform: capitalize; margin-bottom: 4px; }
+.cycle-type-steps { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; }
+.cycle-type-step { white-space: nowrap; text-transform: capitalize; }
+
+.section-title {
+    font-size: 0.9rem; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;
+}
 
 /* ── Cycle Progress ── */
 .cycle-progress {
