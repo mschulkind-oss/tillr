@@ -442,3 +442,29 @@ App._injectBatchUI = function() {
         }
     };
 })();
+
+// Image Lightbox
+(function() {
+    function closeLightbox() {
+        var lb = document.getElementById('lightbox');
+        if (lb) { lb.style.display = 'none'; document.body.style.overflow = ''; }
+    }
+
+    document.addEventListener('click', function(e) {
+        var img = e.target.closest('img');
+        if (!img || img.closest('.lightbox')) return;
+        var lb = document.getElementById('lightbox');
+        if (!lb) return;
+        lb.querySelector('.lightbox-img').src = img.src;
+        lb.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    });
+
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.lightbox-backdrop')) closeLightbox();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeLightbox();
+    });
+})();
