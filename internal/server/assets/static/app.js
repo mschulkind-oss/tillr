@@ -575,9 +575,16 @@ const App = {
         return `<div class="page-header"><h2 class="page-title">Features</h2><p class="page-subtitle">${features.length} features tracked</p></div>
             <div class="features-toolbar">
                 <div class="filter-pills">${pills}</div>
-                <div class="features-search-wrap"><input type="text" class="features-search" placeholder="Search features…" id="featuresSearch" aria-label="Search features"></div>
+                <div class="features-toolbar-right">
+                    <div class="features-view-toggle" id="featuresViewToggle">
+                        <button class="view-toggle-btn active" data-view="list" title="List View">☰</button>
+                        <button class="view-toggle-btn" data-view="graph" title="Graph View">◈</button>
+                    </div>
+                    <div class="features-search-wrap"><input type="text" class="features-search" placeholder="Search features…" id="featuresSearch" aria-label="Search features"></div>
+                </div>
             </div>
-            <div class="card" id="featuresTableWrap">${this.buildFeaturesTable(features)}</div>`;
+            <div class="card" id="featuresTableWrap">${this.buildFeaturesTable(features)}</div>
+            <div id="featuresGraphWrap" class="features-graph-wrap" style="display:none"></div>`;
     },
 
     // ── Roadmap ──
@@ -682,17 +689,30 @@ const App = {
             const statusBtns = roadmapStatusOrder.map(s =>
                 `<button class="roadmap-status-btn rs-${s}${r.status === s ? ' rs-active' : ''}" data-roadmap-id="${esc(r.id)}" data-new-status="${s}" title="Set status to ${roadmapStatusLabels[s]}">${roadmapStatusIcons[s]} ${roadmapStatusLabels[s]}</button>`
             ).join('');
-            const effortHtml = r.effort ? `<span class="effort-badge effort-badge-prominent effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>` : '';
-            return `<div class="roadmap-item st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" data-roadmap-id="${esc(r.id)}" data-priority="${r.priority}" style="animation-delay:${i*0.06}s">
+            const effortLabels = {xs:'XS',s:'S',m:'M',l:'L',xl:'XL'};
+            const effortHtml = r.effort ? `<span class="effort-badge effort-badge-prominent effort-${r.effort}">${effortLabels[r.effort]||r.effort}</span>` : '';
+            // Feature progress for this roadmap item
+            const prog = App.getRoadmapItemProgress(r.id, featuresByRoadmap);
+            const progressHtml = prog ? `<div class="rm-card-progress"><div class="rm-card-progress-bar"><div class="rm-card-progress-fill" style="width:${prog.pct}%"></div></div><span class="rm-card-progress-label">${prog.done}/${prog.total}</span></div>` : '';
+            // Description with show more
+            const descLen = 120;
+            const shortDesc = r.description && r.description.length > descLen;
+            const descHtml = r.description ? `<div class="roadmap-item-desc${shortDesc ? ' rm-desc-truncated' : ''}">${esc(shortDesc ? r.description.substring(0, descLen) + '…' : r.description)}${shortDesc ? `<button class="rm-show-more" type="button">show more</button>` : ''}</div>` : '';
+            const fullDescAttr = shortDesc ? ` data-full-desc="${esc(r.description)}"` : '';
+            return `<div class="roadmap-item rm-card-enhanced st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" data-roadmap-id="${esc(r.id)}" data-priority="${r.priority}"${fullDescAttr} style="animation-delay:${i*0.06}s">
+                <div class="rm-card-heat rm-heat-${r.priority}"></div>
                 <div class="roadmap-item-number">${rank}</div>
                 <div class="roadmap-item-content">
-                    <div class="roadmap-item-title">${esc(r.title)}</div>
-                    ${r.description?`<div class="roadmap-item-desc">${esc(r.description)}</div>`:''}
+                    <div class="rm-card-top-row">
+                        <div class="roadmap-item-title">${esc(r.title)}</div>
+                        ${r.category?`<span class="roadmap-category rm-card-cat ${catCls(r.category)}">${esc(r.category)}</span>`:''}
+                    </div>
+                    ${descHtml}
+                    ${progressHtml}
                     ${linkedHtml}
                 </div>
                 <div class="roadmap-item-meta">
                     <span class="priority-badge pri-${r.priority}">${priIcons[r.priority] || '⚪'} ${String(r.priority || '').replace('-',' ')}</span>
-                    ${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}
                     ${effortHtml}
                     <span class="badge badge-${r.status}">${r.status}</span>
                 </div>
@@ -836,6 +856,7 @@ const App = {
         const viewToggle = `<div class="roadmap-view-toggle">
             <button class="roadmap-view-btn${this._roadmapView === 'priority' ? ' active' : ''}" data-view="priority" title="Group by priority">📊 Priority</button>
             <button class="roadmap-view-btn${this._roadmapView === 'category' ? ' active' : ''}" data-view="category" title="Group by category">📁 Category</button>
+            <button class="roadmap-view-btn${this._roadmapView === 'timeline' ? ' active' : ''}" data-view="timeline" title="Timeline view">🗓️ Timeline</button>
             ${depFeatures.length ? `<button class="roadmap-view-btn${this._roadmapView === 'dependencies' ? ' active' : ''}" data-view="dependencies" title="Dependency flow">🔗 Dependencies</button>` : ''}
         </div>`;
 
@@ -843,17 +864,18 @@ const App = {
         const priSummaryParts = pris.filter(p => (grouped[p] || []).length > 0).map(p => `<span class="roadmap-count-${p}">${(grouped[p] || []).length} ${p.replace('-',' ')}</span>`);
         const compactSummary = `<span class="roadmap-compact-summary">${items.length} items · ${priSummaryParts.join(' · ')}</span>`;
 
-        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p><div class="page-subtitle-counts">${compactSummary}</div></div>
-            <div class="roadmap-summary">
-                <div class="roadmap-summary-stat"><div class="roadmap-summary-value">${items.length}</div><div class="roadmap-summary-label">Total Items</div></div>
-                <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-warning">${inProg}</div><div class="roadmap-summary-label">In Progress</div></div>
-                <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-success">${done}</div><div class="roadmap-summary-label">Completed</div></div>
-                <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-accent">${accepted}</div><div class="roadmap-summary-label">Accepted</div></div>
-                <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-purple">${pct}%</div><div class="roadmap-summary-label">Progress</div></div>
-            </div>
+        // Hero banner with progress ring + dashboard
+        const heroBanner = App.renderRoadmapHeroBanner(items, features, featuresByRoadmap, pris, priColors, priIcons, catCounts, catCls);
+
+        // Timeline view HTML
+        const timelineHtml = App.renderRoadmapTimelineView(items, featuresByRoadmap, pris, priColors, catCls);
+
+        return `<div class="page-header" data-date="${new Date().toLocaleDateString()}"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p><div class="page-subtitle-counts">${compactSummary}</div></div>
+            ${heroBanner}
             ${priorityChart}${categoryChart}${filterBar}
             <div id="roadmapSections" class="roadmap-view-priority">${prioritySections}</div>
             <div id="roadmapCategorySections" class="roadmap-view-category" style="display:none">${categorySections}</div>
+            <div id="roadmapTimelineContainer" class="roadmap-view-timeline" style="display:none">${timelineHtml}</div>
             ${depGraphHtml}
             <div class="roadmap-keyboard-hint" aria-hidden="true">Tip: Use ↑↓ to navigate, Enter to expand</div>`;
     },
@@ -1424,18 +1446,20 @@ const App = {
             }));
             applyRoadmapFilters();
 
-            // View toggle (Priority / Category / Dependencies)
+            // View toggle (Priority / Category / Timeline / Dependencies)
             const switchView = (view) => {
                 this._roadmapView = view;
                 document.querySelectorAll('.roadmap-view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
                 const priSections = document.getElementById('roadmapSections');
                 const catSections = document.getElementById('roadmapCategorySections');
+                const timelineContainer = document.getElementById('roadmapTimelineContainer');
                 const depGraph = document.getElementById('depGraphContainer');
                 const filters = document.querySelector('.roadmap-filters');
                 if (priSections) priSections.style.display = view === 'priority' ? '' : 'none';
                 if (catSections) catSections.style.display = view === 'category' ? '' : 'none';
+                if (timelineContainer) timelineContainer.style.display = view === 'timeline' ? '' : 'none';
                 if (depGraph) depGraph.style.display = view === 'dependencies' ? '' : 'none';
-                if (filters) filters.style.display = view === 'dependencies' ? 'none' : '';
+                if (filters) filters.style.display = (view === 'dependencies' || view === 'timeline') ? 'none' : '';
             };
             document.querySelectorAll('.roadmap-view-btn').forEach(btn => btn.addEventListener('click', () => {
                 switchView(btn.dataset.view);
@@ -1452,6 +1476,37 @@ const App = {
                         const collapsed = catItems.style.display === 'none';
                         catItems.style.display = collapsed ? '' : 'none';
                         if (chevron) chevron.textContent = collapsed ? '▾' : '▸';
+                    }
+                });
+            });
+
+            // "Show more" description toggle
+            document.querySelectorAll('.rm-show-more').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const item = btn.closest('.roadmap-item');
+                    const descEl = btn.closest('.roadmap-item-desc');
+                    if (item && descEl && item.dataset.fullDesc) {
+                        descEl.textContent = item.dataset.fullDesc;
+                        descEl.classList.remove('rm-desc-truncated');
+                    }
+                });
+            });
+
+            // Timeline block click navigates to item
+            document.querySelectorAll('.rm-tl-block').forEach(block => {
+                block.addEventListener('click', () => {
+                    const rid = block.dataset.roadmapId;
+                    if (rid) {
+                        switchView('priority');
+                        setTimeout(() => {
+                            const item = document.querySelector('.roadmap-item[data-roadmap-id="' + rid + '"]');
+                            if (item) {
+                                item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                item.classList.add('rm-highlight');
+                                setTimeout(() => item.classList.remove('rm-highlight'), 2000);
+                            }
+                        }, 100);
                     }
                 });
             });
@@ -1687,6 +1742,23 @@ App._setupFeaturePage = function() {
     });
     var searchInput = document.getElementById('featuresSearch');
     if (searchInput) searchInput.addEventListener('input', function(e) { self._featuresSearch = e.target.value; refresh(); });
+    // View toggle (list ↔ graph)
+    document.querySelectorAll('.view-toggle-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.view-toggle-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            var view = btn.dataset.view;
+            var tableWrap = document.getElementById('featuresTableWrap');
+            var graphWrap = document.getElementById('featuresGraphWrap');
+            if (view === 'graph') {
+                if (tableWrap) tableWrap.style.display = 'none';
+                if (graphWrap) { graphWrap.style.display = ''; App.renderFeaturesDepGraph(graphWrap, self._featuresData); }
+            } else {
+                if (tableWrap) tableWrap.style.display = '';
+                if (graphWrap) graphWrap.style.display = 'none';
+            }
+        });
+    });
     bindFeatureRows();
     var autoExpandId = (self._navContext && self._navContext.id) || self._expandedFeatureId;
     if (autoExpandId) {
@@ -2322,6 +2394,15 @@ App.renderStats = async function() {
         + '</div></div>'
         // Row 5: Milestone Progress (full width)
         + '<div class="stats-card stats-card-full"><div class="stats-card-title">Milestone Progress</div>' + msHtml + '</div>'
+        + '</div>'
+        + '<div class="stats-section-header"><h3>Progress Over Time</h3></div>'
+        + '<div class="stats-grid">'
+        + '<div class="stats-card stats-card-full"><div class="stats-card-title">Feature Burndown</div>'
+        + '<div class="burndown-chart-container"><canvas id="burndownCanvas" class="score-chart-canvas"></canvas>'
+        + '<div id="burndownCanvasTooltip" class="score-chart-tooltip"></div></div></div>'
+        + '<div class="stats-card stats-card-full"><div class="stats-card-title">Weekly Velocity</div>'
+        + '<div class="velocity-chart-container"><canvas id="velocityCanvas" class="score-chart-canvas"></canvas>'
+        + '<div id="velocityCanvasTooltip" class="score-chart-tooltip"></div></div></div>'
         + '</div>';
 };
 
