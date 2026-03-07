@@ -346,6 +346,13 @@ App._bindAgentsEvents = function() {
 // IDEA QUEUE PAGE
 // =====================================================
 App.renderIdeas = async function() {
+    App._ideasViewMode = App._ideasViewMode || 'queue';
+    const viewMode = App._ideasViewMode;
+
+    if (viewMode === 'history') {
+        return App.renderIdeasHistory();
+    }
+
     const ideas = await App.api('ideas');
     const counts = { pending: 0, processing: 0, 'spec-ready': 0, approved: 0, rejected: 0 };
     ideas.forEach(i => { counts[i.status] = (counts[i.status] || 0) + 1; });
@@ -355,8 +362,11 @@ App.renderIdeas = async function() {
         <div class="page-subtitle">${ideas.length} idea${ideas.length !== 1 ? 's' : ''} · ${counts.pending} pending · ${counts['spec-ready']} ready for review</div>
     </div>`;
 
-    // Submit button
     html += `<div class="app4-ideas-toolbar">
+        <div class="app4-view-toggle">
+            <button class="app4-toggle-btn active" data-view="queue">📋 Queue</button>
+            <button class="app4-toggle-btn" data-view="history">📜 History</button>
+        </div>
         <button class="app4-btn app4-btn-primary" id="submitIdeaBtn"><span class="app4-btn-icon">+</span> Submit Idea</button>
     </div>`;
 
@@ -459,6 +469,14 @@ App.renderIdeas = async function() {
 };
 
 App._bindIdeasEvents = function() {
+    // View toggle buttons
+    document.querySelectorAll('.app4-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            App._ideasViewMode = btn.dataset.view;
+            App.navigate('ideas');
+        });
+    });
+
     const modal = document.getElementById('ideaModal');
     const openBtn = document.getElementById('submitIdeaBtn');
     const cancelBtn = document.getElementById('ideaCancelBtn');

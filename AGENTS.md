@@ -73,6 +73,7 @@ just promote        # Promote staging → main
 4. **Clean Code**: Follow Go idioms and conventions. Use `gofmt` and `golangci-lint`.
 5. **Error Handling**: Return errors, don't panic. Use `fmt.Errorf("context: %w", err)` for wrapping.
 6. **Embed Assets**: Use `//go:embed` for web assets so the binary is self-contained.
+7. **No Navigational Dead-Ends**: Every clickable number, status badge, alert, or metric in the UI must lead somewhere useful. If a stat shows "3 failed", clicking it must show which 3 failed and why. If an idea was processed into features, clicking the idea must show those features. Users should never hit a wall where they can see a number but can't drill into it. This applies to all interfaces — web viewer, CLI output, and API responses.
 
 ## TDD Workflow
 

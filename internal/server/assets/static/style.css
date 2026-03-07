@@ -4221,6 +4221,118 @@ details[open] > .app4-past-summary::before {
 /* ---- Ideas/Intake ---- */
 .app4-ideas-toolbar {
     margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.app4-view-toggle {
+    display: flex;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.app4-toggle-btn {
+    padding: 6px 14px;
+    border: none;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s, color 0.15s;
+}
+.app4-toggle-btn:hover { background: var(--bg-secondary); }
+.app4-toggle-btn.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* History timeline */
+.app4-history-timeline {
+    position: relative;
+    padding-left: 24px;
+}
+.app4-history-timeline::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    background: var(--border-color);
+    border-radius: 1px;
+}
+.app4-history-item {
+    position: relative;
+    margin-bottom: 18px;
+}
+.app4-history-dot {
+    position: absolute;
+    left: -21px;
+    top: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg-primary);
+    z-index: 1;
+}
+.app4-history-content {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+.app4-history-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+.app4-history-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.app4-history-type { font-size: 1.1rem; }
+.app4-history-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.app4-history-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+.app4-history-arrow {
+    color: var(--text-muted);
+    font-weight: bold;
+}
+.app4-history-feature-link {
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 500;
+    transition: color 0.15s, text-decoration 0.15s;
+    text-decoration: underline dotted transparent;
+}
+.app4-history-feature-link:hover {
+    color: var(--accent-hover, var(--accent));
+    text-decoration: underline dotted var(--accent);
+}
+.app4-history-priority {
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--text-secondary);
+}
+.app4-history-pending {
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 /* Modal */

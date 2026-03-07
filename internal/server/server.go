@@ -1484,6 +1484,37 @@ func handleIdeas(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 	if ideas == nil {
 		ideas = []models.IdeaQueueItem{}
 	}
+
+	// History view: enrich ideas with linked feature details
+	if r.URL.Query().Get("view") == "history" {
+		type linkedFeature struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Status   string `json:"status"`
+			Priority int    `json:"priority"`
+		}
+		type ideaWithFeature struct {
+			models.IdeaQueueItem
+			LinkedFeature *linkedFeature `json:"linked_feature,omitempty"`
+		}
+		result := make([]ideaWithFeature, 0, len(ideas))
+		featureCache := map[string]*linkedFeature{}
+		for _, idea := range ideas {
+			item := ideaWithFeature{IdeaQueueItem: idea}
+			if idea.FeatureID != "" {
+				if lf, ok := featureCache[idea.FeatureID]; ok {
+					item.LinkedFeature = lf
+				} else if f, fErr := db.GetFeature(database, idea.FeatureID); fErr == nil {
+					lf = &linkedFeature{ID: f.ID, Name: f.Name, Status: f.Status, Priority: f.Priority}
+					featureCache[idea.FeatureID] = lf
+					item.LinkedFeature = lf
+				}
+			}
+			result = append(result, item)
+		}
+		return writeJSON(w, result)
+	}
+
 	return writeJSON(w, ideas)
 }
 
