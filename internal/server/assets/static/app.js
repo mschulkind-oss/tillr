@@ -589,7 +589,7 @@ const App = {
 
         this._roadmapData = items;
         this._roadmapFeatures = features;
-        if (!this.roadmapFilters) this.roadmapFilters = { category: 'all', status: 'all' };
+        if (!this.roadmapFilters) this.roadmapFilters = { category: 'all', status: 'all', priority: 'all' };
         if (!this._roadmapView) this._roadmapView = 'priority';
 
         const pris = ['critical','high','medium','low','nice-to-have'];
@@ -634,6 +634,14 @@ const App = {
             return `<button class="roadmap-filter-pill${active}" data-filter-type="category" data-filter-value="${esc(c)}">${label}<span class="pill-count">${catFilterCounts[c]}</span></button>`;
         }).join('');
 
+        const priFilterCounts = { all: items.length };
+        pris.forEach(p => { priFilterCounts[p] = (grouped[p] || []).length; });
+        const priLabels = { all:'All', critical:'Critical', high:'High', medium:'Medium', low:'Low', 'nice-to-have':'Nice to Have' };
+        const priPills = ['all', ...pris].filter(p => p === 'all' || priFilterCounts[p]).map(p => {
+            const active = this.roadmapFilters.priority === p ? ' active' : '';
+            return `<button class="roadmap-filter-pill${active}" data-filter-type="priority" data-filter-value="${p}">${priLabels[p] || p}<span class="pill-count">${priFilterCounts[p]}</span></button>`;
+        }).join('');
+
         const statusOrder = ['proposed','accepted','in-progress','done','deferred'];
         const statusFilterCounts = { all: items.length };
         items.forEach(r => { statusFilterCounts[r.status] = (statusFilterCounts[r.status] || 0) + 1; });
@@ -644,6 +652,7 @@ const App = {
         }).join('');
 
         const filterBar = `<div class="roadmap-filters">
+            <div class="roadmap-filter-group"><span class="roadmap-filter-label">Priority</span><div class="roadmap-filter-pills">${priPills}</div></div>
             <div class="roadmap-filter-group"><span class="roadmap-filter-label">Category</span><div class="roadmap-filter-pills">${catPills}</div></div>
             <div class="roadmap-filter-group"><span class="roadmap-filter-label">Status</span><div class="roadmap-filter-pills">${stPills}</div></div>
         </div>`;
@@ -657,10 +666,19 @@ const App = {
             ).join('')}</div>`;
         };
 
+        // Status action buttons for expanded details
+        const roadmapStatusOrder = ['proposed','accepted','in-progress','done','deferred'];
+        const roadmapStatusLabels = {proposed:'Proposed',accepted:'Accepted','in-progress':'In Progress',done:'Completed',deferred:'Deferred'};
+        const roadmapStatusIcons = {proposed:'○',accepted:'◉','in-progress':'◔',done:'✓',deferred:'⏸'};
+
         // Helper: render a single roadmap item card
         const renderItem = (r, rank, i) => {
             const itemCat = r.category || 'uncategorized';
             const linkedHtml = renderLinkedFeatures(r.id);
+            const statusBtns = roadmapStatusOrder.map(s =>
+                `<button class="roadmap-status-btn rs-${s}${r.status === s ? ' rs-active' : ''}" data-roadmap-id="${esc(r.id)}" data-new-status="${s}" title="Set status to ${roadmapStatusLabels[s]}">${roadmapStatusIcons[s]} ${roadmapStatusLabels[s]}</button>`
+            ).join('');
+            const effortHtml = r.effort ? `<span class="effort-badge effort-badge-prominent effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>` : '';
             return `<div class="roadmap-item st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" data-roadmap-id="${esc(r.id)}" data-priority="${r.priority}" style="animation-delay:${i*0.06}s">
                 <div class="roadmap-item-number">${rank}</div>
                 <div class="roadmap-item-content">
@@ -669,17 +687,18 @@ const App = {
                     ${linkedHtml}
                 </div>
                 <div class="roadmap-item-meta">
-                    <span class="priority-badge pri-${r.priority}">${priIcons[r.priority] || '⚪'} ${(r.priority || '').replace('-',' ')}</span>
+                    <span class="priority-badge pri-${r.priority}">${priIcons[r.priority] || '⚪'} ${String(r.priority || '').replace('-',' ')}</span>
                     ${r.category?`<span class="roadmap-category ${catCls(r.category)}">${esc(r.category)}</span>`:''}
-                    ${r.effort?`<span class="effort-badge effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span>`:''}
+                    ${effortHtml}
                     <span class="badge badge-${r.status}">${r.status}</span>
                 </div>
                 <div class="roadmap-item-details">
                     ${r.description ? `<div class="roadmap-description-block">${esc(r.description)}</div>` : ''}
                     <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(r.id)}</span></div>
                     ${r.category ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Category</span><span class="roadmap-detail-value">${esc(r.category)}</span></div>` : ''}
-                    ${r.effort ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Effort</span><span class="roadmap-detail-value">${r.effort.toUpperCase()}</span></div>` : ''}
+                    ${r.effort ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Effort</span><span class="roadmap-detail-value"><span class="effort-badge effort-${r.effort}">${{xs:'🟢 XS',s:'🔵 S',m:'🟡 M',l:'🟠 L',xl:'🔴 XL'}[r.effort]||r.effort}</span></span></div>` : ''}
                     <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(r.created_at)}</span></div>
+                    <div class="roadmap-status-actions"><span class="roadmap-detail-label">Status</span><div class="roadmap-status-btns">${statusBtns}</div></div>
                     ${App.renderRoadmapLinkedFeatures(featuresByRoadmap[r.id] || [])}
                 </div>
             </div>`;
@@ -816,7 +835,11 @@ const App = {
             ${depFeatures.length ? `<button class="roadmap-view-btn${this._roadmapView === 'dependencies' ? ' active' : ''}" data-view="dependencies" title="Dependency flow">🔗 Dependencies</button>` : ''}
         </div>`;
 
-        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p></div>
+        // Compact priority summary
+        const priSummaryParts = pris.filter(p => (grouped[p] || []).length > 0).map(p => `<span class="roadmap-count-${p}">${(grouped[p] || []).length} ${p.replace('-',' ')}</span>`);
+        const compactSummary = `<span class="roadmap-compact-summary">${items.length} items · ${priSummaryParts.join(' · ')}</span>`;
+
+        return `<div class="page-header"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p><div class="page-subtitle-counts">${compactSummary}</div></div>
             <div class="roadmap-summary">
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value">${items.length}</div><div class="roadmap-summary-label">Total Items</div></div>
                 <div class="roadmap-summary-stat"><div class="roadmap-summary-value text-warning">${inProg}</div><div class="roadmap-summary-label">In Progress</div></div>
@@ -1312,7 +1335,17 @@ const App = {
                 }
             };
             document.querySelectorAll('.roadmap-item').forEach(item => {
-                item.addEventListener('click', () => toggleItem(item));
+                item.addEventListener('click', (e) => {
+                    if (e.target.closest('.roadmap-status-btn')) return;
+                    toggleItem(item);
+                });
+            });
+            // Status change buttons
+            document.querySelectorAll('.roadmap-status-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    App.changeRoadmapStatus(btn.dataset.roadmapId, btn.dataset.newStatus);
+                });
             });
             // Make inline features clickable
             bindClickableFeatures(document.getElementById('content'));
@@ -1360,10 +1393,12 @@ const App = {
             const applyRoadmapFilters = () => {
                 const cf = this.roadmapFilters.category;
                 const sf = this.roadmapFilters.status;
+                const pf = this.roadmapFilters.priority;
                 document.querySelectorAll('.roadmap-item').forEach(item => {
                     const matchCat = cf === 'all' || item.dataset.category === cf;
                     const matchSt = sf === 'all' || item.dataset.status === sf;
-                    item.style.display = (matchCat && matchSt) ? '' : 'none';
+                    const matchPri = pf === 'all' || item.dataset.priority === pf;
+                    item.style.display = (matchCat && matchSt && matchPri) ? '' : 'none';
                 });
                 document.querySelectorAll('.roadmap-section').forEach(section => {
                     const visible = section.querySelectorAll('.roadmap-item:not([style*="display: none"])');
@@ -1538,6 +1573,33 @@ const App = {
     },
 };
 
+// PATCH API helper — assigned outside object literal to avoid V8 parsing quirk
+App.apiPatch = async function(endpoint, body) {
+    const resp = await fetch('/api/' + endpoint, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    return resp.json();
+};
+
+// Change roadmap item status via PATCH endpoint
+App.changeRoadmapStatus = async function(id, newStatus) {
+    try {
+        const result = await App.apiPatch('roadmap/' + id + '/status', { status: newStatus });
+        if (result.error) {
+            App.toast('Error: ' + result.error, 'error');
+            return;
+        }
+        App.toast('Status changed to ' + newStatus, 'success');
+        // Remember which item was expanded so we can re-expand after re-render
+        App._expandedRoadmapId = id;
+        App.render();
+    } catch (e) {
+        App.toast('Failed to change status', 'error');
+    }
+};
+
 // Render linked features for roadmap item drill-down
 App.renderRoadmapLinkedFeatures = function(linked) {
     if (!linked || !linked.length) return '';
@@ -1545,7 +1607,7 @@ App.renderRoadmapLinkedFeatures = function(linked) {
     const priIcons = {critical:'🔴',high:'🟠',medium:'🟡',low:'🟢','nice-to-have':'🔵'};
 
     const featureCards = linked.map(function(f) {
-        const priLabel = (f.priority || '').replace('-', ' ');
+        const priLabel = String(f.priority || '').replace('-', ' ');
         const priIcon = priIcons[f.priority] || '⚪';
         const deps = (f.depends_on && f.depends_on.length)
             ? '<span class="dep-indicator" title="Depends on: ' + f.depends_on.map(function(d) { return esc(d); }).join(', ') + '">⛓️</span>'

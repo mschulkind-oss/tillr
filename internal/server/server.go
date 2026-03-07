@@ -505,6 +505,7 @@ var validRoadmapStatuses = map[string]bool{
 	"accepted":    true,
 	"in-progress": true,
 	"completed":   true,
+	"done":        true,
 	"deferred":    true,
 }
 
