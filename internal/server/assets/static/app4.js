@@ -28,7 +28,8 @@ App.renderAgents = async function() {
     const active = agents.filter(a => a.status === 'active');
     const completed = agents.filter(a => a.status === 'completed');
     const failed = agents.filter(a => a.status === 'failed');
-    const successRate = agents.length > 0 ? Math.round((completed.length / agents.length) * 100) : 0;
+    const finished = completed.length + failed.length;
+    const successRate = finished > 0 ? Math.round((completed.length / finished) * 100) : 0;
 
     let html = `<div class="page-header">
         <h2 class="page-title">🤖 Agent Dashboard</h2>
@@ -725,6 +726,7 @@ App._bindGlobalSearch = function(page) {
     style.textContent = `
         @media print {
             .sidebar, .hamburger, .sidebar-overlay, .chord-indicator, .shortcut-modal-overlay,
+            .feedback-fab, .feedback-modal-overlay,
             .spec-toc, .page-subtitle, .btn, .theme-toggle { display: none !important; }
             .content { margin: 0 !important; padding: 20px !important; }
             .spec-document { font-size: 11pt; }
@@ -733,4 +735,77 @@ App._bindGlobalSearch = function(page) {
         }
     `;
     document.head.appendChild(style);
+})();
+
+// =====================================================
+// QUICK FEEDBACK MODAL
+// =====================================================
+App.showFeedbackModal = function() {
+    var overlay = document.getElementById('feedbackModal');
+    if (!overlay) return;
+    overlay.classList.add('visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    // Reset form
+    var form = document.getElementById('feedbackForm');
+    if (form) form.reset();
+    // Auto-focus title
+    var title = document.getElementById('feedbackTitle');
+    if (title) setTimeout(function() { title.focus(); }, 50);
+    // Close on backdrop click
+    overlay.onclick = function(e) {
+        if (e.target === overlay) App.hideFeedbackModal();
+    };
+};
+
+App.hideFeedbackModal = function() {
+    var overlay = document.getElementById('feedbackModal');
+    if (!overlay) return;
+    overlay.classList.remove('visible');
+    overlay.setAttribute('aria-hidden', 'true');
+};
+
+App.showToast = function(message) {
+    var existing = document.querySelector('.toast-notification');
+    if (existing) existing.remove();
+    var toast = document.createElement('div');
+    toast.className = 'toast-notification';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    // Trigger reflow then add visible class
+    toast.offsetHeight;
+    toast.classList.add('visible');
+    setTimeout(function() {
+        toast.classList.remove('visible');
+        setTimeout(function() { toast.remove(); }, 300);
+    }, 2000);
+};
+
+// Bind feedback form submission
+(function() {
+    document.addEventListener('DOMContentLoaded', function() {
+        var form = document.getElementById('feedbackForm');
+        if (!form) return;
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var title = document.getElementById('feedbackTitle').value.trim();
+            if (!title) return;
+            var desc = document.getElementById('feedbackDesc').value.trim();
+            var type = document.getElementById('feedbackType').value;
+            var submitBtn = document.getElementById('feedbackSubmitBtn');
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting…'; }
+            try {
+                await App.apiPost('ideas', {
+                    title: title,
+                    raw_input: desc,
+                    idea_type: type === 'idea' ? 'feature' : type,
+                });
+                App.hideFeedbackModal();
+                App.showToast('✓ Feedback submitted');
+            } catch(err) {
+                App.showToast('✗ Error: ' + err.message);
+            } finally {
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit'; }
+            }
+        });
+    });
 })();

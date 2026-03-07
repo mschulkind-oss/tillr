@@ -219,6 +219,13 @@ func CompleteWorkItem(database *sql.DB, result string) error {
 			Data:      fmt.Sprintf(`{"work_type":%q,"result":%q}`, w.WorkType, result),
 		})
 	}
+	// Auto-transition feature to human-qa when implementation/agent-qa work completes
+	if w.FeatureID != "" && p != nil {
+		f, fErr := db.GetFeature(database, w.FeatureID)
+		if fErr == nil && (f.Status == "implementing" || f.Status == "agent-qa") {
+			_ = TransitionFeature(database, p.ID, w.FeatureID, "human-qa")
+		}
+	}
 	return nil
 }
 

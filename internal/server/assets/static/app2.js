@@ -677,9 +677,23 @@ App.initKeyboardShortcuts = function() {
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     }
 
+    // Number-key page mapping (1-9)
+    var numNavMap = {
+        '1': 'dashboard',
+        '2': 'features',
+        '3': 'roadmap',
+        '4': 'cycles',
+        '5': 'agents',
+        '6': 'ideas',
+        '7': 'context',
+        '8': 'discussions',
+        '9': 'history',
+    };
+
     document.addEventListener('keydown', function(e) {
-        // Close shortcut modal on Escape
+        // Close any open modal/overlay on Escape
         if (e.key === 'Escape') {
+            App.hideFeedbackModal();
             App.hideShortcutHelp();
             hideChord();
             return;
@@ -688,9 +702,11 @@ App.initKeyboardShortcuts = function() {
         // Skip if inside input elements (unless it's Escape)
         if (isInputFocused()) return;
 
-        // If shortcut modal is open, only respond to Escape (handled above)
+        // If any modal is open, only respond to Escape (handled above)
         var modal = document.getElementById('shortcutModal');
         if (modal && modal.classList.contains('visible')) return;
+        var fbModal = document.getElementById('feedbackModal');
+        if (fbModal && fbModal.classList.contains('visible')) return;
 
         if (chordActive) {
             e.preventDefault();
@@ -706,6 +722,37 @@ App.initKeyboardShortcuts = function() {
         if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             showChord();
+            return;
+        }
+
+        // Number keys 1-9: quick page navigation
+        if (numNavMap[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            App._breadcrumbDetail = null;
+            App.navigate(numNavMap[e.key]);
+            return;
+        }
+
+        // f — Open Quick Feedback modal
+        if (e.key === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            App.showFeedbackModal();
+            return;
+        }
+
+        // q — Navigate to QA page
+        if (e.key === 'q' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            App._breadcrumbDetail = null;
+            App.navigate('qa');
+            return;
+        }
+
+        // s — Navigate to Stats page
+        if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            App._breadcrumbDetail = null;
+            App.navigate('stats');
             return;
         }
 
@@ -926,7 +973,7 @@ App._renderQACard = function(f, reviewRounds) {
             +   '<span>Feature Spec</span>'
             + '</button>'
             + '<div class="qa-spec-content" id="' + specId + '">'
-            +   '<pre class="qa-spec-text">' + App._esc(f.spec) + '</pre>'
+            +   '<div class="qa-spec-text qa-spec-md">' + (typeof renderMD === 'function' ? renderMD(f.spec) : App._esc(f.spec)) + '</div>'
             + '</div>'
             + '</div>';
     }
@@ -1028,8 +1075,8 @@ App._renderQAEmptyState = function(reviewedHtml, approvedCount, rejectedCount) {
         + '<div>'
         +   '<div class="qa-empty-hero">'
         +     '<div class="qa-empty-icon">✅</div>'
-        +     '<div class="qa-empty-title">All caught up!</div>'
-        +     '<div class="qa-empty-subtitle">No features are waiting for review.</div>'
+        +     '<div class="qa-empty-title">No features awaiting review — great job!</div>'
+        +     '<div class="qa-empty-subtitle">Features will appear here when agents complete their work.</div>'
         +     statsHtml
         +     '<div class="qa-empty-hint">Features will appear here when they reach the <code>human-qa</code> stage.</div>'
         +   '</div>'
@@ -1063,6 +1110,21 @@ App._esc = function(s) {
     var d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+};
+
+// Send a feature to QA (human-qa) from the features list
+App.sendToQA = async function(id) {
+    try {
+        var result = await App.apiPatch('features/' + encodeURIComponent(id), { status: 'human-qa' });
+        if (result.error) {
+            App.toast('Error: ' + result.error, 'error');
+            return;
+        }
+        App.toast('✓ Sent to QA for review', 'success');
+        App.navigate('features');
+    } catch (e) {
+        App.toast('Failed to send to QA', 'error');
+    }
 };
 
 App._qaConfirmAndAct = async function(featureId, action) {
