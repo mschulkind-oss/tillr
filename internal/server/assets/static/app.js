@@ -1466,40 +1466,7 @@ const App = {
             }
         }
         if (page === 'discussions') {
-            document.querySelectorAll('.disc-row').forEach(row => {
-                row.addEventListener('click', async () => {
-                    const did = row.dataset.discId;
-                    const detail = document.querySelector(`.disc-detail-row[data-disc-detail="${did}"]`);
-                    if (detail) {
-                        const isVisible = detail.style.display !== 'none';
-                        document.querySelectorAll('.disc-detail-row').forEach(d => d.style.display = 'none');
-                        document.querySelectorAll('.disc-row').forEach(r => r.classList.remove('expanded'));
-                        if (!isVisible) {
-                            detail.style.display = 'table-row';
-                            row.classList.add('expanded');
-                            const wrap = document.getElementById('discComments' + did);
-                            if (wrap) {
-                                try {
-                                    const disc = await this.api('discussions/' + did);
-                                    wrap.innerHTML = this.renderDiscussionComments(disc.comments || []);
-                                } catch {
-                                    wrap.innerHTML = '<div style="font-size:0.8rem;color:var(--danger);padding:8px">Failed to load comments</div>';
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-            document.querySelectorAll('.disc-feature-link').forEach(link => {
-                link.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); App.navigateTo('features', link.dataset.featureId); });
-            });
-            // Auto-expand discussion from navigation context
-            if (this._navContext?.id) {
-                const did = this._navContext.id;
-                const row = document.querySelector(`.disc-row[data-disc-id="${did}"]`);
-                if (row) { row.click(); setTimeout(() => row.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100); }
-                this._navContext = {};
-            }
+            App._bindDiscussionEvents();
         }
         if (page === 'cycles') {
             if (typeof App.bindCycleCardClicks === 'function') {

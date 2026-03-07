@@ -229,4 +229,7 @@ var migrations = []string{
 	CREATE INDEX idx_discussions_status ON discussions(status);
 	CREATE INDEX idx_comments_discussion ON discussion_comments(discussion_id);
 	CREATE INDEX idx_comments_parent ON discussion_comments(parent_id);`,
+
+	// Migration 7: Add body column to discussions
+	`ALTER TABLE discussions ADD COLUMN body TEXT NOT NULL DEFAULT '';`,
 }

@@ -1129,3 +1129,352 @@ App.bindCycleCardClicks = function() {
     });
 };
 
+// ── Threaded Discussions ──
+
+App._discAvatarColors = [
+    '#e06c75', '#61afef', '#c678dd', '#98c379', '#e5c07b',
+    '#56b6c2', '#d19a66', '#be5046', '#7ec8e3', '#c9a0dc'
+];
+
+App._discAvatarColor = function(name) {
+    var hash = 0;
+    var s = (name || 'U').toLowerCase();
+    for (var i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash) + s.charCodeAt(i);
+        hash = hash & hash;
+    }
+    return App._discAvatarColors[Math.abs(hash) % App._discAvatarColors.length];
+};
+
+App._discInitials = function(name) {
+    if (!name) return '?';
+    var parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.substring(0, 2).toUpperCase();
+};
+
+App._discAvatar = function(name, size) {
+    var sz = size || 36;
+    var color = App._discAvatarColor(name);
+    var initials = App._discInitials(name);
+    return '<div class="disc-avatar" style="width:' + sz + 'px;height:' + sz + 'px;background:' + color + ';font-size:' + (sz * 0.38) + 'px">' + initials + '</div>';
+};
+
+App._discTimeAgo = function(iso) {
+    if (!iso) return '';
+    var now = Date.now();
+    var then = new Date(iso).getTime();
+    var diff = Math.max(0, now - then);
+    var secs = Math.floor(diff / 1000);
+    if (secs < 60) return 'just now';
+    var mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm ago';
+    var hours = Math.floor(mins / 60);
+    if (hours < 24) return hours + 'h ago';
+    var days = Math.floor(hours / 24);
+    if (days < 30) return days + 'd ago';
+    var months = Math.floor(days / 30);
+    if (months < 12) return months + 'mo ago';
+    return Math.floor(months / 12) + 'y ago';
+};
+
+App._discRenderMarkdown = function(text) {
+    if (!text) return '';
+    var e = function(s) { if(!s) return ''; var d=document.createElement('div'); d.textContent=s; return d.innerHTML; };
+    var lines = text.split('\n');
+    var html = '';
+    var inCode = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.match(/^```/)) {
+            if (inCode) { html += '</code></pre>'; inCode = false; }
+            else { html += '<pre><code>'; inCode = true; }
+            continue;
+        }
+        if (inCode) { html += e(line) + '\n'; continue; }
+        var escaped = e(line);
+        // Bold
+        escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Inline code
+        escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+        // Links
+        escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        if (escaped.trim() === '') html += '<p>&nbsp;</p>';
+        else html += '<p>' + escaped + '</p>';
+    }
+    if (inCode) html += '</code></pre>';
+    return html;
+};
+
+App.renderDiscussions = async function() {
+    var discussions = await App.api('discussions');
+    var features = [];
+    try { features = await App.api('features'); } catch(ex) { /* ignore */ }
+
+    App._discussionsData = discussions;
+    App._discussionsFeatures = features;
+    App._discViewMode = 'list';
+    App._discDetailId = null;
+
+    // Check if navigating to a specific discussion
+    if (App._navContext && App._navContext.id) {
+        App._discDetailId = parseInt(App._navContext.id, 10);
+        App._discViewMode = 'detail';
+        App._navContext = {};
+    }
+
+    if (App._discViewMode === 'detail' && App._discDetailId) {
+        return App._renderDiscussionDetail(App._discDetailId);
+    }
+    return App._renderDiscussionList(discussions, features);
+};
+
+App._renderDiscussionList = function(discussions, features) {
+    var esc = window.esc || function(s) { if(!s) return ''; var d=document.createElement('div'); d.textContent=s; return d.innerHTML; };
+
+    var statusCounts = {};
+    (discussions || []).forEach(function(d) { statusCounts[d.status || 'open'] = (statusCounts[d.status || 'open'] || 0) + 1; });
+
+    var headerHtml = '<div class="page-header">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">' +
+        '<div><h2 class="page-title">Discussions</h2>' +
+        '<p class="page-subtitle">' + (discussions.length || 0) + ' discussion' + (discussions.length !== 1 ? 's' : '') + '</p></div>' +
+        '<button class="disc-new-btn" id="discNewBtn">＋ New Discussion</button>' +
+        '</div></div>';
+
+    var statsHtml = '<div class="stats-grid" style="margin-bottom:16px">' +
+        '<div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value">' + (statusCounts.open || 0) + '</div><div class="stat-label">Open</div></div><div class="stat-icon" aria-hidden="true">🟢</div></div>' +
+        '<div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">' + (statusCounts.resolved || 0) + '</div><div class="stat-label">Resolved</div></div><div class="stat-icon" aria-hidden="true">🔵</div></div>' +
+        '<div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">' + (statusCounts.merged || 0) + '</div><div class="stat-label">Merged</div></div><div class="stat-icon" aria-hidden="true">🟣</div></div>' +
+        '<div class="stat-card"><div class="stat-card-info"><div class="stat-value">' + (statusCounts.closed || 0) + '</div><div class="stat-label">Closed</div></div><div class="stat-icon" aria-hidden="true">⚪</div></div>' +
+        '</div>';
+
+    // New discussion form (hidden by default)
+    var featureOptions = '<option value="">None</option>';
+    (features || []).forEach(function(f) {
+        featureOptions += '<option value="' + esc(f.id) + '">' + esc(f.id) + ' — ' + esc(f.name) + '</option>';
+    });
+
+    var formHtml = '<div id="discNewForm" style="display:none;margin-bottom:16px">' +
+        '<div class="disc-form">' +
+        '<div class="disc-form-title">New Discussion</div>' +
+        '<div class="disc-form-group"><label for="discNewTitle">Title</label><input type="text" id="discNewTitle" placeholder="Discussion title…"></div>' +
+        '<div class="disc-form-group"><label for="discNewBody">Body</label><textarea id="discNewBody" rows="4" placeholder="Describe what you want to discuss…"></textarea>' +
+        '<div class="disc-form-hint">Supports **bold**, `code`, and [links](url)</div></div>' +
+        '<div class="disc-form-group"><label for="discNewFeature">Link to Feature</label><select id="discNewFeature">' + featureOptions + '</select></div>' +
+        '<div class="disc-form-group"><label for="discNewAuthor">Author</label><input type="text" id="discNewAuthor" value="human"></div>' +
+        '<div class="disc-form-actions"><button class="disc-form-submit" id="discNewSubmit">Create Discussion</button>' +
+        '<button class="disc-form-cancel" id="discNewCancel">Cancel</button></div>' +
+        '</div></div>';
+
+    if (!discussions || !discussions.length) {
+        return headerHtml + formHtml +
+            '<div class="empty-state">' +
+            '<div class="empty-state-icon">💬</div>' +
+            '<div class="empty-state-text">No discussions yet</div>' +
+            '<div class="empty-state-hint">Start a discussion to track proposals, decisions, and conversations.</div>' +
+            '</div>';
+    }
+
+    var listHtml = '<div class="disc-list">';
+    discussions.forEach(function(d) {
+        var statusCls = 'disc-status-' + (d.status || 'open');
+        var preview = (d.body || '').substring(0, 100);
+        if ((d.body || '').length > 100) preview += '…';
+        if (!preview) preview = 'No description';
+        var featureTag = d.feature_id ? '<a class="disc-feature-tag disc-feature-nav" data-feature-id="' + esc(d.feature_id) + '">' + esc(d.feature_id) + '</a>' : '';
+
+        listHtml += '<div class="disc-list-item" data-disc-id="' + d.id + '">' +
+            App._discAvatar(d.author, 36) +
+            '<div class="disc-list-content">' +
+            '<div class="disc-list-title">' +
+            '<span>' + esc(d.title) + '</span>' +
+            '<span class="badge ' + statusCls + '">' + esc(d.status || 'open') + '</span>' +
+            '</div>' +
+            '<div class="disc-list-preview">' + esc(preview) + '</div>' +
+            '<div class="disc-list-meta">' +
+            '<span>' + esc(d.author || 'Unknown') + '</span>' +
+            '<span class="disc-reply-badge">💬 ' + (d.comment_count || 0) + '</span>' +
+            (featureTag ? featureTag : '') +
+            '<span>' + App._discTimeAgo(d.created_at) + '</span>' +
+            '</div>' +
+            '</div></div>';
+    });
+    listHtml += '</div>';
+
+    return headerHtml + statsHtml + formHtml + listHtml;
+};
+
+App._renderDiscussionDetail = async function(discId) {
+    var esc = window.esc || function(s) { if(!s) return ''; var d=document.createElement('div'); d.textContent=s; return d.innerHTML; };
+    var disc;
+    try {
+        disc = await App.api('discussions/' + discId);
+    } catch(ex) {
+        return '<div class="empty-state"><div class="empty-state-icon">❌</div><div class="empty-state-text">Discussion not found</div></div>';
+    }
+
+    App._discCurrentDiscussion = disc;
+    App._breadcrumbDetail = disc.title;
+    App.updateBreadcrumbs();
+
+    var statusCls = 'disc-status-' + (disc.status || 'open');
+    var featureTag = disc.feature_id ? '<a class="disc-feature-tag disc-feature-nav" data-feature-id="' + esc(disc.feature_id) + '">' + esc(disc.feature_id) + '</a>' : '';
+
+    var headerHtml = '<button class="disc-back-btn" id="discBackBtn">← Back to Discussions</button>' +
+        '<div class="disc-detail-header">' +
+        '<div class="disc-detail-title">' +
+        '<span>#' + disc.id + '</span> ' + esc(disc.title) +
+        ' <span class="badge ' + statusCls + '">' + esc(disc.status || 'open') + '</span>' +
+        '</div>' +
+        '<div class="disc-detail-meta">' +
+        App._discAvatar(disc.author, 24) +
+        '<span>' + esc(disc.author) + '</span>' +
+        '<span>·</span>' +
+        '<span>' + App._discTimeAgo(disc.created_at) + '</span>' +
+        (featureTag ? '<span>·</span>' + featureTag : '') +
+        '<span>·</span>' +
+        '<span class="disc-reply-badge">💬 ' + (disc.comment_count || 0) + ' replies</span>' +
+        '</div></div>';
+
+    // Body
+    var bodyHtml = '';
+    if (disc.body) {
+        bodyHtml = '<div class="disc-detail-body">' + App._discRenderMarkdown(disc.body) + '</div>';
+    }
+
+    // Replies thread
+    var threadHtml = '<div class="disc-thread">';
+    threadHtml += '<div class="disc-thread-title">Replies (' + ((disc.comments || []).length) + ')</div>';
+    if (!disc.comments || !disc.comments.length) {
+        threadHtml += '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0">No replies yet. Be the first to respond.</div>';
+    } else {
+        disc.comments.forEach(function(c) {
+            var typeCls = '';
+            var ctype = c.comment_type || c.type || 'comment';
+            if (ctype !== 'comment') typeCls = '<span class="badge disc-type-' + ctype + '">' + esc(ctype) + '</span>';
+            threadHtml += '<div class="disc-reply">' +
+                '<div>' + App._discAvatar(c.author, 32).replace('disc-avatar', 'disc-reply-avatar') + '</div>' +
+                '<div class="disc-reply-content">' +
+                '<div class="disc-reply-header">' +
+                '<span class="disc-reply-author">' + esc(c.author || 'Unknown') + '</span>' +
+                typeCls +
+                '<span class="disc-reply-time">' + App._discTimeAgo(c.created_at) + '</span>' +
+                '</div>' +
+                '<div class="disc-reply-body">' + App._discRenderMarkdown(c.content) + '</div>' +
+                '</div></div>';
+        });
+    }
+    threadHtml += '</div>';
+
+    // Reply form
+    var replyFormHtml = '<div class="disc-form" id="discReplyFormWrap">' +
+        '<div class="disc-form-title">Reply</div>' +
+        '<div class="disc-form-group"><textarea id="discReplyBody" rows="3" placeholder="Write a reply…"></textarea>' +
+        '<div class="disc-form-hint">Supports **bold**, `code`, and [links](url)</div></div>' +
+        '<div class="disc-form-group"><label for="discReplyAuthor">Author</label><input type="text" id="discReplyAuthor" value="human"></div>' +
+        '<div class="disc-form-actions"><button class="disc-form-submit" id="discReplySubmit">Post Reply</button></div>' +
+        '</div>';
+
+    return headerHtml + bodyHtml + threadHtml + replyFormHtml;
+};
+
+App._bindDiscussionEvents = function() {
+    // List view events
+    var newBtn = document.getElementById('discNewBtn');
+    var newForm = document.getElementById('discNewForm');
+    var newCancel = document.getElementById('discNewCancel');
+    var newSubmit = document.getElementById('discNewSubmit');
+
+    if (newBtn && newForm) {
+        newBtn.addEventListener('click', function() {
+            newForm.style.display = newForm.style.display === 'none' ? 'block' : 'none';
+            if (newForm.style.display === 'block') {
+                var titleInput = document.getElementById('discNewTitle');
+                if (titleInput) titleInput.focus();
+            }
+        });
+    }
+    if (newCancel && newForm) {
+        newCancel.addEventListener('click', function() { newForm.style.display = 'none'; });
+    }
+    if (newSubmit) {
+        newSubmit.addEventListener('click', async function() {
+            var title = (document.getElementById('discNewTitle') || {}).value || '';
+            var body = (document.getElementById('discNewBody') || {}).value || '';
+            var featureId = (document.getElementById('discNewFeature') || {}).value || '';
+            var author = (document.getElementById('discNewAuthor') || {}).value || 'human';
+            if (!title.trim()) { App.toast('Title is required', 'error'); return; }
+            newSubmit.disabled = true;
+            try {
+                await App.apiPost('discussions', { title: title.trim(), body: body, feature_id: featureId, author: author });
+                App.toast('Discussion created', 'success');
+                App._discViewMode = 'list';
+                App._breadcrumbDetail = null;
+                App.navigate('discussions');
+            } catch(ex) {
+                App.toast('Failed to create discussion', 'error');
+            }
+            newSubmit.disabled = false;
+        });
+    }
+
+    // Click discussion to open detail
+    document.querySelectorAll('.disc-list-item').forEach(function(item) {
+        item.addEventListener('click', function(e) {
+            if (e.target.closest('.disc-feature-nav')) return;
+            var id = parseInt(item.getAttribute('data-disc-id'), 10);
+            if (id) App.navigateTo('discussions', id);
+        });
+    });
+
+    // Feature link navigation
+    document.querySelectorAll('.disc-feature-nav').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            App.navigateTo('features', link.getAttribute('data-feature-id'));
+        });
+    });
+
+    // Back button
+    var backBtn = document.getElementById('discBackBtn');
+    if (backBtn) {
+        backBtn.addEventListener('click', function() {
+            App._breadcrumbDetail = null;
+            App._discViewMode = 'list';
+            App.navigate('discussions');
+        });
+    }
+
+    // Reply submit
+    var replySubmit = document.getElementById('discReplySubmit');
+    if (replySubmit && App._discCurrentDiscussion) {
+        replySubmit.addEventListener('click', async function() {
+            var body = (document.getElementById('discReplyBody') || {}).value || '';
+            var author = (document.getElementById('discReplyAuthor') || {}).value || 'human';
+            if (!body.trim()) { App.toast('Reply body is required', 'error'); return; }
+            var discId = App._discCurrentDiscussion.id;
+            replySubmit.disabled = true;
+            try {
+                await App.apiPost('discussions/' + discId + '/replies', { body: body.trim(), author: author });
+                App.toast('Reply posted', 'success');
+                // Re-render detail to show new reply
+                var content = document.getElementById('content');
+                if (content) {
+                    var html = await App._renderDiscussionDetail(discId);
+                    content.innerHTML = html;
+                    App.updateBreadcrumbs();
+                    App._bindDiscussionEvents();
+                    // Auto-scroll to reply form
+                    var formWrap = document.getElementById('discReplyFormWrap');
+                    if (formWrap) formWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            } catch(ex) {
+                App.toast('Failed to post reply', 'error');
+            }
+            replySubmit.disabled = false;
+        });
+    }
+};
+
