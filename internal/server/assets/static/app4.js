@@ -960,6 +960,81 @@ App.renderGitActivity = function() {
 };
 
 // =====================================================
+// DECISIONS (ADR) PAGE
+// =====================================================
+App.renderDecisions = async function() {
+    var decisions = [];
+    try { decisions = await App.api('decisions'); } catch(e) { decisions = []; }
+
+    var statusIcons = {
+        proposed: '📝', accepted: '✅', rejected: '❌',
+        superseded: '🔄', deprecated: '⚠️'
+    };
+    var statusColors = {
+        proposed: 'var(--color-warning)', accepted: 'var(--color-success)',
+        rejected: 'var(--color-danger, #e74c3c)', superseded: 'var(--color-info, #3498db)',
+        deprecated: 'var(--color-muted, #95a5a6)'
+    };
+
+    var html = '<div class="page-header">'
+        + '<h2 class="page-title">📐 Architecture Decisions</h2>'
+        + '<div class="page-subtitle">' + decisions.length + ' decision' + (decisions.length !== 1 ? 's' : '') + ' recorded</div>'
+        + '</div>';
+
+    // Stats row
+    var counts = {proposed:0, accepted:0, rejected:0, superseded:0, deprecated:0};
+    decisions.forEach(function(d) { if (counts[d.status] !== undefined) counts[d.status]++; });
+    html += '<div class="stats-grid app4-stats-row">'
+        + '<div class="stat-card"><div class="stat-value">' + decisions.length + '</div><div class="stat-label">Total</div></div>'
+        + '<div class="stat-card stat-card--accent"><div class="stat-value">' + counts.proposed + '</div><div class="stat-label">Proposed</div></div>'
+        + '<div class="stat-card stat-card--success"><div class="stat-value">' + counts.accepted + '</div><div class="stat-label">Accepted</div></div>'
+        + '<div class="stat-card stat-card--warning"><div class="stat-value">' + (counts.rejected + counts.superseded + counts.deprecated) + '</div><div class="stat-label">Closed</div></div>'
+        + '</div>';
+
+    if (decisions.length === 0) {
+        html += '<div class="empty-state">'
+            + '<div class="empty-state-icon">📐</div>'
+            + '<div class="empty-state-text">No decisions recorded yet</div>'
+            + '<div class="empty-state-hint">Use <code>lifecycle decision add "Title"</code> to record an architecture decision.</div>'
+            + '</div>';
+        return html;
+    }
+
+    html += '<div class="card-grid" style="display:flex;flex-direction:column;gap:12px;">';
+    decisions.forEach(function(d) {
+        var icon = statusIcons[d.status] || '📝';
+        var color = statusColors[d.status] || 'var(--color-muted)';
+        html += '<div class="card" style="padding:16px;border-left:4px solid ' + color + ';">'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+            + '<h3 style="margin:0;font-size:1.1em;">' + icon + ' ' + App.esc(d.title) + '</h3>'
+            + '<span class="badge" style="background:' + color + ';color:white;padding:2px 8px;border-radius:4px;font-size:0.8em;">' + d.status + '</span>'
+            + '</div>'
+            + '<div style="font-size:0.85em;color:var(--color-text-secondary);margin-bottom:8px;">'
+            + '<code>' + App.esc(d.id) + '</code>';
+        if (d.feature_id) {
+            html += ' · Feature: <a href="#" onclick="App.navigate(\'features\',{id:\'' + App.esc(d.feature_id) + '\'});return false;">' + App.esc(d.feature_id) + '</a>';
+        }
+        html += ' · ' + timeAgo(d.created_at) + '</div>';
+
+        if (d.context) {
+            html += '<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-weight:600;font-size:0.9em;">Context</summary>'
+                + '<div style="padding:8px 0 0 12px;font-size:0.9em;white-space:pre-wrap;">' + App.esc(d.context) + '</div></details>';
+        }
+        if (d.decision) {
+            html += '<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-weight:600;font-size:0.9em;">Decision</summary>'
+                + '<div style="padding:8px 0 0 12px;font-size:0.9em;white-space:pre-wrap;">' + App.esc(d.decision) + '</div></details>';
+        }
+        if (d.consequences) {
+            html += '<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-weight:600;font-size:0.9em;">Consequences</summary>'
+                + '<div style="padding:8px 0 0 12px;font-size:0.9em;white-space:pre-wrap;">' + App.esc(d.consequences) + '</div></details>';
+        }
+        html += '</div>';
+    });
+    html += '</div>';
+    return html;
+};
+
+// =====================================================
 // ACCESSIBILITY: Announce page navigations to screen readers
 // =====================================================
 (function() {

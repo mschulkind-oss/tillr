@@ -297,6 +297,19 @@ type QueueResponse struct {
 	Stats QueueStats   `json:"stats"`
 }
 
+// Decision represents an Architecture Decision Record (ADR).
+type Decision struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Status       string `json:"status"`       // proposed, accepted, rejected, superseded, deprecated
+	Context      string `json:"context"`      // Why is this decision needed?
+	Decision     string `json:"decision"`     // What was decided?
+	Consequences string `json:"consequences"` // What are the consequences?
+	FeatureID    string `json:"feature_id,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},

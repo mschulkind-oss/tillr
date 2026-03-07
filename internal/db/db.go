@@ -332,4 +332,18 @@ var migrations = []string{
 
 	// Migration 12: Add assigned_agent to work_items for multi-agent coordination
 	`ALTER TABLE work_items ADD COLUMN assigned_agent TEXT DEFAULT '';`,
+
+	// Migration 13: Decision log (ADRs)
+	`CREATE TABLE IF NOT EXISTS decisions (
+		id TEXT PRIMARY KEY,
+		title TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','accepted','rejected','superseded','deprecated')),
+		context TEXT,
+		decision TEXT,
+		consequences TEXT,
+		feature_id TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (feature_id) REFERENCES features(id)
+	);`,
 }
