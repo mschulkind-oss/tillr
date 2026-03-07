@@ -310,6 +310,15 @@ type Decision struct {
 	UpdatedAt    string `json:"updated_at"`
 }
 
+// SearchResult represents a ranked FTS5 search result with a snippet.
+type SearchResult struct {
+	EntityType string  `json:"entity_type"`
+	EntityID   string  `json:"entity_id"`
+	Title      string  `json:"title"`
+	Snippet    string  `json:"snippet"`
+	Rank       float64 `json:"rank"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},

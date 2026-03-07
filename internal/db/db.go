@@ -346,4 +346,22 @@ var migrations = []string{
 		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 		FOREIGN KEY (feature_id) REFERENCES features(id)
 	);`,
+
+	// Migration 14: FTS5 full-text search across features, roadmap, ideas
+	`CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+		entity_type,
+		entity_id,
+		title,
+		content,
+		tokenize='porter unicode61'
+	);
+
+	INSERT OR IGNORE INTO search_fts (entity_type, entity_id, title, content)
+	SELECT 'feature', id, name, COALESCE(description, '') || ' ' || COALESCE(spec, '') FROM features;
+
+	INSERT OR IGNORE INTO search_fts (entity_type, entity_id, title, content)
+	SELECT 'roadmap', id, title, COALESCE(description, '') FROM roadmap_items;
+
+	INSERT OR IGNORE INTO search_fts (entity_type, entity_id, title, content)
+	SELECT 'idea', CAST(id AS TEXT), title, COALESCE(raw_input, '') FROM idea_queue;`,
 }

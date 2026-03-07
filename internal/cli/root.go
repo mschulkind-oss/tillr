@@ -121,6 +121,7 @@ func init() {
 	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(decisionCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(exportCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

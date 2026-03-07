@@ -2247,3 +2247,59 @@ func UpdateDecision(database *sql.DB, id string, updates map[string]any) error {
 	)
 	return err
 }
+
+// --- FTS5 Search ---
+
+// SearchFTS performs a full-text search across features, roadmap items, and ideas
+// using the FTS5 index. Results are ranked by relevance and include highlighted snippets.
+func SearchFTS(database *sql.DB, query string, limit int) ([]models.SearchResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := database.Query(`
+		SELECT entity_type, entity_id, title,
+			snippet(search_fts, 3, '<mark>', '</mark>', '...', 32) as snippet,
+			rank
+		FROM search_fts
+		WHERE search_fts MATCH ?
+		ORDER BY rank
+		LIMIT ?
+	`, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("FTS search: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.SearchResult
+	for rows.Next() {
+		var r models.SearchResult
+		if err := rows.Scan(&r.EntityType, &r.EntityID, &r.Title, &r.Snippet, &r.Rank); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// IndexEntity adds or replaces an entity in the FTS5 search index.
+func IndexEntity(database *sql.DB, entityType, entityID, title, content string) error {
+	// Remove existing entry first, then insert fresh
+	_, _ = database.Exec(
+		`DELETE FROM search_fts WHERE entity_type = ? AND entity_id = ?`,
+		entityType, entityID,
+	)
+	_, err := database.Exec(
+		`INSERT INTO search_fts (entity_type, entity_id, title, content) VALUES (?, ?, ?, ?)`,
+		entityType, entityID, title, content,
+	)
+	return err
+}
+
+// RemoveFromIndex removes an entity from the FTS5 search index.
+func RemoveFromIndex(database *sql.DB, entityType, entityID string) error {
+	_, err := database.Exec(
+		`DELETE FROM search_fts WHERE entity_type = ? AND entity_id = ?`,
+		entityType, entityID,
+	)
+	return err
+}

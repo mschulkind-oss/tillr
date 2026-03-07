@@ -506,3 +506,109 @@ func TestBatchUpdateFeatures(t *testing.T) {
 		t.Errorf("expected 0 updated for empty IDs, got %d", updated)
 	}
 }
+
+func TestSearchFTS(t *testing.T) {
+	database := openTestDB(t)
+
+	// Create project
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Create features — migration 14 auto-populates FTS from existing rows
+	f1 := &models.Feature{ID: "auth-module", ProjectID: p.ID, Name: "Authentication Module", Description: "JWT-based auth system", Spec: "OAuth2 support"}
+	f2 := &models.Feature{ID: "search-api", ProjectID: p.ID, Name: "Search API", Description: "Full-text search endpoint"}
+	if err := db.CreateFeature(database, f1); err != nil {
+		t.Fatalf("creating feature: %v", err)
+	}
+	if err := db.CreateFeature(database, f2); err != nil {
+		t.Fatalf("creating feature: %v", err)
+	}
+
+	// Index the features manually (since they were created after migration)
+	if err := db.IndexEntity(database, "feature", f1.ID, f1.Name, f1.Description+" "+f1.Spec); err != nil {
+		t.Fatalf("indexing feature: %v", err)
+	}
+	if err := db.IndexEntity(database, "feature", f2.ID, f2.Name, f2.Description); err != nil {
+		t.Fatalf("indexing feature: %v", err)
+	}
+
+	// Search for "auth"
+	results, err := db.SearchFTS(database, "auth", 10)
+	if err != nil {
+		t.Fatalf("searching FTS: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'auth', got %d", len(results))
+	}
+	if results[0].EntityID != "auth-module" {
+		t.Errorf("expected entity_id 'auth-module', got %q", results[0].EntityID)
+	}
+	if results[0].EntityType != "feature" {
+		t.Errorf("expected entity_type 'feature', got %q", results[0].EntityType)
+	}
+
+	// Search for "search"
+	results, err = db.SearchFTS(database, "search", 10)
+	if err != nil {
+		t.Fatalf("searching FTS: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'search', got %d", len(results))
+	}
+	if results[0].EntityID != "search-api" {
+		t.Errorf("expected entity_id 'search-api', got %q", results[0].EntityID)
+	}
+
+	// Remove from index and verify
+	if err := db.RemoveFromIndex(database, "feature", "auth-module"); err != nil {
+		t.Fatalf("removing from index: %v", err)
+	}
+	results, err = db.SearchFTS(database, "auth", 10)
+	if err != nil {
+		t.Fatalf("searching FTS after removal: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results after removal, got %d", len(results))
+	}
+}
+
+func TestIndexEntityUpsert(t *testing.T) {
+	database := openTestDB(t)
+
+	// Create project
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Index and then re-index with updated content
+	if err := db.IndexEntity(database, "feature", "f1", "Original Title", "original content"); err != nil {
+		t.Fatalf("first index: %v", err)
+	}
+	if err := db.IndexEntity(database, "feature", "f1", "Updated Title", "updated content"); err != nil {
+		t.Fatalf("re-index: %v", err)
+	}
+
+	// Search for updated content should work
+	results, err := db.SearchFTS(database, "updated", 10)
+	if err != nil {
+		t.Fatalf("searching: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Title != "Updated Title" {
+		t.Errorf("expected 'Updated Title', got %q", results[0].Title)
+	}
+
+	// Original content should not be found
+	results, err = db.SearchFTS(database, "original", 10)
+	if err != nil {
+		t.Fatalf("searching: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for old content, got %d", len(results))
+	}
+}
