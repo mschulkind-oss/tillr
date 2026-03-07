@@ -144,7 +144,7 @@ App.renderAgents = async function() {
                 ${a.feature_id ? `<div class="app4-agent-feature">Feature: <span class="clickable-feature" data-feature-id="${esc(a.feature_id)}">${esc(a.feature_id)}</span></div>` : ''}
                 <div class="app4-progress-section">
                     <div class="progress-bar app4-progress-bar"><div class="progress-fill app4-progress-fill ${progressClass}" style="width:${a.progress_pct}%"></div></div>
-                    <div class="app4-progress-label">${a.progress_pct}% complete · Last active ${timeAgo(a.updated_at)}</div>
+                    <div class="app4-progress-label">${a.progress_pct}% complete · Last update ${timeAgo(a.updated_at)} · Running for ${timeAgo(a.created_at)}</div>
                 </div>
                 ${updates.length > 0 ? `<div class="app4-updates-section">
                     <div class="app4-updates-heading">Recent Updates</div>

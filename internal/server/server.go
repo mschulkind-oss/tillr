@@ -178,6 +178,18 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 
 	addr := fmt.Sprintf(":%d", port)
 
+	// Periodic stale agent cleanup (every 5 minutes)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		// Also run once at startup after a brief delay
+		time.Sleep(10 * time.Second)
+		cleanupStaleAgents(database)
+		for range ticker.C {
+			cleanupStaleAgents(database)
+		}
+	}()
+
 	// Watch DB file for changes and broadcast to WebSocket clients
 	if dbPath != "" {
 		go watchDBFile(dbPath, hub)
@@ -195,6 +207,27 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	})
 
 	return http.ListenAndServe(addr, handler)
+}
+
+// cleanupStaleAgents marks active agent sessions with no updates for 30+ minutes
+// as failed and reclaims their work items.
+func cleanupStaleAgents(database *sql.DB) {
+	// Mark stale agent sessions as failed
+	res, err := database.Exec(`UPDATE agent_sessions SET status = 'failed', updated_at = datetime('now')
+		WHERE status = 'active' AND updated_at < datetime('now', '-30 minutes')`)
+	if err != nil {
+		log.Printf("stale agent cleanup error: %v", err)
+		return
+	}
+	n, _ := res.RowsAffected()
+	// Reclaim any orphaned work items
+	reclaimed, err := engine.ReclaimStaleWorkItems(database, 30)
+	if err != nil {
+		log.Printf("stale work reclaim error: %v", err)
+	}
+	if n > 0 || reclaimed > 0 {
+		log.Printf("stale cleanup: marked %d agents failed, reclaimed %d work items", n, reclaimed)
+	}
 }
 
 func watchDBFile(dbPath string, hub *wsHub) {
@@ -278,6 +311,52 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 	// Check if it's a feature detail request: /api/features/{id}
 	path := r.URL.Path
 	if id := strings.TrimPrefix(path, "/api/features/"); id != "" && id != path {
+		// POST /api/features/batch
+		if id == "batch" && r.Method == "POST" {
+			var body struct {
+				FeatureIDs []string `json:"feature_ids"`
+				Action     string   `json:"action"`
+				Value      string   `json:"value"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "invalid request body"})
+			}
+			if len(body.FeatureIDs) == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "feature_ids is required"})
+			}
+			if body.Value == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "value is required"})
+			}
+			fieldMap := map[string]string{
+				"set_status":    "status",
+				"set_milestone": "milestone_id",
+				"set_priority":  "priority",
+			}
+			field, ok := fieldMap[body.Action]
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "invalid action: must be set_status, set_milestone, or set_priority"})
+			}
+			if field == "status" {
+				validStatuses := map[string]bool{
+					"draft": true, "planning": true, "implementing": true,
+					"agent-qa": true, "human-qa": true, "done": true, "blocked": true,
+				}
+				if !validStatuses[body.Value] {
+					w.WriteHeader(http.StatusBadRequest)
+					return writeJSON(w, map[string]string{"error": "invalid status value"})
+				}
+			}
+			updated, err := db.BatchUpdateFeatures(database, body.FeatureIDs, field, body.Value)
+			if err != nil {
+				return fmt.Errorf("batch updating features: %w", err)
+			}
+			return writeJSON(w, map[string]any{"ok": true, "updated": updated})
+		}
+
 		// POST /api/features/reorder
 		if id == "reorder" && r.Method == "POST" {
 			var body struct {
