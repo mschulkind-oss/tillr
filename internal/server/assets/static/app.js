@@ -471,11 +471,11 @@ const App = {
         const qaCount = (counts['human-qa']||0) + (counts['agent-qa']||0);
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
-                <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
-                <div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value">${counts.done||0}</div><div class="stat-label">Completed</div></div><div class="stat-icon" aria-hidden="true">✅</div></div>
-                <div class="stat-card stat-card--warning"><div class="stat-card-info"><div class="stat-value">${counts.implementing||0}</div><div class="stat-label">In Progress</div></div><div class="stat-icon" aria-hidden="true">🔨</div></div>
+                <div class="stat-card stat-card--accent" style="cursor:pointer" onclick="App.navigate('features')"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
+                <div class="stat-card stat-card--success" style="cursor:pointer" onclick="App.navigate('features')"><div class="stat-card-info"><div class="stat-value">${counts.done||0}</div><div class="stat-label">Completed</div></div><div class="stat-icon" aria-hidden="true">✅</div></div>
+                <div class="stat-card stat-card--warning" style="cursor:pointer" onclick="App.navigate('features')"><div class="stat-card-info"><div class="stat-value">${counts.implementing||0}</div><div class="stat-label">In Progress</div></div><div class="stat-icon" aria-hidden="true">🔨</div></div>
                 <div class="stat-card stat-card--danger" style="cursor:pointer" onclick="App.navigate('qa')"><div class="stat-card-info"><div class="stat-value">${qaCount}</div><div class="stat-label">Awaiting QA</div></div><div class="stat-icon" aria-hidden="true">🔍</div></div>
-                <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${status.active_cycles||0}</div><div class="stat-label">Active Cycles</div></div><div class="stat-icon" aria-hidden="true">🔄</div></div>
+                <div class="stat-card stat-card--purple" style="cursor:pointer" onclick="App.navigate('cycles')"><div class="stat-card-info"><div class="stat-value">${status.active_cycles||0}</div><div class="stat-label">Active Cycles</div></div><div class="stat-icon" aria-hidden="true">🔄</div></div>
             </div>
             ${total > 0 ? this.renderStatusBar(counts, total) : ''}
             <div class="card" style="margin-bottom:12px;overflow:visible"><div class="card-title" style="margin-bottom:10px;font-size:0.95rem">Feature Board</div><div class="kanban">${kanbanCols}</div></div>
@@ -2509,29 +2509,29 @@ App.renderStats = async function() {
     return '<div class="page-header"><h2>Project Statistics</h2>'
         + '<div class="page-subtitle">' + total + ' features \u00b7 ' + (rs.total||0) + ' roadmap items \u00b7 ' + (cs.total_cycles||0) + ' cycles \u00b7 ' + (act.total_events||0) + ' events</div></div>'
         + '<div class="stats-grid">'
-        // Row 1: Overview cards (8 cards)
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Completion</div>'
+        // Row 1: Overview cards (8 cards) — clickable for drill-down
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="features?status=done"><div class="stats-card-title">Completion</div>'
         + '<div class="stats-big-number">' + (fs.completion_rate||0).toFixed(1) + '%</div>'
         + '<div class="stats-card-sub">' + doneCount + ' of ' + total + ' features done</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Success Rate</div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="' + (failedCount > 0 ? 'features?status=failed' : 'features') + '"><div class="stats-card-title">Success Rate</div>'
         + '<div class="stats-big-number">' + successRateStr + '</div>'
-        + '<div class="stats-card-sub">' + doneCount + ' done' + (failedCount > 0 ? ' \u00b7 ' + failedCount + ' failed' : '') + '</div></div>'
+        + '<div class="stats-card-sub">' + doneCount + ' done' + (failedCount > 0 ? ' · ' + failedCount + ' failed' : '') + '</div></div>'
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Cycle Time</div>'
         + '<div class="stats-big-number">' + (avgCycleTime !== null ? avgCycleTime + 'd' : 'N/A') + '</div>'
         + '<div class="stats-card-sub">' + cycleTimes.length + ' features measured</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Activity</div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="history"><div class="stats-card-title">Activity</div>'
         + '<div class="stats-big-number">' + (act.total_events||0) + '</div>'
-        + '<div class="stats-card-sub">' + weeklyRate + ' last 7d \u00b7 ' + monthlyRate + ' last 30d</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Score</div>'
+        + '<div class="stats-card-sub">' + weeklyRate + ' last 7d · ' + monthlyRate + ' last 30d</div></div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="cycles"><div class="stats-card-title">Avg Score</div>'
         + '<div class="stats-big-number">' + (cs.avg_score||0).toFixed(1) + '</div>'
         + '<div class="stats-card-sub">' + scores.length + ' scores across ' + (cs.total_cycles||0) + ' cycles</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">In QA</div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="qa"><div class="stats-card-title">In QA</div>'
         + '<div class="stats-big-number">' + qaCount + '</div>'
-        + '<div class="stats-card-sub">' + (byStatus['agent-qa']||0) + ' agent \u00b7 ' + (byStatus['human-qa']||0) + ' human</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Blocked</div>'
+        + '<div class="stats-card-sub">' + (byStatus['agent-qa']||0) + ' agent · ' + (byStatus['human-qa']||0) + ' human</div></div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="features?status=blocked"><div class="stats-card-title">Blocked</div>'
         + '<div class="stats-big-number' + (blockedCount > 0 ? ' stats-big-number--danger' : '') + '">' + blockedCount + '</div>'
         + '<div class="stats-card-sub">features blocked</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Active Cycles</div>'
+        + '<div class="stats-card stats-card-sm stats-card-link" data-nav="cycles"><div class="stats-card-title">Active Cycles</div>'
         + '<div class="stats-big-number">' + activeCycles + '</div>'
         + '<div class="stats-card-sub">' + (cs.total_iterations||0) + ' total iterations</div></div>'
         // Row 2: Feature Status donut + Score Trend canvas
