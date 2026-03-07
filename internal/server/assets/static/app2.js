@@ -683,6 +683,25 @@ App.drawStatsCharts = function() {
     }).catch(function() {
         // Silently handle errors — charts will show "No data" state
     });
+
+    // Fetch heatmap data and render
+    App.api('stats/heatmap').then(function(heatmap) {
+        if (!heatmap || !App.renderHeatmap) return;
+        // Dynamically inject heatmap card into the stats page
+        var grids = document.querySelectorAll('.stats-grid');
+        var targetGrid = grids.length > 1 ? grids[grids.length - 1] : grids[0];
+        if (!targetGrid) return;
+        var card = document.createElement('div');
+        card.className = 'stats-card stats-card-full';
+        card.innerHTML = '<div class="stats-card-title">Activity</div><div id="activityHeatmapContainer"></div>';
+        targetGrid.appendChild(card);
+        var container = document.getElementById('activityHeatmapContainer');
+        if (container) {
+            App.renderHeatmap(container, heatmap);
+        }
+    }).catch(function() {
+        // Silently handle errors
+    });
 };
 
 // Cycle Time Distribution histogram

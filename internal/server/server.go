@@ -101,6 +101,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
 	mux.HandleFunc("/api/stats", apiHandler(database, handleStats))
 	mux.HandleFunc("/api/stats/burndown", apiHandler(database, handleStatsBurndown))
+	mux.HandleFunc("/api/stats/heatmap", apiHandler(database, handleStatsHeatmap))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
 	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
 	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
@@ -795,6 +796,27 @@ func handleStatsBurndown(database *sql.DB, w http.ResponseWriter, _ *http.Reques
 		return err
 	}
 	return writeJSON(w, data)
+}
+
+func handleStatsHeatmap(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	days := 365
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err2 := fmt.Sscanf(d, "%d", &days); n != 1 || err2 != nil {
+			days = 365
+		}
+		if days < 1 || days > 730 {
+			days = 365
+		}
+	}
+	heatmap, err := db.GetActivityHeatmap(database, p.ID, days)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, models.HeatmapResponse{Days: heatmap})
 }
 
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {

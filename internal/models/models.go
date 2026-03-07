@@ -319,6 +319,18 @@ type SearchResult struct {
 	Rank       float64 `json:"rank"`
 }
 
+// HeatmapDay holds aggregated daily activity counts for heatmap visualization.
+type HeatmapDay struct {
+	Date   string         `json:"date"`
+	Count  int            `json:"count"`
+	Events map[string]int `json:"events"`
+}
+
+// HeatmapResponse wraps heatmap data returned by the API.
+type HeatmapResponse struct {
+	Days []HeatmapDay `json:"days"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},
