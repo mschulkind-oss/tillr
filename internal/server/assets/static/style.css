@@ -5485,6 +5485,9 @@ details[open] > .app4-idea-spec-summary::before {
 .stats-card:hover::before {
     opacity: 1;
 }
+.stats-card-link { cursor: pointer; }
+.stats-card-link .stats-card-title::after { content: ' →'; opacity: 0; transition: opacity 0.15s; }
+.stats-card-link:hover .stats-card-title::after { opacity: 0.6; }
 
 /* Better chart section spacing */
 .stats-section-header {

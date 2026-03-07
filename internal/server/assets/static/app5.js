@@ -618,3 +618,41 @@ App._injectBatchUI = function() {
         if (e.key === 'Escape') closeLightbox();
     });
 })();
+
+// =====================================================
+// CLICKABLE STAT CARDS — navigational drill-down
+// =====================================================
+
+document.addEventListener('click', function(e) {
+    var card = e.target.closest('.stats-card-link[data-nav]');
+    if (!card) return;
+    var nav = card.getAttribute('data-nav');
+    if (!nav) return;
+    var parts = nav.split('?');
+    var page = parts[0];
+    var params = parts[1] || '';
+    if (params) {
+        window._statsNavFilter = {};
+        params.split('&').forEach(function(p) {
+            var kv = p.split('=');
+            window._statsNavFilter[kv[0]] = kv[1];
+        });
+    }
+    window.location.hash = '#' + page;
+});
+
+// Apply stats navigation filter on Features page
+(function() {
+    var origBind = App.bindPageEvents;
+    App.bindPageEvents = function(page) {
+        origBind.call(this, page);
+        if (page === 'features' && window._statsNavFilter && window._statsNavFilter.status) {
+            var status = window._statsNavFilter.status;
+            window._statsNavFilter = null;
+            App._featuresFilter = status;
+            // Click the matching pill
+            var pill = document.querySelector('.filter-pill[data-status="' + status + '"]');
+            if (pill) pill.click();
+        }
+    };
+})();
