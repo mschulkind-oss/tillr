@@ -1605,3 +1605,45 @@ App._initFeaturesDragDrop = function(container) {
     });
 };
 
+// Compute cycle times (days from first implementing to done) for each feature
+App._computeCycleTimes = function(historyEvents, features) {
+    var featureTimestamps = {};
+    (features || []).forEach(function(f) {
+        if (f.status === 'done' && f.created_at) {
+            featureTimestamps[f.id] = featureTimestamps[f.id] || {};
+            featureTimestamps[f.id].created = f.created_at;
+        }
+    });
+
+    (historyEvents || []).forEach(function(ev) {
+        if (!ev.feature_id || !ev.data) return;
+        var data;
+        try { data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch(e) { return; }
+        var to = data.to || data.new_status || '';
+
+        if (!featureTimestamps[ev.feature_id]) featureTimestamps[ev.feature_id] = {};
+        var ft = featureTimestamps[ev.feature_id];
+
+        if (to === 'implementing' && !ft.implementing_at) {
+            ft.implementing_at = ev.created_at;
+        }
+        if (to === 'done') {
+            ft.done_at = ev.created_at;
+        }
+    });
+
+    var cycleTimes = [];
+    Object.keys(featureTimestamps).forEach(function(fid) {
+        var ft = featureTimestamps[fid];
+        var start = ft.implementing_at || ft.created;
+        var end = ft.done_at;
+        if (start && end) {
+            var startDate = new Date(start);
+            var endDate = new Date(end);
+            var days = (endDate - startDate) / (1000 * 60 * 60 * 24);
+            if (days >= 0) cycleTimes.push(days);
+        }
+    });
+    return cycleTimes;
+};
+
