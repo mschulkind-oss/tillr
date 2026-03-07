@@ -117,6 +117,7 @@ func init() {
 	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(worktreeCmd)
 	rootCmd.AddCommand(gitCmd)
+	rootCmd.AddCommand(queueCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

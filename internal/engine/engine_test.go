@@ -611,3 +611,168 @@ func TestCoordinationStatus(t *testing.T) {
 		t.Errorf("expected claimed_items=1, got %d", status.ClaimedItems)
 	}
 }
+
+func TestPriorityBasedQueueOrdering(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()               //nolint:errcheck
+	engine.InitProject(database, "Test") //nolint:errcheck
+
+	// Create features with different priorities
+	engine.AddFeature(database, "test", "Low Priority", "", "", "", 1, nil, "")   //nolint:errcheck
+	engine.AddFeature(database, "test", "High Priority", "", "", "", 10, nil, "") //nolint:errcheck
+
+	// Create work items — low priority first (created earlier)
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "low-priority", WorkType: "develop", AgentPrompt: "Low prio task",
+	})
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "high-priority", WorkType: "develop", AgentPrompt: "High prio task",
+	})
+
+	// GetNextWorkItem should return the high-priority item first
+	w, err := engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("get next: %v", err)
+	}
+	if w.FeatureID != "high-priority" {
+		t.Errorf("expected high-priority first, got %q", w.FeatureID)
+	}
+}
+
+func TestQueueStatsAndList(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 5, nil, "") //nolint:errcheck
+
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "develop", AgentPrompt: "Task 1",
+	})
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "test", AgentPrompt: "Task 2",
+	})
+
+	// Check stats — 2 pending
+	stats, err := db.GetQueueStats(database)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.TotalPending != 2 {
+		t.Errorf("expected 2 pending, got %d", stats.TotalPending)
+	}
+	if stats.TotalClaimed != 0 {
+		t.Errorf("expected 0 claimed, got %d", stats.TotalClaimed)
+	}
+
+	// Queue list should have 2 items
+	items, err := db.GetQueuedWorkItems(database)
+	if err != nil {
+		t.Fatalf("queue list: %v", err)
+	}
+	if len(items) != 2 {
+		t.Errorf("expected 2 queue items, got %d", len(items))
+	}
+	if items[0].FeatureName != "F1" {
+		t.Errorf("expected feature name F1, got %q", items[0].FeatureName)
+	}
+	if items[0].Priority != 5 {
+		t.Errorf("expected priority 5, got %d", items[0].Priority)
+	}
+
+	// Claim one
+	engine.GetNextWorkItem(database, "agent-a") //nolint:errcheck
+
+	stats, err = db.GetQueueStats(database)
+	if err != nil {
+		t.Fatalf("stats after claim: %v", err)
+	}
+	if stats.TotalPending != 1 {
+		t.Errorf("expected 1 pending after claim, got %d", stats.TotalPending)
+	}
+	if stats.TotalClaimed != 1 {
+		t.Errorf("expected 1 claimed after claim, got %d", stats.TotalClaimed)
+	}
+}
+
+func TestReleaseWorkItem(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 5, nil, "") //nolint:errcheck
+
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "develop", AgentPrompt: "Task 1",
+	})
+
+	// Claim work item
+	w, err := engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("get next: %v", err)
+	}
+	if w.Status != "active" {
+		t.Fatalf("expected active, got %q", w.Status)
+	}
+
+	// Release it back to pending
+	if err := db.ReleaseWorkItem(database, w.ID); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	// Verify it's pending again
+	w2, err := db.GetWorkItemByID(database, w.ID)
+	if err != nil {
+		t.Fatalf("get after release: %v", err)
+	}
+	if w2.Status != "pending" {
+		t.Errorf("expected pending after release, got %q", w2.Status)
+	}
+	if w2.AssignedAgent != "" {
+		t.Errorf("expected empty agent after release, got %q", w2.AssignedAgent)
+	}
+
+	// Cannot release a pending item
+	if err := db.ReleaseWorkItem(database, w.ID); err == nil {
+		t.Error("expected error releasing pending item")
+	}
+}
+
+func TestReclaimStaleWorkItems(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 5, nil, "") //nolint:errcheck
+
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "develop", AgentPrompt: "Task 1",
+	})
+
+	// Claim it
+	w, err := engine.GetNextWorkItem(database, "agent-stale")
+	if err != nil {
+		t.Fatalf("get next: %v", err)
+	}
+
+	// Backdate started_at to simulate a stale claim (45 minutes ago)
+	database.Exec("UPDATE work_items SET started_at = datetime('now', '-45 minutes') WHERE id = ?", w.ID) //nolint:errcheck
+
+	// Reclaim with 30-minute threshold — should reclaim since started 45 min ago with no heartbeat
+	reclaimed, err := engine.ReclaimStaleWorkItems(database, 30)
+	if err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if reclaimed != 1 {
+		t.Errorf("expected 1 reclaimed, got %d", reclaimed)
+	}
+
+	// Verify it's pending again
+	stats, err := db.GetQueueStats(database)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.TotalPending != 1 {
+		t.Errorf("expected 1 pending after reclaim, got %d", stats.TotalPending)
+	}
+	if stats.TotalClaimed != 0 {
+		t.Errorf("expected 0 claimed after reclaim, got %d", stats.TotalClaimed)
+	}
+}

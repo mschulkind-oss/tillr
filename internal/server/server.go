@@ -122,6 +122,9 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/ideas", apiHandler(database, handleIdeas))
 	mux.HandleFunc("/api/ideas/", apiHandler(database, handleIdeaDetail))
 
+	// Queue management route
+	mux.HandleFunc("/api/queue", apiHandler(database, handleQueue))
+
 	// Context routes
 	mux.HandleFunc("/api/context", apiHandler(database, handleContext))
 	mux.HandleFunc("/api/context/", apiHandler(database, handleContextDetail))
@@ -1769,4 +1772,28 @@ func handleGitBranches(_ *sql.DB, w http.ResponseWriter, _ *http.Request) error 
 		branches = []vcs.BranchInfo{}
 	}
 	return writeJSON(w, map[string]any{"vcs": vcsType, "branches": branches})
+}
+
+func handleQueue(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	if r.Method == "POST" {
+		// POST /api/queue — reclaim stale work items
+		reclaimed, err := engine.ReclaimStaleWorkItems(database, 30)
+		if err != nil {
+			return fmt.Errorf("reclaiming stale work items: %w", err)
+		}
+		return writeJSON(w, map[string]any{"reclaimed": reclaimed})
+	}
+
+	queue, err := db.GetQueuedWorkItems(database)
+	if err != nil {
+		return fmt.Errorf("getting queue: %w", err)
+	}
+	if queue == nil {
+		queue = []models.QueueEntry{}
+	}
+	stats, err := db.GetQueueStats(database)
+	if err != nil {
+		return fmt.Errorf("getting queue stats: %w", err)
+	}
+	return writeJSON(w, models.QueueResponse{Queue: queue, Stats: *stats})
 }

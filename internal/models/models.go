@@ -271,6 +271,32 @@ type Worktree struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+// QueueEntry is an enriched work item for queue display, including feature context.
+type QueueEntry struct {
+	WorkItemID    int    `json:"work_item_id"`
+	FeatureID     string `json:"feature_id"`
+	FeatureName   string `json:"feature_name"`
+	WorkType      string `json:"work_type"`
+	Priority      int    `json:"priority"`
+	CycleType     string `json:"cycle_type"`
+	AssignedAgent string `json:"assigned_agent"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// QueueStats holds aggregate statistics about the work queue.
+type QueueStats struct {
+	TotalPending      int `json:"total_pending"`
+	TotalClaimed      int `json:"total_claimed"`
+	TotalCompletedDay int `json:"total_completed_today"`
+}
+
+// QueueResponse is the full response for GET /api/queue.
+type QueueResponse struct {
+	Queue []QueueEntry `json:"queue"`
+	Stats QueueStats   `json:"stats"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},

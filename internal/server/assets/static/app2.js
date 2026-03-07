@@ -57,6 +57,17 @@ App.drawScoreTrendChart = function(canvasId, scores) {
     }
     ctx.setLineDash([]);
 
+    // Axis labels
+    ctx.save();
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.translate(12, pad.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Score', 0, 0);
+    ctx.restore();
+
     // Calculate point positions
     var points = scores.map(function(s, i) {
         var x = pad.left + (scores.length === 1 ? plotW / 2 : (i / (scores.length - 1)) * plotW);
@@ -282,6 +293,23 @@ App.drawBurndownChart = function(canvasId, tooltipId, points) {
     ctx.textBaseline = 'middle';
     ctx.fillText('0', pad.left - 8, pad.top + plotH);
 
+    // Axis labels
+    ctx.save();
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.translate(12, pad.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Features', 0, 0);
+    ctx.restore();
+
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Date', pad.left + plotW / 2, h - 6);
+
     // Calculate point positions
     var chartPoints = points.map(function(p, i) {
         var x = pad.left + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
@@ -485,6 +513,23 @@ App.drawVelocityChart = function(canvasId, tooltipId, velocity) {
     ctx.textBaseline = 'middle';
     ctx.fillText('0', pad.left - 8, pad.top + plotH);
 
+    // Axis labels
+    ctx.save();
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.translate(12, pad.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Completed', 0, 0);
+    ctx.restore();
+
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Week', pad.left + plotW / 2, h - 6);
+
     // Average velocity line
     var totalCompleted = velocity.reduce(function(a, v) { return a + v.completed; }, 0);
     var avgVelocity = totalCompleted / velocity.length;
@@ -625,6 +670,10 @@ App.drawStatsCharts = function() {
     App.drawScoreTrendChart('scoreTrendCanvas', scores);
     App.drawCycleTypeChart('cycleTypeCanvas', scores);
 
+    // Draw cycle time distribution
+    var cycleTimes = App._statsCycleTimes || [];
+    App.drawCycleTimeChart('cycleTimeCanvas', 'cycleTimeCanvasTooltip', cycleTimes);
+
     // Fetch burndown data and draw progress charts
     App.api('stats/burndown').then(function(burndown) {
         if (burndown) {
@@ -634,6 +683,238 @@ App.drawStatsCharts = function() {
     }).catch(function() {
         // Silently handle errors — charts will show "No data" state
     });
+};
+
+// Cycle Time Distribution histogram
+App.drawCycleTimeChart = function(canvasId, tooltipId, cycleTimes) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var container = canvas.parentElement;
+    var dpr = window.devicePixelRatio || 1;
+    var w = container.clientWidth || 400;
+    var h = container.clientHeight || 260;
+
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    ctx.scale(dpr, dpr);
+
+    var cstyle = getComputedStyle(document.documentElement);
+    var font = cstyle.getPropertyValue('--font-sans').trim() || 'system-ui, sans-serif';
+    var textSec = cstyle.getPropertyValue('--text-secondary').trim() || '#8b949e';
+    var border = cstyle.getPropertyValue('--border').trim() || '#30363d';
+
+    if (!cycleTimes || cycleTimes.length === 0) {
+        ctx.fillStyle = textSec;
+        ctx.font = '14px ' + font;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('No cycle time data yet', w / 2, h / 2);
+        return;
+    }
+
+    // Build histogram buckets
+    var maxTime = Math.max.apply(null, cycleTimes);
+    var minTime = Math.min.apply(null, cycleTimes);
+    var bucketCount = Math.min(Math.max(5, Math.ceil(Math.sqrt(cycleTimes.length))), 15);
+    var bucketSize = Math.max(1, Math.ceil((maxTime - minTime + 0.01) / bucketCount));
+    if (bucketSize < 1) bucketSize = 1;
+
+    var buckets = [];
+    for (var bi = 0; bi < bucketCount; bi++) {
+        var lo = minTime + bi * bucketSize;
+        var hi = lo + bucketSize;
+        buckets.push({ lo: lo, hi: hi, count: 0, label: lo.toFixed(0) + '-' + hi.toFixed(0) + 'd' });
+    }
+
+    cycleTimes.forEach(function(t) {
+        var idx = Math.min(Math.floor((t - minTime) / bucketSize), bucketCount - 1);
+        buckets[idx].count++;
+    });
+
+    // Remove trailing empty buckets
+    while (buckets.length > 1 && buckets[buckets.length - 1].count === 0) buckets.pop();
+
+    var pad = { top: 28, right: 24, bottom: 52, left: 44 };
+    var plotW = w - pad.left - pad.right;
+    var plotH = h - pad.top - pad.bottom;
+    var maxY = Math.max.apply(null, buckets.map(function(b) { return b.count; })) || 1;
+    maxY = Math.ceil(maxY * 1.2);
+    if (maxY < 1) maxY = 1;
+
+    // Grid lines
+    var gridCount = Math.min(maxY, 5);
+    var gridStep = Math.max(1, Math.ceil(maxY / gridCount));
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([4, 4]);
+    for (var gl = gridStep; gl <= maxY; gl += gridStep) {
+        var gy = pad.top + plotH - (gl / maxY * plotH);
+        ctx.beginPath();
+        ctx.moveTo(pad.left, gy);
+        ctx.lineTo(pad.left + plotW, gy);
+        ctx.stroke();
+        ctx.fillStyle = textSec;
+        ctx.font = '10px ' + font;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(gl.toString(), pad.left - 8, gy);
+    }
+    ctx.setLineDash([]);
+
+    // Zero label
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('0', pad.left - 8, pad.top + plotH);
+
+    // Axis labels
+    ctx.save();
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Cycle Time (days)', pad.left + plotW / 2, h - 10);
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle = textSec;
+    ctx.font = '10px ' + font;
+    ctx.translate(12, pad.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Features', 0, 0);
+    ctx.restore();
+
+    // Draw bars
+    var barGap = Math.max(2, Math.floor(plotW * 0.02));
+    var barW = Math.max(4, (plotW - barGap * (buckets.length + 1)) / buckets.length);
+    if (barW > 60) barW = 60;
+    var totalBarsWidth = buckets.length * barW + (buckets.length - 1) * barGap;
+    var barStartX = pad.left + (plotW - totalBarsWidth) / 2;
+
+    var barPoints = buckets.map(function(b, i) {
+        var x = barStartX + i * (barW + barGap);
+        var barH = (b.count / maxY) * plotH;
+        var y = pad.top + plotH - barH;
+        return { x: x, y: y, barH: barH, label: b.label, count: b.count, lo: b.lo, hi: b.hi };
+    });
+
+    barPoints.forEach(function(bp) {
+        var barGrad = ctx.createLinearGradient(bp.x, bp.y, bp.x, pad.top + plotH);
+        barGrad.addColorStop(0, '#8b5cf6');
+        barGrad.addColorStop(1, 'rgba(139, 92, 246, 0.4)');
+        ctx.fillStyle = barGrad;
+        var radius = Math.min(4, barW / 2);
+        ctx.beginPath();
+        ctx.moveTo(bp.x + radius, bp.y);
+        ctx.lineTo(bp.x + barW - radius, bp.y);
+        ctx.quadraticCurveTo(bp.x + barW, bp.y, bp.x + barW, bp.y + radius);
+        ctx.lineTo(bp.x + barW, pad.top + plotH);
+        ctx.lineTo(bp.x, pad.top + plotH);
+        ctx.lineTo(bp.x, bp.y + radius);
+        ctx.quadraticCurveTo(bp.x, bp.y, bp.x + radius, bp.y);
+        ctx.closePath();
+        ctx.fill();
+    });
+
+    // Median line
+    var sorted = cycleTimes.slice().sort(function(a, b) { return a - b; });
+    var median = sorted.length % 2 === 0
+        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        : sorted[Math.floor(sorted.length / 2)];
+    var medianX = pad.left + ((median - minTime) / (maxTime - minTime + 0.01)) * plotW;
+    if (medianX >= pad.left && medianX <= pad.left + plotW) {
+        ctx.beginPath();
+        ctx.moveTo(medianX, pad.top);
+        ctx.lineTo(medianX, pad.top + plotH);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#f59e0b';
+        ctx.font = '9px ' + font;
+        ctx.textAlign = 'left';
+        ctx.fillText('median: ' + median.toFixed(1) + 'd', medianX + 4, pad.top + 8);
+    }
+
+    // X-axis labels
+    var labelStep = Math.max(1, Math.floor(buckets.length / 10));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    barPoints.forEach(function(bp, i) {
+        if (i % labelStep === 0 || i === buckets.length - 1) {
+            ctx.fillStyle = textSec;
+            ctx.font = '9px ' + font;
+            ctx.save();
+            ctx.translate(bp.x + barW / 2, pad.top + plotH + 6);
+            ctx.rotate(-0.4);
+            ctx.fillText(bp.label, 0, 0);
+            ctx.restore();
+        }
+    });
+
+    // Legend
+    ctx.font = '10px ' + font;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    var legX = pad.left + 8;
+    var legY = pad.top + 4;
+    ctx.fillStyle = '#8b5cf6';
+    ctx.fillRect(legX, legY - 4, 12, 8);
+    ctx.fillStyle = textSec;
+    ctx.fillText('Features', legX + 16, legY);
+    ctx.beginPath();
+    ctx.moveTo(legX + 90, legY);
+    ctx.lineTo(legX + 110, legY);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = textSec;
+    ctx.fillText('Median', legX + 114, legY);
+
+    // Store for tooltip
+    canvas._barPoints = barPoints;
+    canvas._barW = barW;
+    if (!canvas._tooltipBound) {
+        canvas._tooltipBound = true;
+        var tooltip = document.getElementById(tooltipId);
+        var padTop = pad.top, padPlotH = plotH;
+        canvas.addEventListener('mousemove', function(e) {
+            if (!tooltip || !canvas._barPoints) return;
+            var rect = canvas.getBoundingClientRect();
+            var mx = e.clientX - rect.left;
+            var my = e.clientY - rect.top;
+            var closest = null;
+            canvas._barPoints.forEach(function(bp) {
+                if (mx >= bp.x && mx <= bp.x + canvas._barW && my >= bp.y && my <= padTop + padPlotH) {
+                    closest = bp;
+                }
+            });
+            if (closest) {
+                tooltip.style.display = 'block';
+                var tLeft = closest.x + canvas._barW + 8;
+                var containerW = canvas.clientWidth;
+                if (tLeft + 160 > containerW) tLeft = closest.x - 170;
+                tooltip.style.left = tLeft + 'px';
+                tooltip.style.top = (closest.y - 10) + 'px';
+                tooltip.innerHTML = '<strong>' + closest.label + '</strong>'
+                    + '<br><span style="color:#8b5cf6">Features: ' + closest.count + '</span>';
+            } else {
+                tooltip.style.display = 'none';
+            }
+        });
+        canvas.addEventListener('mouseleave', function() {
+            if (tooltip) tooltip.style.display = 'none';
+        });
+    }
 };
 
 App._bindStatsEvents = function() {
