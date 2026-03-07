@@ -199,8 +199,9 @@ const App = {
 
     // ── Dashboard ──
     async renderDashboard() {
-        const [status, features, milestones] = await Promise.all([
+        const [status, features, milestones, roadmap, cycles] = await Promise.all([
             this.api('status'), this.api('features'), this.api('milestones'),
+            this.api('roadmap'), this.api('cycles'),
         ]);
         const counts = status.feature_counts || {};
         const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -221,7 +222,7 @@ const App = {
             const items = features.filter(f => f.status === s);
             return `<div class="kanban-column kanban-column-${s}">
                 <div class="kanban-header"><span class="kanban-title">${statusLabels[s]||s}</span><span class="kanban-count">${items.length}</span></div>
-                ${items.map(f => `<div class="kanban-card" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty"><div class="kanban-empty-icon">○</div>No items</div>'}
+                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty"><div class="kanban-empty-icon">○</div>No items</div>'}
             </div>`;
         }).join('');
 
@@ -229,7 +230,7 @@ const App = {
             const done = m.done_features || 0;
             const mtotal = m.total_features || 0;
             const pct = mtotal > 0 ? Math.round((done / mtotal) * 100) : 0;
-            return `<div class="card"><div class="card-header"><span class="card-title">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
+            return `<div class="card" style="cursor:pointer" data-milestone="${esc(m.name)}"><div class="card-header"><span class="card-title">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
                 <div class="progress-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(m.name)} progress"><div class="progress-fill ${pct===100?'success':''}" style="width:${pct}%"></div></div>
                 <div style="font-size:0.8rem;color:var(--text-muted)">${done}/${mtotal} features · ${pct}%</div></div>`;
         }).join('') : `<div class="empty-state empty-state--compact">
@@ -240,7 +241,7 @@ const App = {
 
         const recentEvents = (status.recent_events || []).slice(0, 8);
         const events = recentEvents.length ? recentEvents.map(e => `
-            <div class="activity-item">
+            <div class="activity-item" ${e.feature_id ? `data-feature-id="${esc(e.feature_id)}" style="cursor:pointer"` : ''}>
                 <div class="activity-icon">${eventIcon(e.event_type)}</div>
                 <div class="activity-content">
                     <div class="activity-text">${fmtEvent(e.event_type)}${e.feature_id ? ' <span class="feature-badge">' + esc(e.feature_id) + '</span>' : ''}</div>
@@ -252,6 +253,52 @@ const App = {
                 <div class="empty-state-hint">Events will appear here as you work on features.</div>
             </div>`;
 
+        // Roadmap highlights — top items by priority
+        const topRoadmap = (roadmap || []).slice(0, 6);
+        const roadmapPreview = topRoadmap.length ? topRoadmap.map((r, i) => {
+            const priColors = {critical:'var(--danger)',high:'var(--warning)',medium:'var(--accent)',low:'var(--success)','nice-to-have':'var(--purple)'};
+            const stIcons = {proposed:'○','accepted':'◐','in-progress':'◑',completed:'●',deferred:'◌'};
+            return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+                <span style="color:${priColors[r.priority]||'var(--text-muted)'};font-size:0.7rem;font-weight:700;min-width:18px;text-align:center">${i+1}</span>
+                <span style="font-size:0.85rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title)}</span>
+                <span style="font-size:0.7rem;color:var(--text-muted)">${stIcons[r.status]||'○'} ${r.status}</span>
+                ${r.effort ? `<span class="effort-badge effort-${r.effort}">${r.effort.toUpperCase()}</span>` : ''}
+            </div>`;
+        }).join('') : '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">No roadmap items yet</div>';
+
+        // Active cycles
+        const activeCycles = (cycles || []).filter(c => c.status === 'active');
+        const cycleCards = activeCycles.length ? activeCycles.map(c => {
+            const steps = c.config?.steps || [];
+            const currentIdx = steps.indexOf(c.current_step);
+            const progress = steps.length > 0 ? Math.round(((currentIdx + 1) / steps.length) * 100) : 0;
+            return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                    <span style="font-size:0.85rem;font-weight:600;flex:1">${esc(c.feature_id)}</span>
+                    <span class="cycle-type-name">${esc(c.cycle_type)}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <div class="progress-bar" style="flex:1"><div class="progress-fill" style="width:${progress}%"></div></div>
+                    <span style="font-size:0.7rem;color:var(--text-muted)">${c.current_step} (${currentIdx+1}/${steps.length})</span>
+                </div>
+            </div>`;
+        }).join('') : '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">No active cycles</div>';
+
+        // Priority distribution mini-chart
+        const priCounts = {};
+        features.forEach(f => { priCounts[f.priority] = (priCounts[f.priority]||0) + 1; });
+        const priLabels = {1:'Critical',2:'High',3:'Medium',4:'Low',5:'Nice to have'};
+        const priColors = {1:'var(--danger)',2:'var(--warning)',3:'var(--accent)',4:'var(--success)',5:'var(--purple)'};
+        const priChart = Object.keys(priLabels).map(p => {
+            const count = priCounts[p] || 0;
+            const pct = total > 0 ? Math.round((count/total)*100) : 0;
+            return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+                <span style="font-size:0.7rem;color:var(--text-muted);min-width:70px">${priLabels[p]}</span>
+                <div style="flex:1;height:8px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${priColors[p]};border-radius:4px;transition:width 0.6s ease"></div></div>
+                <span style="font-size:0.7rem;color:var(--text-muted);min-width:20px;text-align:right">${count}</span>
+            </div>`;
+        }).join('');
+
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
                 <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
@@ -261,9 +308,11 @@ const App = {
             </div>
             ${total > 0 ? this.renderStatusBar(counts, total) : ''}
             <div class="card" style="margin-bottom:12px;overflow:visible"><div class="card-title" style="margin-bottom:10px;font-size:0.95rem">Feature Board</div><div class="kanban">${kanbanCols}</div></div>
-            <div class="two-col">
-                <div><div class="card"><div class="card-title" style="margin-bottom:8px">Milestones</div>${milestoneCards}</div></div>
-                <div><div class="card"><div class="card-title" style="margin-bottom:8px">Recent Activity</div>${events}</div></div>
+            <div class="dashboard-grid">
+                <div class="card"><div class="card-title" style="margin-bottom:8px">Milestones</div>${milestoneCards}</div>
+                <div class="card"><div class="card-title" style="margin-bottom:8px">Recent Activity</div>${events}</div>
+                <div class="card" style="cursor:pointer" onclick="App.navigate('roadmap')"><div class="card-title" style="margin-bottom:8px">📋 Roadmap Highlights</div>${roadmapPreview}</div>
+                <div class="card"><div class="card-title" style="margin-bottom:8px">Priority Distribution</div>${priChart}${activeCycles.length ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px"><div class="card-title" style="margin-bottom:8px">Active Cycles</div>' + cycleCards + '</div>' : ''}</div>
             </div>`;
     },
 
@@ -326,7 +375,7 @@ const App = {
             const prog = this.featureProgress(f.status);
             const pClass = f.priority <= 5 ? f.priority : 5;
             const desc = f.description ? esc(f.description).substring(0, 80) + (f.description.length > 80 ? '…' : '') : '';
-            return `<tr class="ft-row status-${f.status}">
+            return `<tr class="ft-row status-${f.status}" data-feature-id="${esc(f.id)}" style="cursor:pointer">
             <td>
                 <span class="ft-name">${esc(f.name)}</span>
                 <div class="ft-id">${esc(f.id)}</div>
@@ -342,6 +391,18 @@ const App = {
                 </div>
             </td>
             <td style="color:var(--text-muted)">${fmtDate(f.created_at)}</td>
+        </tr>
+        <tr class="ft-detail-row" data-detail-for="${esc(f.id)}" style="display:none">
+          <td colspan="6">
+            <div class="roadmap-item-details" style="max-height:300px;opacity:1;padding:8px 16px">
+              <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(f.id)}</span></div>
+              <div class="roadmap-detail-row"><span class="roadmap-detail-label">Status</span><span class="roadmap-detail-value">${esc(f.status)}</span></div>
+              <div class="roadmap-detail-row"><span class="roadmap-detail-label">Priority</span><span class="roadmap-detail-value">${this.priorityLabel(f.priority)}</span></div>
+              ${f.milestone_name ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Milestone</span><span class="roadmap-detail-value">${esc(f.milestone_name)}</span></div>` : ''}
+              ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(f.description)}</span></div>` : ''}
+              <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(f.created_at)}</span></div>
+            </div>
+          </td>
         </tr>`;
         }).join('');
         return `${summary}<table class="table"><thead><tr><th>Feature</th><th>Status</th><th>Priority</th><th>Milestone</th><th>Progress</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -670,10 +731,43 @@ const App = {
     },
 
     bindPageEvents(page) {
+        if (page === 'dashboard') {
+            document.querySelectorAll('.kanban-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    const status = card.dataset.status;
+                    App._featuresFilter = status;
+                    App.navigate('features');
+                });
+            });
+            document.querySelectorAll('.activity-item[data-feature-id]').forEach(item => {
+                item.addEventListener('click', () => { App.navigate('features'); });
+            });
+            document.querySelectorAll('[data-milestone]').forEach(card => {
+                card.addEventListener('click', () => { App.navigate('features'); });
+            });
+        }
         if (page === 'features') {
+            const bindFeatureRows = () => {
+                document.querySelectorAll('.ft-row').forEach(row => {
+                    row.addEventListener('click', () => {
+                        const fid = row.dataset.featureId;
+                        const detail = document.querySelector(`.ft-detail-row[data-detail-for="${fid}"]`);
+                        if (detail) {
+                            const isVisible = detail.style.display !== 'none';
+                            document.querySelectorAll('.ft-detail-row').forEach(d => d.style.display = 'none');
+                            document.querySelectorAll('.ft-row').forEach(r => r.classList.remove('expanded'));
+                            if (!isVisible) {
+                                detail.style.display = 'table-row';
+                                row.classList.add('expanded');
+                            }
+                        }
+                    });
+                });
+            };
             const refresh = () => {
                 const wrap = document.getElementById('featuresTableWrap');
                 if (wrap) wrap.innerHTML = this.buildFeaturesTable(this.getFilteredFeatures());
+                bindFeatureRows();
             };
             document.querySelectorAll('.filter-pill').forEach(btn => btn.addEventListener('click', () => {
                 document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
@@ -683,6 +777,7 @@ const App = {
             }));
             const searchInput = document.getElementById('featuresSearch');
             if (searchInput) searchInput.addEventListener('input', (e) => { this._featuresSearch = e.target.value; refresh(); });
+            bindFeatureRows();
         }
         if (page === 'history') {
             const btn = document.getElementById('historyLoadMore');
