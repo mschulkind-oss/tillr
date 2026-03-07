@@ -37,21 +37,39 @@ type Feature struct {
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
 
+	PreviousStatus string `json:"previous_status,omitempty"`
+
 	// Computed fields
 	DependsOn     []string `json:"depends_on,omitempty"`
 	MilestoneName string   `json:"milestone_name,omitempty"`
 }
 
 type WorkItem struct {
-	ID          int    `json:"id"`
-	FeatureID   string `json:"feature_id"`
-	WorkType    string `json:"work_type"`
-	Status      string `json:"status"` // pending, active, done, failed
-	AgentPrompt string `json:"agent_prompt,omitempty"`
-	Result      string `json:"result,omitempty"`
-	StartedAt   string `json:"started_at,omitempty"`
-	CompletedAt string `json:"completed_at,omitempty"`
-	CreatedAt   string `json:"created_at"`
+	ID            int    `json:"id"`
+	FeatureID     string `json:"feature_id"`
+	WorkType      string `json:"work_type"`
+	Status        string `json:"status"` // pending, active, done, failed
+	AgentPrompt   string `json:"agent_prompt,omitempty"`
+	Result        string `json:"result,omitempty"`
+	AssignedAgent string `json:"assigned_agent,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// Conflict represents multiple agents working on the same feature.
+type Conflict struct {
+	FeatureID string   `json:"feature_id"`
+	Agents    []string `json:"agents"`
+}
+
+// CoordinationStatus is the full multi-agent coordination snapshot.
+type CoordinationStatus struct {
+	ActiveAgents []AgentSession `json:"active_agents"`
+	StaleAgents  []AgentSession `json:"stale_agents"`
+	Conflicts    []Conflict     `json:"conflicts"`
+	QueueDepth   int            `json:"queue_depth"`
+	ClaimedItems int            `json:"claimed_items"`
 }
 
 type Event struct {

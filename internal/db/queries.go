@@ -89,13 +89,13 @@ func GetFeature(db *sql.DB, id string) (*models.Feature, error) {
 	row := db.QueryRow(`
 		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
 			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
-			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name
+			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name, COALESCE(f.previous_status,'')
 		FROM features f
 		LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.id = ?`, id)
 	f := &models.Feature{}
 	err := row.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
-		&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName)
+		&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func GetFeature(db *sql.DB, id string) (*models.Feature, error) {
 func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.Feature, error) {
 	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
 			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
-			f.created_at, f.updated_at, COALESCE(m.name,'')
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,'')
 		FROM features f LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.project_id = ?`
 	args := []any{projectID}
@@ -131,7 +131,7 @@ func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.F
 	for rows.Next() {
 		var f models.Feature
 		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
-			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName); err != nil {
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -246,11 +246,25 @@ func CreateWorkItem(db *sql.DB, w *models.WorkItem) error {
 
 func GetActiveWorkItem(db *sql.DB) (*models.WorkItem, error) {
 	row := db.QueryRow(`SELECT id, feature_id, work_type, status, agent_prompt, COALESCE(result,''),
-		COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
 		FROM work_items WHERE status = 'active' LIMIT 1`)
 	w := &models.WorkItem{}
 	err := row.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
-		&w.StartedAt, &w.CompletedAt, &w.CreatedAt)
+		&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// GetActiveWorkItemForAgent returns the active work item assigned to a specific agent.
+func GetActiveWorkItemForAgent(db *sql.DB, agentID string) (*models.WorkItem, error) {
+	row := db.QueryRow(`SELECT id, feature_id, work_type, status, agent_prompt, COALESCE(result,''),
+		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		FROM work_items WHERE status = 'active' AND assigned_agent = ? LIMIT 1`, agentID)
+	w := &models.WorkItem{}
+	err := row.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
+		&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -259,15 +273,31 @@ func GetActiveWorkItem(db *sql.DB) (*models.WorkItem, error) {
 
 func GetNextPendingWorkItem(db *sql.DB) (*models.WorkItem, error) {
 	row := db.QueryRow(`SELECT id, feature_id, work_type, status, agent_prompt, COALESCE(result,''),
-		COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
 		FROM work_items WHERE status = 'pending' ORDER BY created_at LIMIT 1`)
 	w := &models.WorkItem{}
 	err := row.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
-		&w.StartedAt, &w.CompletedAt, &w.CreatedAt)
+		&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return w, nil
+}
+
+// ClaimWorkItem atomically claims a pending work item for an agent.
+func ClaimWorkItem(database *sql.DB, workItemID int, agentID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := database.Exec(
+		`UPDATE work_items SET status = 'active', assigned_agent = ?, started_at = ?
+		 WHERE id = ? AND status = 'pending'`, agentID, now, workItemID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("work item %d is not pending (already claimed or completed)", workItemID)
+	}
+	return nil
 }
 
 func UpdateWorkItemStatus(db *sql.DB, id int, status, result string) error {
@@ -288,7 +318,7 @@ func UpdateWorkItemStatus(db *sql.DB, id int, status, result string) error {
 // ListWorkItemsForFeature returns completed work items for a feature, most recent first.
 func ListWorkItemsForFeature(db *sql.DB, featureID string) ([]models.WorkItem, error) {
 	rows, err := db.Query(`SELECT id, feature_id, work_type, status, COALESCE(agent_prompt,''), COALESCE(result,''),
-		COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
 		FROM work_items WHERE feature_id = ? AND status IN ('done','failed') ORDER BY completed_at DESC`, featureID)
 	if err != nil {
 		return nil, err
@@ -298,7 +328,7 @@ func ListWorkItemsForFeature(db *sql.DB, featureID string) ([]models.WorkItem, e
 	for rows.Next() {
 		var w models.WorkItem
 		if err := rows.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
-			&w.StartedAt, &w.CompletedAt, &w.CreatedAt); err != nil {
+			&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -474,6 +504,35 @@ func UpdateRoadmapItemStatus(db *sql.DB, id, status string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("updating roadmap item status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func UpdateMilestone(db *sql.DB, id string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	var setClauses []string
+	var args []any
+	for col, val := range updates {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	setClauses = append(setClauses, "updated_at = datetime('now')")
+	args = append(args, id)
+	res, err := db.Exec(
+		fmt.Sprintf("UPDATE milestones SET %s WHERE id = ?", strings.Join(setClauses, ", ")),
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("updating milestone: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -1260,6 +1319,61 @@ func GetBlockedFeatures(database *sql.DB) ([]models.Feature, error) {
 	return result, nil
 }
 
+// AreAllDependenciesClear checks if all of a feature's dependencies are not blocked.
+func AreAllDependenciesClear(database *sql.DB, featureID string) (bool, error) {
+	var count int
+	err := database.QueryRow(`
+		SELECT COUNT(*) FROM feature_deps fd
+		JOIN features f ON fd.depends_on = f.id
+		WHERE fd.feature_id = ? AND f.status = 'blocked'`, featureID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+// SavePreviousStatus stores the feature's current status before blocking, so it can be restored on unblock.
+func SavePreviousStatus(database *sql.DB, featureID, status string) error {
+	_, err := database.Exec(`UPDATE features SET previous_status = ?, updated_at = datetime('now') WHERE id = ?`, status, featureID)
+	return err
+}
+
+// GetPreviousStatus retrieves the saved previous status for a feature.
+func GetPreviousStatus(database *sql.DB, featureID string) (string, error) {
+	var status string
+	err := database.QueryRow(`SELECT COALESCE(previous_status,'') FROM features WHERE id = ?`, featureID).Scan(&status)
+	return status, err
+}
+
+// GetAllTransitiveDependents walks the reverse dependency graph via BFS and returns
+// all features that transitively depend on the given feature.
+func GetAllTransitiveDependents(database *sql.DB, featureID string) ([]models.Feature, error) {
+	visited := map[string]bool{}
+	queue := []string{featureID}
+	var result []models.Feature
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+
+		deps, err := GetFeatureDependents(database, current)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range deps {
+			if !visited[d.ID] {
+				result = append(result, d)
+				queue = append(queue, d.ID)
+			}
+		}
+	}
+	return result, nil
+}
+
 // BurndownPoint represents a single day's data for burndown/velocity charts.
 type BurndownPoint struct {
 	Date      string `json:"date"`
@@ -1807,6 +1921,131 @@ func GetWorktreeByAgent(db *sql.DB, agentSessionID string) (*models.Worktree, er
 		FROM worktrees WHERE agent_session_id = ?`, agentSessionID)
 	w := &models.Worktree{}
 	err := row.Scan(&w.ID, &w.Name, &w.Path, &w.Branch, &w.AgentSessionID, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// --- Multi-Agent Coordination ---
+
+// UpdateAgentHeartbeat updates the updated_at timestamp and optionally inserts a status update.
+func UpdateAgentHeartbeat(database *sql.DB, agentID string, message string) error {
+	_, err := database.Exec(
+		`UPDATE agent_sessions SET updated_at = datetime('now') WHERE id = ?`, agentID)
+	if err != nil {
+		return fmt.Errorf("updating agent heartbeat: %w", err)
+	}
+	if message != "" {
+		u := &models.StatusUpdate{
+			AgentSessionID: agentID,
+			MessageMD:      message,
+			Phase:          "heartbeat",
+		}
+		return InsertStatusUpdate(database, u)
+	}
+	return nil
+}
+
+// GetActiveAgents returns agents with recent heartbeats (updated within the last N minutes).
+func GetActiveAgents(database *sql.DB, projectID string, recentMins int) ([]models.AgentSession, error) {
+	rows, err := database.Query(`SELECT id, project_id, COALESCE(feature_id,''), name,
+		COALESCE(task_description,''), status, progress_pct, COALESCE(current_phase,''),
+		COALESCE(eta,''), COALESCE(context_snapshot,''), created_at, updated_at
+		FROM agent_sessions
+		WHERE project_id = ? AND status = 'active'
+		AND updated_at >= datetime('now', ? || ' minutes')
+		ORDER BY updated_at DESC`, projectID, fmt.Sprintf("-%d", recentMins))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.AgentSession
+	for rows.Next() {
+		var s models.AgentSession
+		if err := rows.Scan(&s.ID, &s.ProjectID, &s.FeatureID, &s.Name,
+			&s.TaskDescription, &s.Status, &s.ProgressPct, &s.CurrentPhase,
+			&s.ETA, &s.ContextSnapshot, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// GetStaleAgents returns active agents whose last heartbeat is older than the threshold.
+func GetStaleAgents(database *sql.DB, projectID string, staleMins int) ([]models.AgentSession, error) {
+	rows, err := database.Query(`SELECT id, project_id, COALESCE(feature_id,''), name,
+		COALESCE(task_description,''), status, progress_pct, COALESCE(current_phase,''),
+		COALESCE(eta,''), COALESCE(context_snapshot,''), created_at, updated_at
+		FROM agent_sessions
+		WHERE project_id = ? AND status = 'active'
+		AND updated_at < datetime('now', ? || ' minutes')
+		ORDER BY updated_at ASC`, projectID, fmt.Sprintf("-%d", staleMins))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.AgentSession
+	for rows.Next() {
+		var s models.AgentSession
+		if err := rows.Scan(&s.ID, &s.ProjectID, &s.FeatureID, &s.Name,
+			&s.TaskDescription, &s.Status, &s.ProgressPct, &s.CurrentPhase,
+			&s.ETA, &s.ContextSnapshot, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// DetectConflicts finds features with multiple agents working on active items simultaneously.
+func DetectConflicts(database *sql.DB) ([]models.Conflict, error) {
+	rows, err := database.Query(`SELECT feature_id, GROUP_CONCAT(DISTINCT assigned_agent)
+		FROM work_items
+		WHERE status = 'active' AND assigned_agent != ''
+		GROUP BY feature_id
+		HAVING COUNT(DISTINCT assigned_agent) > 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.Conflict
+	for rows.Next() {
+		var featureID, agents string
+		if err := rows.Scan(&featureID, &agents); err != nil {
+			return nil, err
+		}
+		out = append(out, models.Conflict{
+			FeatureID: featureID,
+			Agents:    strings.Split(agents, ","),
+		})
+	}
+	return out, rows.Err()
+}
+
+// CountPendingWorkItems returns the number of unclaimed pending work items.
+func CountPendingWorkItems(database *sql.DB) (int, error) {
+	var count int
+	err := database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE status = 'pending'`).Scan(&count)
+	return count, err
+}
+
+// CountClaimedWorkItems returns the number of active (claimed) work items.
+func CountClaimedWorkItems(database *sql.DB) (int, error) {
+	var count int
+	err := database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE status = 'active'`).Scan(&count)
+	return count, err
+}
+
+// GetWorkItemByID returns a work item by its ID.
+func GetWorkItemByID(database *sql.DB, id int) (*models.WorkItem, error) {
+	row := database.QueryRow(`SELECT id, feature_id, work_type, status, agent_prompt, COALESCE(result,''),
+		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		FROM work_items WHERE id = ?`, id)
+	w := &models.WorkItem{}
+	err := row.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
+		&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

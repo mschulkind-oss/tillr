@@ -247,3 +247,195 @@ func TestSlug(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockingCascade(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close() //nolint:errcheck
+
+	p, err := engine.InitProject(database, "Cascade Test")
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Create A → B → C dependency chain (C depends on B, B depends on A)
+	_, err = engine.AddFeature(database, p.ID, "Feature A", "base feature", "", "", 1, nil, "")
+	if err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+	_, err = engine.AddFeature(database, p.ID, "Feature B", "middle feature", "", "", 2, []string{"feature-a"}, "")
+	if err != nil {
+		t.Fatalf("add B: %v", err)
+	}
+	_, err = engine.AddFeature(database, p.ID, "Feature C", "end feature", "", "", 3, []string{"feature-b"}, "")
+	if err != nil {
+		t.Fatalf("add C: %v", err)
+	}
+
+	// Move B and C to implementing
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "implementing"); err != nil {
+		t.Fatalf("transition B: %v", err)
+	}
+	if err := engine.TransitionFeature(database, p.ID, "feature-c", "implementing"); err != nil {
+		t.Fatalf("transition C: %v", err)
+	}
+
+	// Block A — B and C should cascade to blocked
+	if err := engine.TransitionFeature(database, p.ID, "feature-a", "blocked"); err != nil {
+		t.Fatalf("block A: %v", err)
+	}
+
+	b, err := db.GetFeature(database, "feature-b")
+	if err != nil {
+		t.Fatalf("get B: %v", err)
+	}
+	if b.Status != "blocked" {
+		t.Errorf("expected B to be blocked, got %q", b.Status)
+	}
+	if b.PreviousStatus != "implementing" {
+		t.Errorf("expected B previous_status=implementing, got %q", b.PreviousStatus)
+	}
+
+	c, err := db.GetFeature(database, "feature-c")
+	if err != nil {
+		t.Fatalf("get C: %v", err)
+	}
+	if c.Status != "blocked" {
+		t.Errorf("expected C to be blocked, got %q", c.Status)
+	}
+	if c.PreviousStatus != "implementing" {
+		t.Errorf("expected C previous_status=implementing, got %q", c.PreviousStatus)
+	}
+
+	// Unblock A — B and C should restore to implementing
+	if err := engine.TransitionFeature(database, p.ID, "feature-a", "implementing"); err != nil {
+		t.Fatalf("unblock A: %v", err)
+	}
+
+	b, err = db.GetFeature(database, "feature-b")
+	if err != nil {
+		t.Fatalf("get B: %v", err)
+	}
+	if b.Status != "implementing" {
+		t.Errorf("expected B to be restored to implementing, got %q", b.Status)
+	}
+
+	c, err = db.GetFeature(database, "feature-c")
+	if err != nil {
+		t.Fatalf("get C: %v", err)
+	}
+	if c.Status != "implementing" {
+		t.Errorf("expected C to be restored to implementing, got %q", c.Status)
+	}
+}
+
+func TestBlockingCascadePartialUnblock(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close() //nolint:errcheck
+
+	p, err := engine.InitProject(database, "Partial Unblock")
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Create A, B both depended on by C
+	_, err = engine.AddFeature(database, p.ID, "Feature A", "", "", "", 1, nil, "")
+	if err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+	_, err = engine.AddFeature(database, p.ID, "Feature B", "", "", "", 2, nil, "")
+	if err != nil {
+		t.Fatalf("add B: %v", err)
+	}
+	_, err = engine.AddFeature(database, p.ID, "Feature C", "", "", "", 3, []string{"feature-a", "feature-b"}, "")
+	if err != nil {
+		t.Fatalf("add C: %v", err)
+	}
+
+	// Move C to implementing
+	if err := engine.TransitionFeature(database, p.ID, "feature-c", "implementing"); err != nil {
+		t.Fatalf("transition C: %v", err)
+	}
+
+	// Block both A and B
+	if err := engine.TransitionFeature(database, p.ID, "feature-a", "blocked"); err != nil {
+		t.Fatalf("block A: %v", err)
+	}
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "blocked"); err != nil {
+		t.Fatalf("block B: %v", err)
+	}
+
+	c, _ := db.GetFeature(database, "feature-c")
+	if c.Status != "blocked" {
+		t.Errorf("expected C blocked, got %q", c.Status)
+	}
+
+	// Unblock A — C should remain blocked because B is still blocked
+	if err := engine.TransitionFeature(database, p.ID, "feature-a", "implementing"); err != nil {
+		t.Fatalf("unblock A: %v", err)
+	}
+
+	c, _ = db.GetFeature(database, "feature-c")
+	if c.Status != "blocked" {
+		t.Errorf("expected C still blocked (B still blocked), got %q", c.Status)
+	}
+
+	// Unblock B — now C should be restored
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "implementing"); err != nil {
+		t.Fatalf("unblock B: %v", err)
+	}
+
+	c, _ = db.GetFeature(database, "feature-c")
+	if c.Status != "implementing" {
+		t.Errorf("expected C restored to implementing, got %q", c.Status)
+	}
+}
+
+func TestBlockingCascadeSkipsDone(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close() //nolint:errcheck
+
+	p, err := engine.InitProject(database, "Skip Done")
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Create A → B where B is done
+	_, err = engine.AddFeature(database, p.ID, "Feature A", "", "", "", 1, nil, "")
+	if err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+	_, err = engine.AddFeature(database, p.ID, "Feature B", "", "", "", 2, []string{"feature-a"}, "")
+	if err != nil {
+		t.Fatalf("add B: %v", err)
+	}
+
+	// Move B through to done
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "implementing"); err != nil {
+		t.Fatalf("transition B to implementing: %v", err)
+	}
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "human-qa"); err != nil {
+		t.Fatalf("transition B to human-qa: %v", err)
+	}
+	if err := engine.TransitionFeature(database, p.ID, "feature-b", "done"); err != nil {
+		t.Fatalf("transition B to done: %v", err)
+	}
+
+	// Block A — B should NOT be affected since it's done
+	if err := engine.TransitionFeature(database, p.ID, "feature-a", "blocked"); err != nil {
+		t.Fatalf("block A: %v", err)
+	}
+
+	b, _ := db.GetFeature(database, "feature-b")
+	if b.Status != "done" {
+		t.Errorf("expected B to remain done, got %q", b.Status)
+	}
+}
