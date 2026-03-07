@@ -3005,6 +3005,15 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     height: 260px;
     min-height: 200px;
 }
+.cycletime-chart-container {
+    position: relative;
+    width: 100%;
+    height: 260px;
+    min-height: 200px;
+}
+.stats-big-number--danger {
+    color: var(--danger, #ef4444);
+}
 
 @media (max-width: 900px) {
     .stats-grid { grid-template-columns: 1fr 1fr; }
@@ -3013,6 +3022,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     .score-chart-container { height: 220px; }
     .burndown-chart-container { height: 280px; }
     .velocity-chart-container { height: 220px; }
+    .cycletime-chart-container { height: 220px; }
 }
 @media (max-width: 600px) {
     .stats-grid { grid-template-columns: 1fr; }
@@ -3020,6 +3030,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     .score-chart-container { height: 200px; }
     .burndown-chart-container { height: 240px; }
     .velocity-chart-container { height: 200px; }
+    .cycletime-chart-container { height: 200px; }
 }
 
 /* ── Dependency Detail Section ── */

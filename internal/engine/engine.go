@@ -377,6 +377,12 @@ func FailWorkItem(database *sql.DB, reason string) error {
 	return nil
 }
 
+// ReclaimStaleWorkItems finds work items claimed by agents with no heartbeat
+// for more than staleMins minutes and releases them back to the pending queue.
+func ReclaimStaleWorkItems(database *sql.DB, staleMins int) (int, error) {
+	return db.ReclaimStaleWorkItems(database, staleMins)
+}
+
 // StartCycle starts a new iteration cycle for a feature.
 func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*models.CycleInstance, error) {
 	// Validate cycle type

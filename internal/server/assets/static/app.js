@@ -2369,7 +2369,17 @@ function fmtEvent(t) { return t.split('.').map(s=>s.charAt(0).toUpperCase()+s.sl
 
 // ── Stats Page ──────────────────────────────────────────────────────────────
 App.renderStats = async function() {
-    var stats = await App.api('stats');
+    var results = await Promise.all([
+        App.api('stats'),
+        App.api('features').catch(function() { return []; }),
+        App.api('cycles').catch(function() { return []; }),
+        App.api('history?type=feature.status_changed').catch(function() { return []; })
+    ]);
+    var stats = results[0];
+    var allFeatures = results[1] || [];
+    var allCycles = results[2] || [];
+    var historyEvents = results[3] || [];
+
     var fs = stats.feature_stats || {};
     var cs = stats.cycle_stats || {};
     var rs = stats.roadmap_stats || {};
@@ -2382,12 +2392,30 @@ App.renderStats = async function() {
 
     // Store data for post-render chart drawing
     App._statsData = stats;
+    App._statsFeatures = allFeatures;
+    App._statsHistory = historyEvents;
 
     var statusColors = {draft:'#8b949e',planning:'#8b5cf6',implementing:'#3b82f6','agent-qa':'#f59e0b','human-qa':'#ec4899',done:'#10b981',blocked:'#ef4444'};
     var priColors = {critical:'#ef4444',high:'#f59e0b',medium:'#3b82f6',low:'#8b949e','nice-to-have':'#8b5cf6'};
 
     var statusEntries = Object.entries(byStatus).filter(function(e){return e[1]>0;});
     var total = fs.total || 0;
+
+    // Compute extra stats
+    var qaCount = (byStatus['human-qa'] || 0) + (byStatus['agent-qa'] || 0);
+    var blockedCount = byStatus.blocked || 0;
+    var activeCycles = allCycles.filter(function(c) { return c.status === 'active'; }).length;
+    var doneCount = byStatus.done || 0;
+    var failedCount = byStatus.failed || 0;
+    var finishedCount = doneCount + failedCount;
+    var successRateStr = finishedCount > 0 ? (doneCount / finishedCount * 100).toFixed(0) + '%' : 'N/A';
+
+    // Compute average cycle time from features (implementing → done via history events)
+    var cycleTimes = App._computeCycleTimes(historyEvents, allFeatures);
+    var avgCycleTime = cycleTimes.length > 0
+        ? (cycleTimes.reduce(function(a, b) { return a + b; }, 0) / cycleTimes.length).toFixed(1)
+        : null;
+    App._statsCycleTimes = cycleTimes;
 
     // Status donut using CSS conic-gradient
     var donutSegments = [];
@@ -2473,7 +2501,6 @@ App.renderStats = async function() {
     }
 
     // Feature velocity
-    var doneCount = byStatus.done || 0;
     var weeklyRate = act.events_last_7_days || 0;
     var monthlyRate = act.events_last_30_days || 0;
     var avgIterPerCycle = cs.total_cycles > 0 ? (cs.total_iterations / cs.total_cycles).toFixed(1) : '0';
@@ -2481,19 +2508,31 @@ App.renderStats = async function() {
     return '<div class="page-header"><h2>Project Statistics</h2>'
         + '<div class="page-subtitle">' + total + ' features \u00b7 ' + (rs.total||0) + ' roadmap items \u00b7 ' + (cs.total_cycles||0) + ' cycles \u00b7 ' + (act.total_events||0) + ' events</div></div>'
         + '<div class="stats-grid">'
-        // Row 1: Overview cards
+        // Row 1: Overview cards (8 cards)
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Completion</div>'
         + '<div class="stats-big-number">' + (fs.completion_rate||0).toFixed(1) + '%</div>'
         + '<div class="stats-card-sub">' + doneCount + ' of ' + total + ' features done</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Score</div>'
-        + '<div class="stats-big-number">' + (cs.avg_score||0).toFixed(1) + '</div>'
-        + '<div class="stats-card-sub">' + scores.length + ' scores across ' + (cs.total_cycles||0) + ' cycles</div></div>'
-        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Iterations</div>'
-        + '<div class="stats-big-number">' + (cs.total_iterations||0) + '</div>'
-        + '<div class="stats-card-sub">' + avgIterPerCycle + ' avg per cycle</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Success Rate</div>'
+        + '<div class="stats-big-number">' + successRateStr + '</div>'
+        + '<div class="stats-card-sub">' + doneCount + ' done' + (failedCount > 0 ? ' \u00b7 ' + failedCount + ' failed' : '') + '</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Cycle Time</div>'
+        + '<div class="stats-big-number">' + (avgCycleTime !== null ? avgCycleTime + 'd' : 'N/A') + '</div>'
+        + '<div class="stats-card-sub">' + cycleTimes.length + ' features measured</div></div>'
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Activity</div>'
         + '<div class="stats-big-number">' + (act.total_events||0) + '</div>'
         + '<div class="stats-card-sub">' + weeklyRate + ' last 7d \u00b7 ' + monthlyRate + ' last 30d</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Score</div>'
+        + '<div class="stats-big-number">' + (cs.avg_score||0).toFixed(1) + '</div>'
+        + '<div class="stats-card-sub">' + scores.length + ' scores across ' + (cs.total_cycles||0) + ' cycles</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">In QA</div>'
+        + '<div class="stats-big-number">' + qaCount + '</div>'
+        + '<div class="stats-card-sub">' + (byStatus['agent-qa']||0) + ' agent \u00b7 ' + (byStatus['human-qa']||0) + ' human</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Blocked</div>'
+        + '<div class="stats-big-number' + (blockedCount > 0 ? ' stats-big-number--danger' : '') + '">' + blockedCount + '</div>'
+        + '<div class="stats-card-sub">features blocked</div></div>'
+        + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Active Cycles</div>'
+        + '<div class="stats-big-number">' + activeCycles + '</div>'
+        + '<div class="stats-card-sub">' + (cs.total_iterations||0) + ' total iterations</div></div>'
         // Row 2: Feature Status donut + Score Trend canvas
         + '<div class="stats-card stats-card-md"><div class="stats-card-title">Feature Status</div>'
         + '<div class="stats-donut-wrap"><div class="stats-donut" style="background:' + donutGradient + '"><div class="stats-donut-hole">' + total + '</div></div>'
@@ -2531,7 +2570,55 @@ App.renderStats = async function() {
         + '<div class="stats-card stats-card-full"><div class="stats-card-title">Weekly Velocity</div>'
         + '<div class="velocity-chart-container"><canvas id="velocityCanvas" class="score-chart-canvas"></canvas>'
         + '<div id="velocityCanvasTooltip" class="score-chart-tooltip"></div></div></div>'
+        + '<div class="stats-card stats-card-full"><div class="stats-card-title">Cycle Time Distribution</div>'
+        + '<div class="cycletime-chart-container"><canvas id="cycleTimeCanvas" class="score-chart-canvas"></canvas>'
+        + '<div id="cycleTimeCanvasTooltip" class="score-chart-tooltip"></div></div></div>'
         + '</div>';
+};
+
+// Compute cycle times (days from first implementing to done) for each feature
+App._computeCycleTimes = function(historyEvents, features) {
+    // Build map of feature_id → {implementing_at, done_at} from transition events
+    var featureTimestamps = {};
+    // Also use features' own timestamps as fallback
+    (features || []).forEach(function(f) {
+        if (f.status === 'done' && f.created_at) {
+            featureTimestamps[f.id] = featureTimestamps[f.id] || {};
+            featureTimestamps[f.id].created = f.created_at;
+        }
+    });
+
+    (historyEvents || []).forEach(function(ev) {
+        if (!ev.feature_id || !ev.data) return;
+        var data;
+        try { data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch(e) { return; }
+        var to = data.to || data.new_status || '';
+        var from = data.from || data.old_status || '';
+
+        if (!featureTimestamps[ev.feature_id]) featureTimestamps[ev.feature_id] = {};
+        var ft = featureTimestamps[ev.feature_id];
+
+        if (to === 'implementing' && !ft.implementing_at) {
+            ft.implementing_at = ev.created_at;
+        }
+        if (to === 'done') {
+            ft.done_at = ev.created_at;
+        }
+    });
+
+    var cycleTimes = [];
+    Object.keys(featureTimestamps).forEach(function(fid) {
+        var ft = featureTimestamps[fid];
+        var start = ft.implementing_at || ft.created;
+        var end = ft.done_at;
+        if (start && end) {
+            var startDate = new Date(start);
+            var endDate = new Date(end);
+            var days = (endDate - startDate) / (1000 * 60 * 60 * 24);
+            if (days >= 0) cycleTimes.push(days);
+        }
+    });
+    return cycleTimes;
 };
 
 

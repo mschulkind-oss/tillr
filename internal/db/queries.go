@@ -271,10 +271,19 @@ func GetActiveWorkItemForAgent(db *sql.DB, agentID string) (*models.WorkItem, er
 	return w, nil
 }
 
-func GetNextPendingWorkItem(db *sql.DB) (*models.WorkItem, error) {
-	row := db.QueryRow(`SELECT id, feature_id, work_type, status, agent_prompt, COALESCE(result,''),
-		COALESCE(assigned_agent,''), COALESCE(started_at,''), COALESCE(completed_at,''), created_at
-		FROM work_items WHERE status = 'pending' ORDER BY created_at LIMIT 1`)
+func GetNextPendingWorkItem(database *sql.DB) (*models.WorkItem, error) {
+	// Priority ordering:
+	// 1. Feature priority DESC (higher priority features first)
+	// 2. Cycle step order ASC (earlier steps first — via cycle_instances current_step)
+	// 3. Creation time ASC (older items first)
+	row := database.QueryRow(`SELECT w.id, w.feature_id, w.work_type, w.status, w.agent_prompt, COALESCE(w.result,''),
+		COALESCE(w.assigned_agent,''), COALESCE(w.started_at,''), COALESCE(w.completed_at,''), w.created_at
+		FROM work_items w
+		LEFT JOIN features f ON w.feature_id = f.id
+		LEFT JOIN cycle_instances ci ON ci.feature_id = w.feature_id AND ci.status = 'active'
+		WHERE w.status = 'pending'
+		ORDER BY COALESCE(f.priority, 0) DESC, COALESCE(ci.current_step, 0) ASC, w.created_at ASC
+		LIMIT 1`)
 	w := &models.WorkItem{}
 	err := row.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
 		&w.AssignedAgent, &w.StartedAt, &w.CompletedAt, &w.CreatedAt)
@@ -2052,4 +2061,86 @@ func GetWorkItemByID(database *sql.DB, id int) (*models.WorkItem, error) {
 		return nil, err
 	}
 	return w, nil
+}
+
+// --- Queue Management ---
+
+// GetQueuedWorkItems returns all pending and active work items in priority order
+// with enriched feature context.
+func GetQueuedWorkItems(database *sql.DB) ([]models.QueueEntry, error) {
+	rows, err := database.Query(`SELECT w.id, w.feature_id, COALESCE(f.name,''), w.work_type,
+		COALESCE(f.priority, 0), COALESCE(ci.cycle_type,''), COALESCE(w.assigned_agent,''),
+		w.status, w.created_at
+		FROM work_items w
+		LEFT JOIN features f ON w.feature_id = f.id
+		LEFT JOIN cycle_instances ci ON ci.feature_id = w.feature_id AND ci.status = 'active'
+		WHERE w.status IN ('pending','active')
+		ORDER BY
+			CASE w.status WHEN 'active' THEN 0 ELSE 1 END,
+			COALESCE(f.priority, 0) DESC,
+			COALESCE(ci.current_step, 0) ASC,
+			w.created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.QueueEntry
+	for rows.Next() {
+		var e models.QueueEntry
+		if err := rows.Scan(&e.WorkItemID, &e.FeatureID, &e.FeatureName, &e.WorkType,
+			&e.Priority, &e.CycleType, &e.AssignedAgent, &e.Status, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GetQueueStats returns aggregate statistics about the work queue.
+func GetQueueStats(database *sql.DB) (*models.QueueStats, error) {
+	s := &models.QueueStats{}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE status = 'pending'`).Scan(&s.TotalPending); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE status = 'active'`).Scan(&s.TotalClaimed); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE status = 'done' AND completed_at >= date('now')`).Scan(&s.TotalCompletedDay); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ReleaseWorkItem resets a claimed (active) work item back to pending status.
+func ReleaseWorkItem(database *sql.DB, workItemID int) error {
+	res, err := database.Exec(
+		`UPDATE work_items SET status = 'pending', assigned_agent = '', started_at = ''
+		 WHERE id = ? AND status = 'active'`, workItemID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("work item %d is not active (cannot release)", workItemID)
+	}
+	return nil
+}
+
+// ReclaimStaleWorkItems resets work items that have been claimed by agents with
+// no heartbeat for the given duration. Returns the number of reclaimed items.
+func ReclaimStaleWorkItems(database *sql.DB, staleMins int) (int, error) {
+	res, err := database.Exec(`UPDATE work_items SET status = 'pending', assigned_agent = '', started_at = ''
+		WHERE status = 'active' AND assigned_agent != ''
+		AND NOT EXISTS (
+			SELECT 1 FROM heartbeats h
+			WHERE h.agent_id = work_items.assigned_agent
+			AND h.created_at >= datetime('now', ? || ' minutes')
+		)
+		AND started_at < datetime('now', ? || ' minutes')`,
+		fmt.Sprintf("-%d", staleMins), fmt.Sprintf("-%d", staleMins))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }

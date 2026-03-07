@@ -45,7 +45,7 @@ App.renderAgents = async function() {
     const completed = agents.filter(a => a.status === 'completed');
     const failed = agents.filter(a => a.status === 'failed');
     const finished = completed.length + failed.length;
-    const successRate = finished > 0 ? Math.round((completed.length / finished) * 100) : 0;
+    const successRate = finished > 0 ? Math.round((completed.length / finished) * 100) : -1;
 
     let html = `<div class="page-header">
         <h2 class="page-title">🤖 Agent Dashboard</h2>
@@ -57,7 +57,7 @@ App.renderAgents = async function() {
         <div class="stat-card stat-card--accent"><div class="stat-value">${agents.length}</div><div class="stat-label">Total Sessions</div></div>
         <div class="stat-card stat-card--success"><div class="stat-value">${active.length}</div><div class="stat-label">Active</div></div>
         <div class="stat-card"><div class="stat-value">${completed.length}</div><div class="stat-label">Completed</div></div>
-        <div class="stat-card stat-card--warning"><div class="stat-value">${successRate}%</div><div class="stat-label">Success Rate</div></div>
+        <div class="stat-card stat-card--warning"><div class="stat-value">${successRate >= 0 ? successRate + '%' : 'N/A'}</div><div class="stat-label">Success Rate</div></div>
     </div>`;
 
     // Coordination status panel
@@ -76,6 +76,44 @@ App.renderAgents = async function() {
             ${coord.conflicts.length ? `<div style="margin-top:8px"><strong>⚠ Conflicts</strong> (multiple agents on same feature):<ul style="margin:4px 0">${coord.conflicts.map(c => `<li>Feature <strong>${esc(c.feature_id)}</strong>: ${c.agents.map(a => esc(a)).join(', ')}</li>`).join('')}</ul></div>` : ''}
         </div>`;
     } catch(e) { /* coordination endpoint not available */ }
+
+    // Queue panel
+    try {
+        const queueData = await App.api('queue');
+        var q = queueData.queue || [];
+        var qs = queueData.stats || {};
+        html += `<div class="card" style="margin-bottom:16px">
+            <h3 style="margin:0 0 12px">📋 Work Queue</h3>
+            <div class="stats-grid app4-stats-row" style="margin-bottom:8px">
+                <div class="stat-card"><div class="stat-value">${qs.total_pending || 0}</div><div class="stat-label">Pending</div></div>
+                <div class="stat-card stat-card--accent"><div class="stat-value">${qs.total_claimed || 0}</div><div class="stat-label">Claimed</div></div>
+                <div class="stat-card stat-card--success"><div class="stat-value">${qs.total_completed_today || 0}</div><div class="stat-label">Done Today</div></div>
+            </div>`;
+        if (q.length > 0) {
+            html += `<table class="queue-table" style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <thead><tr style="text-align:left;border-bottom:1px solid var(--border)">
+                    <th style="padding:6px 8px">Prio</th><th style="padding:6px 8px">Feature</th>
+                    <th style="padding:6px 8px">Type</th><th style="padding:6px 8px">Agent</th>
+                    <th style="padding:6px 8px">Wait</th>
+                </tr></thead><tbody>`;
+            q.forEach(function(item) {
+                var prioColor = item.priority >= 8 ? 'var(--danger)' : item.priority >= 5 ? 'var(--warning)' : 'var(--success)';
+                var agentCell = item.assigned_agent ? esc(item.assigned_agent) : '<span class="text-secondary">unassigned</span>';
+                var statusBadge = item.status === 'active' ? '<span class="badge badge-implementing">active</span> ' : '';
+                html += `<tr style="border-bottom:1px solid var(--border-light)">
+                    <td style="padding:6px 8px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${prioColor};margin-right:4px"></span>${item.priority}</td>
+                    <td style="padding:6px 8px">${statusBadge}${esc(item.feature_name || item.feature_id)}</td>
+                    <td style="padding:6px 8px"><span class="badge">${esc(item.work_type)}</span></td>
+                    <td style="padding:6px 8px">${agentCell}</td>
+                    <td style="padding:6px 8px">${timeAgo(item.created_at)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+        } else {
+            html += '<div class="text-secondary" style="padding:8px 0">No items in queue.</div>';
+        }
+        html += '</div>';
+    } catch(e) { /* queue endpoint not available */ }
 
     html += App.renderSearchBox('agentsSearch', 'Search agents…');
 
