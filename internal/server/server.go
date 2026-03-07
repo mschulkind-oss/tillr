@@ -441,6 +441,41 @@ func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 		return writeJSON(w, cycles)
 	}
 
+	// GET /api/cycles/{id} — single cycle detail with scores and step names
+	trimmed := strings.TrimPrefix(path, "/api/cycles/")
+	if trimmed != "" && trimmed != path {
+		var cycleID int
+		if _, err := fmt.Sscanf(trimmed, "%d", &cycleID); err == nil {
+			cycle, err := db.GetCycleByID(database, cycleID)
+			if err != nil {
+				return fmt.Errorf("cycle not found: %w", err)
+			}
+			scores, err := db.ListCycleScores(database, cycleID)
+			if err != nil {
+				return err
+			}
+			if scores == nil {
+				scores = []models.CycleScore{}
+			}
+			// Resolve step names from cycle type
+			var steps []string
+			for _, ct := range models.CycleTypes {
+				if ct.Name == cycle.CycleType {
+					steps = ct.Steps
+					break
+				}
+			}
+			if steps == nil {
+				steps = []string{}
+			}
+			return writeJSON(w, models.CycleDetail{
+				Cycle:  *cycle,
+				Scores: scores,
+				Steps:  steps,
+			})
+		}
+	}
+
 	// List all cycles (active + completed) with enriched data
 	active, err := db.ListActiveCycles(database)
 	if err != nil {
@@ -473,7 +508,10 @@ func handleHistory(database *sql.DB, w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	events, err := db.ListEvents(database, p.ID, "", "", "", 100)
+	featureID := r.URL.Query().Get("feature")
+	eventType := r.URL.Query().Get("type")
+	since := r.URL.Query().Get("since")
+	events, err := db.ListEvents(database, p.ID, featureID, eventType, since, 100)
 	if err != nil {
 		return err
 	}
@@ -613,6 +651,42 @@ func handleDiscussions(database *sql.DB, w http.ResponseWriter, r *http.Request)
 		return err
 	}
 
+	if r.Method == "POST" {
+		var body struct {
+			Title     string `json:"title"`
+			Body      string `json:"body"`
+			FeatureID string `json:"feature_id"`
+			Author    string `json:"author"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Title == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "title is required"})
+		}
+		if body.Author == "" {
+			body.Author = "human"
+		}
+		d := &models.Discussion{
+			ProjectID: p.ID,
+			Title:     body.Title,
+			Body:      body.Body,
+			FeatureID: body.FeatureID,
+			Author:    body.Author,
+		}
+		if err := db.CreateDiscussion(database, d); err != nil {
+			return fmt.Errorf("creating discussion: %w", err)
+		}
+		created, err := db.GetDiscussion(database, d.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created discussion: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
 	featureID := r.URL.Query().Get("feature")
 	status := r.URL.Query().Get("status")
 
@@ -639,6 +713,36 @@ func handleDiscussionDetail(database *sql.DB, w http.ResponseWriter, r *http.Req
 		} else {
 			break
 		}
+	}
+
+	// POST /api/discussions/{id}/replies
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "replies" {
+		var body struct {
+			Body   string `json:"body"`
+			Author string `json:"author"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Body == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "body is required"})
+		}
+		if body.Author == "" {
+			body.Author = "human"
+		}
+		c := &models.DiscussionComment{
+			DiscussionID: id,
+			Author:       body.Author,
+			Content:      body.Body,
+			CommentType:  "comment",
+		}
+		if err := db.AddDiscussionComment(database, c); err != nil {
+			return fmt.Errorf("adding reply: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, c)
 	}
 
 	d, err := db.GetDiscussion(database, id)
