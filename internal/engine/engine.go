@@ -27,15 +27,17 @@ func InitProject(database *sql.DB, name string) (*models.Project, error) {
 }
 
 // AddFeature creates a feature and logs an event.
-func AddFeature(database *sql.DB, projectID, name, description, milestoneID string, priority int, dependsOn []string) (*models.Feature, error) {
+func AddFeature(database *sql.DB, projectID, name, description, spec, milestoneID string, priority int, dependsOn []string, roadmapItemID string) (*models.Feature, error) {
 	id := slug(name)
 	f := &models.Feature{
-		ID:          id,
-		ProjectID:   projectID,
-		MilestoneID: milestoneID,
-		Name:        name,
-		Description: description,
-		Priority:    priority,
+		ID:            id,
+		ProjectID:     projectID,
+		MilestoneID:   milestoneID,
+		Name:          name,
+		Description:   description,
+		Spec:          spec,
+		Priority:      priority,
+		RoadmapItemID: roadmapItemID,
 	}
 	if err := db.CreateFeature(database, f); err != nil {
 		return nil, fmt.Errorf("creating feature: %w", err)
@@ -49,7 +51,7 @@ func AddFeature(database *sql.DB, projectID, name, description, milestoneID stri
 		ProjectID: projectID,
 		FeatureID: id,
 		EventType: "feature.created",
-		Data:      fmt.Sprintf(`{"name":%q,"priority":%d}`, name, priority),
+		Data:      fmt.Sprintf(`{"name":%q,"priority":%d,"description":%q,"has_spec":%t,"roadmap_item_id":%q}`, name, priority, description, spec != "", roadmapItemID),
 	})
 	return f, nil
 }
@@ -89,6 +91,85 @@ func GetNextWorkItem(database *sql.DB) (*models.WorkItem, error) {
 	}
 	w.Status = "active"
 	return w, nil
+}
+
+// GetWorkContext builds the full enriched context for a work item.
+// This is the single source of truth for what an agent needs — no OOB info required.
+func GetWorkContext(database *sql.DB, w *models.WorkItem) (*models.WorkContext, error) {
+	ctx := &models.WorkContext{WorkItem: w}
+
+	// Load feature with full spec
+	if f, err := db.GetFeature(database, w.FeatureID); err == nil {
+		ctx.Feature = f
+
+		// Load linked roadmap item
+		if f.RoadmapItemID != "" {
+			if ri, err := db.GetRoadmapItem(database, f.RoadmapItemID); err == nil {
+				ctx.RoadmapItem = ri
+			}
+		}
+	}
+
+	// Load active cycle
+	if c, err := db.GetActiveCycle(database, w.FeatureID); err == nil {
+		ctx.Cycle = c
+		for i := range models.CycleTypes {
+			if models.CycleTypes[i].Name == c.CycleType {
+				ctx.CycleType = &models.CycleTypes[i]
+				break
+			}
+		}
+		// Load cycle scores
+		if scores, err := db.ListCycleScores(database, c.ID); err == nil {
+			ctx.CycleScores = scores
+		}
+	}
+
+	// Load prior work results for this feature
+	if prior, err := db.ListWorkItemsForFeature(database, w.FeatureID); err == nil {
+		ctx.PriorResults = prior
+	}
+
+	// Build agent guidance — a human-readable summary of what to do
+	ctx.AgentGuidance = buildAgentGuidance(ctx)
+
+	return ctx, nil
+}
+
+func buildAgentGuidance(ctx *models.WorkContext) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("You are working on feature %q", ctx.Feature.Name))
+	if ctx.Feature.Description != "" {
+		b.WriteString(fmt.Sprintf(": %s", ctx.Feature.Description))
+	}
+	b.WriteString(fmt.Sprintf("\n\nCurrent task: %s (work type: %s)", ctx.WorkItem.AgentPrompt, ctx.WorkItem.WorkType))
+
+	if ctx.Feature.Spec != "" {
+		b.WriteString(fmt.Sprintf("\n\n## Feature Spec\n%s", ctx.Feature.Spec))
+	}
+
+	if ctx.Cycle != nil && ctx.CycleType != nil {
+		b.WriteString(fmt.Sprintf("\n\n## Cycle Context\nCycle type: %s (step %d/%d: %s)",
+			ctx.CycleType.Description, ctx.Cycle.CurrentStep+1, len(ctx.CycleType.Steps),
+			ctx.CycleType.Steps[ctx.Cycle.CurrentStep]))
+		b.WriteString(fmt.Sprintf("\nAll steps: %s", strings.Join(ctx.CycleType.Steps, " → ")))
+	}
+
+	if len(ctx.PriorResults) > 0 {
+		b.WriteString("\n\n## Prior Step Results")
+		for _, pr := range ctx.PriorResults {
+			if pr.Result != "" {
+				b.WriteString(fmt.Sprintf("\n- [%s] %s", pr.WorkType, pr.Result))
+			}
+		}
+	}
+
+	if ctx.RoadmapItem != nil {
+		b.WriteString(fmt.Sprintf("\n\n## Roadmap Context\nTitle: %s\nPriority: %s\nDescription: %s",
+			ctx.RoadmapItem.Title, ctx.RoadmapItem.Priority, ctx.RoadmapItem.Description))
+	}
+
+	return b.String()
 }
 
 // CompleteWorkItem marks the active work item as done.
@@ -154,11 +235,14 @@ func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*mode
 	}
 	c.StepName = ct.Steps[0]
 
+	// Build enriched prompt with feature context
+	prompt := buildWorkItemPrompt(database, featureID, cycleType, ct.Steps[0])
+
 	// Auto-create work item for the first cycle step
 	_ = db.CreateWorkItem(database, &models.WorkItem{
 		FeatureID:   featureID,
 		WorkType:    ct.Steps[0],
-		AgentPrompt: fmt.Sprintf("Cycle %s, step: %s for feature %s", cycleType, ct.Steps[0], featureID),
+		AgentPrompt: prompt,
 	})
 
 	_ = db.InsertEvent(database, &models.Event{
@@ -212,10 +296,11 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 		return db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed")
 	}
 	// Auto-create work item for the next cycle step
+	prompt := buildWorkItemPrompt(database, featureID, c.CycleType, ct.Steps[nextStep])
 	_ = db.CreateWorkItem(database, &models.WorkItem{
 		FeatureID:   featureID,
 		WorkType:    ct.Steps[nextStep],
-		AgentPrompt: fmt.Sprintf("Cycle %s, step: %s for feature %s", c.CycleType, ct.Steps[nextStep], featureID),
+		AgentPrompt: prompt,
 	})
 	return db.UpdateCycleInstance(database, c.ID, nextStep, c.Iteration, "active")
 }
@@ -290,4 +375,21 @@ func slug(name string) string {
 		return -1
 	}, s)
 	return s
+}
+
+// buildWorkItemPrompt creates an enriched agent prompt with feature context.
+func buildWorkItemPrompt(database *sql.DB, featureID, cycleType, stepName string) string {
+	f, err := db.GetFeature(database, featureID)
+	if err != nil {
+		return fmt.Sprintf("Cycle %s, step: %s for feature %s", cycleType, stepName, featureID)
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Cycle %s, step: %s for feature %q", cycleType, stepName, f.Name))
+	if f.Description != "" {
+		b.WriteString(fmt.Sprintf(" — %s", f.Description))
+	}
+	if f.Spec != "" {
+		b.WriteString(fmt.Sprintf("\n\nSpec: %s", f.Spec))
+	}
+	return b.String()
 }
