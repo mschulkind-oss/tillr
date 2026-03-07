@@ -71,6 +71,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	// API routes
 	mux.HandleFunc("/api/status", apiHandler(database, handleStatus))
 	mux.HandleFunc("/api/features", apiHandler(database, handleFeatures))
+	mux.HandleFunc("/api/features/", apiHandler(database, handleFeatures))
 	mux.HandleFunc("/api/milestones", apiHandler(database, handleMilestones))
 	mux.HandleFunc("/api/roadmap", apiHandler(database, handleRoadmap))
 	mux.HandleFunc("/api/roadmap/", apiHandler(database, handleRoadmapStatus))
@@ -110,6 +111,10 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 		if path == "/" || (!strings.Contains(path, ".") && !strings.HasPrefix(path, "/api/") && path != "/ws") {
 			r.URL.Path = "/"
 		}
+		// Prevent caching of static assets during development
+		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
 		fileServer.ServeHTTP(w, r)
 	})
 
@@ -120,7 +125,18 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 		go watchDBFile(dbPath, hub)
 	}
 
-	return http.ListenAndServe(addr, mux)
+	// Wrap mux with panic recovery
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("PANIC recovered in %s %s: %v", r.Method, r.URL.Path, rv)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		mux.ServeHTTP(w, r)
+	})
+
+	return http.ListenAndServe(addr, handler)
 }
 
 func watchDBFile(dbPath string, hub *wsHub) {
@@ -196,7 +212,30 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 			w.WriteHeader(http.StatusNotFound)
 			return writeJSON(w, map[string]string{"error": "feature not found"})
 		}
-		return writeJSON(w, f)
+		// Enrich with work items and cycle scores
+		workItems, _ := db.ListWorkItemsForFeature(database, id)
+		if workItems == nil {
+			workItems = []models.WorkItem{}
+		}
+		cycles, _ := db.ListCycleHistory(database, id)
+		if cycles == nil {
+			cycles = []models.CycleInstance{}
+		}
+		// Build enriched scores from all cycles
+		var allScores []models.CycleScore
+		for _, c := range cycles {
+			scores, _ := db.ListCycleScores(database, c.ID)
+			allScores = append(allScores, scores...)
+		}
+		if allScores == nil {
+			allScores = []models.CycleScore{}
+		}
+		return writeJSON(w, map[string]any{
+			"feature":    f,
+			"work_items": workItems,
+			"cycles":     cycles,
+			"scores":     allScores,
+		})
 	}
 
 	p, err := db.GetProject(database)
