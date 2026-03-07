@@ -12,6 +12,22 @@ function timeAgo(dateStr) {
     return Math.floor(diff / 86400) + 'd ago';
 }
 
+// Screen reader announcement utility
+App.announce = function(message, priority) {
+    var el = document.getElementById('sr-announcements');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'sr-announcements';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', priority || 'polite');
+        el.setAttribute('aria-atomic', 'true');
+        el.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);';
+        document.body.appendChild(el);
+    }
+    el.textContent = '';
+    setTimeout(function() { el.textContent = message; }, 100);
+};
+
 // =====================================================
 // AGENT DASHBOARD PAGE
 // =====================================================
@@ -786,6 +802,8 @@ App.showToast = function(message) {
     if (existing) existing.remove();
     var toast = document.createElement('div');
     toast.className = 'toast-notification';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
     toast.textContent = message;
     document.body.appendChild(toast);
     // Trigger reflow then add visible class
@@ -902,3 +920,16 @@ App.renderGitActivity = function() {
         return html;
     }).catch(function() { return ''; });
 };
+
+// =====================================================
+// ACCESSIBILITY: Announce page navigations to screen readers
+// =====================================================
+(function() {
+    var _origNavigate = App.navigate.bind(App);
+    App.navigate = async function(page, context) {
+        var result = await _origNavigate(page, context);
+        var label = page.charAt(0).toUpperCase() + page.slice(1);
+        App.announce(label + ' page loaded');
+        return result;
+    };
+})();
