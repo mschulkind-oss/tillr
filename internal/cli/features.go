@@ -6,6 +6,7 @@ import (
 
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -22,6 +23,10 @@ func init() {
 	featureCmd.AddCommand(featureRemoveCmd)
 	featureCmd.AddCommand(featureDepsCmd)
 	featureCmd.AddCommand(featureBatchCmd)
+	featureCmd.AddCommand(featureTagCmd)
+	featureCmd.AddCommand(featureUntagCmd)
+	featureCmd.AddCommand(featureTagsCmd)
+	featureCmd.AddCommand(featureEstimatesCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
 	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")
@@ -30,9 +35,12 @@ func init() {
 	featureAddCmd.Flags().String("spec", "", "Feature spec / acceptance criteria (detailed requirements)")
 	featureAddCmd.Flags().String("roadmap-item", "", "Link to originating roadmap item ID")
 	featureAddCmd.Flags().String("status", "draft", "Initial status (draft, planning, implementing, agent-qa, human-qa, done, blocked)")
+	featureAddCmd.Flags().Int("points", 0, "Story points (fibonacci: 1,2,3,5,8,13,21)")
+	featureAddCmd.Flags().String("size", "", "T-shirt size (XS, S, M, L, XL)")
 
 	featureListCmd.Flags().String("status", "", "Filter by status")
 	featureListCmd.Flags().String("milestone", "", "Filter by milestone")
+	featureListCmd.Flags().String("tag", "", "Filter by tag")
 
 	featureEditCmd.Flags().String("name", "", "New name")
 	featureEditCmd.Flags().String("description", "", "New description")
@@ -41,11 +49,15 @@ func init() {
 	featureEditCmd.Flags().String("milestone", "", "New milestone")
 	featureEditCmd.Flags().String("roadmap-item", "", "Link to roadmap item ID")
 	featureEditCmd.Flags().Int("priority", -1, "New priority")
+	featureEditCmd.Flags().Int("points", -1, "Story points (fibonacci: 1,2,3,5,8,13,21)")
+	featureEditCmd.Flags().String("size", "", "T-shirt size (XS, S, M, L, XL)")
 
 	featureBatchCmd.Flags().StringSlice("ids", nil, "Feature IDs to update (comma-separated)")
 	featureBatchCmd.Flags().String("status", "", "Set status for all features")
 	featureBatchCmd.Flags().String("milestone", "", "Set milestone for all features")
 	featureBatchCmd.Flags().Int("priority", -1, "Set priority for all features")
+
+	featureEstimatesCmd.Flags().String("milestone", "", "Filter by milestone")
 }
 
 var featureAddCmd = &cobra.Command{
@@ -79,10 +91,40 @@ var featureAddCmd = &cobra.Command{
 		spec, _ := cmd.Flags().GetString("spec")
 		roadmapItem, _ := cmd.Flags().GetString("roadmap-item")
 		status, _ := cmd.Flags().GetString("status")
+		points, _ := cmd.Flags().GetInt("points")
+		size, _ := cmd.Flags().GetString("size")
+
+		if points != 0 {
+			if err := validatePoints(points); err != nil {
+				return err
+			}
+		}
+		if size != "" {
+			if err := validateSize(size); err != nil {
+				return err
+			}
+			size = strings.ToUpper(size)
+		}
 
 		f, err := engine.AddFeature(database, p.ID, args[0], desc, spec, milestone, priority, deps, roadmapItem)
 		if err != nil {
 			return err
+		}
+
+		// Apply estimate fields
+		if points != 0 || size != "" {
+			estUpdates := map[string]any{}
+			if points != 0 {
+				estUpdates["estimate_points"] = points
+			}
+			if size != "" {
+				estUpdates["estimate_size"] = size
+			}
+			if err := db.UpdateFeature(database, f.ID, estUpdates); err != nil {
+				return fmt.Errorf("setting estimates: %w", err)
+			}
+			f.EstimatePoints = points
+			f.EstimateSize = size
 		}
 
 		// If status is not the default "draft", set it directly
@@ -111,6 +153,10 @@ var featureAddCmd = &cobra.Command{
 var featureListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List features",
+	Long: `List all features in the project, optionally filtered by status, milestone, or tag.
+
+Output includes feature ID, status, priority, and name. Use --json for
+structured output suitable for scripting or agent consumption.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -125,10 +171,32 @@ var featureListCmd = &cobra.Command{
 
 		status, _ := cmd.Flags().GetString("status")
 		milestone, _ := cmd.Flags().GetString("milestone")
+		tag, _ := cmd.Flags().GetString("tag")
 
-		features, err := db.ListFeatures(database, p.ID, status, milestone)
-		if err != nil {
-			return err
+		var features []models.Feature
+		if tag != "" {
+			features, err = db.GetFeaturesByTag(database, p.ID, tag)
+			if err != nil {
+				return err
+			}
+			if status != "" || milestone != "" {
+				var filtered []models.Feature
+				for _, f := range features {
+					if status != "" && f.Status != status {
+						continue
+					}
+					if milestone != "" && f.MilestoneID != milestone {
+						continue
+					}
+					filtered = append(filtered, f)
+				}
+				features = filtered
+			}
+		} else {
+			features, err = db.ListFeatures(database, p.ID, status, milestone)
+			if err != nil {
+				return err
+			}
 		}
 
 		if jsonOutput {
@@ -152,7 +220,11 @@ var featureListCmd = &cobra.Command{
 var featureShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show feature details",
-	Args:  cobra.ExactArgs(1),
+	Long: `Display detailed information about a specific feature including its status,
+priority, milestone, dependencies, tags, spec, and timestamps.
+
+Use 'lifecycle feature list' to find feature IDs.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -162,7 +234,7 @@ var featureShowCmd = &cobra.Command{
 
 		f, err := db.GetFeature(database, args[0])
 		if err != nil {
-			return fmt.Errorf("feature not found: %s", args[0])
+			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", args[0])
 		}
 
 		if jsonOutput {
@@ -182,6 +254,9 @@ var featureShowCmd = &cobra.Command{
 		if len(f.DependsOn) > 0 {
 			fmt.Printf("  Depends:   %s\n", strings.Join(f.DependsOn, ", "))
 		}
+		if len(f.Tags) > 0 {
+			fmt.Printf("  Tags:      %s\n", strings.Join(f.Tags, ", "))
+		}
 		if f.Description != "" {
 			fmt.Printf("  Desc:      %s\n", f.Description)
 		}
@@ -191,6 +266,12 @@ var featureShowCmd = &cobra.Command{
 		if f.RoadmapItemID != "" {
 			fmt.Printf("  Roadmap:   %s\n", f.RoadmapItemID)
 		}
+		if f.EstimatePoints > 0 {
+			fmt.Printf("  Points:    %d\n", f.EstimatePoints)
+		}
+		if f.EstimateSize != "" {
+			fmt.Printf("  Size:      %s\n", f.EstimateSize)
+		}
 		fmt.Printf("  Created:   %s\n", f.CreatedAt)
 		return nil
 	},
@@ -199,7 +280,13 @@ var featureShowCmd = &cobra.Command{
 var featureEditCmd = &cobra.Command{
 	Use:   "edit <id>",
 	Short: "Edit feature properties",
-	Args:  cobra.ExactArgs(1),
+	Long: `Update one or more properties of a feature. Status transitions are validated
+through the lifecycle engine to enforce the QA gate (features must pass
+through human-qa before being marked done).
+
+Editable fields: --name, --description, --spec, --status, --milestone,
+--roadmap-item, --priority.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -227,6 +314,25 @@ var featureEditCmd = &cobra.Command{
 		if v, _ := cmd.Flags().GetInt("priority"); v >= 0 && cmd.Flags().Changed("priority") {
 			updates["priority"] = v
 		}
+		if cmd.Flags().Changed("points") {
+			v, _ := cmd.Flags().GetInt("points")
+			if v > 0 {
+				if err := validatePoints(v); err != nil {
+					return err
+				}
+			}
+			updates["estimate_points"] = v
+		}
+		if cmd.Flags().Changed("size") {
+			v, _ := cmd.Flags().GetString("size")
+			if v != "" {
+				if err := validateSize(v); err != nil {
+					return err
+				}
+				v = strings.ToUpper(v)
+			}
+			updates["estimate_size"] = v
+		}
 
 		if len(updates) == 0 && newStatus == "" {
 			return fmt.Errorf("no changes specified")
@@ -234,7 +340,7 @@ var featureEditCmd = &cobra.Command{
 
 		if len(updates) > 0 {
 			if err := db.UpdateFeature(database, args[0], updates); err != nil {
-				return err
+				return fmt.Errorf("updating feature %q: %w", args[0], err)
 			}
 		}
 
@@ -261,7 +367,11 @@ var featureEditCmd = &cobra.Command{
 var featureRemoveCmd = &cobra.Command{
 	Use:   "remove <id>",
 	Short: "Remove a feature",
-	Args:  cobra.ExactArgs(1),
+	Long: `Permanently remove a feature from the project. This also removes any
+associated dependencies, tags, and work items.
+
+Use 'lifecycle feature list' to find feature IDs.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -270,7 +380,7 @@ var featureRemoveCmd = &cobra.Command{
 		defer database.Close() //nolint:errcheck
 
 		if err := db.DeleteFeature(database, args[0]); err != nil {
-			return err
+			return fmt.Errorf("removing feature %q: %w", args[0], err)
 		}
 
 		if jsonOutput {
@@ -284,7 +394,11 @@ var featureRemoveCmd = &cobra.Command{
 var featureDepsCmd = &cobra.Command{
 	Use:   "deps <id>",
 	Short: "Show dependency tree for a feature",
-	Args:  cobra.ExactArgs(1),
+	Long: `Display the dependency tree for a feature, showing what it depends on
+and what depends on it. Blocking dependencies are highlighted.
+
+Use 'lifecycle feature add --depends-on <id>' to create dependencies.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -295,7 +409,7 @@ var featureDepsCmd = &cobra.Command{
 		featureID := args[0]
 		f, err := db.GetFeature(database, featureID)
 		if err != nil {
-			return fmt.Errorf("feature not found: %s", featureID)
+			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", featureID)
 		}
 
 		dependents, _ := db.GetFeatureDependents(database, featureID)
@@ -409,7 +523,7 @@ var featureBatchCmd = &cobra.Command{
 				"agent-qa": true, "human-qa": true, "done": true, "blocked": true,
 			}
 			if !validStatuses[status] {
-				return fmt.Errorf("invalid status %q", status)
+				return fmt.Errorf("invalid status %q. Valid statuses: draft, planning, implementing, agent-qa, human-qa, done, blocked", status)
 			}
 			field, value = "status", status
 		case milestone != "":
@@ -442,4 +556,171 @@ func statusSymbol(status string) string {
 	default:
 		return "○"
 	}
+}
+
+var validFibonacci = map[int]bool{1: true, 2: true, 3: true, 5: true, 8: true, 13: true, 21: true}
+var validSizes = map[string]bool{"XS": true, "S": true, "M": true, "L": true, "XL": true}
+
+func validatePoints(points int) error {
+	if !validFibonacci[points] {
+		return fmt.Errorf("invalid story points %d: must be a fibonacci number (1, 2, 3, 5, 8, 13, 21)", points)
+	}
+	return nil
+}
+
+func validateSize(size string) error {
+	if !validSizes[strings.ToUpper(size)] {
+		return fmt.Errorf("invalid t-shirt size %q: must be one of XS, S, M, L, XL", size)
+	}
+	return nil
+}
+
+var featureEstimatesCmd = &cobra.Command{
+	Use:   "estimates",
+	Short: "Show estimation summary",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		milestone, _ := cmd.Flags().GetString("milestone")
+
+		summary, err := db.GetEstimationSummary(database, p.ID, milestone)
+		if err != nil {
+			return fmt.Errorf("getting estimation summary: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(summary)
+		}
+
+		fmt.Println("📊 Feature Estimates")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━")
+		fmt.Println()
+		fmt.Printf("Total points: %d (%d completed, %d remaining)\n",
+			summary.TotalPoints, summary.CompletedPoints, summary.RemainingPoints)
+		fmt.Println()
+
+		if len(summary.BySizeEntries) > 0 {
+			fmt.Println("By Size:")
+			for _, e := range summary.BySizeEntries {
+				noun := "features"
+				if e.Total == 1 {
+					noun = "feature"
+				}
+				fmt.Printf("  %-2s: %d %s (done: %d)\n", e.Size, e.Total, noun, e.Done)
+			}
+			fmt.Println()
+		}
+
+		fmt.Printf("Unestimated: %d features\n", summary.Unestimated)
+		return nil
+	},
+}
+
+var featureTagCmd = &cobra.Command{
+	Use:   "tag <feature-id> <tag1> [tag2...]",
+	Short: "Add tags to a feature",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(_ *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		featureID := args[0]
+		if _, err := db.GetFeature(database, featureID); err != nil {
+			return fmt.Errorf("feature not found: %s", featureID)
+		}
+
+		for _, tag := range args[1:] {
+			if err := db.AddFeatureTag(database, featureID, tag); err != nil {
+				return fmt.Errorf("adding tag %q: %w", tag, err)
+			}
+		}
+
+		tags, _ := db.GetFeatureTags(database, featureID)
+		if jsonOutput {
+			return printJSON(map[string]any{"feature_id": featureID, "tags": tags})
+		}
+		fmt.Printf("✓ Tagged %s: %s\n", featureID, strings.Join(args[1:], ", "))
+		return nil
+	},
+}
+
+var featureUntagCmd = &cobra.Command{
+	Use:   "untag <feature-id> <tag1> [tag2...]",
+	Short: "Remove tags from a feature",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(_ *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		featureID := args[0]
+		if _, err := db.GetFeature(database, featureID); err != nil {
+			return fmt.Errorf("feature not found: %s", featureID)
+		}
+
+		for _, tag := range args[1:] {
+			if err := db.RemoveFeatureTag(database, featureID, tag); err != nil {
+				return fmt.Errorf("removing tag %q: %w", tag, err)
+			}
+		}
+
+		tags, _ := db.GetFeatureTags(database, featureID)
+		if jsonOutput {
+			return printJSON(map[string]any{"feature_id": featureID, "tags": tags})
+		}
+		fmt.Printf("✓ Untagged %s: %s\n", featureID, strings.Join(args[1:], ", "))
+		return nil
+	},
+}
+
+var featureTagsCmd = &cobra.Command{
+	Use:   "tags",
+	Short: "List all tags with feature counts",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		tags, err := db.ListAllTags(database, p.ID)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(tags)
+		}
+
+		if len(tags) == 0 {
+			fmt.Println("No tags found.")
+			return nil
+		}
+
+		fmt.Printf("%-30s %s\n", "TAG", "FEATURES")
+		fmt.Println(strings.Repeat("─", 40))
+		for _, tc := range tags {
+			fmt.Printf("%-30s %d\n", tc.Tag, tc.Count)
+		}
+		return nil
+	},
 }

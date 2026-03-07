@@ -132,7 +132,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 		} else {
 			cfg := &config.Config{
 				ProjectDir: cwd,
-				DBPath:     filepath.Join(cwd, config.DefaultDBName),
+				DBPath:     config.DefaultDBName,
 				ServerPort: config.DefaultServerPort,
 			}
 			if err := config.Save(cfg); err != nil {

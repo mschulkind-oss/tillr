@@ -16,7 +16,7 @@ const (
 )
 
 type Config struct {
-	ProjectDir string `json:"project_dir" yaml:"-"`
+	ProjectDir string `json:"-" yaml:"-"`
 	DBPath     string `json:"db_path" yaml:"db_path"`
 	ServerPort int    `json:"server_port" yaml:"server_port"`
 

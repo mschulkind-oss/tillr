@@ -30,9 +30,9 @@ test-cov:
     go test ./... -v -coverprofile=coverage.out
     go tool cover -html=coverage.out -o coverage.html
 
-# Start the web viewer dev server
-dev:
-    go run ./cmd/lifecycle serve
+# Start the web viewer dev server (default port 3847, override with: just dev 3848)
+dev port="":
+    go run ./cmd/lifecycle serve {{ if port != "" { "--port " + port } else { "" } }}
 
 # Install the binary locally
 install:

@@ -79,8 +79,8 @@ func ListMilestones(db *sql.DB, projectID string) ([]models.Milestone, error) {
 
 func CreateFeature(db *sql.DB, f *models.Feature) error {
 	_, err := db.Exec(
-		`INSERT INTO features (id, project_id, milestone_id, name, description, spec, priority, roadmap_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.ID, f.ProjectID, nullStr(f.MilestoneID), f.Name, f.Description, f.Spec, f.Priority, f.RoadmapItemID,
+		`INSERT INTO features (id, project_id, milestone_id, name, description, spec, priority, roadmap_item_id, estimate_points, estimate_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.ProjectID, nullStr(f.MilestoneID), f.Name, f.Description, f.Spec, f.Priority, f.RoadmapItemID, f.EstimatePoints, f.EstimateSize,
 	)
 	return err
 }
@@ -89,25 +89,30 @@ func GetFeature(db *sql.DB, id string) (*models.Feature, error) {
 	row := db.QueryRow(`
 		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
 			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
-			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name, COALESCE(f.previous_status,'')
+			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name, COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
 		FROM features f
 		LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.id = ?`, id)
 	f := &models.Feature{}
 	err := row.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
-		&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus)
+		&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+		&f.EstimatePoints, &f.EstimateSize)
 	if err != nil {
 		return nil, err
 	}
 	deps, _ := featureDeps(db, id)
 	f.DependsOn = deps
+	tags, _ := GetFeatureTags(db, id)
+	f.Tags = tags
 	return f, nil
 }
 
 func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.Feature, error) {
 	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
 			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
-			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,'')
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
 		FROM features f LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.project_id = ?`
 	args := []any{projectID}
@@ -131,7 +136,8 @@ func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.F
 	for rows.Next() {
 		var f models.Feature
 		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
-			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus); err != nil {
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -155,6 +161,26 @@ func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.F
 			for i := range out {
 				if deps, ok := depMap[out[i].ID]; ok {
 					out[i].DependsOn = deps
+				}
+			}
+		}
+	}
+
+	// Bulk-load tags for all features
+	if len(out) > 0 {
+		tagRows, err := db.Query("SELECT feature_id, tag FROM feature_tags ORDER BY tag")
+		if err == nil {
+			defer tagRows.Close() //nolint:errcheck
+			tagMap := make(map[string][]string)
+			for tagRows.Next() {
+				var fid, t string
+				if err := tagRows.Scan(&fid, &t); err == nil {
+					tagMap[fid] = append(tagMap[fid], t)
+				}
+			}
+			for i := range out {
+				if tags, ok := tagMap[out[i].ID]; ok {
+					out[i].Tags = tags
 				}
 			}
 		}
@@ -209,9 +235,11 @@ func DeleteFeature(db *sql.DB, id string) error {
 
 func BatchUpdateFeatures(database *sql.DB, featureIDs []string, field, value string) (int, error) {
 	validFields := map[string]string{
-		"status":       "status",
-		"milestone_id": "milestone_id",
-		"priority":     "priority",
+		"status":          "status",
+		"milestone_id":    "milestone_id",
+		"priority":        "priority",
+		"estimate_points": "estimate_points",
+		"estimate_size":   "estimate_size",
 	}
 	col, ok := validFields[field]
 	if !ok {
@@ -260,6 +288,69 @@ func featureDeps(db *sql.DB, featureID string) ([]string, error) {
 		deps = append(deps, d)
 	}
 	return deps, rows.Err()
+}
+
+// GetEstimationSummary returns aggregate estimation data for a project, optionally filtered by milestone.
+func GetEstimationSummary(database *sql.DB, projectID, milestoneID string) (*models.EstimationSummary, error) {
+	q := `SELECT COALESCE(SUM(estimate_points),0), COALESCE(SUM(CASE WHEN status='done' THEN estimate_points ELSE 0 END),0)
+		FROM features WHERE project_id = ?`
+	args := []any{projectID}
+	if milestoneID != "" {
+		q += " AND milestone_id = ?"
+		args = append(args, milestoneID)
+	}
+
+	var total, completed int
+	if err := database.QueryRow(q, args...).Scan(&total, &completed); err != nil {
+		return nil, err
+	}
+
+	sizeQ := `SELECT COALESCE(estimate_size,'') AS sz, COUNT(*) AS cnt,
+			SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done_cnt
+		FROM features WHERE project_id = ? AND estimate_size != ''`
+	sizeArgs := []any{projectID}
+	if milestoneID != "" {
+		sizeQ += " AND milestone_id = ?"
+		sizeArgs = append(sizeArgs, milestoneID)
+	}
+	sizeQ += " GROUP BY estimate_size ORDER BY CASE estimate_size WHEN 'XS' THEN 1 WHEN 'S' THEN 2 WHEN 'M' THEN 3 WHEN 'L' THEN 4 WHEN 'XL' THEN 5 ELSE 6 END"
+
+	sizeRows, err := database.Query(sizeQ, sizeArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer sizeRows.Close() //nolint:errcheck
+
+	var entries []models.EstimationSizeEntry
+	for sizeRows.Next() {
+		var e models.EstimationSizeEntry
+		if err := sizeRows.Scan(&e.Size, &e.Total, &e.Done); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if err := sizeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	unQ := `SELECT COUNT(*) FROM features WHERE project_id = ? AND estimate_points = 0 AND (estimate_size = '' OR estimate_size IS NULL)`
+	unArgs := []any{projectID}
+	if milestoneID != "" {
+		unQ += " AND milestone_id = ?"
+		unArgs = append(unArgs, milestoneID)
+	}
+	var unestimated int
+	if err := database.QueryRow(unQ, unArgs...).Scan(&unestimated); err != nil {
+		return nil, err
+	}
+
+	return &models.EstimationSummary{
+		TotalPoints:     total,
+		CompletedPoints: completed,
+		RemainingPoints: total - completed,
+		BySizeEntries:   entries,
+		Unestimated:     unestimated,
+	}, nil
 }
 
 // --- Work Items ---
@@ -2349,4 +2440,158 @@ func RemoveFromIndex(database *sql.DB, entityType, entityID string) error {
 		entityType, entityID,
 	)
 	return err
+}
+
+// GetTimeTrackingSummary returns time tracking summary for a project (stub).
+func GetTimeTrackingSummary(_ *sql.DB, _ string) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+// --- Feature Tags ---
+
+func AddFeatureTag(database *sql.DB, featureID, tag string) error {
+	_, err := database.Exec("INSERT OR IGNORE INTO feature_tags (feature_id, tag) VALUES (?, ?)", featureID, tag)
+	return err
+}
+
+func RemoveFeatureTag(database *sql.DB, featureID, tag string) error {
+	_, err := database.Exec("DELETE FROM feature_tags WHERE feature_id = ? AND tag = ?", featureID, tag)
+	return err
+}
+
+func GetFeatureTags(database *sql.DB, featureID string) ([]string, error) {
+	rows, err := database.Query("SELECT tag FROM feature_tags WHERE feature_id = ? ORDER BY tag", featureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var tags []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
+func ListAllTags(database *sql.DB, projectID string) ([]models.TagCount, error) {
+	rows, err := database.Query(`
+		SELECT ft.tag, COUNT(*) as cnt
+		FROM feature_tags ft
+		JOIN features f ON ft.feature_id = f.id
+		WHERE f.project_id = ?
+		GROUP BY ft.tag
+		ORDER BY cnt DESC, ft.tag`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.TagCount
+	for rows.Next() {
+		var tc models.TagCount
+		if err := rows.Scan(&tc.Tag, &tc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, tc)
+	}
+	return out, rows.Err()
+}
+
+func GetFeaturesByTag(database *sql.DB, projectID, tag string) ([]models.Feature, error) {
+	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		JOIN feature_tags ft ON f.id = ft.feature_id
+		WHERE f.project_id = ? AND ft.tag = ?
+		ORDER BY f.priority DESC, f.created_at`
+	rows, err := database.Query(q, projectID, tag)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Feature
+	for rows.Next() {
+		var f models.Feature
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Bulk-load tags for returned features
+	if len(out) > 0 {
+		tagRows, err := database.Query("SELECT feature_id, tag FROM feature_tags ORDER BY tag")
+		if err == nil {
+			defer tagRows.Close() //nolint:errcheck
+			tagMap := make(map[string][]string)
+			for tagRows.Next() {
+				var fid, t string
+				if err := tagRows.Scan(&fid, &t); err == nil {
+					tagMap[fid] = append(tagMap[fid], t)
+				}
+			}
+			for i := range out {
+				if tags, ok := tagMap[out[i].ID]; ok {
+					out[i].Tags = tags
+				}
+			}
+		}
+	}
+
+	return out, nil
+}
+
+// GetCompletedFeatures returns features matching given statuses, optionally filtered by milestone and date.
+func GetCompletedFeatures(database *sql.DB, projectID, since, milestoneID string, statuses []string) ([]models.Feature, error) {
+	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+FROM features f LEFT JOIN milestones m ON f.milestone_id = m.id
+WHERE f.project_id = ?`
+	args := []any{projectID}
+	if len(statuses) > 0 {
+		placeholders := make([]string, len(statuses))
+		for i, s := range statuses {
+			placeholders[i] = "?"
+			args = append(args, s)
+		}
+		q += " AND f.status IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if milestoneID != "" {
+		q += " AND f.milestone_id = ?"
+		args = append(args, milestoneID)
+	}
+	if since != "" {
+		q += " AND f.updated_at >= ?"
+		args = append(args, since)
+	}
+	q += " ORDER BY f.updated_at DESC"
+	rows, err := database.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.Feature
+	for rows.Next() {
+		var f models.Feature
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

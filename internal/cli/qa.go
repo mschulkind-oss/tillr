@@ -80,7 +80,7 @@ var qaApproveCmd = &cobra.Command{
 
 		notes, _ := cmd.Flags().GetString("notes")
 		if err := engine.ApproveFeatureQA(database, p.ID, args[0], notes); err != nil {
-			return err
+			return fmt.Errorf("approving feature %q: %w", args[0], err)
 		}
 
 		if jsonOutput {
@@ -109,7 +109,7 @@ var qaRejectCmd = &cobra.Command{
 
 		notes, _ := cmd.Flags().GetString("notes")
 		if err := engine.RejectFeatureQA(database, p.ID, args[0], notes); err != nil {
-			return err
+			return fmt.Errorf("rejecting feature %q: %w", args[0], err)
 		}
 
 		if jsonOutput {
@@ -133,7 +133,7 @@ var qaChecklistCmd = &cobra.Command{
 
 		f, err := db.GetFeature(database, args[0])
 		if err != nil {
-			return fmt.Errorf("feature not found: %s", args[0])
+			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", args[0])
 		}
 
 		results, err := db.ListQAResults(database, args[0])

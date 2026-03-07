@@ -87,7 +87,7 @@ var gitLinkCmd = &cobra.Command{
 		// Verify feature exists and get project ID
 		feat, err := db.GetFeature(database, featureID)
 		if err != nil {
-			return fmt.Errorf("feature not found: %s", featureID)
+			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", featureID)
 		}
 
 		// Store as an event

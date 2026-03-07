@@ -52,7 +52,7 @@ var milestoneAddCmd = &cobra.Command{
 		}
 
 		if err := db.CreateMilestone(database, m); err != nil {
-			return err
+			return fmt.Errorf("creating milestone %q: %w", args[0], err)
 		}
 
 		_ = db.InsertEvent(database, &models.Event{
@@ -124,7 +124,7 @@ var milestoneShowCmd = &cobra.Command{
 
 		m, err := db.GetMilestone(database, args[0])
 		if err != nil {
-			return fmt.Errorf("milestone not found: %s", args[0])
+			return fmt.Errorf("milestone %q not found. Run 'lifecycle milestone list' to see available milestones", args[0])
 		}
 
 		if jsonOutput {

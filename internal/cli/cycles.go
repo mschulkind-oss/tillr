@@ -65,7 +65,7 @@ var cycleStartCmd = &cobra.Command{
 
 		c, err := engine.StartCycle(database, p.ID, args[1], args[0])
 		if err != nil {
-			return err
+			return fmt.Errorf("starting %s cycle for feature %q: %w", args[0], args[1], err)
 		}
 
 		if jsonOutput {
@@ -166,7 +166,7 @@ var cycleScoreCmd = &cobra.Command{
 
 		score, err := strconv.ParseFloat(args[0], 64)
 		if err != nil {
-			return fmt.Errorf("invalid score: %s", args[0])
+			return fmt.Errorf("invalid score %q: must be a number (e.g., 8.5)", args[0])
 		}
 
 		p, err := db.GetProject(database)
@@ -181,7 +181,7 @@ var cycleScoreCmd = &cobra.Command{
 			// Try to find from active work item
 			w, err := db.GetActiveWorkItem(database)
 			if err != nil {
-				return fmt.Errorf("no active work item and no --feature specified")
+				return fmt.Errorf("no active work item and no --feature specified. Use --feature <id> or start work with 'lifecycle next'")
 			}
 			featureID = w.FeatureID
 		}

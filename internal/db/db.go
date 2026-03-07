@@ -65,6 +65,11 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
+// ExpectedMigrationCount returns the number of migrations defined in the schema.
+func ExpectedMigrationCount() int {
+	return len(migrations)
+}
+
 var migrations = []string{
 	// Migration 1: Core tables
 	`CREATE TABLE projects (
@@ -364,4 +369,18 @@ var migrations = []string{
 
 	INSERT OR IGNORE INTO search_fts (entity_type, entity_id, title, content)
 	SELECT 'idea', CAST(id AS TEXT), title, COALESCE(raw_input, '') FROM idea_queue;`,
+
+	// Migration 15: Feature tags/labels
+	`CREATE TABLE IF NOT EXISTS feature_tags (
+		feature_id TEXT NOT NULL,
+		tag TEXT NOT NULL,
+		created_at DATETIME DEFAULT (datetime('now')),
+		PRIMARY KEY (feature_id, tag),
+		FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_feature_tags_tag ON feature_tags(tag);`,
+
+	// Migration 16: Feature estimation (story points + t-shirt sizing)
+	`ALTER TABLE features ADD COLUMN estimate_points INTEGER NOT NULL DEFAULT 0;
+	 ALTER TABLE features ADD COLUMN estimate_size TEXT NOT NULL DEFAULT '';`,
 }
