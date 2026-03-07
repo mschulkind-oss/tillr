@@ -292,6 +292,7 @@ const App = {
             case 'ideas': return App.renderIdeas();
             case 'context': return App.renderContext();
             case 'spec': return App.renderSpec();
+            case 'adrs': return App.renderDecisions();
             default: return `<div class="empty-state">
                 <div class="empty-state-icon">🧭</div>
                 <div class="empty-state-text">Page not found</div>

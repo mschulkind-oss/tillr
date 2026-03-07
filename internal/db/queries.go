@@ -2144,3 +2144,73 @@ func ReclaimStaleWorkItems(database *sql.DB, staleMins int) (int, error) {
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// --- Decisions (ADRs) ---
+
+func CreateDecision(database *sql.DB, d *models.Decision) error {
+	if d.Status == "" {
+		d.Status = "proposed"
+	}
+	_, err := database.Exec(
+		`INSERT INTO decisions (id, title, status, context, decision, consequences, feature_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Title, d.Status, nullStr(d.Context), nullStr(d.Decision), nullStr(d.Consequences), nullStr(d.FeatureID),
+	)
+	return err
+}
+
+func GetDecision(database *sql.DB, id string) (*models.Decision, error) {
+	row := database.QueryRow(`SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(feature_id,''), created_at, updated_at
+		FROM decisions WHERE id = ?`, id)
+	d := &models.Decision{}
+	err := row.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func ListDecisions(database *sql.DB, status string) ([]models.Decision, error) {
+	q := `SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(feature_id,''), created_at, updated_at
+		FROM decisions`
+	var args []any
+	if status != "" {
+		q += " WHERE status = ?"
+		args = append(args, status)
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := database.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying decisions: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Decision
+	for rows.Next() {
+		var d models.Decision
+		if err := rows.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func UpdateDecision(database *sql.DB, id string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	var setClauses []string
+	var args []any
+	for col, val := range updates {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	setClauses = append(setClauses, "updated_at = datetime('now')")
+	args = append(args, id)
+	_, err := database.Exec(
+		fmt.Sprintf("UPDATE decisions SET %s WHERE id = ?", strings.Join(setClauses, ", ")),
+		args...,
+	)
+	return err
+}

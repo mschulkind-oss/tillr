@@ -132,6 +132,10 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	// Spec document route
 	mux.HandleFunc("/api/spec-document", apiHandler(database, handleSpecDocument))
 
+	// Decision log (ADRs) routes
+	mux.HandleFunc("/api/decisions", apiHandler(database, handleDecisions))
+	mux.HandleFunc("/api/decisions/", apiHandler(database, handleDecisionDetail))
+
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -1796,4 +1800,123 @@ func handleQueue(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 		return fmt.Errorf("getting queue stats: %w", err)
 	}
 	return writeJSON(w, models.QueueResponse{Queue: queue, Stats: *stats})
+}
+
+// --- Decision log (ADR) handlers ---
+
+func handleDecisions(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	if r.Method == "POST" {
+		var body struct {
+			Title        string `json:"title"`
+			Status       string `json:"status"`
+			Context      string `json:"context"`
+			Decision     string `json:"decision"`
+			Consequences string `json:"consequences"`
+			FeatureID    string `json:"feature_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Title == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "title is required"})
+		}
+		if body.Status == "" {
+			body.Status = "proposed"
+		}
+		id := strings.ToLower(strings.ReplaceAll(body.Title, " ", "-"))
+		d := &models.Decision{
+			ID:           id,
+			Title:        body.Title,
+			Status:       body.Status,
+			Context:      body.Context,
+			Decision:     body.Decision,
+			Consequences: body.Consequences,
+			FeatureID:    body.FeatureID,
+		}
+		if err := db.CreateDecision(database, d); err != nil {
+			return fmt.Errorf("creating decision: %w", err)
+		}
+		created, err := db.GetDecision(database, id)
+		if err != nil {
+			return fmt.Errorf("fetching created decision: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
+	status := r.URL.Query().Get("status")
+	decisions, err := db.ListDecisions(database, status)
+	if err != nil {
+		return err
+	}
+	if decisions == nil {
+		decisions = []models.Decision{}
+	}
+	return writeJSON(w, decisions)
+}
+
+func handleDecisionDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	id := strings.TrimPrefix(r.URL.Path, "/api/decisions/")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "decision ID required"})
+	}
+
+	if r.Method == "PATCH" {
+		var body struct {
+			Title        *string `json:"title"`
+			Status       *string `json:"status"`
+			Context      *string `json:"context"`
+			Decision     *string `json:"decision"`
+			Consequences *string `json:"consequences"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		updates := map[string]any{}
+		if body.Title != nil {
+			updates["title"] = *body.Title
+		}
+		if body.Status != nil {
+			validStatuses := map[string]bool{
+				"proposed": true, "accepted": true, "rejected": true,
+				"superseded": true, "deprecated": true,
+			}
+			if !validStatuses[*body.Status] {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "invalid status"})
+			}
+			updates["status"] = *body.Status
+		}
+		if body.Context != nil {
+			updates["context"] = *body.Context
+		}
+		if body.Decision != nil {
+			updates["decision"] = *body.Decision
+		}
+		if body.Consequences != nil {
+			updates["consequences"] = *body.Consequences
+		}
+		if len(updates) > 0 {
+			if err := db.UpdateDecision(database, id, updates); err != nil {
+				return fmt.Errorf("updating decision: %w", err)
+			}
+		}
+		d, err := db.GetDecision(database, id)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return writeJSON(w, map[string]string{"error": "decision not found"})
+		}
+		return writeJSON(w, d)
+	}
+
+	d, err := db.GetDecision(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "decision not found"})
+	}
+	return writeJSON(w, d)
 }
