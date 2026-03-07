@@ -386,4 +386,51 @@ var migrations = []string{
 
 	// Migration 17: Add superseded_by column to decisions for ADR linking
 	`ALTER TABLE decisions ADD COLUMN superseded_by TEXT DEFAULT '';`,
+
+	// Migration 18: Discussion votes/reactions
+	`CREATE TABLE discussion_votes (
+		discussion_id INTEGER NOT NULL REFERENCES discussions(id),
+		voter TEXT NOT NULL,
+		reaction TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(discussion_id, voter, reaction)
+	);
+
+	CREATE INDEX idx_discussion_votes_discussion ON discussion_votes(discussion_id);`,
+
+	// Migration 19: Feature pull request links
+	`CREATE TABLE feature_prs (
+		feature_id TEXT NOT NULL REFERENCES features(id),
+		pr_url TEXT NOT NULL,
+		pr_number INTEGER,
+		repo TEXT,
+		status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed','merged')),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (feature_id, pr_url)
+	);
+
+	CREATE INDEX idx_feature_prs_feature ON feature_prs(feature_id);`,
+
+	// Migration 20: Sprint planning tables
+	`CREATE TABLE IF NOT EXISTS sprints (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		name TEXT NOT NULL,
+		goal TEXT NOT NULL DEFAULT '',
+		start_date TEXT NOT NULL,
+		end_date TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','closed')),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS sprint_features (
+		sprint_id TEXT NOT NULL REFERENCES sprints(id),
+		feature_id TEXT NOT NULL REFERENCES features(id),
+		PRIMARY KEY (sprint_id, feature_id)
+	);
+
+	CREATE INDEX idx_sprints_project ON sprints(project_id);
+	CREATE INDEX idx_sprints_status ON sprints(status);
+	CREATE INDEX idx_sprint_features_feature ON sprint_features(feature_id);`,
 }

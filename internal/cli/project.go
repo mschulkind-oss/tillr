@@ -13,15 +13,65 @@ import (
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
 	"github.com/mschulkind/lifecycle/internal/export"
+	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init [project-name]",
 	Short: "Initialize a new lifecycle project",
-	Args:  cobra.ExactArgs(1),
+	Long: `Initialize a new lifecycle project in the current directory.
+
+Use --template to pre-populate the project with milestones, features,
+roadmap items, and discussions for common project types.
+
+Use --list-templates to see available templates.`,
+	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		listTemplates, _ := cmd.Flags().GetBool("list-templates")
+		if listTemplates {
+			type templateInfo struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}
+			var infos []templateInfo
+			for _, name := range templateNames() {
+				infos = append(infos, templateInfo{
+					Name:        name,
+					Description: projectTemplates[name].Description,
+				})
+			}
+			infos = append(infos, templateInfo{
+				Name:        "empty",
+				Description: "No template (default, blank project)",
+			})
+
+			if jsonOutput {
+				return printJSON(infos)
+			}
+			fmt.Println("Available project templates:")
+			fmt.Println()
+			for _, t := range infos {
+				fmt.Printf("  %-12s %s\n", t.Name, t.Description)
+			}
+			fmt.Println()
+			fmt.Println("Usage: lifecycle init <name> --template <template>")
+			return nil
+		}
+
+		if len(args) == 0 {
+			return fmt.Errorf("requires a project name argument (or use --list-templates)")
+		}
 		name := args[0]
+
+		templateName, _ := cmd.Flags().GetString("template")
+		if templateName != "" && templateName != "empty" {
+			if _, ok := projectTemplates[templateName]; !ok {
+				return fmt.Errorf("unknown template %q (available: %s, empty)",
+					templateName, strings.Join(templateNames(), ", "))
+			}
+		}
+
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -47,17 +97,39 @@ var initCmd = &cobra.Command{
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Suspend webhook dispatch during init+template to avoid
+		// concurrent goroutines fighting for the DB lock.
+		savedDispatch := db.WebhookDispatchFunc
+		db.WebhookDispatchFunc = nil
+		defer func() { db.WebhookDispatchFunc = savedDispatch }()
+
 		p, err := engine.InitProject(database, name)
 		if err != nil {
 			return err
 		}
 
+		var templateCreated int
+		if templateName != "" && templateName != "empty" {
+			templateCreated, err = applyTemplate(database, p.ID, templateName)
+			if err != nil {
+				return fmt.Errorf("applying template %q: %w", templateName, err)
+			}
+		}
+
 		if jsonOutput {
-			return printJSON(p)
+			result := map[string]any{
+				"project":  p,
+				"template": templateName,
+				"created":  templateCreated,
+			}
+			return printJSON(result)
 		}
 		fmt.Printf("✓ Initialized project %q in %s\n", p.Name, cwd)
 		fmt.Printf("  Database: %s\n", cfg.DBPath)
 		fmt.Printf("  Config:   %s\n", cfgPath)
+		if templateName != "" && templateName != "empty" {
+			fmt.Printf("  Template: %s (%d items created)\n", templateName, templateCreated)
+		}
 		return nil
 	},
 }
@@ -549,7 +621,14 @@ var historyExportCmd = &cobra.Command{
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Full-text search across project data",
-	Args:  cobra.ExactArgs(1),
+	Long: `Search features, roadmap items, ideas, and events using full-text search.
+
+Supports prefix matching (e.g., "feat" matches "feature"), multi-word queries,
+and results grouped by entity type with context snippets.`,
+	Args: cobra.ExactArgs(1),
+	Example: `  lifecycle search auth
+  lifecycle search "user login" --type feature
+  lifecycle search deploy --limit 5`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -557,30 +636,89 @@ var searchCmd = &cobra.Command{
 		}
 		defer database.Close() //nolint:errcheck
 
-		p, err := db.GetProject(database)
-		if err != nil {
-			return err
-		}
+		searchType, _ := cmd.Flags().GetString("type")
+		limit, _ := cmd.Flags().GetInt("limit")
 
-		events, err := db.SearchEvents(database, p.ID, args[0])
+		results, err := db.SearchFTSFiltered(database, args[0], searchType, limit)
 		if err != nil {
-			return err
+			return fmt.Errorf("search failed: %w", err)
 		}
 
 		if jsonOutput {
-			return printJSON(events)
+			grouped := groupSearchResults(args[0], results)
+			return printJSON(grouped)
 		}
 
-		if len(events) == 0 {
+		if len(results) == 0 {
 			fmt.Println("No results found.")
 			return nil
 		}
-		for _, e := range events {
-			ts := e.CreatedAt
-			fmt.Printf("%s  %s  %s\n", ts, e.EventType, e.Data)
-		}
+
+		printGroupedResults(args[0], results)
 		return nil
 	},
+}
+
+func groupSearchResults(query string, results []models.SearchResult) models.GroupedSearchResults {
+	groups := make(map[string][]models.SearchResult)
+	var orderedTypes []string
+	seen := make(map[string]bool)
+
+	for _, r := range results {
+		if !seen[r.EntityType] {
+			seen[r.EntityType] = true
+			orderedTypes = append(orderedTypes, r.EntityType)
+		}
+		groups[r.EntityType] = append(groups[r.EntityType], r)
+	}
+
+	return models.GroupedSearchResults{
+		Query:        query,
+		Total:        len(results),
+		Groups:       groups,
+		OrderedTypes: orderedTypes,
+	}
+}
+
+func printGroupedResults(query string, results []models.SearchResult) {
+	grouped := groupSearchResults(query, results)
+
+	fmt.Printf("Search: %q — %d result(s)\n\n", query, grouped.Total)
+
+	typeLabels := map[string]string{
+		"feature": "Features",
+		"roadmap": "Roadmap Items",
+		"idea":    "Ideas",
+		"event":   "Events",
+	}
+
+	for _, entityType := range grouped.OrderedTypes {
+		items := grouped.Groups[entityType]
+		label := typeLabels[entityType]
+		if label == "" {
+			label = strings.Title(entityType) //nolint:staticcheck
+		}
+		fmt.Printf("── %s (%d) ──\n", label, len(items))
+		for _, r := range items {
+			snippet := highlightSnippet(r.Snippet)
+			fmt.Printf("  [%s] %s\n", r.EntityID, r.Title)
+			if snippet != "" {
+				fmt.Printf("         %s\n", snippet)
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// highlightSnippet converts FTS5 snippet markers to terminal-friendly highlights.
+func highlightSnippet(snippet string) string {
+	if snippet == "" {
+		return ""
+	}
+	// Replace FTS5 markers with ANSI bold
+	s := strings.ReplaceAll(snippet, ">>>>", "\033[1m")
+	s = strings.ReplaceAll(s, "<<<<", "\033[0m")
+	return s
 }
 
 var logCmd = &cobra.Command{
@@ -621,6 +759,9 @@ var logCmd = &cobra.Command{
 }
 
 func init() {
+	initCmd.Flags().String("template", "", "Project template (web-app, cli-tool, library, empty)")
+	initCmd.Flags().Bool("list-templates", false, "List available project templates")
+
 	historyCmd.Flags().String("feature", "", "Filter by feature ID")
 	historyCmd.Flags().String("type", "", "Filter by event type")
 	historyCmd.Flags().String("since", "", "Filter by date (ISO 8601)")
@@ -634,6 +775,9 @@ func init() {
 	historyExportCmd.Flags().StringP("output", "o", "", "Write to file instead of stdout")
 
 	historyCmd.AddCommand(historyExportCmd)
+
+	searchCmd.Flags().String("type", "", "Filter by entity type (feature, roadmap, idea)")
+	searchCmd.Flags().Int("limit", 20, "Max results to return")
 }
 
 func eventIcon(eventType string) string {

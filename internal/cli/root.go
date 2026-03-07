@@ -135,6 +135,8 @@ func init() {
 	rootCmd.AddCommand(webhookCmd)
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(restoreCmd)
+	rootCmd.AddCommand(sprintCmd)
+	rootCmd.AddCommand(prCmd)
 
 	// Short aliases for common commands (CLI Aliases roadmap item)
 	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))
@@ -144,6 +146,7 @@ func init() {
 	rootCmd.AddCommand(aliasCmd("d", discussCmd, "Alias for 'discuss'"))
 	rootCmd.AddCommand(aliasCmd("q", qaCmd, "Alias for 'qa'"))
 	rootCmd.AddCommand(aliasCmd("s", searchCmd, "Alias for 'search'"))
+	rootCmd.AddCommand(aliasCmd("sp", sprintCmd, "Alias for 'sprint'"))
 }
 
 func aliasCmd(name string, target *cobra.Command, short string) *cobra.Command {

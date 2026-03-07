@@ -1055,6 +1055,7 @@ func GetDiscussion(db *sql.DB, id int) (*models.Discussion, error) {
 	comments, _ := ListDiscussionComments(db, d.ID)
 	d.Comments = comments
 	d.CommentCount = len(comments)
+	d.Votes = getDiscussionVoteCounts(db, d.ID)
 	return d, nil
 }
 
@@ -1086,6 +1087,7 @@ func ListDiscussions(db *sql.DB, projectID, featureID, status string) ([]models.
 			&d.CreatedAt, &d.UpdatedAt, &d.CommentCount); err != nil {
 			return nil, err
 		}
+		d.Votes = getDiscussionVoteCounts(db, d.ID)
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -1128,6 +1130,63 @@ func ListDiscussionComments(db *sql.DB, discussionID int) ([]models.DiscussionCo
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// --- Discussion Votes ---
+
+// ValidReactions is the set of allowed discussion reactions.
+var ValidReactions = map[string]bool{
+	"👍": true, "👎": true, "🎉": true, "❤️": true, "🤔": true,
+}
+
+func AddDiscussionVote(db *sql.DB, v *models.DiscussionVote) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO discussion_votes (discussion_id, voter, reaction) VALUES (?, ?, ?)`,
+		v.DiscussionID, v.Voter, v.Reaction,
+	)
+	return err
+}
+
+func RemoveDiscussionVote(db *sql.DB, discussionID int, voter, reaction string) error {
+	_, err := db.Exec(
+		`DELETE FROM discussion_votes WHERE discussion_id = ? AND voter = ? AND reaction = ?`,
+		discussionID, voter, reaction,
+	)
+	return err
+}
+
+func GetDiscussionVotes(db *sql.DB, discussionID int) (*models.VoteSummary, error) {
+	rows, err := db.Query(
+		`SELECT reaction, COUNT(*) FROM discussion_votes WHERE discussion_id = ? GROUP BY reaction ORDER BY COUNT(*) DESC`,
+		discussionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	summary := &models.VoteSummary{
+		DiscussionID: discussionID,
+		Counts:       make(map[string]int),
+	}
+	for rows.Next() {
+		var reaction string
+		var count int
+		if err := rows.Scan(&reaction, &count); err != nil {
+			return nil, err
+		}
+		summary.Counts[reaction] = count
+		summary.Total += count
+	}
+	return summary, rows.Err()
+}
+
+func getDiscussionVoteCounts(db *sql.DB, discussionID int) map[string]int {
+	summary, err := GetDiscussionVotes(db, discussionID)
+	if err != nil || summary.Total == 0 {
+		return nil
+	}
+	return summary.Counts
 }
 
 // --- Helpers ---
@@ -2385,21 +2444,82 @@ func SupersedeDecision(database *sql.DB, oldID, newID string) error {
 
 // --- FTS5 Search ---
 
+// BuildFTSQuery converts a user query string into FTS5 syntax with prefix matching.
+// It handles special characters, multi-word queries, and adds * suffix for prefix matching.
+func BuildFTSQuery(userQuery string) string {
+	userQuery = strings.TrimSpace(userQuery)
+	if userQuery == "" {
+		return ""
+	}
+
+	// Remove FTS5 special characters that could cause syntax errors
+	replacer := strings.NewReplacer(
+		"(", " ", ")", " ",
+		":", " ", "\"", " ",
+		"'", " ", ";", " ",
+		"!", " ", "^", " ",
+		"{", " ", "}", " ",
+		"[", " ", "]", " ",
+	)
+	cleaned := replacer.Replace(userQuery)
+
+	words := strings.Fields(cleaned)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// Each word gets a * suffix for prefix matching
+	var terms []string
+	for _, w := range words {
+		if w == "AND" || w == "OR" || w == "NOT" || w == "NEAR" {
+			w = strings.ToLower(w)
+		}
+		terms = append(terms, w+"*")
+	}
+	return strings.Join(terms, " ")
+}
+
 // SearchFTS performs a full-text search across features, roadmap items, and ideas
 // using the FTS5 index. Results are ranked by relevance and include highlighted snippets.
 func SearchFTS(database *sql.DB, query string, limit int) ([]models.SearchResult, error) {
+	return SearchFTSFiltered(database, query, "", limit)
+}
+
+// SearchFTSFiltered performs a full-text search with optional entity type filtering.
+// entityType can be empty (search all), or one of: feature, roadmap, idea, event, discussion.
+func SearchFTSFiltered(database *sql.DB, query string, entityType string, limit int) ([]models.SearchResult, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = 20
 	}
-	rows, err := database.Query(`
-		SELECT entity_type, entity_id, title,
-			snippet(search_fts, 3, '<mark>', '</mark>', '...', 32) as snippet,
-			rank
-		FROM search_fts
-		WHERE search_fts MATCH ?
-		ORDER BY rank
-		LIMIT ?
-	`, query, limit)
+
+	ftsQuery := BuildFTSQuery(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+
+	var rows *sql.Rows
+	var err error
+	if entityType != "" {
+		rows, err = database.Query(`
+			SELECT entity_type, entity_id, title,
+				snippet(search_fts, 3, '>>>>', '<<<<', '...', 48) as snippet,
+				rank
+			FROM search_fts
+			WHERE search_fts MATCH ? AND entity_type = ?
+			ORDER BY rank
+			LIMIT ?
+		`, ftsQuery, entityType, limit)
+	} else {
+		rows, err = database.Query(`
+			SELECT entity_type, entity_id, title,
+				snippet(search_fts, 3, '>>>>', '<<<<', '...', 48) as snippet,
+				rank
+			FROM search_fts
+			WHERE search_fts MATCH ?
+			ORDER BY rank
+			LIMIT ?
+		`, ftsQuery, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("FTS search: %w", err)
 	}
@@ -2409,6 +2529,43 @@ func SearchFTS(database *sql.DB, query string, limit int) ([]models.SearchResult
 	for rows.Next() {
 		var r models.SearchResult
 		if err := rows.Scan(&r.EntityType, &r.EntityID, &r.Title, &r.Snippet, &r.Rank); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SearchFeaturesFTS searches features by name, description, and spec via FTS5.
+// Returns matching features with context snippets.
+func SearchFeaturesFTS(database *sql.DB, projectID, query string, limit int) ([]models.FeatureSearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	ftsQuery := BuildFTSQuery(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+
+	rows, err := database.Query(`
+		SELECT f.id, f.name, f.status,
+			snippet(search_fts, 3, '>>>>', '<<<<', '...', 48) as snippet
+		FROM search_fts s
+		JOIN features f ON s.entity_id = f.id AND s.entity_type = 'feature'
+		WHERE search_fts MATCH ? AND f.project_id = ?
+		ORDER BY s.rank
+		LIMIT ?
+	`, ftsQuery, projectID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("feature FTS search: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.FeatureSearchResult
+	for rows.Next() {
+		var r models.FeatureSearchResult
+		if err := rows.Scan(&r.ID, &r.Name, &r.Status, &r.Snippet); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -2475,6 +2632,30 @@ func GetActivityHeatmap(database *sql.DB, projectID string, days int) ([]models.
 		}
 	}
 	return out, nil
+}
+
+// GetDailyActivityCounts returns simple date+count pairs for the last N days.
+func GetDailyActivityCounts(database *sql.DB, projectID string, days int) ([]models.ActivityDayCount, error) {
+	rows, err := database.Query(`
+		SELECT date(created_at) AS day, COUNT(*) AS cnt
+		FROM events
+		WHERE project_id = ? AND created_at >= datetime('now', ? || ' days')
+		GROUP BY day
+		ORDER BY day`, projectID, fmt.Sprintf("-%d", days))
+	if err != nil {
+		return nil, fmt.Errorf("querying daily activity counts: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.ActivityDayCount
+	for rows.Next() {
+		var d models.ActivityDayCount
+		if err := rows.Scan(&d.Date, &d.Count); err != nil {
+			return nil, fmt.Errorf("scanning daily activity row: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // RemoveFromIndex removes an entity from the FTS5 search index.
@@ -3068,4 +3249,209 @@ func GetAgentStats(database *sql.DB, projectID, agentFilter string) (*models.Age
 	}
 
 	return stats, nil
+}
+
+// --- Sprints ---
+
+func CreateSprint(db *sql.DB, s *models.Sprint) error {
+	_, err := db.Exec(
+		`INSERT INTO sprints (id, project_id, name, goal, start_date, end_date, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.ProjectID, s.Name, s.Goal, s.StartDate, s.EndDate, s.Status,
+	)
+	return err
+}
+
+func GetSprint(db *sql.DB, id string) (*models.Sprint, error) {
+	row := db.QueryRow(`
+		SELECT s.id, s.project_id, s.name, s.goal, s.start_date, s.end_date, s.status,
+			s.created_at, s.updated_at,
+			COUNT(sf.feature_id) AS total,
+			COALESCE(SUM(CASE WHEN f.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+			COALESCE(SUM(CASE WHEN f.status IN ('implementing','agent-qa','human-qa') THEN 1 ELSE 0 END), 0) AS in_prog,
+			COALESCE(SUM(CASE WHEN f.status IN ('draft','planning','blocked') THEN 1 ELSE 0 END), 0) AS not_started
+		FROM sprints s
+		LEFT JOIN sprint_features sf ON sf.sprint_id = s.id
+		LEFT JOIN features f ON f.id = sf.feature_id
+		WHERE s.id = ?
+		GROUP BY s.id`, id)
+	s := &models.Sprint{}
+	err := row.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Goal, &s.StartDate, &s.EndDate, &s.Status,
+		&s.CreatedAt, &s.UpdatedAt, &s.TotalFeatures, &s.DoneFeatures, &s.InProgFeatures, &s.NotStartFeatures)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func ListSprints(db *sql.DB, projectID string) ([]models.Sprint, error) {
+	rows, err := db.Query(`
+		SELECT s.id, s.project_id, s.name, s.goal, s.start_date, s.end_date, s.status,
+			s.created_at, s.updated_at,
+			COUNT(sf.feature_id) AS total,
+			COALESCE(SUM(CASE WHEN f.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+			COALESCE(SUM(CASE WHEN f.status IN ('implementing','agent-qa','human-qa') THEN 1 ELSE 0 END), 0) AS in_prog,
+			COALESCE(SUM(CASE WHEN f.status IN ('draft','planning','blocked') THEN 1 ELSE 0 END), 0) AS not_started
+		FROM sprints s
+		LEFT JOIN sprint_features sf ON sf.sprint_id = s.id
+		LEFT JOIN features f ON f.id = sf.feature_id
+		WHERE s.project_id = ?
+		GROUP BY s.id
+		ORDER BY s.start_date DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Sprint
+	for rows.Next() {
+		var s models.Sprint
+		if err := rows.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Goal, &s.StartDate, &s.EndDate, &s.Status,
+			&s.CreatedAt, &s.UpdatedAt, &s.TotalFeatures, &s.DoneFeatures, &s.InProgFeatures, &s.NotStartFeatures); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func GetActiveSprint(db *sql.DB, projectID string) (*models.Sprint, error) {
+	row := db.QueryRow(`
+		SELECT s.id, s.project_id, s.name, s.goal, s.start_date, s.end_date, s.status,
+			s.created_at, s.updated_at,
+			COUNT(sf.feature_id) AS total,
+			COALESCE(SUM(CASE WHEN f.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+			COALESCE(SUM(CASE WHEN f.status IN ('implementing','agent-qa','human-qa') THEN 1 ELSE 0 END), 0) AS in_prog,
+			COALESCE(SUM(CASE WHEN f.status IN ('draft','planning','blocked') THEN 1 ELSE 0 END), 0) AS not_started
+		FROM sprints s
+		LEFT JOIN sprint_features sf ON sf.sprint_id = s.id
+		LEFT JOIN features f ON f.id = sf.feature_id
+		WHERE s.project_id = ? AND s.status = 'active'
+		GROUP BY s.id
+		LIMIT 1`, projectID)
+	s := &models.Sprint{}
+	err := row.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Goal, &s.StartDate, &s.EndDate, &s.Status,
+		&s.CreatedAt, &s.UpdatedAt, &s.TotalFeatures, &s.DoneFeatures, &s.InProgFeatures, &s.NotStartFeatures)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func CloseSprint(db *sql.DB, id string) error {
+	_, err := db.Exec(`UPDATE sprints SET status = 'closed', updated_at = datetime('now') WHERE id = ?`, id)
+	return err
+}
+
+func AddFeatureToSprint(db *sql.DB, sprintID, featureID string) error {
+	_, err := db.Exec(`INSERT INTO sprint_features (sprint_id, feature_id) VALUES (?, ?)`, sprintID, featureID)
+	return err
+}
+
+func RemoveFeatureFromSprint(db *sql.DB, sprintID, featureID string) error {
+	res, err := db.Exec(`DELETE FROM sprint_features WHERE sprint_id = ? AND feature_id = ?`, sprintID, featureID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("feature %q is not in sprint %q", featureID, sprintID)
+	}
+	return nil
+}
+
+func ListSprintFeatures(db *sql.DB, sprintID string) ([]models.Feature, error) {
+	rows, err := db.Query(`
+		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name, COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		JOIN sprint_features sf ON sf.feature_id = f.id
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE sf.sprint_id = ?
+		ORDER BY f.priority DESC, f.name`, sprintID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Feature
+	for rows.Next() {
+		var f models.Feature
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt,
+			&f.MilestoneName, &f.PreviousStatus, &f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func HasActiveSprint(db *sql.DB, projectID string) (bool, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM sprints WHERE project_id = ? AND status = 'active'`, projectID).Scan(&count)
+	return count > 0, err
+}
+
+// --- Feature PRs ---
+
+func LinkFeaturePR(db *sql.DB, pr *models.FeaturePR) error {
+	_, err := db.Exec(
+		`INSERT INTO feature_prs (feature_id, pr_url, pr_number, repo, status) VALUES (?, ?, ?, ?, ?)`,
+		pr.FeatureID, pr.PRURL, pr.PRNumber, pr.Repo, pr.Status,
+	)
+	return err
+}
+
+func UnlinkFeaturePR(db *sql.DB, featureID, prURL string) error {
+	res, err := db.Exec(`DELETE FROM feature_prs WHERE feature_id = ? AND pr_url = ?`, featureID, prURL)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("no PR link found for feature %q and URL %q", featureID, prURL)
+	}
+	return nil
+}
+
+func ListFeaturePRs(db *sql.DB, featureID string) ([]models.FeaturePR, error) {
+	rows, err := db.Query(
+		`SELECT feature_id, pr_url, COALESCE(pr_number,0), COALESCE(repo,''), status, created_at
+		 FROM feature_prs WHERE feature_id = ? ORDER BY created_at`, featureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.FeaturePR
+	for rows.Next() {
+		var pr models.FeaturePR
+		if err := rows.Scan(&pr.FeatureID, &pr.PRURL, &pr.PRNumber, &pr.Repo, &pr.Status, &pr.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pr)
+	}
+	return out, rows.Err()
+}
+
+func ListAllPRs(db *sql.DB) ([]models.FeaturePR, error) {
+	rows, err := db.Query(
+		`SELECT feature_id, pr_url, COALESCE(pr_number,0), COALESCE(repo,''), status, created_at
+		 FROM feature_prs ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.FeaturePR
+	for rows.Next() {
+		var pr models.FeaturePR
+		if err := rows.Scan(&pr.FeatureID, &pr.PRURL, &pr.PRNumber, &pr.Repo, &pr.Status, &pr.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pr)
+	}
+	return out, rows.Err()
 }

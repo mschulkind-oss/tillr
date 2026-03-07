@@ -282,6 +282,8 @@ func init() {
 	featureCmd.AddCommand(featureTagsCmd)
 	featureCmd.AddCommand(featureEstimatesCmd)
 	featureCmd.AddCommand(featureTemplatesCmd)
+	featureCmd.AddCommand(featureFindCmd)
+	featureCmd.AddCommand(featureCompareCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
 	featureAddCmd.Flags().String("template", "", "Use a feature template (api-endpoint, ui-component, cli-command, migration, integration, bug-fix)")
@@ -314,6 +316,63 @@ func init() {
 	featureBatchCmd.Flags().Int("priority", -1, "Set priority for all features")
 
 	featureEstimatesCmd.Flags().String("milestone", "", "Filter by milestone")
+
+	featureFindCmd.Flags().Int("limit", 20, "Max results to return")
+}
+
+var featureFindCmd = &cobra.Command{
+	Use:   "find <query>",
+	Short: "Search features by name, description, or spec",
+	Long:  `Full-text search across feature names, descriptions, and specs with prefix matching.`,
+	Args:  cobra.ExactArgs(1),
+	Example: `  lifecycle feature find auth
+  lifecycle feature find "user login" --limit 5`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		limit, _ := cmd.Flags().GetInt("limit")
+		results, err := db.SearchFeaturesFTS(database, p.ID, args[0], limit)
+		if err != nil {
+			return fmt.Errorf("feature search failed: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(results)
+		}
+
+		if len(results) == 0 {
+			fmt.Println("No matching features found.")
+			return nil
+		}
+
+		fmt.Printf("Features matching %q (%d result(s)):\n\n", args[0], len(results))
+		for _, r := range results {
+			snippet := highlightFeatureSnippet(r.Snippet)
+			fmt.Printf("  %-20s  %-8s  %s\n", r.ID, "["+r.Status+"]", r.Name)
+			if snippet != "" {
+				fmt.Printf("  %20s  %s\n", "", snippet)
+			}
+		}
+		return nil
+	},
+}
+
+func highlightFeatureSnippet(snippet string) string {
+	if snippet == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(snippet, ">>>>", "\033[1m")
+	s = strings.ReplaceAll(s, "<<<<", "\033[0m")
+	return s
 }
 
 var featureAddCmd = &cobra.Command{
@@ -538,6 +597,13 @@ Use 'lifecycle feature list' to find feature IDs.`,
 		}
 		if f.EstimateSize != "" {
 			fmt.Printf("  Size:      %s\n", f.EstimateSize)
+		}
+		prs, _ := db.ListFeaturePRs(database, f.ID)
+		if len(prs) > 0 {
+			fmt.Printf("  PRs:\n")
+			for _, pr := range prs {
+				fmt.Printf("    - #%d (%s) [%s] %s\n", pr.PRNumber, pr.Repo, pr.Status, pr.PRURL)
+			}
 		}
 		fmt.Printf("  Created:   %s\n", f.CreatedAt)
 		return nil
@@ -1032,4 +1098,242 @@ giving a structured starting point for acceptance criteria.`,
 		fmt.Println("Usage: lifecycle feature add <name> --template <template>")
 		return nil
 	},
+}
+
+// featureCompareEntry holds all data for one feature in a comparison.
+type featureCompareEntry struct {
+	Feature *models.Feature        `json:"feature"`
+	Cycles  []models.CycleInstance `json:"cycles,omitempty"`
+	Scores  []models.CycleScore    `json:"scores,omitempty"`
+}
+
+var featureCompareCmd = &cobra.Command{
+	Use:   "compare <id1> <id2> [id3...]",
+	Short: "Compare features side by side",
+	Long: `Display a side-by-side comparison of two or more features, highlighting
+differences in status, priority, milestone, estimates, tags, dependencies,
+specs, and cycle history.
+
+Example:
+  lifecycle feature compare auth-module search-api
+  lifecycle feature compare f1 f2 f3 --json`,
+	Args: cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		entries := make([]featureCompareEntry, 0, len(args))
+		for _, id := range args {
+			f, fErr := db.GetFeature(database, id)
+			if fErr != nil {
+				return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", id)
+			}
+			entry := featureCompareEntry{Feature: f}
+			cycles, _ := db.ListCycleHistory(database, f.ID)
+			entry.Cycles = cycles
+			for _, c := range cycles {
+				scores, _ := db.ListCycleScores(database, c.ID)
+				entry.Scores = append(entry.Scores, scores...)
+			}
+			entries = append(entries, entry)
+		}
+
+		if jsonOutput {
+			return printJSON(entries)
+		}
+
+		printFeatureComparison(entries)
+		return nil
+	},
+}
+
+func printFeatureComparison(entries []featureCompareEntry) {
+	n := len(entries)
+	colWidth := 22
+
+	// Header
+	fmt.Println("Feature Comparison")
+	fmt.Println(strings.Repeat("━", 18+n*colWidth))
+
+	// Collect column labels (feature IDs)
+	header := fmt.Sprintf("%-18s", "")
+	for _, e := range entries {
+		header += fmt.Sprintf("%-*s", colWidth, truncate(e.Feature.ID, colWidth-2))
+	}
+	fmt.Println(header)
+
+	// Name row
+	printCompareRow("Name:", entries, func(e featureCompareEntry) string { return e.Feature.Name })
+
+	// Status
+	printCompareRow("Status:", entries, func(e featureCompareEntry) string { return e.Feature.Status })
+
+	// Priority
+	printCompareRow("Priority:", entries, func(e featureCompareEntry) string { return fmt.Sprintf("%d", e.Feature.Priority) })
+
+	// Milestone
+	printCompareRow("Milestone:", entries, func(e featureCompareEntry) string {
+		if e.Feature.MilestoneName != "" {
+			return e.Feature.MilestoneName
+		}
+		if e.Feature.MilestoneID != "" {
+			return e.Feature.MilestoneID
+		}
+		return "—"
+	})
+
+	// Estimate
+	printCompareRow("Estimate:", entries, func(e featureCompareEntry) string {
+		parts := []string{}
+		if e.Feature.EstimateSize != "" {
+			parts = append(parts, e.Feature.EstimateSize)
+		}
+		if e.Feature.EstimatePoints > 0 {
+			parts = append(parts, fmt.Sprintf("%dpts", e.Feature.EstimatePoints))
+		}
+		if len(parts) == 0 {
+			return "—"
+		}
+		return strings.Join(parts, " (") + func() string {
+			if len(parts) > 1 {
+				return ")"
+			}
+			return ""
+		}()
+	})
+
+	// Tags
+	printCompareRow("Tags:", entries, func(e featureCompareEntry) string {
+		if len(e.Feature.Tags) == 0 {
+			return "—"
+		}
+		return strings.Join(e.Feature.Tags, ", ")
+	})
+
+	// Dependencies
+	printCompareRow("Depends on:", entries, func(e featureCompareEntry) string {
+		if len(e.Feature.DependsOn) == 0 {
+			return "—"
+		}
+		return strings.Join(e.Feature.DependsOn, ", ")
+	})
+
+	// Assigned Cycle
+	printCompareRow("Cycle:", entries, func(e featureCompareEntry) string {
+		if e.Feature.AssignedCycle == "" {
+			return "—"
+		}
+		return e.Feature.AssignedCycle
+	})
+
+	// Roadmap item
+	printCompareRow("Roadmap:", entries, func(e featureCompareEntry) string {
+		if e.Feature.RoadmapItemID == "" {
+			return "—"
+		}
+		return e.Feature.RoadmapItemID
+	})
+
+	// Cycle history summary
+	fmt.Println()
+	fmt.Println("Cycle History")
+	fmt.Println(strings.Repeat("─", 18+n*colWidth))
+
+	printCompareRow("Iterations:", entries, func(e featureCompareEntry) string {
+		if len(e.Cycles) == 0 {
+			return "—"
+		}
+		total := 0
+		for _, c := range e.Cycles {
+			total += c.Iteration
+		}
+		return fmt.Sprintf("%d", total)
+	})
+
+	printCompareRow("Cycles:", entries, func(e featureCompareEntry) string {
+		if len(e.Cycles) == 0 {
+			return "—"
+		}
+		types := []string{}
+		for _, c := range e.Cycles {
+			types = append(types, c.CycleType)
+		}
+		return strings.Join(types, ", ")
+	})
+
+	printCompareRow("Best score:", entries, func(e featureCompareEntry) string {
+		if len(e.Scores) == 0 {
+			return "—"
+		}
+		best := e.Scores[0].Score
+		for _, s := range e.Scores[1:] {
+			if s.Score > best {
+				best = s.Score
+			}
+		}
+		return fmt.Sprintf("%.1f", best)
+	})
+
+	printCompareRow("Latest score:", entries, func(e featureCompareEntry) string {
+		if len(e.Scores) == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%.1f", e.Scores[len(e.Scores)-1].Score)
+	})
+
+	// Specs
+	fmt.Println()
+	fmt.Println("Specs")
+	fmt.Println(strings.Repeat("─", 18+n*colWidth))
+	for _, e := range entries {
+		fmt.Printf("[%s]\n", e.Feature.ID)
+		if e.Feature.Spec == "" {
+			fmt.Println("  (no spec)")
+		} else {
+			for _, line := range strings.Split(e.Feature.Spec, "\n") {
+				fmt.Printf("  %s\n", line)
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// printCompareRow prints a labeled row with values from each entry,
+// appending a "← differs" marker when not all values are the same.
+func printCompareRow(label string, entries []featureCompareEntry, getter func(featureCompareEntry) string) {
+	colWidth := 22
+	vals := make([]string, len(entries))
+	for i, e := range entries {
+		vals[i] = getter(e)
+	}
+
+	allSame := true
+	for _, v := range vals[1:] {
+		if v != vals[0] {
+			allSame = false
+			break
+		}
+	}
+
+	line := fmt.Sprintf("%-18s", label)
+	for _, v := range vals {
+		line += fmt.Sprintf("%-*s", colWidth, truncate(v, colWidth-2))
+	}
+	if !allSame {
+		line += "← differs"
+	}
+	fmt.Println(line)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }

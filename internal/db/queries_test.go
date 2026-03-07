@@ -612,3 +612,206 @@ func TestIndexEntityUpsert(t *testing.T) {
 		t.Errorf("expected 0 results for old content, got %d", len(results))
 	}
 }
+
+func TestBuildFTSQuery(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"auth", "auth*"},
+		{"user login", "user* login*"},
+		{"feat", "feat*"},
+		{"", ""},
+		{"  spaces  ", "spaces*"},
+		{"special(chars)", "special* chars*"},
+		{`"quoted"`, "quoted*"},
+		{"colon:value", "colon* value*"},
+		{"AND keyword", "and* keyword*"},
+		{"OR test", "or* test*"},
+		{"NOT excluded", "not* excluded*"},
+	}
+
+	for _, tt := range tests {
+		got := db.BuildFTSQuery(tt.input)
+		if got != tt.want {
+			t.Errorf("BuildFTSQuery(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSearchFTSPrefixMatching(t *testing.T) {
+	database := openTestDB(t)
+
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Index features
+	if err := db.IndexEntity(database, "feature", "auth-module", "Authentication Module", "JWT-based auth system with OAuth2"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+	if err := db.IndexEntity(database, "feature", "search-api", "Search API", "Full-text search endpoint"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+	if err := db.IndexEntity(database, "roadmap", "perf-item", "Performance Optimization", "Optimize query patterns and caching"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+
+	// Prefix match: "auth" should match "authentication"
+	results, err := db.SearchFTSFiltered(database, "auth", "", 10)
+	if err != nil {
+		t.Fatalf("prefix search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for prefix 'auth', got %d", len(results))
+	}
+	if results[0].EntityID != "auth-module" {
+		t.Errorf("expected 'auth-module', got %q", results[0].EntityID)
+	}
+
+	// Prefix match: "sea" should match "search"
+	results, err = db.SearchFTSFiltered(database, "sea", "", 10)
+	if err != nil {
+		t.Fatalf("prefix search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for prefix 'sea', got %d", len(results))
+	}
+	if results[0].EntityID != "search-api" {
+		t.Errorf("expected 'search-api', got %q", results[0].EntityID)
+	}
+}
+
+func TestSearchFTSFiltered(t *testing.T) {
+	database := openTestDB(t)
+
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Index mixed entity types
+	if err := db.IndexEntity(database, "feature", "auth-feature", "Auth Feature", "authentication login"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+	if err := db.IndexEntity(database, "roadmap", "auth-roadmap", "Auth Roadmap", "authentication roadmap item"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+
+	// Unfiltered: both results
+	results, err := db.SearchFTSFiltered(database, "auth", "", 10)
+	if err != nil {
+		t.Fatalf("unfiltered search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results unfiltered, got %d", len(results))
+	}
+
+	// Filtered to feature only
+	results, err = db.SearchFTSFiltered(database, "auth", "feature", 10)
+	if err != nil {
+		t.Fatalf("filtered search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for feature filter, got %d", len(results))
+	}
+	if results[0].EntityType != "feature" {
+		t.Errorf("expected entity_type 'feature', got %q", results[0].EntityType)
+	}
+
+	// Filtered to roadmap only
+	results, err = db.SearchFTSFiltered(database, "auth", "roadmap", 10)
+	if err != nil {
+		t.Fatalf("filtered search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for roadmap filter, got %d", len(results))
+	}
+	if results[0].EntityType != "roadmap" {
+		t.Errorf("expected entity_type 'roadmap', got %q", results[0].EntityType)
+	}
+
+	// Empty query returns nil
+	results, err = db.SearchFTSFiltered(database, "", "", 10)
+	if err != nil {
+		t.Fatalf("empty query: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil for empty query, got %d results", len(results))
+	}
+}
+
+func TestSearchFTSSnippet(t *testing.T) {
+	database := openTestDB(t)
+
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	if err := db.IndexEntity(database, "feature", "f1", "Auth Module", "JWT-based authentication with OAuth2 support and refresh tokens"); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+
+	results, err := db.SearchFTSFiltered(database, "OAuth2", "", 10)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	// Snippet should contain the highlight markers
+	if results[0].Snippet == "" {
+		t.Error("expected non-empty snippet")
+	}
+}
+
+func TestSearchFeaturesFTS(t *testing.T) {
+	database := openTestDB(t)
+
+	p := &models.Project{ID: "test-proj", Name: "Test Project"}
+	if err := db.CreateProject(database, p); err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	// Create actual features
+	f1 := &models.Feature{ID: "auth-module", ProjectID: p.ID, Name: "Authentication Module", Description: "JWT-based auth", Spec: "OAuth2 support"}
+	f2 := &models.Feature{ID: "search-api", ProjectID: p.ID, Name: "Search API", Description: "Full-text search"}
+	f3 := &models.Feature{ID: "other-proj-feature", ProjectID: "other-proj", Name: "Auth Other", Description: "Different project auth"}
+	if err := db.CreateFeature(database, f1); err != nil {
+		t.Fatalf("creating feature: %v", err)
+	}
+	if err := db.CreateFeature(database, f2); err != nil {
+		t.Fatalf("creating feature: %v", err)
+	}
+	if err := db.CreateFeature(database, f3); err != nil {
+		t.Fatalf("creating feature: %v", err)
+	}
+
+	// Index them
+	if err := db.IndexEntity(database, "feature", f1.ID, f1.Name, f1.Description+" "+f1.Spec); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+	if err := db.IndexEntity(database, "feature", f2.ID, f2.Name, f2.Description); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+	if err := db.IndexEntity(database, "feature", f3.ID, f3.Name, f3.Description); err != nil {
+		t.Fatalf("indexing: %v", err)
+	}
+
+	// Search for "auth" in test-proj — should only find f1, not f3
+	results, err := db.SearchFeaturesFTS(database, p.ID, "auth", 10)
+	if err != nil {
+		t.Fatalf("feature search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 feature result for 'auth' in test-proj, got %d", len(results))
+	}
+	if results[0].ID != "auth-module" {
+		t.Errorf("expected 'auth-module', got %q", results[0].ID)
+	}
+	if results[0].Name != "Authentication Module" {
+		t.Errorf("expected name 'Authentication Module', got %q", results[0].Name)
+	}
+}

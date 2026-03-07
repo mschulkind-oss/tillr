@@ -181,6 +181,7 @@ type Discussion struct {
 	// Computed
 	CommentCount int                 `json:"comment_count,omitempty"`
 	Comments     []DiscussionComment `json:"comments,omitempty"`
+	Votes        map[string]int      `json:"votes,omitempty"`
 }
 
 // DiscussionComment is a comment in a discussion thread.
@@ -192,6 +193,21 @@ type DiscussionComment struct {
 	ParentID     int    `json:"parent_id,omitempty"`
 	CommentType  string `json:"comment_type"` // comment, proposal, approval, objection, revision, decision
 	CreatedAt    string `json:"created_at"`
+}
+
+// DiscussionVote is a reaction on a discussion.
+type DiscussionVote struct {
+	DiscussionID int    `json:"discussion_id"`
+	Voter        string `json:"voter"`
+	Reaction     string `json:"reaction"`
+	CreatedAt    string `json:"created_at,omitempty"`
+}
+
+// VoteSummary holds the count per reaction for a discussion.
+type VoteSummary struct {
+	DiscussionID int            `json:"discussion_id"`
+	Counts       map[string]int `json:"counts"`
+	Total        int            `json:"total"`
 }
 
 // StatusOverview is the project dashboard summary.
@@ -361,6 +377,22 @@ type SearchResult struct {
 	Rank       float64 `json:"rank"`
 }
 
+// GroupedSearchResults holds search results organized by entity type.
+type GroupedSearchResults struct {
+	Query        string                    `json:"query"`
+	Total        int                       `json:"total"`
+	Groups       map[string][]SearchResult `json:"groups"`
+	OrderedTypes []string                  `json:"ordered_types"`
+}
+
+// FeatureSearchResult is a compact search result for feature find.
+type FeatureSearchResult struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Snippet string `json:"snippet"`
+}
+
 // HeatmapDay holds aggregated daily activity counts for heatmap visualization.
 type HeatmapDay struct {
 	Date   string         `json:"date"`
@@ -371,6 +403,12 @@ type HeatmapDay struct {
 // HeatmapResponse wraps heatmap data returned by the API.
 type HeatmapResponse struct {
 	Days []HeatmapDay `json:"days"`
+}
+
+// ActivityDayCount holds a simple date + count pair for the activity heatmap.
+type ActivityDayCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
 }
 
 // Predefined cycle types
@@ -507,4 +545,39 @@ type WebhookDelivery struct {
 	Event     string         `json:"event"`
 	Timestamp string         `json:"timestamp"`
 	Data      map[string]any `json:"data"`
+}
+
+// Sprint represents a time-boxed planning period.
+type Sprint struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+	Goal      string `json:"goal,omitempty"`
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+	Status    string `json:"status"` // active, closed
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+
+	// Computed fields (populated by queries)
+	TotalFeatures    int `json:"total_features,omitempty"`
+	DoneFeatures     int `json:"done_features,omitempty"`
+	InProgFeatures   int `json:"in_progress_features,omitempty"`
+	NotStartFeatures int `json:"not_started_features,omitempty"`
+}
+
+// SprintFeature links a feature to a sprint.
+type SprintFeature struct {
+	SprintID  string `json:"sprint_id"`
+	FeatureID string `json:"feature_id"`
+}
+
+// FeaturePR links a pull request to a feature.
+type FeaturePR struct {
+	FeatureID string `json:"feature_id"`
+	PRURL     string `json:"pr_url"`
+	PRNumber  int    `json:"pr_number,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	Status    string `json:"status"` // open, closed, merged
+	CreatedAt string `json:"created_at"`
 }
