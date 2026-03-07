@@ -445,3 +445,64 @@ func TestGetBurndownData(t *testing.T) {
 		t.Errorf("expected 0 points for empty project, got %d", len(emptyData.Points))
 	}
 }
+
+func TestBatchUpdateFeatures(t *testing.T) {
+	database := openTestDB(t)
+	db.CreateProject(database, &models.Project{ID: "p1", Name: "P1"}) //nolint:errcheck
+
+	// Create three features
+	for _, id := range []string{"f1", "f2", "f3"} {
+		db.CreateFeature(database, &models.Feature{ID: id, ProjectID: "p1", Name: "Feature " + id}) //nolint:errcheck
+	}
+
+	// Batch update status
+	updated, err := db.BatchUpdateFeatures(database, []string{"f1", "f2"}, "status", "implementing")
+	if err != nil {
+		t.Fatalf("batch update status: %v", err)
+	}
+	if updated != 2 {
+		t.Errorf("expected 2 updated, got %d", updated)
+	}
+
+	f1, _ := db.GetFeature(database, "f1")
+	f2, _ := db.GetFeature(database, "f2")
+	f3, _ := db.GetFeature(database, "f3")
+	if f1.Status != "implementing" {
+		t.Errorf("f1 status = %q, want implementing", f1.Status)
+	}
+	if f2.Status != "implementing" {
+		t.Errorf("f2 status = %q, want implementing", f2.Status)
+	}
+	if f3.Status != "draft" {
+		t.Errorf("f3 status = %q, want draft (unchanged)", f3.Status)
+	}
+
+	// Batch update priority
+	updated, err = db.BatchUpdateFeatures(database, []string{"f1", "f2", "f3"}, "priority", "8")
+	if err != nil {
+		t.Fatalf("batch update priority: %v", err)
+	}
+	if updated != 3 {
+		t.Errorf("expected 3 updated, got %d", updated)
+	}
+
+	f1, _ = db.GetFeature(database, "f1")
+	if f1.Priority != 8 {
+		t.Errorf("f1 priority = %d, want 8", f1.Priority)
+	}
+
+	// Invalid field should error
+	_, err = db.BatchUpdateFeatures(database, []string{"f1"}, "invalid_field", "x")
+	if err == nil {
+		t.Error("expected error for invalid field")
+	}
+
+	// Empty IDs should return 0
+	updated, err = db.BatchUpdateFeatures(database, []string{}, "status", "done")
+	if err != nil {
+		t.Fatalf("batch update empty: %v", err)
+	}
+	if updated != 0 {
+		t.Errorf("expected 0 updated for empty IDs, got %d", updated)
+	}
+}
