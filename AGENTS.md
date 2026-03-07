@@ -232,21 +232,42 @@ Each cycle step produces structured output stored in the DB. Judge steps produce
 
 ## Agent Integration Pattern
 
+**CRITICAL: All context comes from the tool.** When dispatching work to sub-agents, pass the JSON output of `lifecycle next --json` as the work specification. Do NOT summarize, paraphrase, or add OOB context. The tool output IS the spec.
+
 Agents interact with lifecycle via CLI commands. The typical agent loop:
 
 ```bash
-# 1. Get next work item
+# 1. Get next work item — returns FULL context (feature spec, cycle state, prior results, roadmap link)
 WORK=$(lifecycle next --json)
-# Returns: {"feature_id": "f1", "work_type": "implement", "agent_prompt": "...", "context": {...}}
+# Returns WorkContext: {
+#   "work_item": {"id": 1, "feature_id": "f1", "work_type": "develop", "agent_prompt": "..."},
+#   "feature": {"name": "...", "description": "...", "spec": "...", "roadmap_item_id": "..."},
+#   "cycle": {"cycle_type": "feature-implementation", "current_step": 1, ...},
+#   "cycle_type": {"steps": ["research", "develop", "agent-qa", "judge", "human-qa"]},
+#   "roadmap_item": {"title": "...", "description": "...", "priority": "critical"},
+#   "prior_results": [{"work_type": "research", "result": "Found X, Y, Z..."}],
+#   "agent_guidance": "You are working on feature \"F1\": ...\n\n## Feature Spec\n..."
+# }
 
-# 2. Read the prompt and do the work
-# (agent reads agent_prompt, does the work)
+# 2. Pass the ENTIRE JSON to the sub-agent — it contains everything needed
+# The agent_guidance field is a human-readable summary of what to do
 
 # 3. Report completion
 lifecycle done --result "Implemented feature X with tests"
 
 # 4. Repeat
 WORK=$(lifecycle next --json)
+```
+
+### Creating features with full in-band context:
+```bash
+# Always provide --spec with acceptance criteria so agents can work independently
+lifecycle feature add "My Feature" \
+  --description "Brief summary" \
+  --spec "Acceptance criteria:\n1. Must do X\n2. Must handle Y\n3. Tests required for Z" \
+  --milestone v1.0-production \
+  --priority 5 \
+  --roadmap-item my-roadmap-item-id
 ```
 
 For iteration cycles with scoring:

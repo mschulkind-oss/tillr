@@ -197,4 +197,8 @@ var migrations = []string{
 
 	// Migration 4: Add status column to roadmap_items (may already exist from migration 1)
 	`ALTER TABLE roadmap_items ADD COLUMN status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','accepted','in-progress','completed','deferred'));`,
+
+	// Migration 5: Add spec and roadmap_item_id columns to features for in-band context
+	`ALTER TABLE features ADD COLUMN spec TEXT NOT NULL DEFAULT '';
+	 ALTER TABLE features ADD COLUMN roadmap_item_id TEXT NOT NULL DEFAULT '' REFERENCES roadmap_items(id);`,
 }

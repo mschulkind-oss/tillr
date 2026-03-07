@@ -24,7 +24,7 @@ var nextCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer database.Close() //nolint:errcheck //nolint:errcheck
+		defer database.Close() //nolint:errcheck
 
 		w, err := engine.GetNextWorkItem(database)
 		if err != nil {
@@ -36,6 +36,12 @@ var nextCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
+			// Return enriched context — everything an agent needs in one payload
+			ctx, ctxErr := engine.GetWorkContext(database, w)
+			if ctxErr == nil {
+				return printJSON(ctx)
+			}
+			// Fall back to bare work item if context building fails
 			return printJSON(w)
 		}
 
@@ -57,7 +63,7 @@ var doneCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer database.Close() //nolint:errcheck //nolint:errcheck
+		defer database.Close() //nolint:errcheck
 
 		result, _ := cmd.Flags().GetString("result")
 		if err := engine.CompleteWorkItem(database, result); err != nil {
@@ -80,7 +86,7 @@ var failCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer database.Close() //nolint:errcheck //nolint:errcheck
+		defer database.Close() //nolint:errcheck
 
 		reason, _ := cmd.Flags().GetString("reason")
 		if err := engine.FailWorkItem(database, reason); err != nil {
@@ -103,7 +109,7 @@ var heartbeatCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer database.Close() //nolint:errcheck //nolint:errcheck
+		defer database.Close() //nolint:errcheck
 
 		message, _ := cmd.Flags().GetString("message")
 

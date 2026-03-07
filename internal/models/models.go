@@ -29,9 +29,11 @@ type Feature struct {
 	MilestoneID   string `json:"milestone_id,omitempty"`
 	Name          string `json:"name"`
 	Description   string `json:"description,omitempty"`
+	Spec          string `json:"spec,omitempty"`
 	Status        string `json:"status"` // draft, planning, implementing, agent-qa, human-qa, done, blocked
 	Priority      int    `json:"priority"`
 	AssignedCycle string `json:"assigned_cycle,omitempty"`
+	RoadmapItemID string `json:"roadmap_item_id,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
 
@@ -134,6 +136,19 @@ type StatusOverview struct {
 	ActiveCycles   int            `json:"active_cycles"`
 	RecentEvents   []Event        `json:"recent_events"`
 	ActiveWork     []WorkItem     `json:"active_work"`
+}
+
+// WorkContext is the enriched response from `lifecycle next --json`.
+// It carries ALL context an agent needs to do the work — no OOB info needed.
+type WorkContext struct {
+	WorkItem      *WorkItem      `json:"work_item"`
+	Feature       *Feature       `json:"feature"`
+	Cycle         *CycleInstance `json:"cycle,omitempty"`
+	CycleType     *CycleType     `json:"cycle_type,omitempty"`
+	RoadmapItem   *RoadmapItem   `json:"roadmap_item,omitempty"`
+	PriorResults  []WorkItem     `json:"prior_results,omitempty"`
+	CycleScores   []CycleScore   `json:"cycle_scores,omitempty"`
+	AgentGuidance string         `json:"agent_guidance"`
 }
 
 // Predefined cycle types

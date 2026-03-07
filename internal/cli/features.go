@@ -25,14 +25,18 @@ func init() {
 	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")
 	featureAddCmd.Flags().StringSlice("depends-on", nil, "Feature dependencies")
 	featureAddCmd.Flags().String("description", "", "Feature description")
+	featureAddCmd.Flags().String("spec", "", "Feature spec / acceptance criteria (detailed requirements)")
+	featureAddCmd.Flags().String("roadmap-item", "", "Link to originating roadmap item ID")
 
 	featureListCmd.Flags().String("status", "", "Filter by status")
 	featureListCmd.Flags().String("milestone", "", "Filter by milestone")
 
 	featureEditCmd.Flags().String("name", "", "New name")
 	featureEditCmd.Flags().String("description", "", "New description")
+	featureEditCmd.Flags().String("spec", "", "New spec / acceptance criteria")
 	featureEditCmd.Flags().String("status", "", "New status")
 	featureEditCmd.Flags().String("milestone", "", "New milestone")
+	featureEditCmd.Flags().String("roadmap-item", "", "Link to roadmap item ID")
 	featureEditCmd.Flags().Int("priority", -1, "New priority")
 }
 
@@ -56,8 +60,10 @@ var featureAddCmd = &cobra.Command{
 		priority, _ := cmd.Flags().GetInt("priority")
 		deps, _ := cmd.Flags().GetStringSlice("depends-on")
 		desc, _ := cmd.Flags().GetString("description")
+		spec, _ := cmd.Flags().GetString("spec")
+		roadmapItem, _ := cmd.Flags().GetString("roadmap-item")
 
-		f, err := engine.AddFeature(database, p.ID, args[0], desc, milestone, priority, deps)
+		f, err := engine.AddFeature(database, p.ID, args[0], desc, spec, milestone, priority, deps, roadmapItem)
 		if err != nil {
 			return err
 		}
@@ -147,6 +153,12 @@ var featureShowCmd = &cobra.Command{
 		if f.Description != "" {
 			fmt.Printf("  Desc:      %s\n", f.Description)
 		}
+		if f.Spec != "" {
+			fmt.Printf("  Spec:      %s\n", f.Spec)
+		}
+		if f.RoadmapItemID != "" {
+			fmt.Printf("  Roadmap:   %s\n", f.RoadmapItemID)
+		}
 		fmt.Printf("  Created:   %s\n", f.CreatedAt)
 		return nil
 	},
@@ -170,11 +182,17 @@ var featureEditCmd = &cobra.Command{
 		if v, _ := cmd.Flags().GetString("description"); v != "" {
 			updates["description"] = v
 		}
+		if v, _ := cmd.Flags().GetString("spec"); v != "" {
+			updates["spec"] = v
+		}
 		if v, _ := cmd.Flags().GetString("status"); v != "" {
 			updates["status"] = v
 		}
 		if v, _ := cmd.Flags().GetString("milestone"); v != "" {
 			updates["milestone_id"] = v
+		}
+		if v, _ := cmd.Flags().GetString("roadmap-item"); v != "" {
+			updates["roadmap_item_id"] = v
 		}
 		if v, _ := cmd.Flags().GetInt("priority"); v >= 0 && cmd.Flags().Changed("priority") {
 			updates["priority"] = v

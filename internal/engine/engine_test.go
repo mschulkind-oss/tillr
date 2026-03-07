@@ -32,7 +32,7 @@ func TestAddFeature(t *testing.T) {
 	defer database.Close()               //nolint:errcheck
 	engine.InitProject(database, "Test") //nolint:errcheck
 
-	f, err := engine.AddFeature(database, "test", "Cool Feature", "A cool feature", "", 5, nil)
+	f, err := engine.AddFeature(database, "test", "Cool Feature", "A cool feature", "", "", 5, nil, "")
 	if err != nil {
 		t.Fatalf("add feature: %v", err)
 	}
@@ -43,9 +43,9 @@ func TestAddFeature(t *testing.T) {
 
 func TestTransitionFeature(t *testing.T) {
 	database, _ := db.Open(":memory:")
-	defer database.Close()                                    //nolint:errcheck
-	engine.InitProject(database, "Test")                      //nolint:errcheck
-	engine.AddFeature(database, "test", "F1", "", "", 0, nil) //nolint:errcheck
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
 
 	if err := engine.TransitionFeature(database, "test", "f1", "implementing"); err != nil {
 		t.Fatalf("transition: %v", err)
@@ -59,9 +59,9 @@ func TestTransitionFeature(t *testing.T) {
 
 func TestWorkItemFlow(t *testing.T) {
 	database, _ := db.Open(":memory:")
-	defer database.Close()                                    //nolint:errcheck
-	engine.InitProject(database, "Test")                      //nolint:errcheck
-	engine.AddFeature(database, "test", "F1", "", "", 0, nil) //nolint:errcheck
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
 
 	// Create work item
 	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
@@ -91,9 +91,9 @@ func TestWorkItemFlow(t *testing.T) {
 
 func TestCycleFlow(t *testing.T) {
 	database, _ := db.Open(":memory:")
-	defer database.Close()                                    //nolint:errcheck
-	engine.InitProject(database, "Test")                      //nolint:errcheck
-	engine.AddFeature(database, "test", "F1", "", "", 0, nil) //nolint:errcheck
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
 
 	// Start cycle
 	c, err := engine.StartCycle(database, "test", "f1", "bug-triage")
@@ -124,10 +124,10 @@ func TestCycleFlow(t *testing.T) {
 
 func TestQAFlow(t *testing.T) {
 	database, _ := db.Open(":memory:")
-	defer database.Close()                                       //nolint:errcheck
-	engine.InitProject(database, "Test")                         //nolint:errcheck
-	engine.AddFeature(database, "test", "F1", "", "", 0, nil)    //nolint:errcheck
-	engine.TransitionFeature(database, "test", "f1", "human-qa") //nolint:errcheck
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+	engine.TransitionFeature(database, "test", "f1", "human-qa")      //nolint:errcheck
 
 	// Reject
 	if err := engine.RejectFeatureQA(database, "test", "f1", "needs work"); err != nil {

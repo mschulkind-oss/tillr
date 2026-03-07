@@ -79,22 +79,23 @@ func ListMilestones(db *sql.DB, projectID string) ([]models.Milestone, error) {
 
 func CreateFeature(db *sql.DB, f *models.Feature) error {
 	_, err := db.Exec(
-		`INSERT INTO features (id, project_id, milestone_id, name, description, priority) VALUES (?, ?, ?, ?, ?, ?)`,
-		f.ID, f.ProjectID, nullStr(f.MilestoneID), f.Name, f.Description, f.Priority,
+		`INSERT INTO features (id, project_id, milestone_id, name, description, spec, priority, roadmap_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.ProjectID, nullStr(f.MilestoneID), f.Name, f.Description, f.Spec, f.Priority, f.RoadmapItemID,
 	)
 	return err
 }
 
 func GetFeature(db *sql.DB, id string) (*models.Feature, error) {
 	row := db.QueryRow(`
-		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, f.description, f.status, f.priority,
-			COALESCE(f.assigned_cycle,''), f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name
+		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,'') AS ms_name
 		FROM features f
 		LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.id = ?`, id)
 	f := &models.Feature{}
-	err := row.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Status,
-		&f.Priority, &f.AssignedCycle, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName)
+	err := row.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+		&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName)
 	if err != nil {
 		return nil, err
 	}
@@ -104,8 +105,9 @@ func GetFeature(db *sql.DB, id string) (*models.Feature, error) {
 }
 
 func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.Feature, error) {
-	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, f.description, f.status, f.priority,
-			COALESCE(f.assigned_cycle,''), f.created_at, f.updated_at, COALESCE(m.name,'')
+	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,'')
 		FROM features f LEFT JOIN milestones m ON f.milestone_id = m.id
 		WHERE f.project_id = ?`
 	args := []any{projectID}
@@ -128,8 +130,8 @@ func ListFeatures(db *sql.DB, projectID, status, milestoneID string) ([]models.F
 	var out []models.Feature
 	for rows.Next() {
 		var f models.Feature
-		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description,
-			&f.Status, &f.Priority, &f.AssignedCycle, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName); err != nil {
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -257,6 +259,27 @@ func UpdateWorkItemStatus(db *sql.DB, id int, status, result string) error {
 		_, err := db.Exec("UPDATE work_items SET status = ? WHERE id = ?", status, id)
 		return err
 	}
+}
+
+// ListWorkItemsForFeature returns completed work items for a feature, most recent first.
+func ListWorkItemsForFeature(db *sql.DB, featureID string) ([]models.WorkItem, error) {
+	rows, err := db.Query(`SELECT id, feature_id, work_type, status, COALESCE(agent_prompt,''), COALESCE(result,''),
+		COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+		FROM work_items WHERE feature_id = ? AND status IN ('done','failed') ORDER BY completed_at DESC`, featureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.WorkItem
+	for rows.Next() {
+		var w models.WorkItem
+		if err := rows.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status, &w.AgentPrompt, &w.Result,
+			&w.StartedAt, &w.CompletedAt, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }
 
 // --- Events ---
