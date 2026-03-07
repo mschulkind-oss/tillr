@@ -164,7 +164,7 @@ var ideaShowCmd = &cobra.Command{
 
 		idea, err := db.GetIdea(database, id)
 		if err != nil {
-			return fmt.Errorf("idea not found: %s", args[0])
+			return fmt.Errorf("idea #%s not found. Run 'lifecycle idea list' to see available ideas", args[0])
 		}
 
 		if jsonOutput {
@@ -259,7 +259,7 @@ var ideaApproveCmd = &cobra.Command{
 
 		idea, err := db.GetIdea(database, id)
 		if err != nil {
-			return fmt.Errorf("idea not found: %s", args[0])
+			return fmt.Errorf("idea #%s not found. Run 'lifecycle idea list' to see available ideas", args[0])
 		}
 
 		notes, _ := cmd.Flags().GetString("notes")

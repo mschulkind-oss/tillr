@@ -33,7 +33,7 @@ var initCmd = &cobra.Command{
 
 		cfg := &config.Config{
 			ProjectDir: cwd,
-			DBPath:     filepath.Join(cwd, config.DefaultDBName),
+			DBPath:     config.DefaultDBName,
 			ServerPort: config.DefaultServerPort,
 		}
 		if err := config.Save(cfg); err != nil {
@@ -121,6 +121,8 @@ Checks performed:
   project     .lifecycle.json found
   config      Configuration file valid
   database    SQLite database opens and has expected tables
+  schema      Schema version matches expected migration count
+  orphans     No orphaned work items or cycle references
   git         Git repository detected
   go          Go toolchain available (required version)
   gh          GitHub CLI available (optional, enables GitHub integration)
@@ -300,6 +302,64 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 		// Build health summary if DB is available
 		if database != nil && projectID != "" {
 			defer database.Close() //nolint:errcheck
+
+			// Check schema version
+			var schemaVersion int
+			row := database.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+			if err := row.Scan(&schemaVersion); err == nil {
+				expected := db.ExpectedMigrationCount()
+				if schemaVersion == expected {
+					checks = append(checks, Check{
+						Name:   "schema",
+						Status: "ok",
+						Detail: fmt.Sprintf("schema version %d/%d", schemaVersion, expected),
+					})
+				} else {
+					checks = append(checks, Check{
+						Name:   "schema",
+						Status: "warn",
+						Detail: fmt.Sprintf("schema version %d, expected %d", schemaVersion, expected),
+						Fix:    "Re-open the database to apply pending migrations, or re-initialize with 'lifecycle init'",
+					})
+				}
+			}
+
+			// Check for orphaned work items (referencing non-existent features)
+			var orphanedWorkItems int
+			row = database.QueryRow(`
+				SELECT COUNT(*) FROM work_items
+				WHERE feature_id NOT IN (SELECT id FROM features)`)
+			if err := row.Scan(&orphanedWorkItems); err == nil && orphanedWorkItems > 0 {
+				checks = append(checks, Check{
+					Name:   "orphans",
+					Status: "warn",
+					Detail: fmt.Sprintf("%d work item(s) reference non-existent features", orphanedWorkItems),
+					Fix:    "These may be left over from deleted features; consider cleaning up the database",
+				})
+			}
+
+			// Check for orphaned cycle instances (referencing non-existent features)
+			var orphanedCycles int
+			row = database.QueryRow(`
+				SELECT COUNT(*) FROM cycle_instances
+				WHERE feature_id NOT IN (SELECT id FROM features)`)
+			if err := row.Scan(&orphanedCycles); err == nil && orphanedCycles > 0 {
+				checks = append(checks, Check{
+					Name:   "orphans",
+					Status: "warn",
+					Detail: fmt.Sprintf("%d cycle instance(s) reference non-existent features", orphanedCycles),
+					Fix:    "These may be left over from deleted features; consider cleaning up the database",
+				})
+			}
+
+			if orphanedWorkItems == 0 && orphanedCycles == 0 {
+				checks = append(checks, Check{
+					Name:   "orphans",
+					Status: "ok",
+					Detail: "no orphaned work items or cycle references",
+				})
+			}
+
 			health = &HealthSummary{}
 
 			if counts, err := db.FeatureCounts(database, projectID); err == nil {

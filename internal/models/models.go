@@ -38,10 +38,29 @@ type Feature struct {
 	UpdatedAt     string `json:"updated_at"`
 
 	PreviousStatus string `json:"previous_status,omitempty"`
+	EstimatePoints int    `json:"estimate_points,omitempty"`
+	EstimateSize   string `json:"estimate_size,omitempty"`
 
 	// Computed fields
 	DependsOn     []string `json:"depends_on,omitempty"`
 	MilestoneName string   `json:"milestone_name,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+}
+
+// EstimationSummary holds aggregate estimation data for a project or milestone.
+type EstimationSummary struct {
+	TotalPoints     int                   `json:"total_points"`
+	CompletedPoints int                   `json:"completed_points"`
+	RemainingPoints int                   `json:"remaining_points"`
+	BySizeEntries   []EstimationSizeEntry `json:"by_size"`
+	Unestimated     int                   `json:"unestimated"`
+}
+
+// EstimationSizeEntry holds count and done count for a t-shirt size.
+type EstimationSizeEntry struct {
+	Size  string `json:"size"`
+	Total int    `json:"total"`
+	Done  int    `json:"done"`
 }
 
 type WorkItem struct {
@@ -342,4 +361,10 @@ var CycleTypes = []CycleType{
 	{Name: "release", Description: "Release", Steps: []string{"freeze", "qa", "fix", "staging", "verify", "ship"}},
 	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []string{"try", "friction-log", "improve", "verify", "document"}},
 	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []string{"research", "draft-spec", "review", "judge", "human-review"}},
+}
+
+// TagCount represents a tag with its usage count.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
 }

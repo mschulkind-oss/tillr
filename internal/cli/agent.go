@@ -20,6 +20,13 @@ func init() {
 var nextCmd = &cobra.Command{
 	Use:   "next",
 	Short: "Get the next work item for an agent",
+	Long: `Claim and return the next available work item for an agent to work on.
+
+Returns an enriched WorkContext (with --json) containing the work item,
+feature details, cycle state, prior results, and agent guidance — everything
+an agent needs to execute the task without additional context.
+
+If no work items are available, returns a "no_work" status.`,
 	Example: `  # Get next work item as JSON (primary agent interface)
   lifecycle next --json
 
@@ -69,6 +76,13 @@ var nextCmd = &cobra.Command{
 var doneCmd = &cobra.Command{
 	Use:   "done",
 	Short: "Mark current work item as complete",
+	Long: `Mark the currently active work item as complete and record the result.
+
+The --result flag should summarize what was accomplished. This result is
+stored in the work item history and passed to subsequent cycle steps.
+
+If no work item is active, this command will return an error. Use
+'lifecycle next' to claim a work item first.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -78,7 +92,7 @@ var doneCmd = &cobra.Command{
 
 		result, _ := cmd.Flags().GetString("result")
 		if err := engine.CompleteWorkItem(database, result); err != nil {
-			return err
+			return fmt.Errorf("completing work item: %w", err)
 		}
 
 		if jsonOutput {
@@ -92,6 +106,12 @@ var doneCmd = &cobra.Command{
 var failCmd = &cobra.Command{
 	Use:   "fail",
 	Short: "Mark current work item as failed",
+	Long: `Mark the currently active work item as failed and record the reason.
+
+The --reason flag should explain why the work item failed. This allows
+the project manager to decide whether to retry, reassign, or skip the work.
+
+If no work item is active, this command will return an error.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -101,7 +121,7 @@ var failCmd = &cobra.Command{
 
 		reason, _ := cmd.Flags().GetString("reason")
 		if err := engine.FailWorkItem(database, reason); err != nil {
-			return err
+			return fmt.Errorf("failing work item: %w", err)
 		}
 
 		if jsonOutput {
@@ -115,6 +135,11 @@ var failCmd = &cobra.Command{
 var heartbeatCmd = &cobra.Command{
 	Use:   "heartbeat",
 	Short: "Agent heartbeat signal",
+	Long: `Send a heartbeat signal to indicate the agent is still alive and working.
+
+Heartbeats are recorded against the currently active work item. Use
+--message to include a status update (e.g., "Running tests...").
+Stale agents without recent heartbeats may have their work reclaimed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

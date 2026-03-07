@@ -91,6 +91,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/status", apiHandler(database, handleStatus))
 	mux.HandleFunc("/api/features", apiHandler(database, handleFeatures))
 	mux.HandleFunc("/api/features/", apiHandler(database, handleFeatures))
+	mux.HandleFunc("/api/tags", apiHandler(database, handleTags))
 	mux.HandleFunc("/api/milestones", apiHandler(database, handleMilestones))
 	mux.HandleFunc("/api/milestones/", apiHandler(database, handleMilestoneDetail))
 	mux.HandleFunc("/api/roadmap", apiHandler(database, handleRoadmap))
@@ -488,6 +489,21 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 		features = []models.Feature{}
 	}
 	return writeJSON(w, features)
+}
+
+func handleTags(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	tags, err := db.ListAllTags(database, p.ID)
+	if err != nil {
+		return err
+	}
+	if tags == nil {
+		tags = []models.TagCount{}
+	}
+	return writeJSON(w, tags)
 }
 
 func handleFeatureDeps(database *sql.DB, w http.ResponseWriter, featureID string) error {
