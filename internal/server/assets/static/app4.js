@@ -16,7 +16,15 @@ function timeAgo(dateStr) {
 // AGENT DASHBOARD PAGE
 // =====================================================
 App.renderAgents = async function() {
-    const agents = await App.api('agents');
+    // If an agent ID is in context, render detail view
+    if (App._navContext?.id) {
+        return App.renderAgentDetail(App._navContext.id);
+    }
+
+    const [agents, worktrees] = await Promise.all([
+        App.api('agents'),
+        App.api('worktrees').catch(() => []),
+    ]);
     const active = agents.filter(a => a.status === 'active');
     const completed = agents.filter(a => a.status === 'completed');
     const failed = agents.filter(a => a.status === 'failed');
@@ -28,47 +36,50 @@ App.renderAgents = async function() {
     </div>`;
 
     // Stats row
-    html += `<div class="stats-grid" style="margin-bottom:24px">
-        <div class="stat-card"><div class="stat-value">${agents.length}</div><div class="stat-label">Total Sessions</div></div>
-        <div class="stat-card"><div class="stat-value">${active.length}</div><div class="stat-label">Active</div></div>
+    html += `<div class="stats-grid app4-stats-row">
+        <div class="stat-card stat-card--accent"><div class="stat-value">${agents.length}</div><div class="stat-label">Total Sessions</div></div>
+        <div class="stat-card stat-card--success"><div class="stat-value">${active.length}</div><div class="stat-label">Active</div></div>
         <div class="stat-card"><div class="stat-value">${completed.length}</div><div class="stat-label">Completed</div></div>
-        <div class="stat-card"><div class="stat-value">${successRate}%</div><div class="stat-label">Success Rate</div></div>
+        <div class="stat-card stat-card--warning"><div class="stat-value">${successRate}%</div><div class="stat-label">Success Rate</div></div>
     </div>`;
+
+    html += App.renderSearchBox('agentsSearch', 'Search agents…');
 
     // Active agents
     if (active.length > 0) {
-        html += `<h3 style="margin-bottom:12px">Active Agents</h3>`;
+        html += `<h3 class="app4-section-heading">Active Agents</h3>`;
         for (const a of active) {
-            // Fetch updates for each active agent
             let updates = [];
             try {
                 const detail = await App.api('agents/' + encodeURIComponent(a.id));
                 updates = (detail.updates || []).slice(0, 5);
             } catch(e) { /* ignore */ }
 
-            html += `<div class="card" style="margin-bottom:16px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div>
-                        <strong>${esc(a.name)}</strong>
-                        <span style="opacity:0.5;margin-left:8px;font-size:0.85em">${esc(a.id)}</span>
+            const progressClass = a.progress_pct >= 80 ? 'progress-fill--high' : a.progress_pct >= 40 ? 'progress-fill--mid' : '';
+
+            html += `<div class="card app4-agent-card app4-clickable-agent" data-agent-id="${esc(a.id)}">
+                <div class="app4-agent-header">
+                    <div class="app4-agent-identity">
+                        <strong class="app4-agent-name">${esc(a.name)}</strong>
+                        <span class="app4-agent-id">${esc(a.id)}</span>
                     </div>
-                    <div style="display:flex;gap:8px;align-items:center">
-                        ${a.current_phase ? `<span class="status-badge status-implementing">${esc(a.current_phase)}</span>` : ''}
-                        ${a.eta ? `<span style="font-size:0.85em;opacity:0.7">ETA: ${esc(a.eta)}</span>` : ''}
+                    <div class="app4-agent-meta">
+                        ${a.current_phase ? `<span class="badge badge-implementing">${esc(a.current_phase)}</span>` : ''}
+                        ${a.eta ? `<span class="app4-meta-text">ETA: ${esc(a.eta)}</span>` : ''}
                     </div>
                 </div>
-                ${a.task_description ? `<div style="margin-bottom:8px;opacity:0.8">${esc(a.task_description)}</div>` : ''}
-                ${a.feature_id ? `<div style="margin-bottom:8px">Feature: <span class="clickable-feature" data-feature-id="${esc(a.feature_id)}">${esc(a.feature_id)}</span></div>` : ''}
-                <div style="margin-bottom:8px">
-                    <div class="progress-bar"><div class="progress-fill" style="width:${a.progress_pct}%"></div></div>
-                    <div style="font-size:0.85em;opacity:0.7;margin-top:4px">${a.progress_pct}% complete · Last active ${timeAgo(a.updated_at)}</div>
+                ${a.task_description ? `<div class="app4-agent-task">${esc(a.task_description)}</div>` : ''}
+                ${a.feature_id ? `<div class="app4-agent-feature">Feature: <span class="clickable-feature" data-feature-id="${esc(a.feature_id)}">${esc(a.feature_id)}</span></div>` : ''}
+                <div class="app4-progress-section">
+                    <div class="progress-bar app4-progress-bar"><div class="progress-fill app4-progress-fill ${progressClass}" style="width:${a.progress_pct}%"></div></div>
+                    <div class="app4-progress-label">${a.progress_pct}% complete · Last active ${timeAgo(a.updated_at)}</div>
                 </div>
-                ${updates.length > 0 ? `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px">
-                    <div style="font-size:0.85em;font-weight:600;margin-bottom:6px">Recent Updates</div>
-                    ${updates.map(u => `<div style="padding:6px 0;border-bottom:1px solid var(--border-light, var(--border));font-size:0.9em">
-                        <div style="display:flex;justify-content:space-between;margin-bottom:2px">
-                            ${u.phase ? `<span class="status-badge status-planning">${esc(u.phase)}</span>` : '<span></span>'}
-                            <span style="opacity:0.5">${timeAgo(u.created_at)}</span>
+                ${updates.length > 0 ? `<div class="app4-updates-section">
+                    <div class="app4-updates-heading">Recent Updates</div>
+                    ${updates.map(u => `<div class="app4-update-item">
+                        <div class="app4-update-header">
+                            ${u.phase ? `<span class="badge badge-planning">${esc(u.phase)}</span>` : '<span></span>'}
+                            <span class="app4-time-text">${timeAgo(u.created_at)}</span>
                         </div>
                         <div class="md-content">${renderMD(u.message_md)}</div>
                     </div>`).join('')}
@@ -76,36 +87,187 @@ App.renderAgents = async function() {
             </div>`;
         }
     } else {
-        html += `<div class="empty-state" style="margin-bottom:24px">
+        html += `<div class="empty-state app4-empty-state">
             <div class="empty-state-icon">🤖</div>
             <div class="empty-state-text">No active agents</div>
             <div class="empty-state-hint">Agents will appear here when they start working on tasks.</div>
+            <div class="app4-empty-pulse"></div>
         </div>`;
     }
 
     // Completed/Failed agents
     const past = [...completed, ...failed];
     if (past.length > 0) {
-        html += `<details style="margin-top:16px"><summary style="cursor:pointer;font-weight:600;margin-bottom:8px">
+        html += `<details class="app4-past-section"><summary class="app4-past-summary">
             Completed & Failed Sessions (${past.length})
-        </summary><div>`;
+        </summary><div class="app4-past-list">`;
         for (const a of past) {
             const icon = a.status === 'completed' ? '✅' : '❌';
-            html += `<div class="card" style="margin-bottom:8px;opacity:0.85">
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div>${icon} <strong>${esc(a.name)}</strong></div>
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <span class="status-badge status-${a.status === 'completed' ? 'done' : 'blocked'}">${esc(a.status)}</span>
-                        <span style="font-size:0.85em;opacity:0.5">${timeAgo(a.updated_at)}</span>
+            html += `<div class="card app4-past-card app4-clickable-agent" data-agent-id="${esc(a.id)}">
+                <div class="app4-past-card-header">
+                    <div class="app4-past-card-name">${icon} <strong>${esc(a.name)}</strong></div>
+                    <div class="app4-past-card-meta">
+                        <span class="badge badge-${a.status === 'completed' ? 'done' : 'failed'}">${esc(a.status)}</span>
+                        <span class="app4-time-text">${timeAgo(a.updated_at)}</span>
                     </div>
                 </div>
-                ${a.task_description ? `<div style="font-size:0.9em;opacity:0.7;margin-top:4px">${esc(a.task_description)}</div>` : ''}
+                ${a.task_description ? `<div class="app4-past-card-desc">${esc(a.task_description)}</div>` : ''}
             </div>`;
         }
         html += `</div></details>`;
     }
 
+    // Workspaces section
+    html += `<h3 class="app4-section-heading" style="margin-top:32px">📂 Workspaces</h3>`;
+    if (worktrees.length > 0) {
+        html += `<div class="app4-worktree-grid">`;
+        for (const wt of worktrees) {
+            const agentName = wt.agent_session_id ? agents.find(a => a.id === wt.agent_session_id)?.name : null;
+            html += `<div class="card app4-worktree-card">
+                <div class="app4-wt-header">
+                    <strong class="app4-wt-name">📁 ${esc(wt.name)}</strong>
+                    ${wt.branch ? `<span class="badge badge-planning">${esc(wt.branch)}</span>` : ''}
+                </div>
+                <div class="app4-wt-path">${esc(wt.path)}</div>
+                ${agentName ? `<div class="app4-wt-agent">🤖 <span class="app4-clickable-agent-link" data-agent-id="${esc(wt.agent_session_id)}">${esc(agentName)}</span></div>` : '<div class="app4-wt-agent app4-wt-unlinked">No agent linked</div>'}
+            </div>`;
+        }
+        html += `</div>`;
+    } else {
+        html += `<div class="empty-state app4-empty-state" style="padding:24px">
+            <div class="empty-state-text" style="font-size:14px">No workspaces configured</div>
+            <div class="empty-state-hint">Use <code>lifecycle worktree add &lt;name&gt;</code> to create one.</div>
+        </div>`;
+    }
+
     return html;
+};
+
+// Agent Detail View
+App.renderAgentDetail = async function(agentId) {
+    let detail;
+    try {
+        detail = await App.api('agents/' + encodeURIComponent(agentId));
+    } catch(e) {
+        return `<div class="empty-state"><div class="empty-state-icon">❌</div>
+            <div class="empty-state-text">Agent not found</div>
+            <div class="empty-state-hint">${esc(e.message)}</div>
+            <button class="app4-btn app4-btn-ghost" onclick="App._navContext={};App.navigate('agents')">← Back to Agents</button>
+        </div>`;
+    }
+    const s = detail.session;
+    const updates = detail.updates || [];
+    const wt = detail.worktree;
+
+    const statusColors = { active: 'implementing', completed: 'done', failed: 'blocked', paused: 'planning', abandoned: 'blocked' };
+    const progressClass = s.progress_pct >= 80 ? 'progress-fill--high' : s.progress_pct >= 40 ? 'progress-fill--mid' : '';
+
+    let html = `<div class="page-header">
+        <div>
+            <button class="app4-btn app4-btn-ghost app4-back-btn" id="agentBackBtn" style="margin-bottom:8px">← Back to Agents</button>
+            <h2 class="page-title">🤖 ${esc(s.name)}</h2>
+            <div class="page-subtitle">${esc(s.id)}</div>
+        </div>
+    </div>`;
+
+    // Info cards row
+    html += `<div class="stats-grid app4-stats-row">
+        <div class="stat-card"><div class="stat-value"><span class="badge badge-${statusColors[s.status] || 'planning'}" style="font-size:16px">${esc(s.status)}</span></div><div class="stat-label">Status</div></div>
+        <div class="stat-card"><div class="stat-value">${s.progress_pct}%</div><div class="stat-label">Progress</div></div>
+        <div class="stat-card"><div class="stat-value">${s.current_phase ? esc(s.current_phase) : '—'}</div><div class="stat-label">Phase</div></div>
+        <div class="stat-card"><div class="stat-value">${s.eta ? esc(s.eta) : '—'}</div><div class="stat-label">ETA</div></div>
+    </div>`;
+
+    // Progress bar
+    html += `<div class="card" style="margin-bottom:16px">
+        <div class="app4-progress-section">
+            <div class="progress-bar app4-progress-bar"><div class="progress-fill app4-progress-fill ${progressClass}" style="width:${s.progress_pct}%"></div></div>
+            <div class="app4-progress-label">${s.progress_pct}% complete</div>
+        </div>
+    </div>`;
+
+    // Task description
+    if (s.task_description) {
+        html += `<div class="card" style="margin-bottom:16px">
+            <div class="app4-updates-heading">Task Description</div>
+            <div class="app4-agent-task">${esc(s.task_description)}</div>
+        </div>`;
+    }
+
+    // Feature link
+    if (s.feature_id) {
+        html += `<div class="card" style="margin-bottom:16px;padding:12px 16px">
+            Feature: <span class="clickable-feature" data-feature-id="${esc(s.feature_id)}">${esc(s.feature_id)}</span>
+        </div>`;
+    }
+
+    // Linked Worktree
+    if (wt) {
+        html += `<div class="card" style="margin-bottom:16px">
+            <div class="app4-updates-heading">📂 Linked Workspace</div>
+            <div class="app4-wt-detail">
+                <div><strong>${esc(wt.name)}</strong></div>
+                <div class="app4-wt-path">${esc(wt.path)}</div>
+                ${wt.branch ? `<div>Branch: <span class="badge badge-planning">${esc(wt.branch)}</span></div>` : ''}
+            </div>
+        </div>`;
+    }
+
+    // Status Updates Timeline
+    html += `<div class="card">
+        <div class="app4-updates-heading">Status Updates Timeline (${updates.length})</div>`;
+    if (updates.length > 0) {
+        html += `<div class="app4-timeline">`;
+        for (const u of updates) {
+            html += `<div class="app4-timeline-item">
+                <div class="app4-timeline-dot"></div>
+                <div class="app4-timeline-content">
+                    <div class="app4-update-header">
+                        ${u.phase ? `<span class="badge badge-planning">${esc(u.phase)}</span>` : '<span></span>'}
+                        ${u.progress_pct != null ? `<span class="app4-meta-text">${u.progress_pct}%</span>` : ''}
+                        <span class="app4-time-text">${timeAgo(u.created_at)}${u.created_at ? ' · ' + new Date(u.created_at + 'Z').toLocaleString() : ''}</span>
+                    </div>
+                    <div class="md-content">${renderMD(u.message_md)}</div>
+                </div>
+            </div>`;
+        }
+        html += `</div>`;
+    } else {
+        html += `<div class="app4-wt-unlinked" style="padding:12px">No status updates yet.</div>`;
+    }
+    html += `</div>`;
+
+    // Timestamps
+    html += `<div style="margin-top:12px;color:var(--text-secondary);font-size:12px">
+        Created: ${s.created_at ? new Date(s.created_at + 'Z').toLocaleString() : '—'} · 
+        Updated: ${s.updated_at ? new Date(s.updated_at + 'Z').toLocaleString() : '—'}
+    </div>`;
+
+    return html;
+};
+
+App._bindAgentsEvents = function() {
+    // Agent card clicks → navigate to detail
+    document.querySelectorAll('.app4-clickable-agent').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.clickable-feature')) return;
+            App.navigateTo('agents', card.dataset.agentId);
+        });
+        card.style.cursor = 'pointer';
+    });
+    // Agent links in worktree section
+    document.querySelectorAll('.app4-clickable-agent-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.stopPropagation();
+            App.navigateTo('agents', link.dataset.agentId);
+        });
+        link.style.cursor = 'pointer';
+    });
+    // Back button on detail view
+    const backBtn = document.getElementById('agentBackBtn');
+    if (backBtn) {
+        backBtn.addEventListener('click', () => { App._navContext = {}; App.navigate('agents'); });
+    }
 };
 
 // =====================================================
@@ -122,39 +284,46 @@ App.renderIdeas = async function() {
     </div>`;
 
     // Submit button
-    html += `<div style="margin-bottom:20px">
-        <button class="btn btn-primary" id="submitIdeaBtn">+ Submit Idea</button>
+    html += `<div class="app4-ideas-toolbar">
+        <button class="app4-btn app4-btn-primary" id="submitIdeaBtn"><span class="app4-btn-icon">+</span> Submit Idea</button>
     </div>`;
 
+    html += App.renderSearchBox('ideasSearch', 'Search ideas…');
+
     // Modal (hidden by default)
-    html += `<div id="ideaModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">
-        <div class="card" style="width:90%;max-width:560px;max-height:90vh;overflow-y:auto;padding:24px">
-            <h3 style="margin-bottom:16px">Submit New Idea</h3>
-            <div style="margin-bottom:12px">
-                <label style="display:block;font-weight:600;margin-bottom:4px">Title *</label>
-                <input type="text" id="ideaTitle" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text)" placeholder="Idea title">
+    html += `<div id="ideaModal" class="app4-modal-overlay">
+        <div class="card app4-modal-card">
+            <div class="app4-modal-header">
+                <h3 class="app4-modal-title">Submit New Idea</h3>
+                <button class="app4-modal-close" id="ideaCancelBtn" aria-label="Close">✕</button>
             </div>
-            <div style="margin-bottom:12px">
-                <label style="display:block;font-weight:600;margin-bottom:4px">Description</label>
-                <textarea id="ideaDesc" rows="5" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text);resize:vertical" placeholder="Describe the idea (markdown supported)"></textarea>
-            </div>
-            <div style="display:flex;gap:12px;margin-bottom:12px">
-                <div style="flex:1">
-                    <label style="display:block;font-weight:600;margin-bottom:4px">Type</label>
-                    <select id="ideaType" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text)">
-                        <option value="feature">Feature</option>
-                        <option value="bug">Bug</option>
-                    </select>
+            <div class="app4-modal-body">
+                <div class="app4-form-group">
+                    <label class="app4-form-label" for="ideaTitle">Title <span class="app4-required">*</span></label>
+                    <input type="text" id="ideaTitle" class="app4-form-input" placeholder="What's the idea?">
                 </div>
-                <div style="flex:1;display:flex;align-items:end">
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                        <input type="checkbox" id="ideaAuto"> Auto-implement
-                    </label>
+                <div class="app4-form-group">
+                    <label class="app4-form-label" for="ideaDesc">Description</label>
+                    <textarea id="ideaDesc" rows="5" class="app4-form-input app4-form-textarea" placeholder="Describe the idea (markdown supported)"></textarea>
+                </div>
+                <div class="app4-form-row">
+                    <div class="app4-form-group" style="flex:1">
+                        <label class="app4-form-label" for="ideaType">Type</label>
+                        <select id="ideaType" class="app4-form-input">
+                            <option value="feature">✨ Feature</option>
+                            <option value="bug">🐛 Bug</option>
+                        </select>
+                    </div>
+                    <div class="app4-form-group app4-form-checkbox-group">
+                        <label class="app4-checkbox-label">
+                            <input type="checkbox" id="ideaAuto" class="app4-checkbox"> Auto-implement
+                        </label>
+                    </div>
                 </div>
             </div>
-            <div style="display:flex;gap:8px;justify-content:flex-end">
-                <button class="btn" id="ideaCancelBtn">Cancel</button>
-                <button class="btn btn-primary" id="ideaSubmitBtn">Submit</button>
+            <div class="app4-modal-footer">
+                <button class="app4-btn app4-btn-ghost" id="ideaCancelBtn2">Cancel</button>
+                <button class="app4-btn app4-btn-primary" id="ideaSubmitBtn">Submit Idea</button>
             </div>
         </div>
     </div>`;
@@ -162,6 +331,7 @@ App.renderIdeas = async function() {
     // Group ideas by status
     const statusOrder = ['pending', 'processing', 'spec-ready', 'approved', 'rejected'];
     const statusLabels = { pending: '⏳ Pending', processing: '⚙️ Processing', 'spec-ready': '📋 Spec Ready', approved: '✅ Approved', rejected: '❌ Rejected' };
+    const badgeMap = { pending: 'planning', processing: 'implementing', 'spec-ready': 'human-qa', approved: 'done', rejected: 'blocked' };
 
     for (const st of statusOrder) {
         const group = ideas.filter(i => i.status === st);
@@ -169,34 +339,34 @@ App.renderIdeas = async function() {
 
         const collapsed = st === 'approved' || st === 'rejected';
         if (collapsed) {
-            html += `<details style="margin-top:16px"><summary style="cursor:pointer;font-weight:600;margin-bottom:8px">${statusLabels[st]} (${group.length})</summary><div>`;
+            html += `<details class="app4-past-section"><summary class="app4-past-summary">${statusLabels[st]} (${group.length})</summary><div class="app4-past-list">`;
         } else {
-            html += `<h3 style="margin:20px 0 12px">${statusLabels[st]} (${group.length})</h3>`;
+            html += `<h3 class="app4-section-heading">${statusLabels[st]} (${group.length})</h3>`;
         }
 
         for (const idea of group) {
             const typeBadge = idea.idea_type === 'bug' ? '🐛' : '✨';
-            html += `<div class="card" style="margin-bottom:12px" data-idea-id="${idea.id}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                    <div>
-                        <span style="margin-right:6px">${typeBadge}</span>
+            html += `<div class="card app4-idea-card" data-idea-id="${idea.id}">
+                <div class="app4-idea-header">
+                    <div class="app4-idea-title-row">
+                        <span class="app4-idea-type-icon">${typeBadge}</span>
                         <strong>${esc(idea.title)}</strong>
-                        ${idea.auto_implement ? '<span style="font-size:0.8em;opacity:0.6;margin-left:6px">🤖 auto</span>' : ''}
+                        ${idea.auto_implement ? '<span class="app4-auto-badge">🤖 auto</span>' : ''}
                     </div>
-                    <div style="display:flex;gap:6px;align-items:center">
-                        <span class="status-badge status-${st === 'spec-ready' ? 'human-qa' : st === 'approved' ? 'done' : st === 'rejected' ? 'blocked' : 'planning'}">${esc(idea.status)}</span>
-                        <span style="font-size:0.85em;opacity:0.5">${timeAgo(idea.created_at)}</span>
+                    <div class="app4-idea-meta">
+                        <span class="badge badge-${badgeMap[st] || 'planning'}">${esc(idea.status)}</span>
+                        <span class="app4-time-text">${timeAgo(idea.created_at)}</span>
                     </div>
                 </div>
-                ${idea.raw_input ? `<div style="font-size:0.9em;opacity:0.8;margin-bottom:8px">${esc(idea.raw_input).substring(0, 200)}${idea.raw_input.length > 200 ? '...' : ''}</div>` : ''}
-                <div style="font-size:0.85em;opacity:0.6">by ${esc(idea.submitted_by || 'human')}</div>
-                ${idea.feature_id ? `<div style="margin-top:4px;font-size:0.85em">→ Feature: <span class="clickable-feature" data-feature-id="${esc(idea.feature_id)}">${esc(idea.feature_id)}</span></div>` : ''}
-                ${idea.spec_md ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.9em;font-weight:600">View Spec</summary>
-                    <div class="md-content" style="margin-top:8px;padding:12px;background:var(--bg-secondary);border-radius:6px">${renderMD(idea.spec_md)}</div>
+                ${idea.raw_input ? `<div class="app4-idea-desc">${esc(idea.raw_input).substring(0, 200)}${idea.raw_input.length > 200 ? '...' : ''}</div>` : ''}
+                <div class="app4-idea-author">by ${esc(idea.submitted_by || 'human')}</div>
+                ${idea.feature_id ? `<div class="app4-idea-feature">→ Feature: <span class="clickable-feature" data-feature-id="${esc(idea.feature_id)}">${esc(idea.feature_id)}</span></div>` : ''}
+                ${idea.spec_md ? `<details class="app4-idea-spec-details"><summary class="app4-idea-spec-summary">View Spec</summary>
+                    <div class="md-content app4-idea-spec-content">${renderMD(idea.spec_md)}</div>
                 </details>` : ''}
-                ${st === 'spec-ready' ? `<div style="margin-top:10px;display:flex;gap:8px">
-                    <button class="btn btn-primary idea-approve-btn" data-idea-id="${idea.id}" style="font-size:0.85em">✅ Approve</button>
-                    <button class="btn idea-reject-btn" data-idea-id="${idea.id}" style="font-size:0.85em">❌ Reject</button>
+                ${st === 'spec-ready' ? `<div class="app4-idea-actions">
+                    <button class="app4-btn app4-btn-approve idea-approve-btn" data-idea-id="${idea.id}">✅ Approve</button>
+                    <button class="app4-btn app4-btn-reject idea-reject-btn" data-idea-id="${idea.id}">❌ Reject</button>
                 </div>` : ''}
             </div>`;
         }
@@ -205,10 +375,11 @@ App.renderIdeas = async function() {
     }
 
     if (ideas.length === 0) {
-        html += `<div class="empty-state">
+        html += `<div class="empty-state app4-empty-state">
             <div class="empty-state-icon">💡</div>
             <div class="empty-state-text">No ideas yet</div>
-            <div class="empty-state-hint">Submit your first idea using the button above.</div>
+            <div class="empty-state-hint">Submit your first idea to get started. Ideas are processed by agents and turned into actionable specs.</div>
+            <div class="app4-empty-pulse"></div>
         </div>`;
     }
 
@@ -219,10 +390,12 @@ App._bindIdeasEvents = function() {
     const modal = document.getElementById('ideaModal');
     const openBtn = document.getElementById('submitIdeaBtn');
     const cancelBtn = document.getElementById('ideaCancelBtn');
+    const cancelBtn2 = document.getElementById('ideaCancelBtn2');
     const submitBtn = document.getElementById('ideaSubmitBtn');
 
     if (openBtn) openBtn.addEventListener('click', () => { if (modal) modal.style.display = 'flex'; });
     if (cancelBtn) cancelBtn.addEventListener('click', () => { if (modal) modal.style.display = 'none'; });
+    if (cancelBtn2) cancelBtn2.addEventListener('click', () => { if (modal) modal.style.display = 'none'; });
     if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
 
     if (submitBtn) submitBtn.addEventListener('click', async () => {
@@ -266,11 +439,6 @@ App._bindIdeasEvents = function() {
 // =====================================================
 App.renderContext = async function() {
     let entries = await App.api('context');
-    const q = App._contextSearch || '';
-    if (q) {
-        entries = await App.api('context/search?q=' + encodeURIComponent(q));
-    }
-
     const typeFilter = App._contextTypeFilter || 'all';
     if (typeFilter !== 'all') {
         entries = entries.filter(e => e.context_type === typeFilter);
@@ -284,51 +452,47 @@ App.renderContext = async function() {
     </div>`;
 
     // Search bar
-    html += `<div style="margin-bottom:16px">
-        <input type="text" id="contextSearchInput" value="${esc(q)}" placeholder="Search context entries..."
-            style="width:100%;max-width:400px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text)">
-    </div>`;
+    html += App.renderSearchBox('contextSearch', 'Search context entries…', App._contextSearch);
 
     // Type filter pills
-    html += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">`;
+    html += `<div class="app4-ctx-filter-row">`;
     for (const t of types) {
         const active = t === typeFilter;
-        html += `<button class="filter-btn ctx-type-filter ${active ? 'active' : ''}" data-type="${t}"
-            style="padding:4px 12px;border-radius:16px;border:1px solid var(--border);cursor:pointer;font-size:0.85em;
-            background:${active ? 'var(--accent)' : 'var(--bg-secondary)'};color:${active ? '#fff' : 'var(--text)'}">${t}</button>`;
+        html += `<button class="app4-filter-pill ctx-type-filter ${active ? 'active' : ''}" data-type="${t}">${t}</button>`;
     }
     html += `</div>`;
 
     // Context cards
     if (entries.length === 0) {
-        html += `<div class="empty-state">
+        html += `<div class="empty-state app4-empty-state">
             <div class="empty-state-icon">📚</div>
-            <div class="empty-state-text">No context entries${q ? ' matching "' + esc(q) + '"' : ''}</div>
-            <div class="empty-state-hint">Context entries are added by agents during their work.</div>
+            <div class="empty-state-text">No context entries</div>
+            <div class="empty-state-hint">Context entries are added by agents during their work. They capture research, analysis, and notes for future reference.</div>
+            <div class="app4-empty-pulse"></div>
         </div>`;
     } else {
         for (const e of entries) {
             const typeIcons = { 'source-analysis': '🔍', doc: '📄', spec: '📋', research: '🔬', note: '📝' };
             const icon = typeIcons[e.context_type] || '📎';
             const preview = (e.content_md || '').substring(0, 200).replace(/\n/g, ' ');
-            html += `<div class="card ctx-card" style="margin-bottom:12px;cursor:pointer" data-ctx-id="${e.id}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                    <div>
-                        <span style="margin-right:6px">${icon}</span>
+            html += `<div class="card app4-ctx-card ctx-card" data-ctx-id="${e.id}">
+                <div class="app4-ctx-card-header">
+                    <div class="app4-ctx-card-title">
+                        <span class="app4-ctx-icon">${icon}</span>
                         <strong>${esc(e.title)}</strong>
                     </div>
-                    <div style="display:flex;gap:6px;align-items:center">
-                        <span class="status-badge status-planning">${esc(e.context_type)}</span>
-                        <span style="font-size:0.85em;opacity:0.5">${timeAgo(e.created_at)}</span>
+                    <div class="app4-ctx-card-meta">
+                        <span class="badge badge-planning">${esc(e.context_type)}</span>
+                        <span class="app4-time-text">${timeAgo(e.created_at)}</span>
                     </div>
                 </div>
-                <div style="font-size:0.9em;opacity:0.7;margin-bottom:4px">${esc(preview)}${(e.content_md || '').length > 200 ? '...' : ''}</div>
-                <div style="display:flex;gap:8px;font-size:0.85em;opacity:0.6">
+                <div class="app4-ctx-preview">${esc(preview)}${(e.content_md || '').length > 200 ? '...' : ''}</div>
+                <div class="app4-ctx-footer">
                     <span>by ${esc(e.author)}</span>
                     ${e.feature_id ? `<span>· Feature: <span class="clickable-feature" data-feature-id="${esc(e.feature_id)}">${esc(e.feature_id)}</span></span>` : ''}
                     ${e.tags ? `<span>· ${esc(e.tags)}</span>` : ''}
                 </div>
-                <div class="ctx-expanded" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+                <div class="ctx-expanded app4-ctx-expanded">
                     <div class="md-content">${renderMD(e.content_md)}</div>
                 </div>
             </div>`;
@@ -339,18 +503,6 @@ App.renderContext = async function() {
 };
 
 App._bindContextEvents = function() {
-    const searchInput = document.getElementById('contextSearchInput');
-    let debounceTimer;
-    if (searchInput) {
-        searchInput.addEventListener('input', () => {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                App._contextSearch = searchInput.value.trim();
-                App.navigate('context');
-            }, 400);
-        });
-    }
-
     document.querySelectorAll('.ctx-type-filter').forEach(btn => {
         btn.addEventListener('click', () => {
             App._contextTypeFilter = btn.dataset.type;
@@ -378,28 +530,28 @@ App.renderSpec = async function() {
 
     for (const section of (spec.sections || [])) {
         const anchor = section.id;
-        tocHtml += `<a href="#spec-${anchor}" class="spec-toc-item" style="padding:4px 0;display:block;font-size:0.9em;color:var(--text);text-decoration:none;opacity:0.8">${esc(section.title)}</a>`;
+        tocHtml += `<a href="#spec-${anchor}" class="app4-toc-link spec-toc-item">${esc(section.title)}</a>`;
 
-        contentHtml += `<div id="spec-${anchor}" class="spec-section" style="margin-bottom:32px">
-            <h2 style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px">${esc(section.title)}</h2>
+        contentHtml += `<div id="spec-${anchor}" class="spec-section app4-spec-section">
+            <h2 class="app4-spec-section-title">${esc(section.title)}</h2>
             <div class="md-content">${renderMD(section.content_md)}</div>`;
 
         if (section.features && section.features.length > 0) {
-            contentHtml += `<div style="margin-top:16px">`;
+            contentHtml += `<div class="app4-spec-features">`;
             for (const f of section.features) {
                 const deps = (f.dependencies || []);
-                contentHtml += `<div class="card" style="margin-bottom:10px;padding:12px">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                contentHtml += `<div class="card app4-spec-feature-card">
+                    <div class="app4-spec-feature-header">
                         <strong class="clickable-feature" data-feature-id="${esc(f.id)}">${esc(f.name)}</strong>
-                        <div style="display:flex;gap:6px">
-                            <span class="status-badge status-${esc(f.status)}">${esc(f.status)}</span>
-                            <span style="font-size:0.85em;opacity:0.6">P${f.priority}</span>
+                        <div class="app4-spec-feature-meta">
+                            <span class="badge badge-${esc(f.status)}">${esc(f.status)}</span>
+                            <span class="app4-priority-badge">P${f.priority}</span>
                         </div>
                     </div>
-                    ${f.description ? `<div style="font-size:0.9em;opacity:0.8;margin-bottom:6px">${esc(f.description)}</div>` : ''}
-                    ${deps.length > 0 ? `<div style="font-size:0.85em;margin-bottom:6px">Depends on: ${deps.map(d => `<span class="clickable-feature" data-feature-id="${esc(d)}" style="background:var(--bg-secondary);padding:2px 8px;border-radius:10px;margin-right:4px">${esc(d)}</span>`).join('')}</div>` : ''}
-                    ${f.spec_md ? `<details><summary style="cursor:pointer;font-size:0.85em;font-weight:600;margin-top:4px">Specification</summary>
-                        <div class="md-content" style="margin-top:8px;padding:12px;background:var(--bg-secondary);border-radius:6px">${renderMD(f.spec_md)}</div>
+                    ${f.description ? `<div class="app4-spec-feature-desc">${esc(f.description)}</div>` : ''}
+                    ${deps.length > 0 ? `<div class="app4-spec-deps">Depends on: ${deps.map(d => `<span class="clickable-feature app4-dep-chip" data-feature-id="${esc(d)}">${esc(d)}</span>`).join('')}</div>` : ''}
+                    ${f.spec_md ? `<details class="app4-idea-spec-details"><summary class="app4-idea-spec-summary">Specification</summary>
+                        <div class="md-content app4-idea-spec-content">${renderMD(f.spec_md)}</div>
                     </details>` : ''}
                 </div>`;
             }
@@ -411,30 +563,30 @@ App.renderSpec = async function() {
 
     // Stats footer
     const s = spec.stats || {};
-    const statsHtml = `<div class="stats-grid" style="margin-top:24px">
-        <div class="stat-card"><div class="stat-value">${s.total_features || 0}</div><div class="stat-label">Features</div></div>
-        <div class="stat-card"><div class="stat-value">${s.done || 0}</div><div class="stat-label">Done</div></div>
-        <div class="stat-card"><div class="stat-value">${s.in_progress || 0}</div><div class="stat-label">In Progress</div></div>
-        <div class="stat-card"><div class="stat-value">${s.total_milestones || 0}</div><div class="stat-label">Milestones</div></div>
+    const statsHtml = `<div class="stats-grid app4-stats-row">
+        <div class="stat-card stat-card--accent"><div class="stat-value">${s.total_features || 0}</div><div class="stat-label">Features</div></div>
+        <div class="stat-card stat-card--success"><div class="stat-value">${s.done || 0}</div><div class="stat-label">Done</div></div>
+        <div class="stat-card stat-card--warning"><div class="stat-value">${s.in_progress || 0}</div><div class="stat-label">In Progress</div></div>
+        <div class="stat-card stat-card--purple"><div class="stat-value">${s.total_milestones || 0}</div><div class="stat-label">Milestones</div></div>
     </div>`;
 
     let html = `<div class="spec-document">
-        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
+        <div class="page-header app4-spec-header">
             <div>
                 <h2 class="page-title">📋 ${esc(spec.title || 'Software Specification')}</h2>
                 <div class="page-subtitle">Generated ${spec.generated_at ? new Date(spec.generated_at).toLocaleString() : 'now'}</div>
             </div>
             <div>
-                <button class="btn" onclick="window.print()" style="font-size:0.85em">🖨️ Print</button>
+                <button class="app4-btn app4-btn-ghost" onclick="window.print()">🖨️ Print</button>
             </div>
         </div>
         ${statsHtml}
-        <div style="display:flex;gap:24px;margin-top:24px">
-            <div class="spec-toc" style="width:220px;flex-shrink:0;position:sticky;top:16px;align-self:flex-start;padding:12px;background:var(--bg-secondary);border-radius:8px;max-height:80vh;overflow-y:auto">
-                <div style="font-weight:700;margin-bottom:8px;font-size:0.9em">Table of Contents</div>
+        <div class="app4-spec-layout">
+            <nav class="app4-toc-sidebar">
+                <div class="app4-toc-heading">Table of Contents</div>
                 ${tocHtml}
-            </div>
-            <div style="flex:1;min-width:0">
+            </nav>
+            <div class="app4-spec-content">
                 ${contentHtml}
             </div>
         </div>
@@ -452,6 +604,117 @@ App._bindSpecEvents = function() {
             if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
     });
+};
+
+// =====================================================
+// GLOBAL SEARCH FILTER — reusable component
+// =====================================================
+App.renderSearchBox = function(id, placeholder, value) {
+    const v = value || '';
+    return `<div class="gsf-wrap" id="${id}Wrap"><span class="gsf-icon">🔍</span><input type="text" class="gsf-input" id="${id}" value="${esc(v)}" placeholder="${esc(placeholder || 'Search…')}" aria-label="${esc(placeholder || 'Search')}"><span class="gsf-clear" id="${id}Clear"${v ? '' : ' style="display:none"'} aria-label="Clear search">×</span><span class="gsf-count" id="${id}Count"></span></div>`;
+};
+
+App.bindSearchBox = function(id, filterFn) {
+    var input = document.getElementById(id);
+    var clear = document.getElementById(id + 'Clear');
+    if (!input) return;
+    var timer;
+    var run = function() {
+        clearTimeout(timer);
+        timer = setTimeout(function() {
+            var term = input.value.trim().toLowerCase();
+            if (clear) clear.style.display = term ? '' : 'none';
+            filterFn(term);
+        }, 150);
+    };
+    input.addEventListener('input', run);
+    if (clear) clear.addEventListener('click', function() {
+        input.value = ''; clear.style.display = 'none';
+        filterFn(''); input.focus();
+    });
+    if (input.value.trim()) { setTimeout(run, 0); }
+};
+
+App.updateSearchCount = function(id, shown, total) {
+    var el = document.getElementById(id + 'Count');
+    if (el) el.textContent = (shown < total) ? shown + ' / ' + total : '';
+};
+
+App._filterItems = function(searchId, selector, term) {
+    var items = document.querySelectorAll(selector);
+    var shown = 0;
+    items.forEach(function(item) {
+        var match = !term || item.textContent.toLowerCase().includes(term);
+        item.style.display = match ? '' : 'none';
+        if (match) shown++;
+    });
+    App.updateSearchCount(searchId, shown, items.length);
+};
+
+App._bindGlobalSearch = function(page) {
+    if (page === 'cycles') {
+        App.bindSearchBox('cyclesSearch', function(term) {
+            App._filterItems('cyclesSearch', '.cycle-card', term);
+        });
+    }
+    if (page === 'history') {
+        App.bindSearchBox('historySearch', function(term) {
+            var items = document.querySelectorAll('.timeline-item');
+            var shown = 0;
+            items.forEach(function(it) {
+                var match = !term || it.textContent.toLowerCase().includes(term);
+                it.style.display = match ? '' : 'none';
+                if (match) shown++;
+            });
+            document.querySelectorAll('.timeline-date-group').forEach(function(g) {
+                g.style.display = g.querySelectorAll('.timeline-item:not([style*="display: none"])').length ? '' : 'none';
+            });
+            App.updateSearchCount('historySearch', shown, items.length);
+        });
+    }
+    if (page === 'discussions') {
+        App.bindSearchBox('discSearch', function(term) {
+            var rows = document.querySelectorAll('.disc-row');
+            var shown = 0;
+            rows.forEach(function(row) {
+                var match = !term || row.textContent.toLowerCase().includes(term);
+                row.style.display = match ? '' : 'none';
+                var detail = document.querySelector('.disc-detail-row[data-disc-detail="' + row.dataset.discId + '"]');
+                if (detail && !match) detail.style.display = 'none';
+                if (match) shown++;
+            });
+            App.updateSearchCount('discSearch', shown, rows.length);
+        });
+    }
+    if (page === 'roadmap') {
+        App.bindSearchBox('roadmapSearch', function(term) {
+            App._roadmapSearch = term;
+            if (App._applyRoadmapFilters) App._applyRoadmapFilters();
+        });
+    }
+    if (page === 'agents') {
+        App.bindSearchBox('agentsSearch', function(term) {
+            var cards = document.querySelectorAll('.app4-agent-card, .app4-past-card');
+            var shown = 0;
+            cards.forEach(function(c) {
+                var match = !term || c.textContent.toLowerCase().includes(term);
+                c.style.display = match ? '' : 'none';
+                if (match) shown++;
+            });
+            App.updateSearchCount('agentsSearch', shown, cards.length);
+        });
+    }
+    if (page === 'ideas') {
+        App.bindSearchBox('ideasSearch', function(term) {
+            App._filterItems('ideasSearch', '.app4-idea-card', term);
+        });
+    }
+    if (page === 'context') {
+        App.bindSearchBox('contextSearch', function(term) {
+            App._contextSearch = term;
+            App._filterItems('contextSearch', '.ctx-card', term);
+        });
+    }
 };
 
 // =====================================================

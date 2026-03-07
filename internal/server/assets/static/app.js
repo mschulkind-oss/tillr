@@ -367,13 +367,13 @@ const App = {
         const roadmapPreview = topRoadmap.length ? topRoadmap.map((r, i) => {
             const priColors = {critical:'var(--danger)',high:'var(--warning)',medium:'var(--accent)',low:'var(--success)','nice-to-have':'var(--purple)'};
             const stIcons = {proposed:'○','accepted':'◐','in-progress':'◑',completed:'●',deferred:'◌'};
-            return `<div class="dash-roadmap-item" data-roadmap-id="${esc(r.id)}" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
-                <span style="color:${priColors[r.priority]||'var(--text-muted)'};font-size:0.7rem;font-weight:700;min-width:18px;text-align:center">${i+1}</span>
-                <span style="font-size:0.8rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title)}</span>
-                <span style="font-size:0.65rem;color:var(--text-muted)">${stIcons[r.status]||'○'} ${r.status}</span>
+            return `<div class="dash-roadmap-item" data-roadmap-id="${esc(r.id)}" style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);cursor:pointer;border-radius:4px;transition:background 0.15s ease" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'">
+                <span style="color:${priColors[r.priority]||'var(--text-secondary)'};font-size:0.75rem;font-weight:700;min-width:20px;text-align:center">${i+1}</span>
+                <span style="font-size:0.82rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)">${esc(r.title)}</span>
+                <span class="dash-roadmap-status" style="font-size:0.72rem;color:var(--text-secondary)">${stIcons[r.status]||'○'} ${r.status}</span>
                 ${r.effort ? `<span class="effort-badge effort-${r.effort}">${r.effort.toUpperCase()}</span>` : ''}
             </div>`;
-        }).join('') : '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">No roadmap items yet</div>';
+        }).join('') : '<div style="color:var(--text-secondary);font-size:0.82rem;padding:8px 0">No roadmap items yet</div>';
 
         // Active cycles
         const activeCycles = (cycles || []).filter(c => c.status === 'active');
@@ -381,17 +381,17 @@ const App = {
             const steps = c.config?.steps || [];
             const currentIdx = steps.indexOf(c.current_step);
             const progress = steps.length > 0 ? Math.round(((currentIdx + 1) / steps.length) * 100) : 0;
-            return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                    <span style="font-size:0.85rem;font-weight:600;flex:1">${esc(c.feature_id)}</span>
+            return `<div style="padding:8px 4px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                    <span style="font-size:0.85rem;font-weight:600;flex:1;color:var(--text-primary)">${esc(c.feature_id)}</span>
                     <span class="cycle-type-name">${esc(c.cycle_type)}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px">
-                    <div class="progress-bar" style="flex:1"><div class="progress-fill" style="width:${progress}%"></div></div>
-                    <span style="font-size:0.7rem;color:var(--text-muted)">${c.current_step} (${currentIdx+1}/${steps.length})</span>
+                    <div class="progress-bar" style="flex:1;height:6px"><div class="progress-fill" style="width:${progress}%"></div></div>
+                    <span style="font-size:0.72rem;color:var(--text-secondary)">${c.current_step} (${currentIdx+1}/${steps.length})</span>
                 </div>
             </div>`;
-        }).join('') : '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">No active cycles</div>';
+        }).join('') : '<div style="color:var(--text-secondary);font-size:0.82rem;padding:8px 0">No active cycles</div>';
 
         // Priority distribution mini-chart
         const priCounts = {};
@@ -401,10 +401,10 @@ const App = {
         const priChart = Object.keys(priLabels).map(p => {
             const count = priCounts[p] || 0;
             const pct = total > 0 ? Math.round((count/total)*100) : 0;
-            return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">
-                <span style="font-size:0.7rem;color:var(--text-muted);min-width:70px">${priLabels[p]}</span>
-                <div style="flex:1;height:8px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${priColors[p]};border-radius:4px;transition:width 0.6s ease"></div></div>
-                <span style="font-size:0.7rem;color:var(--text-muted);min-width:20px;text-align:right">${count}</span>
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+                <span class="dash-pri-label" style="font-size:0.75rem;color:var(--text-secondary);min-width:74px">${priLabels[p]}</span>
+                <div style="flex:1;height:10px;background:var(--bg-tertiary);border-radius:5px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${priColors[p]};border-radius:5px;transition:width 0.8s cubic-bezier(0.4,0,0.2,1)"></div></div>
+                <span class="dash-pri-count" style="font-size:0.75rem;color:var(--text-primary);min-width:22px;text-align:right;font-weight:600">${count}</span>
             </div>`;
         }).join('');
 
@@ -564,7 +564,7 @@ const App = {
         if (this._featuresFilter !== 'all') list = list.filter(f => f.status === this._featuresFilter);
         if (this._featuresSearch) {
             const q = this._featuresSearch.toLowerCase();
-            list = list.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.id && f.id.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)));
+            list = list.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.id && f.id.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)) || (f.status && f.status.includes(q)) || (f.milestone_name && f.milestone_name.toLowerCase().includes(q)));
         }
         return list;
     },
@@ -603,7 +603,7 @@ const App = {
                         <button class="view-toggle-btn active" data-view="list" title="List View">☰</button>
                         <button class="view-toggle-btn" data-view="graph" title="Graph View">◈</button>
                     </div>
-                    <div class="features-search-wrap"><input type="text" class="features-search" placeholder="Search features…" id="featuresSearch" aria-label="Search features"></div>
+                    ${App.renderSearchBox('featuresSearch', 'Search features…')}
                 </div>
             </div>
             <div class="card" id="featuresTableWrap">${this.buildFeaturesTable(features)}</div>
@@ -895,7 +895,7 @@ const App = {
 
         return `<div class="page-header" data-date="${new Date().toLocaleDateString()}"><div class="page-header-row"><h2 class="page-title">Roadmap</h2>${viewToggle}<button class="btn-print" onclick="window.print()" title="Print or save as PDF"><span aria-hidden="true">🖨️</span> Print / Export</button></div><p class="page-subtitle">Strategic priorities and planned work — ranked by impact</p><div class="page-subtitle-counts">${compactSummary}</div></div>
             ${heroBanner}
-            ${priorityChart}${categoryChart}${filterBar}
+            ${priorityChart}${categoryChart}${App.renderSearchBox('roadmapSearch', 'Search roadmap…')}${filterBar}
             <div id="roadmapSections" class="roadmap-view-priority">${prioritySections}</div>
             <div id="roadmapCategorySections" class="roadmap-view-category" style="display:none">${categorySections}</div>
             <div id="roadmapTimelineContainer" class="roadmap-view-timeline" style="display:none">${timelineHtml}</div>
@@ -1001,6 +1001,7 @@ const App = {
         };
 
         let html = `<div class="page-header"><h2 class="page-title">Iteration Cycles</h2><p class="page-subtitle">${activeCycles.length} active · ${completedCycles.length} completed</p></div>`;
+        html += App.renderSearchBox('cyclesSearch', 'Search cycles…');
 
         if (activeCycles.length) {
             html += `<h3 class="section-title">Active Cycles</h3>` + activeCycles.map(renderCycleCard).join('');
@@ -1057,6 +1058,7 @@ const App = {
         );
 
         return `<div class="page-header"><h2 class="page-title">History</h2><p class="page-subtitle">${events.length} events</p></div>
+            ${App.renderSearchBox('historySearch', 'Search events…')}
             <div class="history-filters" id="historyFilters">
                 ${filterBtns.map(([id, label, count]) =>
                     `<button class="filter-btn ${this._historyFilter === id ? 'active' : ''}" data-filter="${id}">${label} <span class="filter-count">${count}</span></button>`
@@ -1218,6 +1220,7 @@ const App = {
                 <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${statusCounts.merged || 0}</div><div class="stat-label">Merged</div></div><div class="stat-icon" aria-hidden="true">🟣</div></div>
                 <div class="stat-card"><div class="stat-card-info"><div class="stat-value">${statusCounts.closed || 0}</div><div class="stat-label">Closed</div></div><div class="stat-icon" aria-hidden="true">⚪</div></div>
             </div>
+            ${App.renderSearchBox('discSearch', 'Search discussions…')}
             <div class="card"><table class="table"><thead><tr><th>ID</th><th>Status</th><th>Title</th><th>Author</th><th>Comments</th><th>Feature</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     },
 
@@ -1445,20 +1448,20 @@ const App = {
             });
             // Roadmap filter pills
             const applyRoadmapFilters = () => {
-                const cf = this.roadmapFilters.category;
-                const sf = this.roadmapFilters.status;
-                const pf = this.roadmapFilters.priority;
+                const cf = this.roadmapFilters.category, sf = this.roadmapFilters.status, pf = this.roadmapFilters.priority, q = (this._roadmapSearch || '').toLowerCase();
+                let vis = 0, total = 0;
                 document.querySelectorAll('.roadmap-item').forEach(item => {
-                    const matchCat = cf === 'all' || item.dataset.category === cf;
-                    const matchSt = sf === 'all' || item.dataset.status === sf;
-                    const matchPri = pf === 'all' || item.dataset.priority === pf;
-                    item.style.display = (matchCat && matchSt && matchPri) ? '' : 'none';
+                    total++;
+                    const show = (cf === 'all' || item.dataset.category === cf) && (sf === 'all' || item.dataset.status === sf) && (pf === 'all' || item.dataset.priority === pf) && (!q || item.textContent.toLowerCase().includes(q));
+                    item.style.display = show ? '' : 'none';
+                    if (show) vis++;
                 });
                 document.querySelectorAll('.roadmap-section').forEach(section => {
-                    const visible = section.querySelectorAll('.roadmap-item:not([style*="display: none"])');
-                    section.style.display = visible.length ? '' : 'none';
+                    section.style.display = section.querySelectorAll('.roadmap-item:not([style*="display: none"])').length ? '' : 'none';
                 });
+                App.updateSearchCount('roadmapSearch', vis, total);
             };
+            this._applyRoadmapFilters = applyRoadmapFilters;
             document.querySelectorAll('.roadmap-filter-pill').forEach(btn => btn.addEventListener('click', () => {
                 const type = btn.dataset.filterType;
                 const value = btn.dataset.filterValue;
@@ -1587,6 +1590,10 @@ const App = {
         if (page === 'agents' || page === 'ideas' || page === 'context' || page === 'spec') {
             bindClickableFeatures();
         }
+        if (page === 'agents') {
+            App._bindAgentsEvents();
+        }
+        App._bindGlobalSearch.call(this, page);
     },
 
     bindHistoryExpand(root) {
@@ -1781,8 +1788,7 @@ App._setupFeaturePage = function() {
             refresh();
         });
     });
-    var searchInput = document.getElementById('featuresSearch');
-    if (searchInput) searchInput.addEventListener('input', function(e) { self._featuresSearch = e.target.value; refresh(); });
+    App.bindSearchBox('featuresSearch', function(term) { self._featuresSearch = term; refresh(); App.updateSearchCount('featuresSearch', self.getFilteredFeatures().length, (self._featuresData || []).length); });
     // View toggle (list ↔ graph)
     document.querySelectorAll('.view-toggle-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -2338,8 +2344,8 @@ App.renderStats = async function() {
     // Store data for post-render chart drawing
     App._statsData = stats;
 
-    var statusColors = {draft:'#6b7280',planning:'#8b5cf6',implementing:'#3b82f6','agent-qa':'#f59e0b','human-qa':'#ec4899',done:'#10b981',blocked:'#ef4444'};
-    var priColors = {critical:'#ef4444',high:'#f59e0b',medium:'#3b82f6',low:'#6b7280','nice-to-have':'#8b5cf6'};
+    var statusColors = {draft:'#8b949e',planning:'#8b5cf6',implementing:'#3b82f6','agent-qa':'#f59e0b','human-qa':'#ec4899',done:'#10b981',blocked:'#ef4444'};
+    var priColors = {critical:'#ef4444',high:'#f59e0b',medium:'#3b82f6',low:'#8b949e','nice-to-have':'#8b5cf6'};
 
     var statusEntries = Object.entries(byStatus).filter(function(e){return e[1]>0;});
     var total = fs.total || 0;
@@ -2351,15 +2357,15 @@ App.renderStats = async function() {
         var dk = statusEntries[di][0], dv = statusEntries[di][1];
         var startAngle = angle;
         angle += (dv / total) * 360;
-        donutSegments.push((statusColors[dk]||'#6b7280') + ' ' + startAngle.toFixed(1) + 'deg ' + angle.toFixed(1) + 'deg');
+        donutSegments.push((statusColors[dk]||'#8b949e') + ' ' + startAngle.toFixed(1) + 'deg ' + angle.toFixed(1) + 'deg');
     }
-    var donutGradient = donutSegments.length > 0 ? 'conic-gradient(' + donutSegments.join(', ') + ')' : 'conic-gradient(#374151 0deg 360deg)';
+    var donutGradient = donutSegments.length > 0 ? 'conic-gradient(' + donutSegments.join(', ') + ')' : 'conic-gradient(#484f58 0deg 360deg)';
 
     var donutLegend = '';
     for (var li = 0; li < statusEntries.length; li++) {
         var lk = statusEntries[li][0], lv = statusEntries[li][1];
         donutLegend += '<div class="stats-legend-item">'
-            + '<span class="stats-legend-dot" style="background:' + (statusColors[lk]||'#6b7280') + '"></span>'
+            + '<span class="stats-legend-dot" style="background:' + (statusColors[lk]||'#8b949e') + '"></span>'
             + '<span>' + lk + '</span><span class="stats-legend-val">' + lv + '</span></div>';
     }
 
@@ -2374,7 +2380,7 @@ App.renderStats = async function() {
         var pct = (pv / maxPri * 100).toFixed(0);
         priHtml += '<div class="stats-bar-row">'
             + '<span class="stats-bar-label">' + pk + '</span>'
-            + '<div class="stats-bar-track"><div class="stats-bar-fill" style="width:' + pct + '%;background:' + (priColors[pk]||'#6b7280') + '"></div></div>'
+            + '<div class="stats-bar-track"><div class="stats-bar-fill" style="width:' + pct + '%;background:' + (priColors[pk]||'#8b949e') + '"></div></div>'
             + '<span class="stats-bar-val">' + pv + '</span>'
             + '</div>';
     }
@@ -2389,7 +2395,7 @@ App.renderStats = async function() {
         var cpct = (cv / maxCat * 100).toFixed(0);
         catHtml += '<div class="stats-bar-row">'
             + '<span class="stats-bar-label">' + ck + '</span>'
-            + '<div class="stats-bar-track"><div class="stats-bar-fill" style="width:' + cpct + '%;background:' + (catColors[ck]||'#6b7280') + '"></div></div>'
+            + '<div class="stats-bar-track"><div class="stats-bar-fill" style="width:' + cpct + '%;background:' + (catColors[ck]||'#8b949e') + '"></div></div>'
             + '<span class="stats-bar-val">' + cv + '</span>'
             + '</div>';
     }
@@ -2423,7 +2429,7 @@ App.renderStats = async function() {
     for (var cti = 0; cti < cycleTypeEntries.length; cti++) {
         var ctk = cycleTypeEntries[cti][0], ctv = cycleTypeEntries[cti][1];
         cycleTypeLegend += '<div class="stats-legend-item">'
-            + '<span class="stats-legend-dot" style="background:' + (cycleTypeColors[ctk]||'#484f58') + '"></span>'
+            + '<span class="stats-legend-dot" style="background:' + (cycleTypeColors[ctk]||'#8b949e') + '"></span>'
             + '<span>' + ctk.replace(/-/g, ' ') + '</span><span class="stats-legend-val">' + ctv + '</span></div>';
     }
 

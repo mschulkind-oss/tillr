@@ -896,6 +896,41 @@ App._renderQACard = function(f, reviewRounds) {
         : f.priority <= 3 ? 'Medium' : 'Low';
     var enteredQA = f.updated_at || f.created_at;
 
+    // Build QA gate status indicator
+    var gateSteps = ['draft', 'planning', 'implementing', 'agent-qa', 'human-qa', 'done'];
+    var currentIdx = gateSteps.indexOf(f.status || 'human-qa');
+    if (currentIdx < 0) currentIdx = 4;
+    var gateHtml = '<div class="qa-gate-status">'
+        + '<div class="qa-gate-label">QA Gate Progress</div>'
+        + '<div class="qa-gate-steps">';
+    for (var gi = 0; gi < gateSteps.length; gi++) {
+        var stepCls = gi < currentIdx ? 'completed' : gi === currentIdx ? 'current' : 'upcoming';
+        var stepLabel = gateSteps[gi].replace('-', ' ');
+        gateHtml += '<div class="qa-gate-step ' + stepCls + '" title="' + stepLabel + '">'
+            + '<div class="qa-gate-dot"></div>'
+            + '<div class="qa-gate-step-label">' + stepLabel + '</div>'
+            + '</div>';
+        if (gi < gateSteps.length - 1) {
+            gateHtml += '<div class="qa-gate-connector ' + (gi < currentIdx ? 'completed' : '') + '"></div>';
+        }
+    }
+    gateHtml += '</div></div>';
+
+    // Build expandable spec section
+    var specHtml = '';
+    if (f.spec) {
+        var specId = 'qaSpec_' + id.replace(/[^a-zA-Z0-9_-]/g, '_');
+        specHtml = '<div class="qa-spec-section">'
+            + '<button class="qa-spec-toggle" aria-expanded="false" aria-controls="' + specId + '" type="button">'
+            +   '<span class="qa-spec-toggle-icon">▶</span>'
+            +   '<span>Feature Spec</span>'
+            + '</button>'
+            + '<div class="qa-spec-content" id="' + specId + '">'
+            +   '<pre class="qa-spec-text">' + App._esc(f.spec) + '</pre>'
+            + '</div>'
+            + '</div>';
+    }
+
     var html = '<div class="qa-review-card" data-qa-feature="' + id + '">'
         + '<div class="qa-card-header">'
         +   '<span class="qa-card-title">' + name + '</span>'
@@ -904,7 +939,9 @@ App._renderQACard = function(f, reviewRounds) {
         +     '<span class="qa-priority-badge ' + priorityClass + '">P' + f.priority + ' ' + priorityLabel + '</span>'
         +   '</div>'
         + '</div>'
+        + gateHtml
         + '<div class="qa-card-description">' + desc + '</div>'
+        + specHtml
         + '<div class="qa-card-meta">'
         +   '<span title="Feature ID">🏷️ ' + id + '</span>';
 
@@ -919,7 +956,10 @@ App._renderQACard = function(f, reviewRounds) {
     }
 
     html += '</div>'
-        + '<textarea class="qa-notes" id="qaNotes_' + id + '" placeholder="Add review notes or feedback…" aria-label="Review notes for ' + name + '"></textarea>'
+        + '<div class="qa-notes-section">'
+        +   '<label class="qa-notes-label" for="qaNotes_' + id + '">Review Notes</label>'
+        +   '<textarea class="qa-notes" id="qaNotes_' + id + '" placeholder="Add review notes or feedback…" aria-label="Review notes for ' + name + '"></textarea>'
+        + '</div>'
         + '<div class="qa-actions">'
         +   '<button class="btn-approve qa-action-approve" data-qa-id="' + id + '" aria-label="Approve ' + name + '">✓ Approve</button>'
         +   '<button class="btn-reject qa-action-reject" data-qa-id="' + id + '" aria-label="Reject ' + name + '">✗ Reject</button>'
@@ -978,15 +1018,16 @@ App._renderQAEmptyState = function(reviewedHtml, approvedCount, rejectedCount) {
     if (totalReviewed > 0) {
         statsHtml = '<div class="qa-empty-stats">'
             + '<span class="qa-empty-stat"><span class="qa-reviewed-icon approved" style="width:18px;height:18px;font-size:0.6rem;display:inline-flex">✓</span> ' + approvedCount + ' approved</span>'
+            + '<span class="qa-empty-stat qa-empty-stat--divider"></span>'
             + '<span class="qa-empty-stat"><span class="qa-reviewed-icon rejected" style="width:18px;height:18px;font-size:0.6rem;display:inline-flex">✗</span> ' + rejectedCount + ' rejected</span>'
             + '</div>';
     }
 
     return header
-        + '<div class="qa-layout">'
+        + '<div class="qa-layout qa-layout--empty">'
         + '<div>'
         +   '<div class="qa-empty-hero">'
-        +     '<div class="qa-empty-icon">🎉</div>'
+        +     '<div class="qa-empty-icon">✅</div>'
         +     '<div class="qa-empty-title">All caught up!</div>'
         +     '<div class="qa-empty-subtitle">No features are waiting for review.</div>'
         +     statsHtml
@@ -1157,6 +1198,17 @@ App._bindQAPageEvents = function() {
     document.querySelectorAll('.qa-notes').forEach(function(ta) {
         ta.addEventListener('input', function() {
             ta.classList.remove('qa-notes-required');
+        });
+    });
+
+    // Expandable spec toggles
+    document.querySelectorAll('.qa-spec-toggle').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var content = btn.nextElementSibling;
+            var isExpanded = btn.getAttribute('aria-expanded') === 'true';
+            btn.setAttribute('aria-expanded', String(!isExpanded));
+            content.classList.toggle('qa-spec-content--open');
+            btn.querySelector('.qa-spec-toggle-icon').textContent = isExpanded ? '▶' : '▼';
         });
     });
 };

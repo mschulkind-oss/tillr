@@ -107,6 +107,10 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/agents", apiHandler(database, handleAgents))
 	mux.HandleFunc("/api/agents/", apiHandler(database, handleAgentDetail))
 
+	// Worktree routes
+	mux.HandleFunc("/api/worktrees", apiHandler(database, handleWorktrees))
+	mux.HandleFunc("/api/worktrees/", apiHandler(database, handleWorktreeDetail))
+
 	// Idea queue routes
 	mux.HandleFunc("/api/ideas", apiHandler(database, handleIdeas))
 	mux.HandleFunc("/api/ideas/", apiHandler(database, handleIdeaDetail))
@@ -223,7 +227,7 @@ func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			return
 		}
@@ -1052,9 +1056,115 @@ func handleAgentDetail(database *sql.DB, w http.ResponseWriter, r *http.Request)
 	if updates == nil {
 		updates = []models.StatusUpdate{}
 	}
+	// Include linked worktree if any
+	var worktree *models.Worktree
+	if wt, wtErr := db.GetWorktreeByAgent(database, id); wtErr == nil {
+		worktree = wt
+	}
 	return writeJSON(w, map[string]any{
-		"session": s,
-		"updates": updates,
+		"session":  s,
+		"updates":  updates,
+		"worktree": worktree,
+	})
+}
+
+// --- Worktrees ---
+
+func handleWorktrees(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	if r.Method == "POST" {
+		var body struct {
+			Name   string `json:"name"`
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Name == "" || body.Path == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "name and path are required"})
+		}
+		wt := &models.Worktree{
+			ID:     fmt.Sprintf("wt-%d", timeNowUnixMilli()),
+			Name:   body.Name,
+			Path:   body.Path,
+			Branch: body.Branch,
+		}
+		if err := db.CreateWorktree(database, wt); err != nil {
+			return fmt.Errorf("creating worktree: %w", err)
+		}
+		created, err := db.GetWorktree(database, wt.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created worktree: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
+	// GET /api/worktrees
+	worktrees, err := db.ListWorktrees(database)
+	if err != nil {
+		return err
+	}
+	if worktrees == nil {
+		worktrees = []models.Worktree{}
+	}
+	return writeJSON(w, worktrees)
+}
+
+func handleWorktreeDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/worktrees/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "worktree ID required"})
+	}
+	id := parts[0]
+
+	// POST /api/worktrees/{id}/link
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "link" {
+		var body struct {
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.AgentID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "agent_id is required"})
+		}
+		if err := db.LinkWorktreeToAgent(database, id, body.AgentID); err != nil {
+			return fmt.Errorf("linking worktree: %w", err)
+		}
+		return writeJSON(w, map[string]bool{"ok": true})
+	}
+
+	// DELETE /api/worktrees/{id}
+	if r.Method == "DELETE" {
+		if err := db.DeleteWorktree(database, id); err != nil {
+			return fmt.Errorf("deleting worktree: %w", err)
+		}
+		return writeJSON(w, map[string]bool{"ok": true})
+	}
+
+	// GET /api/worktrees/{id}
+	wt, err := db.GetWorktree(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "worktree not found"})
+	}
+	// Include linked agent if any
+	var agent *models.AgentSession
+	if wt.AgentSessionID != "" {
+		if a, aErr := db.GetAgentSession(database, wt.AgentSessionID); aErr == nil {
+			agent = a
+		}
+	}
+	return writeJSON(w, map[string]any{
+		"worktree": wt,
+		"agent":    agent,
 	})
 }
 

@@ -1725,3 +1725,90 @@ func extractJSONField(data, field string) string {
 	}
 	return data[start : start+end]
 }
+
+// --- Worktrees ---
+
+func CreateWorktree(db *sql.DB, w *models.Worktree) error {
+	_, err := db.Exec(
+		`INSERT INTO worktrees (id, name, path, branch, agent_session_id) VALUES (?, ?, ?, ?, ?)`,
+		w.ID, w.Name, w.Path, w.Branch, nullStr(w.AgentSessionID),
+	)
+	return err
+}
+
+func GetWorktree(db *sql.DB, id string) (*models.Worktree, error) {
+	row := db.QueryRow(`SELECT id, name, path, COALESCE(branch,''), COALESCE(agent_session_id,''), created_at
+		FROM worktrees WHERE id = ?`, id)
+	w := &models.Worktree{}
+	err := row.Scan(&w.ID, &w.Name, &w.Path, &w.Branch, &w.AgentSessionID, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func GetWorktreeByName(db *sql.DB, name string) (*models.Worktree, error) {
+	row := db.QueryRow(`SELECT id, name, path, COALESCE(branch,''), COALESCE(agent_session_id,''), created_at
+		FROM worktrees WHERE name = ?`, name)
+	w := &models.Worktree{}
+	err := row.Scan(&w.ID, &w.Name, &w.Path, &w.Branch, &w.AgentSessionID, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func ListWorktrees(db *sql.DB) ([]models.Worktree, error) {
+	rows, err := db.Query(`SELECT id, name, path, COALESCE(branch,''), COALESCE(agent_session_id,''), created_at
+		FROM worktrees ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Worktree
+	for rows.Next() {
+		var w models.Worktree
+		if err := rows.Scan(&w.ID, &w.Name, &w.Path, &w.Branch, &w.AgentSessionID, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func DeleteWorktree(db *sql.DB, id string) error {
+	// Clear any agent session references first
+	_, _ = db.Exec("UPDATE agent_sessions SET worktree_id = '' WHERE worktree_id = ?", id)
+	_, err := db.Exec("DELETE FROM worktrees WHERE id = ?", id)
+	return err
+}
+
+func LinkWorktreeToAgent(db *sql.DB, worktreeID, agentSessionID string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.Exec("UPDATE worktrees SET agent_session_id = ? WHERE id = ?", agentSessionID, worktreeID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("UPDATE agent_sessions SET worktree_id = ? WHERE id = ?", worktreeID, agentSessionID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func GetWorktreeByAgent(db *sql.DB, agentSessionID string) (*models.Worktree, error) {
+	row := db.QueryRow(`SELECT id, name, path, COALESCE(branch,''), COALESCE(agent_session_id,''), created_at
+		FROM worktrees WHERE agent_session_id = ?`, agentSessionID)
+	w := &models.Worktree{}
+	err := row.Scan(&w.ID, &w.Name, &w.Path, &w.Branch, &w.AgentSessionID, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
