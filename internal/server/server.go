@@ -124,6 +124,7 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	mux.HandleFunc("/api/stats", apiHandler(database, handleStats))
 	mux.HandleFunc("/api/stats/burndown", apiHandler(database, handleStatsBurndown))
 	mux.HandleFunc("/api/stats/heatmap", apiHandler(database, handleStatsHeatmap))
+	mux.HandleFunc("/api/stats/activity-heatmap", apiHandler(database, handleStatsActivityHeatmap))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
 	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
 	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
@@ -428,6 +429,11 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 			return handleFeatureDeps(database, w, rest)
 		}
 
+		// Check for /api/features/{id}/prs endpoint
+		if rest, found := strings.CutSuffix(id, "/prs"); found && rest != "" {
+			return handleFeaturePRs(database, w, rest)
+		}
+
 		// Handle PATCH for feature updates
 		if r.Method == "PATCH" {
 			var body struct {
@@ -602,6 +608,22 @@ func handleFeatureDeps(database *sql.DB, w http.ResponseWriter, featureID string
 		"depended_by":    dependedBy,
 		"blocking_chain": blockingChain,
 	})
+}
+
+func handleFeaturePRs(database *sql.DB, w http.ResponseWriter, featureID string) error {
+	if _, err := db.GetFeature(database, featureID); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "feature not found"})
+	}
+
+	prs, err := db.ListFeaturePRs(database, featureID)
+	if err != nil {
+		return fmt.Errorf("listing feature PRs: %w", err)
+	}
+	if prs == nil {
+		prs = []models.FeaturePR{}
+	}
+	return writeJSON(w, prs)
 }
 
 func handleMilestones(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
@@ -871,6 +893,27 @@ func handleStatsHeatmap(database *sql.DB, w http.ResponseWriter, r *http.Request
 		return err
 	}
 	return writeJSON(w, models.HeatmapResponse{Days: heatmap})
+}
+
+func handleStatsActivityHeatmap(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	days := 365
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err2 := fmt.Sscanf(d, "%d", &days); n != 1 || err2 != nil {
+			days = 365
+		}
+		if days < 1 || days > 730 {
+			days = 365
+		}
+	}
+	counts, err := db.GetDailyActivityCounts(database, p.ID, days)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, counts)
 }
 
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
@@ -1167,6 +1210,44 @@ func handleDiscussionDetail(database *sql.DB, w http.ResponseWriter, r *http.Req
 		}
 		w.WriteHeader(http.StatusCreated)
 		return writeJSON(w, c)
+	}
+
+	// POST /api/discussions/{id}/votes
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "votes" {
+		var body struct {
+			Reaction string `json:"reaction"`
+			Voter    string `json:"voter"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if !db.ValidReactions[body.Reaction] {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid reaction"})
+		}
+		if body.Voter == "" {
+			body.Voter = "human"
+		}
+		v := &models.DiscussionVote{
+			DiscussionID: id,
+			Voter:        body.Voter,
+			Reaction:     body.Reaction,
+		}
+		if err := db.AddDiscussionVote(database, v); err != nil {
+			return fmt.Errorf("adding vote: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, v)
+	}
+
+	// GET /api/discussions/{id}/votes
+	if r.Method == "GET" && len(parts) >= 2 && parts[1] == "votes" {
+		summary, err := db.GetDiscussionVotes(database, id)
+		if err != nil {
+			return fmt.Errorf("getting votes: %w", err)
+		}
+		return writeJSON(w, summary)
 	}
 
 	d, err := db.GetDiscussion(database, id)
@@ -2437,6 +2518,23 @@ const apiDocsHTML = `<!DOCTYPE html>
 <div class="endpoint-header" onclick="toggle(this)">
   <span class="chevron">&#9654;</span>
   <span class="method method-get">GET</span>
+  <span class="path">/api/stats/activity-heatmap</span>
+  <span class="desc">Daily event counts (flat array)</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns daily event counts for the last 365 days as a flat array of {date, count} objects.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>days</code></td><td>int</td><td>Number of days to include (default: 365)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/stats/activity-heatmap')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
   <span class="path">/api/search</span>
   <span class="desc">Full-text search</span>
 </div>
@@ -3028,6 +3126,32 @@ const apiDocsHTML = `<!DOCTYPE html>
 </div>
 <div class="endpoint-body">
   <p>Adds a reply/comment to an existing discussion.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/discussions/<span class="path-param">{id}</span>/votes</span>
+  <span class="desc">Get vote counts</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns reaction counts for a discussion.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/discussions/1/votes')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/discussions/<span class="path-param">{id}</span>/votes</span>
+  <span class="desc">Add vote/reaction</span>
+</div>
+<div class="endpoint-body">
+  <p>Adds a reaction to a discussion. Send JSON body with reaction (👍 👎 🎉 ❤️ 🤔) and voter.</p>
 </div>
 </div>
 

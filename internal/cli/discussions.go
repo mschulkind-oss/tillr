@@ -140,6 +140,8 @@ func init() {
 	discussCmd.AddCommand(discussCommentCmd)
 	discussCmd.AddCommand(discussResolveCmd)
 	discussCmd.AddCommand(discussTemplatesCmd)
+	discussCmd.AddCommand(discussVoteCmd)
+	discussCmd.AddCommand(discussVotesCmd)
 
 	discussNewCmd.Flags().String("feature", "", "Link to feature ID")
 	discussNewCmd.Flags().String("author", "agent", "Author name/ID")
@@ -151,6 +153,8 @@ func init() {
 	discussCommentCmd.Flags().String("author", "agent", "Comment author")
 	discussCommentCmd.Flags().String("type", "comment", "Comment type (comment/proposal/approval/objection/revision/decision)")
 	discussCommentCmd.Flags().Int("reply-to", 0, "Reply to comment ID (for threading)")
+
+	discussVoteCmd.Flags().String("voter", "agent", "Voter name/ID")
 }
 
 var discussNewCmd = &cobra.Command{
@@ -250,10 +254,18 @@ var discussListCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Printf("%-4s %-10s %-12s %-4s %s\n", "ID", "STATUS", "AUTHOR", "💬", "TITLE")
-		fmt.Println(strings.Repeat("─", 70))
+		fmt.Printf("%-4s %-10s %-12s %-4s %-6s %s\n", "ID", "STATUS", "AUTHOR", "💬", "VOTES", "TITLE")
+		fmt.Println(strings.Repeat("─", 78))
 		for _, d := range discussions {
-			fmt.Printf("%-4d %-10s %-12s %-4d %s\n", d.ID, d.Status, d.Author, d.CommentCount, d.Title)
+			voteStr := ""
+			if len(d.Votes) > 0 {
+				parts := make([]string, 0, len(d.Votes))
+				for r, c := range d.Votes {
+					parts = append(parts, fmt.Sprintf("%s%d", r, c))
+				}
+				voteStr = strings.Join(parts, " ")
+			}
+			fmt.Printf("%-4d %-10s %-12s %-4d %-6s %s\n", d.ID, d.Status, d.Author, d.CommentCount, voteStr, d.Title)
 		}
 		return nil
 	},
@@ -288,6 +300,13 @@ var discussShowCmd = &cobra.Command{
 		fmt.Printf("  Status: %s | Author: %s | Created: %s\n", d.Status, d.Author, d.CreatedAt)
 		if d.FeatureID != "" {
 			fmt.Printf("  Feature: %s\n", d.FeatureID)
+		}
+		if len(d.Votes) > 0 {
+			parts := make([]string, 0, len(d.Votes))
+			for r, c := range d.Votes {
+				parts = append(parts, fmt.Sprintf("%s %d", r, c))
+			}
+			fmt.Printf("  Votes: %s\n", strings.Join(parts, "  "))
 		}
 		fmt.Println(strings.Repeat("─", 60))
 		for _, c := range d.Comments {
@@ -438,4 +457,90 @@ func sortedTemplateNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+var discussVoteCmd = &cobra.Command{
+	Use:   "vote <discussion-id> <reaction>",
+	Short: "Add a reaction to a discussion (👍 👎 🎉 ❤️ 🤔)",
+	Args:  cobra.ExactArgs(2),
+	Example: `  # Add a thumbs-up reaction
+  lifecycle discuss vote 1 👍
+  lifecycle discuss vote 1 👍 --voter design-agent`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		discussionID, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid discussion ID: %s", args[0])
+		}
+
+		reaction := args[1]
+		if !db.ValidReactions[reaction] {
+			valid := make([]string, 0, len(db.ValidReactions))
+			for r := range db.ValidReactions {
+				valid = append(valid, r)
+			}
+			sort.Strings(valid)
+			return fmt.Errorf("invalid reaction %q (valid: %s)", reaction, strings.Join(valid, " "))
+		}
+
+		voter, _ := cmd.Flags().GetString("voter")
+
+		v := &models.DiscussionVote{
+			DiscussionID: discussionID,
+			Voter:        voter,
+			Reaction:     reaction,
+		}
+		if err := db.AddDiscussionVote(database, v); err != nil {
+			return fmt.Errorf("adding vote: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(v)
+		}
+		fmt.Printf("✓ %s reacted %s to discussion #%d\n", voter, reaction, discussionID)
+		return nil
+	},
+}
+
+var discussVotesCmd = &cobra.Command{
+	Use:   "votes <discussion-id>",
+	Short: "Show vote counts for a discussion",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		discussionID, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid discussion ID: %s", args[0])
+		}
+
+		summary, err := db.GetDiscussionVotes(database, discussionID)
+		if err != nil {
+			return fmt.Errorf("getting votes: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(summary)
+		}
+
+		if summary.Total == 0 {
+			fmt.Printf("Discussion #%d has no votes yet.\n", discussionID)
+			return nil
+		}
+
+		fmt.Printf("Votes for discussion #%d (%d total):\n", discussionID, summary.Total)
+		for reaction, count := range summary.Counts {
+			fmt.Printf("  %s  %d\n", reaction, count)
+		}
+		return nil
+	},
 }

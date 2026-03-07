@@ -685,8 +685,8 @@ App.drawStatsCharts = function() {
     });
 
     // Fetch heatmap data and render
-    App.api('stats/heatmap').then(function(heatmap) {
-        if (!heatmap || !App.renderHeatmap) return;
+    App.api('stats/activity-heatmap').then(function(data) {
+        if (!data || !App.renderHeatmap) return;
         // Dynamically inject heatmap card into the stats page
         var grids = document.querySelectorAll('.stats-grid');
         var targetGrid = grids.length > 1 ? grids[grids.length - 1] : grids[0];
@@ -697,7 +697,7 @@ App.drawStatsCharts = function() {
         targetGrid.appendChild(card);
         var container = document.getElementById('activityHeatmapContainer');
         if (container) {
-            App.renderHeatmap(container, heatmap);
+            App.renderHeatmap(container, {days: data});
         }
     }).catch(function() {
         // Silently handle errors

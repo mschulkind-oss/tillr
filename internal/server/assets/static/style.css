@@ -8161,7 +8161,7 @@ textarea:focus-visible,
 .hm-cell[data-level="3"] { background: #30a14e; }
 .hm-cell[data-level="4"] { background: #216e39; }
 /* Dark theme heatmap colors */
-[data-theme="dark"] .hm-cell[data-level="0"] { background: var(--bg-secondary); }
+[data-theme="dark"] .hm-cell[data-level="0"] { background: #1a1a2e; }
 [data-theme="dark"] .hm-cell[data-level="1"] { background: #0e4429; }
 [data-theme="dark"] .hm-cell[data-level="2"] { background: #006d32; }
 [data-theme="dark"] .hm-cell[data-level="3"] { background: #26a641; }
@@ -8171,7 +8171,7 @@ textarea:focus-visible,
 .hm-legend-cell[data-level="2"] { background: #40c463; }
 .hm-legend-cell[data-level="3"] { background: #30a14e; }
 .hm-legend-cell[data-level="4"] { background: #216e39; }
-[data-theme="dark"] .hm-legend-cell[data-level="0"] { background: var(--bg-secondary); }
+[data-theme="dark"] .hm-legend-cell[data-level="0"] { background: #1a1a2e; }
 [data-theme="dark"] .hm-legend-cell[data-level="1"] { background: #0e4429; }
 [data-theme="dark"] .hm-legend-cell[data-level="2"] { background: #006d32; }
 [data-theme="dark"] .hm-legend-cell[data-level="3"] { background: #26a641; }

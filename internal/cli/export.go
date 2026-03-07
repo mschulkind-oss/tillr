@@ -20,11 +20,17 @@ func init() {
 	exportCmd.AddCommand(exportRoadmapCmd)
 	exportCmd.AddCommand(exportDecisionsCmd)
 	exportCmd.AddCommand(exportAllCmd)
+	exportCmd.AddCommand(exportDiagramCmd)
 
 	exportFeaturesCmd.Flags().String("format", "json", "Output format (json, md, csv)")
 	exportRoadmapCmd.Flags().String("format", "json", "Output format (json, md, csv)")
 	exportDecisionsCmd.Flags().String("format", "json", "Output format (json, md, csv)")
 	exportAllCmd.Flags().String("format", "json", "Output format (json, md)")
+
+	exportDiagramCmd.Flags().String("format", "mermaid", "Output format (mermaid, dot)")
+	exportDiagramCmd.Flags().StringP("output", "o", "", "Write to file instead of stdout")
+	exportDiagramCmd.Flags().String("milestone", "", "Limit to a specific milestone ID")
+	exportDiagramCmd.Flags().String("status", "", "Filter features by status")
 }
 
 var exportFeaturesCmd = &cobra.Command{
@@ -122,5 +128,62 @@ var exportAllCmd = &cobra.Command{
 		decisions, _ := db.ListDecisions(database, "")
 
 		return export.All(p.Name, features, items, decisions, os.Stdout, format)
+	},
+}
+
+var exportDiagramCmd = &cobra.Command{
+	Use:   "diagram",
+	Short: "Export architecture diagram as Mermaid or Graphviz DOT",
+	Long: `Generate a dependency diagram of project features.
+
+Features are shown as nodes colored by status, with edges representing
+dependencies. Milestones are rendered as subgraphs grouping their features.
+
+Output can be pasted into GitHub Markdown (Mermaid) or rendered with Graphviz (DOT).
+
+Examples:
+  lifecycle export diagram                      # Mermaid to stdout
+  lifecycle export diagram --format dot          # Graphviz DOT to stdout
+  lifecycle export diagram -o arch.md            # Write to file
+  lifecycle export diagram --milestone v1        # Only features in milestone v1
+  lifecycle export diagram --status implementing # Only implementing features`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		milestoneFilter, _ := cmd.Flags().GetString("milestone")
+		statusFilter, _ := cmd.Flags().GetString("status")
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		features, err := db.ListFeatures(database, p.ID, statusFilter, milestoneFilter)
+		if err != nil {
+			return fmt.Errorf("listing features: %w", err)
+		}
+
+		milestones, err := db.ListMilestones(database, p.ID)
+		if err != nil {
+			return fmt.Errorf("listing milestones: %w", err)
+		}
+
+		w := os.Stdout
+		if output != "" {
+			f, err := os.Create(output)
+			if err != nil {
+				return fmt.Errorf("creating output file: %w", err)
+			}
+			defer f.Close() //nolint:errcheck
+			w = f
+		}
+
+		return export.Diagram(features, milestones, w, format)
 	},
 }
