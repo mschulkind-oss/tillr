@@ -260,8 +260,13 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 					w.WriteHeader(http.StatusBadRequest)
 					return writeJSON(w, map[string]string{"error": "invalid status"})
 				}
-				if err := db.UpdateFeature(database, id, map[string]any{"status": body.Status}); err != nil {
+				p, err := db.GetProject(database)
+				if err != nil {
 					return err
+				}
+				if err := engine.TransitionFeature(database, p.ID, id, body.Status); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return writeJSON(w, map[string]string{"error": err.Error()})
 				}
 			}
 			f, err := db.GetFeature(database, id)

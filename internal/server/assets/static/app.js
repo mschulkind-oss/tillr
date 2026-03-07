@@ -23,6 +23,7 @@ const App = {
         if (initial.context) this._navContext = initial.context;
         App.initKeyboardShortcuts();
         await this.navigate(initial.page || 'dashboard');
+        this.updateQABadge();
     },
 
     parseHash() {
@@ -48,6 +49,7 @@ const App = {
                     const expandedRoadmap = document.querySelector('.roadmap-item.expanded');
                     if (expandedRoadmap) this._expandedRoadmapId = expandedRoadmap.dataset.roadmapId;
                     this.navigate(this.currentPage);
+                    this.updateQABadge();
                 }
             } catch { /* ignore non-JSON */ }
         };
@@ -57,6 +59,21 @@ const App = {
         this._ws.onerror = () => {
             this._ws.close();
         };
+    },
+
+    async updateQABadge() {
+        try {
+            const pending = await this.api('qa/pending');
+            const badge = document.getElementById('qaBadge');
+            if (!badge) return;
+            const count = Array.isArray(pending) ? pending.length : 0;
+            if (count > 0) {
+                badge.textContent = count;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        } catch { /* ignore errors */ }
     },
 
     bindNavigation() {
@@ -415,11 +432,13 @@ const App = {
         }).join('');
         const scoresCard = recentScores.length ? `<div class="card"><div class="card-title" style="margin-bottom:8px">🎯 Cycle Scores</div><div class="score-dots-wrap">${scoreDots}</div></div>` : '';
 
+        const qaCount = (counts['human-qa']||0) + (counts['agent-qa']||0);
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
                 <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${total}</div><div class="stat-label">Total Features</div></div><div class="stat-icon" aria-hidden="true">📦</div></div>
                 <div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value">${counts.done||0}</div><div class="stat-label">Completed</div></div><div class="stat-icon" aria-hidden="true">✅</div></div>
                 <div class="stat-card stat-card--warning"><div class="stat-card-info"><div class="stat-value">${counts.implementing||0}</div><div class="stat-label">In Progress</div></div><div class="stat-icon" aria-hidden="true">🔨</div></div>
+                <div class="stat-card stat-card--danger" style="cursor:pointer" onclick="App.navigate('qa')"><div class="stat-card-info"><div class="stat-value">${qaCount}</div><div class="stat-label">Awaiting QA</div></div><div class="stat-icon" aria-hidden="true">🔍</div></div>
                 <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${status.active_cycles||0}</div><div class="stat-label">Active Cycles</div></div><div class="stat-icon" aria-hidden="true">🔄</div></div>
             </div>
             ${total > 0 ? this.renderStatusBar(counts, total) : ''}
@@ -2189,6 +2208,44 @@ App.drawFullDepGraph = function(canvas, data) {
 };
 
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+// Markdown rendering via marked.js
+function renderMD(md) {
+    if (!md) return '';
+    if (typeof marked !== 'undefined' && marked.parse) {
+        return marked.parse(md, { breaks: true, gfm: true });
+    }
+    // Fallback: escape HTML and do minimal formatting
+    var h = esc(md);
+    h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    h = h.replace(/`(.+?)`/g, '<code>$1</code>');
+    h = h.replace(/\n/g, '<br>');
+    return h;
+}
+
+// Delta flash: highlight changed elements in a container
+function deltaFlash(container) {
+    if (!container) return;
+    var children = Array.from(container.children);
+    children.forEach(function(el) {
+        el.classList.add('animate-flash-update');
+        el.addEventListener('animationend', function() {
+            el.classList.remove('animate-flash-update');
+        }, { once: true });
+    });
+}
+
+// Flash a single element (for new items, status changes)
+function flashElement(el, type) {
+    if (!el) return;
+    var cls = type === 'new' ? 'animate-flash-new' : type === 'status' ? 'animate-flash-status' : 'animate-flash-update';
+    el.classList.add(cls);
+    el.addEventListener('animationend', function() { el.classList.remove(cls); }, { once: true });
+}
 function fmtDate(iso) { if(!iso) return '—'; return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
 function parseUTC(iso) { if(!iso) return null; return new Date(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ','T') + 'Z'); }
 function fmtTime(iso) { const d = parseUTC(iso); if(!d) return ''; return d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
