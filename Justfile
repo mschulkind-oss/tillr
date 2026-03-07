@@ -42,6 +42,18 @@ install:
 clean:
     rm -rf bin/ coverage.out coverage.html
 
+# Docker build
+docker-build:
+    docker build -t lifecycle:latest .
+
+# Docker run with local DB
+docker-run:
+    docker run -p 3847:3847 -v $(pwd)/.lifecycle.db:/app/.lifecycle.db lifecycle:latest
+
+# Bootstrap self-management
+bootstrap:
+    bash scripts/bootstrap.sh
+
 # Push jj bookmarks to remotes
 push:
     jj git push --bookmark main --remote public

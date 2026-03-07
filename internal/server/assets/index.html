@@ -16,8 +16,8 @@
     </button>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-    <nav class="sidebar" id="sidebar" aria-label="Main navigation">
-        <div class="sidebar-header">
+    <nav class="sidebar" id="sidebar" role="navigation" aria-label="Main navigation">
+        <div class="sidebar-header" role="banner">
             <h1 class="logo"><span class="logo-icon" aria-hidden="true">⚡</span>Lifecycle</h1>
         </div>
         <ul class="nav-links" role="list">
@@ -75,7 +75,7 @@
         </div>
     </nav>
 
-    <main class="content" id="content" aria-live="polite">
+    <main class="content" id="content" role="main" aria-live="polite">
     </main>
 
     <!-- Floating feedback button -->
@@ -83,7 +83,7 @@
 
     <!-- Feedback modal -->
     <div class="feedback-modal-overlay" id="feedbackModal" aria-hidden="true">
-        <div class="feedback-modal" role="dialog" aria-label="Quick Feedback">
+        <div class="feedback-modal" role="dialog" aria-modal="true" aria-label="Quick Feedback">
             <h3 class="feedback-modal-title">💬 Quick Feedback</h3>
             <form id="feedbackForm" autocomplete="off">
                 <label class="feedback-label" for="feedbackTitle">Title <span class="feedback-required">*</span></label>
@@ -109,7 +109,7 @@
 
     <!-- Keyboard shortcut help modal -->
     <div class="shortcut-modal-overlay" id="shortcutModal" aria-hidden="true">
-        <div class="shortcut-modal" role="dialog" aria-label="Keyboard shortcuts">
+        <div class="shortcut-modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
             <h3>⌨️ Keyboard Shortcuts</h3>
             <div class="shortcut-modal-columns">
                 <div>
