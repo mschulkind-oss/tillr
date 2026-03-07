@@ -263,7 +263,7 @@ var migrations = []string{
 		project_id TEXT NOT NULL REFERENCES projects(id),
 		title TEXT NOT NULL,
 		raw_input TEXT NOT NULL,
-		idea_type TEXT NOT NULL DEFAULT 'feature' CHECK(idea_type IN ('feature','bug')),
+		idea_type TEXT NOT NULL DEFAULT 'feature' CHECK(idea_type IN ('feature','bug','feedback')),
 		status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','spec-ready','approved','rejected','implementing','done')),
 		spec_md TEXT,
 		auto_implement INTEGER NOT NULL DEFAULT 0,
@@ -306,4 +306,24 @@ var migrations = []string{
 	);
 
 	ALTER TABLE agent_sessions ADD COLUMN worktree_id TEXT DEFAULT '';`,
+
+	// Migration 10: Add 'feedback' to idea_type CHECK constraint
+	`CREATE TABLE IF NOT EXISTS idea_queue_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		title TEXT NOT NULL,
+		raw_input TEXT NOT NULL,
+		idea_type TEXT NOT NULL DEFAULT 'feature' CHECK(idea_type IN ('feature','bug','feedback')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','spec-ready','approved','rejected','implementing','done')),
+		spec_md TEXT,
+		auto_implement INTEGER NOT NULL DEFAULT 0,
+		submitted_by TEXT DEFAULT 'human',
+		assigned_agent TEXT,
+		feature_id TEXT REFERENCES features(id),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	INSERT INTO idea_queue_new SELECT * FROM idea_queue;
+	DROP TABLE idea_queue;
+	ALTER TABLE idea_queue_new RENAME TO idea_queue;`,
 }

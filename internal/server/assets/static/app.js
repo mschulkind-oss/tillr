@@ -525,7 +525,7 @@ const App = {
                 <div class="ft-id">${esc(f.id)}</div>
                 ${desc ? `<div class="ft-desc" title="${esc(f.description)}">${desc}</div>` : ''}
             </td>
-            <td><span class="badge badge-${f.status}">${f.status}</span></td>
+            <td><span class="badge badge-${f.status}">${f.status}</span>${(f.status==='implementing'||f.status==='agent-qa')?`<button class="btn-send-qa" onclick="event.stopPropagation();App.sendToQA('${esc(f.id)}')" title="Send to QA for review">Send to QA →</button>`:''}</td>
             <td><span class="priority-dot p-${pClass}">${this.priorityLabel(f.priority)}</span></td>
             <td>${esc(f.milestone_name||'—')}</td>
             <td>
@@ -1131,8 +1131,8 @@ const App = {
                     <div>
                         <div class="empty-state" style="padding:40px">
                             <div class="empty-state-icon">🎉</div>
-                            <div class="empty-state-text">All clear — nothing to review!</div>
-                            <div class="empty-state-hint">Features will appear here when they reach the <code>human-qa</code> stage.</div>
+                            <div class="empty-state-text">No features awaiting review — great job!</div>
+                            <div class="empty-state-hint">Features will appear here when agents complete their work, or you can send features to QA from the <a href="#" onclick="App.navigate('features');return false">Features</a> page.</div>
                         </div>
                     </div>
                     <div>
@@ -1148,6 +1148,7 @@ const App = {
                 <span class="badge badge-human-qa">awaiting QA</span>
             </div>
             <div class="qa-card-description">${esc(f.description || 'No description provided')}</div>
+            ${f.spec ? `<div class="qa-spec-section"><details class="qa-spec-details"><summary class="qa-spec-toggle"><span class="qa-spec-toggle-icon">▶</span> Feature Spec</summary><div class="qa-spec-text qa-spec-md">${renderMD(f.spec)}</div></details></div>` : ''}
             <div class="qa-card-meta">
                 <span>🏷️ ${esc(f.id)}</span>
                 ${f.milestone_name ? `<span>📌 ${esc(f.milestone_name)}</span>` : ''}
