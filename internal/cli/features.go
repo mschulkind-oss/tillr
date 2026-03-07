@@ -27,6 +27,7 @@ func init() {
 	featureAddCmd.Flags().String("description", "", "Feature description")
 	featureAddCmd.Flags().String("spec", "", "Feature spec / acceptance criteria (detailed requirements)")
 	featureAddCmd.Flags().String("roadmap-item", "", "Link to originating roadmap item ID")
+	featureAddCmd.Flags().String("status", "draft", "Initial status (draft, planning, implementing, agent-qa, human-qa, done, blocked)")
 
 	featureListCmd.Flags().String("status", "", "Filter by status")
 	featureListCmd.Flags().String("milestone", "", "Filter by milestone")
@@ -44,6 +45,14 @@ var featureAddCmd = &cobra.Command{
 	Use:   "add <name>",
 	Short: "Add a new feature",
 	Args:  cobra.ExactArgs(1),
+	Example: `  # Add a new feature
+  lifecycle feature add "User Auth" --description "JWT-based authentication" --priority 8
+
+  # Add with full spec for agents
+  lifecycle feature add "Search" --spec "1. Full-text search via FTS5\n2. Results ranked by relevance" --milestone v1.0
+
+  # Onboarding: add already-completed feature
+  lifecycle feature add "Database Layer" --status done --spec "..." --priority 10`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -62,10 +71,26 @@ var featureAddCmd = &cobra.Command{
 		desc, _ := cmd.Flags().GetString("description")
 		spec, _ := cmd.Flags().GetString("spec")
 		roadmapItem, _ := cmd.Flags().GetString("roadmap-item")
+		status, _ := cmd.Flags().GetString("status")
 
 		f, err := engine.AddFeature(database, p.ID, args[0], desc, spec, milestone, priority, deps, roadmapItem)
 		if err != nil {
 			return err
+		}
+
+		// If status is not the default "draft", set it directly
+		if status != "" && status != "draft" {
+			validStatuses := map[string]bool{
+				"planning": true, "implementing": true, "agent-qa": true,
+				"human-qa": true, "done": true, "blocked": true,
+			}
+			if !validStatuses[status] {
+				return fmt.Errorf("invalid status %q: must be one of draft, planning, implementing, agent-qa, human-qa, done, blocked", status)
+			}
+			if err := db.SetFeatureStatus(database, f.ID, status); err != nil {
+				return fmt.Errorf("setting feature status: %w", err)
+			}
+			f.Status = status
 		}
 
 		if jsonOutput {

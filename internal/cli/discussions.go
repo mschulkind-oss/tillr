@@ -37,6 +37,14 @@ var discussNewCmd = &cobra.Command{
 	Use:   "new <title>",
 	Short: "Start a new discussion/RFC",
 	Args:  cobra.ExactArgs(1),
+	Example: `  # Start an RFC discussion
+  lifecycle discuss new "RFC: Authentication Strategy" --feature user-auth --author architect-agent
+
+  # Add a typed comment
+  lifecycle discuss comment 1 "I propose using JWT tokens" --type proposal --author design-agent
+
+  # Approve or object
+  lifecycle discuss comment 1 "Agreed" --type approval --author review-agent`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

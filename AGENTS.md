@@ -230,6 +230,136 @@ See `docs/design/iteration-cycles.md` for the full specification. The predefined
 
 Each cycle step produces structured output stored in the DB. Judge steps produce numeric scores. Human steps block until human input via CLI or web viewer.
 
+## Onboarding an Existing Project
+
+Lifecycle can manage any software project. To onboard an existing project, use the guided onboarding command:
+
+### Quick Onboard
+
+```bash
+# From the project root directory:
+lifecycle onboard --name my-project --scan
+
+# Or step by step:
+lifecycle init my-project
+lifecycle doctor
+```
+
+### Agent Onboarding Workflow
+
+When an agent is tasked with onboarding a project into lifecycle, follow this process:
+
+#### Step 1: Initialize
+```bash
+lifecycle onboard --name <project-name> --scan --json
+```
+This creates the project and scans the codebase. Read the output to understand the project structure.
+
+#### Step 2: Create Milestones
+Create 2–4 milestones representing development phases:
+```bash
+lifecycle milestone add "v1.0 MVP" --description "Core functionality complete"
+lifecycle milestone add "v2.0 Polish" --description "UX refinements and documentation"
+```
+
+#### Step 3: Add Features (Use Judgement)
+
+**For completed work** — Add features that are already built and working:
+```bash
+lifecycle feature add "Database Layer" \
+  --status done \
+  --description "PostgreSQL with migrations" \
+  --spec "1. Schema migrations via goose\n2. Connection pooling\n3. Query builder" \
+  --milestone v1.0-mvp \
+  --priority 10
+```
+
+**For work in progress** — Add features that are partially built:
+```bash
+lifecycle feature add "Search API" \
+  --status implementing \
+  --description "Full-text search endpoint" \
+  --spec "1. Elasticsearch integration\n2. Pagination\n3. Filters [NOT YET DONE]" \
+  --milestone v1.0-mvp \
+  --priority 7
+```
+
+**For planned work** — Add features on the roadmap but not started:
+```bash
+lifecycle feature add "Email Notifications" \
+  --status draft \
+  --description "Send emails on key events" \
+  --spec "1. SMTP/SendGrid integration\n2. Template system\n3. Unsubscribe" \
+  --milestone v2.0-polish \
+  --priority 5
+```
+
+#### Step 4: Build the Roadmap
+Add roadmap items for strategic planning:
+```bash
+lifecycle roadmap add "API Performance" \
+  --description "Optimize query patterns, add caching layer, reduce p99 latency" \
+  --priority high --category infrastructure --effort m
+```
+
+Link features to roadmap items:
+```bash
+lifecycle feature edit <feature-id> --roadmap-item <roadmap-id>
+```
+
+#### Step 5: Create Discussions for Open Questions
+Use discussions for design decisions that need input:
+```bash
+lifecycle discuss new "RFC: Caching Strategy" \
+  --feature cache-layer \
+  --author onboarding-agent
+lifecycle discuss comment 1 "Propose Redis for session cache, local LRU for hot paths" \
+  --type proposal --author onboarding-agent
+```
+
+#### Step 6: Verify
+```bash
+lifecycle doctor          # Check everything is healthy
+lifecycle status          # See project overview
+lifecycle serve           # Launch web viewer to review
+```
+
+### How Far Back to Go
+
+Use judgement based on project maturity:
+- **New projects (<3 months)**: Add everything as features — the history is short enough to capture fully.
+- **Established projects (3–12 months)**: Focus on current and planned work. Add major completed features as `--status done` with brief specs. Don't try to capture every past change.
+- **Mature projects (>1 year)**: Only add actively maintained features and future work. Use `--status done` for major subsystems. Focus energy on roadmap and planned features.
+
+### Writing Good Specs During Onboarding
+
+Every feature should have a spec with numbered acceptance criteria. For completed features, document what IS built:
+```
+1. REST API with OpenAPI spec
+2. JWT authentication with refresh tokens
+3. Rate limiting at 100 req/s per client
+4. PostgreSQL with connection pooling (max 50)
+5. Automated migrations on startup
+```
+
+For planned features, document what SHOULD be built:
+```
+1. Full-text search across all entities
+2. Faceted filtering by category, date, status
+3. Search suggestions with autocomplete
+4. Results pagination with cursor-based navigation
+5. Search analytics dashboard
+```
+
+### Valid Feature Statuses for Onboarding
+- `draft` — Planned, not started (default)
+- `planning` — Requirements being defined
+- `implementing` — Currently being built
+- `agent-qa` — In automated testing
+- `human-qa` — Awaiting human review
+- `done` — Complete and deployed
+- `blocked` — Cannot proceed (document why in description)
+
 ## Agent Integration Pattern
 
 **CRITICAL: All context comes from the tool.** When dispatching work to sub-agents, pass the JSON output of `lifecycle next --json` as the work specification. Do NOT summarize, paraphrase, or add OOB context. The tool output IS the spec.
