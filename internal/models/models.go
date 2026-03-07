@@ -59,8 +59,9 @@ type WorkItem struct {
 
 // Conflict represents multiple agents working on the same feature.
 type Conflict struct {
-	FeatureID string   `json:"feature_id"`
-	Agents    []string `json:"agents"`
+	FeatureID   string   `json:"feature_id"`
+	FeatureName string   `json:"feature_name"`
+	Agents      []string `json:"agents"`
 }
 
 // CoordinationStatus is the full multi-agent coordination snapshot.

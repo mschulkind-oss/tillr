@@ -91,6 +91,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/features", apiHandler(database, handleFeatures))
 	mux.HandleFunc("/api/features/", apiHandler(database, handleFeatures))
 	mux.HandleFunc("/api/milestones", apiHandler(database, handleMilestones))
+	mux.HandleFunc("/api/milestones/", apiHandler(database, handleMilestoneDetail))
 	mux.HandleFunc("/api/roadmap", apiHandler(database, handleRoadmap))
 	mux.HandleFunc("/api/roadmap/", apiHandler(database, handleRoadmapStatus))
 	mux.HandleFunc("/api/cycles", apiHandler(database, handleCycles))
@@ -294,11 +295,14 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 			return handleFeatureDeps(database, w, rest)
 		}
 
-		// Handle PATCH for status updates
+		// Handle PATCH for feature updates
 		if r.Method == "PATCH" {
 			var body struct {
-				Status   string `json:"status"`
-				Priority int    `json:"priority"`
+				Status      string `json:"status"`
+				Priority    int    `json:"priority"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				Spec        string `json:"spec"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -320,6 +324,22 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 				if err := engine.TransitionFeature(database, p.ID, id, body.Status); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					return writeJSON(w, map[string]string{"error": err.Error()})
+				}
+			}
+			// Apply non-status field updates
+			updates := map[string]any{}
+			if body.Name != "" {
+				updates["name"] = body.Name
+			}
+			if body.Description != "" {
+				updates["description"] = body.Description
+			}
+			if body.Spec != "" {
+				updates["spec"] = body.Spec
+			}
+			if len(updates) > 0 {
+				if err := db.UpdateFeature(database, id, updates); err != nil {
+					return fmt.Errorf("updating feature: %w", err)
 				}
 			}
 			f, err := db.GetFeature(database, id)
@@ -449,6 +469,56 @@ func handleMilestones(database *sql.DB, w http.ResponseWriter, _ *http.Request) 
 		milestones = []models.Milestone{}
 	}
 	return writeJSON(w, milestones)
+}
+
+func handleMilestoneDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	id := strings.TrimPrefix(r.URL.Path, "/api/milestones/")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "milestone id required"})
+	}
+
+	if r.Method == "PATCH" {
+		var body struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		updates := map[string]any{}
+		if body.Name != "" {
+			updates["name"] = body.Name
+		}
+		if body.Description != "" {
+			updates["description"] = body.Description
+		}
+		if len(updates) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "no fields to update"})
+		}
+		if err := db.UpdateMilestone(database, id, updates); err != nil {
+			if err == sql.ErrNoRows {
+				w.WriteHeader(http.StatusNotFound)
+				return writeJSON(w, map[string]string{"error": "milestone not found"})
+			}
+			return fmt.Errorf("updating milestone: %w", err)
+		}
+		m, err := db.GetMilestone(database, id)
+		if err != nil {
+			return fmt.Errorf("fetching updated milestone: %w", err)
+		}
+		return writeJSON(w, m)
+	}
+
+	// GET — return milestone detail
+	m, err := db.GetMilestone(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "milestone not found"})
+	}
+	return writeJSON(w, m)
 }
 
 func handleRoadmap(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
@@ -739,41 +809,83 @@ func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Reques
 		return writeJSON(w, map[string]bool{"ok": true})
 	}
 
-	// PATCH /api/roadmap/{id}/status
 	if r.Method != "PATCH" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return writeJSON(w, map[string]string{"error": "PATCH required"})
 	}
 
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[1] != "status" || parts[0] == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return writeJSON(w, map[string]string{"error": "invalid path, expected /api/roadmap/{id}/status"})
-	}
-	id := parts[0]
 
-	var body struct {
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return writeJSON(w, map[string]string{"error": "invalid request body"})
-	}
-
-	if !validRoadmapStatuses[body.Status] {
-		w.WriteHeader(http.StatusBadRequest)
-		return writeJSON(w, map[string]string{"error": "invalid status: " + body.Status})
-	}
-
-	if err := db.UpdateRoadmapItemStatus(database, id, body.Status); err != nil {
-		if err == sql.ErrNoRows {
-			w.WriteHeader(http.StatusNotFound)
-			return writeJSON(w, map[string]string{"error": "roadmap item not found"})
+	// PATCH /api/roadmap/{id}/status — dedicated status endpoint
+	if len(parts) == 2 && parts[1] == "status" && parts[0] != "" {
+		id := parts[0]
+		var body struct {
+			Status string `json:"status"`
 		}
-		return fmt.Errorf("updating roadmap item status: %w", err)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if !validRoadmapStatuses[body.Status] {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid status: " + body.Status})
+		}
+		if err := db.UpdateRoadmapItemStatus(database, id, body.Status); err != nil {
+			if err == sql.ErrNoRows {
+				w.WriteHeader(http.StatusNotFound)
+				return writeJSON(w, map[string]string{"error": "roadmap item not found"})
+			}
+			return fmt.Errorf("updating roadmap item status: %w", err)
+		}
+		return writeJSON(w, map[string]bool{"ok": true})
 	}
 
-	return writeJSON(w, map[string]bool{"ok": true})
+	// PATCH /api/roadmap/{id} — general field updates
+	if len(parts) == 1 && parts[0] != "" {
+		id := parts[0]
+		var body struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			Priority    string `json:"priority"`
+			Effort      string `json:"effort"`
+			Category    string `json:"category"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		updates := map[string]any{}
+		if body.Title != "" {
+			updates["title"] = body.Title
+		}
+		if body.Description != "" {
+			updates["description"] = body.Description
+		}
+		if body.Priority != "" {
+			updates["priority"] = body.Priority
+		}
+		if body.Effort != "" {
+			updates["effort"] = body.Effort
+		}
+		if body.Category != "" {
+			updates["category"] = body.Category
+		}
+		if len(updates) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "no fields to update"})
+		}
+		if err := db.UpdateRoadmapItem(database, id, updates); err != nil {
+			return fmt.Errorf("updating roadmap item: %w", err)
+		}
+		item, err := db.GetRoadmapItem(database, id)
+		if err != nil {
+			return fmt.Errorf("fetching updated roadmap item: %w", err)
+		}
+		return writeJSON(w, item)
+	}
+
+	w.WriteHeader(http.StatusBadRequest)
+	return writeJSON(w, map[string]string{"error": "invalid path"})
 }
 
 func handleDiscussions(database *sql.DB, w http.ResponseWriter, r *http.Request) error {

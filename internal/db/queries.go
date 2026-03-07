@@ -2001,24 +2001,26 @@ func GetStaleAgents(database *sql.DB, projectID string, staleMins int) ([]models
 
 // DetectConflicts finds features with multiple agents working on active items simultaneously.
 func DetectConflicts(database *sql.DB) ([]models.Conflict, error) {
-	rows, err := database.Query(`SELECT feature_id, GROUP_CONCAT(DISTINCT assigned_agent)
-		FROM work_items
-		WHERE status = 'active' AND assigned_agent != ''
-		GROUP BY feature_id
-		HAVING COUNT(DISTINCT assigned_agent) > 1`)
+	rows, err := database.Query(`SELECT wi.feature_id, COALESCE(f.name,''), GROUP_CONCAT(DISTINCT wi.assigned_agent)
+		FROM work_items wi
+		LEFT JOIN features f ON wi.feature_id = f.id
+		WHERE wi.status = 'active' AND wi.assigned_agent != ''
+		GROUP BY wi.feature_id
+		HAVING COUNT(DISTINCT wi.assigned_agent) > 1`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close() //nolint:errcheck
 	var out []models.Conflict
 	for rows.Next() {
-		var featureID, agents string
-		if err := rows.Scan(&featureID, &agents); err != nil {
+		var featureID, featureName, agents string
+		if err := rows.Scan(&featureID, &featureName, &agents); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Conflict{
-			FeatureID: featureID,
-			Agents:    strings.Split(agents, ","),
+			FeatureID:   featureID,
+			FeatureName: featureName,
+			Agents:      strings.Split(agents, ","),
 		})
 	}
 	return out, rows.Err()
