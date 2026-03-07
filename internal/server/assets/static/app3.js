@@ -92,6 +92,22 @@ App.renderCycleDetailView = function(data) {
 
     var html = '';
 
+    // Role labels for cycle steps
+    var _roleLabels = {
+        'design': 'Designer', 'ux-review': 'UX Reviewer', 'develop': 'Developer',
+        'manual-qa': 'QA Tester', 'judge': 'Judge', 'research': 'Researcher',
+        'agent-qa': 'Agent', 'human-qa': 'Human', 'plan': 'Planner',
+        'create-roadmap': 'Planner', 'prioritize': 'Stakeholder', 'human-review': 'Human',
+        'report': 'Reporter', 'reproduce': 'Developer', 'root-cause': 'Developer',
+        'fix': 'Developer', 'verify': 'QA Tester', 'draft': 'Writer',
+        'review': 'Reviewer', 'edit': 'Editor', 'publish': 'Publisher',
+        'analyze': 'Architect', 'propose': 'Architect', 'discuss': 'Team',
+        'decide': 'Lead', 'implement': 'Developer', 'freeze': 'Release Mgr',
+        'qa': 'QA', 'staging': 'DevOps', 'ship': 'Release Mgr',
+        'try': 'New User', 'friction-log': 'DX Engineer', 'improve': 'Developer',
+        'document': 'Writer', 'draft-spec': 'Spec Author'
+    };
+
     // Header
     html += '<div class="cd-header">';
     html += '<button class="cd-back" id="cdBack">← Back to Cycles</button>';
@@ -102,7 +118,7 @@ App.renderCycleDetailView = function(data) {
     html += '<div class="cd-subtitle">';
     html += '<span class="clickable-feature cd-feature-link" data-feature-id="' + esc(cycle.feature_id) + '">' + esc(cycle.feature_id) + '</span>';
     html += ' · <span class="badge badge-' + cycle.status + '">' + cycle.status + '</span>';
-    html += ' · Iteration ' + cycle.iteration;
+    html += ' · <span class="cd-iter-pill">Iteration ' + cycle.iteration + '</span>';
     if (avgScore !== null) {
         var avgCls = App.scoreColorClass(avgScore);
         html += ' · <span class="score-badge ' + avgCls + '">★ ' + avgScore.toFixed(1) + ' avg</span>';
@@ -112,24 +128,28 @@ App.renderCycleDetailView = function(data) {
     // Progress bar
     html += '<div class="cd-progress-wrap">';
     html += '<div class="cd-progress-label">' + pct + '% complete (' + cycle.current_step + '/' + totalSteps + ' steps)</div>';
-    html += '<div class="cycle-progress" style="height:6px"><div class="cycle-progress-fill" style="width:' + pct + '%"></div></div>';
+    html += '<div class="cycle-progress cd-progress-bar"><div class="cycle-progress-fill" style="width:' + pct + '%"></div></div>';
     html += '</div>';
     html += '</div>';
 
-    // Step timeline (horizontal stepper, enhanced)
+    // Step pipeline (enhanced stepper)
     html += '<div class="cd-section"><h3 class="cd-section-title">Step Progression</h3>';
-    html += '<div class="cd-stepper">';
+    html += '<div class="cd-pipeline">';
     for (var si = 0; si < steps.length; si++) {
         var state = si < cycle.current_step ? 'done' : si === cycle.current_step ? 'active' : 'pending';
         var stepScores = scores.filter(function(sc) { return sc.step === si; });
         var bestScore = stepScores.length ? stepScores[stepScores.length - 1].score : null;
         var indicator = state === 'done' ? '✓' : (si + 1);
+        var roleName = _roleLabels[steps[si]] || '';
 
-        html += '<div class="cd-step ' + state + '">';
-        html += '<div class="cd-step-indicator">' + indicator + '</div>';
-        html += '<div class="cd-step-body">';
-        html += '<div class="cd-step-name">' + esc(steps[si].replace(/-/g, ' ')) + '</div>';
-        html += '<div class="cd-step-status">';
+        html += '<div class="cd-pipe-step ' + state + '">';
+        html += '<div class="cd-pipe-indicator">' + indicator + '</div>';
+        html += '<div class="cd-pipe-body">';
+        html += '<div class="cd-pipe-name">' + esc(steps[si].replace(/-/g, ' ')) + '</div>';
+        if (roleName) {
+            html += '<div class="cd-pipe-role' + (state === 'active' ? ' cd-pipe-role-active' : '') + '">' + esc(roleName) + '</div>';
+        }
+        html += '<div class="cd-pipe-status">';
         if (state === 'done') html += '<span class="cd-status-badge cd-status-done">Done</span>';
         else if (state === 'active') html += '<span class="cd-status-badge cd-status-active">Active</span>';
         else html += '<span class="cd-status-badge cd-status-pending">Pending</span>';
@@ -138,7 +158,6 @@ App.renderCycleDetailView = function(data) {
             var bCls = App.scoreColorClass(bestScore);
             html += '<span class="score-badge ' + bCls + '" style="font-size:0.72rem">' + bestScore.toFixed(1) + '</span>';
         }
-        // Show all scores for this step
         if (stepScores.length) {
             html += '<div class="cd-step-scores">';
             stepScores.forEach(function(ss) {
@@ -153,7 +172,7 @@ App.renderCycleDetailView = function(data) {
             html += '</div>';
         }
         html += '</div></div>';
-        if (si < steps.length - 1) html += '<div class="cd-step-connector ' + (si < cycle.current_step ? 'done' : '') + '"></div>';
+        if (si < steps.length - 1) html += '<div class="cd-pipe-connector ' + (si < cycle.current_step ? 'done' : '') + '"></div>';
     }
     html += '</div></div>';
 
@@ -500,22 +519,25 @@ App._renderDiscussionList = function(discussions, features) {
 
     var listHtml = '<div class="disc-list">';
     discussions.forEach(function(d) {
-        var statusCls = 'disc-status-' + (d.status || 'open');
-        var preview = (d.body || '').substring(0, 100);
-        if ((d.body || '').length > 100) preview += '…';
+        var st = d.status || 'open';
+        var statusCls = 'disc-status-' + st;
+        var accentCls = 'disc-card-accent-' + st;
+        var preview = (d.body || '').substring(0, 120);
+        if ((d.body || '').length > 120) preview += '…';
         if (!preview) preview = 'No description';
         var featureTag = d.feature_id ? '<a class="disc-feature-tag disc-feature-nav" data-feature-id="' + esc(d.feature_id) + '">' + esc(d.feature_id) + '</a>' : '';
 
-        listHtml += '<div class="disc-list-item" data-disc-id="' + d.id + '">' +
-            App._discAvatar(d.author, 36) +
+        listHtml += '<div class="disc-list-item ' + accentCls + '" data-disc-id="' + d.id + '">' +
+            App._discAvatar(d.author, 40) +
             '<div class="disc-list-content">' +
             '<div class="disc-list-title">' +
+            '<span class="disc-list-id">#' + d.id + '</span>' +
             '<span>' + esc(d.title) + '</span>' +
-            '<span class="badge ' + statusCls + '">' + esc(d.status || 'open') + '</span>' +
+            '<span class="badge ' + statusCls + '">' + esc(st) + '</span>' +
             '</div>' +
             '<div class="disc-list-preview">' + esc(preview) + '</div>' +
             '<div class="disc-list-meta">' +
-            '<span>' + esc(d.author || 'Unknown') + '</span>' +
+            '<span class="disc-list-author">' + esc(d.author || 'Unknown') + '</span>' +
             '<span class="disc-reply-badge">💬 ' + (d.comment_count || 0) + '</span>' +
             (featureTag ? featureTag : '') +
             '<span>' + App._discTimeAgo(d.created_at) + '</span>' +
@@ -567,16 +589,20 @@ App._renderDiscussionDetail = async function(discId) {
 
     // Replies thread
     var threadHtml = '<div class="disc-thread">';
-    threadHtml += '<div class="disc-thread-title">Replies (' + ((disc.comments || []).length) + ')</div>';
+    threadHtml += '<div class="disc-thread-title">Replies <span class="disc-thread-count">' + ((disc.comments || []).length) + '</span></div>';
     if (!disc.comments || !disc.comments.length) {
-        threadHtml += '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0">No replies yet. Be the first to respond.</div>';
+        threadHtml += '<div class="disc-thread-empty">No replies yet. Be the first to respond.</div>';
     } else {
-        disc.comments.forEach(function(c) {
+        threadHtml += '<div class="disc-thread-line">';
+        disc.comments.forEach(function(c, idx) {
             var typeCls = '';
             var ctype = c.comment_type || c.type || 'comment';
-            if (ctype !== 'comment') typeCls = '<span class="badge disc-type-' + ctype + '">' + esc(ctype) + '</span>';
-            threadHtml += '<div class="disc-reply">' +
-                '<div>' + App._discAvatar(c.author, 32).replace('disc-avatar', 'disc-reply-avatar') + '</div>' +
+            if (ctype !== 'comment') typeCls = '<span class="badge disc-type-badge disc-type-' + ctype + '">' + esc(ctype) + '</span>';
+            var isLast = idx === disc.comments.length - 1;
+            threadHtml += '<div class="disc-reply' + (isLast ? ' disc-reply-last' : '') + '">' +
+                '<div class="disc-reply-gutter">' +
+                App._discAvatar(c.author, 32).replace('disc-avatar', 'disc-reply-avatar') +
+                '</div>' +
                 '<div class="disc-reply-content">' +
                 '<div class="disc-reply-header">' +
                 '<span class="disc-reply-author">' + esc(c.author || 'Unknown') + '</span>' +
@@ -586,16 +612,40 @@ App._renderDiscussionDetail = async function(discId) {
                 '<div class="disc-reply-body">' + App._discRenderMarkdown(c.content) + '</div>' +
                 '</div></div>';
         });
+        threadHtml += '</div>';
     }
     threadHtml += '</div>';
 
-    // Reply form
-    var replyFormHtml = '<div class="disc-form" id="discReplyFormWrap">' +
+    // Reply form with type selector and markdown preview
+    var typeOptions = ['comment', 'proposal', 'decision', 'question', 'concern'].map(function(t) {
+        return '<option value="' + t + '">' + t.charAt(0).toUpperCase() + t.slice(1) + '</option>';
+    }).join('');
+
+    var replyFormHtml = '<div class="disc-form disc-reply-form" id="discReplyFormWrap">' +
         '<div class="disc-form-title">Reply</div>' +
-        '<div class="disc-form-group"><textarea id="discReplyBody" rows="3" placeholder="Write a reply…"></textarea>' +
-        '<div class="disc-form-hint">Supports **bold**, `code`, and [links](url)</div></div>' +
-        '<div class="disc-form-group"><label for="discReplyAuthor">Author</label><input type="text" id="discReplyAuthor" value="human"></div>' +
-        '<div class="disc-form-actions"><button class="disc-form-submit" id="discReplySubmit">Post Reply</button></div>' +
+        '<div class="disc-form-row">' +
+        '<div class="disc-form-group disc-form-grow">' +
+        '<label for="discReplyBody">Message</label>' +
+        '<div class="disc-compose-wrap">' +
+        '<div class="disc-compose-tabs">' +
+        '<button class="disc-compose-tab active" data-tab="write" id="discTabWrite">Write</button>' +
+        '<button class="disc-compose-tab" data-tab="preview" id="discTabPreview">Preview</button>' +
+        '</div>' +
+        '<textarea id="discReplyBody" rows="4" placeholder="Write a reply… (supports **bold**, `code`, [links](url))"></textarea>' +
+        '<div id="discReplyPreview" class="disc-compose-preview" style="display:none"></div>' +
+        '</div></div></div>' +
+        '<div class="disc-form-row disc-form-bottom">' +
+        '<div class="disc-form-group disc-form-inline">' +
+        '<label for="discReplyType">Type</label>' +
+        '<select id="discReplyType">' + typeOptions + '</select>' +
+        '</div>' +
+        '<div class="disc-form-group disc-form-inline">' +
+        '<label for="discReplyAuthor">Author</label>' +
+        '<input type="text" id="discReplyAuthor" value="human">' +
+        '</div>' +
+        '<div class="disc-form-actions">' +
+        '<button class="disc-form-submit" id="discReplySubmit">Post Reply</button>' +
+        '</div></div>' +
         '</div>';
 
     return headerHtml + bodyHtml + threadHtml + replyFormHtml;
@@ -675,11 +725,12 @@ App._bindDiscussionEvents = function() {
         replySubmit.addEventListener('click', async function() {
             var body = (document.getElementById('discReplyBody') || {}).value || '';
             var author = (document.getElementById('discReplyAuthor') || {}).value || 'human';
+            var commentType = (document.getElementById('discReplyType') || {}).value || 'comment';
             if (!body.trim()) { App.toast('Reply body is required', 'error'); return; }
             var discId = App._discCurrentDiscussion.id;
             replySubmit.disabled = true;
             try {
-                await App.apiPost('discussions/' + discId + '/replies', { body: body.trim(), author: author });
+                await App.apiPost('discussions/' + discId + '/replies', { body: body.trim(), author: author, type: commentType });
                 App.toast('Reply posted', 'success');
                 // Re-render detail to show new reply
                 var content = document.getElementById('content');
@@ -688,7 +739,6 @@ App._bindDiscussionEvents = function() {
                     content.innerHTML = html;
                     App.updateBreadcrumbs();
                     App._bindDiscussionEvents();
-                    // Auto-scroll to reply form
                     var formWrap = document.getElementById('discReplyFormWrap');
                     if (formWrap) formWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
@@ -696,6 +746,28 @@ App._bindDiscussionEvents = function() {
                 App.toast('Failed to post reply', 'error');
             }
             replySubmit.disabled = false;
+        });
+    }
+
+    // Markdown preview tabs
+    var tabWrite = document.getElementById('discTabWrite');
+    var tabPreview = document.getElementById('discTabPreview');
+    var replyBody = document.getElementById('discReplyBody');
+    var previewEl = document.getElementById('discReplyPreview');
+    if (tabWrite && tabPreview && replyBody && previewEl) {
+        tabWrite.addEventListener('click', function() {
+            tabWrite.classList.add('active');
+            tabPreview.classList.remove('active');
+            replyBody.style.display = '';
+            previewEl.style.display = 'none';
+        });
+        tabPreview.addEventListener('click', function() {
+            tabPreview.classList.add('active');
+            tabWrite.classList.remove('active');
+            replyBody.style.display = 'none';
+            previewEl.style.display = 'block';
+            var text = replyBody.value || '';
+            previewEl.innerHTML = text.trim() ? App._discRenderMarkdown(text) : '<span class="disc-preview-empty">Nothing to preview</span>';
         });
     }
 };

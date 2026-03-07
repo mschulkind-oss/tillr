@@ -293,4 +293,17 @@ var migrations = []string{
 	CREATE INDEX idx_idea_queue_status ON idea_queue(status);
 	CREATE INDEX idx_context_entries_project ON context_entries(project_id);
 	CREATE INDEX idx_context_entries_feature ON context_entries(feature_id);`,
+
+	// Migration 9: Worktree/workspace management
+	`CREATE TABLE IF NOT EXISTS worktrees (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		path TEXT NOT NULL,
+		branch TEXT DEFAULT '',
+		agent_session_id TEXT DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (agent_session_id) REFERENCES agent_sessions(id)
+	);
+
+	ALTER TABLE agent_sessions ADD COLUMN worktree_id TEXT DEFAULT '';`,
 }

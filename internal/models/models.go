@@ -242,6 +242,16 @@ type ContextEntry struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+// Worktree represents a git/jj worktree linked to the project.
+type Worktree struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	Branch         string `json:"branch,omitempty"`
+	AgentSessionID string `json:"agent_session_id,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},
