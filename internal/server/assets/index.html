@@ -90,20 +90,13 @@
     <!-- Feedback modal -->
     <div class="feedback-modal-overlay" id="feedbackModal" aria-hidden="true">
         <div class="feedback-modal" role="dialog" aria-modal="true" aria-label="Quick Feedback">
-            <h3 class="feedback-modal-title">💬 Quick Feedback</h3>
+            <div class="feedback-modal-header">
+                <span class="feedback-modal-title">Quick Feedback</span>
+                <button type="button" class="feedback-modal-close" onclick="App.hideFeedbackModal()" aria-label="Close">&times;</button>
+            </div>
             <form id="feedbackForm" autocomplete="off">
-                <label class="feedback-label" for="feedbackTitle">Title <span class="feedback-required">*</span></label>
-                <input type="text" id="feedbackTitle" class="feedback-input" placeholder="Brief summary…" required>
-                <label class="feedback-label" for="feedbackType">Type</label>
-                <select id="feedbackType" class="feedback-select">
-                    <option value="feedback" selected>💬 Feedback</option>
-                    <option value="idea">💡 Idea</option>
-                    <option value="bug">🐛 Bug</option>
-                </select>
-                <label class="feedback-label" for="feedbackDesc">Description</label>
-                <textarea id="feedbackDesc" class="feedback-textarea" placeholder="Details (markdown supported)…" rows="4"></textarea>
+                <textarea id="feedbackText" class="feedback-textarea" placeholder="What's on your mind? (markdown supported)" rows="10"></textarea>
                 <div class="feedback-actions">
-                    <button type="button" class="btn btn-secondary" onclick="App.hideFeedbackModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="feedbackSubmitBtn">Submit</button>
                 </div>
             </form>

@@ -809,20 +809,24 @@ App._bindGlobalSearch = function(page) {
 })();
 
 // =====================================================
-// QUICK FEEDBACK MODAL
+// QUICK FEEDBACK MODAL (simplified with localStorage)
 // =====================================================
+var FEEDBACK_LS_KEY = 'lifecycle_feedback_draft';
+var _feedbackSaveTimer = null;
+
 App.showFeedbackModal = function() {
     var overlay = document.getElementById('feedbackModal');
     if (!overlay) return;
     overlay.classList.add('visible');
     overlay.setAttribute('aria-hidden', 'false');
-    // Reset form
-    var form = document.getElementById('feedbackForm');
-    if (form) form.reset();
-    // Auto-focus title
-    var title = document.getElementById('feedbackTitle');
-    if (title) setTimeout(function() { title.focus(); }, 50);
-    // Close on backdrop click
+    // Restore draft from localStorage
+    var textarea = document.getElementById('feedbackText');
+    if (textarea) {
+        var draft = localStorage.getItem(FEEDBACK_LS_KEY);
+        if (draft) textarea.value = draft;
+        setTimeout(function() { textarea.focus(); }, 50);
+    }
+    // Close on backdrop click (preserve content)
     overlay.onclick = function(e) {
         if (e.target === overlay) App.hideFeedbackModal();
     };
@@ -833,7 +837,49 @@ App.hideFeedbackModal = function() {
     if (!overlay) return;
     overlay.classList.remove('visible');
     overlay.setAttribute('aria-hidden', 'true');
+    // Content stays in localStorage — NOT cleared on close
 };
+
+// Save to localStorage on every keystroke (debounced 300ms)
+document.addEventListener('input', function(e) {
+    if (e.target.id !== 'feedbackText') return;
+    if (_feedbackSaveTimer) clearTimeout(_feedbackSaveTimer);
+    _feedbackSaveTimer = setTimeout(function() {
+        localStorage.setItem(FEEDBACK_LS_KEY, e.target.value);
+    }, 300);
+});
+
+// Submit handler
+document.addEventListener('submit', function(e) {
+    if (!e.target.matches('#feedbackForm')) return;
+    e.preventDefault();
+    var textarea = document.getElementById('feedbackText');
+    var text = (textarea && textarea.value || '').trim();
+    if (!text) return;
+    var btn = document.getElementById('feedbackSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    // Extract first line as title, rest as description
+    var lines = text.split('\n');
+    var title = lines[0].substring(0, 100);
+    var description = lines.slice(1).join('\n').trim();
+    App.apiPost('ideas', {
+        title: title,
+        raw_input: description,
+        idea_type: 'feedback',
+        submitted_by: 'human'
+    }).then(function() {
+        // Clear localStorage on successful submit
+        localStorage.removeItem(FEEDBACK_LS_KEY);
+        if (textarea) textarea.value = '';
+        App.hideFeedbackModal();
+        App.toast('Feedback submitted!', 'success');
+        if (typeof App.announce === 'function') App.announce('Feedback submitted');
+    }).catch(function(err) {
+        App.toast('Error: ' + (err.message || 'Submit failed'), 'error');
+    }).finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Submit'; }
+    });
+});
 
 App.showToast = function(message) {
     var existing = document.querySelector('.toast-notification');
@@ -903,36 +949,6 @@ App.inlineEdit = function(el, opts) {
     input.addEventListener('blur', function() { setTimeout(save, 150); });
     if (opts.type === 'select') input.addEventListener('change', save);
 };
-
-// Bind feedback form submission
-(function() {
-    document.addEventListener('DOMContentLoaded', function() {
-        var form = document.getElementById('feedbackForm');
-        if (!form) return;
-        form.addEventListener('submit', async function(e) {
-            e.preventDefault();
-            var title = document.getElementById('feedbackTitle').value.trim();
-            if (!title) return;
-            var desc = document.getElementById('feedbackDesc').value.trim();
-            var type = document.getElementById('feedbackType').value;
-            var submitBtn = document.getElementById('feedbackSubmitBtn');
-            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting…'; }
-            try {
-                await App.apiPost('ideas', {
-                    title: title,
-                    raw_input: desc,
-                    idea_type: type === 'idea' ? 'feature' : type,
-                });
-                App.hideFeedbackModal();
-                App.showToast('✓ Feedback submitted');
-            } catch(err) {
-                App.showToast('✗ Error: ' + err.message);
-            } finally {
-                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit'; }
-            }
-        });
-    });
-})();
 
 // =====================================================
 // GIT/VCS ACTIVITY (used by Dashboard)

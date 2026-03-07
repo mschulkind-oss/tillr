@@ -195,14 +195,28 @@ func TestCycleScoring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Get & complete the research work item
+	// Get & complete the research work item (auto-advances to develop)
 	w, _ := GetNextWorkItem(database)
 	if w.WorkType != "research" {
 		t.Fatalf("expected research, got %s", w.WorkType)
 	}
 	_ = CompleteWorkItem(database, "researched")
 
-	// Score with a high score
+	// Complete develop (auto-advances to agent-qa)
+	w2, _ := GetNextWorkItem(database)
+	if w2.WorkType != "develop" {
+		t.Fatalf("expected develop, got %s", w2.WorkType)
+	}
+	_ = CompleteWorkItem(database, "developed")
+
+	// Complete agent-qa (auto-advances to judge step, no work item created)
+	w3, _ := GetNextWorkItem(database)
+	if w3.WorkType != "agent-qa" {
+		t.Fatalf("expected agent-qa, got %s", w3.WorkType)
+	}
+	_ = CompleteWorkItem(database, "qa passed")
+
+	// Score the judge step
 	if err := ScoreCycleStep(database, p.ID, f.ID, 9.5, "excellent"); err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +234,9 @@ func TestCycleScoring(t *testing.T) {
 		t.Errorf("expected score 9.5, got %f", scores[0].Score)
 	}
 
-	// Cycle should have advanced to step 1 (develop)
-	if c.CurrentStep != 1 {
-		t.Errorf("expected current step 1 (develop), got %d", c.CurrentStep)
+	// Cycle should have advanced to step 4 (human-qa)
+	if c.CurrentStep != 4 {
+		t.Errorf("expected current step 4 (human-qa), got %d", c.CurrentStep)
 	}
 }
 
