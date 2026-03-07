@@ -1741,6 +1741,362 @@ App.loadFeatureEnrichedData = async function(featureId, container) {
     }
 };
 
+// Fetch and render dependency info for a feature in its detail view
+App.loadFeatureDeps = async function(featureId, container) {
+    try {
+        const data = await App.api('features/' + encodeURIComponent(featureId) + '/deps');
+        if (!data || (!data.depends_on.length && !data.depended_by.length)) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const statusBadge = function(status) {
+            return '<span class="badge badge-' + esc(status) + '">' + esc(status) + '</span>';
+        };
+
+        let html = '<div class="enriched-section"><div class="enriched-section-header">Dependencies</div>';
+
+        if (data.depends_on.length) {
+            html += '<div class="dep-detail-group"><div class="dep-detail-label">Depends On:</div>';
+            data.depends_on.forEach(function(d) {
+                html += '<div class="dep-detail-item"><a href="#" class="clickable-feature dep-link" data-feature-id="' + esc(d.id) + '">' + esc(d.name) + '</a> ' + statusBadge(d.status) + '</div>';
+            });
+            html += '</div>';
+        }
+
+        if (data.depended_by.length) {
+            html += '<div class="dep-detail-group"><div class="dep-detail-label">Required By:</div>';
+            data.depended_by.forEach(function(d) {
+                html += '<div class="dep-detail-item"><a href="#" class="clickable-feature dep-link" data-feature-id="' + esc(d.id) + '">' + esc(d.name) + '</a> ' + statusBadge(d.status) + '</div>';
+            });
+            html += '</div>';
+        }
+
+        if (data.blocking_chain.length) {
+            html += '<div class="dep-detail-group dep-blocking"><div class="dep-detail-label">\u26A0\uFE0F Blocking Chain:</div>';
+            data.blocking_chain.forEach(function(b) {
+                html += '<div class="dep-detail-item dep-blocking-item">' + esc(b) + '</div>';
+            });
+            html += '</div>';
+        }
+
+        // Mini dependency graph canvas
+        if (data.depends_on.length || data.depended_by.length) {
+            html += '<div class="dep-mini-graph">';
+            html += '<canvas id="depMiniCanvas-' + esc(featureId) + '" class="dep-mini-canvas"></canvas>';
+            html += '</div>';
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+
+        // Draw the mini graph on canvas
+        if (data.depends_on.length || data.depended_by.length) {
+            var canvas = document.getElementById('depMiniCanvas-' + featureId);
+            if (canvas) App.drawMiniDepGraph(canvas, data);
+        }
+
+        // Bind clickable features
+        container.querySelectorAll('.dep-link').forEach(function(a) {
+            a.addEventListener('click', function(e) {
+                e.preventDefault();
+                App._expandedFeatureId = a.dataset.featureId;
+                App.navigate('features', { id: a.dataset.featureId });
+            });
+        });
+    } catch(e) {
+        container.innerHTML = '';
+    }
+};
+
+// Draw a mini dependency graph on a canvas element
+App.drawMiniDepGraph = function(canvas, data) {
+    var dpr = window.devicePixelRatio || 1;
+    var width = canvas.parentElement.offsetWidth || 400;
+    var height = 150;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var statusColors = {
+        done: '#3fb950', implementing: '#58a6ff', 'agent-qa': '#58a6ff',
+        'human-qa': '#58a6ff', draft: '#8b949e', planning: '#d29922',
+        blocked: '#f85149', unknown: '#8b949e'
+    };
+
+    // Collect columns: depends_on (left), feature (center), depended_by (right)
+    var columns = [];
+    if (data.depends_on.length) columns.push(data.depends_on.map(function(d) { return { id: d.id, name: d.name, status: d.status }; }));
+    columns.push([{ id: data.feature.id, name: data.feature.name, status: data.feature.status, isCurrent: true }]);
+    if (data.depended_by.length) columns.push(data.depended_by.map(function(d) { return { id: d.id, name: d.name, status: d.status }; }));
+
+    var colWidth = width / columns.length;
+    var nodeW = Math.min(100, colWidth - 20);
+    var nodeH = 32;
+    var positions = {};
+
+    columns.forEach(function(col, ci) {
+        var cx = colWidth * ci + colWidth / 2;
+        var totalH = col.length * (nodeH + 12) - 12;
+        var startY = (height - totalH) / 2;
+        col.forEach(function(node, ni) {
+            var x = cx - nodeW / 2;
+            var y = startY + ni * (nodeH + 12);
+            positions[node.id] = { x: x, y: y, cx: cx, cy: y + nodeH / 2, node: node };
+        });
+    });
+
+    // Draw edges
+    ctx.lineWidth = 2;
+    data.depends_on.forEach(function(d) {
+        var from = positions[d.id];
+        var to = positions[data.feature.id];
+        if (from && to) {
+            ctx.beginPath();
+            ctx.strokeStyle = statusColors[d.status] || statusColors.unknown;
+            ctx.globalAlpha = 0.5;
+            ctx.moveTo(from.cx + nodeW / 2, from.cy);
+            ctx.lineTo(to.cx - nodeW / 2, to.cy);
+            ctx.stroke();
+            var ax = to.cx - nodeW / 2;
+            var ay = to.cy;
+            ctx.beginPath();
+            ctx.globalAlpha = 0.7;
+            ctx.fillStyle = statusColors[d.status] || statusColors.unknown;
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - 6, ay - 4);
+            ctx.lineTo(ax - 6, ay + 4);
+            ctx.closePath();
+            ctx.fill();
+        }
+    });
+    data.depended_by.forEach(function(d) {
+        var from = positions[data.feature.id];
+        var to = positions[d.id];
+        if (from && to) {
+            ctx.beginPath();
+            ctx.strokeStyle = statusColors[d.status] || statusColors.unknown;
+            ctx.globalAlpha = 0.5;
+            ctx.moveTo(from.cx + nodeW / 2, from.cy);
+            ctx.lineTo(to.cx - nodeW / 2, to.cy);
+            ctx.stroke();
+            var ax = to.cx - nodeW / 2;
+            var ay = to.cy;
+            ctx.beginPath();
+            ctx.globalAlpha = 0.7;
+            ctx.fillStyle = statusColors[d.status] || statusColors.unknown;
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - 6, ay - 4);
+            ctx.lineTo(ax - 6, ay + 4);
+            ctx.closePath();
+            ctx.fill();
+        }
+    });
+
+    // Draw nodes
+    ctx.globalAlpha = 1;
+    Object.values(positions).forEach(function(p) {
+        var color = statusColors[p.node.status] || statusColors.unknown;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = p.node.isCurrent ? 1 : 0.8;
+        ctx.beginPath();
+        var r = 6;
+        ctx.moveTo(p.x + r, p.y);
+        ctx.lineTo(p.x + nodeW - r, p.y);
+        ctx.quadraticCurveTo(p.x + nodeW, p.y, p.x + nodeW, p.y + r);
+        ctx.lineTo(p.x + nodeW, p.y + nodeH - r);
+        ctx.quadraticCurveTo(p.x + nodeW, p.y + nodeH, p.x + nodeW - r, p.y + nodeH);
+        ctx.lineTo(p.x + r, p.y + nodeH);
+        ctx.quadraticCurveTo(p.x, p.y + nodeH, p.x, p.y + nodeH - r);
+        ctx.lineTo(p.x, p.y + r);
+        ctx.quadraticCurveTo(p.x, p.y, p.x + r, p.y);
+        ctx.fill();
+        if (p.node.isCurrent) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = (p.node.isCurrent ? 'bold ' : '') + '11px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        var label = p.node.name.length > 12 ? p.node.name.substring(0, 11) + '\u2026' : p.node.name;
+        ctx.fillText(label, p.cx, p.cy);
+    });
+};
+
+// Render full dependency graph (canvas-based) for the roadmap Dependencies tab
+App.renderDependencyGraph = function(container) {
+    App.api('dependencies').then(function(data) {
+        if (!data || !data.nodes || !data.nodes.length) {
+            container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD17</div><div class="empty-state-text">No dependencies found</div></div>';
+            return;
+        }
+        var html = '<div class="dep-canvas-container">';
+        html += '<div class="dep-graph-legend">';
+        html += '<span class="dep-legend-item"><span class="dep-legend-dot dep-done"></span>Done</span>';
+        html += '<span class="dep-legend-item"><span class="dep-legend-dot dep-implementing"></span>In Progress</span>';
+        html += '<span class="dep-legend-item"><span class="dep-legend-dot dep-draft"></span>Draft</span>';
+        html += '<span class="dep-legend-item"><span class="dep-legend-dot dep-blocked"></span>Blocked</span>';
+        html += '</div>';
+        html += '<canvas id="depFullCanvas" class="dep-full-canvas"></canvas>';
+        html += '</div>';
+        container.innerHTML = html;
+        var canvas = document.getElementById('depFullCanvas');
+        if (canvas) App.drawFullDepGraph(canvas, data);
+    });
+};
+
+// Draw full project dependency graph on canvas
+App.drawFullDepGraph = function(canvas, data) {
+    var nodes = data.nodes;
+    var edges = data.edges;
+    if (!nodes.length) return;
+
+    var nodeMap = {};
+    nodes.forEach(function(n) { nodeMap[n.id] = n; });
+    var deps = {};
+    edges.forEach(function(e) {
+        if (!deps[e.from]) deps[e.from] = [];
+        deps[e.from].push(e.to);
+    });
+
+    // Compute layers (topological sort)
+    var layers = {};
+    var getLayer = function(id, visited) {
+        if (layers[id] !== undefined) return layers[id];
+        if (visited[id]) return 0;
+        visited[id] = true;
+        if (!deps[id] || !deps[id].length) { layers[id] = 0; return 0; }
+        var mx = 0;
+        deps[id].forEach(function(d) {
+            if (nodeMap[d]) mx = Math.max(mx, getLayer(d, visited) + 1);
+        });
+        layers[id] = mx;
+        return mx;
+    };
+    nodes.forEach(function(n) { getLayer(n.id, {}); });
+
+    var maxLayer = Math.max(0, Math.max.apply(null, Object.values(layers).concat([0])));
+    var columns = [];
+    for (var l = 0; l <= maxLayer; l++) {
+        columns.push(nodes.filter(function(n) { return (layers[n.id] || 0) === l; }));
+    }
+
+    var dpr = window.devicePixelRatio || 1;
+    var colWidth = 160;
+    var nodeW = 120;
+    var nodeH = 40;
+    var rowGap = 16;
+    var width = Math.max(colWidth * columns.length, 400);
+    var maxColLen = Math.max.apply(null, columns.map(function(c) { return c.length; }).concat([1]));
+    var height = Math.max(maxColLen * (nodeH + rowGap) + 40, 200);
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var statusColors = {
+        done: '#3fb950', implementing: '#58a6ff', 'agent-qa': '#58a6ff',
+        'human-qa': '#58a6ff', draft: '#8b949e', planning: '#d29922',
+        blocked: '#f85149'
+    };
+
+    var positions = {};
+    columns.forEach(function(col, ci) {
+        var cx = colWidth * ci + colWidth / 2;
+        var totalH = col.length * (nodeH + rowGap) - rowGap;
+        var startY = (height - totalH) / 2;
+        col.forEach(function(node, ni) {
+            positions[node.id] = {
+                x: cx - nodeW / 2, y: startY + ni * (nodeH + rowGap),
+                cx: cx, cy: startY + ni * (nodeH + rowGap) + nodeH / 2
+            };
+        });
+    });
+
+    // Draw edges with bezier curves
+    ctx.lineWidth = 2;
+    edges.forEach(function(e) {
+        var from = positions[e.from];
+        var to = positions[e.to];
+        if (!from || !to) return;
+        var color = statusColors[(nodeMap[e.to] || {}).status] || '#8b949e';
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.4;
+        var startX = from.x;
+        var endX = to.x + nodeW;
+        ctx.moveTo(startX, from.cy);
+        var cpx = (startX + endX) / 2;
+        ctx.bezierCurveTo(cpx, from.cy, cpx, to.cy, endX, to.cy);
+        ctx.stroke();
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(startX, from.cy);
+        ctx.lineTo(startX + 6, from.cy - 4);
+        ctx.lineTo(startX + 6, from.cy + 4);
+        ctx.closePath();
+        ctx.fill();
+    });
+
+    // Draw nodes
+    ctx.globalAlpha = 1;
+    nodes.forEach(function(n) {
+        var p = positions[n.id];
+        if (!p) return;
+        var color = statusColors[n.status] || '#8b949e';
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.9;
+        var r = 8;
+        ctx.beginPath();
+        ctx.moveTo(p.x + r, p.y);
+        ctx.lineTo(p.x + nodeW - r, p.y);
+        ctx.quadraticCurveTo(p.x + nodeW, p.y, p.x + nodeW, p.y + r);
+        ctx.lineTo(p.x + nodeW, p.y + nodeH - r);
+        ctx.quadraticCurveTo(p.x + nodeW, p.y + nodeH, p.x + nodeW - r, p.y + nodeH);
+        ctx.lineTo(p.x + r, p.y + nodeH);
+        ctx.quadraticCurveTo(p.x, p.y + nodeH, p.x, p.y + nodeH - r);
+        ctx.lineTo(p.x, p.y + r);
+        ctx.quadraticCurveTo(p.x, p.y, p.x + r, p.y);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        var label = n.name.length > 14 ? n.name.substring(0, 13) + '\u2026' : n.name;
+        ctx.fillText(label, p.cx, p.cy - 6);
+        ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.globalAlpha = 0.8;
+        ctx.fillText(n.status, p.cx, p.cy + 8);
+    });
+
+    // Click handler for canvas nodes
+    canvas.onclick = function(evt) {
+        var rect = canvas.getBoundingClientRect();
+        var mx = (evt.clientX - rect.left) * (canvas.width / dpr / rect.width);
+        var my = (evt.clientY - rect.top) * (canvas.height / dpr / rect.height);
+        for (var id in positions) {
+            var p = positions[id];
+            if (mx >= p.x && mx <= p.x + nodeW && my >= p.y && my <= p.y + nodeH) {
+                App._expandedFeatureId = id;
+                App.navigate('features', { id: id });
+                return;
+            }
+        }
+    };
+    canvas.style.cursor = 'pointer';
+};
+
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function fmtDate(iso) { if(!iso) return '—'; return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
 function fmtTime(iso) { if(!iso) return ''; return new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
