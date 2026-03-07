@@ -261,7 +261,7 @@ body {
 /* ── Main Content ── */
 .content {
     margin-left: var(--sidebar-width); flex: 1;
-    padding: 20px 24px; min-height: 100vh; max-width: 1400px;
+    padding: 20px 24px; min-height: 100vh;
 }
 
 .page-header { margin-bottom: 16px; }
@@ -329,6 +329,9 @@ body {
 [data-theme="light"] .stat-card--purple:hover { box-shadow: 0 4px 20px rgba(130,80,223,0.08); }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+@media (min-width: 1400px) { .dashboard-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 768px) { .dashboard-grid { grid-template-columns: 1fr; } }
 
 /* ── Badges ── */
 .badge {
@@ -459,7 +462,7 @@ body {
 
 /* ── Kanban ── */
 .kanban { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
-.kanban-column { flex: 1 0 150px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; border-top: 3px solid var(--border); max-height: 480px; overflow-y: auto; }
+.kanban-column { flex: 1 1 180px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; border-top: 3px solid var(--border); max-height: 480px; overflow-y: auto; }
 .kanban-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 4px 0; }
 .kanban-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 .kanban-count { padding: 1px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
@@ -1748,4 +1751,20 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 }
 [data-theme="light"] .roadmap-filter-pill.active .pill-count {
     background: rgba(255,255,255,0.25);
+}
+
+/* ── Wide-screen enhancements ── */
+
+@media (min-width: 1600px) {
+    .two-col { grid-template-columns: 1fr 1fr 1fr; }
+    .stats-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+}
+
+@media (min-width: 1800px) {
+    .content { padding: 24px 32px; }
+    .kanban-column { flex-basis: 200px; }
+}
+
+@media (min-width: 2200px) {
+    .content { padding: 24px 48px; }
 }
