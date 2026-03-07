@@ -19,6 +19,16 @@ func init() {
 var nextCmd = &cobra.Command{
 	Use:   "next",
 	Short: "Get the next work item for an agent",
+	Example: `  # Get next work item as JSON (primary agent interface)
+  lifecycle next --json
+
+  # Filter by cycle type
+  lifecycle next --cycle feature-implementation --json
+
+  # Typical agent loop:
+  #   WORK=$(lifecycle next --json)
+  #   # Read agent_guidance field, do the work
+  #   lifecycle done --result "Completed: ..."`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

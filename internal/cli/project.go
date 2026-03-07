@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -115,7 +118,20 @@ var doctorCmd = &cobra.Command{
 			Status string `json:"status"`
 			Detail string `json:"detail,omitempty"`
 		}
+		type HealthSummary struct {
+			FeatureTotal      int            `json:"feature_total"`
+			FeatureCounts     map[string]int `json:"feature_counts"`
+			FeaturesWithSpecs int            `json:"features_with_specs"`
+			Milestones        int            `json:"milestones"`
+			RoadmapItems      int            `json:"roadmap_items"`
+			Discussions       int            `json:"discussions"`
+		}
+		type DoctorResult struct {
+			Checks []Check        `json:"checks"`
+			Health *HealthSummary `json:"health,omitempty"`
+		}
 		var checks []Check
+		var health *HealthSummary
 
 		// Check project
 		root, err := config.FindProjectRoot()
@@ -125,36 +141,118 @@ var doctorCmd = &cobra.Command{
 			checks = append(checks, Check{"project", "ok", root})
 		}
 
-		// Check DB
+		// Check config and DB
+		var database *sql.DB
+		var projectID string
 		if root != "" {
 			cfg, err := config.Load(root)
 			if err != nil {
 				checks = append(checks, Check{"config", "fail", err.Error()})
 			} else {
 				checks = append(checks, Check{"config", "ok", cfg.DBPath})
-				database, err := db.Open(cfg.DBPath)
+				d, err := db.Open(cfg.DBPath)
 				if err != nil {
 					checks = append(checks, Check{"database", "fail", err.Error()})
 				} else {
-					_ = database.Close()
+					database = d
 					checks = append(checks, Check{"database", "ok", cfg.DBPath})
+					if p, err := db.GetProject(database); err == nil {
+						projectID = p.ID
+					}
 				}
 			}
 		}
 
+		// Check git
+		gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+		if out, err := gitCmd.Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+			checks = append(checks, Check{"git", "ok", "git repository detected"})
+		} else {
+			checks = append(checks, Check{"git", "warn", "not a git repository"})
+		}
+
+		// Check go
+		goCmd := exec.Command("go", "version")
+		if out, err := goCmd.Output(); err == nil {
+			version := strings.TrimSpace(string(out))
+			// Extract just the version part: "go version go1.24.0 linux/amd64" → "go1.24.0"
+			parts := strings.Fields(version)
+			if len(parts) >= 3 {
+				version = parts[2]
+			}
+			checks = append(checks, Check{"go", "ok", version})
+		} else {
+			checks = append(checks, Check{"go", "warn", "go not found"})
+		}
+
+		// Build health summary if DB is available
+		if database != nil && projectID != "" {
+			defer database.Close() //nolint:errcheck
+			health = &HealthSummary{}
+
+			if counts, err := db.FeatureCounts(database, projectID); err == nil {
+				health.FeatureCounts = counts
+				for _, c := range counts {
+					health.FeatureTotal += c
+				}
+			}
+			if total, withSpecs, err := db.CountFeaturesWithoutSpecs(database, projectID); err == nil {
+				_ = total
+				health.FeaturesWithSpecs = withSpecs
+			}
+			if count, err := db.CountMilestones(database, projectID); err == nil {
+				health.Milestones = count
+			}
+			if stats, err := db.GetRoadmapStats(database, projectID); err == nil {
+				health.RoadmapItems = stats.Total
+			}
+			if count, err := db.CountDiscussions(database, projectID); err == nil {
+				health.Discussions = count
+			}
+		} else if database != nil {
+			_ = database.Close()
+		}
+
 		if jsonOutput {
-			return printJSON(checks)
+			return printJSON(DoctorResult{Checks: checks, Health: health})
 		}
 
 		allOK := true
 		for _, c := range checks {
 			icon := "✓"
-			if c.Status != "ok" {
+			switch c.Status {
+			case "fail":
 				icon = "✗"
 				allOK = false
+			case "warn":
+				icon = "!"
 			}
 			fmt.Printf("%s %-10s %s\n", icon, c.Name, c.Detail)
 		}
+
+		if health != nil {
+			fmt.Println("\nProject Health:")
+			// Features line
+			if health.FeatureTotal > 0 {
+				var parts []string
+				for status, count := range health.FeatureCounts {
+					parts = append(parts, fmt.Sprintf("%d %s", count, status))
+				}
+				fmt.Printf("  Features:     %d (%s)\n", health.FeatureTotal, strings.Join(parts, ", "))
+			} else {
+				fmt.Printf("  Features:     0\n")
+			}
+			// Specs
+			specIcon := "✓"
+			if health.FeaturesWithSpecs < health.FeatureTotal {
+				specIcon = "!"
+			}
+			fmt.Printf("  With specs:   %d/%d %s\n", health.FeaturesWithSpecs, health.FeatureTotal, specIcon)
+			fmt.Printf("  Milestones:   %d\n", health.Milestones)
+			fmt.Printf("  Roadmap:      %d items\n", health.RoadmapItems)
+			fmt.Printf("  Discussions:  %d\n", health.Discussions)
+		}
+
 		if allOK {
 			fmt.Println("\nAll checks passed!")
 		}

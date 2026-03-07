@@ -46,6 +46,11 @@ var cycleStartCmd = &cobra.Command{
 	Use:   "start <type> <feature-id>",
 	Short: "Start a cycle for a feature",
 	Args:  cobra.ExactArgs(2),
+	Example: `  # Start a feature implementation cycle
+  lifecycle cycle start feature-implementation my-feature
+
+  # Available cycle types: feature-implementation, ui-refinement, bug-triage,
+  # documentation, architecture-review, release, roadmap-planning, onboarding-dx`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

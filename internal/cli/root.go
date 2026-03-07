@@ -18,7 +18,40 @@ var rootCmd = &cobra.Command{
 	Short: "Human-in-the-loop project management for agentic development",
 	Long: `Lifecycle is a project management tool that bridges human product owners
 and AI agents. It tracks, visualizes, and steers work as it flows through
-defined iteration cycles — acting as the project manager for agentic development.`,
+defined iteration cycles — acting as the project manager for agentic development.
+
+QUICK START
+  lifecycle init my-project          Create a new project
+  lifecycle onboard                  Onboard an existing project
+  lifecycle doctor                   Check environment health
+
+AGENT WORKFLOW
+  lifecycle next --json              Get next work item (returns full context)
+  lifecycle done --result "..."      Complete current work
+  lifecycle fail --reason "..."      Report failure
+  lifecycle heartbeat                Signal agent is alive
+
+FEATURES & ROADMAP
+  lifecycle feature add "Name" --spec "..." --priority 8
+  lifecycle feature list             List all features
+  lifecycle roadmap show             View roadmap
+  lifecycle roadmap add "Item"       Add roadmap item
+
+ITERATION CYCLES
+  lifecycle cycle list               Show available cycle types
+  lifecycle cycle start <type> <id>  Start a cycle
+  lifecycle cycle score 8.5          Submit score
+
+COLLABORATION
+  lifecycle discuss new "RFC: ..."   Start a discussion
+  lifecycle discuss comment <id>     Add to discussion
+  lifecycle qa approve <feature>     Approve feature
+
+WEB VIEWER
+  lifecycle serve                    Start web dashboard at :3847
+
+Use "lifecycle [command] --help" for detailed information about any command.
+Use "lifecycle --json" on any command for structured output.`,
 }
 
 func Execute() {
@@ -48,6 +81,7 @@ func init() {
 	rootCmd.AddCommand(logCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(discussCmd)
+	rootCmd.AddCommand(onboardCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

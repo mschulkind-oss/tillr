@@ -865,3 +865,45 @@ func FeatureCounts(db *sql.DB, projectID string) (map[string]int, error) {
 func PendingQAFeatures(db *sql.DB, projectID string) ([]models.Feature, error) {
 	return ListFeatures(db, projectID, "human-qa", "")
 }
+
+// SetFeatureStatus directly updates a feature's status, bypassing transition validation.
+// Used during onboarding to set status on newly created features.
+func SetFeatureStatus(db *sql.DB, featureID, status string) error {
+	_, err := db.Exec(`UPDATE features SET status = ?, updated_at = datetime('now') WHERE id = ?`, status, featureID)
+	return err
+}
+
+// CountFeaturesWithoutSpecs returns the number of features missing specs.
+func CountFeaturesWithoutSpecs(db *sql.DB, projectID string) (int, int, error) {
+	var total, withSpecs int
+	err := db.QueryRow(`SELECT COUNT(*) FROM features WHERE project_id = ?`, projectID).Scan(&total)
+	if err != nil {
+		return 0, 0, err
+	}
+	err = db.QueryRow(`SELECT COUNT(*) FROM features WHERE project_id = ? AND spec != ''`, projectID).Scan(&withSpecs)
+	if err != nil {
+		return 0, 0, err
+	}
+	return total, withSpecs, nil
+}
+
+// CountFeaturesWithoutRoadmap returns features missing roadmap item links.
+func CountFeaturesWithoutRoadmap(db *sql.DB, projectID string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM features WHERE project_id = ? AND roadmap_item_id = ''`, projectID).Scan(&count)
+	return count, err
+}
+
+// CountDiscussions returns the total number of discussions.
+func CountDiscussions(db *sql.DB, projectID string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM discussions WHERE project_id = ?`, projectID).Scan(&count)
+	return count, err
+}
+
+// CountMilestones returns the total number of milestones.
+func CountMilestones(db *sql.DB, projectID string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM milestones WHERE project_id = ?`, projectID).Scan(&count)
+	return count, err
+}
