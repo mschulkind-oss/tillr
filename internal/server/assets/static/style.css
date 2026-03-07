@@ -665,7 +665,7 @@ body {
     border-top: 0 solid var(--border);
 }
 .roadmap-item.expanded .roadmap-item-details {
-    max-height: 300px; opacity: 1;
+    max-height: 1200px; opacity: 1;
     padding: 12px 0 4px 60px;
     border-top-width: 1px; margin-top: 12px;
 }
@@ -2071,26 +2071,305 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 [data-theme="light"] .event-json { background: #f6f8fa; }
 
 /* ── Roadmap Expanded Details (enhanced) ── */
-.roadmap-item.expanded .roadmap-item-details { max-height: 600px; }
+.roadmap-item.expanded .roadmap-item-details { max-height: 1200px; }
 .roadmap-linked-feature { border-bottom: 1px solid var(--border); transition: background var(--transition); border-radius: var(--radius); }
 .roadmap-linked-feature:hover { background: var(--bg-hover); }
 .roadmap-linked-feature:last-child { border-bottom: none; }
 
-/* ── Data Density Adjustments ── */
-.card { padding: 12px; }
-.stat-card { padding: 10px 12px; }
+/* Prominent description block */
+.roadmap-description-block {
+    font-size: 0.88rem; line-height: 1.65; color: var(--text-secondary);
+    padding: 10px 14px; margin-bottom: 10px;
+    background: var(--bg-tertiary); border-radius: var(--radius);
+    border-left: 3px solid var(--accent);
+}
+
+/* Linked features section in roadmap drill-down */
+.roadmap-linked-features-section { margin-top: 12px; }
+.roadmap-linked-feature-card {
+    display: block; padding: 8px 10px; margin-bottom: 4px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius); cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+}
+.roadmap-linked-feature-card:hover { background: var(--bg-hover); border-color: var(--accent); }
+.roadmap-linked-feature-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.roadmap-linked-feature-name { font-size: 0.84rem; font-weight: 500; color: var(--text-primary); }
+
+/* Spec toggle inside linked features */
+.roadmap-spec-wrap { margin-top: 6px; }
+.roadmap-spec-toggle {
+    background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 0.76rem; font-weight: 600; padding: 2px 0;
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.roadmap-spec-toggle:hover { text-decoration: underline; }
+.roadmap-spec-chevron { font-size: 0.7rem; }
+.roadmap-spec-content {
+    overflow: hidden;
+    transition: max-height 0.3s ease, opacity 0.25s ease;
+}
+.roadmap-spec-text {
+    font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+    font-size: 0.76rem; line-height: 1.6; color: var(--text-secondary);
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 12px; margin: 4px 0 0;
+    white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto;
+}
+
+/* ── Data Density & UI Polish ── */
+
+/* Kanban: wider cards, show more text, compact empty columns */
+.kanban { gap: 8px; }
+.kanban-column { flex: 1 1 160px; min-width: 120px; padding: 8px; }
+.kanban-column--empty { flex: 0 0 80px; min-width: 80px; opacity: 0.5; transition: opacity 0.2s ease; }
+.kanban-column--empty:hover { opacity: 0.7; }
+.kanban-column--empty .kanban-empty { padding: 8px 4px; border: none; font-size: 0.7rem; text-align: center; color: var(--text-muted); }
+.kanban-card { padding: 10px; margin-bottom: 5px; }
+.kanban-card-title {
+    font-size: 0.8rem; margin-bottom: 3px;
+    overflow: hidden; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    white-space: normal; line-height: 1.4;
+}
+.kanban-card-meta { font-size: 0.68rem; }
+.kanban-title { font-size: 0.65rem; }
+
+/* Dashboard grid & cards */
 .dashboard-grid { gap: 10px; }
 .stats-grid { gap: 10px; margin-bottom: 12px; }
-.kanban-column { flex: 1 1 150px; padding: 8px; }
-.kanban-card { padding: 8px; margin-bottom: 4px; }
-.kanban-card-title { font-size: 0.75rem; margin-bottom: 2px; }
-.kanban-card-meta { font-size: 0.65rem; }
-.kanban-title { font-size: 0.65rem; }
-.activity-item { padding: 8px 0; }
+.stat-card { padding: 10px 12px; }
+.card { padding: 12px; }
+
+/* Activity items */
+.activity-item { padding: 8px 6px; border-radius: var(--radius); transition: background var(--transition); }
+.activity-item:hover { background: var(--bg-hover); }
 .activity-text { font-size: 0.8rem; }
-.ft-desc { font-size: 0.7rem; }
+
+/* Feature table density */
+.ft-desc { font-size: 0.72rem; max-width: 420px; }
 .feature-badge { cursor: pointer; transition: opacity var(--transition); }
 .feature-badge:hover { opacity: 0.8; }
+
+/* ── Milestone Cards ── */
+.milestone-card { position: relative; overflow: hidden; }
+.milestone-card .progress-bar { margin: 6px 0 4px; }
+.milestone-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.78rem; color: var(--text-muted);
+}
+.milestone-fraction { font-weight: 500; }
+.milestone-pct { font-weight: 700; font-size: 0.85rem; }
+.milestone-complete .milestone-pct { color: var(--success); }
+.milestone-active .milestone-pct { color: var(--accent); }
+.milestone-complete { border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
+.milestone-complete::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(135deg, transparent 60%, rgba(63,185,80,0.06));
+}
+
+/* ── Progress Bars Enhanced ── */
+.progress-bar { height: 10px; border-radius: 5px; }
+.progress-fill {
+    background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--purple)));
+    border-radius: 5px;
+    position: relative;
+}
+.progress-fill.success {
+    background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, #39d2c0));
+}
+.progress-fill::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 60%);
+    border-radius: inherit;
+}
+
+/* ── Priority Dots Larger ── */
+.priority-dot::before { width: 10px; height: 10px; }
+.priority-dot.p-1::before { box-shadow: 0 0 8px rgba(248,81,73,0.6); }
+.priority-dot.p-2::before { box-shadow: 0 0 8px rgba(210,153,34,0.5); }
+.priority-dot.p-3::before { box-shadow: 0 0 6px rgba(88,166,255,0.4); }
+
+/* ── Table Headers Enhanced ── */
+.table th {
+    background: linear-gradient(180deg, var(--bg-card), color-mix(in srgb, var(--bg-tertiary) 40%, var(--bg-card)));
+    border-bottom: 2px solid var(--border);
+    padding: 8px 10px;
+}
+[data-theme="light"] .table th {
+    background: linear-gradient(180deg, #fff, #f6f8fa);
+}
+
+/* ── Feature Rows Enhanced ── */
+.ft-row { transition: all var(--transition); }
+.ft-row:hover { background: color-mix(in srgb, var(--bg-hover) 80%, transparent); }
+.ft-row.expanded { background: var(--bg-hover); }
+
+/* ── Sparkline Enhanced ── */
+.score-sparkline { flex-shrink: 0; }
+.cycle-sparkline-row { margin-top: 10px; padding: 4px 0; }
+
+/* ── Cycle Type Reference Cards ── */
+.cycle-type-ref {
+    padding: 16px !important;
+    border-left: 3px solid var(--accent);
+    transition: all 0.25s ease;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+}
+.cycle-type-ref::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, transparent 70%, rgba(88,166,255,0.04));
+    pointer-events: none;
+}
+.cycle-type-ref:hover {
+    border-left-color: var(--purple);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(88,166,255,0.12);
+}
+.cycle-type-ref .card-title {
+    font-size: 0.9rem; font-weight: 700; text-transform: capitalize;
+    margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+}
+.cycle-type-icon { font-size: 1.1rem; }
+.cycle-type-steps {
+    font-size: 0.78rem; color: var(--text-secondary); line-height: 1.8;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+}
+.cycle-type-step {
+    display: inline-block;
+    padding: 3px 10px; border-radius: 14px;
+    background: var(--bg-tertiary); font-size: 0.72rem;
+    text-transform: capitalize; white-space: nowrap;
+    border: 1px solid var(--border);
+    transition: all 0.2s ease;
+}
+.cycle-type-ref:hover .cycle-type-step { border-color: var(--border-hover); }
+.cycle-step-arrow { color: var(--text-muted); font-size: 0.7rem; margin: 0 2px; }
+.cycle-type-count {
+    margin-top: 8px; font-size: 0.7rem; color: var(--text-muted);
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+}
+
+/* ── QA Buttons More Prominent ── */
+.btn-approve {
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+    border: 2px solid var(--success);
+    color: var(--success);
+    font-size: 0.9rem;
+    padding: 10px 28px;
+    font-weight: 700;
+}
+.btn-approve:hover {
+    background: var(--success);
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(63,185,80,0.35);
+}
+.btn-reject {
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border: 2px solid var(--danger);
+    color: var(--danger);
+    font-size: 0.9rem;
+    padding: 10px 28px;
+    font-weight: 700;
+}
+.btn-reject:hover {
+    background: var(--danger);
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(248,81,73,0.35);
+}
+
+/* QA review card polish */
+.qa-review-card {
+    border-left: 4px solid var(--warning);
+    transition: all 0.25s ease;
+}
+.qa-review-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+}
+
+/* QA reviewed items hover */
+.qa-reviewed-item { transition: background var(--transition); border-radius: var(--radius); }
+.qa-reviewed-item:hover { background: var(--bg-hover); }
+
+/* ── Sidebar Active Indicator ── */
+.nav-link.active {
+    border-left-width: 4px;
+    position: relative;
+}
+.nav-link.active::after {
+    content: ''; position: absolute; right: 0; top: 20%; bottom: 20%;
+    width: 2px; border-radius: 1px;
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ── History Timeline Enhanced ── */
+.timeline-dot {
+    width: 28px; height: 28px; font-size: 0.75rem;
+    transition: transform 0.2s ease;
+}
+.timeline-item:hover .timeline-dot { transform: scale(1.15); }
+.timeline-item {
+    border-radius: var(--radius);
+    transition: background 0.2s ease;
+}
+.timeline-item:hover { background: var(--bg-hover); }
+.timeline-date-label {
+    font-size: 0.72rem; font-weight: 700;
+    background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
+    border: 1px solid var(--border-hover);
+    padding: 5px 16px;
+}
+
+/* ── Roadmap Bar Segment Labels ── */
+.roadmap-bar { height: 18px; border-radius: 9px; }
+.roadmap-bar-segment { position: relative; }
+.roadmap-bar-label {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.5rem; font-weight: 700; color: rgba(255,255,255,0.9);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    overflow: hidden; white-space: nowrap; text-transform: capitalize;
+    pointer-events: none; letter-spacing: 0.02em;
+}
+
+/* Roadmap legend enhanced */
+.roadmap-legend { margin-top: 8px; }
+.roadmap-legend-item { font-size: 0.78rem; }
+.roadmap-legend-label { font-weight: 600; }
+
+/* ── Effort Badges More Readable ── */
+.effort-badge { font-size: 0.7rem; padding: 3px 10px; font-weight: 700; }
+
+/* ── Badge Sizing Consistency ── */
+.badge { padding: 3px 10px; font-size: 0.72rem; border-radius: 20px; }
+
+/* ── Filter Pills Active State Enhanced ── */
+.filter-pill.active {
+    box-shadow: 0 2px 12px rgba(88,166,255,0.3), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.roadmap-filter-pill.active {
+    box-shadow: 0 2px 12px rgba(88,166,255,0.3), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+/* ── General Interactive Hover ── */
+.card[style*="cursor:pointer"]:hover,
+.card[onclick]:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+}
+.disc-row:hover td { background: var(--bg-hover); }
+
+/* ── Loading Skeleton Enhanced ── */
+.skeleton { opacity: 0.6; }
+.skeleton-stat { height: 72px; }
+.skeleton-card { height: 100px; margin-bottom: 12px; }
 
 /* Feature spec block */
 .feature-spec-section { margin-top: 12px; }
@@ -2147,6 +2426,14 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .enriched-work-result { font-size: var(--font-xs); color: var(--text-secondary); width: 100%; }
 .enriched-history-item { padding: 2px 0; font-size: var(--font-sm); display: flex; align-items: center; gap: 8px; }
 .enriched-disc-item { padding: 4px 0; font-size: var(--font-sm); display: flex; align-items: center; gap: 8px; }
+
+/* ── Light Theme Polish Overrides ── */
+[data-theme="light"] .qa-review-card:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
+[data-theme="light"] .cycle-type-ref:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
+[data-theme="light"] .timeline-date-label { background: linear-gradient(135deg, #fff, #f6f8fa); }
+[data-theme="light"] .milestone-complete::after { background: linear-gradient(135deg, transparent 60%, rgba(63,185,80,0.04)); }
+[data-theme="light"] .filter-pill.active,
+[data-theme="light"] .roadmap-filter-pill.active { box-shadow: 0 2px 12px rgba(9,105,218,0.2), inset 0 1px 0 rgba(255,255,255,0.5); }
 
 /* ── Wide-screen enhancements ── */
 

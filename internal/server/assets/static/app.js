@@ -300,9 +300,10 @@ const App = {
         const statusLabels = {draft:'Draft',planning:'Planning',implementing:'Implementing','agent-qa':'Agent QA','human-qa':'Human QA',done:'Done',blocked:'Blocked'};
         const kanbanCols = statuses.map(s => {
             const items = features.filter(f => f.status === s);
-            return `<div class="kanban-column kanban-column-${s}">
+            const emptyClass = items.length === 0 ? ' kanban-column--empty' : '';
+            return `<div class="kanban-column kanban-column-${s}${emptyClass}">
                 <div class="kanban-header"><span class="kanban-title">${statusLabels[s]||s}</span><span class="kanban-count">${items.length}</span></div>
-                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-id="${esc(f.id)}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty"><div class="kanban-empty-icon">○</div>No items</div>'}
+                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-id="${esc(f.id)}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty">—</div>'}
             </div>`;
         }).join('');
 
@@ -310,9 +311,10 @@ const App = {
             const done = m.done_features || 0;
             const mtotal = m.total_features || 0;
             const pct = mtotal > 0 ? Math.round((done / mtotal) * 100) : 0;
-            return `<div class="card" style="cursor:pointer" data-milestone="${esc(m.name)}"><div class="card-header"><span class="card-title">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
+            const pctClass = pct === 100 ? 'milestone-complete' : pct > 0 ? 'milestone-active' : '';
+            return `<div class="card milestone-card ${pctClass}" style="cursor:pointer" data-milestone="${esc(m.name)}"><div class="card-header"><span class="card-title">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
                 <div class="progress-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(m.name)} progress"><div class="progress-fill ${pct===100?'success':''}" style="width:${pct}%"></div></div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">${done}/${mtotal} features · ${pct}%</div></div>`;
+                <div class="milestone-meta"><span class="milestone-fraction">${done}/${mtotal} features</span><span class="milestone-pct">${pct}%</span></div></div>`;
         }).join('') : `<div class="empty-state empty-state--compact">
             <div class="empty-state-icon">🏔️</div>
             <div class="empty-state-text">No milestones yet</div>
@@ -438,7 +440,7 @@ const App = {
         ].filter(s => counts[s.key] > 0);
         const bar = segments.map(s => {
             const pct = ((counts[s.key] / total) * 100).toFixed(1);
-            return `<div class="roadmap-bar-segment" style="width:${pct}%;background:${s.color}" title="${s.label}: ${counts[s.key]}"></div>`;
+            return `<div class="roadmap-bar-segment" style="width:${pct}%;background:${s.color}" title="${s.label}: ${counts[s.key]}"><span class="roadmap-bar-label">${s.label}</span></div>`;
         }).join('');
         const legend = segments.map(s =>
             `<span class="roadmap-legend-item"><span class="roadmap-legend-dot" style="background:${s.color}"></span><span class="roadmap-legend-label">${s.label}</span><span class="roadmap-legend-count">${counts[s.key]}</span></span>`
@@ -670,12 +672,12 @@ const App = {
                     <span class="badge badge-${r.status}">${r.status}</span>
                 </div>
                 <div class="roadmap-item-details">
+                    ${r.description ? `<div class="roadmap-description-block">${esc(r.description)}</div>` : ''}
                     <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(r.id)}</span></div>
-                    ${r.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(r.description)}</span></div>` : ''}
                     ${r.category ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Category</span><span class="roadmap-detail-value">${esc(r.category)}</span></div>` : ''}
                     ${r.effort ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Effort</span><span class="roadmap-detail-value">${r.effort.toUpperCase()}</span></div>` : ''}
                     <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(r.created_at)}</span></div>
-                    <div class="roadmap-linked-features" data-roadmap-id="${esc(r.id)}"></div>
+                    ${App.renderRoadmapLinkedFeatures(featuresByRoadmap[r.id] || [])}
                 </div>
             </div>`;
         };
@@ -715,7 +717,7 @@ const App = {
             const idx = Math.abs(catCls(cat).replace('roadmap-cat-','')) % 6;
             const color = catBarColors[idx];
             const widthPct = ((count / items.length) * 100).toFixed(1);
-            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${color}" title="${esc(cat)}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"></div>`;
+            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${color}" title="${esc(cat)}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"><span class="roadmap-bar-label">${esc(cat)}</span></div>`;
         }).join('');
         const catLegendItems = catEntries.map(([cat, count]) => {
             const idx = Math.abs(catCls(cat).replace('roadmap-cat-','')) % 6;
@@ -733,7 +735,7 @@ const App = {
         const priBarSegments = pris.filter(p => priCounts[p]).map(p => {
             const count = priCounts[p];
             const widthPct = ((count / items.length) * 100).toFixed(1);
-            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${priColors[p]}" title="${p.replace('-',' ')}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"></div>`;
+            return `<div class="roadmap-bar-segment" style="width:${widthPct}%;background:${priColors[p]}" title="${p.replace('-',' ')}: ${count} item${count !== 1 ? 's' : ''} (${widthPct}%)"><span class="roadmap-bar-label">${p.replace('-',' ')}</span></div>`;
         }).join('');
         const priLegendItems = pris.filter(p => priCounts[p]).map(p => {
             return `<div class="roadmap-legend-item"><span class="roadmap-legend-dot" style="background:${priColors[p]}"></span><span class="roadmap-legend-label">${p.replace('-',' ')}</span><span class="roadmap-legend-count">${priCounts[p]}</span></div>`;
@@ -879,14 +881,15 @@ const App = {
             // Score sparkline
             let sparkline = '';
             if (scores.length >= 2) {
-                const w = 120, h = 32, pad = 2;
+                const w = 180, h = 44, pad = 2;
                 const maxS = 10, minS = 0;
                 const points = scores.map((s, i) => {
                     const x = pad + (i / (scores.length - 1)) * (w - 2 * pad);
                     const y = h - pad - ((s.score - minS) / (maxS - minS)) * (h - 2 * pad);
                     return `${x},${y}`;
                 }).join(' ');
-                sparkline = `<svg class="score-sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>`;
+                const areaPoints = `${pad},${h} ${points} ${w-pad},${h}`;
+                sparkline = `<svg class="score-sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polygon points="${areaPoints}" fill="url(#sparkGrad)" opacity="0.3"/><defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)"/><stop offset="100%" stop-color="transparent"/></linearGradient></defs><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${scores.map((s, i) => { const x = pad + (i / (scores.length - 1)) * (w - 2 * pad); const y = h - pad - ((s.score - minS) / (maxS - minS)) * (h - 2 * pad); return `<circle cx="${x}" cy="${y}" r="3" fill="var(--accent)" opacity="0.6"/>`; }).join('')}</svg>`;
             }
 
             // Build score detail rows for expanded view
@@ -933,8 +936,9 @@ const App = {
 
         // Cycle type reference
         html += `<h3 class="section-title" style="margin-top:20px">Available Cycle Types</h3><div class="cycle-types-grid">`;
+        const ctIcons = {'ui-refinement':'🎨','feature-implementation':'⚙️','roadmap-planning':'📋','bug-triage':'🐛','documentation':'📖','architecture-review':'🏗️','release':'🚀','onboarding-dx':'👋'};
         for (const [type, steps] of Object.entries(ctSteps)) {
-            html += `<div class="card cycle-type-ref"><div class="card-title">${type.replace(/-/g, ' ')}</div><div class="cycle-type-steps">${steps.map(s => `<span class="cycle-type-step">${s.replace(/-/g,' ')}</span>`).join(' → ')}</div></div>`;
+            html += `<div class="card cycle-type-ref"><div class="card-title"><span class="cycle-type-icon">${ctIcons[type]||'🔄'}</span>${type.replace(/-/g, ' ')}</div><div class="cycle-type-steps">${steps.map(s => `<span class="cycle-type-step">${s.replace(/-/g,' ')}</span>`).join('<span class="cycle-step-arrow">→</span>')}</div><div class="cycle-type-count">${steps.length} steps</div></div>`;
         }
         html += `</div>`;
 
@@ -1297,25 +1301,8 @@ const App = {
                     item.classList.add('expanded');
                     const ch = item.querySelector('.roadmap-item-chevron');
                     if (ch) ch.textContent = '▾';
-                    // Load linked features on expand
-                    const linkedDiv = item.querySelector('.roadmap-linked-features');
-                    if (linkedDiv && !linkedDiv.dataset.loaded) {
-                        const rid = item.dataset.roadmapId;
-                        try {
-                            const features = this._roadmapFeatures || await App.api('features');
-                            const linked = features.filter(f => f.roadmap_item_id === rid);
-                            if (linked.length) {
-                                linkedDiv.innerHTML = `<div class="roadmap-detail-label" style="margin-top:8px;margin-bottom:4px">Linked Features</div>` +
-                                    linked.map(f => `<div class="roadmap-linked-feature clickable-feature" data-feature-id="${esc(f.id)}" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:4px 0">
-                                        <span class="badge badge-${f.status}">${f.status}</span>
-                                        <span style="font-size:0.82rem">${esc(f.name)}</span>
-                                        ${(f.depends_on && f.depends_on.length) ? `<span class="dep-indicator" title="Depends on: ${f.depends_on.join(', ')}">⛓️</span>` : ''}
-                                    </div>`).join('');
-                                bindClickableFeatures(linkedDiv);
-                            }
-                        } catch(e) { /* ignore */ }
-                        linkedDiv.dataset.loaded = 'true';
-                    }
+                    // Bind clickable features inside the expanded details
+                    bindClickableFeatures(item);
                 }
             };
             document.querySelectorAll('.roadmap-item').forEach(item => {
@@ -1323,6 +1310,20 @@ const App = {
             });
             // Make inline features clickable
             bindClickableFeatures(document.getElementById('content'));
+            // Spec toggle
+            document.querySelectorAll('.roadmap-spec-toggle').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const wrap = btn.closest('.roadmap-spec-wrap');
+                    if (!wrap) return;
+                    const content = wrap.querySelector('.roadmap-spec-content');
+                    if (!content) return;
+                    const open = content.style.maxHeight && content.style.maxHeight !== '0px';
+                    content.style.maxHeight = open ? '0px' : content.scrollHeight + 'px';
+                    content.style.opacity = open ? '0' : '1';
+                    btn.querySelector('.roadmap-spec-chevron').textContent = open ? '▸' : '▾';
+                });
+            });
             const content = document.getElementById('content');
             if (content) content.addEventListener('keydown', (e) => {
                 const items = Array.from(content.querySelectorAll('.roadmap-item'));
@@ -1526,6 +1527,47 @@ const App = {
         c.appendChild(t);
         setTimeout(() => { t.classList.add('toast-exit'); t.addEventListener('animationend', () => t.remove()); }, 3000);
     },
+};
+
+// Render linked features for roadmap item drill-down
+App.renderRoadmapLinkedFeatures = function(linked) {
+    if (!linked || !linked.length) return '';
+    const esc = window.esc || (function(s) { if(!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; });
+    const priIcons = {critical:'🔴',high:'🟠',medium:'🟡',low:'🟢','nice-to-have':'🔵'};
+
+    const featureCards = linked.map(function(f) {
+        const priLabel = (f.priority || '').replace('-', ' ');
+        const priIcon = priIcons[f.priority] || '⚪';
+        const deps = (f.depends_on && f.depends_on.length)
+            ? '<span class="dep-indicator" title="Depends on: ' + f.depends_on.map(function(d) { return esc(d); }).join(', ') + '">⛓️</span>'
+            : '';
+        let specHtml = '';
+        if (f.spec) {
+            specHtml = '<div class="roadmap-spec-wrap">' +
+                '<button class="roadmap-spec-toggle" type="button">' +
+                    '<span class="roadmap-spec-chevron">▸</span> Spec' +
+                '</button>' +
+                '<div class="roadmap-spec-content" style="max-height:0;opacity:0">' +
+                    '<pre class="roadmap-spec-text">' + esc(f.spec) + '</pre>' +
+                '</div>' +
+            '</div>';
+        }
+
+        return '<div class="roadmap-linked-feature-card clickable-feature" data-feature-id="' + esc(f.id) + '">' +
+            '<div class="roadmap-linked-feature-header">' +
+                '<span class="badge badge-' + f.status + '">' + f.status + '</span>' +
+                '<span class="roadmap-linked-feature-name">' + esc(f.name) + '</span>' +
+                '<span class="priority-badge pri-' + f.priority + '" style="font-size:0.7rem">' + priIcon + ' ' + priLabel + '</span>' +
+                deps +
+            '</div>' +
+            specHtml +
+        '</div>';
+    }).join('');
+
+    return '<div class="enriched-section roadmap-linked-features-section">' +
+        '<div class="enriched-section-header">🔗 Linked Features (' + linked.length + ')</div>' +
+        featureCards +
+    '</div>';
 };
 
 // Feature page setup — assigned outside object literal to avoid V8 parsing quirk
