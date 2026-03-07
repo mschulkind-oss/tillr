@@ -2,7 +2,7 @@
 
 Lifecycle is a human-in-the-loop project management tool for agentic software development. It gives you a CLI to define features, assign work to AI agents through structured iteration cycles, gate quality with human QA, and visualize everything in a live-updating web dashboard.
 
-> **Note:** Features marked with 🚧 are coming soon. This guide documents the full intended surface so you know what to expect as the tool matures.
+> **Note:** Features marked with 🚧 are coming soon. Unmarked features are implemented and available today.
 
 ---
 
@@ -244,7 +244,7 @@ lifecycle feature show feat-1
 #   2025-01-15 10:30  cycle round 1 complete (score: 6/10)
 ```
 
-#### `lifecycle feature edit <id>` 🚧 Coming Soon
+#### `lifecycle feature edit <id>`
 
 Edit a feature's metadata.
 
@@ -259,7 +259,7 @@ lifecycle feature edit feat-1 --name "JWT Authentication" --priority critical
 | `--priority P` | Change priority |
 | `--status S` | Manually override status (use with care) |
 
-#### `lifecycle feature remove <id>` 🚧 Coming Soon
+#### `lifecycle feature remove <id>`
 
 Remove a feature. Prompts for confirmation unless `--yes` is passed.
 
@@ -327,7 +327,7 @@ lifecycle fail --reason "Cannot connect to external API for OAuth verification"
 
 ### Milestone Management
 
-#### `lifecycle milestone add <name>` 🚧 Coming Soon
+#### `lifecycle milestone add <name>`
 
 Create a milestone.
 
@@ -336,7 +336,7 @@ lifecycle milestone add "v1.0" --description "Initial public release"
 # Created milestone: v1.0
 ```
 
-#### `lifecycle milestone list` 🚧 Coming Soon
+#### `lifecycle milestone list`
 
 List milestones with progress.
 
@@ -347,7 +347,7 @@ lifecycle milestone list
 # v1.1       active  0/3 features done (0%)
 ```
 
-#### `lifecycle milestone show <id>` 🚧 Coming Soon
+#### `lifecycle milestone show <id>`
 
 Show milestone details including all assigned features.
 
@@ -372,7 +372,7 @@ lifecycle milestone show v1.0
 
 ### Iteration Cycles
 
-#### `lifecycle cycle list` 🚧 Coming Soon
+#### `lifecycle cycle list`
 
 List available iteration cycle types.
 
@@ -385,7 +385,7 @@ lifecycle cycle list
 # roadmap-plan  Collaborative roadmap planning cycle
 ```
 
-#### `lifecycle cycle start <cycle-name> <feature-id>` 🚧 Coming Soon
+#### `lifecycle cycle start <cycle-name> <feature-id>`
 
 Start an iteration cycle for a feature.
 
@@ -395,7 +395,7 @@ lifecycle cycle start implement feat-1
 # Round 1 of 5 · work item created · run "lifecycle next" to begin
 ```
 
-#### `lifecycle cycle status` 🚧 Coming Soon
+#### `lifecycle cycle status`
 
 Show active cycle progress.
 
@@ -406,7 +406,7 @@ lifecycle cycle status
 # feat-7   ui-refine  1/3    —      designer
 ```
 
-#### `lifecycle cycle history <feature-id>` 🚧 Coming Soon
+#### `lifecycle cycle history <feature-id>`
 
 Show cycle history for a feature — every round, score, and result.
 
@@ -418,9 +418,23 @@ lifecycle cycle history feat-1
 # Round 3  (active)
 ```
 
+#### `lifecycle cycle score <score>`
+
+Submit a judge score for the current cycle step. Scores are numeric (e.g. 0–10) and recorded against the active cycle step for the feature.
+
+```bash
+lifecycle cycle score 8.5 --feature feat-1 --notes "Good implementation but accessibility needs work"
+# Scored feat-1 cycle step: 8.5
+```
+
+| Flag | Description |
+|------|-------------|
+| `--feature F` | Feature ID to score (required if ambiguous) |
+| `--notes N` | Freeform notes explaining the score |
+
 ---
 
-### Roadmap 🚧 Coming Soon
+### Roadmap
 
 #### `lifecycle roadmap show`
 
@@ -464,7 +478,7 @@ lifecycle roadmap export --format json | jq .
 
 ---
 
-### QA 🚧 Coming Soon
+### QA
 
 #### `lifecycle qa pending`
 
@@ -497,7 +511,7 @@ lifecycle qa reject feat-8 --notes "Search results not sorted by relevance"
 
 ---
 
-### History & Search 🚧 Coming Soon
+### History & Search
 
 #### `lifecycle history`
 
@@ -544,39 +558,35 @@ lifecycle serve
 |------|-------------|
 | `--port P` | Override the default port (3847) |
 
-The web viewer is **read-only by design** — it renders the data that the CLI manages. All state changes happen through CLI commands. The viewer updates in real time via WebSocket, so you can keep it open while agents work.
+The web viewer is **read-only by design** — it renders the data that the CLI manages. All state changes happen through CLI commands (with the exception of QA approve/reject, which can be done from the web UI). The viewer updates in real time via WebSocket, so you can keep it open while agents work.
 
-### Dashboard 🚧 Coming Soon
+### Dashboard
 
-The landing page shows project health at a glance: feature counts by state, milestone progress bars, and active agent activity.
+The landing page shows project health at a glance. A kanban board groups features by lifecycle state — click any column header to filter the features list. Below the kanban you'll find milestone progress bars, a recent activity feed, roadmap highlights, a priority distribution chart, and a preview of active cycles.
 
-### Feature Board 🚧 Coming Soon
+### Feature Board
 
-A kanban-style board with columns for each lifecycle state. Drag features between columns to reprioritize within a state. Click a feature card to see full details, cycle history, and QA results.
+A tabular list of all features with status badges, priority indicators, and milestone assignments. Click any row to expand an inline detail panel showing the feature's description, milestone, priority, timestamps, and full history.
 
-### Milestone Timeline 🚧 Coming Soon
+### Roadmap View
 
-A timeline view showing milestone progress, feature completion over time, and projected completion dates based on current velocity.
+A presentation-quality roadmap grouped by priority (Critical → High → Medium → Low). Each item shows its status, category, and effort sizing badge. Click an item to expand its full description.
 
-### Roadmap View 🚧 Coming Soon
+### Cycle Progress
 
-The roadmap rendered as a prioritized, categorized list. Filter by category or status.
+Displays both active and completed iteration cycles. Each cycle shows a step pipeline visualizing progress through the cycle's stages. Per-step scores are displayed alongside sparkline charts, with an average score summary. A cycle type reference grid at the bottom lists all available cycle definitions.
 
-### Cycle Progress 🚧 Coming Soon
+### Event History
 
-Live view of active iteration cycles: current round, agent role, scores, and work item status. Watch agents work in real time.
+A scrollable timeline of every project event, grouped by date. Category filter buttons (All / Cycle / Work / Feature / Roadmap / Milestone) and a feature dropdown let you narrow the view. Pagination uses a "load more" button to fetch older events.
 
-### Event History 🚧 Coming Soon
+### QA Review
 
-A scrollable timeline of every project event. Filter by feature, event type, or date range.
+A dedicated interface for reviewing features that have reached the `human-qa` stage. Features appear automatically when they enter `human-qa`. Review the feature context and cycle results, then approve or reject with notes using the built-in textarea and action buttons.
 
-### QA Review 🚧 Coming Soon
+### Live Updates / WebSocket
 
-A dedicated interface for reviewing features in `human-qa`. See the feature context, cycle results, and agent work — then approve or reject with notes.
-
-### Search 🚧 Coming Soon
-
-Full-text search across all project data, directly in the browser.
+The web viewer maintains a WebSocket connection to the server. When any data changes in the database, the server pushes an update and all open pages refresh automatically. If the connection drops, the viewer auto-reconnects with a 3-second backoff. No manual refresh needed — keep the dashboard open and watch agents work in real time.
 
 ---
 
