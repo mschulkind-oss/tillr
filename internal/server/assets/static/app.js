@@ -10,15 +10,18 @@ const App = {
         this.loadTheme();
         this.connectWebSocket();
         this._navContext = {};
+        this._breadcrumbDetail = null;
         window.addEventListener('hashchange', () => {
             const parsed = this.parseHash();
             if (parsed.page) {
                 this._navContext = parsed.context || {};
+                this._breadcrumbDetail = null;
                 this.navigate(parsed.page);
             }
         });
         const initial = this.parseHash();
         if (initial.context) this._navContext = initial.context;
+        App.initKeyboardShortcuts();
         await this.navigate(initial.page || 'dashboard');
     },
 
@@ -153,6 +156,7 @@ const App = {
         try {
             const html = await this.renderPage(page);
             content.innerHTML = html;
+            App.updateBreadcrumbs();
             this.applyStaggerAnimation(content);
             this.animateProgressBars(content);
             this.animateStatValues(content);
@@ -513,7 +517,7 @@ const App = {
           <td colspan="6">
             <div class="roadmap-item-details" style="max-height:none;opacity:1;padding:8px 16px">
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">ID</span><span class="roadmap-detail-value roadmap-detail-id">${esc(f.id)}</span></div>
-              <div class="roadmap-detail-row"><span class="roadmap-detail-label">Status</span><span class="roadmap-detail-value">${esc(f.status)}</span></div>
+              <div class="roadmap-detail-row"><span class="roadmap-detail-label">Status</span><span class="roadmap-detail-value"><span class="feature-status-select-wrap"><select class="feature-status-select" data-feature-id="${esc(f.id)}" onchange="App.changeFeatureStatus('${esc(f.id)}', this.value)">${['draft','planning','implementing','agent-qa','human-qa','done','blocked'].map(s => '<option value="' + s + '"' + (f.status === s ? ' selected' : '') + '>' + s + '</option>').join('')}</select><span class="feature-status-select-arrow">▾</span></span></span></div>
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Priority</span><span class="roadmap-detail-value">${this.priorityLabel(f.priority)}</span></div>
               ${f.milestone_name ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Milestone</span><span class="roadmap-detail-value">${esc(f.milestone_name)}</span></div>` : ''}
               ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(f.description)}</span></div>` : ''}
@@ -1332,7 +1336,12 @@ const App = {
                     if (ch) ch.textContent = '▾';
                     // Bind clickable features inside the expanded details
                     bindClickableFeatures(item);
+                    var titleEl = item.querySelector('.roadmap-item-title');
+                    App._breadcrumbDetail = titleEl ? titleEl.textContent : (item.dataset.roadmapId || null);
+                } else {
+                    App._breadcrumbDetail = null;
                 }
+                App.updateBreadcrumbs();
             };
             document.querySelectorAll('.roadmap-item').forEach(item => {
                 item.addEventListener('click', (e) => {
@@ -1700,7 +1709,14 @@ App._setupFeaturePage = function() {
                     var isVisible = detail.style.display !== 'none';
                     document.querySelectorAll('.ft-detail-row').forEach(function(d) { d.style.display = 'none'; });
                     document.querySelectorAll('.ft-row').forEach(function(r) { r.classList.remove('expanded'); });
-                    if (!isVisible) expandFeature(fid);
+                    if (!isVisible) {
+                        expandFeature(fid);
+                        var fname = row.querySelector('.ft-name');
+                        App._breadcrumbDetail = fname ? fname.textContent : fid;
+                    } else {
+                        App._breadcrumbDetail = null;
+                    }
+                    App.updateBreadcrumbs();
                 }
             });
         });
@@ -1708,6 +1724,10 @@ App._setupFeaturePage = function() {
             link.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); App.navigateTo('roadmap', link.dataset.roadmapId); });
         });
         bindClickableFeatures();
+        // Prevent status dropdowns from triggering row expand/collapse
+        document.querySelectorAll('.feature-status-select').forEach(function(sel) {
+            sel.addEventListener('click', function(e) { e.stopPropagation(); });
+        });
     };
     var refresh = function() {
         var expandedRow = document.querySelector('.ft-row.expanded');
@@ -2212,267 +2232,6 @@ function fmtEvent(t) { return t.split('.').map(s=>s.charAt(0).toUpperCase()+s.sl
 
 // ── Stats Page ──────────────────────────────────────────────────────────────
 App.renderStats = async function() {
-    const data = await this.api('stats');
-    const fs = data.feature_stats || {};
-    const cs = data.cycle_stats || {};
-    const rs = data.roadmap_stats || {};
-    const ms = data.milestone_stats || [];
-    const act = data.activity || {};
-    const byStatus = fs.by_status || {};
-    const completionPct = (fs.completion_rate || 0).toFixed(1);
-
-    // Top summary stat cards
-    const summaryCards = `
-        <div class="stats-grid">
-            <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value" data-target="${fs.total || 0}">${fs.total || 0}</div><div class="stat-label">Total Features</div></div></div>
-            <div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value" data-target="${completionPct}">${completionPct}%</div><div class="stat-label">Completion Rate</div></div></div>
-            <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value" data-target="${cs.total_cycles || 0}">${cs.total_cycles || 0}</div><div class="stat-label">Total Cycles</div></div></div>
-            <div class="stat-card stat-card--warning"><div class="stat-card-info"><div class="stat-value" data-target="${(cs.avg_score || 0).toFixed(1)}">${(cs.avg_score || 0).toFixed(1)}</div><div class="stat-label">Avg Score</div></div></div>
-        </div>`;
-
-    // Activity stat cards
-    const activityCards = `
-        <div class="stats-grid">
-            <div class="stat-card stat-card--accent"><div class="stat-card-info"><div class="stat-value">${act.total_events || 0}</div><div class="stat-label">Total Events</div></div></div>
-            <div class="stat-card stat-card--success"><div class="stat-card-info"><div class="stat-value">${act.events_last_7_days || 0}</div><div class="stat-label">Last 7 Days</div></div></div>
-            <div class="stat-card stat-card--warning"><div class="stat-card-info"><div class="stat-value">${act.events_last_30_days || 0}</div><div class="stat-label">Last 30 Days</div></div></div>
-            <div class="stat-card stat-card--purple"><div class="stat-card-info"><div class="stat-value">${rs.total || 0}</div><div class="stat-label">Roadmap Items</div></div></div>
-        </div>`;
-
-    // Milestone progress bars
-    const milestoneRows = ms.length ? ms.map(function(m) {
-        const pct = Math.round(m.progress || 0);
-        const cls = pct === 100 ? 'stats-bar-fill--success' : pct > 50 ? 'stats-bar-fill--accent' : 'stats-bar-fill--warning';
-        return '<div class="stats-milestone-row">' +
-            '<div class="stats-milestone-header">' +
-                '<span class="stats-milestone-name">' + esc(m.name) + '</span>' +
-                '<span class="stats-milestone-pct">' + m.done + '/' + m.total + ' (' + pct + '%)</span>' +
-            '</div>' +
-            '<div class="stats-bar"><div class="stats-bar-fill ' + cls + '" style="width:' + pct + '%"></div></div>' +
-        '</div>';
-    }).join('') : '<div class="empty-state empty-state--compact"><div class="empty-state-text">No milestones</div></div>';
-
-    // Priority distribution data
-    const byPriority = rs.by_priority || {};
-    const priOrder = ['critical', 'high', 'medium', 'low', 'nice-to-have'];
-    const priColors = { critical: 'var(--danger)', high: 'var(--warning)', medium: 'var(--accent)', low: 'var(--success)', 'nice-to-have': 'var(--purple)' };
-    const priMax = Math.max(1, ...priOrder.map(function(k) { return byPriority[k] || 0; }));
-    const priRows = priOrder.filter(function(k) { return (byPriority[k] || 0) > 0; }).map(function(k) {
-        const v = byPriority[k] || 0;
-        const pct = Math.round(v / priMax * 100);
-        return '<div class="stats-hbar-row">' +
-            '<span class="stats-hbar-label">' + k + '</span>' +
-            '<div class="stats-hbar-track"><div class="stats-hbar-fill" style="width:' + pct + '%;background:' + priColors[k] + '"></div></div>' +
-            '<span class="stats-hbar-value">' + v + '</span>' +
-        '</div>';
-    }).join('');
-
-    // Category breakdown data
-    const byCategory = rs.by_category || {};
-    const catEntries = Object.entries(byCategory).sort(function(a, b) { return b[1] - a[1]; });
-    const catMax = catEntries.length ? catEntries[0][1] : 1;
-    const catColors = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--purple)', 'var(--danger)', 'var(--info)'];
-    const catRows = catEntries.map(function(entry, i) {
-        var k = entry[0], v = entry[1];
-        var pct = Math.round(v / catMax * 100);
-        var color = catColors[i % catColors.length];
-        return '<div class="stats-hbar-row">' +
-            '<span class="stats-hbar-label">' + esc(k) + '</span>' +
-            '<div class="stats-hbar-track"><div class="stats-hbar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
-            '<span class="stats-hbar-value">' + v + '</span>' +
-        '</div>';
-    }).join('');
-
-    return '<div class="page-header"><h2 class="page-title">Project Stats &amp; Analytics</h2></div>' +
-        summaryCards +
-        '<div class="stats-charts-grid">' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Feature Status</div></div><canvas id="statsDonutChart" width="300" height="300"></canvas></div>' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Score Trend</div></div><canvas id="statsLineChart" width="500" height="300"></canvas></div>' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Priority Distribution</div></div>' + (priRows || '<div class="empty-state empty-state--compact"><div class="empty-state-text">No data</div></div>') + '</div>' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Category Breakdown</div></div>' + (catRows || '<div class="empty-state empty-state--compact"><div class="empty-state-text">No data</div></div>') + '</div>' +
-        '</div>' +
-        '<div class="stats-charts-grid stats-charts-grid--wide">' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Milestone Progress</div></div>' + milestoneRows + '</div>' +
-            '<div class="card stats-chart-card"><div class="card-header"><div class="card-title">Activity Summary</div></div>' + activityCards + '</div>' +
-        '</div>';
-};
-
-App.drawStatsCharts = function() {
-    var self = this;
-    self.api('stats').then(function(data) {
-        var fs = data.feature_stats || {};
-        var cs = data.cycle_stats || {};
-        self._drawDonut(fs.by_status || {});
-        self._drawScoreLine(cs.scores_over_time || []);
-    }).catch(function() {});
-};
-
-App._drawDonut = function(byStatus) {
-    var canvas = document.getElementById('statsDonutChart');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
-    ctx.scale(dpr, dpr);
-    var w = canvas.clientWidth, h = canvas.clientHeight;
-    var cx = w / 2, cy = h / 2, r = Math.min(cx, cy) - 30, inner = r * 0.55;
-
-    var statusColors = {
-        draft: '#8b949e', planning: '#58a6ff', implementing: '#d29922',
-        'agent-qa': '#bc8cff', 'human-qa': '#f0883e', done: '#3fb950',
-        blocked: '#f85149'
-    };
-    var order = ['draft', 'planning', 'implementing', 'agent-qa', 'human-qa', 'done', 'blocked'];
-    var entries = order.filter(function(k) { return (byStatus[k] || 0) > 0; }).map(function(k) { return { key: k, val: byStatus[k] }; });
-    // Include any statuses not in the order
-    Object.keys(byStatus).forEach(function(k) { if (order.indexOf(k) === -1 && byStatus[k] > 0) entries.push({ key: k, val: byStatus[k] }); });
-
-    var total = entries.reduce(function(a, e) { return a + e.val; }, 0);
-    if (total === 0) {
-        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#8b949e';
-        ctx.font = '14px ' + (getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim() || 'sans-serif');
-        ctx.textAlign = 'center';
-        ctx.fillText('No feature data', cx, cy);
-        return;
-    }
-
-    var angle = -Math.PI / 2;
-    entries.forEach(function(e) {
-        var sweep = (e.val / total) * 2 * Math.PI;
-        ctx.beginPath();
-        ctx.moveTo(cx + inner * Math.cos(angle), cy + inner * Math.sin(angle));
-        ctx.arc(cx, cy, r, angle, angle + sweep);
-        ctx.arc(cx, cy, inner, angle + sweep, angle, true);
-        ctx.closePath();
-        ctx.fillStyle = statusColors[e.key] || '#484f58';
-        ctx.fill();
-        angle += sweep;
-    });
-
-    // Center text
-    var font = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim() || 'sans-serif';
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim() || '#e6edf3';
-    ctx.font = 'bold 28px ' + font;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(total, cx, cy - 8);
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#8b949e';
-    ctx.font = '11px ' + font;
-    ctx.fillText('FEATURES', cx, cy + 14);
-
-    // Legend
-    var lx = 8, ly = h - (entries.length * 18) - 4;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    entries.forEach(function(e) {
-        ctx.fillStyle = statusColors[e.key] || '#484f58';
-        ctx.fillRect(lx, ly - 5, 10, 10);
-        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#8b949e';
-        ctx.font = '11px ' + font;
-        ctx.fillText(e.key + ' (' + e.val + ')', lx + 14, ly);
-        ly += 18;
-    });
-};
-
-App._drawScoreLine = function(scores) {
-    var canvas = document.getElementById('statsLineChart');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
-    ctx.scale(dpr, dpr);
-    var w = canvas.clientWidth, h = canvas.clientHeight;
-    var pad = { top: 20, right: 20, bottom: 40, left: 40 };
-    var plotW = w - pad.left - pad.right;
-    var plotH = h - pad.top - pad.bottom;
-    var font = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim() || 'sans-serif';
-    var textSecondary = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#8b949e';
-    var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#58a6ff';
-
-    if (!scores || scores.length === 0) {
-        ctx.fillStyle = textSecondary;
-        ctx.font = '14px ' + font;
-        ctx.textAlign = 'center';
-        ctx.fillText('No score data', w / 2, h / 2);
-        return;
-    }
-
-    var minScore = Math.max(0, Math.min.apply(null, scores.map(function(s) { return s.score; })) - 1);
-    var maxScore = Math.min(10, Math.max.apply(null, scores.map(function(s) { return s.score; })) + 1);
-    var range = maxScore - minScore || 1;
-
-    // Grid lines
-    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#30363d';
-    ctx.lineWidth = 0.5;
-    for (var g = 0; g <= 4; g++) {
-        var gy = pad.top + plotH - (plotH * g / 4);
-        ctx.beginPath();
-        ctx.moveTo(pad.left, gy);
-        ctx.lineTo(pad.left + plotW, gy);
-        ctx.stroke();
-        var lbl = (minScore + range * g / 4).toFixed(1);
-        ctx.fillStyle = textSecondary;
-        ctx.font = '10px ' + font;
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(lbl, pad.left - 6, gy);
-    }
-
-    // X-axis labels
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    var step = Math.max(1, Math.floor(scores.length / 6));
-    scores.forEach(function(s, i) {
-        if (i % step === 0 || i === scores.length - 1) {
-            var x = pad.left + (i / (scores.length - 1 || 1)) * plotW;
-            ctx.fillStyle = textSecondary;
-            ctx.font = '9px ' + font;
-            ctx.fillText(s.date.substring(5), x, pad.top + plotH + 6);
-        }
-    });
-
-    // Line + area
-    ctx.beginPath();
-    scores.forEach(function(s, i) {
-        var x = pad.left + (i / (scores.length - 1 || 1)) * plotW;
-        var y = pad.top + plotH - ((s.score - minScore) / range * plotH);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Area fill
-    var lastX = pad.left + plotW;
-    ctx.lineTo(lastX, pad.top + plotH);
-    ctx.lineTo(pad.left, pad.top + plotH);
-    ctx.closePath();
-    var grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
-    grad.addColorStop(0, accent.replace(')', ',0.2)').replace('rgb', 'rgba'));
-    grad.addColorStop(1, accent.replace(')', ',0.02)').replace('rgb', 'rgba'));
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Data points
-    scores.forEach(function(s, i) {
-        var x = pad.left + (i / (scores.length - 1 || 1)) * plotW;
-        var y = pad.top + plotH - ((s.score - minScore) / range * plotH);
-        ctx.beginPath();
-        ctx.arc(x, y, 3.5, 0, 2 * Math.PI);
-        ctx.fillStyle = accent;
-        ctx.fill();
-        ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-card').trim() || '#1c2128';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-    });
-};
-
-
-// ── Stats Page (outside App object for V8 compatibility) ──
-App.renderStats = async function() {
     var stats = await App.api('stats');
     var fs = stats.feature_stats || {};
     var cs = stats.cycle_stats || {};
@@ -2484,28 +2243,32 @@ App.renderStats = async function() {
     var byCat = rs.by_category || {};
     var scores = cs.scores_over_time || [];
 
+    // Store data for post-render chart drawing
+    App._statsData = stats;
+
     var statusColors = {draft:'#6b7280',planning:'#8b5cf6',implementing:'#3b82f6','agent-qa':'#f59e0b','human-qa':'#ec4899',done:'#10b981',blocked:'#ef4444'};
     var priColors = {critical:'#ef4444',high:'#f59e0b',medium:'#3b82f6',low:'#6b7280','nice-to-have':'#8b5cf6'};
 
     var statusEntries = Object.entries(byStatus).filter(function(e){return e[1]>0;});
     var total = fs.total || 0;
 
-    // Score trend data
-    var scoreHtml = '';
-    if (scores.length > 0) {
-        scoreHtml = '<div class="stats-score-list">';
-        for (var si = 0; si < scores.length; si++) {
-            var s = scores[si];
-            var cls = s.score >= 8 ? 'score-green' : (s.score >= 5 ? 'score-yellow' : 'score-red');
-            scoreHtml += '<div class="stats-score-row">'
-                + '<span class="score-badge ' + cls + '">' + (s.score||0).toFixed(1) + '</span> '
-                + '<span class="stats-score-cycle">' + esc(s.cycle||'') + '</span> '
-                + '<span class="stats-score-date">' + esc(s.date||'') + '</span>'
-                + '</div>';
-        }
-        scoreHtml += '</div>';
-    } else {
-        scoreHtml = '<div class="empty-state-hint">No scores recorded yet</div>';
+    // Status donut using CSS conic-gradient
+    var donutSegments = [];
+    var angle = 0;
+    for (var di = 0; di < statusEntries.length; di++) {
+        var dk = statusEntries[di][0], dv = statusEntries[di][1];
+        var startAngle = angle;
+        angle += (dv / total) * 360;
+        donutSegments.push((statusColors[dk]||'#6b7280') + ' ' + startAngle.toFixed(1) + 'deg ' + angle.toFixed(1) + 'deg');
+    }
+    var donutGradient = donutSegments.length > 0 ? 'conic-gradient(' + donutSegments.join(', ') + ')' : 'conic-gradient(#374151 0deg 360deg)';
+
+    var donutLegend = '';
+    for (var li = 0; li < statusEntries.length; li++) {
+        var lk = statusEntries[li][0], lv = statusEntries[li][1];
+        donutLegend += '<div class="stats-legend-item">'
+            + '<span class="stats-legend-dot" style="background:' + (statusColors[lk]||'#6b7280') + '"></span>'
+            + '<span>' + lk + '</span><span class="stats-legend-val">' + lv + '</span></div>';
     }
 
     // Priority bars
@@ -2541,6 +2304,9 @@ App.renderStats = async function() {
 
     // Milestone progress
     var msHtml = '';
+    if (ms.length === 0) {
+        msHtml = '<div class="empty-state-hint">No milestones yet</div>';
+    }
     for (var mi = 0; mi < ms.length; mi++) {
         var m = ms[mi];
         var mpct = (m.progress||0).toFixed(0);
@@ -2550,24 +2316,30 @@ App.renderStats = async function() {
             + '</div>';
     }
 
-    // Status donut using CSS conic-gradient
-    var donutSegments = [];
-    var angle = 0;
-    for (var di = 0; di < statusEntries.length; di++) {
-        var dk = statusEntries[di][0], dv = statusEntries[di][1];
-        var startAngle = angle;
-        angle += (dv / total) * 360;
-        donutSegments.push((statusColors[dk]||'#6b7280') + ' ' + startAngle.toFixed(1) + 'deg ' + angle.toFixed(1) + 'deg');
+    // Cycle type distribution (computed from scores)
+    var cycleTypeCounts = {};
+    scores.forEach(function(s) {
+        cycleTypeCounts[s.cycle] = (cycleTypeCounts[s.cycle] || 0) + 1;
+    });
+    var cycleTypeColors = {
+        'feature-implementation':'#3b82f6','ui-refinement':'#8b5cf6','bug-triage':'#ef4444',
+        'documentation':'#10b981','architecture-review':'#f59e0b','release':'#ec4899',
+        'roadmap-planning':'#14b8a6','onboarding-dx':'#6366f1'
+    };
+    var cycleTypeEntries = Object.entries(cycleTypeCounts).sort(function(a,b){return b[1]-a[1];});
+    var cycleTypeLegend = '';
+    for (var cti = 0; cti < cycleTypeEntries.length; cti++) {
+        var ctk = cycleTypeEntries[cti][0], ctv = cycleTypeEntries[cti][1];
+        cycleTypeLegend += '<div class="stats-legend-item">'
+            + '<span class="stats-legend-dot" style="background:' + (cycleTypeColors[ctk]||'#484f58') + '"></span>'
+            + '<span>' + ctk.replace(/-/g, ' ') + '</span><span class="stats-legend-val">' + ctv + '</span></div>';
     }
-    var donutGradient = donutSegments.length > 0 ? 'conic-gradient(' + donutSegments.join(', ') + ')' : 'conic-gradient(#374151 0deg 360deg)';
 
-    var donutLegend = '';
-    for (var li = 0; li < statusEntries.length; li++) {
-        var lk = statusEntries[li][0], lv = statusEntries[li][1];
-        donutLegend += '<div class="stats-legend-item">'
-            + '<span class="stats-legend-dot" style="background:' + (statusColors[lk]||'#6b7280') + '"></span>'
-            + '<span>' + lk + '</span><span class="stats-legend-val">' + lv + '</span></div>';
-    }
+    // Feature velocity
+    var doneCount = byStatus.done || 0;
+    var weeklyRate = act.events_last_7_days || 0;
+    var monthlyRate = act.events_last_30_days || 0;
+    var avgIterPerCycle = cs.total_cycles > 0 ? (cs.total_iterations / cs.total_cycles).toFixed(1) : '0';
 
     return '<div class="page-header"><h2>Project Statistics</h2>'
         + '<div class="page-subtitle">' + total + ' features \u00b7 ' + (rs.total||0) + ' roadmap items \u00b7 ' + (cs.total_cycles||0) + ' cycles \u00b7 ' + (act.total_events||0) + ' events</div></div>'
@@ -2575,31 +2347,46 @@ App.renderStats = async function() {
         // Row 1: Overview cards
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Completion</div>'
         + '<div class="stats-big-number">' + (fs.completion_rate||0).toFixed(1) + '%</div>'
-        + '<div class="stats-card-sub">' + (byStatus.done||0) + ' of ' + total + ' features done</div></div>'
+        + '<div class="stats-card-sub">' + doneCount + ' of ' + total + ' features done</div></div>'
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Avg Score</div>'
         + '<div class="stats-big-number">' + (cs.avg_score||0).toFixed(1) + '</div>'
-        + '<div class="stats-card-sub">' + (cs.scores_over_time||[]).length + ' scores across ' + (cs.total_cycles||0) + ' cycles</div></div>'
+        + '<div class="stats-card-sub">' + scores.length + ' scores across ' + (cs.total_cycles||0) + ' cycles</div></div>'
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Iterations</div>'
         + '<div class="stats-big-number">' + (cs.total_iterations||0) + '</div>'
-        + '<div class="stats-card-sub">Total cycle iterations</div></div>'
+        + '<div class="stats-card-sub">' + avgIterPerCycle + ' avg per cycle</div></div>'
         + '<div class="stats-card stats-card-sm"><div class="stats-card-title">Activity</div>'
         + '<div class="stats-big-number">' + (act.total_events||0) + '</div>'
-        + '<div class="stats-card-sub">' + (act.events_last_7_days||0) + ' last 7d \u00b7 ' + (act.events_last_30_days||0) + ' last 30d</div></div>'
-        // Row 2: Donut + Milestones
+        + '<div class="stats-card-sub">' + weeklyRate + ' last 7d \u00b7 ' + monthlyRate + ' last 30d</div></div>'
+        // Row 2: Feature Status donut + Score Trend canvas
         + '<div class="stats-card stats-card-md"><div class="stats-card-title">Feature Status</div>'
         + '<div class="stats-donut-wrap"><div class="stats-donut" style="background:' + donutGradient + '"><div class="stats-donut-hole">' + total + '</div></div>'
         + '<div class="stats-legend">' + donutLegend + '</div></div></div>'
-        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Milestone Progress</div>' + msHtml + '</div>'
+        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Score Trend</div>'
+        + '<div class="score-chart-container"><canvas id="scoreTrendCanvas" class="score-chart-canvas"></canvas>'
+        + '<div id="scoreTrendCanvasTooltip" class="score-chart-tooltip"></div></div></div>'
         // Row 3: Priority + Category
-        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Roadmap by Priority</div>' + priHtml + '</div>'
-        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Roadmap by Category</div>' + catHtml + '</div>'
-        // Row 4: Scores
-        + '<div class="stats-card stats-card-full"><div class="stats-card-title">Score History</div>' + scoreHtml + '</div>'
+        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Roadmap by Priority</div>'
+        + (priHtml || '<div class="empty-state-hint">No roadmap items</div>') + '</div>'
+        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Roadmap by Category</div>'
+        + (catHtml || '<div class="empty-state-hint">No roadmap items</div>') + '</div>'
+        // Row 4: Cycle Type Distribution + Feature Velocity
+        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Cycle Type Distribution</div>'
+        + (cycleTypeEntries.length > 0
+            ? '<div class="stats-donut-wrap"><canvas id="cycleTypeCanvas" class="score-chart-canvas" style="max-width:200px;max-height:200px"></canvas>'
+              + '<div class="stats-legend">' + cycleTypeLegend + '</div></div>'
+            : '<div class="empty-state-hint">No cycle data yet</div>') + '</div>'
+        + '<div class="stats-card stats-card-md"><div class="stats-card-title">Feature Velocity</div>'
+        + '<div class="stats-velocity">'
+        + '<div class="stats-velocity-row"><span class="stats-velocity-label">Features Completed</span><span class="stats-velocity-value">' + doneCount + '</span></div>'
+        + '<div class="stats-velocity-row"><span class="stats-velocity-label">Events (7 days)</span><span class="stats-velocity-value">' + weeklyRate + '</span></div>'
+        + '<div class="stats-velocity-row"><span class="stats-velocity-label">Events (30 days)</span><span class="stats-velocity-value">' + monthlyRate + '</span></div>'
+        + '<div class="stats-velocity-row"><span class="stats-velocity-label">Avg Iterations/Cycle</span><span class="stats-velocity-value">' + avgIterPerCycle + '</span></div>'
+        + '<div class="stats-velocity-row"><span class="stats-velocity-label">Total Cycles</span><span class="stats-velocity-value">' + (cs.total_cycles||0) + '</span></div>'
+        + '</div></div>'
+        // Row 5: Milestone Progress (full width)
+        + '<div class="stats-card stats-card-full"><div class="stats-card-title">Milestone Progress</div>' + msHtml + '</div>'
         + '</div>';
 };
 
-App._bindStatsEvents = function() {
-    App.animateProgressBars(document.getElementById('content'));
-};
 
 document.addEventListener('DOMContentLoaded', () => App.init());

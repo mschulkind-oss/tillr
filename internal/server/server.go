@@ -8,8 +8,11 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
@@ -65,6 +68,17 @@ func Start(database *sql.DB, port int) error {
 
 // StartWithDBPath launches the server and watches the given DB file for changes.
 func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
+	// Ignore SIGPIPE to prevent server termination on broken connections
+	signal.Ignore(syscall.SIGPIPE)
+	// Ensure SIGINT/SIGTERM are handled gracefully
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received %v, shutting down gracefully", sig)
+		os.Exit(0)
+	}()
+
 	hub := newHub()
 	mux := http.NewServeMux()
 
@@ -92,7 +106,12 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 			return
 		}
 		hub.add(conn)
-		defer hub.remove(conn)
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("PANIC in WebSocket handler: %v", rv)
+			}
+			hub.remove(conn)
+		}()
 		// Keep connection alive — read messages (pongs) until disconnect
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -142,6 +161,11 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 }
 
 func watchDBFile(dbPath string, hub *wsHub) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			log.Printf("PANIC in file watcher: %v", rv)
+		}
+	}()
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("Warning: could not start file watcher: %v", err)
@@ -180,7 +204,7 @@ func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			return
 		}
@@ -212,6 +236,36 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 		// Check for /api/features/{id}/deps endpoint
 		if rest, found := strings.CutSuffix(id, "/deps"); found && rest != "" {
 			return handleFeatureDeps(database, w, rest)
+		}
+
+		// Handle PATCH for status updates
+		if r.Method == "PATCH" {
+			var body struct {
+				Status   string `json:"status"`
+				Priority int    `json:"priority"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "invalid request body"})
+			}
+			if body.Status != "" {
+				validStatuses := map[string]bool{
+					"draft": true, "planning": true, "implementing": true,
+					"agent-qa": true, "human-qa": true, "done": true, "blocked": true,
+				}
+				if !validStatuses[body.Status] {
+					w.WriteHeader(http.StatusBadRequest)
+					return writeJSON(w, map[string]string{"error": "invalid status"})
+				}
+				if err := db.UpdateFeature(database, id, map[string]any{"status": body.Status}); err != nil {
+					return err
+				}
+			}
+			f, err := db.GetFeature(database, id)
+			if err != nil {
+				return err
+			}
+			return writeJSON(w, f)
 		}
 
 		f, err := db.GetFeature(database, id)
