@@ -609,6 +609,25 @@ func ListActiveCycles(db *sql.DB) ([]models.CycleInstance, error) {
 	return out, rows.Err()
 }
 
+func ListAllCycles(db *sql.DB) ([]models.CycleInstance, error) {
+	rows, err := db.Query(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
+		FROM cycle_instances ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.CycleInstance
+	for rows.Next() {
+		var c models.CycleInstance
+		if err := rows.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func UpdateCycleInstance(db *sql.DB, id int, step, iteration int, status string) error {
 	_, err := db.Exec(`UPDATE cycle_instances SET current_step = ?, iteration = ?, status = ?, updated_at = datetime('now') WHERE id = ?`,
 		step, iteration, status, id)

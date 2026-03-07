@@ -8,7 +8,28 @@ const App = {
         this.bindThemeToggle();
         this.bindHamburger();
         this.loadTheme();
+        this.connectWebSocket();
         await this.navigate('dashboard');
+    },
+
+    connectWebSocket() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${proto}//${location.host}/ws`;
+        this._ws = new WebSocket(url);
+        this._ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'refresh') {
+                    this.navigate(this.currentPage);
+                }
+            } catch { /* ignore non-JSON */ }
+        };
+        this._ws.onclose = () => {
+            setTimeout(() => this.connectWebSocket(), 3000);
+        };
+        this._ws.onerror = () => {
+            this._ws.close();
+        };
     },
 
     bindNavigation() {
@@ -558,13 +579,6 @@ const App = {
     // ── Cycles ──
     async renderCycles() {
         const cycles = await this.api('cycles');
-        if (!cycles.length) return `<div class="page-header"><h2 class="page-title">Iteration Cycles</h2><p class="page-subtitle">Structured iteration workflows for features</p></div>
-            <div class="empty-state">
-                <div class="empty-state-icon">🔄</div>
-                <div class="empty-state-text">No active cycles</div>
-                <div class="empty-state-hint">Cycles guide features through structured steps like research, develop, QA, and review.</div>
-                <div class="empty-state-cta"><span class="cta-icon">$</span> lifecycle cycle start &lt;type&gt; &lt;feature&gt;</div>
-            </div>`;
 
         const ctSteps = {
             'ui-refinement':['design','ux-review','develop','manual-qa','judge'],
@@ -577,30 +591,85 @@ const App = {
             'onboarding-dx':['try','friction-log','improve','verify','document'],
         };
 
-        return `<div class="page-header"><h2 class="page-title">Iteration Cycles</h2><p class="page-subtitle">${cycles.length} active</p></div>` +
-            cycles.map(c => {
-                const steps = ctSteps[c.cycle_type] || [];
-                const pct = steps.length > 0 ? Math.round((c.current_step / steps.length) * 100) : 0;
-                const scoreVal = c.score != null ? parseFloat(c.score) : null;
-                const scoreCls = scoreVal != null ? (scoreVal >= 7 ? 'score-high' : scoreVal >= 4 ? 'score-mid' : 'score-low') : '';
+        if (!cycles.length) return `<div class="page-header"><h2 class="page-title">Iteration Cycles</h2><p class="page-subtitle">Structured iteration workflows for features</p></div>
+            <div class="empty-state">
+                <div class="empty-state-icon">🔄</div>
+                <div class="empty-state-text">No cycles</div>
+                <div class="empty-state-hint">Cycles guide features through structured steps like research, develop, QA, and review.</div>
+                <div class="empty-state-cta"><span class="cta-icon">$</span> lifecycle cycle start &lt;type&gt; &lt;feature&gt;</div>
+            </div>`;
 
-                const pipeline = steps.map((s, i) => {
-                    const state = i < c.current_step ? 'done' : i === c.current_step ? 'active' : '';
-                    const indicator = state === 'done' ? '✓' : (i + 1);
-                    return `<div class="cycle-node ${state}"><div class="cycle-node-indicator">${indicator}</div><div class="cycle-node-label">${s.replace(/-/g, ' ')}</div></div>`;
-                }).join('');
+        // Fetch scores for each cycle
+        const scoresMap = {};
+        await Promise.all(cycles.map(async c => {
+            try {
+                scoresMap[c.id] = await this.api(`cycles/${c.id}/scores`);
+            } catch { scoresMap[c.id] = []; }
+        }));
 
-                return `<div class="card cycle-card">
-                    <div class="card-header"><span class="card-title">${esc(c.feature_id)}</span><span class="badge badge-${c.status}">${c.status}</span></div>
-                    <div class="cycle-meta">
-                        <span class="cycle-type-name">${c.cycle_type.replace(/-/g, ' ')}</span>
-                        <span class="cycle-iteration-badge">⟳ Iteration ${c.iteration}</span>
-                        ${scoreVal != null ? `<span class="cycle-score ${scoreCls}">★ ${scoreVal.toFixed(1)}</span>` : ''}
-                    </div>
-                    <div class="cycle-pipeline">${pipeline}</div>
-                    <div class="cycle-progress"><div class="cycle-progress-fill" style="width:${pct}%"></div></div>
-                </div>`;
+        const activeCycles = cycles.filter(c => c.status === 'active');
+        const completedCycles = cycles.filter(c => c.status !== 'active');
+
+        const renderCycleCard = (c) => {
+            const steps = ctSteps[c.cycle_type] || [];
+            const totalSteps = steps.length;
+            const pct = totalSteps > 0 ? Math.round((c.current_step / totalSteps) * 100) : 0;
+            const scores = scoresMap[c.id] || [];
+            const avgScore = scores.length ? (scores.reduce((s, x) => s + x.score, 0) / scores.length) : null;
+            const scoreCls = avgScore != null ? (avgScore >= 7 ? 'score-high' : avgScore >= 4 ? 'score-mid' : 'score-low') : '';
+
+            const pipeline = steps.map((s, i) => {
+                const state = i < c.current_step ? 'done' : i === c.current_step ? 'active' : '';
+                const stepScore = scores.find(sc => sc.step === i);
+                const indicator = state === 'done' ? '✓' : (i + 1);
+                const scoreTag = stepScore ? `<div class="cycle-node-score">${stepScore.score.toFixed(1)}</div>` : '';
+                return `<div class="cycle-node ${state}"><div class="cycle-node-indicator">${indicator}</div><div class="cycle-node-label">${s.replace(/-/g, ' ')}</div>${scoreTag}</div>`;
             }).join('');
+
+            // Score sparkline
+            let sparkline = '';
+            if (scores.length >= 2) {
+                const w = 120, h = 32, pad = 2;
+                const maxS = 10, minS = 0;
+                const points = scores.map((s, i) => {
+                    const x = pad + (i / (scores.length - 1)) * (w - 2 * pad);
+                    const y = h - pad - ((s.score - minS) / (maxS - minS)) * (h - 2 * pad);
+                    return `${x},${y}`;
+                }).join(' ');
+                sparkline = `<svg class="score-sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>`;
+            }
+
+            return `<div class="card cycle-card" data-cycle-id="${c.id}">
+                <div class="card-header"><span class="card-title">${esc(c.feature_id)}</span><span class="badge badge-${c.status}">${c.status}</span></div>
+                <div class="cycle-meta">
+                    <span class="cycle-type-name">${c.cycle_type.replace(/-/g, ' ')}</span>
+                    <span class="cycle-iteration-badge">⟳ Iteration ${c.iteration}</span>
+                    ${avgScore != null ? `<span class="cycle-score ${scoreCls}">★ ${avgScore.toFixed(1)} avg</span>` : ''}
+                    <span class="cycle-step-count">${c.current_step}/${totalSteps} steps</span>
+                </div>
+                <div class="cycle-pipeline">${pipeline}</div>
+                <div class="cycle-progress"><div class="cycle-progress-fill" style="width:${pct}%"></div></div>
+                ${sparkline ? `<div class="cycle-sparkline-row">${sparkline}<span class="sparkline-label">${scores.length} scores</span></div>` : ''}
+            </div>`;
+        };
+
+        let html = `<div class="page-header"><h2 class="page-title">Iteration Cycles</h2><p class="page-subtitle">${activeCycles.length} active · ${completedCycles.length} completed</p></div>`;
+
+        if (activeCycles.length) {
+            html += `<h3 class="section-title">Active Cycles</h3>` + activeCycles.map(renderCycleCard).join('');
+        }
+        if (completedCycles.length) {
+            html += `<h3 class="section-title" style="margin-top:20px">Completed Cycles</h3>` + completedCycles.map(renderCycleCard).join('');
+        }
+
+        // Cycle type reference
+        html += `<h3 class="section-title" style="margin-top:20px">Available Cycle Types</h3><div class="cycle-types-grid">`;
+        for (const [type, steps] of Object.entries(ctSteps)) {
+            html += `<div class="card cycle-type-ref"><div class="card-title">${type.replace(/-/g, ' ')}</div><div class="cycle-type-steps">${steps.map(s => `<span class="cycle-type-step">${s.replace(/-/g,' ')}</span>`).join(' → ')}</div></div>`;
+        }
+        html += `</div>`;
+
+        return html;
     },
 
     // ── History ──
@@ -617,12 +686,37 @@ const App = {
             </div>`;
 
         this._historyEvents = events;
+        this._historyFilter = this._historyFilter || 'all';
         this._historyShown = Math.min(this._historyPageSize, events.length);
-        const hasMore = events.length > this._historyShown;
+
+        // Categorize events
+        const categories = {};
+        events.forEach(e => {
+            const cat = e.event_type.split('.')[0] || 'other';
+            categories[cat] = (categories[cat] || 0) + 1;
+        });
+
+        // Feature filter
+        const features = [...new Set(events.map(e => e.feature_id).filter(Boolean))];
+
+        const filtered = this._historyFilter === 'all' ? events
+            : events.filter(e => e.event_type.startsWith(this._historyFilter) || e.feature_id === this._historyFilter);
+        const shown = filtered.slice(0, this._historyShown);
+        const hasMore = filtered.length > this._historyShown;
+
+        const filterBtns = [['all', 'All', events.length]].concat(
+            Object.entries(categories).sort((a,b) => b[1]-a[1]).map(([k,v]) => [k, k.charAt(0).toUpperCase() + k.slice(1), v])
+        );
 
         return `<div class="page-header"><h2 class="page-title">History</h2><p class="page-subtitle">${events.length} events</p></div>
-            <div class="card"><div class="timeline" id="historyTimeline">${this.buildHistoryItems(events.slice(0, this._historyShown), 0)}</div>
-            ${hasMore ? `<div class="timeline-load-more-wrap"><button class="timeline-load-more" id="historyLoadMore">Load more (${events.length - this._historyShown} remaining)</button></div>` : ''}</div>`;
+            <div class="history-filters" id="historyFilters">
+                ${filterBtns.map(([id, label, count]) =>
+                    `<button class="filter-btn ${this._historyFilter === id ? 'active' : ''}" data-filter="${id}">${label} <span class="filter-count">${count}</span></button>`
+                ).join('')}
+                ${features.length > 1 ? `<select class="filter-select" id="historyFeatureFilter"><option value="all">All features</option>${features.map(f => `<option value="${f}" ${this._historyFilter === f ? 'selected' : ''}>${f}</option>`).join('')}</select>` : ''}
+            </div>
+            <div class="card"><div class="timeline" id="historyTimeline">${this.buildHistoryItems(shown, 0)}</div>
+            ${hasMore ? `<div class="timeline-load-more-wrap"><button class="timeline-load-more" id="historyLoadMore">Load more (${filtered.length - this._historyShown} remaining)</button></div>` : ''}</div>`;
     },
 
     buildHistoryItems(events, startIdx) {
@@ -780,18 +874,33 @@ const App = {
             bindFeatureRows();
         }
         if (page === 'history') {
+            // Filter buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this._historyFilter = btn.dataset.filter;
+                    this.navigate('history');
+                });
+            });
+            const featureFilter = document.getElementById('historyFeatureFilter');
+            if (featureFilter) featureFilter.addEventListener('change', () => {
+                this._historyFilter = featureFilter.value;
+                this.navigate('history');
+            });
             const btn = document.getElementById('historyLoadMore');
             if (btn) btn.addEventListener('click', () => {
                 const events = this._historyEvents;
+                const filter = this._historyFilter || 'all';
+                const filtered = filter === 'all' ? events
+                    : events.filter(e => e.event_type.startsWith(filter) || e.feature_id === filter);
                 const prev = this._historyShown;
-                this._historyShown = Math.min(prev + this._historyPageSize, events.length);
+                this._historyShown = Math.min(prev + this._historyPageSize, filtered.length);
                 const timeline = document.getElementById('historyTimeline');
                 if (timeline) {
                     const tmp = document.createElement('div');
-                    tmp.innerHTML = this.buildHistoryItems(events.slice(prev, this._historyShown), prev);
+                    tmp.innerHTML = this.buildHistoryItems(filtered.slice(prev, this._historyShown), prev);
                     while (tmp.firstChild) timeline.appendChild(tmp.firstChild);
                 }
-                const remaining = events.length - this._historyShown;
+                const remaining = filtered.length - this._historyShown;
                 if (remaining <= 0) {
                     btn.parentElement.remove();
                 } else {

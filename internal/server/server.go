@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/fsnotify/fsnotify"
+	"github.com/gorilla/websocket"
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
 	"github.com/mschulkind/lifecycle/internal/models"
@@ -17,8 +21,51 @@ import (
 //go:embed all:assets
 var embeddedAssets embed.FS
 
-// Start launches the HTTP server.
+// WebSocket hub
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(_ *http.Request) bool { return true },
+}
+
+type wsHub struct {
+	mu      sync.Mutex
+	clients map[*websocket.Conn]bool
+}
+
+func newHub() *wsHub {
+	return &wsHub{clients: make(map[*websocket.Conn]bool)}
+}
+
+func (h *wsHub) add(conn *websocket.Conn) {
+	h.mu.Lock()
+	h.clients[conn] = true
+	h.mu.Unlock()
+}
+
+func (h *wsHub) remove(conn *websocket.Conn) {
+	h.mu.Lock()
+	delete(h.clients, conn)
+	h.mu.Unlock()
+}
+
+func (h *wsHub) broadcast(msg []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for conn := range h.clients {
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			conn.Close() //nolint:errcheck
+			delete(h.clients, conn)
+		}
+	}
+}
+
+// Start launches the HTTP server with WebSocket support and DB file watching.
 func Start(database *sql.DB, port int) error {
+	return StartWithDBPath(database, port, "")
+}
+
+// StartWithDBPath launches the server and watches the given DB file for changes.
+func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
+	hub := newHub()
 	mux := http.NewServeMux()
 
 	// API routes
@@ -28,14 +75,25 @@ func Start(database *sql.DB, port int) error {
 	mux.HandleFunc("/api/roadmap", apiHandler(database, handleRoadmap))
 	mux.HandleFunc("/api/roadmap/", apiHandler(database, handleRoadmapStatus))
 	mux.HandleFunc("/api/cycles", apiHandler(database, handleCycles))
+	mux.HandleFunc("/api/cycles/", apiHandler(database, handleCycles))
 	mux.HandleFunc("/api/history", apiHandler(database, handleHistory))
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
 
-	// WebSocket placeholder
+	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = fmt.Fprintf(w, "WebSocket endpoint - connect with a WebSocket client")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		hub.add(conn)
+		defer hub.remove(conn)
+		// Keep connection alive — read messages (pongs) until disconnect
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
+		}
 	})
 
 	// Static assets
@@ -54,7 +112,45 @@ func Start(database *sql.DB, port int) error {
 	})
 
 	addr := fmt.Sprintf(":%d", port)
+
+	// Watch DB file for changes and broadcast to WebSocket clients
+	if dbPath != "" {
+		go watchDBFile(dbPath, hub)
+	}
+
 	return http.ListenAndServe(addr, mux)
+}
+
+func watchDBFile(dbPath string, hub *wsHub) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Warning: could not start file watcher: %v", err)
+		return
+	}
+	defer watcher.Close() //nolint:errcheck
+
+	// Watch the DB file and its WAL/SHM companions
+	if err := watcher.Add(dbPath); err != nil {
+		log.Printf("Warning: could not watch %s: %v", dbPath, err)
+		return
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) {
+				hub.broadcast([]byte(`{"type":"refresh"}`))
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("File watcher error: %v", err)
+		}
+	}
 }
 
 type apiFunc func(*sql.DB, http.ResponseWriter, *http.Request) error
@@ -155,6 +251,23 @@ func handleRoadmap(database *sql.DB, w http.ResponseWriter, r *http.Request) err
 
 func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	path := r.URL.Path
+	// /api/cycles/{id}/scores
+	if strings.HasSuffix(path, "/scores") {
+		idStr := strings.TrimPrefix(path, "/api/cycles/")
+		idStr = strings.TrimSuffix(idStr, "/scores")
+		var cycleID int
+		if _, err := fmt.Sscanf(idStr, "%d", &cycleID); err != nil {
+			return fmt.Errorf("invalid cycle ID: %s", idStr)
+		}
+		scores, err := db.ListCycleScores(database, cycleID)
+		if err != nil {
+			return err
+		}
+		if scores == nil {
+			scores = []models.CycleScore{}
+		}
+		return writeJSON(w, scores)
+	}
 	// /api/cycles/{id}/history
 	if strings.HasSuffix(path, "/history") {
 		featureID := strings.TrimPrefix(path, "/api/cycles/")
@@ -166,14 +279,31 @@ func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 		return writeJSON(w, cycles)
 	}
 
-	cycles, err := db.ListActiveCycles(database)
+	// List all cycles (active + completed) with enriched data
+	active, err := db.ListActiveCycles(database)
 	if err != nil {
 		return err
 	}
-	if cycles == nil {
-		cycles = []models.CycleInstance{}
+	completed, err := db.ListAllCycles(database)
+	if err != nil {
+		// fallback if ListAllCycles doesn't exist yet
+		completed = []models.CycleInstance{}
 	}
-	return writeJSON(w, cycles)
+	// Merge — include completed ones not in active
+	activeIDs := make(map[int]bool)
+	for _, c := range active {
+		activeIDs[c.ID] = true
+	}
+	all := append([]models.CycleInstance{}, active...)
+	for _, c := range completed {
+		if !activeIDs[c.ID] {
+			all = append(all, c)
+		}
+	}
+	if all == nil {
+		all = []models.CycleInstance{}
+	}
+	return writeJSON(w, all)
 }
 
 func handleHistory(database *sql.DB, w http.ResponseWriter, r *http.Request) error {

@@ -154,6 +154,13 @@ func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*mode
 	}
 	c.StepName = ct.Steps[0]
 
+	// Auto-create work item for the first cycle step
+	_ = db.CreateWorkItem(database, &models.WorkItem{
+		FeatureID:   featureID,
+		WorkType:    ct.Steps[0],
+		AgentPrompt: fmt.Sprintf("Cycle %s, step: %s for feature %s", cycleType, ct.Steps[0], featureID),
+	})
+
 	_ = db.InsertEvent(database, &models.Event{
 		ProjectID: projectID,
 		FeatureID: featureID,
@@ -204,6 +211,12 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 	if nextStep >= len(ct.Steps) {
 		return db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed")
 	}
+	// Auto-create work item for the next cycle step
+	_ = db.CreateWorkItem(database, &models.WorkItem{
+		FeatureID:   featureID,
+		WorkType:    ct.Steps[nextStep],
+		AgentPrompt: fmt.Sprintf("Cycle %s, step: %s for feature %s", c.CycleType, ct.Steps[nextStep], featureID),
+	})
 	return db.UpdateCycleInstance(database, c.ID, nextStep, c.Iteration, "active")
 }
 

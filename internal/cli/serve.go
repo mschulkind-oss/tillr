@@ -37,7 +37,7 @@ var serveCmd = &cobra.Command{
 		fmt.Printf("Database: %s\n", cfg.DBPath)
 		fmt.Println("Press Ctrl+C to stop.")
 
-		return server.Start(database, cfg.ServerPort)
+		return server.StartWithDBPath(database, cfg.ServerPort, cfg.DBPath)
 	},
 }
 
