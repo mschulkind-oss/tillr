@@ -2,8 +2,6 @@
 
 Lifecycle is a human-in-the-loop project management tool for agentic software development. It gives you a CLI to define features, assign work to AI agents through structured iteration cycles, gate quality with human QA, and visualize everything in a live-updating web dashboard.
 
-> **Note:** Features marked with 🚧 are coming soon. Unmarked features are implemented and available today.
-
 ---
 
 ## Table of Contents
@@ -69,7 +67,7 @@ lifecycle doctor
 ### Requirements
 
 - **Go 1.24+** (build only)
-- **SQLite** (bundled via `go-sqlite3`; no external install needed)
+- **SQLite** (bundled via `modernc.org/sqlite`; pure Go, no CGO or external install needed)
 - A modern browser for the web viewer
 
 ---
@@ -88,9 +86,7 @@ Use this workflow when:
 
 You don't need to model everything — just the user-facing capabilities you want to track, iterate on, and QA.
 
-### The Onboard Command 🚧
-
-> **Coming soon.** The `lifecycle onboard` command will automate much of the setup described below.
+### The Onboard Command
 
 ```bash
 lifecycle onboard --name my-project --scan
@@ -109,7 +105,13 @@ The `--scan` flag inspects your repository for:
 
 The scan produces suggestions, not changes. You review them and decide what to track.
 
-Until the command lands, you can set up everything manually with the steps below — they work today.
+For non-interactive use (CI or agent-driven onboarding), pass `--yes` to automatically create suggested milestones and features:
+
+```bash
+lifecycle onboard --name my-project --yes
+```
+
+You can also run the steps below manually for full control.
 
 ### Step-by-Step Walkthrough
 
@@ -691,6 +693,242 @@ lifecycle search "JWT"
 
 ---
 
+### Architecture Decision Records (ADRs)
+
+#### `lifecycle decision add <title>`
+
+Record an architecture decision.
+
+```bash
+lifecycle decision add "Use PostgreSQL for primary storage" \
+  --context "Need a reliable RDBMS for transactional data" \
+  --decision "PostgreSQL 16 with connection pooling" \
+  --consequences "Team needs PostgreSQL expertise; adds ops complexity" \
+  --feature feat-1
+# Created decision: "Use PostgreSQL for primary storage" (proposed)
+```
+
+| Flag | Description |
+|------|-------------|
+| `--context C` | Why is this decision needed? |
+| `--decision D` | What was decided? |
+| `--consequences C` | What are the consequences? |
+| `--feature F` | Link to a feature ID |
+| `--status S` | Status: `proposed`, `accepted`, `rejected`, `superseded`, `deprecated` (default: `proposed`) |
+
+#### `lifecycle decision list`
+
+List all architecture decisions.
+
+```bash
+lifecycle decision list
+# ID  Status    Title
+# 1   accepted  Use PostgreSQL for primary storage
+# 2   proposed  JWT vs session-based auth
+```
+
+#### `lifecycle decision show <id>`
+
+Show full decision details, including context, decision text, consequences, and linked feature.
+
+#### `lifecycle decision edit <id>`
+
+Edit a decision's properties (status, context, decision text, consequences).
+
+---
+
+### Configuration Management
+
+#### `lifecycle config init`
+
+Create a `.lifecycle.yaml` configuration file with default values.
+
+```bash
+lifecycle config init
+# Created .lifecycle.yaml with defaults
+```
+
+#### `lifecycle config show`
+
+Show the current configuration (merged defaults + file overrides).
+
+```bash
+lifecycle config show
+# default_milestone: ""
+# default_priority: 5
+# server_port: 3847
+# theme: system
+# agent_timeout_minutes: 30
+# db_path: lifecycle.db
+```
+
+#### `lifecycle config set <key> <value>`
+
+Set a configuration value in `.lifecycle.yaml`.
+
+```bash
+lifecycle config set server_port 8080
+lifecycle config set default_priority 7
+lifecycle config set theme dark
+```
+
+---
+
+### Export
+
+Export project data in multiple formats.
+
+#### `lifecycle export features`
+
+```bash
+lifecycle export features --format md > FEATURES.md
+lifecycle export features --format csv > features.csv
+lifecycle export features --format json | jq .
+```
+
+#### `lifecycle export roadmap`
+
+```bash
+lifecycle export roadmap --format md > ROADMAP.md
+```
+
+#### `lifecycle export decisions`
+
+```bash
+lifecycle export decisions --format md > DECISIONS.md
+```
+
+#### `lifecycle export all`
+
+Export all project data (features, roadmap, and decisions) at once.
+
+```bash
+lifecycle export all --format json > project-export.json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--format F` | Output format: `json` (default), `md`, or `csv` |
+
+---
+
+### Queue Management
+
+#### `lifecycle queue list`
+
+List pending work items in priority order.
+
+```bash
+lifecycle queue list
+# ID   Feature            Type        Priority  Claimed
+# 12   feat-4             implement   high      agent-1
+# 15   feat-7             research    medium    (unclaimed)
+```
+
+#### `lifecycle queue stats`
+
+Show queue statistics — pending, claimed, and completed counts.
+
+```bash
+lifecycle queue stats
+# Pending:   3
+# Claimed:   1
+# Completed: 12
+```
+
+#### `lifecycle queue reassign <work-item-id>`
+
+Release a claimed work item back to the pending queue so another agent can pick it up.
+
+```bash
+lifecycle queue reassign 12
+# Released work item 12 back to pending queue.
+```
+
+#### `lifecycle queue reclaim`
+
+Reclaim stale work items that have had no heartbeat for 30+ minutes.
+
+```bash
+lifecycle queue reclaim
+# Reclaimed 2 stale work item(s).
+```
+
+---
+
+### Git / VCS Integration
+
+Lifecycle auto-detects whether your project uses `git` or `jj` (Jujutsu).
+
+#### `lifecycle git log`
+
+Show recent commits.
+
+```bash
+lifecycle git log -n 10
+```
+
+| Flag | Description |
+|------|-------------|
+| `-n N` | Number of commits to show (default: 20) |
+
+#### `lifecycle git branches`
+
+Show branches and their linked features.
+
+```bash
+lifecycle git branches
+```
+
+#### `lifecycle git link <feature-id> <commit-hash>`
+
+Link a commit to a feature for traceability.
+
+```bash
+lifecycle git link feat-1 abc123f
+# Linked commit abc123f to feat-1.
+```
+
+---
+
+### MCP Server
+
+Start a Model Context Protocol (MCP) server for direct agent integration over stdio.
+
+```bash
+lifecycle mcp
+```
+
+The MCP server exposes lifecycle tools (`lifecycle_next`, `lifecycle_done`, `lifecycle_fail`, `lifecycle_status`, `lifecycle_features`, `lifecycle_feedback`) via JSON-RPC 2.0 over stdin/stdout. This allows AI agents to interact with lifecycle directly without subprocess CLI calls.
+
+---
+
+### Batch Operations
+
+#### `lifecycle feature batch`
+
+Update multiple features at once.
+
+```bash
+# Set status for multiple features
+lifecycle feature batch --ids feat-1,feat-2,feat-3 --status implementing
+
+# Set milestone for multiple features
+lifecycle feature batch --ids feat-1,feat-2 --milestone v1.0
+
+# Set priority for multiple features
+lifecycle feature batch --ids feat-1,feat-2,feat-3 --priority 8
+```
+
+| Flag | Description |
+|------|-------------|
+| `--ids IDs` | Comma-separated feature IDs |
+| `--status S` | Set status for all listed features |
+| `--milestone M` | Set milestone for all listed features |
+| `--priority P` | Set priority for all listed features |
+
+---
+
 ## Web Viewer Guide
 
 Start the web viewer:
@@ -713,11 +951,15 @@ The landing page shows project health at a glance. A kanban board groups feature
 
 ### Feature Board
 
-A tabular list of all features with status badges, priority indicators, and milestone assignments. Click any row to expand an inline detail panel showing the feature's description, milestone, priority, timestamps, and full history.
+A tabular list of all features with status badges, priority indicators, and milestone assignments. Click any row to expand an inline detail panel showing the feature's description, milestone, priority, timestamps, and full history. Use the checkboxes to select multiple features, then use the floating action bar to batch-update status, milestone, or priority.
 
 ### Roadmap View
 
 A presentation-quality roadmap grouped by priority (Critical → High → Medium → Low). Each item shows its status, category, and effort sizing badge. Click an item to expand its full description.
+
+### Timeline View
+
+A Gantt-style timeline page showing feature progress over time. Access it at `#timeline`. Features are displayed as horizontal bars spanning their active period, grouped by milestone. Useful for spotting bottlenecks and understanding parallel work.
 
 ### Cycle Progress
 
@@ -729,7 +971,19 @@ A scrollable timeline of every project event, grouped by date. Category filter b
 
 ### QA Review
 
-A dedicated interface for reviewing features that have reached the `human-qa` stage. Features appear automatically when they enter `human-qa`. Review the feature context and cycle results, then approve or reject with notes using the built-in textarea and action buttons.
+A dedicated interface for reviewing features that have reached the `human-qa` stage. Features appear automatically when they enter `human-qa`, forming a review queue. Review the feature context and cycle results, then approve or reject with notes using the built-in textarea and action buttons.
+
+### Decisions (ADRs)
+
+Browse Architecture Decision Records at `#adrs`. Decisions are listed with their status (proposed, accepted, rejected, superseded, deprecated), linked features, and full context. Click any decision to view the complete record including context, decision text, and consequences.
+
+### Keyboard Shortcuts
+
+Press **`?`** on any page to see all available keyboard shortcuts. Shortcuts include navigation between pages, toggling dark mode, and jumping to specific features.
+
+### Quick Feedback Button
+
+A small **⊕** button floats in the bottom-right corner of every page. Click it to open a minimal text input — just type and press Enter to submit feedback, bug reports, or feature ideas. No forms, no dropdowns. Submissions appear in the idea queue (`lifecycle idea list`).
 
 ### Live Updates / WebSocket
 
@@ -787,15 +1041,31 @@ while true; do
 done
 ```
 
-### Heartbeats 🚧 Coming Soon
+### Heartbeats
 
-Long-running agents can send heartbeats to signal they're still alive. The web viewer shows agent activity in real time.
+Long-running agents should send periodic heartbeats to signal they're still alive:
+
+```bash
+lifecycle heartbeat --message "Running integration tests"
+# Heartbeat recorded.
+```
+
+The web viewer shows agent activity and heartbeat status in real time. Work items with no heartbeat for 30+ minutes are considered stale and can be reclaimed:
+
+```bash
+lifecycle queue reclaim
+# Reclaimed 1 stale work item(s).
+```
 
 ---
 
 ## Configuration Reference
 
-Lifecycle stores project configuration in `.lifecycle.json` at the project root.
+Lifecycle uses two configuration files:
+
+### Project File: `.lifecycle.json`
+
+Created by `lifecycle init`, this file identifies the project root and stores core settings:
 
 ```json
 {
@@ -805,11 +1075,39 @@ Lifecycle stores project configuration in `.lifecycle.json` at the project root.
 }
 ```
 
+Lifecycle finds your project by walking up from the current directory until it finds `.lifecycle.json`, so you can run commands from any subdirectory.
+
+### Defaults File: `.lifecycle.yaml`
+
+Created by `lifecycle config init`, this optional file stores configuration defaults. It is merged with built-in defaults at runtime. Create it with:
+
+```bash
+lifecycle config init
+```
+
+Available fields:
+
 | Field | Default | Description |
 |-------|---------|-------------|
-| `project_dir` | `.` | Root directory of the project |
-| `db_path` | `lifecycle.db` | Path to the SQLite database file |
+| `default_milestone` | `""` | Default milestone for new features |
+| `default_priority` | `5` | Default priority for new features (integer) |
 | `server_port` | `3847` | Port for the web viewer |
+| `theme` | `system` | Web viewer theme: `light`, `dark`, or `system` |
+| `agent_timeout_minutes` | `30` | Minutes before an agent is considered stale |
+| `db_path` | `lifecycle.db` | Path to the SQLite database file |
+
+View current configuration (merged defaults + file):
+
+```bash
+lifecycle config show
+```
+
+Set individual values:
+
+```bash
+lifecycle config set server_port 8080
+lifecycle config set theme dark
+```
 
 ### Project Discovery
 
