@@ -211,9 +211,7 @@ var featureEditCmd = &cobra.Command{
 		if v, _ := cmd.Flags().GetString("spec"); v != "" {
 			updates["spec"] = v
 		}
-		if v, _ := cmd.Flags().GetString("status"); v != "" {
-			updates["status"] = v
-		}
+		newStatus, _ := cmd.Flags().GetString("status")
 		if v, _ := cmd.Flags().GetString("milestone"); v != "" {
 			updates["milestone_id"] = v
 		}
@@ -224,12 +222,25 @@ var featureEditCmd = &cobra.Command{
 			updates["priority"] = v
 		}
 
-		if len(updates) == 0 {
+		if len(updates) == 0 && newStatus == "" {
 			return fmt.Errorf("no changes specified")
 		}
 
-		if err := db.UpdateFeature(database, args[0], updates); err != nil {
-			return err
+		if len(updates) > 0 {
+			if err := db.UpdateFeature(database, args[0], updates); err != nil {
+				return err
+			}
+		}
+
+		// Handle status transition through the engine to enforce QA gate
+		if newStatus != "" {
+			p, err := db.GetProject(database)
+			if err != nil {
+				return fmt.Errorf("getting project: %w", err)
+			}
+			if err := engine.TransitionFeature(database, p.ID, args[0], newStatus); err != nil {
+				return err
+			}
 		}
 
 		if jsonOutput {

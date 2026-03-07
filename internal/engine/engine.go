@@ -56,11 +56,40 @@ func AddFeature(database *sql.DB, projectID, name, description, spec, milestoneI
 	return f, nil
 }
 
-// TransitionFeature moves a feature to a new status.
+// ValidTransitions defines the allowed state machine transitions for features.
+// A feature MUST go through human-qa before reaching done.
+var ValidTransitions = map[string][]string{
+	"draft":        {"planning", "implementing", "blocked"},
+	"planning":     {"implementing", "blocked"},
+	"implementing": {"agent-qa", "human-qa", "blocked"},
+	"agent-qa":     {"human-qa", "implementing", "blocked"},
+	"human-qa":     {"done", "implementing", "blocked"},
+	"blocked":      {"draft", "planning", "implementing"},
+	"done":         {"implementing"},
+}
+
+// IsValidTransition checks whether transitioning from one status to another is allowed.
+func IsValidTransition(from, to string) bool {
+	allowed, ok := ValidTransitions[from]
+	if !ok {
+		return false
+	}
+	for _, s := range allowed {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
+
+// TransitionFeature moves a feature to a new status, enforcing QA gate rules.
 func TransitionFeature(database *sql.DB, projectID, featureID, newStatus string) error {
 	f, err := db.GetFeature(database, featureID)
 	if err != nil {
 		return fmt.Errorf("getting feature: %w", err)
+	}
+	if !IsValidTransition(f.Status, newStatus) {
+		return fmt.Errorf("invalid transition from %q to %q: features must go through human-qa before done", f.Status, newStatus)
 	}
 	if err := db.UpdateFeature(database, featureID, map[string]any{"status": newStatus}); err != nil {
 		return fmt.Errorf("updating status: %w", err)
@@ -306,7 +335,15 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 }
 
 // ApproveFeatureQA approves a feature and transitions it to done.
+// The feature must be in human-qa status.
 func ApproveFeatureQA(database *sql.DB, projectID, featureID, notes string) error {
+	f, err := db.GetFeature(database, featureID)
+	if err != nil {
+		return fmt.Errorf("getting feature: %w", err)
+	}
+	if f.Status != "human-qa" {
+		return fmt.Errorf("cannot approve feature in %q status: must be in human-qa", f.Status)
+	}
 	if err := db.CreateQAResult(database, &models.QAResult{
 		FeatureID: featureID,
 		QAType:    "human",
@@ -319,7 +356,15 @@ func ApproveFeatureQA(database *sql.DB, projectID, featureID, notes string) erro
 }
 
 // RejectFeatureQA rejects a feature and sends it back to implementing.
+// The feature must be in human-qa status.
 func RejectFeatureQA(database *sql.DB, projectID, featureID, notes string) error {
+	f, err := db.GetFeature(database, featureID)
+	if err != nil {
+		return fmt.Errorf("getting feature: %w", err)
+	}
+	if f.Status != "human-qa" {
+		return fmt.Errorf("cannot reject feature in %q status: must be in human-qa", f.Status)
+	}
 	if err := db.CreateQAResult(database, &models.QAResult{
 		FeatureID: featureID,
 		QAType:    "human",

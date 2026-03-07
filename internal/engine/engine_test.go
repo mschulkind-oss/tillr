@@ -57,6 +57,69 @@ func TestTransitionFeature(t *testing.T) {
 	}
 }
 
+func TestTransitionFeatureInvalid(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+
+	// draft → done should be rejected (must go through human-qa)
+	if err := engine.TransitionFeature(database, "test", "f1", "done"); err == nil {
+		t.Error("expected error for draft → done transition")
+	}
+
+	// implementing → done should be rejected
+	engine.TransitionFeature(database, "test", "f1", "implementing") //nolint:errcheck
+	if err := engine.TransitionFeature(database, "test", "f1", "done"); err == nil {
+		t.Error("expected error for implementing → done transition")
+	}
+
+	// agent-qa → done should be rejected
+	engine.TransitionFeature(database, "test", "f1", "agent-qa") //nolint:errcheck
+	if err := engine.TransitionFeature(database, "test", "f1", "done"); err == nil {
+		t.Error("expected error for agent-qa → done transition")
+	}
+
+	// agent-qa → human-qa → done should succeed
+	engine.TransitionFeature(database, "test", "f1", "human-qa") //nolint:errcheck
+	if err := engine.TransitionFeature(database, "test", "f1", "done"); err != nil {
+		t.Fatalf("human-qa → done should be valid: %v", err)
+	}
+	f, _ := db.GetFeature(database, "f1")
+	if f.Status != "done" {
+		t.Errorf("got %q, want done", f.Status)
+	}
+}
+
+func TestIsValidTransition(t *testing.T) {
+	tests := []struct {
+		from, to string
+		valid    bool
+	}{
+		{"draft", "planning", true},
+		{"draft", "implementing", true},
+		{"draft", "blocked", true},
+		{"draft", "done", false},
+		{"draft", "human-qa", false},
+		{"implementing", "agent-qa", true},
+		{"implementing", "human-qa", true},
+		{"implementing", "done", false},
+		{"agent-qa", "human-qa", true},
+		{"agent-qa", "implementing", true},
+		{"agent-qa", "done", false},
+		{"human-qa", "done", true},
+		{"human-qa", "implementing", true},
+		{"blocked", "implementing", true},
+		{"done", "implementing", true},
+	}
+	for _, tt := range tests {
+		got := engine.IsValidTransition(tt.from, tt.to)
+		if got != tt.valid {
+			t.Errorf("IsValidTransition(%q, %q) = %v, want %v", tt.from, tt.to, got, tt.valid)
+		}
+	}
+}
+
 func TestWorkItemFlow(t *testing.T) {
 	database, _ := db.Open(":memory:")
 	defer database.Close()                                            //nolint:errcheck
@@ -127,6 +190,7 @@ func TestQAFlow(t *testing.T) {
 	defer database.Close()                                            //nolint:errcheck
 	engine.InitProject(database, "Test")                              //nolint:errcheck
 	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+	engine.TransitionFeature(database, "test", "f1", "implementing")  //nolint:errcheck
 	engine.TransitionFeature(database, "test", "f1", "human-qa")      //nolint:errcheck
 
 	// Reject
@@ -146,6 +210,24 @@ func TestQAFlow(t *testing.T) {
 	f, _ = db.GetFeature(database, "f1")
 	if f.Status != "done" {
 		t.Errorf("after approve got %q, want done", f.Status)
+	}
+}
+
+func TestQAFlowRequiresHumanQAStatus(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+	engine.TransitionFeature(database, "test", "f1", "implementing")  //nolint:errcheck
+
+	// Cannot approve a feature not in human-qa
+	if err := engine.ApproveFeatureQA(database, "test", "f1", "looks good"); err == nil {
+		t.Error("expected error approving feature not in human-qa status")
+	}
+
+	// Cannot reject a feature not in human-qa
+	if err := engine.RejectFeatureQA(database, "test", "f1", "bad"); err == nil {
+		t.Error("expected error rejecting feature not in human-qa status")
 	}
 }
 
