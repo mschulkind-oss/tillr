@@ -7790,6 +7790,24 @@ details[open] > .app4-idea-spec-summary::before {
 [data-theme="light"] .feedback-modal-overlay {
     background: rgba(0, 0, 0, 0.4);
 }
+/* === GIT/VCS INTEGRATION === */
+.commit-list { display: flex; flex-direction: column; gap: 4px; }
+.commit-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0; border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+.commit-row:last-child { border-bottom: none; }
+.commit-hash {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+}
+.commit-msg { flex: 1; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.commit-author { flex-shrink: 0; font-size: 0.75rem; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-date { flex-shrink: 0; font-size: 0.75rem; }
+/* === END GIT/VCS INTEGRATION === */
 /* === CLS PREVENTION === */
 #content { min-height: 400px; }
 .roadmap-item, .feature-card, .ft-row { min-height: 48px; }

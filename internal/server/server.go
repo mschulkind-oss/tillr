@@ -20,6 +20,7 @@ import (
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
 	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/lifecycle/internal/vcs"
 )
 
 //go:embed all:assets
@@ -104,12 +105,17 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/dependencies", apiHandler(database, handleDependencies))
 
 	// Agent session routes
+	mux.HandleFunc("/api/agents/coordination", apiHandler(database, handleAgentCoordination))
 	mux.HandleFunc("/api/agents", apiHandler(database, handleAgents))
 	mux.HandleFunc("/api/agents/", apiHandler(database, handleAgentDetail))
 
 	// Worktree routes
 	mux.HandleFunc("/api/worktrees", apiHandler(database, handleWorktrees))
 	mux.HandleFunc("/api/worktrees/", apiHandler(database, handleWorktreeDetail))
+
+	// Git/VCS routes
+	mux.HandleFunc("/api/git/log", apiHandler(database, handleGitLog))
+	mux.HandleFunc("/api/git/branches", apiHandler(database, handleGitBranches))
 
 	// Idea queue routes
 	mux.HandleFunc("/api/ideas", apiHandler(database, handleIdeas))
@@ -917,6 +923,18 @@ func handleDependencies(database *sql.DB, w http.ResponseWriter, _ *http.Request
 
 // --- Agent Sessions ---
 
+func handleAgentCoordination(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	status, err := engine.GetCoordinationStatus(database, p.ID)
+	if err != nil {
+		return fmt.Errorf("getting coordination status: %w", err)
+	}
+	return writeJSON(w, status)
+}
+
 func handleAgents(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	p, err := db.GetProject(database)
 	if err != nil {
@@ -1615,4 +1633,28 @@ func handleSpecDocument(database *sql.DB, w http.ResponseWriter, _ *http.Request
 	}
 
 	return writeJSON(w, result)
+}
+
+// ── Git/VCS handlers ──
+
+func handleGitLog(_ *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	vcsType, commits, err := vcs.GetLog(20)
+	if err != nil {
+		return fmt.Errorf("reading git log: %w", err)
+	}
+	if commits == nil {
+		commits = []vcs.CommitInfo{}
+	}
+	return writeJSON(w, map[string]any{"vcs": vcsType, "commits": commits})
+}
+
+func handleGitBranches(_ *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	vcsType, branches, err := vcs.GetBranches()
+	if err != nil {
+		return fmt.Errorf("reading git branches: %w", err)
+	}
+	if branches == nil {
+		branches = []vcs.BranchInfo{}
+	}
+	return writeJSON(w, map[string]any{"vcs": vcsType, "branches": branches})
 }

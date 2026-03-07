@@ -439,3 +439,175 @@ func TestBlockingCascadeSkipsDone(t *testing.T) {
 		t.Errorf("expected B to remain done, got %q", b.Status)
 	}
 }
+
+// --- Multi-Agent Coordination Tests ---
+
+func TestAgentTaskClaiming(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+
+	// Create two work items
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "implement", AgentPrompt: "Task 1",
+	})
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "test", AgentPrompt: "Task 2",
+	})
+
+	// Agent A claims the first work item
+	w1, err := engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("agent-a get next: %v", err)
+	}
+	if w1.AssignedAgent != "agent-a" {
+		t.Errorf("expected assigned_agent=agent-a, got %q", w1.AssignedAgent)
+	}
+	if w1.Status != "active" {
+		t.Errorf("expected status=active, got %q", w1.Status)
+	}
+
+	// Agent B should get the second work item (first is claimed)
+	w2, err := engine.GetNextWorkItem(database, "agent-b")
+	if err != nil {
+		t.Fatalf("agent-b get next: %v", err)
+	}
+	if w2.ID == w1.ID {
+		t.Error("agent-b got the same work item as agent-a")
+	}
+	if w2.AssignedAgent != "agent-b" {
+		t.Errorf("expected assigned_agent=agent-b, got %q", w2.AssignedAgent)
+	}
+
+	// Agent A asking again should get their already-claimed item back
+	w1Again, err := engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("agent-a get next again: %v", err)
+	}
+	if w1Again.ID != w1.ID {
+		t.Errorf("agent-a should get same item back, got #%d instead of #%d", w1Again.ID, w1.ID)
+	}
+
+	// No more work items for a new agent
+	_, err = engine.GetNextWorkItem(database, "agent-c")
+	if err == nil {
+		t.Error("expected error for no remaining work items")
+	}
+}
+
+func TestAgentClaimWorkItem(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "implement", AgentPrompt: "Build it",
+	})
+
+	// Claim the work item
+	err := db.ClaimWorkItem(database, 1, "agent-x")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// Verify it's claimed
+	w, err := db.GetWorkItemByID(database, 1)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if w.AssignedAgent != "agent-x" {
+		t.Errorf("expected agent-x, got %q", w.AssignedAgent)
+	}
+	if w.Status != "active" {
+		t.Errorf("expected active, got %q", w.Status)
+	}
+
+	// Double-claim should fail
+	err = db.ClaimWorkItem(database, 1, "agent-y")
+	if err == nil {
+		t.Error("expected error for double-claim")
+	}
+}
+
+func TestConflictDetection(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+
+	// Create two work items for the same feature
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "implement", AgentPrompt: "Task 1",
+	})
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "test", AgentPrompt: "Task 2",
+	})
+
+	// Two agents claim work on the same feature
+	_, err := engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("agent-a: %v", err)
+	}
+	_, err = engine.GetNextWorkItem(database, "agent-b")
+	if err != nil {
+		t.Fatalf("agent-b: %v", err)
+	}
+
+	// Should detect a conflict
+	conflicts, err := db.DetectConflicts(database)
+	if err != nil {
+		t.Fatalf("detect conflicts: %v", err)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+	if conflicts[0].FeatureID != "f1" {
+		t.Errorf("expected feature f1, got %q", conflicts[0].FeatureID)
+	}
+	if len(conflicts[0].Agents) != 2 {
+		t.Errorf("expected 2 agents in conflict, got %d", len(conflicts[0].Agents))
+	}
+}
+
+func TestCoordinationStatus(t *testing.T) {
+	database, _ := db.Open(":memory:")
+	defer database.Close()                                            //nolint:errcheck
+	engine.InitProject(database, "Test")                              //nolint:errcheck
+	engine.AddFeature(database, "test", "F1", "", "", "", 0, nil, "") //nolint:errcheck
+
+	// Create a work item
+	db.CreateWorkItem(database, &models.WorkItem{ //nolint:errcheck
+		FeatureID: "f1", WorkType: "implement", AgentPrompt: "Build",
+	})
+
+	// Get coordination status
+	status, err := engine.GetCoordinationStatus(database, "test")
+	if err != nil {
+		t.Fatalf("coordination status: %v", err)
+	}
+	if status.QueueDepth != 1 {
+		t.Errorf("expected queue_depth=1, got %d", status.QueueDepth)
+	}
+	if status.ClaimedItems != 0 {
+		t.Errorf("expected claimed_items=0, got %d", status.ClaimedItems)
+	}
+
+	// Claim it
+	_, err = engine.GetNextWorkItem(database, "agent-a")
+	if err != nil {
+		t.Fatalf("get next: %v", err)
+	}
+
+	status, err = engine.GetCoordinationStatus(database, "test")
+	if err != nil {
+		t.Fatalf("coordination status after claim: %v", err)
+	}
+	if status.QueueDepth != 0 {
+		t.Errorf("expected queue_depth=0, got %d", status.QueueDepth)
+	}
+	if status.ClaimedItems != 1 {
+		t.Errorf("expected claimed_items=1, got %d", status.ClaimedItems)
+	}
+}

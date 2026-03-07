@@ -317,10 +317,11 @@ const App = {
 
     // ── Dashboard ──
     async renderDashboard() {
-        const [status, features, milestones, roadmap, cycles, discussions] = await Promise.all([
+        const [status, features, milestones, roadmap, cycles, discussions, gitData] = await Promise.all([
             this.api('status'), this.api('features'), this.api('milestones'),
             this.api('roadmap'), this.api('cycles'),
             this.api('discussions').catch(() => []),
+            this.api('git/log').catch(() => ({ vcs: '', commits: [] })),
         ]);
         const counts = status.feature_counts || {};
         const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -454,6 +455,18 @@ const App = {
         }).join('');
         const scoresCard = recentScores.length ? `<div class="card"><div class="card-title" style="margin-bottom:8px">🎯 Cycle Scores</div><div class="score-dots-wrap">${scoreDots}</div></div>` : '';
 
+        // Git/VCS recent commits
+        const gitCommits = (gitData && gitData.commits) || [];
+        const vcsLabel = gitData && gitData.vcs === 'jj' ? 'jj' : 'git';
+        const gitCard = gitCommits.length ? `<div class="card"><div class="card-title" style="margin-bottom:8px">📝 Recent Commits <span class="text-secondary" style="font-size:0.72rem;font-weight:400">(${esc(vcsLabel)})</span></div><div class="commit-list">${
+            gitCommits.slice(0, 8).map(c => {
+                const hash = (c.hash || '').substring(0, 8);
+                let date = c.date || '';
+                if (date.length > 16) date = date.substring(0, 16);
+                return `<div class="commit-row"><code class="commit-hash">${esc(hash)}</code><span class="commit-msg">${esc(c.message || '')}</span><span class="commit-author text-secondary">${esc(c.author || '')}</span><span class="commit-date text-secondary">${esc(date)}</span></div>`;
+            }).join('')
+        }</div></div>` : '';
+
         const qaCount = (counts['human-qa']||0) + (counts['agent-qa']||0);
         return `<div class="page-header"><h2 class="page-title">${esc(status.project?.name || 'Project')} Dashboard</h2><p class="page-subtitle">Project overview and health at a glance</p></div>
             <div class="stats-grid">
@@ -472,6 +485,7 @@ const App = {
                 <div class="card"><div class="card-title" style="margin-bottom:8px">Priority Distribution</div>${priChart}${activeCycles.length ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px"><div class="card-title" style="margin-bottom:8px">Active Cycles</div>' + cycleCards + '</div>' : ''}</div>
                 ${scoresCard}
                 ${statsCard}
+                ${gitCard}
             </div>`;
     },
 

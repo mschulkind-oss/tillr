@@ -44,6 +44,23 @@ App.renderAgents = async function() {
         <div class="stat-card stat-card--warning"><div class="stat-value">${successRate}%</div><div class="stat-label">Success Rate</div></div>
     </div>`;
 
+    // Coordination status panel
+    try {
+        const coord = await App.api('agents/coordination');
+        const hasIssues = coord.stale_agents.length > 0 || coord.conflicts.length > 0;
+        html += `<div class="card" style="margin-bottom:16px;${hasIssues ? 'border-left:3px solid var(--warning)' : ''}">
+            <h3 style="margin:0 0 12px">🔗 Coordination</h3>
+            <div class="stats-grid app4-stats-row" style="margin-bottom:8px">
+                <div class="stat-card"><div class="stat-value">${coord.queue_depth}</div><div class="stat-label">Queue Depth</div></div>
+                <div class="stat-card"><div class="stat-value">${coord.claimed_items}</div><div class="stat-label">Claimed</div></div>
+                <div class="stat-card${coord.stale_agents.length ? ' stat-card--warning' : ''}"><div class="stat-value">${coord.stale_agents.length}</div><div class="stat-label">Stale</div></div>
+                <div class="stat-card${coord.conflicts.length ? ' stat-card--warning' : ''}"><div class="stat-value">${coord.conflicts.length}</div><div class="stat-label">Conflicts</div></div>
+            </div>
+            ${coord.stale_agents.length ? `<div style="margin-top:8px"><strong>⚠ Stale Agents</strong> (no heartbeat in 5 min):<ul style="margin:4px 0">${coord.stale_agents.map(a => `<li>${esc(a.name)} (${esc(a.id)}) — last seen ${timeAgo(a.updated_at)}</li>`).join('')}</ul></div>` : ''}
+            ${coord.conflicts.length ? `<div style="margin-top:8px"><strong>⚠ Conflicts</strong> (multiple agents on same feature):<ul style="margin:4px 0">${coord.conflicts.map(c => `<li>Feature <strong>${esc(c.feature_id)}</strong>: ${c.agents.map(a => esc(a)).join(', ')}</li>`).join('')}</ul></div>` : ''}
+        </div>`;
+    } catch(e) { /* coordination endpoint not available */ }
+
     html += App.renderSearchBox('agentsSearch', 'Search agents…');
 
     // Active agents
@@ -809,3 +826,28 @@ App.showToast = function(message) {
         });
     });
 })();
+
+// =====================================================
+// GIT/VCS ACTIVITY (used by Dashboard)
+// =====================================================
+App.renderGitActivity = function() {
+    return App.api('git/log').then(function(data) {
+        var commits = data && data.commits;
+        if (!commits || !commits.length) return '';
+        var vcsLabel = (data.vcs === 'jj') ? 'jj' : 'git';
+        var html = '<div class="card"><div class="card-title" style="margin-bottom:8px">📝 Recent Commits <span class="text-secondary" style="font-size:0.72rem;font-weight:400">(' + App.esc(vcsLabel) + ')</span></div><div class="commit-list">';
+        commits.slice(0, 8).forEach(function(c) {
+            var hash = c.hash ? c.hash.substring(0, 8) : '';
+            var date = c.date || '';
+            if (date.length > 16) date = date.substring(0, 16);
+            html += '<div class="commit-row">'
+                + '<code class="commit-hash">' + App.esc(hash) + '</code>'
+                + '<span class="commit-msg">' + App.esc(c.message || '') + '</span>'
+                + '<span class="commit-author text-secondary">' + App.esc(c.author || '') + '</span>'
+                + '<span class="commit-date text-secondary">' + App.esc(date) + '</span>'
+                + '</div>';
+        });
+        html += '</div></div>';
+        return html;
+    }).catch(function() { return ''; });
+};
