@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,6 +27,9 @@ type Config struct {
 	DefaultPriority  int    `json:"default_priority,omitempty" yaml:"default_priority"`
 	Theme            string `json:"theme,omitempty" yaml:"theme"`
 	AgentTimeout     int    `json:"agent_timeout_minutes,omitempty" yaml:"agent_timeout_minutes"`
+
+	// API key for server authentication (stored in .lifecycle.json only)
+	ApiKey string `json:"api_key,omitempty" yaml:"-"`
 }
 
 // Defaults returns a Config with sensible defaults.
@@ -159,4 +164,21 @@ func Save(cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(cfg.ProjectDir, ConfigFileName), data, 0o644)
+}
+
+// GenerateAPIKey generates a cryptographically random 32-byte hex API key.
+func GenerateAPIKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// MaskAPIKey returns a masked version of an API key for display.
+func MaskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "..." + key[len(key)-4:]
 }

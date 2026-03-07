@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/lifecycle/internal/export"
 	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
@@ -21,6 +23,8 @@ func init() {
 	decisionCmd.AddCommand(decisionListCmd)
 	decisionCmd.AddCommand(decisionShowCmd)
 	decisionCmd.AddCommand(decisionEditCmd)
+	decisionCmd.AddCommand(decisionSupersedeCmd)
+	decisionCmd.AddCommand(decisionExportCmd)
 
 	decisionAddCmd.Flags().String("context", "", "Why is this decision needed?")
 	decisionAddCmd.Flags().String("decision", "", "What was decided?")
@@ -35,6 +39,8 @@ func init() {
 	decisionEditCmd.Flags().String("context", "", "New context")
 	decisionEditCmd.Flags().String("decision", "", "New decision text")
 	decisionEditCmd.Flags().String("consequences", "", "New consequences")
+
+	decisionExportCmd.Flags().String("format", "adr", "Output format (adr, json, md, csv)")
 }
 
 var decisionAddCmd = &cobra.Command{
@@ -168,6 +174,9 @@ var decisionShowCmd = &cobra.Command{
 		fmt.Printf("Decision: %s\n", d.Title)
 		fmt.Printf("  ID:           %s\n", d.ID)
 		fmt.Printf("  Status:       %s\n", d.Status)
+		if d.SupersededBy != "" {
+			fmt.Printf("  Superseded by: %s\n", d.SupersededBy)
+		}
 		if d.FeatureID != "" {
 			fmt.Printf("  Feature:      %s\n", d.FeatureID)
 		}
@@ -246,5 +255,75 @@ var decisionEditCmd = &cobra.Command{
 		}
 		fmt.Printf("✓ Updated decision %s\n", args[0])
 		return nil
+	},
+}
+
+var decisionSupersedeCmd = &cobra.Command{
+	Use:   "supersede <old-id> <new-id>",
+	Short: "Mark a decision as superseded by another",
+	Long:  "Sets the old decision's status to 'superseded' and links it to the new decision.",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		oldID, newID := args[0], args[1]
+
+		// Verify both decisions exist
+		oldD, err := db.GetDecision(database, oldID)
+		if err != nil {
+			return fmt.Errorf("decision %q not found", oldID)
+		}
+		newD, err := db.GetDecision(database, newID)
+		if err != nil {
+			return fmt.Errorf("decision %q not found", newID)
+		}
+
+		if err := db.SupersedeDecision(database, oldID, newID); err != nil {
+			return fmt.Errorf("superseding decision: %w", err)
+		}
+
+		p, _ := db.GetProject(database)
+		if p != nil {
+			_ = db.InsertEvent(database, &models.Event{
+				ProjectID: p.ID,
+				EventType: "decision.superseded",
+				Data:      fmt.Sprintf(`{"old_id":%q,"old_title":%q,"new_id":%q,"new_title":%q}`, oldID, oldD.Title, newID, newD.Title),
+			})
+		}
+
+		if jsonOutput {
+			updated, _ := db.GetDecision(database, oldID)
+			return printJSON(updated)
+		}
+		fmt.Printf("✓ Decision %q superseded by %q\n", oldD.Title, newD.Title)
+		return nil
+	},
+}
+
+var decisionExportCmd = &cobra.Command{
+	Use:   "export",
+	Short: "Export decisions as ADR documents",
+	Long:  "Export architecture decisions in standard ADR format, JSON, Markdown, or CSV.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		decisions, err := db.ListDecisions(database, "")
+		if err != nil {
+			return fmt.Errorf("listing decisions: %w", err)
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		if format == "adr" {
+			return export.DecisionsADR(decisions, os.Stdout)
+		}
+		return export.Decisions(decisions, os.Stdout, format)
 	},
 }

@@ -471,12 +471,28 @@ func ListWorkItemsForFeature(db *sql.DB, featureID string) ([]models.WorkItem, e
 
 // --- Events ---
 
+// WebhookDispatchFunc is called after every event insertion with the DB
+// handle and the event. Set by the server package to dispatch webhooks.
+var WebhookDispatchFunc func(*sql.DB, *models.Event)
+
 func InsertEvent(db *sql.DB, e *models.Event) error {
-	_, err := db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO events (project_id, feature_id, event_type, data) VALUES (?, ?, ?, ?)`,
 		e.ProjectID, nullStr(e.FeatureID), e.EventType, e.Data,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if id, idErr := res.LastInsertId(); idErr == nil {
+		e.ID = int(id)
+	}
+	if e.CreatedAt == "" {
+		e.CreatedAt = time.Now().UTC().Format("2006-01-02 15:04:05")
+	}
+	if WebhookDispatchFunc != nil {
+		WebhookDispatchFunc(db, e)
+	}
+	return nil
 }
 
 func ListEvents(db *sql.DB, projectID, featureID, eventType, since string, limit int) ([]models.Event, error) {
@@ -2285,17 +2301,17 @@ func CreateDecision(database *sql.DB, d *models.Decision) error {
 		d.Status = "proposed"
 	}
 	_, err := database.Exec(
-		`INSERT INTO decisions (id, title, status, context, decision, consequences, feature_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.Title, d.Status, nullStr(d.Context), nullStr(d.Decision), nullStr(d.Consequences), nullStr(d.FeatureID),
+		`INSERT INTO decisions (id, title, status, context, decision, consequences, feature_id, superseded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Title, d.Status, nullStr(d.Context), nullStr(d.Decision), nullStr(d.Consequences), nullStr(d.FeatureID), nullStr(d.SupersededBy),
 	)
 	return err
 }
 
 func GetDecision(database *sql.DB, id string) (*models.Decision, error) {
-	row := database.QueryRow(`SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(feature_id,''), created_at, updated_at
+	row := database.QueryRow(`SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(superseded_by,''), COALESCE(feature_id,''), created_at, updated_at
 		FROM decisions WHERE id = ?`, id)
 	d := &models.Decision{}
-	err := row.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt)
+	err := row.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.SupersededBy, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2303,7 +2319,7 @@ func GetDecision(database *sql.DB, id string) (*models.Decision, error) {
 }
 
 func ListDecisions(database *sql.DB, status string) ([]models.Decision, error) {
-	q := `SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(feature_id,''), created_at, updated_at
+	q := `SELECT id, title, status, COALESCE(context,''), COALESCE(decision,''), COALESCE(consequences,''), COALESCE(superseded_by,''), COALESCE(feature_id,''), created_at, updated_at
 		FROM decisions`
 	var args []any
 	if status != "" {
@@ -2321,7 +2337,7 @@ func ListDecisions(database *sql.DB, status string) ([]models.Decision, error) {
 	var out []models.Decision
 	for rows.Next() {
 		var d models.Decision
-		if err := rows.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Title, &d.Status, &d.Context, &d.Decision, &d.Consequences, &d.SupersededBy, &d.FeatureID, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -2346,6 +2362,25 @@ func UpdateDecision(database *sql.DB, id string, updates map[string]any) error {
 		args...,
 	)
 	return err
+}
+
+// SupersedeDecision marks oldID as superseded by newID.
+func SupersedeDecision(database *sql.DB, oldID, newID string) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.Exec(
+		`UPDATE decisions SET status = 'superseded', superseded_by = ?, updated_at = datetime('now') WHERE id = ?`,
+		newID, oldID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating old decision: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // --- FTS5 Search ---
@@ -2707,4 +2742,330 @@ WHERE f.project_id = ?`
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// GetAgentStatusDashboard returns enriched agent session data for the heartbeat dashboard.
+func GetAgentStatusDashboard(database *sql.DB, projectID string) (*models.AgentStatusDashboard, error) {
+	const staleMins = 5
+	now := time.Now()
+
+	sessions, err := ListAgentSessions(database, projectID, "")
+	if err != nil {
+		return nil, fmt.Errorf("listing agent sessions: %w", err)
+	}
+
+	var agents []models.AgentHeartbeatInfo
+	var activeCount, staleCount, failedCount, completedCount, totalWorkDone int
+
+	for _, s := range sessions {
+		info := models.AgentHeartbeatInfo{Session: s}
+
+		// Determine heartbeat status
+		switch s.Status {
+		case "completed":
+			info.HeartbeatStatus = "completed"
+			completedCount++
+		case "failed", "abandoned":
+			info.HeartbeatStatus = "failed"
+			failedCount++
+		case "active":
+			updatedAt, parseErr := time.Parse("2006-01-02 15:04:05", s.UpdatedAt)
+			if parseErr != nil {
+				updatedAt = now
+			}
+			minutesAgo := now.Sub(updatedAt).Minutes()
+			if minutesAgo <= float64(staleMins) {
+				info.HeartbeatStatus = "active"
+				activeCount++
+			} else {
+				info.HeartbeatStatus = "stale"
+				staleCount++
+			}
+		default:
+			info.HeartbeatStatus = s.Status
+		}
+
+		// Session duration
+		createdAt, parseErr := time.Parse("2006-01-02 15:04:05", s.CreatedAt)
+		if parseErr == nil {
+			info.SessionDuration = int64(now.Sub(createdAt).Seconds())
+		}
+
+		// Fetch feature name
+		if s.FeatureID != "" {
+			var fname sql.NullString
+			_ = database.QueryRow(`SELECT name FROM features WHERE id = ?`, s.FeatureID).Scan(&fname)
+			if fname.Valid {
+				info.FeatureName = fname.String
+			}
+		}
+
+		// Current active work item for this agent
+		row := database.QueryRow(`SELECT id, feature_id, work_type, status,
+			COALESCE(agent_prompt,''), COALESCE(result,''), COALESCE(assigned_agent,''),
+			COALESCE(started_at,''), COALESCE(completed_at,''), created_at
+			FROM work_items
+			WHERE assigned_agent = ? AND status = 'active'
+			ORDER BY started_at DESC LIMIT 1`, s.ID)
+		var wi models.WorkItem
+		if scanErr := row.Scan(&wi.ID, &wi.FeatureID, &wi.WorkType, &wi.Status,
+			&wi.AgentPrompt, &wi.Result, &wi.AssignedAgent,
+			&wi.StartedAt, &wi.CompletedAt, &wi.CreatedAt); scanErr == nil {
+			info.CurrentWorkItem = &wi
+		}
+
+		// Completed/failed work item counts
+		_ = database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE assigned_agent = ? AND status = 'done'`,
+			s.ID).Scan(&info.CompletedCount)
+		_ = database.QueryRow(`SELECT COUNT(*) FROM work_items WHERE assigned_agent = ? AND status = 'failed'`,
+			s.ID).Scan(&info.FailedCount)
+		totalWorkDone += info.CompletedCount
+
+		agents = append(agents, info)
+	}
+
+	return &models.AgentStatusDashboard{
+		Agents:         agents,
+		TotalSessions:  len(sessions),
+		ActiveCount:    activeCount,
+		StaleCount:     staleCount,
+		FailedCount:    failedCount,
+		CompletedCount: completedCount,
+		TotalWorkDone:  totalWorkDone,
+	}, nil
+}
+
+// --- Webhooks ---
+
+func CreateWebhook(db *sql.DB, w *models.Webhook) error {
+	_, err := db.Exec(
+		`INSERT INTO webhooks (id, url, secret, events, active) VALUES (?, ?, ?, ?, ?)`,
+		w.ID, w.URL, nullStr(w.Secret), w.Events, boolToInt(w.Active),
+	)
+	return err
+}
+
+func GetWebhook(db *sql.DB, id string) (*models.Webhook, error) {
+	row := db.QueryRow(`SELECT id, url, COALESCE(secret,''), events, active, created_at FROM webhooks WHERE id = ?`, id)
+	w := &models.Webhook{}
+	var active int
+	err := row.Scan(&w.ID, &w.URL, &w.Secret, &w.Events, &active, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	w.Active = active != 0
+	return w, nil
+}
+
+func ListWebhooks(db *sql.DB) ([]models.Webhook, error) {
+	rows, err := db.Query(`SELECT id, url, COALESCE(secret,''), events, active, created_at FROM webhooks ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Webhook
+	for rows.Next() {
+		var w models.Webhook
+		var active int
+		if err := rows.Scan(&w.ID, &w.URL, &w.Secret, &w.Events, &active, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		w.Active = active != 0
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func ListActiveWebhooks(db *sql.DB) ([]models.Webhook, error) {
+	rows, err := db.Query(`SELECT id, url, COALESCE(secret,''), events, active, created_at FROM webhooks WHERE active = 1 ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Webhook
+	for rows.Next() {
+		var w models.Webhook
+		var active int
+		if err := rows.Scan(&w.ID, &w.URL, &w.Secret, &w.Events, &active, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		w.Active = active != 0
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func DeleteWebhook(db *sql.DB, id string) error {
+	res, err := db.Exec(`DELETE FROM webhooks WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("webhook %q not found", id)
+	}
+	return nil
+}
+
+// GetAgentStats computes aggregate agent performance metrics.
+// If agentFilter is non-empty, results are scoped to that agent name.
+func GetAgentStats(database *sql.DB, projectID, agentFilter string) (*models.AgentStats, error) {
+	stats := &models.AgentStats{}
+
+	// --- Total completed / failed work items ---
+	completedQuery := `SELECT COUNT(*) FROM work_items w
+		JOIN features f ON w.feature_id = f.id
+		WHERE f.project_id = ? AND w.status = 'done'`
+	failedQuery := `SELECT COUNT(*) FROM work_items w
+		JOIN features f ON w.feature_id = f.id
+		WHERE f.project_id = ? AND w.status = 'failed'`
+	completedArgs := []any{projectID}
+	failedArgs := []any{projectID}
+
+	if agentFilter != "" {
+		completedQuery += ` AND w.assigned_agent IN (SELECT id FROM agent_sessions WHERE name = ?)`
+		failedQuery += ` AND w.assigned_agent IN (SELECT id FROM agent_sessions WHERE name = ?)`
+		completedArgs = append(completedArgs, agentFilter)
+		failedArgs = append(failedArgs, agentFilter)
+	}
+
+	if err := database.QueryRow(completedQuery, completedArgs...).Scan(&stats.TotalCompleted); err != nil {
+		return nil, fmt.Errorf("counting completed items: %w", err)
+	}
+	if err := database.QueryRow(failedQuery, failedArgs...).Scan(&stats.TotalFailed); err != nil {
+		return nil, fmt.Errorf("counting failed items: %w", err)
+	}
+
+	// --- Average completion time by work type ---
+	avgQuery := `SELECT w.work_type, COUNT(*) AS cnt,
+			AVG((julianday(w.completed_at) - julianday(w.started_at)) * 86400) AS avg_sec
+		FROM work_items w
+		JOIN features f ON w.feature_id = f.id
+		WHERE f.project_id = ? AND w.started_at != '' AND w.completed_at != ''
+			AND w.status = 'done'`
+	avgArgs := []any{projectID}
+	if agentFilter != "" {
+		avgQuery += ` AND w.assigned_agent IN (SELECT id FROM agent_sessions WHERE name = ?)`
+		avgArgs = append(avgArgs, agentFilter)
+	}
+	avgQuery += ` GROUP BY w.work_type ORDER BY avg_sec DESC`
+
+	rows, err := database.Query(avgQuery, avgArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying avg by work type: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var wt models.AgentWorkTypeStat
+		if err := rows.Scan(&wt.WorkType, &wt.Count, &wt.AvgSec); err != nil {
+			return nil, err
+		}
+		stats.AvgByWorkType = append(stats.AvgByWorkType, wt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// --- Success rate per agent ---
+	srQuery := `SELECT a.name,
+			SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+			SUM(CASE WHEN a.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+			COUNT(*) AS total
+		FROM agent_sessions a
+		WHERE a.project_id = ? AND a.status IN ('completed', 'failed')`
+	srArgs := []any{projectID}
+	if agentFilter != "" {
+		srQuery += ` AND a.name = ?`
+		srArgs = append(srArgs, agentFilter)
+	}
+	srQuery += ` GROUP BY a.name ORDER BY total DESC`
+
+	rows2, err := database.Query(srQuery, srArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying success rates: %w", err)
+	}
+	defer rows2.Close() //nolint:errcheck
+	for rows2.Next() {
+		var sr models.AgentSuccessRate
+		if err := rows2.Scan(&sr.AgentName, &sr.Completed, &sr.Failed, &sr.Total); err != nil {
+			return nil, err
+		}
+		if sr.Total > 0 {
+			sr.SuccessRate = float64(sr.Completed) / float64(sr.Total) * 100
+		}
+		stats.SuccessRates = append(stats.SuccessRates, sr)
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// --- Active agents and current tasks ---
+	activeQuery := `SELECT a.name, a.id, COALESCE(a.task_description, ''),
+			COALESCE(a.current_phase, ''), a.progress_pct, a.created_at
+		FROM agent_sessions a
+		WHERE a.project_id = ? AND a.status = 'active'`
+	activeArgs := []any{projectID}
+	if agentFilter != "" {
+		activeQuery += ` AND a.name = ?`
+		activeArgs = append(activeArgs, agentFilter)
+	}
+	activeQuery += ` ORDER BY a.updated_at DESC`
+
+	rows3, err := database.Query(activeQuery, activeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying active agents: %w", err)
+	}
+	defer rows3.Close() //nolint:errcheck
+	for rows3.Next() {
+		var at models.AgentActiveTask
+		if err := rows3.Scan(&at.AgentName, &at.SessionID, &at.TaskDescription,
+			&at.CurrentPhase, &at.ProgressPct, &at.StartedAt); err != nil {
+			return nil, err
+		}
+		stats.ActiveAgents = append(stats.ActiveAgents, at)
+	}
+	if err := rows3.Err(); err != nil {
+		return nil, err
+	}
+
+	// --- Throughput (items per hour over 24h, 7d, 30d) ---
+	type windowDef struct {
+		label string
+		hours float64
+	}
+	windows := []windowDef{
+		{"last 24h", 24},
+		{"last 7d", 24 * 7},
+		{"last 30d", 24 * 30},
+	}
+	for _, w := range windows {
+		since := time.Now().UTC().Add(-time.Duration(w.hours) * time.Hour).Format("2006-01-02T15:04:05")
+		tpQuery := `SELECT COUNT(*) FROM work_items wi
+			JOIN features f ON wi.feature_id = f.id
+			WHERE f.project_id = ? AND wi.status = 'done'
+				AND wi.completed_at >= ?`
+		tpArgs := []any{projectID, since}
+		if agentFilter != "" {
+			tpQuery += ` AND wi.assigned_agent IN (SELECT id FROM agent_sessions WHERE name = ?)`
+			tpArgs = append(tpArgs, agentFilter)
+		}
+		var count int
+		if err := database.QueryRow(tpQuery, tpArgs...).Scan(&count); err != nil {
+			return nil, fmt.Errorf("querying throughput %s: %w", w.label, err)
+		}
+		iph := 0.0
+		if w.hours > 0 {
+			iph = float64(count) / w.hours
+		}
+		stats.Throughput = append(stats.Throughput, models.AgentThroughput{
+			Period:       w.label,
+			ItemsTotal:   count,
+			HoursSpan:    w.hours,
+			ItemsPerHour: iph,
+		})
+	}
+
+	return stats, nil
 }

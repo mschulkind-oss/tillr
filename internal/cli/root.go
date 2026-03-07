@@ -8,6 +8,8 @@ import (
 
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
+	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/lifecycle/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -91,6 +93,11 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 
+	// Wire up webhook dispatch so every InsertEvent triggers matching webhooks.
+	db.WebhookDispatchFunc = func(database *sql.DB, event *models.Event) {
+		server.DispatchWebhooks(database, event)
+	}
+
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(doctorCmd)
@@ -125,6 +132,9 @@ func init() {
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(releaseNotesCmd)
 	rootCmd.AddCommand(timeCmd)
+	rootCmd.AddCommand(webhookCmd)
+	rootCmd.AddCommand(backupCmd)
+	rootCmd.AddCommand(restoreCmd)
 
 	// Short aliases for common commands (CLI Aliases roadmap item)
 	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))

@@ -83,6 +83,26 @@
 
     <div id="breadcrumb" class="breadcrumb-bar" aria-label="Breadcrumb"></div>
 
+    <!-- Notification bell -->
+    <div class="notif-container" id="notifContainer">
+        <button class="notif-bell" id="notifBell" aria-label="Notifications" aria-expanded="false" aria-haspopup="true" title="Notifications">
+            <svg class="notif-bell-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <span class="notif-badge" id="notifBadge" style="display:none" aria-live="polite">0</span>
+        </button>
+        <div class="notif-dropdown" id="notifDropdown" role="menu" aria-label="Notifications" style="display:none">
+            <div class="notif-dropdown-header">
+                <span class="notif-dropdown-title">Notifications</span>
+                <button class="notif-mark-all" id="notifMarkAll" title="Mark all as read">&#10003; Mark all read</button>
+            </div>
+            <div class="notif-list" id="notifList" role="list">
+                <div class="notif-empty">No notifications yet</div>
+            </div>
+        </div>
+    </div>
+
     <main class="content" id="content" role="main" aria-live="polite">
     </main>
 
@@ -169,5 +189,6 @@
     <script src="/static/app3.js"></script>
     <script src="/static/app4.js"></script>
     <script src="/static/app5.js"></script>
+    <script src="/static/app6.js"></script>
 </body>
 </html>

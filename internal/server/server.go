@@ -76,6 +76,7 @@ type ServerConfig struct {
 	DBPath    string
 	RateLimit float64 // requests per second (0 = disabled)
 	RateBurst int     // burst capacity
+	ApiKey    string  // API key for authentication (empty = no auth)
 }
 
 // StartWithDBPath starts the server with default rate limiting disabled.
@@ -130,6 +131,7 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 
 	// Agent session routes
 	mux.HandleFunc("/api/agents/coordination", apiHandler(database, handleAgentCoordination))
+	mux.HandleFunc("/api/agents/status", apiHandler(database, handleAgentStatus))
 	mux.HandleFunc("/api/agents", apiHandler(database, handleAgents))
 	mux.HandleFunc("/api/agents/", apiHandler(database, handleAgentDetail))
 
@@ -164,6 +166,9 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	mux.HandleFunc("/api/export/roadmap", handleExport(database, "roadmap"))
 	mux.HandleFunc("/api/export/decisions", handleExport(database, "decisions"))
 	mux.HandleFunc("/api/export/all", handleExport(database, "all"))
+
+	// API documentation page
+	mux.HandleFunc("/api/docs", handleAPIDocs)
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +247,12 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		log.Printf("Rate limiting enabled: %.0f req/s, burst %d", cfg.RateLimit, cfg.RateBurst)
 	}
 
+	// Apply API key authentication if configured (outermost = runs first).
+	if cfg.ApiKey != "" {
+		handler = AuthMiddleware(cfg.ApiKey, handler)
+		log.Printf("API key authentication enabled")
+	}
+
 	return http.ListenAndServe(addr, handler)
 }
 
@@ -311,7 +322,7 @@ func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			return
 		}
 		if err := fn(database, w, r); err != nil {
@@ -950,7 +961,7 @@ var validRoadmapStatuses = map[string]bool{
 func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	if r.Method == "OPTIONS" {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		return nil
 	}
 
@@ -1215,6 +1226,18 @@ func handleAgentCoordination(database *sql.DB, w http.ResponseWriter, r *http.Re
 		return fmt.Errorf("getting coordination status: %w", err)
 	}
 	return writeJSON(w, status)
+}
+
+func handleAgentStatus(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	dashboard, err := db.GetAgentStatusDashboard(database, p.ID)
+	if err != nil {
+		return fmt.Errorf("getting agent status dashboard: %w", err)
+	}
+	return writeJSON(w, dashboard)
 }
 
 func handleAgents(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
@@ -2065,6 +2088,7 @@ func handleDecisionDetail(database *sql.DB, w http.ResponseWriter, r *http.Reque
 			Context      *string `json:"context"`
 			Decision     *string `json:"decision"`
 			Consequences *string `json:"consequences"`
+			SupersededBy *string `json:"superseded_by"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -2094,6 +2118,9 @@ func handleDecisionDetail(database *sql.DB, w http.ResponseWriter, r *http.Reque
 		if body.Consequences != nil {
 			updates["consequences"] = *body.Consequences
 		}
+		if body.SupersededBy != nil {
+			updates["superseded_by"] = *body.SupersededBy
+		}
 		if len(updates) > 0 {
 			if err := db.UpdateDecision(database, id, updates); err != nil {
 				return fmt.Errorf("updating decision: %w", err)
@@ -2120,7 +2147,7 @@ func handleExport(database *sql.DB, entity string) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			return
 		}
 
@@ -2192,3 +2219,1255 @@ func handleExport(database *sql.DB, entity string) http.HandlerFunc {
 		}
 	}
 }
+
+func handleAPIDocs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, apiDocsHTML) //nolint:errcheck
+}
+
+const apiDocsHTML = `<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lifecycle API Documentation</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-card: #1c2128;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #848d97;
+    --accent: #58a6ff;
+    --accent-hover: #79c0ff;
+    --success: #3fb950;
+    --warning: #d29922;
+    --danger: #f85149;
+    --purple: #bc8cff;
+    --border: #30363d;
+    --border-hover: #484f58;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: linear-gradient(145deg, #0d1117 0%, #101820 50%, #0d1117 100%);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+  h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--text-secondary); margin-bottom: 2rem; font-size: 0.95rem; }
+  .toc {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 2rem;
+  }
+  .toc h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: 0.75rem; }
+  .toc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.35rem 1.5rem; }
+  .toc a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+  .toc a:hover { color: var(--accent-hover); text-decoration: underline; }
+  .section { margin-bottom: 2.5rem; }
+  .section-title {
+    font-size: 1.15rem; font-weight: 600; color: var(--text-primary);
+    border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem;
+  }
+  .endpoint {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+  }
+  .endpoint-header {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.75rem 1rem; cursor: pointer; user-select: none;
+  }
+  .endpoint-header:hover { background: var(--bg-tertiary); }
+  .method {
+    display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+    font-size: 0.7rem; font-weight: 700;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    min-width: 3.5rem; text-align: center; letter-spacing: 0.03em;
+  }
+  .method-get { background: rgba(63,185,80,0.15); color: var(--success); border: 1px solid rgba(63,185,80,0.3); }
+  .method-post { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+  .method-patch { background: rgba(210,153,34,0.15); color: var(--warning); border: 1px solid rgba(210,153,34,0.3); }
+  .method-delete { background: rgba(248,81,73,0.15); color: var(--danger); border: 1px solid rgba(248,81,73,0.3); }
+  .method-ws { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  .path { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; color: var(--text-primary); }
+  .path-param { color: var(--warning); }
+  .desc { color: var(--text-secondary); font-size: 0.8rem; margin-left: auto; text-align: right; white-space: nowrap; }
+  .endpoint-body { display: none; padding: 0 1rem 1rem 1rem; border-top: 1px solid var(--border); }
+  .endpoint.open .endpoint-body { display: block; }
+  .endpoint-body p { color: var(--text-secondary); font-size: 0.85rem; margin: 0.75rem 0 0.5rem 0; }
+  .params-table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; }
+  .params-table th {
+    text-align: left; color: var(--text-muted); font-weight: 600;
+    padding: 0.35rem 0.75rem; border-bottom: 1px solid var(--border);
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .params-table td { padding: 0.35rem 0.75rem; border-bottom: 1px solid rgba(48,54,61,0.5); color: var(--text-secondary); }
+  .params-table code { color: var(--accent); font-size: 0.8rem; }
+  .try-btn {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    background: rgba(88,166,255,0.1); color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.3); border-radius: 6px;
+    padding: 0.35rem 0.85rem; font-size: 0.8rem; cursor: pointer; margin-top: 0.5rem;
+    transition: background 0.15s;
+  }
+  .try-btn:hover { background: rgba(88,166,255,0.2); }
+  .try-btn:disabled { opacity: 0.5; cursor: wait; }
+  .response-area {
+    margin-top: 0.5rem; background: var(--bg-primary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.75rem;
+    font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem;
+    color: var(--text-secondary); max-height: 300px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word; display: none;
+  }
+  .response-area.visible { display: block; }
+  .chevron { color: var(--text-muted); font-size: 0.7rem; transition: transform 0.15s; margin-left: -0.25rem; }
+  .endpoint.open .chevron { transform: rotate(90deg); }
+  @media (max-width: 640px) {
+    .container { padding: 1rem; }
+    .desc { display: none; }
+    .toc-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Lifecycle API</h1>
+<p class="subtitle">REST API reference for the Lifecycle project management server. All endpoints return JSON unless noted.</p>
+
+<div class="toc">
+<h2>Sections</h2>
+<div class="toc-grid">
+  <a href="#project">Project</a>
+  <a href="#features">Features</a>
+  <a href="#milestones">Milestones</a>
+  <a href="#roadmap">Roadmap</a>
+  <a href="#cycles">Cycles</a>
+  <a href="#qa">QA</a>
+  <a href="#ideas">Ideas</a>
+  <a href="#decisions">Decisions</a>
+  <a href="#discussions">Discussions</a>
+  <a href="#agents">Agents</a>
+  <a href="#worktrees">Worktrees</a>
+  <a href="#git">Git / VCS</a>
+  <a href="#context">Context</a>
+  <a href="#queue">Queue</a>
+  <a href="#export">Export</a>
+  <a href="#websocket">WebSocket</a>
+</div>
+</div>
+
+<!-- ===== Project ===== -->
+<div class="section" id="project">
+<h2 class="section-title">Project</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/status</span>
+  <span class="desc">Project overview dashboard</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns project name, feature counts by status, milestone progress, active cycles, and recent activity.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/status')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/stats</span>
+  <span class="desc">Project statistics</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns aggregate project statistics including feature counts, velocity, and completion rates.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/stats')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/stats/burndown</span>
+  <span class="desc">Burndown chart data</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns time-series data for burndown charts showing feature completion over time.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/stats/burndown')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/stats/heatmap</span>
+  <span class="desc">Activity heatmap data</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns daily activity counts for heatmap visualization. Defaults to last 365 days.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>days</code></td><td>int</td><td>Number of days to include (default: 365)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/stats/heatmap')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/search</span>
+  <span class="desc">Full-text search</span>
+</div>
+<div class="endpoint-body">
+  <p>Searches across all project data using FTS5. Falls back to LIKE-based search if FTS is unavailable.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>q</code></td><td>string</td><td>Search query (required)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/search?q=test')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/history</span>
+  <span class="desc">Event history</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns event history with optional filtering. Supports pagination.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>feature</code></td><td>string</td><td>Filter by feature ID</td></tr>
+  <tr><td><code>type</code></td><td>string</td><td>Filter by event type</td></tr>
+  <tr><td><code>since</code></td><td>string</td><td>ISO 8601 timestamp lower bound</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/history')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/dependencies</span>
+  <span class="desc">Dependency graph</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns feature dependency graph as nodes and edges for visualization.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/dependencies')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/tags</span>
+  <span class="desc">List all tags</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all tags with their usage counts.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/tags')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/spec-document</span>
+  <span class="desc">Full specification document</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a comprehensive specification document with sections, features, and project statistics.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/spec-document')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Features ===== -->
+<div class="section" id="features">
+<h2 class="section-title">Features</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/features</span>
+  <span class="desc">List features</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all features. Supports filtering by status, milestone, and tags.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>status</code></td><td>string</td><td>Filter by status</td></tr>
+  <tr><td><code>milestone</code></td><td>string</td><td>Filter by milestone</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/features')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/features/<span class="path-param">{id}</span></span>
+  <span class="desc">Feature detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single feature with its work items, cycles, scores, and dependencies.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/features/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/features/<span class="path-param">{id}</span>/deps</span>
+  <span class="desc">Feature dependencies</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns the dependency list for a specific feature.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/features/1/deps')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/features/<span class="path-param">{id}</span></span>
+  <span class="desc">Update a feature</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates feature fields. Send a JSON body with the fields to update (name, description, status, priority, etc.).</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/features/batch</span>
+  <span class="desc">Batch update features</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates multiple features in a single request. Send a JSON array of feature update objects.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/features/reorder</span>
+  <span class="desc">Reorder feature priorities</span>
+</div>
+<div class="endpoint-body">
+  <p>Reorders feature priorities. Send a JSON object with ordered feature IDs.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Milestones ===== -->
+<div class="section" id="milestones">
+<h2 class="section-title">Milestones</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/milestones</span>
+  <span class="desc">List milestones</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all milestones with progress information.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/milestones')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/milestones/<span class="path-param">{id}</span></span>
+  <span class="desc">Milestone detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single milestone with its associated features and progress.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/milestones/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/milestones/<span class="path-param">{id}</span></span>
+  <span class="desc">Update milestone</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates milestone fields. Send a JSON body with the fields to update.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Roadmap ===== -->
+<div class="section" id="roadmap">
+<h2 class="section-title">Roadmap</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/roadmap</span>
+  <span class="desc">List roadmap items</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns roadmap items. Supports filtering and sorting.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>category</code></td><td>string</td><td>Filter by category</td></tr>
+  <tr><td><code>priority</code></td><td>string</td><td>Filter by priority</td></tr>
+  <tr><td><code>status</code></td><td>string</td><td>Filter by status</td></tr>
+  <tr><td><code>sort</code></td><td>string</td><td>Sort field</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/roadmap')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/roadmap/<span class="path-param">{id}</span></span>
+  <span class="desc">Update roadmap item</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates roadmap item fields such as title, description, priority, category, or effort.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/roadmap/<span class="path-param">{id}</span>/status</span>
+  <span class="desc">Update roadmap item status</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates the status of a roadmap item.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/roadmap/reorder</span>
+  <span class="desc">Reorder roadmap items</span>
+</div>
+<div class="endpoint-body">
+  <p>Reorders roadmap item priorities. Send a JSON object with ordered item IDs.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Cycles ===== -->
+<div class="section" id="cycles">
+<h2 class="section-title">Cycles</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/cycles</span>
+  <span class="desc">List active cycles</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all active iteration cycles with their current step and progress.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/cycles')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/cycles/<span class="path-param">{id}</span></span>
+  <span class="desc">Cycle detail with scores</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single cycle with its steps, scores, and iteration history.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/cycles/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/cycles/<span class="path-param">{id}</span>/scores</span>
+  <span class="desc">Cycle scores</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns score history for a specific cycle.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/cycles/1/scores')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/cycles/<span class="path-param">{id}</span>/history</span>
+  <span class="desc">Cycle iteration history</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns the iteration history for a cycle, showing progression through steps.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/cycles/1/history')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+</div>
+
+<!-- ===== QA ===== -->
+<div class="section" id="qa">
+<h2 class="section-title">QA</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/qa/pending</span>
+  <span class="desc">Pending QA items</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns features awaiting QA review.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/qa/pending')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/qa/history</span>
+  <span class="desc">QA event history</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns QA-related events (approvals, rejections).</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/qa/history')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/qa/<span class="path-param">{id}</span>/approve</span>
+  <span class="desc">Approve feature QA</span>
+</div>
+<div class="endpoint-body">
+  <p>Approves a feature through QA. Optionally include notes in the JSON body.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/qa/<span class="path-param">{id}</span>/reject</span>
+  <span class="desc">Reject feature QA</span>
+</div>
+<div class="endpoint-body">
+  <p>Rejects a feature, sending it back to development. Include rejection notes in the JSON body.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Ideas ===== -->
+<div class="section" id="ideas">
+<h2 class="section-title">Ideas</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/ideas</span>
+  <span class="desc">List ideas</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all ideas. Use <code>view=history</code> to include enriched history data.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>view</code></td><td>string</td><td>Set to "history" for enriched view</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/ideas')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/ideas/<span class="path-param">{id}</span></span>
+  <span class="desc">Idea detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single idea with full details.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/ideas/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/ideas</span>
+  <span class="desc">Create idea</span>
+</div>
+<div class="endpoint-body">
+  <p>Creates a new idea. Send a JSON body with title, description, and source fields.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/ideas/<span class="path-param">{id}</span>/spec</span>
+  <span class="desc">Set idea spec</span>
+</div>
+<div class="endpoint-body">
+  <p>Attaches a specification to an idea. Send a JSON body with the spec content.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/ideas/<span class="path-param">{id}</span>/approve</span>
+  <span class="desc">Approve idea</span>
+</div>
+<div class="endpoint-body">
+  <p>Approves an idea, promoting it toward feature creation.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/ideas/<span class="path-param">{id}</span>/reject</span>
+  <span class="desc">Reject idea</span>
+</div>
+<div class="endpoint-body">
+  <p>Rejects an idea with optional notes.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Decisions ===== -->
+<div class="section" id="decisions">
+<h2 class="section-title">Decisions (ADRs)</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/decisions</span>
+  <span class="desc">List decisions</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all architecture decision records. Filterable by status.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>status</code></td><td>string</td><td>Filter by status</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/decisions')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/decisions/<span class="path-param">{id}</span></span>
+  <span class="desc">Decision detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single decision with full details.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/decisions/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/decisions</span>
+  <span class="desc">Create decision</span>
+</div>
+<div class="endpoint-body">
+  <p>Creates a new decision record. Send JSON body with title, context, and decision fields.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/decisions/<span class="path-param">{id}</span></span>
+  <span class="desc">Update decision</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates decision fields such as status, context, or consequences.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Discussions ===== -->
+<div class="section" id="discussions">
+<h2 class="section-title">Discussions</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/discussions</span>
+  <span class="desc">List discussions</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all discussions.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/discussions')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/discussions/<span class="path-param">{id}</span></span>
+  <span class="desc">Discussion detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single discussion with all comments/replies.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/discussions/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/discussions</span>
+  <span class="desc">Create discussion</span>
+</div>
+<div class="endpoint-body">
+  <p>Creates a new discussion thread. Send JSON body with title, content, and optional feature link.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/discussions/<span class="path-param">{id}</span>/replies</span>
+  <span class="desc">Add reply</span>
+</div>
+<div class="endpoint-body">
+  <p>Adds a reply/comment to an existing discussion.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Agents ===== -->
+<div class="section" id="agents">
+<h2 class="section-title">Agents</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/agents</span>
+  <span class="desc">List agent sessions</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all agent sessions with their status and linked worktrees.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/agents')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/agents/<span class="path-param">{id}</span></span>
+  <span class="desc">Agent session detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single agent session with status updates and linked worktree.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/agents/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/agents/coordination</span>
+  <span class="desc">Agent coordination status</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns coordination information for multi-agent orchestration.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/agents/coordination')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/agents</span>
+  <span class="desc">Create agent session</span>
+</div>
+<div class="endpoint-body">
+  <p>Creates a new agent session. Send JSON body with agent name and configuration.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/agents/<span class="path-param">{id}</span>/update</span>
+  <span class="desc">Post agent status update</span>
+</div>
+<div class="endpoint-body">
+  <p>Posts a status update from an agent. Used for heartbeat and progress reporting.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-patch">PATCH</span>
+  <span class="path">/api/agents/<span class="path-param">{id}</span></span>
+  <span class="desc">Update agent session</span>
+</div>
+<div class="endpoint-body">
+  <p>Updates agent session fields such as status.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Worktrees ===== -->
+<div class="section" id="worktrees">
+<h2 class="section-title">Worktrees</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/worktrees</span>
+  <span class="desc">List worktrees</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all registered worktrees.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/worktrees')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/worktrees/<span class="path-param">{id}</span></span>
+  <span class="desc">Worktree detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single worktree with its linked agent session.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/worktrees/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/worktrees</span>
+  <span class="desc">Create worktree</span>
+</div>
+<div class="endpoint-body">
+  <p>Registers a new worktree. Send JSON body with path and branch information.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/worktrees/<span class="path-param">{id}</span>/link</span>
+  <span class="desc">Link agent to worktree</span>
+</div>
+<div class="endpoint-body">
+  <p>Links an agent session to a worktree.</p>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-delete">DELETE</span>
+  <span class="path">/api/worktrees/<span class="path-param">{id}</span></span>
+  <span class="desc">Delete worktree</span>
+</div>
+<div class="endpoint-body">
+  <p>Removes a worktree registration.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Git / VCS ===== -->
+<div class="section" id="git">
+<h2 class="section-title">Git / VCS</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/git/log</span>
+  <span class="desc">Recent commits</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns the VCS type and the last 20 commits from the repository.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/git/log')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/git/branches</span>
+  <span class="desc">List branches</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns the VCS type and list of branches in the repository.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/git/branches')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Context ===== -->
+<div class="section" id="context">
+<h2 class="section-title">Context</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/context</span>
+  <span class="desc">List context entries</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns all context entries (shared knowledge, notes, references).</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/context')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/context/<span class="path-param">{id}</span></span>
+  <span class="desc">Context entry detail</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns a single context entry.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/context/1')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/context/search</span>
+  <span class="desc">Search context</span>
+</div>
+<div class="endpoint-body">
+  <p>Searches context entries by query string.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>q</code></td><td>string</td><td>Search query</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/context/search?q=test')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/context</span>
+  <span class="desc">Create context entry</span>
+</div>
+<div class="endpoint-body">
+  <p>Creates a new context entry. Send JSON body with key, value, and optional category.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Queue ===== -->
+<div class="section" id="queue">
+<h2 class="section-title">Queue</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/queue</span>
+  <span class="desc">Work queue status</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns queued work items with queue statistics.</p>
+  <button class="try-btn" onclick="tryIt(this, '/api/queue')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-post">POST</span>
+  <span class="path">/api/queue</span>
+  <span class="desc">Reclaim stale items</span>
+</div>
+<div class="endpoint-body">
+  <p>Reclaims stale work items that were abandoned by failed agents.</p>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Export ===== -->
+<div class="section" id="export">
+<h2 class="section-title">Export</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/export/features</span>
+  <span class="desc">Export features</span>
+</div>
+<div class="endpoint-body">
+  <p>Exports feature data. Supports multiple formats.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>format</code></td><td>string</td><td>Export format: json, csv, or markdown (default: json)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/export/features')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/export/roadmap</span>
+  <span class="desc">Export roadmap</span>
+</div>
+<div class="endpoint-body">
+  <p>Exports roadmap data in the specified format.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>format</code></td><td>string</td><td>Export format: json, csv, or markdown (default: json)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/export/roadmap')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/export/decisions</span>
+  <span class="desc">Export decisions</span>
+</div>
+<div class="endpoint-body">
+  <p>Exports decision records in the specified format.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>format</code></td><td>string</td><td>Export format: json, csv, or markdown (default: json)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/export/decisions')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/export/all</span>
+  <span class="desc">Export all data</span>
+</div>
+<div class="endpoint-body">
+  <p>Exports all project data (features, roadmap, decisions) in a combined format.</p>
+  <table class="params-table"><tr><th>Param</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>format</code></td><td>string</td><td>Export format: json, csv, or markdown (default: json)</td></tr>
+  </table>
+  <button class="try-btn" onclick="tryIt(this, '/api/export/all')">&#9654; Try it</button>
+  <pre class="response-area"></pre>
+</div>
+</div>
+
+</div>
+
+<!-- ===== WebSocket ===== -->
+<div class="section" id="websocket">
+<h2 class="section-title">WebSocket</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-ws">WS</span>
+  <span class="path">/ws</span>
+  <span class="desc">Live updates</span>
+</div>
+<div class="endpoint-body">
+  <p>WebSocket endpoint for real-time updates. The server broadcasts a <code>{"type":"refresh"}</code> message whenever the database changes. Clients should reconnect automatically on disconnect.</p>
+  <table class="params-table"><tr><th>Direction</th><th>Format</th><th>Description</th></tr>
+  <tr><td>Server &#8594; Client</td><td><code>{"type":"refresh"}</code></td><td>Sent when database file changes (via fsnotify watcher)</td></tr>
+  <tr><td>Client &#8594; Server</td><td>any</td><td>Messages are read to keep the connection alive (pong handling)</td></tr>
+  </table>
+</div>
+</div>
+
+</div>
+
+<!-- ===== Meta ===== -->
+<div class="section">
+<h2 class="section-title">Meta</h2>
+
+<div class="endpoint">
+<div class="endpoint-header" onclick="toggle(this)">
+  <span class="chevron">&#9654;</span>
+  <span class="method method-get">GET</span>
+  <span class="path">/api/docs</span>
+  <span class="desc">This page</span>
+</div>
+<div class="endpoint-body">
+  <p>Returns this API documentation page.</p>
+</div>
+</div>
+
+</div>
+
+</div>
+
+<script>
+function toggle(header) {
+  header.parentElement.classList.toggle('open');
+}
+
+function tryIt(btn, url) {
+  var area = btn.nextElementSibling;
+  if (area.classList.contains('visible')) {
+    area.classList.remove('visible');
+    area.textContent = '';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '\u23F3 Loading...';
+  fetch(url)
+    .then(function(r) {
+      var status = r.status + ' ' + r.statusText;
+      return r.text().then(function(text) {
+        try {
+          var json = JSON.parse(text);
+          return status + '\n\n' + JSON.stringify(json, null, 2);
+        } catch(e) {
+          return status + '\n\n' + text;
+        }
+      });
+    })
+    .catch(function(err) {
+      return 'Error: ' + err.message;
+    })
+    .then(function(result) {
+      area.textContent = result;
+      area.classList.add('visible');
+      btn.disabled = false;
+      btn.textContent = '\u25B6 Try it';
+    });
+}
+</script>
+</body>
+</html>`

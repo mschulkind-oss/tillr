@@ -240,6 +240,28 @@ type AgentSession struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
+// AgentHeartbeatInfo is an enriched agent session for the heartbeat dashboard.
+type AgentHeartbeatInfo struct {
+	Session         AgentSession `json:"session"`
+	HeartbeatStatus string       `json:"heartbeat_status"` // active, stale, failed
+	SessionDuration int64        `json:"session_duration_secs"`
+	CurrentWorkItem *WorkItem    `json:"current_work_item,omitempty"`
+	FeatureName     string       `json:"feature_name,omitempty"`
+	CompletedCount  int          `json:"completed_count"`
+	FailedCount     int          `json:"failed_count"`
+}
+
+// AgentStatusDashboard is the full agent heartbeat dashboard response.
+type AgentStatusDashboard struct {
+	Agents         []AgentHeartbeatInfo `json:"agents"`
+	TotalSessions  int                  `json:"total_sessions"`
+	ActiveCount    int                  `json:"active_count"`
+	StaleCount     int                  `json:"stale_count"`
+	FailedCount    int                  `json:"failed_count"`
+	CompletedCount int                  `json:"completed_count"`
+	TotalWorkDone  int                  `json:"total_work_done"`
+}
+
 // StatusUpdate is an agent progress update (markdown).
 type StatusUpdate struct {
 	ID             int    `json:"id"`
@@ -324,6 +346,7 @@ type Decision struct {
 	Context      string `json:"context"`      // Why is this decision needed?
 	Decision     string `json:"decision"`     // What was decided?
 	Consequences string `json:"consequences"` // What are the consequences?
+	SupersededBy string `json:"superseded_by,omitempty"`
 	FeatureID    string `json:"feature_id,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
@@ -361,6 +384,51 @@ var CycleTypes = []CycleType{
 	{Name: "release", Description: "Release", Steps: []string{"freeze", "qa", "fix", "staging", "verify", "ship"}},
 	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []string{"try", "friction-log", "improve", "verify", "document"}},
 	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []string{"research", "draft-spec", "review", "judge", "human-review"}},
+}
+
+// AgentWorkTypeStat holds average completion time for a work type.
+type AgentWorkTypeStat struct {
+	WorkType    string  `json:"work_type"`
+	Count       int     `json:"count"`
+	AvgSec      float64 `json:"avg_seconds"`
+	AvgDuration string  `json:"avg_duration"`
+}
+
+// AgentSuccessRate holds success/failure counts for a single agent.
+type AgentSuccessRate struct {
+	AgentName   string  `json:"agent_name"`
+	Completed   int     `json:"completed"`
+	Failed      int     `json:"failed"`
+	Total       int     `json:"total"`
+	SuccessRate float64 `json:"success_rate"`
+}
+
+// AgentActiveTask describes an agent's current in-progress work.
+type AgentActiveTask struct {
+	AgentName       string `json:"agent_name"`
+	SessionID       string `json:"session_id"`
+	TaskDescription string `json:"task_description,omitempty"`
+	CurrentPhase    string `json:"current_phase,omitempty"`
+	ProgressPct     int    `json:"progress_pct"`
+	StartedAt       string `json:"started_at"`
+}
+
+// AgentThroughput holds items-per-hour throughput over a time window.
+type AgentThroughput struct {
+	Period       string  `json:"period"`
+	ItemsTotal   int     `json:"items_total"`
+	HoursSpan    float64 `json:"hours_span"`
+	ItemsPerHour float64 `json:"items_per_hour"`
+}
+
+// AgentStats is the full response for `lifecycle agent stats`.
+type AgentStats struct {
+	TotalCompleted int                 `json:"total_completed"`
+	TotalFailed    int                 `json:"total_failed"`
+	AvgByWorkType  []AgentWorkTypeStat `json:"avg_by_work_type"`
+	SuccessRates   []AgentSuccessRate  `json:"success_rates"`
+	ActiveAgents   []AgentActiveTask   `json:"active_agents"`
+	Throughput     []AgentThroughput   `json:"throughput"`
 }
 
 // TagCount represents a tag with its usage count.
@@ -421,4 +489,22 @@ type ProjectTimeSummary struct {
 	ByWorkType    []WorkTypeAvg        `json:"by_work_type"`
 	TopFeatures   []FeatureTimeSummary `json:"top_features"`
 	ByStatus      []StatusTime         `json:"by_status"`
+}
+
+// Webhook represents a registered webhook endpoint.
+type Webhook struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	Secret    string `json:"secret,omitempty"`
+	Events    string `json:"events"`
+	Active    bool   `json:"active"`
+	CreatedAt string `json:"created_at"`
+}
+
+// WebhookDelivery represents a single webhook delivery payload.
+type WebhookDelivery struct {
+	ID        string         `json:"id"`
+	Event     string         `json:"event"`
+	Timestamp string         `json:"timestamp"`
+	Data      map[string]any `json:"data"`
 }

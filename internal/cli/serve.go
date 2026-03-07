@@ -29,6 +29,12 @@ var serveCmd = &cobra.Command{
 
 		rateLimit, _ := cmd.Flags().GetFloat64("rate-limit")
 		rateBurst, _ := cmd.Flags().GetInt("rate-burst")
+		noAuth, _ := cmd.Flags().GetBool("no-auth")
+
+		apiKey := cfg.ApiKey
+		if noAuth {
+			apiKey = ""
+		}
 
 		database, err := db.Open(cfg.DBPath)
 		if err != nil {
@@ -38,6 +44,9 @@ var serveCmd = &cobra.Command{
 
 		fmt.Printf("Starting web viewer at http://localhost:%d\n", cfg.ServerPort)
 		fmt.Printf("Database: %s\n", cfg.DBPath)
+		if apiKey != "" {
+			fmt.Println("API key authentication: enabled")
+		}
 		fmt.Println("Press Ctrl+C to stop.")
 
 		return server.StartWithConfig(database, server.ServerConfig{
@@ -45,6 +54,7 @@ var serveCmd = &cobra.Command{
 			DBPath:    cfg.DBPath,
 			RateLimit: rateLimit,
 			RateBurst: rateBurst,
+			ApiKey:    apiKey,
 		})
 	},
 }
@@ -53,4 +63,5 @@ func init() {
 	serveCmd.Flags().Int("port", 0, "Server port (default: 3847)")
 	serveCmd.Flags().Float64("rate-limit", 100, "API rate limit in requests per second (0 to disable)")
 	serveCmd.Flags().Int("rate-burst", 200, "API rate limit burst capacity")
+	serveCmd.Flags().Bool("no-auth", false, "Disable API key authentication even when configured")
 }
