@@ -96,6 +96,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/history", apiHandler(database, handleHistory))
 	mux.HandleFunc("/api/search", apiHandler(database, handleSearch))
 	mux.HandleFunc("/api/stats", apiHandler(database, handleStats))
+	mux.HandleFunc("/api/stats/burndown", apiHandler(database, handleStatsBurndown))
 	mux.HandleFunc("/api/qa/", apiHandler(database, handleQA))
 	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
 	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
@@ -549,6 +550,18 @@ func handleStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error
 		return err
 	}
 	return writeJSON(w, stats)
+}
+
+func handleStatsBurndown(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	data, err := db.GetBurndownData(database, p.ID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, data)
 }
 
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
