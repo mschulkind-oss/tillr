@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/lifecycle/internal/export"
 	"github.com/spf13/cobra"
 )
 
@@ -495,6 +496,56 @@ var historyCmd = &cobra.Command{
 	},
 }
 
+var historyExportCmd = &cobra.Command{
+	Use:   "export",
+	Short: "Export event history for auditing",
+	Long:  "Export lifecycle events in JSON, CSV, or Markdown format for compliance and auditing.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		featureID, _ := cmd.Flags().GetString("feature")
+		eventType, _ := cmd.Flags().GetString("type")
+		since, _ := cmd.Flags().GetString("since")
+		until, _ := cmd.Flags().GetString("until")
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		events, err := db.ListEventsFiltered(database, p.ID, featureID, eventType, since, until, 0)
+		if err != nil {
+			return err
+		}
+
+		var w *os.File
+		if output != "" {
+			w, err = os.Create(output)
+			if err != nil {
+				return fmt.Errorf("creating output file: %w", err)
+			}
+			defer w.Close() //nolint:errcheck
+		} else {
+			w = os.Stdout
+		}
+
+		if err := export.Events(events, w, format); err != nil {
+			return fmt.Errorf("exporting events: %w", err)
+		}
+
+		if output != "" {
+			fmt.Fprintf(os.Stderr, "Exported %d events to %s\n", len(events), output)
+		}
+		return nil
+	},
+}
+
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Full-text search across project data",
@@ -574,6 +625,15 @@ func init() {
 	historyCmd.Flags().String("type", "", "Filter by event type")
 	historyCmd.Flags().String("since", "", "Filter by date (ISO 8601)")
 	historyCmd.Flags().Int("limit", 50, "Max events to show")
+
+	historyExportCmd.Flags().String("format", "json", "Output format (json, csv, markdown)")
+	historyExportCmd.Flags().String("since", "", "Include events from this date (ISO 8601)")
+	historyExportCmd.Flags().String("until", "", "Include events until this date (ISO 8601)")
+	historyExportCmd.Flags().String("type", "", "Filter by event type")
+	historyExportCmd.Flags().String("feature", "", "Filter by feature ID")
+	historyExportCmd.Flags().StringP("output", "o", "", "Write to file instead of stdout")
+
+	historyCmd.AddCommand(historyExportCmd)
 }
 
 func eventIcon(eventType string) string {

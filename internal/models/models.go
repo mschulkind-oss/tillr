@@ -368,3 +368,57 @@ type TagCount struct {
 	Tag   string `json:"tag"`
 	Count int    `json:"count"`
 }
+
+// WorkItemTime represents a work item with its computed duration.
+type WorkItemTime struct {
+	ID          int     `json:"id"`
+	FeatureID   string  `json:"feature_id"`
+	WorkType    string  `json:"work_type"`
+	Status      string  `json:"status"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt string  `json:"completed_at"`
+	DurationSec float64 `json:"duration_seconds"`
+	Duration    string  `json:"duration"`
+}
+
+// FeatureTimeReport is the response for time show <feature-id>.
+type FeatureTimeReport struct {
+	FeatureID     string         `json:"feature_id"`
+	FeatureName   string         `json:"feature_name"`
+	Items         []WorkItemTime `json:"items"`
+	TotalSec      float64        `json:"total_seconds"`
+	TotalDuration string         `json:"total_duration"`
+}
+
+// WorkTypeAvg represents average time for a work type.
+type WorkTypeAvg struct {
+	WorkType    string  `json:"work_type"`
+	Count       int     `json:"count"`
+	TotalSec    float64 `json:"total_seconds"`
+	AvgSec      float64 `json:"avg_seconds"`
+	AvgDuration string  `json:"avg_duration"`
+}
+
+// FeatureTimeSummary is a feature entry in the top-N list.
+type FeatureTimeSummary struct {
+	FeatureID string  `json:"feature_id"`
+	Name      string  `json:"name"`
+	TotalSec  float64 `json:"total_seconds"`
+	Duration  string  `json:"duration"`
+}
+
+// StatusTime represents time spent on features by status.
+type StatusTime struct {
+	Status   string  `json:"status"`
+	TotalSec float64 `json:"total_seconds"`
+	Duration string  `json:"duration"`
+}
+
+// ProjectTimeSummary is the response for time summary.
+type ProjectTimeSummary struct {
+	TotalSec      float64              `json:"total_seconds"`
+	TotalDuration string               `json:"total_duration"`
+	ByWorkType    []WorkTypeAvg        `json:"by_work_type"`
+	TopFeatures   []FeatureTimeSummary `json:"top_features"`
+	ByStatus      []StatusTime         `json:"by_status"`
+}

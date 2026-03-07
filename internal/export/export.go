@@ -358,6 +358,119 @@ func priorityLabel(p string) string {
 	}
 }
 
+// Events exports events in the given format (json, md/markdown, csv).
+func Events(events []models.Event, w io.Writer, format string) error {
+	switch format {
+	case "csv":
+		return EventsCSV(events, w)
+	case "md", "markdown":
+		return EventsMarkdown(events, w)
+	default:
+		return EventsJSON(events, w)
+	}
+}
+
+// EventsJSON writes events as pretty-printed JSON.
+func EventsJSON(events []models.Event, w io.Writer) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(events)
+}
+
+// EventsCSV writes events as CSV with headers.
+func EventsCSV(events []models.Event, w io.Writer) error {
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+
+	if err := cw.Write([]string{"timestamp", "event_type", "entity_type", "entity_id", "description", "metadata"}); err != nil {
+		return err
+	}
+	for _, e := range events {
+		entityType, entityID, description, metadata := parseEventData(e)
+		if err := cw.Write([]string{
+			e.CreatedAt, e.EventType, entityType, entityID, description, metadata,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EventsMarkdown writes events as a markdown table.
+func EventsMarkdown(events []models.Event, w io.Writer) error {
+	pr := newPrinter(w)
+	pr.println("## Event History")
+	pr.println()
+
+	if len(events) == 0 {
+		pr.println("*No events.*")
+		return pr.err
+	}
+
+	pr.println("| Timestamp | Event Type | Entity Type | Entity ID | Description | Metadata |")
+	pr.println("|-----------|------------|-------------|-----------|-------------|----------|")
+	for _, e := range events {
+		entityType, entityID, description, metadata := parseEventData(e)
+		pr.printf("| %s | %s | %s | %s | %s | %s |\n",
+			escapeMarkdownCell(e.CreatedAt),
+			escapeMarkdownCell(e.EventType),
+			escapeMarkdownCell(entityType),
+			escapeMarkdownCell(entityID),
+			escapeMarkdownCell(description),
+			escapeMarkdownCell(metadata),
+		)
+	}
+	return pr.err
+}
+
+// parseEventData extracts structured fields from an event's Data JSON.
+func parseEventData(e models.Event) (entityType, entityID, description, metadata string) {
+	entityType = "event"
+	if e.FeatureID != "" {
+		entityType = "feature"
+		entityID = e.FeatureID
+	}
+
+	if e.Data == "" {
+		return entityType, entityID, e.EventType, ""
+	}
+
+	var m map[string]any
+	if json.Unmarshal([]byte(e.Data), &m) != nil {
+		return entityType, entityID, e.EventType, e.Data
+	}
+
+	if et, ok := m["entity_type"].(string); ok {
+		entityType = et
+	}
+	if eid, ok := m["entity_id"].(string); ok {
+		entityID = eid
+	}
+	if desc, ok := m["description"].(string); ok {
+		description = desc
+	} else {
+		description = e.EventType
+	}
+
+	// Remaining fields go into metadata
+	delete(m, "entity_type")
+	delete(m, "entity_id")
+	delete(m, "description")
+	if len(m) > 0 {
+		if b, err := json.Marshal(m); err == nil {
+			metadata = string(b)
+		}
+	}
+	return entityType, entityID, description, metadata
+}
+
+// escapeMarkdownCell replaces pipe characters so they don't break the table.
+func escapeMarkdownCell(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
 func titleCase(s string) string {
 	if s == "" {
 		return s

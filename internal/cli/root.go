@@ -123,6 +123,26 @@ func init() {
 	rootCmd.AddCommand(decisionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(exportCmd)
+	rootCmd.AddCommand(releaseNotesCmd)
+	rootCmd.AddCommand(timeCmd)
+
+	// Short aliases for common commands (CLI Aliases roadmap item)
+	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))
+	rootCmd.AddCommand(aliasCmd("m", milestoneCmd, "Alias for 'milestone'"))
+	rootCmd.AddCommand(aliasCmd("r", roadmapCmd, "Alias for 'roadmap'"))
+	rootCmd.AddCommand(aliasCmd("c", cycleCmd, "Alias for 'cycle'"))
+	rootCmd.AddCommand(aliasCmd("d", discussCmd, "Alias for 'discuss'"))
+	rootCmd.AddCommand(aliasCmd("q", qaCmd, "Alias for 'qa'"))
+	rootCmd.AddCommand(aliasCmd("s", searchCmd, "Alias for 'search'"))
+}
+
+func aliasCmd(name string, target *cobra.Command, short string) *cobra.Command {
+	alias := *target
+	alias.Use = name
+	alias.Short = short
+	alias.Hidden = true
+	alias.Aliases = nil
+	return &alias
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

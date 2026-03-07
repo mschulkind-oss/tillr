@@ -70,7 +70,27 @@ func Start(database *sql.DB, port int) error {
 }
 
 // StartWithDBPath launches the server and watches the given DB file for changes.
+// ServerConfig holds configuration for the HTTP server.
+type ServerConfig struct {
+	Port      int
+	DBPath    string
+	RateLimit float64 // requests per second (0 = disabled)
+	RateBurst int     // burst capacity
+}
+
+// StartWithDBPath starts the server with default rate limiting disabled.
+// Prefer StartWithConfig for full configuration.
 func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
+	return StartWithConfig(database, ServerConfig{
+		Port:   port,
+		DBPath: dbPath,
+	})
+}
+
+// StartWithConfig starts the HTTP server with the given configuration.
+func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
+	port := cfg.Port
+	dbPath := cfg.DBPath
 	// Ignore signals that could terminate the server unexpectedly
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG,
 		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGWINCH,
@@ -205,7 +225,7 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	}
 
 	// Wrap mux with panic recovery
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rv := recover(); rv != nil {
 				log.Printf("PANIC recovered in %s %s: %v", r.Method, r.URL.Path, rv)
@@ -214,6 +234,13 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 		}()
 		mux.ServeHTTP(w, r)
 	})
+
+	// Apply rate limiting to /api/* routes if configured.
+	if cfg.RateLimit > 0 {
+		rl := NewRateLimiter(cfg.RateLimit, cfg.RateBurst)
+		handler = RateLimitMiddleware(rl, handler)
+		log.Printf("Rate limiting enabled: %.0f req/s, burst %d", cfg.RateLimit, cfg.RateBurst)
+	}
 
 	return http.ListenAndServe(addr, handler)
 }

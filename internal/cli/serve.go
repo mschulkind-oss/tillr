@@ -27,6 +27,9 @@ var serveCmd = &cobra.Command{
 			cfg.ServerPort = port
 		}
 
+		rateLimit, _ := cmd.Flags().GetFloat64("rate-limit")
+		rateBurst, _ := cmd.Flags().GetInt("rate-burst")
+
 		database, err := db.Open(cfg.DBPath)
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
@@ -37,10 +40,17 @@ var serveCmd = &cobra.Command{
 		fmt.Printf("Database: %s\n", cfg.DBPath)
 		fmt.Println("Press Ctrl+C to stop.")
 
-		return server.StartWithDBPath(database, cfg.ServerPort, cfg.DBPath)
+		return server.StartWithConfig(database, server.ServerConfig{
+			Port:      cfg.ServerPort,
+			DBPath:    cfg.DBPath,
+			RateLimit: rateLimit,
+			RateBurst: rateBurst,
+		})
 	},
 }
 
 func init() {
 	serveCmd.Flags().Int("port", 0, "Server port (default: 3847)")
+	serveCmd.Flags().Float64("rate-limit", 100, "API rate limit in requests per second (0 to disable)")
+	serveCmd.Flags().Int("rate-burst", 200, "API rate limit burst capacity")
 }

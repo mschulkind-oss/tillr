@@ -1679,6 +1679,7 @@ body {
         box-shadow: var(--shadow-lg);
     }
     .content { margin-left: 0; padding: 60px 16px 20px; }
+    #breadcrumb { margin-left: 0; padding: 52px 16px 0; }
 
     /* Typography scale-down */
     .page-title { font-size: 1.35rem; }
@@ -3102,7 +3103,8 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .roadmap-count-nice-to-have { color: var(--purple); font-weight: 600; }
 
 /* ── Breadcrumb Navigation ── */
-.breadcrumb-bar { display: flex; align-items: center; gap: 4px; padding: 8px 0; margin-bottom: 8px; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; }
+#breadcrumb { margin-left: var(--sidebar-width); padding: 6px 24px 0; }
+.breadcrumb-bar { display: flex; align-items: center; gap: 4px; padding: 8px 0; margin-bottom: 0; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; min-height: 1.4em; }
 .breadcrumb-item { color: var(--text-muted); text-decoration: none; cursor: pointer; border-radius: 4px; padding: 2px 6px; transition: color var(--transition), background var(--transition); }
 .breadcrumb-item:hover { color: var(--accent); background: var(--bg-tertiary); }
 .breadcrumb-item.active { color: var(--text-primary); cursor: default; pointer-events: none; }
@@ -3717,7 +3719,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 
 @media print {
     /* Full width, no sidebar */
-    .sidebar, .nav-sidebar, nav, .breadcrumbs, .btn-print,
+    .sidebar, .nav-sidebar, nav, .breadcrumbs, #breadcrumb, .btn-print,
     .roadmap-view-toggle, .roadmap-keyboard-hint,
     .roadmap-filter-pill, .roadmap-filters,
     .roadmap-status-actions, .roadmap-status-btns,
@@ -8174,3 +8176,253 @@ textarea:focus-visible,
 [data-theme="dark"] .hm-legend-cell[data-level="2"] { background: #006d32; }
 [data-theme="dark"] .hm-legend-cell[data-level="3"] { background: #26a641; }
 [data-theme="dark"] .hm-legend-cell[data-level="4"] { background: #39d353; }
+
+/* === MOBILE RESPONSIVE POLISH === */
+@media (max-width: 768px) {
+    /* 1. Navigation: horizontal scroll instead of wrapping */
+    .nav-links {
+        display: flex;
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        gap: 2px;
+        padding: 6px 8px;
+        white-space: nowrap;
+    }
+    .nav-links::-webkit-scrollbar { display: none; }
+    .nav-section {
+        display: flex;
+        flex-direction: row;
+        gap: 2px;
+        padding: 0;
+        border-bottom: none;
+    }
+    .nav-section-label { display: none; }
+    .nav-link {
+        flex-shrink: 0;
+        white-space: nowrap;
+        padding: 10px 14px;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        border-left: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 6px 6px 0 0;
+    }
+    .nav-link.active {
+        border-left-color: transparent;
+        border-bottom-color: var(--accent);
+    }
+    .filter-pills {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        flex-wrap: nowrap;
+    }
+    .filter-pills::-webkit-scrollbar { display: none; }
+
+    /* 2. Feature cards: single-column on mobile */
+    .dashboard-grid { grid-template-columns: 1fr !important; }
+    .two-col { grid-template-columns: 1fr; }
+    .kanban { flex-direction: column; }
+    .kanban-column { flex-basis: auto; min-width: 0; }
+
+    /* 3. Tables: horizontally scrollable */
+    .table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        white-space: nowrap;
+    }
+    .table th,
+    .table td {
+        white-space: nowrap;
+    }
+
+    /* 4. Modal dialogs: full-width with appropriate padding */
+    .qa-confirm-dialog {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 12px 12px 0 0;
+        padding: 20px 16px;
+        margin: 0;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+    }
+    .qa-confirm-overlay.visible .qa-confirm-dialog {
+        transform: translateY(0);
+    }
+    .qa-confirm-actions {
+        flex-direction: column;
+        gap: 8px;
+    }
+    .qa-confirm-cancel,
+    .qa-confirm-submit {
+        width: 100%;
+        justify-content: center;
+        min-height: 44px;
+    }
+    .app4-modal-card {
+        width: 100%;
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 12px 12px 0 0;
+        margin-top: auto;
+    }
+    .app4-modal-overlay {
+        align-items: flex-end;
+    }
+    .app4-modal-header { padding: 16px; }
+    .app4-modal-body { padding: 16px; }
+    .app4-modal-footer { padding: 12px 16px 16px; }
+    .app4-modal-close {
+        min-width: 44px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* 5. Stats/metric cards: stack vertically */
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+    .stat-card {
+        padding: 14px 16px;
+        gap: 10px;
+    }
+    .roadmap-summary {
+        grid-template-columns: 1fr;
+        gap: 8px;
+        padding: 12px;
+    }
+
+    /* 6. Dependency graph: scrollable */
+    .dep-graph-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 12px;
+    }
+    .dep-graph {
+        min-width: max-content;
+    }
+    .depgraph-canvas-wrap {
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        min-height: 300px;
+    }
+    .depgraph-canvas-wrap canvas {
+        min-width: 600px;
+        min-height: 300px;
+    }
+    .dep-canvas-container {
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 8px;
+    }
+
+    /* 7. Touch-friendly buttons and form inputs (min 44px tap target) */
+    .app4-btn {
+        min-height: 44px;
+        padding: 10px 16px;
+        font-size: 0.875rem;
+    }
+    .disc-form-submit,
+    .disc-form-cancel,
+    .disc-new-btn {
+        min-height: 44px;
+        padding: 10px 16px;
+    }
+    .disc-form-group input,
+    .disc-form-group textarea,
+    .disc-form-group select {
+        min-height: 44px;
+        padding: 10px 12px;
+        font-size: 0.875rem;
+    }
+    .features-search {
+        min-height: 44px;
+        padding: 10px 14px 10px 36px;
+        font-size: 0.875rem;
+    }
+    .batch-btn {
+        min-height: 44px;
+        padding: 10px 14px;
+    }
+    .batch-dropdown-item {
+        min-height: 44px;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+    }
+    .batch-checkbox {
+        width: 20px;
+        height: 20px;
+    }
+    .theme-toggle {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    /* 8. Font sizes: readable on mobile (min 14px body text) */
+    body {
+        font-size: 0.875rem; /* 14px */
+    }
+    .table td {
+        font-size: 0.8125rem;
+    }
+    .stat-label {
+        font-size: 0.75rem;
+    }
+    .disc-form-group label {
+        font-size: 0.8125rem;
+    }
+    .empty-state-hint {
+        font-size: 0.875rem;
+    }
+    .dep-legend-item {
+        font-size: 0.8125rem;
+    }
+
+    /* Batch action bar: responsive on mobile */
+    .batch-action-bar {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        transform: none;
+        padding: 10px 12px;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    /* Timeline view: scrollable on narrow screens */
+    .tl-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tl-label { width: 120px; min-width: 120px; max-width: 120px; font-size: 0.7rem; }
+
+    /* Heatmap: scrollable */
+    .heatmap-body { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .heatmap { min-width: max-content; }
+
+    /* Lightbox: better mobile sizing */
+    .lightbox-img { max-width: 100vw; max-height: 90vh; border-radius: 0; }
+
+    /* Content area: tighter padding on mobile */
+    .content { padding: 56px 12px 16px; }
+    #breadcrumb { padding: 48px 12px 0; }
+
+    /* Discussion forms: full-width actions */
+    .disc-form-actions {
+        flex-direction: column;
+    }
+    .disc-form-actions > * {
+        width: 100%;
+        text-align: center;
+        justify-content: center;
+    }
+}
