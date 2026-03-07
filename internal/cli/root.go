@@ -110,6 +110,11 @@ func init() {
 	rootCmd.AddCommand(discussCmd)
 	rootCmd.AddCommand(onboardCmd)
 	rootCmd.AddCommand(completionCmd)
+	rootCmd.AddCommand(agentCmd)
+	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(ideaCmd)
+	rootCmd.AddCommand(bugCmd)
+	rootCmd.AddCommand(contextCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

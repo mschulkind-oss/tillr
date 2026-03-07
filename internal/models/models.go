@@ -186,6 +186,62 @@ type CycleDetail struct {
 	Steps  []string      `json:"steps"`
 }
 
+// AgentSession tracks an active agent work session.
+type AgentSession struct {
+	ID              string `json:"id"`
+	ProjectID       string `json:"project_id"`
+	FeatureID       string `json:"feature_id,omitempty"`
+	Name            string `json:"name"`
+	TaskDescription string `json:"task_description,omitempty"`
+	Status          string `json:"status"`
+	ProgressPct     int    `json:"progress_pct"`
+	CurrentPhase    string `json:"current_phase,omitempty"`
+	ETA             string `json:"eta,omitempty"`
+	ContextSnapshot string `json:"context_snapshot,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+// StatusUpdate is an agent progress update (markdown).
+type StatusUpdate struct {
+	ID             int    `json:"id"`
+	AgentSessionID string `json:"agent_session_id"`
+	MessageMD      string `json:"message_md"`
+	ProgressPct    *int   `json:"progress_pct,omitempty"`
+	Phase          string `json:"phase,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// IdeaQueueItem is a human-submitted feature/bug idea.
+type IdeaQueueItem struct {
+	ID            int    `json:"id"`
+	ProjectID     string `json:"project_id"`
+	Title         string `json:"title"`
+	RawInput      string `json:"raw_input"`
+	IdeaType      string `json:"idea_type"`
+	Status        string `json:"status"`
+	SpecMD        string `json:"spec_md,omitempty"`
+	AutoImplement bool   `json:"auto_implement"`
+	SubmittedBy   string `json:"submitted_by"`
+	AssignedAgent string `json:"assigned_agent,omitempty"`
+	FeatureID     string `json:"feature_id,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// ContextEntry is a stored context entry for features/tasks.
+type ContextEntry struct {
+	ID          int    `json:"id"`
+	ProjectID   string `json:"project_id"`
+	FeatureID   string `json:"feature_id,omitempty"`
+	ContextType string `json:"context_type"`
+	Title       string `json:"title"`
+	ContentMD   string `json:"content_md"`
+	Author      string `json:"author"`
+	Tags        string `json:"tags,omitempty"`
+	CreatedAt   string `json:"created_at"`
+}
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},

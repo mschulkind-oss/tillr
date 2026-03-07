@@ -232,4 +232,65 @@ var migrations = []string{
 
 	// Migration 7: Add body column to discussions
 	`ALTER TABLE discussions ADD COLUMN body TEXT NOT NULL DEFAULT '';`,
+
+	// Migration 8: Agent-first lifecycle tables
+	`CREATE TABLE IF NOT EXISTS agent_sessions (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		feature_id TEXT REFERENCES features(id),
+		name TEXT NOT NULL,
+		task_description TEXT,
+		status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','completed','failed','abandoned')),
+		progress_pct INTEGER DEFAULT 0,
+		current_phase TEXT,
+		eta TEXT,
+		context_snapshot TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS status_updates (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+		message_md TEXT NOT NULL,
+		progress_pct INTEGER,
+		phase TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS idea_queue (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		title TEXT NOT NULL,
+		raw_input TEXT NOT NULL,
+		idea_type TEXT NOT NULL DEFAULT 'feature' CHECK(idea_type IN ('feature','bug')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','spec-ready','approved','rejected','implementing','done')),
+		spec_md TEXT,
+		auto_implement INTEGER NOT NULL DEFAULT 0,
+		submitted_by TEXT DEFAULT 'human',
+		assigned_agent TEXT,
+		feature_id TEXT REFERENCES features(id),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS context_entries (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		feature_id TEXT REFERENCES features(id),
+		context_type TEXT NOT NULL DEFAULT 'note' CHECK(context_type IN ('source-analysis','doc','spec','research','note','status-update','decision')),
+		title TEXT NOT NULL,
+		content_md TEXT NOT NULL,
+		author TEXT DEFAULT 'system',
+		tags TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE INDEX idx_agent_sessions_project ON agent_sessions(project_id);
+	CREATE INDEX idx_agent_sessions_status ON agent_sessions(status);
+	CREATE INDEX idx_status_updates_session ON status_updates(agent_session_id);
+	CREATE INDEX idx_idea_queue_project ON idea_queue(project_id);
+	CREATE INDEX idx_idea_queue_status ON idea_queue(status);
+	CREATE INDEX idx_context_entries_project ON context_entries(project_id);
+	CREATE INDEX idx_context_entries_feature ON context_entries(feature_id);`,
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
@@ -101,6 +102,21 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	mux.HandleFunc("/api/discussions", apiHandler(database, handleDiscussions))
 	mux.HandleFunc("/api/discussions/", apiHandler(database, handleDiscussionDetail))
 	mux.HandleFunc("/api/dependencies", apiHandler(database, handleDependencies))
+
+	// Agent session routes
+	mux.HandleFunc("/api/agents", apiHandler(database, handleAgents))
+	mux.HandleFunc("/api/agents/", apiHandler(database, handleAgentDetail))
+
+	// Idea queue routes
+	mux.HandleFunc("/api/ideas", apiHandler(database, handleIdeas))
+	mux.HandleFunc("/api/ideas/", apiHandler(database, handleIdeaDetail))
+
+	// Context routes
+	mux.HandleFunc("/api/context", apiHandler(database, handleContext))
+	mux.HandleFunc("/api/context/", apiHandler(database, handleContextDetail))
+
+	// Spec document route
+	mux.HandleFunc("/api/spec-document", apiHandler(database, handleSpecDocument))
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +234,14 @@ func apiHandler(database *sql.DB, fn apiFunc) http.HandlerFunc {
 	}
 }
 
+func timeNowUnixMilli() int64 {
+	return time.Now().UnixMilli()
+}
+
+func timeNowISO() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
 func writeJSON(w http.ResponseWriter, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -236,6 +260,25 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) er
 	// Check if it's a feature detail request: /api/features/{id}
 	path := r.URL.Path
 	if id := strings.TrimPrefix(path, "/api/features/"); id != "" && id != path {
+		// POST /api/features/reorder
+		if id == "reorder" && r.Method == "POST" {
+			var body struct {
+				Items []db.FeaturePriorityItem `json:"items"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "invalid request body"})
+			}
+			if len(body.Items) == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return writeJSON(w, map[string]string{"error": "items array is required"})
+			}
+			if err := db.ReorderFeaturePriorities(database, body.Items); err != nil {
+				return fmt.Errorf("reordering feature priorities: %w", err)
+			}
+			return writeJSON(w, map[string]bool{"ok": true})
+		}
+
 		// Check for /api/features/{id}/deps endpoint
 		if rest, found := strings.CutSuffix(id, "/deps"); found && rest != "" {
 			return handleFeatureDeps(database, w, rest)
@@ -656,17 +699,42 @@ var validRoadmapStatuses = map[string]bool{
 
 func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Methods", "PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		return nil
 	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/roadmap/")
+
+	// POST /api/roadmap/reorder
+	if path == "reorder" {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return writeJSON(w, map[string]string{"error": "POST required"})
+		}
+		var body struct {
+			Items []db.ReorderItem `json:"items"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if len(body.Items) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "items array is required"})
+		}
+		if err := db.ReorderRoadmapItems(database, body.Items); err != nil {
+			return fmt.Errorf("reordering roadmap items: %w", err)
+		}
+		return writeJSON(w, map[string]bool{"ok": true})
+	}
+
+	// PATCH /api/roadmap/{id}/status
 	if r.Method != "PATCH" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return writeJSON(w, map[string]string{"error": "PATCH required"})
 	}
 
-	// Parse /api/roadmap/{id}/status
-	path := strings.TrimPrefix(r.URL.Path, "/api/roadmap/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 || parts[1] != "status" || parts[0] == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -841,4 +909,600 @@ func handleDependencies(database *sql.DB, w http.ResponseWriter, _ *http.Request
 		"nodes": nodes,
 		"edges": edges,
 	})
+}
+
+// --- Agent Sessions ---
+
+func handleAgents(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	if r.Method == "POST" {
+		var body struct {
+			Name            string `json:"name"`
+			TaskDescription string `json:"task_description"`
+			FeatureID       string `json:"feature_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Name == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "name is required"})
+		}
+		s := &models.AgentSession{
+			ID:              fmt.Sprintf("agent-%d", timeNowUnixMilli()),
+			ProjectID:       p.ID,
+			Name:            body.Name,
+			TaskDescription: body.TaskDescription,
+			FeatureID:       body.FeatureID,
+			Status:          "active",
+		}
+		if err := db.CreateAgentSession(database, s); err != nil {
+			return fmt.Errorf("creating agent session: %w", err)
+		}
+		created, err := db.GetAgentSession(database, s.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created agent session: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
+	status := r.URL.Query().Get("status")
+	sessions, err := db.ListAgentSessions(database, p.ID, status)
+	if err != nil {
+		return err
+	}
+	if sessions == nil {
+		sessions = []models.AgentSession{}
+	}
+	return writeJSON(w, sessions)
+}
+
+func handleAgentDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "agent session ID required"})
+	}
+	id := parts[0]
+
+	// POST /api/agents/{id}/update
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "update" {
+		var body struct {
+			MessageMD   string `json:"message_md"`
+			ProgressPct *int   `json:"progress_pct"`
+			Phase       string `json:"phase"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		u := &models.StatusUpdate{
+			AgentSessionID: id,
+			MessageMD:      body.MessageMD,
+			ProgressPct:    body.ProgressPct,
+			Phase:          body.Phase,
+		}
+		if err := db.InsertStatusUpdate(database, u); err != nil {
+			return fmt.Errorf("inserting status update: %w", err)
+		}
+		// Also update agent session fields if provided
+		updates := map[string]any{}
+		if body.ProgressPct != nil {
+			updates["progress_pct"] = *body.ProgressPct
+		}
+		if body.Phase != "" {
+			updates["current_phase"] = body.Phase
+		}
+		if len(updates) > 0 {
+			_ = db.UpdateAgentSession(database, id, updates)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, u)
+	}
+
+	// PATCH /api/agents/{id}
+	if r.Method == "PATCH" {
+		var body struct {
+			ProgressPct  *int   `json:"progress_pct"`
+			CurrentPhase string `json:"current_phase"`
+			ETA          string `json:"eta"`
+			Status       string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		updates := map[string]any{}
+		if body.ProgressPct != nil {
+			updates["progress_pct"] = *body.ProgressPct
+		}
+		if body.CurrentPhase != "" {
+			updates["current_phase"] = body.CurrentPhase
+		}
+		if body.ETA != "" {
+			updates["eta"] = body.ETA
+		}
+		if body.Status != "" {
+			updates["status"] = body.Status
+		}
+		if err := db.UpdateAgentSession(database, id, updates); err != nil {
+			return fmt.Errorf("updating agent session: %w", err)
+		}
+		s, err := db.GetAgentSession(database, id)
+		if err != nil {
+			return err
+		}
+		return writeJSON(w, s)
+	}
+
+	// GET /api/agents/{id}
+	s, err := db.GetAgentSession(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "agent session not found"})
+	}
+	updates, _ := db.ListStatusUpdates(database, id)
+	if updates == nil {
+		updates = []models.StatusUpdate{}
+	}
+	return writeJSON(w, map[string]any{
+		"session": s,
+		"updates": updates,
+	})
+}
+
+// --- Idea Queue ---
+
+func handleIdeas(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	if r.Method == "POST" {
+		var body struct {
+			Title         string `json:"title"`
+			RawInput      string `json:"raw_input"`
+			IdeaType      string `json:"idea_type"`
+			AutoImplement bool   `json:"auto_implement"`
+			SubmittedBy   string `json:"submitted_by"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Title == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "title is required"})
+		}
+		if body.IdeaType == "" {
+			body.IdeaType = "feature"
+		}
+		if body.SubmittedBy == "" {
+			body.SubmittedBy = "human"
+		}
+		idea := &models.IdeaQueueItem{
+			ProjectID:     p.ID,
+			Title:         body.Title,
+			RawInput:      body.RawInput,
+			IdeaType:      body.IdeaType,
+			Status:        "pending",
+			AutoImplement: body.AutoImplement,
+			SubmittedBy:   body.SubmittedBy,
+		}
+		if err := db.InsertIdea(database, idea); err != nil {
+			return fmt.Errorf("creating idea: %w", err)
+		}
+		created, err := db.GetIdea(database, idea.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created idea: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
+	status := r.URL.Query().Get("status")
+	ideaType := r.URL.Query().Get("type")
+	ideas, err := db.ListIdeas(database, p.ID, status, ideaType)
+	if err != nil {
+		return err
+	}
+	if ideas == nil {
+		ideas = []models.IdeaQueueItem{}
+	}
+	return writeJSON(w, ideas)
+}
+
+func handleIdeaDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/ideas/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "idea ID required"})
+	}
+
+	id := 0
+	for _, c := range parts[0] {
+		if c >= '0' && c <= '9' {
+			id = id*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	if id == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "invalid idea ID"})
+	}
+
+	// POST /api/ideas/{id}/spec
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "spec" {
+		var body struct {
+			SpecMD string `json:"spec_md"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if err := db.SetIdeaSpec(database, id, body.SpecMD); err != nil {
+			return fmt.Errorf("setting idea spec: %w", err)
+		}
+		idea, err := db.GetIdea(database, id)
+		if err != nil {
+			return err
+		}
+		return writeJSON(w, idea)
+	}
+
+	// POST /api/ideas/{id}/approve
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "approve" {
+		var body struct {
+			Notes     string `json:"notes"`
+			FeatureID string `json:"feature_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if err := db.ApproveIdea(database, id, body.FeatureID); err != nil {
+			return fmt.Errorf("approving idea: %w", err)
+		}
+		idea, err := db.GetIdea(database, id)
+		if err != nil {
+			return err
+		}
+		return writeJSON(w, idea)
+	}
+
+	// POST /api/ideas/{id}/reject
+	if r.Method == "POST" && len(parts) >= 2 && parts[1] == "reject" {
+		if err := db.UpdateIdeaStatus(database, id, "rejected"); err != nil {
+			return fmt.Errorf("rejecting idea: %w", err)
+		}
+		idea, err := db.GetIdea(database, id)
+		if err != nil {
+			return err
+		}
+		return writeJSON(w, idea)
+	}
+
+	// GET /api/ideas/{id}
+	idea, err := db.GetIdea(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "idea not found"})
+	}
+	return writeJSON(w, idea)
+}
+
+// --- Context ---
+
+func handleContext(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	if r.Method == "POST" {
+		var body struct {
+			FeatureID   string `json:"feature_id"`
+			ContextType string `json:"context_type"`
+			Title       string `json:"title"`
+			ContentMD   string `json:"content_md"`
+			Author      string `json:"author"`
+			Tags        string `json:"tags"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.Title == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "title is required"})
+		}
+		if body.ContextType == "" {
+			body.ContextType = "note"
+		}
+		if body.Author == "" {
+			body.Author = "human"
+		}
+		e := &models.ContextEntry{
+			ProjectID:   p.ID,
+			FeatureID:   body.FeatureID,
+			ContextType: body.ContextType,
+			Title:       body.Title,
+			ContentMD:   body.ContentMD,
+			Author:      body.Author,
+			Tags:        body.Tags,
+		}
+		if err := db.InsertContext(database, e); err != nil {
+			return fmt.Errorf("creating context entry: %w", err)
+		}
+		created, err := db.GetContextEntry(database, e.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created context entry: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
+	featureID := r.URL.Query().Get("feature_id")
+	entries, err := db.ListContext(database, p.ID, featureID)
+	if err != nil {
+		return err
+	}
+	if entries == nil {
+		entries = []models.ContextEntry{}
+	}
+	return writeJSON(w, entries)
+}
+
+func handleContextDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	path := strings.TrimPrefix(r.URL.Path, "/api/context/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "context entry ID or action required"})
+	}
+
+	// GET /api/context/search?q=...
+	if parts[0] == "search" {
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+		q := r.URL.Query().Get("q")
+		if q == "" {
+			return writeJSON(w, []models.ContextEntry{})
+		}
+		results, err := db.SearchContext(database, p.ID, q)
+		if err != nil {
+			return err
+		}
+		if results == nil {
+			results = []models.ContextEntry{}
+		}
+		return writeJSON(w, results)
+	}
+
+	// Parse numeric ID
+	id := 0
+	for _, c := range parts[0] {
+		if c >= '0' && c <= '9' {
+			id = id*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	if id == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "invalid context entry ID"})
+	}
+
+	e, err := db.GetContextEntry(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "context entry not found"})
+	}
+	return writeJSON(w, e)
+}
+
+// --- Spec Document ---
+
+func handleSpecDocument(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	milestones, err := db.ListMilestones(database, p.ID)
+	if err != nil {
+		return err
+	}
+
+	features, err := db.ListFeatures(database, p.ID, "", "")
+	if err != nil {
+		return err
+	}
+
+	roadmapItems, err := db.ListRoadmapItems(database, p.ID)
+	if err != nil {
+		return err
+	}
+
+	discussions, err := db.ListDiscussions(database, p.ID, "", "")
+	if err != nil {
+		discussions = []models.Discussion{}
+	}
+
+	events, err := db.ListEvents(database, p.ID, "", "", "", 50)
+	if err != nil {
+		events = []models.Event{}
+	}
+
+	// Count features by status
+	statusCounts := map[string]int{}
+	for _, f := range features {
+		statusCounts[f.Status]++
+	}
+
+	// Build executive summary
+	milestoneNames := make([]string, len(milestones))
+	for i, m := range milestones {
+		milestoneNames[i] = m.Name
+	}
+	summaryMD := fmt.Sprintf("## Executive Summary\n\n**%s** is a project with %d features across %d milestones",
+		p.Name, len(features), len(milestones))
+	if len(milestoneNames) > 0 {
+		summaryMD += fmt.Sprintf(" (%s)", strings.Join(milestoneNames, ", "))
+	}
+	summaryMD += fmt.Sprintf(".\n\n**Feature Status:** %d done, %d in progress, %d planning, %d blocked, %d draft\n\n",
+		statusCounts["done"], statusCounts["implementing"], statusCounts["planning"],
+		statusCounts["blocked"], statusCounts["draft"])
+	summaryMD += fmt.Sprintf("**Roadmap Items:** %d total\n", len(roadmapItems))
+
+	type specFeature struct {
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Status       string   `json:"status"`
+		Priority     int      `json:"priority"`
+		SpecMD       string   `json:"spec_md,omitempty"`
+		Description  string   `json:"description,omitempty"`
+		Dependencies []string `json:"dependencies,omitempty"`
+	}
+
+	type specSection struct {
+		ID        string        `json:"id"`
+		Title     string        `json:"title"`
+		ContentMD string        `json:"content_md"`
+		Level     int           `json:"level"`
+		Features  []specFeature `json:"features,omitempty"`
+	}
+
+	sections := []specSection{
+		{
+			ID:        "executive-summary",
+			Title:     "Executive Summary",
+			ContentMD: summaryMD,
+			Level:     1,
+		},
+	}
+
+	// Group features by milestone
+	featuresByMilestone := map[string][]models.Feature{}
+	var unassigned []models.Feature
+	for _, f := range features {
+		if f.MilestoneID != "" {
+			featuresByMilestone[f.MilestoneID] = append(featuresByMilestone[f.MilestoneID], f)
+		} else {
+			unassigned = append(unassigned, f)
+		}
+	}
+
+	for i, m := range milestones {
+		mFeatures := featuresByMilestone[m.ID]
+		contentMD := fmt.Sprintf("## Phase %d: %s\n\n", i+1, m.Name)
+		if m.Description != "" {
+			contentMD += m.Description + "\n\n"
+		}
+		contentMD += fmt.Sprintf("**Features:** %d total, %d done\n", m.TotalFeatures, m.DoneFeatures)
+
+		sf := make([]specFeature, len(mFeatures))
+		for j, f := range mFeatures {
+			sf[j] = specFeature{
+				ID:           f.ID,
+				Name:         f.Name,
+				Status:       f.Status,
+				Priority:     f.Priority,
+				SpecMD:       f.Spec,
+				Description:  f.Description,
+				Dependencies: f.DependsOn,
+			}
+		}
+
+		sections = append(sections, specSection{
+			ID:        fmt.Sprintf("milestone-%s", m.ID),
+			Title:     fmt.Sprintf("Phase %d: %s — %s", i+1, m.ID, m.Name),
+			ContentMD: contentMD,
+			Level:     1,
+			Features:  sf,
+		})
+	}
+
+	// Unassigned features
+	if len(unassigned) > 0 {
+		sf := make([]specFeature, len(unassigned))
+		for j, f := range unassigned {
+			sf[j] = specFeature{
+				ID:           f.ID,
+				Name:         f.Name,
+				Status:       f.Status,
+				Priority:     f.Priority,
+				SpecMD:       f.Spec,
+				Description:  f.Description,
+				Dependencies: f.DependsOn,
+			}
+		}
+		sections = append(sections, specSection{
+			ID:        "unassigned",
+			Title:     "Unassigned Features",
+			ContentMD: fmt.Sprintf("## Unassigned Features\n\n%d features not yet assigned to a milestone.\n", len(unassigned)),
+			Level:     1,
+			Features:  sf,
+		})
+	}
+
+	// Discussions section
+	if len(discussions) > 0 {
+		discMD := "## Active Discussions\n\n"
+		for _, d := range discussions {
+			discMD += fmt.Sprintf("- **%s** (%s) — %s\n", d.Title, d.Status, d.Author)
+		}
+		sections = append(sections, specSection{
+			ID:        "discussions",
+			Title:     "Active Discussions",
+			ContentMD: discMD,
+			Level:     1,
+		})
+	}
+
+	// Recent activity
+	if len(events) > 0 {
+		actMD := "## Recent Activity\n\n"
+		shown := events
+		if len(shown) > 20 {
+			shown = shown[:20]
+		}
+		for _, e := range shown {
+			actMD += fmt.Sprintf("- [%s] %s — %s\n", e.EventType, e.Data, e.CreatedAt)
+		}
+		sections = append(sections, specSection{
+			ID:        "recent-activity",
+			Title:     "Recent Activity",
+			ContentMD: actMD,
+			Level:     1,
+		})
+	}
+
+	result := map[string]any{
+		"title":        p.Name + " — Software Specification",
+		"generated_at": timeNowISO(),
+		"sections":     sections,
+		"stats": map[string]int{
+			"total_features":      len(features),
+			"done":                statusCounts["done"],
+			"in_progress":         statusCounts["implementing"],
+			"blocked":             statusCounts["blocked"],
+			"total_milestones":    len(milestones),
+			"total_roadmap_items": len(roadmapItems),
+		},
+	}
+
+	return writeJSON(w, result)
 }
