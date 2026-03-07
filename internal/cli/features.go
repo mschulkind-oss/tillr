@@ -263,3 +263,106 @@ var featureRemoveCmd = &cobra.Command{
 		return nil
 	},
 }
+
+var featureDepsCmd = &cobra.Command{
+	Use:   "deps <id>",
+	Short: "Show dependency tree for a feature",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		featureID := args[0]
+		f, err := db.GetFeature(database, featureID)
+		if err != nil {
+			return fmt.Errorf("feature not found: %s", featureID)
+		}
+
+		dependents, _ := db.GetFeatureDependents(database, featureID)
+
+		if jsonOutput {
+			tree, _ := db.GetFeatureDependencyTree(database, featureID)
+			blocked, _ := db.GetBlockedFeatures(database)
+			blockedSet := map[string]bool{}
+			for _, b := range blocked {
+				blockedSet[b.ID] = true
+			}
+			return printJSON(map[string]any{
+				"feature":    f,
+				"tree":       tree,
+				"dependents": dependents,
+				"is_blocked": blockedSet[f.ID],
+			})
+		}
+
+		// Print tree header
+		statusMark := statusSymbol(f.Status)
+		fmt.Printf("%s (%s) %s\n", f.Name, f.Status, statusMark)
+
+		// Print dependencies
+		for i, depID := range f.DependsOn {
+			dep, depErr := db.GetFeature(database, depID)
+			isLast := i == len(f.DependsOn)-1
+			prefix := "├── "
+			if isLast && len(dependents) == 0 {
+				prefix = "└── "
+			}
+			if depErr != nil {
+				fmt.Printf("%s%s (unknown)\n", prefix, depID)
+				continue
+			}
+			mark := statusSymbol(dep.Status)
+			blocking := ""
+			if dep.Status != "done" {
+				blocking = " BLOCKING"
+			}
+			fmt.Printf("%s%s (%s) %s%s\n", prefix, dep.Name, dep.Status, mark, blocking)
+			// Print transitive deps (one level)
+			for j, subDepID := range dep.DependsOn {
+				subDep, subErr := db.GetFeature(database, subDepID)
+				subPrefix := "│   "
+				if isLast && len(dependents) == 0 {
+					subPrefix = "    "
+				}
+				connector := "├── "
+				if j == len(dep.DependsOn)-1 {
+					connector = "└── "
+				}
+				if subErr != nil {
+					fmt.Printf("%s%s%s (unknown)\n", subPrefix, connector, subDepID)
+					continue
+				}
+				subMark := statusSymbol(subDep.Status)
+				fmt.Printf("%s%s%s (%s) %s\n", subPrefix, connector, subDep.Name, subDep.Status, subMark)
+			}
+		}
+
+		// Print dependents (required by)
+		if len(dependents) > 0 {
+			fmt.Println("Required by:")
+			for i, dep := range dependents {
+				prefix := "├── "
+				if i == len(dependents)-1 {
+					prefix = "└── "
+				}
+				fmt.Printf("%s%s (%s)\n", prefix, dep.Name, dep.Status)
+			}
+		}
+
+		return nil
+	},
+}
+
+func statusSymbol(status string) string {
+	switch status {
+	case "done":
+		return "✓"
+	case "blocked":
+		return "✗"
+	default:
+		return "○"
+	}
+}
