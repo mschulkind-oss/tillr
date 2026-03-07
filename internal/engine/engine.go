@@ -355,6 +355,49 @@ func CompleteWorkItem(database *sql.DB, result string) error {
 			Data:      fmt.Sprintf(`{"work_type":%q,"result":%q}`, w.WorkType, result),
 		})
 	}
+
+	// Auto-advance cycle to next step and create work item
+	if w.FeatureID != "" {
+		if c, cErr := db.GetActiveCycle(database, w.FeatureID); cErr == nil {
+			var ct *models.CycleType
+			for i := range models.CycleTypes {
+				if models.CycleTypes[i].Name == c.CycleType {
+					ct = &models.CycleTypes[i]
+					break
+				}
+			}
+			if ct != nil {
+				// Only advance if current step matches the completed work type
+				if c.CurrentStep < len(ct.Steps) && ct.Steps[c.CurrentStep] == w.WorkType {
+					nextStep := c.CurrentStep + 1
+					if nextStep >= len(ct.Steps) {
+						// Cycle complete
+						_ = db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed")
+					} else {
+						// Advance and create next work item (unless it's a judge step — those need scoring)
+						if ct.Steps[nextStep] != "judge" {
+							prompt := buildWorkItemPrompt(database, w.FeatureID, c.CycleType, ct.Steps[nextStep])
+							_ = db.CreateWorkItem(database, &models.WorkItem{
+								FeatureID:   w.FeatureID,
+								WorkType:    ct.Steps[nextStep],
+								AgentPrompt: prompt,
+							})
+						}
+						_ = db.UpdateCycleInstance(database, c.ID, nextStep, c.Iteration, "active")
+						if p != nil {
+							_ = db.InsertEvent(database, &models.Event{
+								ProjectID: p.ID,
+								FeatureID: w.FeatureID,
+								EventType: "cycle.advanced",
+								Data:      fmt.Sprintf(`{"step":%q,"step_index":%d}`, ct.Steps[nextStep], nextStep),
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Auto-transition feature to human-qa when implementation/agent-qa work completes
 	if w.FeatureID != "" && p != nil {
 		f, fErr := db.GetFeature(database, w.FeatureID)
