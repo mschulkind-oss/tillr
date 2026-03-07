@@ -1,4 +1,72 @@
-// app5.js — Timeline View, Batch Feature Operations & Activity Heatmap
+// app5.js — Timeline View, Batch Feature Operations, Activity Heatmap & Idea History
+
+// =====================================================
+// IDEA HISTORY VIEW
+// =====================================================
+
+App.renderIdeasHistory = async function() {
+    const ideas = await App.api('ideas?view=history');
+
+    let html = `<div class="page-header">
+        <h2 class="page-title">💡 Idea Queue</h2>
+        <div class="page-subtitle">${ideas.length} idea${ideas.length !== 1 ? 's' : ''} — History view</div>
+    </div>`;
+
+    html += `<div class="app4-ideas-toolbar">
+        <div class="app4-view-toggle">
+            <button class="app4-toggle-btn" data-view="queue">📋 Queue</button>
+            <button class="app4-toggle-btn active" data-view="history">📜 History</button>
+        </div>
+        <button class="app4-btn app4-btn-primary" id="submitIdeaBtn"><span class="app4-btn-icon">+</span> Submit Idea</button>
+    </div>`;
+
+    if (ideas.length === 0) {
+        html += `<div class="empty-state app4-empty-state">
+            <div class="empty-state-icon">📜</div>
+            <div class="empty-state-text">No ideas yet</div>
+            <div class="empty-state-hint">Submit ideas to see their journey here.</div>
+        </div>`;
+        return html;
+    }
+
+    var badgeMap = { pending: 'planning', processing: 'implementing', 'spec-ready': 'human-qa', approved: 'done', rejected: 'blocked' };
+    var featureBadgeMap = { draft: 'draft', planning: 'planning', implementing: 'implementing', 'agent-qa': 'agent-qa', 'human-qa': 'human-qa', done: 'done', blocked: 'blocked' };
+
+    html += `<div class="app4-history-timeline">`;
+    for (var i = 0; i < ideas.length; i++) {
+        var idea = ideas[i];
+        var typeBadge = idea.idea_type === 'bug' ? '🐛' : (idea.idea_type === 'feedback' ? '💬' : '✨');
+        var ideaBadge = badgeMap[idea.status] || 'planning';
+        var lf = idea.linked_feature;
+
+        html += `<div class="app4-history-item">`;
+        html += `<div class="app4-history-dot"></div>`;
+        html += `<div class="app4-history-content">`;
+        html += `<div class="app4-history-time">${timeAgo(idea.created_at)}</div>`;
+        html += `<div class="app4-history-main">`;
+        html += `<span class="app4-history-type">${typeBadge}</span>`;
+        html += `<span class="app4-history-title">${esc(idea.title)}</span>`;
+        html += `<span class="badge badge-${ideaBadge}">${esc(idea.status)}</span>`;
+        html += `</div>`;
+
+        if (lf) {
+            var fBadge = featureBadgeMap[lf.status] || 'planning';
+            html += `<div class="app4-history-link">`;
+            html += `<span class="app4-history-arrow">→</span>`;
+            html += `<span class="app4-history-feature-link clickable-feature" data-feature-id="${esc(lf.id)}">${esc(lf.name)}</span>`;
+            html += `<span class="badge badge-${fBadge}">${esc(lf.status)}</span>`;
+            html += `<span class="app4-history-priority" title="Priority ${lf.priority}">P${lf.priority}</span>`;
+            html += `</div>`;
+        } else {
+            html += `<div class="app4-history-link app4-history-pending">⏳ Pending processing</div>`;
+        }
+
+        html += `</div></div>`;
+    }
+    html += `</div>`;
+
+    return html;
+};
 
 // =====================================================
 // ACTIVITY HEATMAP
