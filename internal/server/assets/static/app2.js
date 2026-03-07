@@ -1014,11 +1014,11 @@ App.initKeyboardShortcuts = function() {
             var page = navMap[e.key];
             if (page) {
                 App._breadcrumbDetail = null;
+                App._breadcrumbSub = null;
                 App.navigate(page);
             }
             return;
         }
-
         if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             showChord();
@@ -1029,6 +1029,7 @@ App.initKeyboardShortcuts = function() {
         if (numNavMap[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             App._breadcrumbDetail = null;
+            App._breadcrumbSub = null;
             App.navigate(numNavMap[e.key]);
             return;
         }
@@ -1044,6 +1045,7 @@ App.initKeyboardShortcuts = function() {
         if (e.key === 'q' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             App._breadcrumbDetail = null;
+            App._breadcrumbSub = null;
             App.navigate('qa');
             return;
         }
@@ -1052,6 +1054,7 @@ App.initKeyboardShortcuts = function() {
         if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             App._breadcrumbDetail = null;
+            App._breadcrumbSub = null;
             App.navigate('stats');
             return;
         }
@@ -1093,66 +1096,6 @@ App.hideShortcutHelp = function() {
         modal.classList.remove('visible');
         modal.setAttribute('aria-hidden', 'true');
     }
-};
-
-// ── Breadcrumb Navigation ──
-App.updateBreadcrumbs = function() {
-    var content = document.getElementById('content');
-    if (!content) return;
-    // Remove existing breadcrumb bar
-    var existing = content.querySelector('.breadcrumb-bar');
-    if (existing) existing.remove();
-
-    var page = App.currentPage;
-    if (page === 'dashboard' && !App._breadcrumbDetail) return;
-
-    var pageLabels = {
-        dashboard: 'Dashboard', features: 'Features', roadmap: 'Roadmap',
-        cycles: 'Cycles', stats: 'Stats', history: 'History',
-        qa: 'QA', discussions: 'Discussions',
-    };
-
-    var bar = document.createElement('div');
-    bar.className = 'breadcrumb-bar';
-    bar.setAttribute('aria-label', 'Breadcrumb');
-
-    // Root: Dashboard
-    var root = document.createElement('a');
-    root.className = 'breadcrumb-item';
-    root.textContent = 'Dashboard';
-    root.addEventListener('click', function(e) { e.preventDefault(); App._breadcrumbDetail = null; App.navigate('dashboard'); });
-    bar.appendChild(root);
-
-    if (page !== 'dashboard') {
-        bar.appendChild(App._makeBreadcrumbSep());
-        if (App._breadcrumbDetail) {
-            var pageLink = document.createElement('a');
-            pageLink.className = 'breadcrumb-item';
-            pageLink.textContent = pageLabels[page] || page;
-            pageLink.addEventListener('click', function(e) { e.preventDefault(); App._breadcrumbDetail = null; App.navigate(page); });
-            bar.appendChild(pageLink);
-            bar.appendChild(App._makeBreadcrumbSep());
-            var detail = document.createElement('span');
-            detail.className = 'breadcrumb-item active';
-            detail.textContent = App._breadcrumbDetail;
-            bar.appendChild(detail);
-        } else {
-            var current = document.createElement('span');
-            current.className = 'breadcrumb-item active';
-            current.textContent = pageLabels[page] || page;
-            bar.appendChild(current);
-        }
-    }
-
-    content.insertBefore(bar, content.firstChild);
-};
-
-App._makeBreadcrumbSep = function() {
-    var sep = document.createElement('span');
-    sep.className = 'breadcrumb-separator';
-    sep.textContent = '›';
-    sep.setAttribute('aria-hidden', 'true');
-    return sep;
 };
 
 // ── Inline Feature Status Editing ──
@@ -1594,6 +1537,7 @@ App.changeFeatureStatus = async function(id, newStatus) {
         }
         // Re-render features page
         App._breadcrumbDetail = null;
+        App._breadcrumbSub = null;
         App.navigate('features');
     } catch (e) {
         App.toast('Failed to change status', 'error');

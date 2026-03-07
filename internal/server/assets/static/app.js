@@ -11,11 +11,13 @@ const App = {
         this.connectWebSocket();
         this._navContext = {};
         this._breadcrumbDetail = null;
+        this._breadcrumbSub = null;
         window.addEventListener('hashchange', () => {
             const parsed = this.parseHash();
             if (parsed.page) {
                 this._navContext = parsed.context || {};
                 this._breadcrumbDetail = null;
+                this._breadcrumbSub = null;
                 this.navigate(parsed.page);
             }
         });
@@ -1426,6 +1428,7 @@ const App = {
                     App._breadcrumbDetail = titleEl ? titleEl.textContent : (item.dataset.roadmapId || null);
                 } else {
                     App._breadcrumbDetail = null;
+                    App._breadcrumbSub = null;
                 }
                 App.updateBreadcrumbs();
             };
@@ -1795,6 +1798,7 @@ App._setupFeaturePage = function() {
                         App._breadcrumbDetail = fname ? fname.textContent : fid;
                     } else {
                         App._breadcrumbDetail = null;
+                        App._breadcrumbSub = null;
                     }
                     App.updateBreadcrumbs();
                 }

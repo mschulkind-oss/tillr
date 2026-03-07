@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -9,6 +10,259 @@ import (
 	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
+
+// Feature templates provide pre-populated spec content for common feature types.
+var featureTemplates = map[string]struct {
+	Name        string
+	Description string
+	Spec        string
+}{
+	"api-endpoint": {
+		Name:        "API Endpoint",
+		Description: "REST API endpoint spec",
+		Spec: `## API Endpoint Specification
+
+1. **Method & Path**
+   - HTTP Method: GET | POST | PUT | PATCH | DELETE
+   - Path: /api/v1/...
+   - Description: 
+
+2. **Request**
+   - Headers: 
+   - Query Parameters: 
+   - Request Body (JSON):
+     ` + "```json" + `
+     {}
+     ` + "```" + `
+
+3. **Response**
+   - Success Status: 200 | 201 | 204
+   - Response Body (JSON):
+     ` + "```json" + `
+     {}
+     ` + "```" + `
+
+4. **Authentication & Authorization**
+   - Auth Required: Yes | No
+   - Required Roles/Permissions: 
+
+5. **Error Responses**
+   - 400 Bad Request: 
+   - 401 Unauthorized: 
+   - 403 Forbidden: 
+   - 404 Not Found: 
+   - 422 Validation Error: 
+
+6. **Acceptance Criteria**
+   - [ ] Endpoint returns correct status codes
+   - [ ] Request validation rejects invalid input
+   - [ ] Auth checks enforced
+   - [ ] Response matches documented schema
+   - [ ] Error responses include actionable messages`,
+	},
+	"ui-component": {
+		Name:        "UI Component",
+		Description: "UI component spec",
+		Spec: `## UI Component Specification
+
+1. **Component Name & Purpose**
+   - Name: 
+   - Purpose: 
+   - Location: 
+
+2. **Props / Inputs**
+   - | Prop | Type | Required | Default | Description |
+     |------|------|----------|---------|-------------|
+     |      |      |          |         |             |
+
+3. **States**
+   - Loading: 
+   - Empty: 
+   - Error: 
+   - Populated: 
+   - Disabled: 
+
+4. **Events / Interactions**
+   - onClick: 
+   - onChange: 
+   - onSubmit: 
+
+5. **Accessibility**
+   - ARIA labels: 
+   - Keyboard navigation: 
+   - Screen reader support: 
+   - Color contrast: 
+
+6. **Acceptance Criteria**
+   - [ ] Renders correctly in all states
+   - [ ] Props are validated
+   - [ ] Events fire correctly
+   - [ ] Accessible via keyboard
+   - [ ] Passes WCAG 2.1 AA contrast requirements`,
+	},
+	"cli-command": {
+		Name:        "CLI Command",
+		Description: "CLI command spec",
+		Spec: `## CLI Command Specification
+
+1. **Command Signature**
+   - Command: lifecycle ...
+   - Arguments: 
+   - Description: 
+
+2. **Flags**
+   - | Flag | Type | Default | Description |
+     |------|------|---------|-------------|
+     |      |      |         |             |
+
+3. **Output Formats**
+   - Human-readable: 
+   - JSON (--json): 
+
+4. **Examples**
+   ` + "```bash" + `
+   # Basic usage
+   lifecycle ...
+
+   # With flags
+   lifecycle ... --flag value
+   ` + "```" + `
+
+5. **Error Cases**
+   - Missing required arguments: 
+   - Invalid flag values: 
+   - Not in a lifecycle project: 
+
+6. **Acceptance Criteria**
+   - [ ] Command executes successfully with valid input
+   - [ ] --json flag produces valid JSON output
+   - [ ] Error messages are clear and suggest next steps
+   - [ ] Help text is accurate and complete
+   - [ ] Works with both short and long flag forms`,
+	},
+	"migration": {
+		Name:        "Database Migration",
+		Description: "Database migration spec",
+		Spec: `## Database Migration Specification
+
+1. **Migration Purpose**
+   - Description: 
+   - Reason for change: 
+
+2. **Tables**
+   - New tables: 
+   - Modified tables: 
+
+3. **Columns**
+   - | Table | Column | Type | Nullable | Default | Description |
+     |-------|--------|------|----------|---------|-------------|
+     |       |        |      |          |         |             |
+
+4. **Indexes**
+   - | Table | Columns | Type | Purpose |
+     |-------|---------|------|---------|
+     |       |         |      |         |
+
+5. **Rollback Plan**
+   - Reversible: Yes | No
+   - Rollback steps: 
+   - Data preservation: 
+
+6. **Acceptance Criteria**
+   - [ ] Migration applies cleanly on empty database
+   - [ ] Migration applies cleanly on existing data
+   - [ ] Rollback works without data loss
+   - [ ] Indexes improve target query performance
+   - [ ] No breaking changes to existing queries`,
+	},
+	"integration": {
+		Name:        "Third-Party Integration",
+		Description: "Third-party integration spec",
+		Spec: `## Third-Party Integration Specification
+
+1. **Service**
+   - Name: 
+   - Documentation URL: 
+   - Purpose: 
+
+2. **Authentication**
+   - Auth method: API Key | OAuth2 | Bearer Token
+   - Credential storage: 
+   - Token refresh strategy: 
+
+3. **Endpoints / Operations**
+   - | Operation | Method | Endpoint | Description |
+     |-----------|--------|----------|-------------|
+     |           |        |          |             |
+
+4. **Error Handling**
+   - Retry strategy: 
+   - Timeout configuration: 
+   - Fallback behavior: 
+   - Circuit breaker: 
+
+5. **Rate Limits**
+   - Limit: 
+   - Throttling strategy: 
+   - Quota monitoring: 
+
+6. **Acceptance Criteria**
+   - [ ] Authentication works with valid credentials
+   - [ ] Graceful handling of auth failures
+   - [ ] Retries on transient errors
+   - [ ] Rate limits respected
+   - [ ] Timeout handling prevents hangs`,
+	},
+	"bug-fix": {
+		Name:        "Bug Fix",
+		Description: "Bug fix spec",
+		Spec: `## Bug Fix Specification
+
+1. **Reproduction Steps**
+   - Environment: 
+   - Steps:
+     1. 
+     2. 
+     3. 
+   - Expected behavior: 
+   - Actual behavior: 
+
+2. **Root Cause**
+   - Location (file:line): 
+   - Cause: 
+   - Impact: 
+
+3. **Fix Approach**
+   - Description: 
+   - Files to modify: 
+   - Risk assessment: Low | Medium | High
+
+4. **Test Plan**
+   - Unit tests: 
+   - Integration tests: 
+   - Manual verification: 
+
+5. **Regression Check**
+   - Related features to verify: 
+   - Edge cases to test: 
+
+6. **Acceptance Criteria**
+   - [ ] Bug no longer reproducible
+   - [ ] Reproduction test case added
+   - [ ] No regressions in related features
+   - [ ] Fix works across supported environments
+   - [ ] Root cause documented`,
+	},
+}
+
+func getTemplateNames() []string {
+	names := make([]string, 0, len(featureTemplates))
+	for name := range featureTemplates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 var featureCmd = &cobra.Command{
 	Use:   "feature",
@@ -27,8 +281,10 @@ func init() {
 	featureCmd.AddCommand(featureUntagCmd)
 	featureCmd.AddCommand(featureTagsCmd)
 	featureCmd.AddCommand(featureEstimatesCmd)
+	featureCmd.AddCommand(featureTemplatesCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
+	featureAddCmd.Flags().String("template", "", "Use a feature template (api-endpoint, ui-component, cli-command, migration, integration, bug-fix)")
 	featureAddCmd.Flags().Int("priority", 0, "Priority (higher = more important)")
 	featureAddCmd.Flags().StringSlice("depends-on", nil, "Feature dependencies")
 	featureAddCmd.Flags().String("description", "", "Feature description")
@@ -93,6 +349,17 @@ var featureAddCmd = &cobra.Command{
 		status, _ := cmd.Flags().GetString("status")
 		points, _ := cmd.Flags().GetInt("points")
 		size, _ := cmd.Flags().GetString("size")
+		templateName, _ := cmd.Flags().GetString("template")
+
+		if templateName != "" {
+			tmpl, ok := featureTemplates[templateName]
+			if !ok {
+				return fmt.Errorf("unknown template %q: available templates: %s", templateName, strings.Join(getTemplateNames(), ", "))
+			}
+			if spec == "" {
+				spec = tmpl.Spec
+			}
+		}
 
 		if points != 0 {
 			if err := validatePoints(points); err != nil {
@@ -721,6 +988,48 @@ var featureTagsCmd = &cobra.Command{
 		for _, tc := range tags {
 			fmt.Printf("%-30s %d\n", tc.Tag, tc.Count)
 		}
+		return nil
+	},
+}
+
+var featureTemplatesCmd = &cobra.Command{
+	Use:   "templates",
+	Short: "List available feature templates",
+	Long: `List all available feature templates that can be used with 'lifecycle feature add --template <name>'.
+
+Templates provide pre-populated spec content for common feature types,
+giving a structured starting point for acceptance criteria.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		names := getTemplateNames()
+
+		if jsonOutput {
+			type templateInfo struct {
+				Name        string `json:"name"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+			}
+			out := make([]templateInfo, 0, len(names))
+			for _, name := range names {
+				tmpl := featureTemplates[name]
+				out = append(out, templateInfo{
+					Name:        name,
+					Title:       tmpl.Name,
+					Description: tmpl.Description,
+				})
+			}
+			return printJSON(out)
+		}
+
+		fmt.Println("Available feature templates:")
+		fmt.Println()
+		fmt.Printf("  %-20s %s\n", "TEMPLATE", "DESCRIPTION")
+		fmt.Printf("  %-20s %s\n", strings.Repeat("─", 18), strings.Repeat("─", 40))
+		for _, name := range names {
+			tmpl := featureTemplates[name]
+			fmt.Printf("  %-20s %s\n", name, tmpl.Description)
+		}
+		fmt.Println()
+		fmt.Println("Usage: lifecycle feature add <name> --template <template>")
 		return nil
 	},
 }

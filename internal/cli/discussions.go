@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -9,6 +10,123 @@ import (
 	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
+
+// discussionTemplate holds metadata and content for a discussion template.
+type discussionTemplate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Body        string `json:"body"`
+}
+
+var discussionTemplates = map[string]discussionTemplate{
+	"rfc": {
+		Name:        "rfc",
+		Description: "Request for Comments",
+		Body: `## Problem
+
+_Describe the problem or need this RFC addresses._
+
+## Proposed Solution
+
+_Describe the proposed approach in detail._
+
+## Alternatives
+
+_What other approaches were considered? Why were they rejected?_
+
+## Open Questions
+
+- _Question 1_
+- _Question 2_
+`,
+	},
+	"adr": {
+		Name:        "adr",
+		Description: "Architecture Decision Record",
+		Body: `## Context
+
+_What is the issue that we're seeing that is motivating this decision or change?_
+
+## Decision
+
+_What is the change that we're proposing and/or doing?_
+
+## Consequences
+
+_What becomes easier or more difficult to do because of this change?_
+`,
+	},
+	"bug-report": {
+		Name:        "bug-report",
+		Description: "Bug Report",
+		Body: `## Steps to Reproduce
+
+1. _Step 1_
+2. _Step 2_
+3. _Step 3_
+
+## Expected Behavior
+
+_What should happen?_
+
+## Actual Behavior
+
+_What actually happens?_
+
+## Environment
+
+- OS: _e.g., macOS 14.0_
+- Version: _e.g., v1.2.3_
+- Other relevant details: _..._
+`,
+	},
+	"retro": {
+		Name:        "retro",
+		Description: "Retrospective",
+		Body: `## What Went Well
+
+- _Item 1_
+- _Item 2_
+
+## What Didn't Go Well
+
+- _Item 1_
+- _Item 2_
+
+## Action Items
+
+- [ ] _Action 1_
+- [ ] _Action 2_
+`,
+	},
+	"design": {
+		Name:        "design",
+		Description: "Design Review",
+		Body: `## Overview
+
+_Brief summary of the design being proposed._
+
+## Goals
+
+- _Goal 1_
+- _Goal 2_
+
+## Non-goals
+
+- _Non-goal 1_
+- _Non-goal 2_
+
+## Design
+
+_Detailed description of the design. Include diagrams, API shapes, data models, etc._
+
+## Risks
+
+- _Risk 1_
+- _Risk 2_
+`,
+	},
+}
 
 var discussCmd = &cobra.Command{
 	Use:   "discuss",
@@ -21,9 +139,11 @@ func init() {
 	discussCmd.AddCommand(discussShowCmd)
 	discussCmd.AddCommand(discussCommentCmd)
 	discussCmd.AddCommand(discussResolveCmd)
+	discussCmd.AddCommand(discussTemplatesCmd)
 
 	discussNewCmd.Flags().String("feature", "", "Link to feature ID")
 	discussNewCmd.Flags().String("author", "agent", "Author name/ID")
+	discussNewCmd.Flags().String("template", "", "Use a discussion template (rfc, adr, bug-report, retro, design)")
 
 	discussListCmd.Flags().String("feature", "", "Filter by feature ID")
 	discussListCmd.Flags().String("status", "", "Filter by status (open/resolved/merged/closed)")
@@ -59,11 +179,23 @@ var discussNewCmd = &cobra.Command{
 
 		featureID, _ := cmd.Flags().GetString("feature")
 		author, _ := cmd.Flags().GetString("author")
+		templateName, _ := cmd.Flags().GetString("template")
+
+		var body string
+		if templateName != "" {
+			tmpl, ok := discussionTemplates[templateName]
+			if !ok {
+				names := sortedTemplateNames()
+				return fmt.Errorf("unknown template %q (available: %s)", templateName, strings.Join(names, ", "))
+			}
+			body = tmpl.Body
+		}
 
 		d := &models.Discussion{
 			ProjectID: p.ID,
 			FeatureID: featureID,
 			Title:     args[0],
+			Body:      body,
 			Author:    author,
 			Status:    "open",
 		}
@@ -272,4 +404,38 @@ var discussResolveCmd = &cobra.Command{
 		fmt.Printf("✓ Discussion #%d → %s\n", id, status)
 		return nil
 	},
+}
+
+var discussTemplatesCmd = &cobra.Command{
+	Use:   "templates",
+	Short: "List available discussion templates",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		names := sortedTemplateNames()
+
+		if jsonOutput {
+			out := make([]discussionTemplate, 0, len(names))
+			for _, n := range names {
+				out = append(out, discussionTemplates[n])
+			}
+			return printJSON(out)
+		}
+
+		fmt.Printf("%-12s %s\n", "NAME", "DESCRIPTION")
+		fmt.Println(strings.Repeat("─", 40))
+		for _, n := range names {
+			t := discussionTemplates[n]
+			fmt.Printf("%-12s %s\n", t.Name, t.Description)
+		}
+		fmt.Printf("\nUse --template <name> with 'discuss new' to apply a template.\n")
+		return nil
+	},
+}
+
+func sortedTemplateNames() []string {
+	names := make([]string, 0, len(discussionTemplates))
+	for k := range discussionTemplates {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }

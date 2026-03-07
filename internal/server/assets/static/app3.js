@@ -30,13 +30,7 @@ App.loadCycleDetail = function(cycleId) {
     var content = document.getElementById('content');
     if (!content) return;
 
-    // Keep breadcrumb if present
-    var bc = content.querySelector('.breadcrumb-bar');
-    var tempFrag = document.createDocumentFragment();
-    if (bc) tempFrag.appendChild(bc);
-
     content.innerHTML = '<div class="loading-spinner" style="text-align:center;padding:60px 0"><div class="spinner"></div></div>';
-    if (tempFrag.children.length) content.insertBefore(tempFrag.children[0], content.firstChild);
 
     App.api('cycles/' + cycleId).then(function(data) {
         App.renderCycleDetailView(data);
@@ -85,10 +79,6 @@ App.renderCycleDetailView = function(data) {
     });
 
     var selectedIter = App._cycleDetailIter || 0; // 0 = all
-
-    var bc = content.querySelector('.breadcrumb-bar');
-    var tempFrag = document.createDocumentFragment();
-    if (bc) tempFrag.appendChild(bc);
 
     var html = '';
 
@@ -225,7 +215,6 @@ App.renderCycleDetailView = function(data) {
     html += '</div>';
 
     content.innerHTML = html;
-    if (tempFrag.children.length) content.insertBefore(tempFrag.children[0], content.firstChild);
 
     // Bind events
     App.bindCycleDetailEvents(data);
@@ -237,6 +226,7 @@ App.bindCycleDetailEvents = function(data) {
         backBtn.addEventListener('click', function() {
             App._activeCycleDetail = null;
             App._breadcrumbDetail = null;
+            App._breadcrumbSub = null;
             App._cycleDetailIter = 0;
             App.navigate('cycles');
         });
@@ -683,6 +673,7 @@ App._bindDiscussionEvents = function() {
                 App.toast('Discussion created', 'success');
                 App._discViewMode = 'list';
                 App._breadcrumbDetail = null;
+                App._breadcrumbSub = null;
                 App.navigate('discussions');
             } catch(ex) {
                 App.toast('Failed to create discussion', 'error');
@@ -714,6 +705,7 @@ App._bindDiscussionEvents = function() {
     if (backBtn) {
         backBtn.addEventListener('click', function() {
             App._breadcrumbDetail = null;
+            App._breadcrumbSub = null;
             App._discViewMode = 'list';
             App.navigate('discussions');
         });

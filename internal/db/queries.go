@@ -480,6 +480,11 @@ func InsertEvent(db *sql.DB, e *models.Event) error {
 }
 
 func ListEvents(db *sql.DB, projectID, featureID, eventType, since string, limit int) ([]models.Event, error) {
+	return ListEventsFiltered(db, projectID, featureID, eventType, since, "", limit)
+}
+
+// ListEventsFiltered queries events with optional until filter in addition to ListEvents filters.
+func ListEventsFiltered(db *sql.DB, projectID, featureID, eventType, since, until string, limit int) ([]models.Event, error) {
 	q := `SELECT id, project_id, COALESCE(feature_id,''), event_type, COALESCE(data,''), created_at
 		FROM events WHERE project_id = ?`
 	args := []any{projectID}
@@ -494,6 +499,10 @@ func ListEvents(db *sql.DB, projectID, featureID, eventType, since string, limit
 	if since != "" {
 		q += " AND created_at >= ?"
 		args = append(args, since)
+	}
+	if until != "" {
+		q += " AND created_at <= ?"
+		args = append(args, until)
 	}
 	q += " ORDER BY created_at DESC"
 	if limit > 0 {
@@ -2442,9 +2451,113 @@ func RemoveFromIndex(database *sql.DB, entityType, entityID string) error {
 	return err
 }
 
-// GetTimeTrackingSummary returns time tracking summary for a project (stub).
-func GetTimeTrackingSummary(_ *sql.DB, _ string) (map[string]any, error) {
-	return map[string]any{}, nil
+// GetWorkItemsWithTime returns work items for a feature that have both started_at and completed_at.
+func GetWorkItemsWithTime(database *sql.DB, featureID string) ([]models.WorkItemTime, error) {
+	rows, err := database.Query(`
+		SELECT id, feature_id, work_type, status, started_at, completed_at,
+			(julianday(completed_at) - julianday(started_at)) * 86400 AS duration_sec
+		FROM work_items
+		WHERE feature_id = ? AND started_at != '' AND completed_at != ''
+		ORDER BY started_at ASC`, featureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.WorkItemTime
+	for rows.Next() {
+		var w models.WorkItemTime
+		if err := rows.Scan(&w.ID, &w.FeatureID, &w.WorkType, &w.Status,
+			&w.StartedAt, &w.CompletedAt, &w.DurationSec); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// GetProjectTimeSummary returns aggregated time tracking data for the whole project.
+func GetProjectTimeSummary(database *sql.DB) (*models.ProjectTimeSummary, error) {
+	summary := &models.ProjectTimeSummary{}
+
+	// Total time
+	err := database.QueryRow(`
+		SELECT COALESCE(SUM((julianday(completed_at) - julianday(started_at)) * 86400), 0)
+		FROM work_items
+		WHERE started_at != '' AND completed_at != ''`).Scan(&summary.TotalSec)
+	if err != nil {
+		return nil, fmt.Errorf("querying total time: %w", err)
+	}
+
+	// Average time per work type
+	rows, err := database.Query(`
+		SELECT work_type, COUNT(*) AS cnt,
+			SUM((julianday(completed_at) - julianday(started_at)) * 86400) AS total_sec,
+			AVG((julianday(completed_at) - julianday(started_at)) * 86400) AS avg_sec
+		FROM work_items
+		WHERE started_at != '' AND completed_at != ''
+		GROUP BY work_type
+		ORDER BY total_sec DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying by work type: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var wt models.WorkTypeAvg
+		if err := rows.Scan(&wt.WorkType, &wt.Count, &wt.TotalSec, &wt.AvgSec); err != nil {
+			return nil, err
+		}
+		summary.ByWorkType = append(summary.ByWorkType, wt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Top 5 features by time
+	rows2, err := database.Query(`
+		SELECT w.feature_id, COALESCE(f.name, w.feature_id) AS name,
+			SUM((julianday(w.completed_at) - julianday(w.started_at)) * 86400) AS total_sec
+		FROM work_items w
+		LEFT JOIN features f ON w.feature_id = f.id
+		WHERE w.started_at != '' AND w.completed_at != ''
+		GROUP BY w.feature_id
+		ORDER BY total_sec DESC
+		LIMIT 5`)
+	if err != nil {
+		return nil, fmt.Errorf("querying top features: %w", err)
+	}
+	defer rows2.Close() //nolint:errcheck
+	for rows2.Next() {
+		var ft models.FeatureTimeSummary
+		if err := rows2.Scan(&ft.FeatureID, &ft.Name, &ft.TotalSec); err != nil {
+			return nil, err
+		}
+		summary.TopFeatures = append(summary.TopFeatures, ft)
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// Time by feature status
+	rows3, err := database.Query(`
+		SELECT COALESCE(f.status, 'unknown') AS status,
+			SUM((julianday(w.completed_at) - julianday(w.started_at)) * 86400) AS total_sec
+		FROM work_items w
+		LEFT JOIN features f ON w.feature_id = f.id
+		WHERE w.started_at != '' AND w.completed_at != ''
+		GROUP BY f.status
+		ORDER BY total_sec DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying by status: %w", err)
+	}
+	defer rows3.Close() //nolint:errcheck
+	for rows3.Next() {
+		var st models.StatusTime
+		if err := rows3.Scan(&st.Status, &st.TotalSec); err != nil {
+			return nil, err
+		}
+		summary.ByStatus = append(summary.ByStatus, st)
+	}
+	return summary, rows3.Err()
 }
 
 // --- Feature Tags ---
