@@ -1,4 +1,154 @@
-// app5.js — Timeline View & Batch Feature Operations
+// app5.js — Timeline View, Batch Feature Operations & Activity Heatmap
+
+// =====================================================
+// ACTIVITY HEATMAP
+// =====================================================
+
+App.renderHeatmap = function(containerEl, heatmapData) {
+    var days = heatmapData.days || [];
+    var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    // Build a map of date -> day data
+    var dayMap = {};
+    for (var i = 0; i < days.length; i++) {
+        dayMap[days[i].date] = days[i];
+    }
+
+    // Build 52 weeks of data ending today
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Find the last Saturday (end of last complete week column) or use today
+    var endDate = new Date(today);
+    // Start from ~52 weeks ago, aligned to Sunday
+    var startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - 364);
+    // Align to Sunday
+    startDate.setDate(startDate.getDate() - startDate.getDay());
+
+    // Build weeks array: each week is an array of 7 day objects
+    var weeks = [];
+    var currentDate = new Date(startDate);
+    while (currentDate <= today) {
+        var week = [];
+        for (var d = 0; d < 7; d++) {
+            var dateStr = currentDate.getFullYear() + '-'
+                + String(currentDate.getMonth() + 1).padStart(2, '0') + '-'
+                + String(currentDate.getDate()).padStart(2, '0');
+            var dayData = dayMap[dateStr];
+            var count = dayData ? dayData.count : 0;
+            var level = count === 0 ? 0 : count <= 3 ? 1 : count <= 6 ? 2 : count <= 9 ? 3 : 4;
+            var isFuture = currentDate > today;
+            week.push({
+                date: dateStr,
+                count: count,
+                level: level,
+                events: dayData ? dayData.events : {},
+                isFuture: isFuture,
+                dayOfWeek: currentDate.getDay(),
+                month: currentDate.getMonth(),
+                year: currentDate.getFullYear()
+            });
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+        weeks.push(week);
+    }
+
+    // Build month labels with column positions
+    var monthLabels = [];
+    var lastMonth = -1;
+    for (var w = 0; w < weeks.length; w++) {
+        var firstDayMonth = weeks[w][0].month;
+        if (firstDayMonth !== lastMonth) {
+            monthLabels.push({ month: monthNames[firstDayMonth], col: w });
+            lastMonth = firstDayMonth;
+        }
+    }
+
+    // Build HTML
+    var html = '<div class="heatmap-wrap">';
+
+    // Month labels row
+    html += '<div class="heatmap-top"><div class="hm-labels"></div><div class="heatmap-months">';
+    var prevCol = 0;
+    for (var m = 0; m < monthLabels.length; m++) {
+        var ml = monthLabels[m];
+        var colSpan = (m + 1 < monthLabels.length ? monthLabels[m + 1].col : weeks.length) - ml.col;
+        var widthPx = colSpan * 14; // 12px cell + 2px gap
+        html += '<span class="hm-month" style="width:' + widthPx + 'px">' + ml.month + '</span>';
+    }
+    html += '</div></div>';
+
+    // Grid body: day labels + cells
+    html += '<div class="heatmap-body">';
+
+    // Day labels column
+    html += '<div class="hm-labels">';
+    for (var dl = 0; dl < 7; dl++) {
+        // Only show Mon, Wed, Fri labels
+        if (dl === 1 || dl === 3 || dl === 5) {
+            html += '<div class="hm-label">' + dayLabels[dl].substring(0, 3) + '</div>';
+        } else {
+            html += '<div class="hm-label"></div>';
+        }
+    }
+    html += '</div>';
+
+    // Week columns
+    html += '<div class="heatmap">';
+    for (var wi = 0; wi < weeks.length; wi++) {
+        html += '<div class="hm-week">';
+        for (var di = 0; di < weeks[wi].length; di++) {
+            var cell = weeks[wi][di];
+            if (cell.isFuture) {
+                html += '<div class="hm-cell" data-level="0" style="opacity:0.3"></div>';
+            } else {
+                html += '<div class="hm-cell" data-level="' + cell.level + '"'
+                    + ' data-date="' + cell.date + '"'
+                    + ' data-count="' + cell.count + '"></div>';
+            }
+        }
+        html += '</div>';
+    }
+    html += '</div></div>';
+
+    // Legend
+    html += '<div class="hm-legend"><span>Less</span>';
+    for (var l = 0; l <= 4; l++) {
+        html += '<span class="hm-legend-cell" data-level="' + l + '"></span>';
+    }
+    html += '<span>More</span></div>';
+
+    html += '</div>';
+
+    // Tooltip element
+    html += '<div class="hm-tooltip" id="hmTooltip"></div>';
+
+    containerEl.innerHTML = html;
+
+    // Bind hover tooltip
+    var tooltip = containerEl.querySelector('#hmTooltip');
+    var cells = containerEl.querySelectorAll('.hm-cell[data-date]');
+    for (var ci = 0; ci < cells.length; ci++) {
+        cells[ci].addEventListener('mouseenter', function(e) {
+            var c = e.target;
+            var date = c.getAttribute('data-date');
+            var count = c.getAttribute('data-count');
+            var parts = date.split('-');
+            var dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            var formatted = monthNames[dateObj.getMonth()] + ' ' + dateObj.getDate() + ', ' + dateObj.getFullYear();
+            var text = '<span class="hm-tooltip-count">' + count + ' event' + (count !== '1' ? 's' : '') + '</span> on ' + formatted;
+            tooltip.innerHTML = text;
+            tooltip.style.display = 'block';
+            var rect = c.getBoundingClientRect();
+            tooltip.style.left = (rect.left + rect.width / 2 - tooltip.offsetWidth / 2) + 'px';
+            tooltip.style.top = (rect.top - tooltip.offsetHeight - 6) + 'px';
+        });
+        cells[ci].addEventListener('mouseleave', function() {
+            tooltip.style.display = 'none';
+        });
+    }
+};
 
 // =====================================================
 // TIMELINE PAGE

@@ -2295,6 +2295,53 @@ func IndexEntity(database *sql.DB, entityType, entityID, title, content string) 
 	return err
 }
 
+// GetActivityHeatmap returns daily event counts for the given number of past days.
+func GetActivityHeatmap(database *sql.DB, projectID string, days int) ([]models.HeatmapDay, error) {
+	rows, err := database.Query(`
+		SELECT date(created_at) AS day, event_type, COUNT(*) AS cnt
+		FROM events
+		WHERE project_id = ? AND created_at >= datetime('now', ? || ' days')
+		GROUP BY day, event_type
+		ORDER BY day`, projectID, fmt.Sprintf("-%d", days))
+	if err != nil {
+		return nil, fmt.Errorf("querying activity heatmap: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	dayMap := make(map[string]*models.HeatmapDay)
+	for rows.Next() {
+		var day, eventType string
+		var cnt int
+		if err := rows.Scan(&day, &eventType, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning heatmap row: %w", err)
+		}
+		d, ok := dayMap[day]
+		if !ok {
+			d = &models.HeatmapDay{Date: day, Events: make(map[string]int)}
+			dayMap[day] = d
+		}
+		d.Events[eventType] = cnt
+		d.Count += cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]models.HeatmapDay, 0, len(dayMap))
+	for _, d := range dayMap {
+		out = append(out, *d)
+	}
+	// Sort by date ascending
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[i].Date > out[j].Date {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
+}
+
 // RemoveFromIndex removes an entity from the FTS5 search index.
 func RemoveFromIndex(database *sql.DB, entityType, entityID string) error {
 	_, err := database.Exec(

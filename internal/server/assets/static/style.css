@@ -8008,3 +8008,42 @@ textarea:focus-visible,
 .lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.85); cursor: pointer; }
 .lightbox-img { position: relative; z-index: 1; max-width: 95vw; max-height: 95vh; object-fit: contain; border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); animation: lightbox-in 0.2s ease; }
 @keyframes lightbox-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+/* === ACTIVITY HEATMAP === */
+.heatmap-wrap { display: flex; flex-direction: column; gap: 4px; }
+.heatmap-top { display: flex; }
+.heatmap-months { display: flex; gap: 2px; margin-left: 32px; margin-bottom: 4px; }
+.hm-month { font-size: 10px; color: var(--text-secondary); }
+.heatmap-body { display: flex; }
+.hm-labels { display: flex; flex-direction: column; gap: 2px; margin-right: 4px; width: 28px; flex-shrink: 0; }
+.hm-label { height: 12px; font-size: 9px; line-height: 12px; color: var(--text-secondary); text-align: right; }
+.heatmap { display: flex; gap: 2px; overflow-x: auto; }
+.hm-week { display: flex; flex-direction: column; gap: 2px; }
+.hm-cell { width: 12px; height: 12px; border-radius: 2px; cursor: pointer; position: relative; }
+.hm-cell:hover { outline: 1px solid var(--text-primary); outline-offset: -1px; }
+.hm-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.hm-legend-cell { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.hm-tooltip { position: fixed; background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 11px; color: var(--text-primary); pointer-events: none; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.3); white-space: nowrap; display: none; }
+.hm-tooltip-count { font-weight: 600; }
+/* Light theme heatmap colors */
+.hm-cell[data-level="0"] { background: #ebedf0; }
+.hm-cell[data-level="1"] { background: #9be9a8; }
+.hm-cell[data-level="2"] { background: #40c463; }
+.hm-cell[data-level="3"] { background: #30a14e; }
+.hm-cell[data-level="4"] { background: #216e39; }
+/* Dark theme heatmap colors */
+[data-theme="dark"] .hm-cell[data-level="0"] { background: var(--bg-secondary); }
+[data-theme="dark"] .hm-cell[data-level="1"] { background: #0e4429; }
+[data-theme="dark"] .hm-cell[data-level="2"] { background: #006d32; }
+[data-theme="dark"] .hm-cell[data-level="3"] { background: #26a641; }
+[data-theme="dark"] .hm-cell[data-level="4"] { background: #39d353; }
+.hm-legend-cell[data-level="0"] { background: #ebedf0; }
+.hm-legend-cell[data-level="1"] { background: #9be9a8; }
+.hm-legend-cell[data-level="2"] { background: #40c463; }
+.hm-legend-cell[data-level="3"] { background: #30a14e; }
+.hm-legend-cell[data-level="4"] { background: #216e39; }
+[data-theme="dark"] .hm-legend-cell[data-level="0"] { background: var(--bg-secondary); }
+[data-theme="dark"] .hm-legend-cell[data-level="1"] { background: #0e4429; }
+[data-theme="dark"] .hm-legend-cell[data-level="2"] { background: #006d32; }
+[data-theme="dark"] .hm-legend-cell[data-level="3"] { background: #26a641; }
+[data-theme="dark"] .hm-legend-cell[data-level="4"] { background: #39d353; }
