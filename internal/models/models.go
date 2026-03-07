@@ -128,6 +128,33 @@ type CycleScore struct {
 	CreatedAt string  `json:"created_at"`
 }
 
+// Discussion is an RFC-style thread for agent collaboration.
+type Discussion struct {
+	ID        int    `json:"id"`
+	ProjectID string `json:"project_id"`
+	FeatureID string `json:"feature_id,omitempty"`
+	Title     string `json:"title"`
+	Status    string `json:"status"` // open, resolved, merged, closed
+	Author    string `json:"author"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+
+	// Computed
+	CommentCount int                 `json:"comment_count,omitempty"`
+	Comments     []DiscussionComment `json:"comments,omitempty"`
+}
+
+// DiscussionComment is a comment in a discussion thread.
+type DiscussionComment struct {
+	ID           int    `json:"id"`
+	DiscussionID int    `json:"discussion_id"`
+	Author       string `json:"author"`
+	Content      string `json:"content"`
+	ParentID     int    `json:"parent_id,omitempty"`
+	CommentType  string `json:"comment_type"` // comment, proposal, approval, objection, revision, decision
+	CreatedAt    string `json:"created_at"`
+}
+
 // StatusOverview is the project dashboard summary.
 type StatusOverview struct {
 	Project        *Project       `json:"project"`

@@ -47,6 +47,7 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(logCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(discussCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

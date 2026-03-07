@@ -201,4 +201,32 @@ var migrations = []string{
 	// Migration 5: Add spec and roadmap_item_id columns to features for in-band context
 	`ALTER TABLE features ADD COLUMN spec TEXT NOT NULL DEFAULT '';
 	 ALTER TABLE features ADD COLUMN roadmap_item_id TEXT NOT NULL DEFAULT '' REFERENCES roadmap_items(id);`,
+
+	// Migration 6: Discussion/RFC system for agent collaboration
+	`CREATE TABLE discussions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		feature_id TEXT REFERENCES features(id),
+		title TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','merged','closed')),
+		author TEXT NOT NULL DEFAULT 'system',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE discussion_comments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		discussion_id INTEGER NOT NULL REFERENCES discussions(id),
+		author TEXT NOT NULL DEFAULT 'agent',
+		content TEXT NOT NULL,
+		parent_id INTEGER REFERENCES discussion_comments(id),
+		comment_type TEXT NOT NULL DEFAULT 'comment' CHECK(comment_type IN ('comment','proposal','approval','objection','revision','decision')),
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE INDEX idx_discussions_project ON discussions(project_id);
+	CREATE INDEX idx_discussions_feature ON discussions(feature_id);
+	CREATE INDEX idx_discussions_status ON discussions(status);
+	CREATE INDEX idx_comments_discussion ON discussion_comments(discussion_id);
+	CREATE INDEX idx_comments_parent ON discussion_comments(parent_id);`,
 }
