@@ -7848,3 +7848,12 @@ canvas { min-height: 200px; }
     padding: 2px 6px;
 }
 /* === END INLINE EDITING === */
+
+/* === COORDINATION PANEL === */
+.coordination-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.coord-stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; text-align: center; }
+.coord-stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); }
+.coord-stat-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; margin-top: 4px; }
+.coord-warning { color: var(--warning, #d29922); }
+.coord-danger { color: var(--danger, #f85149); }
+/* === END COORDINATION PANEL === */

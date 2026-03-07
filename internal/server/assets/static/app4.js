@@ -797,6 +797,57 @@ App.showToast = function(message) {
     }, 2000);
 };
 
+// Reusable inline edit function — used by features, roadmap items, milestones
+App.inlineEdit = function(el, opts) {
+    if (el.querySelector('.inline-edit-input')) return;
+    var original = opts.value;
+    var input;
+    if (opts.type === 'select') {
+        input = document.createElement('select');
+        input.className = 'inline-edit-input inline-edit-select';
+        (opts.options || []).forEach(function(o) {
+            var opt = document.createElement('option');
+            opt.value = typeof o === 'object' ? o.value : o;
+            opt.textContent = typeof o === 'object' ? o.label : o;
+            if ((typeof o === 'object' ? o.value : o) === original) opt.selected = true;
+            input.appendChild(opt);
+        });
+    } else if (opts.type === 'textarea') {
+        input = document.createElement('textarea');
+        input.className = 'inline-edit-input inline-edit-textarea';
+        input.value = original;
+        input.rows = 3;
+    } else {
+        input = document.createElement('input');
+        input.className = 'inline-edit-input';
+        input.type = 'text';
+        input.value = original;
+    }
+    el.dataset.originalHtml = el.innerHTML;
+    el.innerHTML = '';
+    el.appendChild(input);
+    input.focus();
+    if (input.select && opts.type !== 'select') input.select();
+
+    var done = false;
+    var save = async function() {
+        if (done) return; done = true;
+        var newVal = input.value.trim();
+        if (newVal && newVal !== original) {
+            try { await opts.onSave(newVal); App.showToast('\u2713 Saved'); }
+            catch(e) { App.showToast('\u2717 ' + (e.message || 'Save failed')); el.innerHTML = el.dataset.originalHtml; return; }
+        }
+        el.innerHTML = newVal ? App.esc(newVal) : el.dataset.originalHtml;
+    };
+    var cancel = function() { if (done) return; done = true; el.innerHTML = el.dataset.originalHtml; };
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !(opts.type === 'textarea' && e.shiftKey)) { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', function() { setTimeout(save, 150); });
+    if (opts.type === 'select') input.addEventListener('change', save);
+};
+
 // Bind feedback form submission
 (function() {
     document.addEventListener('DOMContentLoaded', function() {
