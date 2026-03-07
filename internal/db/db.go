@@ -383,4 +383,7 @@ var migrations = []string{
 	// Migration 16: Feature estimation (story points + t-shirt sizing)
 	`ALTER TABLE features ADD COLUMN estimate_points INTEGER NOT NULL DEFAULT 0;
 	 ALTER TABLE features ADD COLUMN estimate_size TEXT NOT NULL DEFAULT '';`,
+
+	// Migration 17: Add superseded_by column to decisions for ADR linking
+	`ALTER TABLE decisions ADD COLUMN superseded_by TEXT DEFAULT '';`,
 }

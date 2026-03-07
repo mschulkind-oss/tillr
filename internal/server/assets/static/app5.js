@@ -724,3 +724,348 @@ document.addEventListener('click', function(e) {
         }
     };
 })();
+
+// =====================================================
+// IN-APP NOTIFICATION SYSTEM
+// =====================================================
+
+var Notifications = {
+    _items: [],
+    _readIds: [],
+    _lastSeenEventId: 0,
+    _maxItems: 20,
+    _open: false,
+    _initialized: false,
+
+    NOTEWORTHY_TYPES: [
+        'feature.status_changed',
+        'feature.cascade_blocked',
+        'feature.cascade_unblocked',
+        'idea.approved',
+        'idea.rejected',
+        'cycle.advanced',
+        'cycle.scored',
+        'work.completed'
+    ],
+
+    init: function() {
+        if (this._initialized) return;
+        this._initialized = true;
+        this._loadReadState();
+        this._bindUI();
+        this._hookWebSocket();
+        this._fetchInitial();
+    },
+
+    // Load read IDs from localStorage
+    _loadReadState: function() {
+        try {
+            var stored = localStorage.getItem('lifecycle_notif_read');
+            if (stored) this._readIds = JSON.parse(stored);
+        } catch(e) { this._readIds = []; }
+        try {
+            var lastSeen = localStorage.getItem('lifecycle_notif_last_seen');
+            if (lastSeen) this._lastSeenEventId = parseInt(lastSeen, 10) || 0;
+        } catch(e) { /* ignore */ }
+    },
+
+    _saveReadState: function() {
+        try {
+            // Keep only IDs of current items to avoid unbounded growth
+            var currentIds = this._items.map(function(n) { return n.id; });
+            this._readIds = this._readIds.filter(function(id) { return currentIds.indexOf(id) >= 0; });
+            localStorage.setItem('lifecycle_notif_read', JSON.stringify(this._readIds));
+            localStorage.setItem('lifecycle_notif_last_seen', String(this._lastSeenEventId));
+        } catch(e) { /* ignore */ }
+    },
+
+    _bindUI: function() {
+        var self = this;
+        var bell = document.getElementById('notifBell');
+        var container = document.getElementById('notifContainer');
+        if (!bell) return;
+
+        bell.addEventListener('click', function(e) {
+            e.stopPropagation();
+            self._toggle();
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (self._open && container && !container.contains(e.target)) {
+                self._close();
+            }
+        });
+
+        // Close on Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && self._open) {
+                self._close();
+                bell.focus();
+            }
+        });
+
+        var markAllBtn = document.getElementById('notifMarkAll');
+        if (markAllBtn) {
+            markAllBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                self.markAllRead();
+            });
+        }
+    },
+
+    // Wrap App.connectWebSocket to intercept messages
+    _hookWebSocket: function() {
+        if (this._wsHooked) return;
+        this._wsHooked = true;
+        var self = this;
+        var origConnect = App.connectWebSocket;
+        App.connectWebSocket = function() {
+            origConnect.call(App);
+            if (App._ws) {
+                var origOnMessage = App._ws.onmessage;
+                App._ws.onmessage = function(event) {
+                    if (origOnMessage) origOnMessage.call(App._ws, event);
+                    self._onWSMessage(event);
+                };
+            }
+        };
+    },
+
+    _onWSMessage: function(event) {
+        var self = this;
+        try {
+            var msg = JSON.parse(event.data);
+            if (msg.type === 'refresh') {
+                // Debounce: avoid flooding on rapid DB writes
+                clearTimeout(self._fetchTimer);
+                self._fetchTimer = setTimeout(function() { self._fetchNew(); }, 500);
+            }
+        } catch(e) { /* ignore */ }
+    },
+
+    _fetchInitial: function() {
+        var self = this;
+        App.api('history').then(function(events) {
+            if (!Array.isArray(events)) return;
+            var noteworthy = events.filter(function(ev) {
+                return self.NOTEWORTHY_TYPES.indexOf(ev.event_type) >= 0;
+            });
+            // Take latest 20
+            noteworthy = noteworthy.slice(0, self._maxItems);
+            self._items = noteworthy.map(function(ev) { return self._eventToNotif(ev); });
+            if (self._items.length > 0) {
+                self._lastSeenEventId = Math.max.apply(null, self._items.map(function(n) { return n.id; }));
+                self._saveReadState();
+            }
+            self._render();
+        }).catch(function() { /* ignore fetch errors */ });
+    },
+
+    _fetchNew: function() {
+        var self = this;
+        App.api('history').then(function(events) {
+            if (!Array.isArray(events)) return;
+            var noteworthy = events.filter(function(ev) {
+                return self.NOTEWORTHY_TYPES.indexOf(ev.event_type) >= 0 && ev.id > self._lastSeenEventId;
+            });
+            if (noteworthy.length === 0) return;
+            // Add new items to front
+            var newItems = noteworthy.map(function(ev) { return self._eventToNotif(ev); });
+            self._items = newItems.concat(self._items).slice(0, self._maxItems);
+            self._lastSeenEventId = Math.max.apply(null, self._items.map(function(n) { return n.id; }));
+            self._saveReadState();
+            self._render();
+        }).catch(function() { /* ignore */ });
+    },
+
+    _eventToNotif: function(ev) {
+        var data = {};
+        try { data = ev.data ? JSON.parse(ev.data) : {}; } catch(e) { /* ignore */ }
+        return {
+            id: ev.id,
+            type: ev.event_type,
+            featureId: ev.feature_id || '',
+            text: this._formatText(ev.event_type, data, ev.feature_id),
+            icon: this._getIcon(ev.event_type),
+            time: ev.created_at,
+            data: data
+        };
+    },
+
+    _formatText: function(type, data, featureId) {
+        var fLabel = featureId ? '"' + featureId + '"' : 'a feature';
+        switch (type) {
+            case 'feature.status_changed':
+                return 'Feature ' + fLabel + ' changed from ' + (data.from || '?') + ' → ' + (data.to || '?');
+            case 'feature.cascade_blocked':
+                return 'Feature ' + fLabel + ' blocked by dependency cascade';
+            case 'feature.cascade_unblocked':
+                return 'Feature ' + fLabel + ' unblocked';
+            case 'idea.approved':
+                return 'Idea approved: ' + (data.title || data.name || featureId || 'unknown');
+            case 'idea.rejected':
+                return 'Idea rejected: ' + (data.title || data.name || featureId || 'unknown');
+            case 'cycle.advanced':
+                return 'Cycle advanced to step "' + (data.step || '?') + '"' + (featureId ? ' for ' + fLabel : '');
+            case 'cycle.scored':
+                return 'Cycle scored ' + (data.score != null ? data.score : '?') + ' on "' + (data.step || '?') + '"' + (featureId ? ' for ' + fLabel : '');
+            case 'work.completed':
+                return 'Work completed' + (featureId ? ' on ' + fLabel : '') + (data.work_type ? ' (' + data.work_type + ')' : '');
+            default:
+                return type.replace(/\./g, ' ');
+        }
+    },
+
+    _getIcon: function(type) {
+        switch (type) {
+            case 'feature.status_changed': return '🔄';
+            case 'feature.cascade_blocked': return '🚫';
+            case 'feature.cascade_unblocked': return '✅';
+            case 'idea.approved': return '👍';
+            case 'idea.rejected': return '👎';
+            case 'cycle.advanced': return '⏭️';
+            case 'cycle.scored': return '⭐';
+            case 'work.completed': return '✔️';
+            default: return '📋';
+        }
+    },
+
+    _isRead: function(id) {
+        return this._readIds.indexOf(id) >= 0;
+    },
+
+    _unreadCount: function() {
+        var self = this;
+        return this._items.filter(function(n) { return !self._isRead(n.id); }).length;
+    },
+
+    markRead: function(id) {
+        if (this._readIds.indexOf(id) < 0) {
+            this._readIds.push(id);
+            this._saveReadState();
+            this._render();
+        }
+    },
+
+    markAllRead: function() {
+        var self = this;
+        this._items.forEach(function(n) {
+            if (self._readIds.indexOf(n.id) < 0) self._readIds.push(n.id);
+        });
+        this._saveReadState();
+        this._render();
+    },
+
+    _toggle: function() {
+        if (this._open) this._close(); else this._openDropdown();
+    },
+
+    _openDropdown: function() {
+        this._open = true;
+        var dd = document.getElementById('notifDropdown');
+        var bell = document.getElementById('notifBell');
+        if (dd) dd.style.display = '';
+        if (bell) bell.setAttribute('aria-expanded', 'true');
+    },
+
+    _close: function() {
+        this._open = false;
+        var dd = document.getElementById('notifDropdown');
+        var bell = document.getElementById('notifBell');
+        if (dd) dd.style.display = 'none';
+        if (bell) bell.setAttribute('aria-expanded', 'false');
+    },
+
+    _render: function() {
+        var badge = document.getElementById('notifBadge');
+        var list = document.getElementById('notifList');
+        if (!badge || !list) return;
+
+        // Update badge
+        var count = this._unreadCount();
+        if (count > 0) {
+            badge.textContent = count > 99 ? '99+' : String(count);
+            badge.style.display = '';
+        } else {
+            badge.style.display = 'none';
+        }
+
+        // Render list
+        if (this._items.length === 0) {
+            list.innerHTML = '<div class="notif-empty">No notifications yet</div>';
+            return;
+        }
+
+        var self = this;
+        var html = '';
+        this._items.forEach(function(n) {
+            var read = self._isRead(n.id);
+            var cls = 'notif-item' + (read ? '' : ' unread');
+            html += '<div class="' + cls + '" role="listitem" data-notif-id="' + n.id + '"'
+                + (n.featureId ? ' data-feature-id="' + self._escAttr(n.featureId) + '"' : '') + '>'
+                + '<span class="notif-icon">' + n.icon + '</span>'
+                + '<div class="notif-body">'
+                + '<div class="notif-text">' + self._esc(n.text) + '</div>'
+                + '<div class="notif-time">' + self._relativeTime(n.time) + '</div>'
+                + '</div>'
+                + (read ? '' : '<span class="notif-unread-dot"></span>')
+                + '</div>';
+        });
+        list.innerHTML = html;
+
+        // Bind click handlers
+        list.querySelectorAll('.notif-item').forEach(function(el) {
+            el.addEventListener('click', function() {
+                var nid = parseInt(el.dataset.notifId, 10);
+                self.markRead(nid);
+                var fid = el.dataset.featureId;
+                if (fid) {
+                    self._close();
+                    App.navigateTo('features', fid);
+                }
+            });
+        });
+    },
+
+    _esc: function(str) {
+        var d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    },
+
+    _escAttr: function(str) {
+        return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    _relativeTime: function(iso) {
+        if (!iso) return '';
+        var date = new Date(iso.indexOf('T') < 0 ? iso.replace(' ', 'T') + 'Z' : iso);
+        var now = new Date();
+        var diffMs = now - date;
+        var diffSec = Math.floor(diffMs / 1000);
+        if (diffSec < 60) return 'just now';
+        var diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return diffMin + 'm ago';
+        var diffHr = Math.floor(diffMin / 60);
+        if (diffHr < 24) return diffHr + 'h ago';
+        var diffDay = Math.floor(diffHr / 24);
+        if (diffDay < 7) return diffDay + 'd ago';
+        return date.toLocaleDateString();
+    }
+};
+
+// Initialize notifications after DOM is ready and App has been set up
+(function() {
+    var origInit = App.init;
+    App.init = async function() {
+        // Hook WS before original init calls connectWebSocket
+        Notifications._hookWebSocket();
+        Notifications._initialized = false;
+        await origInit.call(App);
+        Notifications._initialized = true;
+        Notifications._loadReadState();
+        Notifications._bindUI();
+        Notifications._fetchInitial();
+    };
+})();

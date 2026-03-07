@@ -125,6 +125,58 @@ func TestDecisionsMarkdown(t *testing.T) {
 	}
 }
 
+func TestDecisionsADR(t *testing.T) {
+	decisions := []models.Decision{
+		{ID: "d1", Title: "Use SQLite", Status: "accepted", Context: "Need embedded DB", Decision: "SQLite via modernc", Consequences: "No server needed"},
+		{ID: "d2", Title: "Use REST", Status: "superseded", Context: "API design", Decision: "REST over GraphQL", Consequences: "Simple clients", SupersededBy: "d3"},
+	}
+	var buf bytes.Buffer
+	if err := export.DecisionsADR(decisions, &buf); err != nil {
+		t.Fatalf("DecisionsADR: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "# ADR-001: Use SQLite") {
+		t.Errorf("expected ADR-001 header, got: %s", out)
+	}
+	if !strings.Contains(out, "## Status") {
+		t.Errorf("expected Status section")
+	}
+	if !strings.Contains(out, "Accepted") {
+		t.Errorf("expected Accepted status")
+	}
+	if !strings.Contains(out, "## Context") {
+		t.Errorf("expected Context section")
+	}
+	if !strings.Contains(out, "Need embedded DB") {
+		t.Errorf("expected context text")
+	}
+	if !strings.Contains(out, "## Decision") {
+		t.Errorf("expected Decision section")
+	}
+	if !strings.Contains(out, "## Consequences") {
+		t.Errorf("expected Consequences section")
+	}
+	if !strings.Contains(out, "# ADR-002: Use REST") {
+		t.Errorf("expected ADR-002 header")
+	}
+	if !strings.Contains(out, "Superseded by [d3]") {
+		t.Errorf("expected superseded_by link, got: %s", out)
+	}
+	if !strings.Contains(out, "---") {
+		t.Errorf("expected separator between ADRs")
+	}
+}
+
+func TestDecisionsADREmpty(t *testing.T) {
+	var buf bytes.Buffer
+	if err := export.DecisionsADR(nil, &buf); err != nil {
+		t.Fatalf("DecisionsADR empty: %v", err)
+	}
+	if !strings.Contains(buf.String(), "*No decisions recorded.*") {
+		t.Errorf("expected empty message for ADR export")
+	}
+}
+
 func TestAllJSON(t *testing.T) {
 	features := []models.Feature{{ID: "f1", Name: "Auth"}}
 	roadmap := []models.RoadmapItem{{ID: "r1", Title: "WebSocket"}}

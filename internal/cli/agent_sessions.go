@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ func init() {
 	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentShowCmd)
 	agentCmd.AddCommand(agentEndCmd)
+	agentCmd.AddCommand(agentStatsCmd)
+
+	agentStatsCmd.Flags().String("agent", "", "Filter stats to a specific agent name")
 
 	agentStartCmd.Flags().String("task", "", "Task description")
 	agentStartCmd.Flags().String("feature", "", "Feature ID to associate with")
@@ -226,6 +230,129 @@ var agentEndCmd = &cobra.Command{
 		fmt.Printf("✓ Ended agent session %s (%s)\n", args[0], endStatus)
 		return nil
 	},
+}
+
+var agentStatsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "Show agent performance metrics",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		agentFilter, _ := cmd.Flags().GetString("agent")
+
+		stats, err := db.GetAgentStats(database, p.ID, agentFilter)
+		if err != nil {
+			return fmt.Errorf("loading agent stats: %w", err)
+		}
+
+		// Fill in human-readable durations
+		for i := range stats.AvgByWorkType {
+			stats.AvgByWorkType[i].AvgDuration = fmtAgentDuration(stats.AvgByWorkType[i].AvgSec)
+		}
+
+		if jsonOutput {
+			return printJSON(stats)
+		}
+
+		if agentFilter != "" {
+			fmt.Printf("Agent Performance Stats (agent: %s)\n", agentFilter)
+		} else {
+			fmt.Printf("Agent Performance Stats\n")
+		}
+		fmt.Println(strings.Repeat("═", 50))
+
+		total := stats.TotalCompleted + stats.TotalFailed
+		fmt.Printf("\nWork Items:  %d completed, %d failed", stats.TotalCompleted, stats.TotalFailed)
+		if total > 0 {
+			rate := float64(stats.TotalCompleted) / float64(total) * 100
+			fmt.Printf(" (%.0f%% success)\n", rate)
+		} else {
+			fmt.Println()
+		}
+
+		if len(stats.AvgByWorkType) > 0 {
+			fmt.Printf("\nAvg Completion Time by Work Type:\n")
+			fmt.Printf("  %-20s %6s %10s\n", "TYPE", "COUNT", "AVG TIME")
+			fmt.Printf("  %s\n", strings.Repeat("─", 40))
+			for _, wt := range stats.AvgByWorkType {
+				fmt.Printf("  %-20s %6d %10s\n", wt.WorkType, wt.Count, wt.AvgDuration)
+			}
+		}
+
+		if len(stats.SuccessRates) > 0 {
+			fmt.Printf("\nSuccess Rate by Agent:\n")
+			fmt.Printf("  %-20s %5s %5s %8s\n", "AGENT", "DONE", "FAIL", "RATE")
+			fmt.Printf("  %s\n", strings.Repeat("─", 42))
+			for _, sr := range stats.SuccessRates {
+				fmt.Printf("  %-20s %5d %5d %7.0f%%\n", sr.AgentName, sr.Completed, sr.Failed, sr.SuccessRate)
+			}
+		}
+
+		if len(stats.ActiveAgents) > 0 {
+			fmt.Printf("\nActive Agents:\n")
+			fmt.Printf("  %-15s %-20s %-12s %s\n", "NAME", "SESSION", "PHASE", "TASK")
+			fmt.Printf("  %s\n", strings.Repeat("─", 60))
+			for _, a := range stats.ActiveAgents {
+				phase := a.CurrentPhase
+				if phase == "" {
+					phase = "-"
+				}
+				task := a.TaskDescription
+				if len(task) > 30 {
+					task = task[:27] + "..."
+				}
+				fmt.Printf("  %-15s %-20s %-12s %s\n", a.AgentName, a.SessionID, phase, task)
+			}
+		} else {
+			fmt.Printf("\nNo active agents.\n")
+		}
+
+		if len(stats.Throughput) > 0 {
+			fmt.Printf("\nThroughput:\n")
+			for _, t := range stats.Throughput {
+				fmt.Printf("  %-10s  %d items (%.2f items/hr)\n", t.Period, t.ItemsTotal, t.ItemsPerHour)
+			}
+		}
+
+		return nil
+	},
+}
+
+// fmtAgentDuration formats seconds into a human-readable duration string.
+func fmtAgentDuration(totalSec float64) string {
+	if totalSec < 0 {
+		return "0m"
+	}
+	sec := int(math.Round(totalSec))
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	days := sec / 86400
+	sec %= 86400
+	hours := sec / 3600
+	sec %= 3600
+	minutes := sec / 60
+
+	var parts []string
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dd", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if minutes > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	return strings.Join(parts, " ")
 }
 
 var updateCmd = &cobra.Command{

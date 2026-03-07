@@ -17,6 +17,8 @@ func init() {
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configGetCmd)
+	configCmd.AddCommand(configGenerateAPIKeyCmd)
 }
 
 var configShowCmd = &cobra.Command{
@@ -44,6 +46,11 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("  default_priority:     %d\n", cfg.DefaultPriority)
 		fmt.Printf("  theme:                %s\n", cfg.Theme)
 		fmt.Printf("  agent_timeout_minutes: %d\n", cfg.AgentTimeout)
+		if cfg.ApiKey != "" {
+			fmt.Printf("  api_key:              %s\n", config.MaskAPIKey(cfg.ApiKey))
+		} else {
+			fmt.Printf("  api_key:              %s\n", valOrNone(""))
+		}
 		return nil
 	},
 }
@@ -116,8 +123,23 @@ var configSetCmd = &cobra.Command{
 			cfg.AgentTimeout = v
 		case "db_path":
 			cfg.DBPath = value
+		case "api-key":
+			// API key is stored in .lifecycle.json, not .lifecycle.yaml
+			jsonCfg, loadErr := config.Load(root)
+			if loadErr != nil {
+				return fmt.Errorf("loading config: %w", loadErr)
+			}
+			jsonCfg.ApiKey = value
+			if saveErr := config.Save(jsonCfg); saveErr != nil {
+				return fmt.Errorf("saving config: %w", saveErr)
+			}
+			if jsonOutput {
+				return printJSON(map[string]string{"key": key, "value": config.MaskAPIKey(value)})
+			}
+			fmt.Printf("✓ Set api-key = %s\n", config.MaskAPIKey(value))
+			return nil
 		default:
-			return fmt.Errorf("unknown config key %q. Valid keys: default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path", key)
+			return fmt.Errorf("unknown config key %q. Valid keys: default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path, api-key", key)
 		}
 
 		if err := config.SaveYAML(cfg, root); err != nil {
@@ -137,4 +159,89 @@ func valOrNone(s string) string {
 		return "(none)"
 	}
 	return s
+}
+
+var configGetCmd = &cobra.Command{
+	Use:   "get <key>",
+	Short: "Get a configuration value",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root, err := config.FindProjectRoot()
+		if err != nil {
+			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+		}
+
+		cfg, err := config.Load(root)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		key := args[0]
+		var value string
+		switch key {
+		case "api-key":
+			if cfg.ApiKey == "" {
+				if jsonOutput {
+					return printJSON(map[string]string{"key": key, "value": ""})
+				}
+				fmt.Println("(none)")
+				return nil
+			}
+			value = config.MaskAPIKey(cfg.ApiKey)
+		case "default_milestone":
+			value = cfg.DefaultMilestone
+		case "default_priority":
+			value = strconv.Itoa(cfg.DefaultPriority)
+		case "server_port":
+			value = strconv.Itoa(cfg.ServerPort)
+		case "theme":
+			value = cfg.Theme
+		case "agent_timeout_minutes":
+			value = strconv.Itoa(cfg.AgentTimeout)
+		case "db_path":
+			value = cfg.DBPath
+		default:
+			return fmt.Errorf("unknown config key %q. Valid keys: api-key, default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path", key)
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]string{"key": key, "value": value})
+		}
+		fmt.Println(value)
+		return nil
+	},
+}
+
+var configGenerateAPIKeyCmd = &cobra.Command{
+	Use:   "generate-api-key",
+	Short: "Generate and set a random API key",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root, err := config.FindProjectRoot()
+		if err != nil {
+			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+		}
+
+		key, err := config.GenerateAPIKey()
+		if err != nil {
+			return fmt.Errorf("generating API key: %w", err)
+		}
+
+		cfg, err := config.Load(root)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		cfg.ApiKey = key
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("saving config: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]string{"api_key": key})
+		}
+		fmt.Printf("✓ Generated and saved API key: %s\n", key)
+		fmt.Println("Use this key in the Authorization header: Bearer <key>")
+		fmt.Println("Or as a query parameter: ?api_key=<key>")
+		return nil
+	},
 }

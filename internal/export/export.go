@@ -263,6 +263,61 @@ func DecisionsMarkdown(decisions []models.Decision, w io.Writer) error {
 	return pr.err
 }
 
+// DecisionsADR writes decisions in standard ADR template format.
+func DecisionsADR(decisions []models.Decision, w io.Writer) error {
+	pr := newPrinter(w)
+
+	if len(decisions) == 0 {
+		pr.println("*No decisions recorded.*")
+		return pr.err
+	}
+
+	for i, d := range decisions {
+		if i > 0 {
+			pr.println("---")
+			pr.println()
+		}
+		pr.printf("# ADR-%03d: %s\n\n", i+1, d.Title)
+		pr.println("## Status")
+		pr.println()
+		status := titleCase(d.Status)
+		if d.SupersededBy != "" {
+			pr.printf("%s by [%s]\n", status, d.SupersededBy)
+		} else {
+			pr.println(status)
+		}
+		pr.println()
+
+		pr.println("## Context")
+		pr.println()
+		if d.Context != "" {
+			pr.println(d.Context)
+		} else {
+			pr.println("_No context provided._")
+		}
+		pr.println()
+
+		pr.println("## Decision")
+		pr.println()
+		if d.Decision != "" {
+			pr.println(d.Decision)
+		} else {
+			pr.println("_No decision recorded._")
+		}
+		pr.println()
+
+		pr.println("## Consequences")
+		pr.println()
+		if d.Consequences != "" {
+			pr.println(d.Consequences)
+		} else {
+			pr.println("_No consequences documented._")
+		}
+		pr.println()
+	}
+	return pr.err
+}
+
 // --- CSV exports ---
 
 // FeaturesCSV writes features as CSV.
