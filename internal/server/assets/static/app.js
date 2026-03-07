@@ -276,6 +276,10 @@ const App = {
             case 'discussions': return this.renderDiscussions();
             case 'qa': return this.renderQA();
             case 'stats': return this.renderStats();
+            case 'agents': return App.renderAgents();
+            case 'ideas': return App.renderIdeas();
+            case 'context': return App.renderContext();
+            case 'spec': return App.renderSpec();
             default: return `<div class="empty-state">
                 <div class="empty-state-icon">🧭</div>
                 <div class="empty-state-text">Page not found</div>
@@ -1538,6 +1542,12 @@ const App = {
                 this._navContext = {};
                 this._expandedRoadmapId = null;
             }
+
+            // Initialize drag-and-drop for roadmap cards
+            var priContainer = document.getElementById('roadmapSections');
+            if (priContainer) App._initRoadmapDragDrop(priContainer);
+            var catContainer = document.getElementById('roadmapCategorySections');
+            if (catContainer) App._initRoadmapDragDrop(catContainer);
         }
         if (page === 'discussions') {
             App._bindDiscussionEvents();
@@ -1564,6 +1574,18 @@ const App = {
         }
         if (page === 'stats') {
             App.drawStatsCharts();
+        }
+        if (page === 'ideas') {
+            App._bindIdeasEvents();
+        }
+        if (page === 'context') {
+            App._bindContextEvents();
+        }
+        if (page === 'spec') {
+            App._bindSpecEvents();
+        }
+        if (page === 'agents' || page === 'ideas' || page === 'context' || page === 'spec') {
+            bindClickableFeatures();
         }
     },
 
@@ -1789,6 +1811,10 @@ App._setupFeaturePage = function() {
         self._navContext = {};
         self._expandedFeatureId = null;
     }
+
+    // Initialize drag-and-drop for feature rows
+    var featuresTableWrap = document.getElementById('featuresTableWrap');
+    if (featuresTableWrap) App._initFeaturesDragDrop(featuresTableWrap);
 };
 
 // Assigned outside object literal to avoid Chrome parsing quirk

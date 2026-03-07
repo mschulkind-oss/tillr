@@ -485,6 +485,58 @@ func UpdateRoadmapItemStatus(db *sql.DB, id, status string) error {
 	return nil
 }
 
+// --- Roadmap Reorder ---
+
+// ReorderItem represents an item ID and its new sort order.
+type ReorderItem struct {
+	ID        string `json:"id"`
+	SortOrder int    `json:"sort_order"`
+}
+
+// ReorderRoadmapItems updates the sort_order for multiple roadmap items in a transaction.
+func ReorderRoadmapItems(database *sql.DB, items []ReorderItem) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for _, item := range items {
+		if _, err := tx.Exec(
+			"UPDATE roadmap_items SET sort_order = ?, updated_at = datetime('now') WHERE id = ?",
+			item.SortOrder, item.ID,
+		); err != nil {
+			return fmt.Errorf("updating roadmap item %s: %w", item.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// FeaturePriorityItem represents a feature ID and its new priority.
+type FeaturePriorityItem struct {
+	ID       string `json:"id"`
+	Priority int    `json:"priority"`
+}
+
+// ReorderFeaturePriorities updates the priority for multiple features in a transaction.
+func ReorderFeaturePriorities(database *sql.DB, items []FeaturePriorityItem) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for _, item := range items {
+		if _, err := tx.Exec(
+			"UPDATE features SET priority = ?, updated_at = datetime('now') WHERE id = ?",
+			item.Priority, item.ID,
+		); err != nil {
+			return fmt.Errorf("updating feature priority %s: %w", item.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // --- Roadmap Stats ---
 
 // RoadmapStats holds aggregated roadmap statistics.
@@ -1347,6 +1399,316 @@ func GetBurndownData(database *sql.DB, projectID string) (*BurndownData, error) 
 	}
 
 	return &BurndownData{Points: points, Velocity: velocity}, nil
+}
+
+// --- Agent Sessions ---
+
+func CreateAgentSession(db *sql.DB, s *models.AgentSession) error {
+	_, err := db.Exec(
+		`INSERT INTO agent_sessions (id, project_id, feature_id, name, task_description, status, progress_pct, current_phase, eta, context_snapshot)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.ProjectID, nullStr(s.FeatureID), s.Name, nullStr(s.TaskDescription),
+		s.Status, s.ProgressPct, nullStr(s.CurrentPhase), nullStr(s.ETA), nullStr(s.ContextSnapshot),
+	)
+	return err
+}
+
+func GetAgentSession(db *sql.DB, id string) (*models.AgentSession, error) {
+	row := db.QueryRow(`SELECT id, project_id, COALESCE(feature_id,''), name, COALESCE(task_description,''),
+		status, progress_pct, COALESCE(current_phase,''), COALESCE(eta,''), COALESCE(context_snapshot,''),
+		created_at, updated_at
+		FROM agent_sessions WHERE id = ?`, id)
+	s := &models.AgentSession{}
+	err := row.Scan(&s.ID, &s.ProjectID, &s.FeatureID, &s.Name, &s.TaskDescription,
+		&s.Status, &s.ProgressPct, &s.CurrentPhase, &s.ETA, &s.ContextSnapshot,
+		&s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func ListAgentSessions(db *sql.DB, projectID, status string) ([]models.AgentSession, error) {
+	q := `SELECT id, project_id, COALESCE(feature_id,''), name, COALESCE(task_description,''),
+		status, progress_pct, COALESCE(current_phase,''), COALESCE(eta,''), COALESCE(context_snapshot,''),
+		created_at, updated_at
+		FROM agent_sessions WHERE project_id = ?`
+	args := []any{projectID}
+	if status != "" {
+		q += " AND status = ?"
+		args = append(args, status)
+	}
+	q += " ORDER BY updated_at DESC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.AgentSession
+	for rows.Next() {
+		var s models.AgentSession
+		if err := rows.Scan(&s.ID, &s.ProjectID, &s.FeatureID, &s.Name, &s.TaskDescription,
+			&s.Status, &s.ProgressPct, &s.CurrentPhase, &s.ETA, &s.ContextSnapshot,
+			&s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func UpdateAgentSession(db *sql.DB, id string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	var setClauses []string
+	var args []any
+	for col, val := range updates {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	setClauses = append(setClauses, "updated_at = datetime('now')")
+	args = append(args, id)
+	_, err := db.Exec(
+		fmt.Sprintf("UPDATE agent_sessions SET %s WHERE id = ?", strings.Join(setClauses, ", ")),
+		args...,
+	)
+	return err
+}
+
+func EndAgentSession(db *sql.DB, id, status string) error {
+	_, err := db.Exec(
+		"UPDATE agent_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?",
+		status, id,
+	)
+	return err
+}
+
+func InsertStatusUpdate(db *sql.DB, u *models.StatusUpdate) error {
+	res, err := db.Exec(
+		`INSERT INTO status_updates (agent_session_id, message_md, progress_pct, phase) VALUES (?, ?, ?, ?)`,
+		u.AgentSessionID, u.MessageMD, u.ProgressPct, nullStr(u.Phase),
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	u.ID = int(id)
+	return nil
+}
+
+func ListStatusUpdates(db *sql.DB, agentSessionID string) ([]models.StatusUpdate, error) {
+	rows, err := db.Query(`SELECT id, agent_session_id, message_md, progress_pct, COALESCE(phase,''), created_at
+		FROM status_updates WHERE agent_session_id = ? ORDER BY created_at DESC`, agentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.StatusUpdate
+	for rows.Next() {
+		var u models.StatusUpdate
+		if err := rows.Scan(&u.ID, &u.AgentSessionID, &u.MessageMD, &u.ProgressPct, &u.Phase, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// --- Idea Queue ---
+
+func InsertIdea(db *sql.DB, idea *models.IdeaQueueItem) error {
+	res, err := db.Exec(
+		`INSERT INTO idea_queue (project_id, title, raw_input, idea_type, status, spec_md, auto_implement, submitted_by, assigned_agent, feature_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		idea.ProjectID, idea.Title, idea.RawInput, idea.IdeaType, idea.Status,
+		nullStr(idea.SpecMD), boolToInt(idea.AutoImplement), idea.SubmittedBy,
+		nullStr(idea.AssignedAgent), nullStr(idea.FeatureID),
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	idea.ID = int(id)
+	return nil
+}
+
+func GetIdea(db *sql.DB, id int) (*models.IdeaQueueItem, error) {
+	row := db.QueryRow(`SELECT id, project_id, title, raw_input, idea_type, status,
+		COALESCE(spec_md,''), auto_implement, COALESCE(submitted_by,'human'), COALESCE(assigned_agent,''),
+		COALESCE(feature_id,''), created_at, updated_at
+		FROM idea_queue WHERE id = ?`, id)
+	item := &models.IdeaQueueItem{}
+	var autoImpl int
+	err := row.Scan(&item.ID, &item.ProjectID, &item.Title, &item.RawInput, &item.IdeaType, &item.Status,
+		&item.SpecMD, &autoImpl, &item.SubmittedBy, &item.AssignedAgent,
+		&item.FeatureID, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	item.AutoImplement = autoImpl != 0
+	return item, nil
+}
+
+func ListIdeas(db *sql.DB, projectID, status, ideaType string) ([]models.IdeaQueueItem, error) {
+	q := `SELECT id, project_id, title, raw_input, idea_type, status,
+		COALESCE(spec_md,''), auto_implement, COALESCE(submitted_by,'human'), COALESCE(assigned_agent,''),
+		COALESCE(feature_id,''), created_at, updated_at
+		FROM idea_queue WHERE project_id = ?`
+	args := []any{projectID}
+	if status != "" {
+		q += " AND status = ?"
+		args = append(args, status)
+	}
+	if ideaType != "" {
+		q += " AND idea_type = ?"
+		args = append(args, ideaType)
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.IdeaQueueItem
+	for rows.Next() {
+		var item models.IdeaQueueItem
+		var autoImpl int
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.Title, &item.RawInput, &item.IdeaType, &item.Status,
+			&item.SpecMD, &autoImpl, &item.SubmittedBy, &item.AssignedAgent,
+			&item.FeatureID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.AutoImplement = autoImpl != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func UpdateIdeaStatus(db *sql.DB, id int, status string) error {
+	_, err := db.Exec("UPDATE idea_queue SET status = ?, updated_at = datetime('now') WHERE id = ?", status, id)
+	return err
+}
+
+func SetIdeaSpec(db *sql.DB, id int, specMD string) error {
+	_, err := db.Exec("UPDATE idea_queue SET spec_md = ?, status = 'spec-ready', updated_at = datetime('now') WHERE id = ?", specMD, id)
+	return err
+}
+
+func ApproveIdea(db *sql.DB, id int, featureID string) error {
+	_, err := db.Exec("UPDATE idea_queue SET status = 'approved', feature_id = ?, updated_at = datetime('now') WHERE id = ?", featureID, id)
+	return err
+}
+
+func GetNextIdeaForSpec(db *sql.DB, projectID string) (*models.IdeaQueueItem, error) {
+	row := db.QueryRow(`SELECT id, project_id, title, raw_input, idea_type, status,
+		COALESCE(spec_md,''), auto_implement, COALESCE(submitted_by,'human'), COALESCE(assigned_agent,''),
+		COALESCE(feature_id,''), created_at, updated_at
+		FROM idea_queue WHERE project_id = ? AND status = 'pending'
+		ORDER BY created_at ASC LIMIT 1`, projectID)
+	item := &models.IdeaQueueItem{}
+	var autoImpl int
+	err := row.Scan(&item.ID, &item.ProjectID, &item.Title, &item.RawInput, &item.IdeaType, &item.Status,
+		&item.SpecMD, &autoImpl, &item.SubmittedBy, &item.AssignedAgent,
+		&item.FeatureID, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	item.AutoImplement = autoImpl != 0
+	return item, nil
+}
+
+// --- Context Entries ---
+
+func InsertContext(db *sql.DB, e *models.ContextEntry) error {
+	res, err := db.Exec(
+		`INSERT INTO context_entries (project_id, feature_id, context_type, title, content_md, author, tags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.ProjectID, nullStr(e.FeatureID), e.ContextType, e.Title, e.ContentMD, e.Author, nullStr(e.Tags),
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	e.ID = int(id)
+	return nil
+}
+
+func GetContextEntry(database *sql.DB, id int) (*models.ContextEntry, error) {
+	row := database.QueryRow(`SELECT id, project_id, COALESCE(feature_id,''), context_type, title, content_md,
+		COALESCE(author,'system'), COALESCE(tags,''), created_at
+		FROM context_entries WHERE id = ?`, id)
+	e := &models.ContextEntry{}
+	err := row.Scan(&e.ID, &e.ProjectID, &e.FeatureID, &e.ContextType, &e.Title, &e.ContentMD,
+		&e.Author, &e.Tags, &e.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+func ListContext(db *sql.DB, projectID, featureID string) ([]models.ContextEntry, error) {
+	q := `SELECT id, project_id, COALESCE(feature_id,''), context_type, title, content_md,
+		COALESCE(author,'system'), COALESCE(tags,''), created_at
+		FROM context_entries WHERE project_id = ?`
+	args := []any{projectID}
+	if featureID != "" {
+		q += " AND feature_id = ?"
+		args = append(args, featureID)
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.ContextEntry
+	for rows.Next() {
+		var e models.ContextEntry
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.FeatureID, &e.ContextType, &e.Title, &e.ContentMD,
+			&e.Author, &e.Tags, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func SearchContext(db *sql.DB, projectID, query string) ([]models.ContextEntry, error) {
+	pattern := "%" + query + "%"
+	rows, err := db.Query(`SELECT id, project_id, COALESCE(feature_id,''), context_type, title, content_md,
+		COALESCE(author,'system'), COALESCE(tags,''), created_at
+		FROM context_entries WHERE project_id = ? AND (title LIKE ? OR content_md LIKE ?)
+		ORDER BY created_at DESC`, projectID, pattern, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.ContextEntry
+	for rows.Next() {
+		var e models.ContextEntry
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.FeatureID, &e.ContextType, &e.Title, &e.ContentMD,
+			&e.Author, &e.Tags, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // extractJSONField extracts a simple string field value from a JSON string.

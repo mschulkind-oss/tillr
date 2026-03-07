@@ -1253,3 +1253,283 @@ App._drawFeaturesDepGraph = function(canvas, data) {
     canvas.style.cursor = 'grab';
 };
 
+// ── Drag & Drop: Roadmap Cards ──
+
+App._initRoadmapDragDrop = function(container) {
+    if (!container) return;
+    var cards = container.querySelectorAll('.roadmap-item[data-roadmap-id]');
+    if (!cards.length) return;
+
+    var draggedEl = null;
+    var draggedId = null;
+
+    // Build dependency lookup from features data
+    var depMap = {}; // featureId → [depends_on ids]
+    var reverseDepMap = {}; // featureId → [features that depend on it]
+    var roadmapToFeatures = {}; // roadmapItemId → [featureIds]
+    if (App._roadmapFeatures) {
+        App._roadmapFeatures.forEach(function(f) {
+            if (f.roadmap_item_id) {
+                if (!roadmapToFeatures[f.roadmap_item_id]) roadmapToFeatures[f.roadmap_item_id] = [];
+                roadmapToFeatures[f.roadmap_item_id].push(f.id);
+            }
+            if (f.depends_on && f.depends_on.length) {
+                depMap[f.id] = f.depends_on;
+                f.depends_on.forEach(function(d) {
+                    if (!reverseDepMap[d]) reverseDepMap[d] = [];
+                    reverseDepMap[d].push(f.id);
+                });
+            }
+        });
+    }
+
+    function getRelatedRoadmapIds(roadmapId) {
+        var featureIds = roadmapToFeatures[roadmapId] || [];
+        var blockers = new Set(); // roadmap items that depend on this one
+        var dependencies = new Set(); // roadmap items this one depends on
+        featureIds.forEach(function(fid) {
+            // Features that depend on fid → those roadmap items are blockers
+            (reverseDepMap[fid] || []).forEach(function(depFid) {
+                if (App._roadmapFeatures) {
+                    var f = App._roadmapFeatures.find(function(ff) { return ff.id === depFid; });
+                    if (f && f.roadmap_item_id && f.roadmap_item_id !== roadmapId) blockers.add(f.roadmap_item_id);
+                }
+            });
+            // Features fid depends on → those roadmap items are dependencies
+            (depMap[fid] || []).forEach(function(depId) {
+                if (App._roadmapFeatures) {
+                    var f = App._roadmapFeatures.find(function(ff) { return ff.id === depId; });
+                    if (f && f.roadmap_item_id && f.roadmap_item_id !== roadmapId) dependencies.add(f.roadmap_item_id);
+                }
+            });
+        });
+        return { blockers: blockers, dependencies: dependencies };
+    }
+
+    function highlightDeps(roadmapId) {
+        var rel = getRelatedRoadmapIds(roadmapId);
+        container.querySelectorAll('.roadmap-item[data-roadmap-id]').forEach(function(c) {
+            var rid = c.getAttribute('data-roadmap-id');
+            if (rel.blockers.has(rid)) c.classList.add('dep-blocker');
+            if (rel.dependencies.has(rid)) c.classList.add('dep-dependency');
+        });
+    }
+
+    function clearHighlights() {
+        container.querySelectorAll('.roadmap-item').forEach(function(c) {
+            c.classList.remove('dep-blocker', 'dep-dependency', 'drag-over');
+        });
+    }
+
+    cards.forEach(function(card) {
+        card.setAttribute('draggable', 'true');
+
+        card.addEventListener('dragstart', function(e) {
+            draggedEl = card;
+            draggedId = card.getAttribute('data-roadmap-id');
+            card.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', draggedId);
+            highlightDeps(draggedId);
+        });
+
+        card.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (!draggedEl || draggedEl === card) return;
+            e.dataTransfer.dropEffect = 'move';
+            card.classList.add('drag-over');
+        });
+
+        card.addEventListener('dragleave', function() {
+            card.classList.remove('drag-over');
+        });
+
+        card.addEventListener('drop', function(e) {
+            e.preventDefault();
+            card.classList.remove('drag-over');
+            var sourceId = e.dataTransfer.getData('text/plain');
+            if (!sourceId || sourceId === card.getAttribute('data-roadmap-id')) return;
+
+            // Find the section (priority group) this card belongs to
+            var section = card.closest('.roadmap-items');
+            if (!section) return;
+
+            var orderedCards = Array.from(section.querySelectorAll('.roadmap-item[data-roadmap-id]'));
+            var sourceCard = section.querySelector('.roadmap-item[data-roadmap-id="' + sourceId + '"]');
+            if (!sourceCard) {
+                // Dragged from a different priority group — move into this group
+                sourceCard = draggedEl;
+                if (sourceCard && sourceCard.parentNode) sourceCard.parentNode.removeChild(sourceCard);
+                section.insertBefore(sourceCard, card);
+                orderedCards = Array.from(section.querySelectorAll('.roadmap-item[data-roadmap-id]'));
+            } else {
+                // Same group — reorder
+                var sourceIdx = orderedCards.indexOf(sourceCard);
+                var targetIdx = orderedCards.indexOf(card);
+                if (sourceIdx < 0 || targetIdx < 0) return;
+                section.removeChild(sourceCard);
+                if (sourceIdx < targetIdx) {
+                    section.insertBefore(sourceCard, card.nextSibling);
+                } else {
+                    section.insertBefore(sourceCard, card);
+                }
+                orderedCards = Array.from(section.querySelectorAll('.roadmap-item[data-roadmap-id]'));
+            }
+
+            // Build new sort order for all items in this section
+            var items = orderedCards.map(function(c, i) {
+                return { id: c.getAttribute('data-roadmap-id'), sort_order: i + 1 };
+            });
+
+            // Save via API
+            App.apiPost('roadmap/reorder', { items: items }).then(function() {
+                App.navigate('roadmap');
+            }).catch(function(err) {
+                console.error('Reorder failed:', err);
+                App.navigate('roadmap');
+            });
+        });
+
+        card.addEventListener('dragend', function() {
+            if (draggedEl) draggedEl.classList.remove('dragging');
+            draggedEl = null;
+            draggedId = null;
+            clearHighlights();
+        });
+    });
+};
+
+// ── Drag & Drop: Features Table ──
+
+App._initFeaturesDragDrop = function(container) {
+    if (!container) return;
+    var tbody = container.querySelector('tbody');
+    if (!tbody) return;
+
+    var rows = tbody.querySelectorAll('tr.ft-row[data-feature-id]');
+    if (!rows.length) return;
+
+    var draggedEl = null;
+    var draggedId = null;
+
+    // Build dependency maps
+    var depMap = {};
+    var reverseDepMap = {};
+    if (App._featuresData) {
+        App._featuresData.forEach(function(f) {
+            if (f.depends_on && f.depends_on.length) {
+                depMap[f.id] = f.depends_on;
+                f.depends_on.forEach(function(d) {
+                    if (!reverseDepMap[d]) reverseDepMap[d] = [];
+                    reverseDepMap[d].push(f.id);
+                });
+            }
+        });
+    }
+
+    function highlightDeps(featureId) {
+        var dependents = reverseDepMap[featureId] || [];
+        var dependencies = depMap[featureId] || [];
+        tbody.querySelectorAll('tr.ft-row[data-feature-id]').forEach(function(r) {
+            var fid = r.getAttribute('data-feature-id');
+            if (dependents.indexOf(fid) >= 0) r.classList.add('dep-blocker');
+            if (dependencies.indexOf(fid) >= 0) r.classList.add('dep-dependency');
+        });
+    }
+
+    function clearHighlights() {
+        tbody.querySelectorAll('tr.ft-row').forEach(function(r) {
+            r.classList.remove('dep-blocker', 'dep-dependency', 'drag-over');
+        });
+    }
+
+    rows.forEach(function(row) {
+        row.setAttribute('draggable', 'true');
+
+        row.addEventListener('dragstart', function(e) {
+            draggedEl = row;
+            draggedId = row.getAttribute('data-feature-id');
+            row.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', draggedId);
+            highlightDeps(draggedId);
+        });
+
+        row.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (!draggedEl || draggedEl === row) return;
+
+            // Prevent dropping below a dependency
+            var targetId = row.getAttribute('data-feature-id');
+            var dragDeps = depMap[draggedId] || [];
+            if (dragDeps.indexOf(targetId) >= 0) {
+                e.dataTransfer.dropEffect = 'none';
+                return;
+            }
+
+            e.dataTransfer.dropEffect = 'move';
+            row.classList.add('drag-over');
+        });
+
+        row.addEventListener('dragleave', function() {
+            row.classList.remove('drag-over');
+        });
+
+        row.addEventListener('drop', function(e) {
+            e.preventDefault();
+            row.classList.remove('drag-over');
+            var sourceId = e.dataTransfer.getData('text/plain');
+            var targetId = row.getAttribute('data-feature-id');
+            if (!sourceId || sourceId === targetId) return;
+
+            // Prevent dropping below a dependency
+            var dragDeps = depMap[sourceId] || [];
+            if (dragDeps.indexOf(targetId) >= 0) return;
+
+            // Reorder in DOM
+            var sourceRow = tbody.querySelector('tr.ft-row[data-feature-id="' + sourceId + '"]');
+            var sourceDetail = tbody.querySelector('tr.ft-detail-row[data-detail-for="' + sourceId + '"]');
+            var targetDetail = tbody.querySelector('tr.ft-detail-row[data-detail-for="' + targetId + '"]');
+            if (!sourceRow) return;
+
+            // Move source after target (including detail row)
+            var allRows = Array.from(tbody.querySelectorAll('tr.ft-row[data-feature-id]'));
+            var sourceIdx = allRows.indexOf(sourceRow);
+            var targetIdx = allRows.indexOf(row);
+            if (sourceIdx < 0 || targetIdx < 0) return;
+
+            // Remove source rows
+            if (sourceDetail) tbody.removeChild(sourceDetail);
+            tbody.removeChild(sourceRow);
+
+            // Insert at new position
+            if (targetDetail) {
+                tbody.insertBefore(sourceRow, targetDetail.nextSibling);
+            } else {
+                tbody.insertBefore(sourceRow, row.nextSibling);
+            }
+            if (sourceDetail) tbody.insertBefore(sourceDetail, sourceRow.nextSibling);
+
+            // Build new priority order (highest priority = lowest number)
+            var reorderedRows = Array.from(tbody.querySelectorAll('tr.ft-row[data-feature-id]'));
+            var items = reorderedRows.map(function(r, i) {
+                return { id: r.getAttribute('data-feature-id'), priority: i + 1 };
+            });
+
+            App.apiPost('features/reorder', { items: items }).then(function() {
+                App.navigate('features');
+            }).catch(function(err) {
+                console.error('Feature reorder failed:', err);
+                App.navigate('features');
+            });
+        });
+
+        row.addEventListener('dragend', function() {
+            if (draggedEl) draggedEl.classList.remove('dragging');
+            draggedEl = null;
+            draggedId = null;
+            clearHighlights();
+        });
+    });
+};
+
