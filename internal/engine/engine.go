@@ -3,6 +3,7 @@ package engine
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -91,6 +92,7 @@ func TransitionFeature(database *sql.DB, projectID, featureID, newStatus string)
 	if !IsValidTransition(f.Status, newStatus) {
 		return fmt.Errorf("invalid transition from %q to %q: features must go through human-qa before done", f.Status, newStatus)
 	}
+	oldStatus := f.Status
 	if err := db.UpdateFeature(database, featureID, map[string]any{"status": newStatus}); err != nil {
 		return fmt.Errorf("updating status: %w", err)
 	}
@@ -98,28 +100,162 @@ func TransitionFeature(database *sql.DB, projectID, featureID, newStatus string)
 		ProjectID: projectID,
 		FeatureID: featureID,
 		EventType: "feature.status_changed",
-		Data:      fmt.Sprintf(`{"from":%q,"to":%q}`, f.Status, newStatus),
+		Data:      fmt.Sprintf(`{"from":%q,"to":%q}`, oldStatus, newStatus),
 	})
+	// Cascade blocking: auto-block/unblock dependents
+	if newStatus == "blocked" || oldStatus == "blocked" {
+		if err := CascadeBlocking(database, featureID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cascade blocking: %v\n", err)
+		}
+	}
 	return nil
 }
 
-// GetNextWorkItem finds the next pending work item, activates it, and returns it.
-func GetNextWorkItem(database *sql.DB) (*models.WorkItem, error) {
-	// Check for already active items first
-	active, err := db.GetActiveWorkItem(database)
-	if err == nil {
-		return active, nil
+// CascadeBlocking propagates blocking status changes through the dependency graph.
+// When a feature is blocked, all transitive dependents are automatically blocked.
+// When a feature is unblocked, dependents are restored to their previous status
+// (if no other blockers remain).
+func CascadeBlocking(database *sql.DB, featureID string) error {
+	dependents, err := db.GetAllTransitiveDependents(database, featureID)
+	if err != nil {
+		return fmt.Errorf("getting dependents: %w", err)
 	}
-	// Get next pending
+
+	feature, err := db.GetFeature(database, featureID)
+	if err != nil {
+		return fmt.Errorf("getting feature: %w", err)
+	}
+
+	if feature.Status == "blocked" {
+		for _, dep := range dependents {
+			if dep.Status != "blocked" && dep.Status != "done" {
+				if err := db.SavePreviousStatus(database, dep.ID, dep.Status); err != nil {
+					return fmt.Errorf("saving previous status for %s: %w", dep.ID, err)
+				}
+				if err := db.SetFeatureStatus(database, dep.ID, "blocked"); err != nil {
+					return fmt.Errorf("blocking %s: %w", dep.ID, err)
+				}
+				_ = db.InsertEvent(database, &models.Event{
+					ProjectID: dep.ProjectID,
+					FeatureID: dep.ID,
+					EventType: "feature.cascade_blocked",
+					Data:      fmt.Sprintf(`{"blocked_by":%q}`, featureID),
+				})
+			}
+		}
+	} else {
+		for _, dep := range dependents {
+			if dep.Status == "blocked" {
+				allClear, err := db.AreAllDependenciesClear(database, dep.ID)
+				if err != nil {
+					return fmt.Errorf("checking dependencies for %s: %w", dep.ID, err)
+				}
+				if allClear {
+					prevStatus, err := db.GetPreviousStatus(database, dep.ID)
+					if err != nil || prevStatus == "" {
+						prevStatus = "draft"
+					}
+					if err := db.SetFeatureStatus(database, dep.ID, prevStatus); err != nil {
+						return fmt.Errorf("unblocking %s: %w", dep.ID, err)
+					}
+					_ = db.InsertEvent(database, &models.Event{
+						ProjectID: dep.ProjectID,
+						FeatureID: dep.ID,
+						EventType: "feature.cascade_unblocked",
+						Data:      fmt.Sprintf(`{"unblocked_by":%q,"restored_status":%q}`, featureID, prevStatus),
+					})
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// GetNextWorkItem finds the next available work item for an agent.
+// If agentID is provided, it first checks for items already assigned to that agent,
+// then claims an unassigned pending item. This prevents two agents from getting the same work.
+func GetNextWorkItem(database *sql.DB, agentID ...string) (*models.WorkItem, error) {
+	agent := ""
+	if len(agentID) > 0 {
+		agent = agentID[0]
+	}
+
+	// If agent specified, check for items already assigned to this agent
+	if agent != "" {
+		if active, err := db.GetActiveWorkItemForAgent(database, agent); err == nil {
+			return active, nil
+		}
+	} else {
+		// Legacy: check for any active item
+		if active, err := db.GetActiveWorkItem(database); err == nil {
+			return active, nil
+		}
+	}
+
+	// Get next pending item
 	w, err := db.GetNextPendingWorkItem(database)
 	if err != nil {
 		return nil, fmt.Errorf("no pending work items")
 	}
-	if err := db.UpdateWorkItemStatus(database, w.ID, "active", ""); err != nil {
-		return nil, fmt.Errorf("activating work item: %w", err)
+
+	// Claim it atomically
+	if agent != "" {
+		if err := db.ClaimWorkItem(database, w.ID, agent); err != nil {
+			return nil, fmt.Errorf("claiming work item: %w", err)
+		}
+		w.AssignedAgent = agent
+	} else {
+		if err := db.UpdateWorkItemStatus(database, w.ID, "active", ""); err != nil {
+			return nil, fmt.Errorf("activating work item: %w", err)
+		}
 	}
 	w.Status = "active"
 	return w, nil
+}
+
+// GetCoordinationStatus returns the full multi-agent coordination snapshot.
+func GetCoordinationStatus(database *sql.DB, projectID string) (*models.CoordinationStatus, error) {
+	active, err := db.GetActiveAgents(database, projectID, 5)
+	if err != nil {
+		return nil, fmt.Errorf("getting active agents: %w", err)
+	}
+	if active == nil {
+		active = []models.AgentSession{}
+	}
+
+	stale, err := db.GetStaleAgents(database, projectID, 5)
+	if err != nil {
+		return nil, fmt.Errorf("getting stale agents: %w", err)
+	}
+	if stale == nil {
+		stale = []models.AgentSession{}
+	}
+
+	conflicts, err := db.DetectConflicts(database)
+	if err != nil {
+		return nil, fmt.Errorf("detecting conflicts: %w", err)
+	}
+	if conflicts == nil {
+		conflicts = []models.Conflict{}
+	}
+
+	queueDepth, err := db.CountPendingWorkItems(database)
+	if err != nil {
+		return nil, fmt.Errorf("counting pending work items: %w", err)
+	}
+
+	claimed, err := db.CountClaimedWorkItems(database)
+	if err != nil {
+		return nil, fmt.Errorf("counting claimed work items: %w", err)
+	}
+
+	return &models.CoordinationStatus{
+		ActiveAgents: active,
+		StaleAgents:  stale,
+		Conflicts:    conflicts,
+		QueueDepth:   queueDepth,
+		ClaimedItems: claimed,
+	}, nil
 }
 
 // GetWorkContext builds the full enriched context for a work item.

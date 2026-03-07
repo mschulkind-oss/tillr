@@ -48,7 +48,13 @@ const App = {
                     if (expandedFeature) this._expandedFeatureId = expandedFeature.dataset.featureId;
                     const expandedRoadmap = document.querySelector('.roadmap-item.expanded');
                     if (expandedRoadmap) this._expandedRoadmapId = expandedRoadmap.dataset.roadmapId;
-                    this.navigate(this.currentPage);
+                    // Preserve scroll position across WebSocket-triggered re-renders
+                    const scrollY = window.scrollY;
+                    this._isRefresh = true;
+                    this.navigate(this.currentPage).then(() => {
+                        window.scrollTo(0, scrollY);
+                        this._isRefresh = false;
+                    });
                     this.updateQABadge();
                 }
             } catch { /* ignore non-JSON */ }
@@ -162,17 +168,23 @@ const App = {
         });
         document.title = page.charAt(0).toUpperCase() + page.slice(1) + ' — Lifecycle';
         const content = document.getElementById('content');
-        if (content.children.length) {
+        const isRefresh = this._isRefresh;
+        if (content.children.length && !isRefresh) {
             content.style.transition = 'opacity 0.15s ease';
             content.style.opacity = '0';
             await new Promise(r => setTimeout(r, 150));
         }
+        // Preserve container height during re-render to prevent CLS
+        const prevHeight = content.offsetHeight;
+        if (prevHeight > 0) content.style.minHeight = prevHeight + 'px';
         content.style.transition = 'none';
         content.style.opacity = '1';
-        content.innerHTML = this.renderSkeleton();
+        if (!isRefresh) content.innerHTML = this.renderSkeleton();
         try {
             const html = await this.renderPage(page);
             content.innerHTML = html;
+            // Release min-height lock after content is rendered
+            requestAnimationFrame(() => { content.style.minHeight = ''; });
             App.updateBreadcrumbs();
             this.applyStaggerAnimation(content);
             this.animateProgressBars(content);
@@ -330,7 +342,13 @@ const App = {
             const emptyClass = items.length === 0 ? ' kanban-column--empty' : '';
             return `<div class="kanban-column kanban-column-${s}${emptyClass}">
                 <div class="kanban-header"><span class="kanban-title">${statusLabels[s]||s}</span><span class="kanban-count">${items.length}</span></div>
-                ${items.map(f => `<div class="kanban-card" data-status="${s}" data-feature-id="${esc(f.id)}" data-feature-name="${esc(f.name)}" title="${esc(f.name)}"><div class="kanban-card-title">${esc(f.name)}</div><div class="kanban-card-meta"><span class="kanban-card-priority p${f.priority}"></span>P${f.priority}${f.milestone_name ? ' · ' + esc(f.milestone_name) : ''}</div></div>`).join('') || '<div class="kanban-empty">—</div>'}
+                ${items.map(f => {
+                    const blockingCount = features.filter(o => o.depends_on && o.depends_on.includes(f.id) && o.status !== 'done').length;
+                    const blockedByNames = (f.status === 'blocked' && f.depends_on) ? f.depends_on.filter(d => { const dep = features.find(o => o.id === d); return dep && dep.status === 'blocked'; }) : [];
+                    const blockingHtml = blockingCount ? '<div class="kanban-card-blocking">⚠️ Blocking: ' + blockingCount + '</div>' : '';
+                    const blockedHtml = blockedByNames.length ? '<div class="kanban-card-blocked">🚫 Blocked by: ' + blockedByNames.map(d => esc(d)).join(', ') + '</div>' : '';
+                    return '<div class="kanban-card" data-status="' + s + '" data-feature-id="' + esc(f.id) + '" data-feature-name="' + esc(f.name) + '" title="' + esc(f.name) + '"><div class="kanban-card-title">' + esc(f.name) + '</div><div class="kanban-card-meta"><span class="kanban-card-priority p' + f.priority + '"></span>P' + f.priority + (f.milestone_name ? ' · ' + esc(f.milestone_name) : '') + '</div>' + blockedHtml + blockingHtml + '</div>';
+                }).join('') || '<div class="kanban-empty">—</div>'}
             </div>`;
         }).join('');
 
@@ -339,7 +357,7 @@ const App = {
             const mtotal = m.total_features || 0;
             const pct = mtotal > 0 ? Math.round((done / mtotal) * 100) : 0;
             const pctClass = pct === 100 ? 'milestone-complete' : pct > 0 ? 'milestone-active' : '';
-            return `<div class="card milestone-card ${pctClass}" style="cursor:pointer" data-milestone="${esc(m.name)}"><div class="card-header"><span class="card-title">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
+            return `<div class="card milestone-card ${pctClass}" style="cursor:pointer" data-milestone="${esc(m.name)}" data-milestone-id="${esc(m.id)}"><div class="card-header"><span class="card-title inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(m.name)},type:'text',onSave:async function(v){await App.apiPatch('milestones/'+${JSON.stringify(m.id)},{name:v})}})">${esc(m.name)}</span><span class="badge badge-${m.status}">${m.status}</span></div>
                 <div class="progress-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(m.name)} progress"><div class="progress-fill ${pct===100?'success':''}" style="width:${pct}%"></div></div>
                 <div class="milestone-meta"><span class="milestone-fraction">${done}/${mtotal} features</span><span class="milestone-pct">${pct}%</span></div></div>`;
         }).join('') : `<div class="empty-state empty-state--compact">
@@ -519,13 +537,17 @@ const App = {
             const rmItem = f.roadmap_item_id && this._roadmapData ? this._roadmapData.find(r => r.id === f.roadmap_item_id) : null;
             const rmDisplay = rmItem ? rmItem.title : f.roadmap_item_id;
             const specHtml = f.spec ? `<div class="feature-spec-section"><div class="feature-spec-header">Spec</div><div class="feature-spec-card">${this.renderSpecContent(f.spec)}</div></div>` : '';
+            const blockingCount = features.filter(o => o.depends_on && o.depends_on.includes(f.id) && o.status !== 'done').length;
+            const blockedByNames = (f.status === 'blocked' && f.depends_on) ? f.depends_on.filter(d => { const dep = features.find(o => o.id === d); return dep && dep.status === 'blocked'; }) : [];
+            const blockingTag = blockingCount ? `<span class="ft-blocking-tag" title="Blocking ${blockingCount} feature(s)">⚠️ Blocking: ${blockingCount}</span>` : '';
+            const blockedTag = blockedByNames.length ? `<span class="ft-blocked-tag" title="Blocked by ${blockedByNames.join(', ')}">🚫 ${blockedByNames.map(d => esc(d)).join(', ')}</span>` : '';
             return `<tr class="ft-row status-${f.status}" data-feature-id="${esc(f.id)}" style="cursor:pointer">
             <td>
-                <span class="ft-name">${esc(f.name)}</span>
+                <span class="ft-name inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(f.name)},type:'text',onSave:async function(v){await App.apiPatch('features/'+${JSON.stringify(f.id)},{name:v})}})">${esc(f.name)}</span>
                 <div class="ft-id">${esc(f.id)}</div>
-                ${desc ? `<div class="ft-desc" title="${esc(f.description)}">${desc}</div>` : ''}
+                ${desc ? `<div class="ft-desc inline-editable" title="${esc(f.description)}" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(f.description||'')},type:'textarea',onSave:async function(v){await App.apiPatch('features/'+${JSON.stringify(f.id)},{description:v})}})">${desc}</div>` : ''}
             </td>
-            <td><span class="badge badge-${f.status}">${f.status}</span>${(f.status==='implementing'||f.status==='agent-qa')?`<button class="btn-send-qa" onclick="event.stopPropagation();App.sendToQA('${esc(f.id)}')" title="Send to QA for review">Send to QA →</button>`:''}</td>
+            <td><span class="badge badge-${f.status}">${f.status}</span>${(f.status==='implementing'||f.status==='agent-qa')?`<button class="btn-send-qa" onclick="event.stopPropagation();App.sendToQA('${esc(f.id)}')" title="Send to QA for review">Send to QA →</button>`:''}${blockedTag}${blockingTag}</td>
             <td><span class="priority-dot p-${pClass}">${this.priorityLabel(f.priority)}</span></td>
             <td>${esc(f.milestone_name||'—')}</td>
             <td>
@@ -543,7 +565,7 @@ const App = {
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Status</span><span class="roadmap-detail-value"><span class="feature-status-select-wrap"><select class="feature-status-select" data-feature-id="${esc(f.id)}" onchange="App.changeFeatureStatus('${esc(f.id)}', this.value)">${['draft','planning','implementing','agent-qa','human-qa','done','blocked'].map(s => '<option value="' + s + '"' + (f.status === s ? ' selected' : '') + '>' + s + '</option>').join('')}</select><span class="feature-status-select-arrow">▾</span></span></span></div>
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Priority</span><span class="roadmap-detail-value">${this.priorityLabel(f.priority)}</span></div>
               ${f.milestone_name ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Milestone</span><span class="roadmap-detail-value">${esc(f.milestone_name)}</span></div>` : ''}
-              ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value">${esc(f.description)}</span></div>` : ''}
+              ${f.description ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Description</span><span class="roadmap-detail-value inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(f.description||'')},type:'textarea',onSave:async function(v){await App.apiPatch('features/'+${JSON.stringify(f.id)},{description:v})}})">${esc(f.description)}</span></div>` : ''}
               ${f.roadmap_item_id ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Roadmap Item</span><span class="roadmap-detail-value"><a href="#" class="feature-roadmap-link" data-roadmap-id="${esc(f.roadmap_item_id)}">${esc(rmDisplay)}</a></span></div>` : ''}
               ${f.depends_on && f.depends_on.length ? `<div class="roadmap-detail-row"><span class="roadmap-detail-label">Depends On</span><span class="roadmap-detail-value">${f.depends_on.map(d => `<a href="#" class="clickable-feature" data-feature-id="${esc(d)}">${esc(d)}</a>`).join(', ')}</span></div>` : ''}
               <div class="roadmap-detail-row"><span class="roadmap-detail-label">Created</span><span class="roadmap-detail-value">${fmtTime(f.created_at)}</span></div>
@@ -713,21 +735,21 @@ const App = {
                 `<button class="roadmap-status-btn rs-${s}${r.status === s ? ' rs-active' : ''}" data-roadmap-id="${esc(r.id)}" data-new-status="${s}" title="Set status to ${roadmapStatusLabels[s]}">${roadmapStatusIcons[s]} ${roadmapStatusLabels[s]}</button>`
             ).join('');
             const effortLabels = {xs:'XS',s:'S',m:'M',l:'L',xl:'XL'};
-            const effortHtml = r.effort ? `<span class="effort-badge effort-badge-prominent effort-${r.effort}">${effortLabels[r.effort]||r.effort}</span>` : '';
+            const effortHtml = r.effort ? `<span class="effort-badge effort-badge-prominent effort-${r.effort} inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(r.effort||'')},type:'select',options:['xs','s','m','l','xl'],onSave:async function(v){await App.apiPatch('roadmap/'+${JSON.stringify(r.id)},{effort:v})}})">${effortLabels[r.effort]||r.effort}</span>` : '';
             // Feature progress for this roadmap item
             const prog = App.getRoadmapItemProgress(r.id, featuresByRoadmap);
             const progressHtml = prog ? `<div class="rm-card-progress"><div class="rm-card-progress-bar"><div class="rm-card-progress-fill" style="width:${prog.pct}%"></div></div><span class="rm-card-progress-label">${prog.done}/${prog.total}</span></div>` : '';
             // Description with show more
             const descLen = 120;
             const shortDesc = r.description && r.description.length > descLen;
-            const descHtml = r.description ? `<div class="roadmap-item-desc${shortDesc ? ' rm-desc-truncated' : ''}">${esc(shortDesc ? r.description.substring(0, descLen) + '…' : r.description)}${shortDesc ? `<button class="rm-show-more" type="button">show more</button>` : ''}</div>` : '';
+            const descHtml = r.description ? `<div class="roadmap-item-desc inline-editable${shortDesc ? ' rm-desc-truncated' : ''}" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(r.description||'')},type:'textarea',onSave:async function(v){await App.apiPatch('roadmap/'+${JSON.stringify(r.id)},{description:v})}})">${esc(shortDesc ? r.description.substring(0, descLen) + '…' : r.description)}${shortDesc ? `<button class="rm-show-more" type="button">show more</button>` : ''}</div>` : '';
             const fullDescAttr = shortDesc ? ` data-full-desc="${esc(r.description)}"` : '';
             return `<div class="roadmap-item rm-card-enhanced st-${r.status}" role="listitem" tabindex="0" data-category="${esc(itemCat)}" data-status="${r.status}" data-roadmap-id="${esc(r.id)}" data-priority="${r.priority}"${fullDescAttr} style="animation-delay:${i*0.06}s">
                 <div class="rm-card-heat rm-heat-${r.priority}"></div>
                 <div class="roadmap-item-number">${rank}</div>
                 <div class="roadmap-item-content">
                     <div class="rm-card-top-row">
-                        <div class="roadmap-item-title">${esc(r.title)}</div>
+                        <div class="roadmap-item-title inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(r.title)},type:'text',onSave:async function(v){await App.apiPatch('roadmap/'+${JSON.stringify(r.id)},{title:v})}})">${esc(r.title)}</div>
                         ${r.category?`<span class="roadmap-category rm-card-cat ${catCls(r.category)}">${esc(r.category)}</span>`:''}
                     </div>
                     ${descHtml}
@@ -735,7 +757,7 @@ const App = {
                     ${linkedHtml}
                 </div>
                 <div class="roadmap-item-meta">
-                    <span class="priority-badge pri-${r.priority}">${priIcons[r.priority] || '⚪'} ${String(r.priority || '').replace('-',' ')}</span>
+                    <span class="priority-badge pri-${r.priority} inline-editable" onclick="event.stopPropagation();App.inlineEdit(this,{value:${JSON.stringify(r.priority||'')},type:'select',options:['critical','high','medium','low','nice-to-have'],onSave:async function(v){await App.apiPatch('roadmap/'+${JSON.stringify(r.id)},{priority:v})}})">${priIcons[r.priority] || '⚪'} ${String(r.priority || '').replace('-',' ')}</span>
                     ${effortHtml}
                     <span class="badge badge-${r.status}">${r.status}</span>
                 </div>
@@ -1454,11 +1476,13 @@ const App = {
                 document.querySelectorAll('.roadmap-item').forEach(item => {
                     total++;
                     const show = (cf === 'all' || item.dataset.category === cf) && (sf === 'all' || item.dataset.status === sf) && (pf === 'all' || item.dataset.priority === pf) && (!q || item.textContent.toLowerCase().includes(q));
-                    item.style.display = show ? '' : 'none';
-                    if (show) vis++;
+                    if (show) { item.classList.remove('search-hidden'); vis++; }
+                    else { item.classList.add('search-hidden'); }
                 });
                 document.querySelectorAll('.roadmap-section').forEach(section => {
-                    section.style.display = section.querySelectorAll('.roadmap-item:not([style*="display: none"])').length ? '' : 'none';
+                    const hasVisible = section.querySelectorAll('.roadmap-item:not(.search-hidden)').length > 0;
+                    if (hasVisible) section.classList.remove('search-hidden');
+                    else section.classList.add('search-hidden');
                 });
                 App.updateSearchCount('roadmapSearch', vis, total);
             };

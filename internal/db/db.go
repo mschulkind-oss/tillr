@@ -326,4 +326,10 @@ var migrations = []string{
 	INSERT INTO idea_queue_new SELECT * FROM idea_queue;
 	DROP TABLE idea_queue;
 	ALTER TABLE idea_queue_new RENAME TO idea_queue;`,
+
+	// Migration 11: Add previous_status column for blocking cascade
+	`ALTER TABLE features ADD COLUMN previous_status TEXT DEFAULT '';`,
+
+	// Migration 12: Add assigned_agent to work_items for multi-agent coordination
+	`ALTER TABLE work_items ADD COLUMN assigned_agent TEXT DEFAULT '';`,
 }
