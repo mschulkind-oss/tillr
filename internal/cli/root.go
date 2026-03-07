@@ -21,9 +21,10 @@ and AI agents. It tracks, visualizes, and steers work as it flows through
 defined iteration cycles — acting as the project manager for agentic development.
 
 QUICK START
-  lifecycle init my-project          Create a new project
-  lifecycle onboard                  Onboard an existing project
+  lifecycle onboard                  Onboard an existing project (recommended)
+  lifecycle init my-project          Create a new project from scratch
   lifecycle doctor                   Check environment health
+  lifecycle status                   Project overview dashboard
 
 AGENT WORKFLOW
   lifecycle next --json              Get next work item (returns full context)
@@ -31,27 +32,53 @@ AGENT WORKFLOW
   lifecycle fail --reason "..."      Report failure
   lifecycle heartbeat                Signal agent is alive
 
-FEATURES & ROADMAP
-  lifecycle feature add "Name" --spec "..." --priority 8
-  lifecycle feature list             List all features
-  lifecycle roadmap show             View roadmap
-  lifecycle roadmap add "Item"       Add roadmap item
+FEATURES
+  lifecycle feature add "Name"       Create a feature (--spec, --priority, --milestone)
+  lifecycle feature list             List all features (--status, --milestone)
+  lifecycle feature show <id>        Feature details with full history
+  lifecycle feature edit <id>        Update feature properties
+  lifecycle feature remove <id>      Remove a feature
 
 ITERATION CYCLES
   lifecycle cycle list               Show available cycle types
-  lifecycle cycle start <type> <id>  Start a cycle
-  lifecycle cycle score 8.5          Submit score
+  lifecycle cycle start <type> <id>  Start a cycle for a feature
+  lifecycle cycle status             View active cycle progress
+  lifecycle cycle history <id>       Cycle history for a feature
+  lifecycle cycle score 8.5          Submit judge score
+
+QA
+  lifecycle qa pending               Features awaiting QA
+  lifecycle qa approve <feature>     Approve feature (--notes)
+  lifecycle qa reject <feature>      Reject → back to development
+
+ROADMAP
+  lifecycle roadmap show             View roadmap (--format table|json|markdown)
+  lifecycle roadmap add "Title"      Add item (--priority, --category, --effort)
+  lifecycle roadmap edit <id>        Update roadmap item
+  lifecycle roadmap prioritize       Interactive prioritization
+  lifecycle roadmap export           Export roadmap (--format md|json)
+
+MILESTONES
+  lifecycle milestone add "Name"     Create a milestone
+  lifecycle milestone list           List milestones with progress
+  lifecycle milestone show <id>      Milestone details
 
 COLLABORATION
   lifecycle discuss new "RFC: ..."   Start a discussion
+  lifecycle discuss list             List discussions
   lifecycle discuss comment <id>     Add to discussion
-  lifecycle qa approve <feature>     Approve feature
+  lifecycle discuss resolve <id>     Resolve a discussion
+
+HISTORY & SEARCH
+  lifecycle history                  Event history (--feature, --since, --type)
+  lifecycle search <query>           Full-text search across project data
+  lifecycle log                      Compact activity log
 
 WEB VIEWER
   lifecycle serve                    Start web dashboard at :3847
 
 Use "lifecycle [command] --help" for detailed information about any command.
-Use "lifecycle --json" on any command for structured output.`,
+Use "lifecycle --json" on any command for structured output (critical for agents).`,
 }
 
 func Execute() {
@@ -82,6 +109,7 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(discussCmd)
 	rootCmd.AddCommand(onboardCmd)
+	rootCmd.AddCommand(completionCmd)
 }
 
 func openDB() (*sql.DB, *config.Config, error) {

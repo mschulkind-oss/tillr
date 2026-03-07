@@ -112,11 +112,29 @@ var statusCmd = &cobra.Command{
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Validate environment and project setup",
+	Long: `Doctor validates the lifecycle environment and project health.
+
+It checks for required tools, project configuration, database integrity,
+and provides actionable suggestions for any issues found.
+
+Checks performed:
+  project     .lifecycle.json found
+  config      Configuration file valid
+  database    SQLite database opens and has expected tables
+  git         Git repository detected
+  go          Go toolchain available (required version)
+  gh          GitHub CLI available (optional, enables GitHub integration)
+  skills      Agent configuration files (AGENTS.md, copilot-instructions.md)
+
+Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
+	Example: `  lifecycle doctor          # Human-readable health report
+  lifecycle doctor --json   # Structured output for automation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		type Check struct {
 			Name   string `json:"name"`
 			Status string `json:"status"`
 			Detail string `json:"detail,omitempty"`
+			Fix    string `json:"fix,omitempty"`
 		}
 		type HealthSummary struct {
 			FeatureTotal      int            `json:"feature_total"`
@@ -136,9 +154,14 @@ var doctorCmd = &cobra.Command{
 		// Check project
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			checks = append(checks, Check{"project", "fail", "No .lifecycle.json found. Run 'lifecycle init <name>'"})
+			checks = append(checks, Check{
+				Name:   "project",
+				Status: "fail",
+				Detail: "No .lifecycle.json found",
+				Fix:    "Run 'lifecycle init <name>' or 'lifecycle onboard' to initialize",
+			})
 		} else {
-			checks = append(checks, Check{"project", "ok", root})
+			checks = append(checks, Check{Name: "project", Status: "ok", Detail: root})
 		}
 
 		// Check config and DB
@@ -147,17 +170,43 @@ var doctorCmd = &cobra.Command{
 		if root != "" {
 			cfg, err := config.Load(root)
 			if err != nil {
-				checks = append(checks, Check{"config", "fail", err.Error()})
+				checks = append(checks, Check{
+					Name:   "config",
+					Status: "fail",
+					Detail: err.Error(),
+					Fix:    "Check .lifecycle.json is valid JSON",
+				})
 			} else {
-				checks = append(checks, Check{"config", "ok", cfg.DBPath})
+				checks = append(checks, Check{Name: "config", Status: "ok", Detail: cfg.DBPath})
+
+				// Database health check
 				d, err := db.Open(cfg.DBPath)
 				if err != nil {
-					checks = append(checks, Check{"database", "fail", err.Error()})
+					checks = append(checks, Check{
+						Name:   "database",
+						Status: "fail",
+						Detail: err.Error(),
+						Fix:    "Check database file permissions or re-initialize with 'lifecycle init'",
+					})
 				} else {
 					database = d
-					checks = append(checks, Check{"database", "ok", cfg.DBPath})
+					// Verify database has expected tables
+					dbHealthDetail := cfg.DBPath
+					var tableCount int
+					row := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+					if err := row.Scan(&tableCount); err == nil {
+						dbHealthDetail = fmt.Sprintf("%s (%d tables)", cfg.DBPath, tableCount)
+					}
 					if p, err := db.GetProject(database); err == nil {
 						projectID = p.ID
+						checks = append(checks, Check{Name: "database", Status: "ok", Detail: dbHealthDetail})
+					} else {
+						checks = append(checks, Check{
+							Name:   "database",
+							Status: "warn",
+							Detail: "Database exists but no project found",
+							Fix:    "Run 'lifecycle init <name>' to create a project",
+						})
 					}
 				}
 			}
@@ -166,23 +215,86 @@ var doctorCmd = &cobra.Command{
 		// Check git
 		gitCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 		if out, err := gitCmd.Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
-			checks = append(checks, Check{"git", "ok", "git repository detected"})
+			checks = append(checks, Check{Name: "git", Status: "ok", Detail: "git repository detected"})
 		} else {
-			checks = append(checks, Check{"git", "warn", "not a git repository"})
+			checks = append(checks, Check{
+				Name:   "git",
+				Status: "warn",
+				Detail: "Not a git repository",
+				Fix:    "Run 'git init' to initialize version control",
+			})
 		}
 
-		// Check go
+		// Check go version
 		goCmd := exec.Command("go", "version")
 		if out, err := goCmd.Output(); err == nil {
 			version := strings.TrimSpace(string(out))
-			// Extract just the version part: "go version go1.24.0 linux/amd64" → "go1.24.0"
 			parts := strings.Fields(version)
 			if len(parts) >= 3 {
 				version = parts[2]
 			}
-			checks = append(checks, Check{"go", "ok", version})
+			checks = append(checks, Check{Name: "go", Status: "ok", Detail: version})
 		} else {
-			checks = append(checks, Check{"go", "warn", "go not found"})
+			checks = append(checks, Check{
+				Name:   "go",
+				Status: "warn",
+				Detail: "Go not found",
+				Fix:    "Install Go 1.24+ from https://go.dev/dl/ or via 'mise install go'",
+			})
+		}
+
+		// Check GitHub CLI
+		if _, err := exec.LookPath("gh"); err == nil {
+			ghCmd := exec.Command("gh", "auth", "status")
+			if err := ghCmd.Run(); err == nil {
+				checks = append(checks, Check{Name: "gh", Status: "ok", Detail: "GitHub CLI authenticated"})
+			} else {
+				checks = append(checks, Check{
+					Name:   "gh",
+					Status: "warn",
+					Detail: "GitHub CLI found but not authenticated",
+					Fix:    "Run 'gh auth login' to enable GitHub integration",
+				})
+			}
+		} else {
+			checks = append(checks, Check{
+				Name:   "gh",
+				Status: "warn",
+				Detail: "GitHub CLI not found (optional)",
+				Fix:    "Install from https://cli.github.com/ for GitHub issue/PR integration",
+			})
+		}
+
+		// Check skills/agent configuration
+		cwd, _ := os.Getwd()
+		var skillsFound []string
+		skillFiles := []struct {
+			path string
+			name string
+		}{
+			{"AGENTS.md", "AGENTS.md"},
+			{".github/copilot-instructions.md", "Copilot Instructions"},
+			{".cursorrules", "Cursor Rules"},
+			{".clinerules", "Cline Rules"},
+		}
+		for _, sf := range skillFiles {
+			if _, err := os.Stat(filepath.Join(cwd, sf.path)); err == nil {
+				skillsFound = append(skillsFound, sf.name)
+			}
+		}
+		if len(skillsFound) > 0 {
+			checks = append(checks, Check{
+				Name:   "skills",
+				Status: "ok",
+				Detail: fmt.Sprintf("Agent configs: %s", strings.Join(skillsFound, ", ")),
+			})
+		} else {
+			checks = append(checks, Check{
+				Name:   "skills",
+				Status: "warn",
+				Detail: "No agent configuration files found",
+				Fix:    "Create AGENTS.md or .github/copilot-instructions.md for agent guidance",
+			})
 		}
 
 		// Build health summary if DB is available
@@ -227,7 +339,11 @@ var doctorCmd = &cobra.Command{
 			case "warn":
 				icon = "!"
 			}
-			fmt.Printf("%s %-10s %s\n", icon, c.Name, c.Detail)
+			detail := c.Detail
+			if c.Fix != "" && c.Status != "ok" {
+				detail = fmt.Sprintf("%s\n    → %s", c.Detail, c.Fix)
+			}
+			fmt.Printf("%s %-10s %s\n", icon, c.Name, detail)
 		}
 
 		if health != nil {
