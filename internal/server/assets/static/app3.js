@@ -385,7 +385,7 @@ App._discAvatar = function(name, size) {
 App._discTimeAgo = function(iso) {
     if (!iso) return '';
     var now = Date.now();
-    var then = new Date(iso).getTime();
+    var then = parseUTC(iso).getTime();
     var diff = Math.max(0, now - then);
     var secs = Math.floor(diff / 1000);
     if (secs < 60) return 'just now';

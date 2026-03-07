@@ -2190,7 +2190,8 @@ App.drawFullDepGraph = function(canvas, data) {
 
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function fmtDate(iso) { if(!iso) return '—'; return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
-function fmtTime(iso) { if(!iso) return ''; return new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function parseUTC(iso) { if(!iso) return null; return new Date(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ','T') + 'Z'); }
+function fmtTime(iso) { const d = parseUTC(iso); if(!d) return ''; return d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function eventIcon(t) {
     if(t.includes('approved')) return '✔';
     if(t.includes('completed')) return '✔';
@@ -2222,9 +2223,8 @@ function eventClass(t) {
     return '';
 }
 function fmtRelTime(iso) {
-    if(!iso) return '';
-    const d = new Date(iso);
-    if(isNaN(d.getTime())) return '';
+    const d = parseUTC(iso);
+    if(!d || isNaN(d.getTime())) return '';
     const now = Date.now(), diff = now - d.getTime();
     if(diff < 0) return 'just now';
     const s = Math.floor(diff/1000);

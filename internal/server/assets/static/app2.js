@@ -1003,7 +1003,7 @@ App._renderQAEmptyState = function(reviewedHtml, approvedCount, rejectedCount) {
 App._fmtTimeAgo = function(iso) {
     if (!iso) return '—';
     var now = Date.now();
-    var then = new Date(iso).getTime();
+    var then = parseUTC(iso).getTime();
     var diff = now - then;
     if (isNaN(diff)) return '—';
     var mins = Math.floor(diff / 60000);
@@ -1014,7 +1014,7 @@ App._fmtTimeAgo = function(iso) {
     var days = Math.floor(hrs / 24);
     if (days < 7) return days + 'd ago';
     // Fall back to formatted date
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return parseUTC(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
 App._esc = function(s) {
