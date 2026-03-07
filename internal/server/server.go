@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/lifecycle/internal/export"
 	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/mschulkind/lifecycle/internal/vcs"
 )
@@ -135,6 +136,12 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	// Decision log (ADRs) routes
 	mux.HandleFunc("/api/decisions", apiHandler(database, handleDecisions))
 	mux.HandleFunc("/api/decisions/", apiHandler(database, handleDecisionDetail))
+
+	// Export routes
+	mux.HandleFunc("/api/export/features", handleExport(database, "features"))
+	mux.HandleFunc("/api/export/roadmap", handleExport(database, "roadmap"))
+	mux.HandleFunc("/api/export/decisions", handleExport(database, "decisions"))
+	mux.HandleFunc("/api/export/all", handleExport(database, "all"))
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -739,19 +746,31 @@ func handleHistory(database *sql.DB, w http.ResponseWriter, r *http.Request) err
 }
 
 func handleSearch(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
-	p, err := db.GetProject(database)
-	if err != nil {
-		return err
-	}
 	q := r.URL.Query().Get("q")
 	if q == "" {
-		return writeJSON(w, []models.Event{})
+		return writeJSON(w, []models.SearchResult{})
 	}
-	events, err := db.SearchEvents(database, p.ID, q)
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if n, err := fmt.Sscanf(limitStr, "%d", &limit); n != 1 || err != nil {
+			limit = 50
+		}
+	}
+	results, err := db.SearchFTS(database, q, limit)
 	if err != nil {
-		return err
+		// Fall back to the old LIKE-based event search if FTS fails
+		p, pErr := db.GetProject(database)
+		if pErr != nil {
+			return pErr
+		}
+		events, eErr := db.SearchEvents(database, p.ID, q)
+		if eErr != nil {
+			return eErr
+		}
+		return writeJSON(w, events)
 	}
-	return writeJSON(w, events)
+	return writeJSON(w, results)
 }
 
 func handleStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
@@ -1998,4 +2017,82 @@ func handleDecisionDetail(database *sql.DB, w http.ResponseWriter, r *http.Reque
 		return writeJSON(w, map[string]string{"error": "decision not found"})
 	}
 	return writeJSON(w, d)
+}
+
+func handleExport(database *sql.DB, entity string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			return
+		}
+
+		format := r.URL.Query().Get("format")
+		if format == "" {
+			format = "json"
+		}
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+			return
+		}
+
+		switch format {
+		case "csv":
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.csv", p.Name, entity))
+		case "md", "markdown":
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.md", p.Name, entity))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.json", p.Name, entity))
+		}
+
+		var exportErr error
+		switch entity {
+		case "features":
+			features, fErr := db.ListFeatures(database, p.ID, "", "")
+			if fErr != nil {
+				exportErr = fErr
+				break
+			}
+			exportErr = export.Features(features, w, format)
+		case "roadmap":
+			items, rErr := db.ListRoadmapItems(database, p.ID)
+			if rErr != nil {
+				exportErr = rErr
+				break
+			}
+			exportErr = export.Roadmap(items, w, format)
+		case "decisions":
+			decisions, dErr := db.ListDecisions(database, "")
+			if dErr != nil {
+				exportErr = dErr
+				break
+			}
+			exportErr = export.Decisions(decisions, w, format)
+		case "all":
+			if format == "csv" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "CSV format not supported for 'all' export"}) //nolint:errcheck
+				return
+			}
+			features, _ := db.ListFeatures(database, p.ID, "", "")
+			items, _ := db.ListRoadmapItems(database, p.ID)
+			decisions, _ := db.ListDecisions(database, "")
+			exportErr = export.All(p.Name, features, items, decisions, w, format)
+		}
+
+		if exportErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": exportErr.Error()}) //nolint:errcheck
+		}
+	}
 }
