@@ -92,6 +92,7 @@ body {
     min-height: 100vh;
     line-height: 1.5;
     font-size: var(--font-md);
+    overflow-x: hidden;
 }
 
 /* ── Selection ── */
@@ -274,6 +275,7 @@ body {
 .content {
     margin-left: var(--sidebar-width); flex: 1;
     padding: 20px 24px; min-height: 100vh;
+    overflow-x: hidden; box-sizing: border-box; width: calc(100vw - var(--sidebar-width));
 }
 
 .page-header { margin-bottom: 16px; }
@@ -349,7 +351,8 @@ body {
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-@media (min-width: 1400px) { .dashboard-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (min-width: 1200px) { .dashboard-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 1700px) { .dashboard-grid { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 768px) { .dashboard-grid { grid-template-columns: 1fr; } }
 
 /* ── Badges ── */
@@ -481,7 +484,7 @@ body {
 
 /* ── Kanban ── */
 .kanban { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
-.kanban-column { flex: 1 1 180px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; border-top: 3px solid var(--border); max-height: 480px; overflow-y: auto; }
+.kanban-column { flex: 1 1 180px; min-width: 0; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; border-top: 3px solid var(--border); max-height: 480px; overflow-y: auto; }
 .kanban-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 4px 0; }
 .kanban-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 .kanban-count { padding: 1px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
@@ -1705,7 +1708,7 @@ body {
         box-shadow: var(--shadow-lg);
     }
     .content { margin-left: 0; padding: 60px 16px 20px; }
-    #breadcrumb { margin-left: 0; padding: 52px 16px 0; }
+    #breadcrumb { padding: 2px 0 0; }
 
     /* Typography scale-down */
     .page-title { font-size: 1.35rem; }
@@ -3129,8 +3132,8 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .roadmap-count-nice-to-have { color: var(--purple); font-weight: 600; }
 
 /* ── Breadcrumb Navigation ── */
-#breadcrumb { margin-left: var(--sidebar-width); padding: 6px 24px 0; }
-.breadcrumb-bar { display: flex; align-items: center; gap: 4px; padding: 8px 0; margin-bottom: 0; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; min-height: 1.4em; }
+#breadcrumb { padding: 2px 0 0; }
+.breadcrumb-bar { display: flex; align-items: center; gap: 4px; padding: 4px 0; margin-bottom: 0; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; min-height: 1.4em; }
 .breadcrumb-item { color: var(--text-muted); text-decoration: none; cursor: pointer; border-radius: 4px; padding: 2px 6px; transition: color var(--transition), background var(--transition); }
 .breadcrumb-item:hover { color: var(--accent); background: var(--bg-tertiary); }
 .breadcrumb-item.active { color: var(--text-primary); cursor: default; pointer-events: none; }
@@ -5565,6 +5568,7 @@ details[open] > .app4-idea-spec-summary::before {
 /* Dashboard card hover lift */
 .dashboard-grid .card {
     transition: box-shadow 0.2s ease, transform 0.2s ease;
+    min-width: 0; overflow: hidden;
 }
 .dashboard-grid .card:hover {
     box-shadow: 0 4px 16px rgba(0,0,0,0.15);
@@ -8470,7 +8474,7 @@ textarea:focus-visible,
 
     /* Content area: tighter padding on mobile */
     .content { padding: 56px 12px 16px; }
-    #breadcrumb { padding: 48px 12px 0; }
+    #breadcrumb { padding: 2px 0 0; }
 
     /* Discussion forms: full-width actions */
     .disc-form-actions {

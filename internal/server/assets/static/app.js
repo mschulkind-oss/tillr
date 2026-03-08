@@ -219,8 +219,18 @@ const App = {
     },
 
     updateBreadcrumbs() {
-        const el = document.getElementById('breadcrumb');
-        if (!el) return;
+        const content = document.getElementById('content');
+        if (!content) return;
+        let el = document.getElementById('breadcrumb');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'breadcrumb';
+            el.className = 'breadcrumb-bar';
+            el.setAttribute('aria-label', 'Breadcrumb');
+            content.prepend(el);
+        } else if (el.parentNode !== content) {
+            content.prepend(el);
+        }
         const labels = {
             dashboard: 'Dashboard', features: 'Features', roadmap: 'Roadmap',
             cycles: 'Cycles', stats: 'Stats', history: 'History',
