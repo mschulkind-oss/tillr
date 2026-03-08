@@ -3,6 +3,7 @@ default:
 
 # Build the lifecycle binary
 build:
+    cd web && pnpm build
     go build -o bin/lifecycle ./cmd/lifecycle
 
 # Run lifecycle CLI with args
@@ -33,6 +34,10 @@ test-cov:
 # Start the web viewer dev server (default port 3847, override with: just dev 3848)
 dev port="":
     go run ./cmd/lifecycle serve {{ if port != "" { "--port " + port } else { "" } }}
+
+# Start Vite dev server for frontend development (proxies API to Go server)
+dev-frontend:
+    cd web && pnpm dev
 
 # Install the binary locally
 install:
