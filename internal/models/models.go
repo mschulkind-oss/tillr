@@ -238,6 +238,7 @@ type WorkContext struct {
 	PriorResults  []WorkItem     `json:"prior_results,omitempty"`
 	CycleScores   []CycleScore   `json:"cycle_scores,omitempty"`
 	AgentGuidance string         `json:"agent_guidance"`
+	Notifications map[string]any `json:"notifications,omitempty"`
 }
 
 // CycleDetail is the enriched response for GET /api/cycles/{id}.
@@ -308,6 +309,8 @@ type IdeaQueueItem struct {
 	SubmittedBy   string `json:"submitted_by"`
 	AssignedAgent string `json:"assigned_agent,omitempty"`
 	FeatureID     string `json:"feature_id,omitempty"`
+	SourcePage    string `json:"source_page,omitempty"`
+	Context       string `json:"context,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
 }

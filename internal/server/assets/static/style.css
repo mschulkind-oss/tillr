@@ -7956,7 +7956,7 @@ details[open] > .app4-idea-spec-summary::before {
 /* --- Toast Notification --- */
 .toast-notification {
     position: fixed;
-    bottom: 84px;
+    bottom: 140px;
     right: 24px;
     z-index: 3000;
     background: var(--bg-secondary);

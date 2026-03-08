@@ -1841,6 +1841,15 @@ func UpdateAgentSession(db *sql.DB, id string, updates map[string]any) error {
 	return err
 }
 
+// UpdateAgentSessionStatus updates only the status of an agent session.
+func UpdateAgentSessionStatus(db *sql.DB, id, status string) error {
+	_, err := db.Exec(
+		"UPDATE agent_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?",
+		status, id,
+	)
+	return err
+}
+
 func EndAgentSession(db *sql.DB, id, status string) error {
 	_, err := db.Exec(
 		"UPDATE agent_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?",
@@ -1888,11 +1897,12 @@ func InsertIdea(db *sql.DB, idea *models.IdeaQueueItem) error {
 	idea.CreatedAt = now
 	idea.UpdatedAt = now
 	res, err := db.Exec(
-		`INSERT INTO idea_queue (project_id, title, raw_input, idea_type, status, spec_md, auto_implement, submitted_by, assigned_agent, feature_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO idea_queue (project_id, title, raw_input, idea_type, status, spec_md, auto_implement, submitted_by, assigned_agent, feature_id, source_page, context, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		idea.ProjectID, idea.Title, idea.RawInput, idea.IdeaType, idea.Status,
 		nullStr(idea.SpecMD), boolToInt(idea.AutoImplement), idea.SubmittedBy,
 		nullStr(idea.AssignedAgent), nullStr(idea.FeatureID),
+		idea.SourcePage, idea.Context,
 		idea.CreatedAt, idea.UpdatedAt,
 	)
 	if err != nil {
@@ -1909,13 +1919,13 @@ func InsertIdea(db *sql.DB, idea *models.IdeaQueueItem) error {
 func GetIdea(db *sql.DB, id int) (*models.IdeaQueueItem, error) {
 	row := db.QueryRow(`SELECT id, project_id, title, raw_input, idea_type, status,
 		COALESCE(spec_md,''), auto_implement, COALESCE(submitted_by,'human'), COALESCE(assigned_agent,''),
-		COALESCE(feature_id,''), created_at, updated_at
+		COALESCE(feature_id,''), COALESCE(source_page,''), COALESCE(context,''), created_at, updated_at
 		FROM idea_queue WHERE id = ?`, id)
 	item := &models.IdeaQueueItem{}
 	var autoImpl int
 	err := row.Scan(&item.ID, &item.ProjectID, &item.Title, &item.RawInput, &item.IdeaType, &item.Status,
 		&item.SpecMD, &autoImpl, &item.SubmittedBy, &item.AssignedAgent,
-		&item.FeatureID, &item.CreatedAt, &item.UpdatedAt)
+		&item.FeatureID, &item.SourcePage, &item.Context, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1926,7 +1936,7 @@ func GetIdea(db *sql.DB, id int) (*models.IdeaQueueItem, error) {
 func ListIdeas(db *sql.DB, projectID, status, ideaType string) ([]models.IdeaQueueItem, error) {
 	q := `SELECT id, project_id, title, raw_input, idea_type, status,
 		COALESCE(spec_md,''), auto_implement, COALESCE(submitted_by,'human'), COALESCE(assigned_agent,''),
-		COALESCE(feature_id,''), created_at, updated_at
+		COALESCE(feature_id,''), COALESCE(source_page,''), COALESCE(context,''), created_at, updated_at
 		FROM idea_queue WHERE project_id = ?`
 	args := []any{projectID}
 	if status != "" {
@@ -1951,7 +1961,7 @@ func ListIdeas(db *sql.DB, projectID, status, ideaType string) ([]models.IdeaQue
 		var autoImpl int
 		if err := rows.Scan(&item.ID, &item.ProjectID, &item.Title, &item.RawInput, &item.IdeaType, &item.Status,
 			&item.SpecMD, &autoImpl, &item.SubmittedBy, &item.AssignedAgent,
-			&item.FeatureID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.FeatureID, &item.SourcePage, &item.Context, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		item.AutoImplement = autoImpl != 0
@@ -3880,4 +3890,18 @@ func MarkUndone(database *sql.DB, id int64) error {
 func MarkRedone(database *sql.DB, id int64) error {
 	_, err := database.Exec(`UPDATE undo_log SET undone = 0 WHERE id = ?`, id)
 	return err
+}
+
+// CountPendingHighPriorityItems returns the number of pending ideas and
+// high-priority features (priority >= 8) that are not done.
+func CountPendingHighPriorityItems(database *sql.DB) (int, int, error) {
+	var ideaCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM idea_queue WHERE status = 'pending'`).Scan(&ideaCount); err != nil {
+		return 0, 0, fmt.Errorf("counting pending ideas: %w", err)
+	}
+	var featureCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM features WHERE priority >= 8 AND status NOT IN ('done')`).Scan(&featureCount); err != nil {
+		return 0, 0, fmt.Errorf("counting high-priority features: %w", err)
+	}
+	return ideaCount, featureCount, nil
 }
