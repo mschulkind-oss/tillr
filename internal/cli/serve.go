@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"log"
+	"os"
 
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -30,6 +33,20 @@ var serveCmd = &cobra.Command{
 		rateLimit, _ := cmd.Flags().GetFloat64("rate-limit")
 		rateBurst, _ := cmd.Flags().GetInt("rate-burst")
 		noAuth, _ := cmd.Flags().GetBool("no-auth")
+		logFile, _ := cmd.Flags().GetString("log-file")
+
+		// Set up log file if specified
+		if logFile != "" {
+			f, ferr := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if ferr != nil {
+				return fmt.Errorf("opening log file %s: %w", logFile, ferr)
+			}
+			defer f.Close() //nolint:errcheck
+			// Write to both stdout and log file
+			multi := io.MultiWriter(os.Stdout, f)
+			log.SetOutput(multi)
+			fmt.Fprintf(os.Stderr, "Logging to %s\n", logFile)
+		}
 
 		apiKey := cfg.ApiKey
 		if noAuth {
@@ -64,4 +81,5 @@ func init() {
 	serveCmd.Flags().Float64("rate-limit", 100, "API rate limit in requests per second (0 to disable)")
 	serveCmd.Flags().Int("rate-burst", 200, "API rate limit burst capacity")
 	serveCmd.Flags().Bool("no-auth", false, "Disable API key authentication even when configured")
+	serveCmd.Flags().String("log-file", "", "Write server logs to file (in addition to stdout)")
 }

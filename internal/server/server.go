@@ -234,7 +234,7 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		go watchDBFile(dbPath, hub)
 	}
 
-	// Wrap mux with panic recovery
+	// Wrap mux with request logging + panic recovery
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rv := recover(); rv != nil {
@@ -242,6 +242,10 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
+		// Log API requests (skip static assets and WebSocket upgrades)
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			log.Printf("%s %s", r.Method, r.URL.RequestURI())
+		}
 		mux.ServeHTTP(w, r)
 	})
 
