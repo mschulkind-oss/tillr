@@ -593,6 +593,12 @@ App._showIdeaDetail = async function(ideaId) {
         </div>`;
     }
 
+    if (idea.source_page) {
+        var pgName = idea.source_page.replace('#', '');
+        pgName = pgName.charAt(0).toUpperCase() + pgName.slice(1);
+        html += `<div class="idea-detail-section"><h3 class="idea-detail-section-title">Source</h3><div style="color:var(--text-dim);font-size:0.9em">\u{1F4CD} ${esc(pgName)} page</div></div>`;
+    }
+
     if (canAct) {
         html += `<div class="idea-detail-actions">
             <button class="app4-btn app4-btn-approve" id="ideaDetailApprove">✅ Approve</button>
@@ -953,6 +959,12 @@ App.showFeedbackModal = function() {
     if (!overlay) return;
     overlay.classList.add('visible');
     overlay.setAttribute('aria-hidden', 'false');
+    // Show captured context
+    var ctxEl = document.getElementById('feedbackContextInfo');
+    if (ctxEl) {
+        var pg = (window.location.hash || '#dashboard').replace('#', '');
+        ctxEl.textContent = '\u{1F4CD} Captured from: ' + pg.charAt(0).toUpperCase() + pg.slice(1) + ' page';
+    }
     // Restore draft from localStorage
     var textarea = document.getElementById('feedbackText');
     if (textarea) {

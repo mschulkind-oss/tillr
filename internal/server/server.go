@@ -1614,6 +1614,8 @@ func handleIdeas(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 			IdeaType      string `json:"idea_type"`
 			AutoImplement bool   `json:"auto_implement"`
 			SubmittedBy   string `json:"submitted_by"`
+			SourcePage    string `json:"source_page"`
+			Context       string `json:"context"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -1637,6 +1639,8 @@ func handleIdeas(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 			Status:        "pending",
 			AutoImplement: body.AutoImplement,
 			SubmittedBy:   body.SubmittedBy,
+			SourcePage:    body.SourcePage,
+			Context:       body.Context,
 		}
 		if err := db.InsertIdea(database, idea); err != nil {
 			return fmt.Errorf("creating idea: %w", err)

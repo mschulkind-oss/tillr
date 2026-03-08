@@ -499,4 +499,8 @@ var migrations = []string{
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_undo_log_project ON undo_log(project_id);`,
+
+	// Migration 27: Add source_page and context to idea_queue
+	`ALTER TABLE idea_queue ADD COLUMN source_page TEXT DEFAULT '';
+	ALTER TABLE idea_queue ADD COLUMN context TEXT DEFAULT '';`,
 }

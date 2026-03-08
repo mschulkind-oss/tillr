@@ -1,13 +1,58 @@
 package cli
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
+	"strconv"
 
 	"github.com/mschulkind/lifecycle/internal/db"
 	"github.com/mschulkind/lifecycle/internal/engine"
 	"github.com/mschulkind/lifecycle/internal/models"
 	"github.com/spf13/cobra"
 )
+
+// getAgentSessionID returns a stable agent session ID.
+// Priority: LIFECYCLE_AGENT_ID env var > "agent-{hostname}-{pid}".
+func getAgentSessionID() string {
+	if id := os.Getenv("LIFECYCLE_AGENT_ID"); id != "" {
+		return id
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown"
+	}
+	return "agent-" + host + "-" + strconv.Itoa(os.Getpid())
+}
+
+// ensureAgentSession creates or updates an agent session so the web dashboard
+// can see active agents. If the session already exists, its status is updated.
+func ensureAgentSession(database *sql.DB, projectID, status string) string {
+	agentID := getAgentSessionID()
+
+	existing, err := db.GetAgentSession(database, agentID)
+	if err != nil || existing == nil {
+		// Session doesn't exist — create it.
+		host, _ := os.Hostname()
+		if host == "" {
+			host = "unknown"
+		}
+		s := &models.AgentSession{
+			ID:        agentID,
+			ProjectID: projectID,
+			Name:      host + "-agent",
+			Status:    status,
+		}
+		if createErr := db.CreateAgentSession(database, s); createErr != nil {
+			// Best-effort: don't fail the command if session creation fails.
+			return agentID
+		}
+	} else {
+		// Session exists — update status.
+		_ = db.UpdateAgentSessionStatus(database, agentID, status)
+	}
+	return agentID
+}
 
 func init() {
 	nextCmd.Flags().String("cycle", "", "Filter by cycle type")
@@ -44,6 +89,11 @@ If no work items are available, returns a "no_work" status.`,
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Register/update agent session so the web dashboard can see this agent.
+		if p, pErr := db.GetProject(database); pErr == nil {
+			ensureAgentSession(database, p.ID, "active")
+		}
+
 		w, err := engine.GetNextWorkItem(database)
 		if err != nil {
 			if jsonOutput {
@@ -57,6 +107,7 @@ If no work items are available, returns a "no_work" status.`,
 			// Return enriched context — everything an agent needs in one payload
 			ctx, ctxErr := engine.GetWorkContext(database, w)
 			if ctxErr == nil {
+				addNotificationsToContext(database, ctx)
 				return printJSON(ctx)
 			}
 			// Fall back to bare work item if context building fails
@@ -69,6 +120,7 @@ If no work items are available, returns a "no_work" status.`,
 		if w.AgentPrompt != "" {
 			fmt.Printf("  Prompt:  %s\n", w.AgentPrompt)
 		}
+		showPriorityNotifications(database)
 		return nil
 	},
 }
@@ -90,15 +142,23 @@ If no work item is active, this command will return an error. Use
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Update agent session status to idle.
+		if p, pErr := db.GetProject(database); pErr == nil {
+			ensureAgentSession(database, p.ID, "idle")
+		}
+
 		result, _ := cmd.Flags().GetString("result")
 		if err := engine.CompleteWorkItem(database, result); err != nil {
 			return fmt.Errorf("completing work item: %w", err)
 		}
 
 		if jsonOutput {
-			return printJSON(map[string]string{"status": "done"})
+			err := printJSON(map[string]string{"status": "done"})
+			showPriorityNotifications(database)
+			return err
 		}
 		fmt.Println("✓ Work item marked as done.")
+		showPriorityNotifications(database)
 		return nil
 	},
 }
@@ -119,15 +179,23 @@ If no work item is active, this command will return an error.`,
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Update agent session status to failed.
+		if p, pErr := db.GetProject(database); pErr == nil {
+			ensureAgentSession(database, p.ID, "failed")
+		}
+
 		reason, _ := cmd.Flags().GetString("reason")
 		if err := engine.FailWorkItem(database, reason); err != nil {
 			return fmt.Errorf("failing work item: %w", err)
 		}
 
 		if jsonOutput {
-			return printJSON(map[string]string{"status": "failed"})
+			err := printJSON(map[string]string{"status": "failed"})
+			showPriorityNotifications(database)
+			return err
 		}
 		fmt.Println("✗ Work item marked as failed.")
+		showPriorityNotifications(database)
 		return nil
 	},
 }
@@ -148,6 +216,12 @@ Stale agents without recent heartbeats may have their work reclaimed.`,
 		defer database.Close() //nolint:errcheck
 
 		message, _ := cmd.Flags().GetString("message")
+
+		// Ensure agent session exists and update its timestamp.
+		if p, pErr := db.GetProject(database); pErr == nil {
+			agentID := ensureAgentSession(database, p.ID, "active")
+			_ = db.UpdateAgentHeartbeat(database, agentID, "")
+		}
 
 		w, err := db.GetActiveWorkItem(database)
 		if err != nil {
@@ -194,6 +268,11 @@ also includes a "completed" field showing what was just finished.`,
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Update agent session status to active.
+		if p, pErr := db.GetProject(database); pErr == nil {
+			ensureAgentSession(database, p.ID, "active")
+		}
+
 		result, _ := cmd.Flags().GetString("result")
 
 		// Step 1: Complete current work item
@@ -225,6 +304,13 @@ also includes a "completed" field showing what was just finished.`,
 				response["next"] = nil
 				response["status"] = "no_more_work"
 			}
+			ideaCount, featureCount, _ := db.CountPendingHighPriorityItems(database)
+			if ideaCount > 0 || featureCount > 0 {
+				response["notifications"] = map[string]any{
+					"pending_ideas":          ideaCount,
+					"high_priority_features": featureCount,
+				}
+			}
 			return printJSON(response)
 		}
 
@@ -234,6 +320,38 @@ also includes a "completed" field showing what was just finished.`,
 		} else {
 			fmt.Println("  No more work items available.")
 		}
+		showPriorityNotifications(database)
 		return nil
 	},
+}
+
+// showPriorityNotifications prints human-readable notifications about pending
+// high-priority work items to stderr so they don't interfere with JSON piping.
+func showPriorityNotifications(database *sql.DB) {
+	if jsonOutput {
+		return
+	}
+	ideaCount, featureCount, err := db.CountPendingHighPriorityItems(database)
+	if err != nil || (ideaCount == 0 && featureCount == 0) {
+		return
+	}
+	if ideaCount > 0 {
+		fmt.Fprintf(os.Stderr, "⚡ %d pending idea(s) to process\n", ideaCount)
+	}
+	if featureCount > 0 {
+		fmt.Fprintf(os.Stderr, "🔴 %d high-priority feature(s) awaiting work\n", featureCount)
+	}
+}
+
+// addNotificationsToContext populates the Notifications field on a WorkContext
+// with pending idea and high-priority feature counts for JSON responses.
+func addNotificationsToContext(database *sql.DB, ctx *models.WorkContext) {
+	ideaCount, featureCount, err := db.CountPendingHighPriorityItems(database)
+	if err != nil || (ideaCount == 0 && featureCount == 0) {
+		return
+	}
+	ctx.Notifications = map[string]any{
+		"pending_ideas":          ideaCount,
+		"high_priority_features": featureCount,
+	}
 }

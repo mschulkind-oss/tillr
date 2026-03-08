@@ -871,3 +871,40 @@ func TestGetPerfSummaryEmpty(t *testing.T) {
 		t.Errorf("expected 0 commands, got %d", summary.TotalCommands)
 	}
 }
+
+func TestCountPendingHighPriorityItems(t *testing.T) {
+	database := openTestDB(t)
+	db.CreateProject(database, &models.Project{ID: "p1", Name: "P1"}) //nolint:errcheck
+
+	// Empty DB should return zeros.
+	ideas, features, err := db.CountPendingHighPriorityItems(database)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ideas != 0 || features != 0 {
+		t.Errorf("expected 0,0 got %d,%d", ideas, features)
+	}
+
+	// Insert pending ideas.
+	database.Exec(`INSERT INTO idea_queue (project_id, title, raw_input, status) VALUES ('p1','idea1','raw1','pending')`)  //nolint:errcheck
+	database.Exec(`INSERT INTO idea_queue (project_id, title, raw_input, status) VALUES ('p1','idea2','raw2','pending')`)  //nolint:errcheck
+	database.Exec(`INSERT INTO idea_queue (project_id, title, raw_input, status) VALUES ('p1','idea3','raw3','approved')`) //nolint:errcheck
+
+	// Insert features with varying priorities and statuses.
+	database.Exec(`INSERT INTO features (id, project_id, name, status, priority) VALUES ('f1','p1','F1','draft',9)`)        //nolint:errcheck
+	database.Exec(`INSERT INTO features (id, project_id, name, status, priority) VALUES ('f2','p1','F2','implementing',8)`) //nolint:errcheck
+	database.Exec(`INSERT INTO features (id, project_id, name, status, priority) VALUES ('f3','p1','F3','done',10)`)        //nolint:errcheck
+	database.Exec(`INSERT INTO features (id, project_id, name, status, priority) VALUES ('f4','p1','F4','draft',5)`)        //nolint:errcheck
+
+	ideas, features, err = db.CountPendingHighPriorityItems(database)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ideas != 2 {
+		t.Errorf("expected 2 pending ideas, got %d", ideas)
+	}
+	// f1(9,draft) + f2(8,implementing) = 2; f3 excluded (done), f4 excluded (priority 5)
+	if features != 2 {
+		t.Errorf("expected 2 high-priority features, got %d", features)
+	}
+}
