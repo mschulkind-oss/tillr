@@ -627,6 +627,9 @@ Editable fields: --name, --description, --spec, --status, --milestone,
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Capture before state for undo log
+		beforeFeature, _ := db.GetFeature(database, args[0])
+
 		updates := make(map[string]any)
 		if v, _ := cmd.Flags().GetString("name"); v != "" {
 			updates["name"] = v
@@ -688,6 +691,14 @@ Editable fields: --name, --description, --spec, --status, --milestone,
 			}
 		}
 
+		// Log undo entry after successful mutation
+		if beforeFeature != nil {
+			afterFeature, _ := db.GetFeature(database, args[0])
+			if afterFeature != nil {
+				_ = LogFeatureUndo(database, beforeFeature.ProjectID, "feature_edit", args[0], beforeFeature, afterFeature)
+			}
+		}
+
 		if jsonOutput {
 			f, _ := db.GetFeature(database, args[0])
 			return printJSON(f)
@@ -712,8 +723,16 @@ Use 'lifecycle feature list' to find feature IDs.`,
 		}
 		defer database.Close() //nolint:errcheck
 
+		// Capture before state for undo log
+		beforeFeature, _ := db.GetFeature(database, args[0])
+
 		if err := db.DeleteFeature(database, args[0]); err != nil {
 			return fmt.Errorf("removing feature %q: %w", args[0], err)
+		}
+
+		// Log undo entry after successful deletion
+		if beforeFeature != nil {
+			_ = LogFeatureUndo(database, beforeFeature.ProjectID, "feature_delete", args[0], beforeFeature, nil)
 		}
 
 		if jsonOutput {

@@ -22,6 +22,7 @@ func init() {
 	agentCmd.AddCommand(agentShowCmd)
 	agentCmd.AddCommand(agentEndCmd)
 	agentCmd.AddCommand(agentStatsCmd)
+	agentCmd.AddCommand(agentCapabilityCmd)
 
 	agentStatsCmd.Flags().String("agent", "", "Filter stats to a specific agent name")
 

@@ -466,4 +466,37 @@ var migrations = []string{
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_webhooks_project ON webhooks(project_id);`,
+
+	// Migration 24: Agent capabilities for capability-based work matching
+	`CREATE TABLE IF NOT EXISTS agent_capabilities (
+		agent_id TEXT NOT NULL,
+		capability TEXT NOT NULL,
+		PRIMARY KEY (agent_id, capability)
+	);
+	CREATE INDEX IF NOT EXISTS idx_agent_cap_capability ON agent_capabilities(capability);`,
+
+	// Migration 25: Dashboard configurations
+	`CREATE TABLE IF NOT EXISTS dashboard_configs (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		name TEXT NOT NULL,
+		layout TEXT NOT NULL DEFAULT '[]',
+		is_default INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_dashboard_configs_project ON dashboard_configs(project_id);`,
+
+	// Migration 26: Undo/redo log for event-sourced undo
+	`CREATE TABLE IF NOT EXISTS undo_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL,
+		operation TEXT NOT NULL,
+		entity_type TEXT NOT NULL,
+		entity_id TEXT NOT NULL,
+		before_data TEXT NOT NULL DEFAULT '{}',
+		after_data TEXT NOT NULL DEFAULT '{}',
+		undone INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_undo_log_project ON undo_log(project_id);`,
 }

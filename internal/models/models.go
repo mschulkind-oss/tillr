@@ -1,5 +1,12 @@
 package models
 
+import "encoding/json"
+
+type AgentCapability struct {
+	AgentID    string `json:"agent_id"`
+	Capability string `json:"capability"`
+}
+
 type Project struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -618,4 +625,35 @@ type CommandPerfStats struct {
 	AvgDurationMs float64 `json:"avg_duration_ms"`
 	MaxDurationMs float64 `json:"max_duration_ms"`
 	SuccessRate   float64 `json:"success_rate"`
+}
+
+// UndoEntry represents a single undoable operation in the undo log.
+type UndoEntry struct {
+	ID         int64  `json:"id"`
+	ProjectID  string `json:"project_id"`
+	Operation  string `json:"operation"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	BeforeData string `json:"before_data"`
+	AfterData  string `json:"after_data"`
+	Undone     bool   `json:"undone"`
+	CreatedAt  string `json:"created_at"`
+}
+
+// DashboardConfig represents a saved dashboard layout configuration.
+type DashboardConfig struct {
+	ID        string          `json:"id"`
+	ProjectID string          `json:"project_id"`
+	Name      string          `json:"name"`
+	Layout    json.RawMessage `json:"layout"`
+	IsDefault bool            `json:"is_default"`
+	CreatedAt string          `json:"created_at"`
+}
+
+// DashboardWidget describes a single widget within a dashboard layout.
+type DashboardWidget struct {
+	Type   string         `json:"type"` // "feature-summary", "milestone-progress", "roadmap-overview", etc.
+	Title  string         `json:"title"`
+	Size   string         `json:"size"` // "small", "medium", "large"
+	Config map[string]any `json:"config,omitempty"`
 }

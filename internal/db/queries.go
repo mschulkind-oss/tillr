@@ -30,6 +30,37 @@ func GetProject(db *sql.DB) (*models.Project, error) {
 	return p, nil
 }
 
+func ListProjects(db *sql.DB) ([]models.Project, error) {
+	rows, err := db.Query(`SELECT id, name, description, created_at, updated_at FROM projects ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var projects []models.Project
+	for rows.Next() {
+		var p models.Project
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
+}
+
+func GetProjectByID(db *sql.DB, id string) (*models.Project, error) {
+	row := db.QueryRow(`SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?`, id)
+	p := &models.Project{}
+	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func UpdateProject(db *sql.DB, id, description string) error {
+	_, err := db.Exec(`UPDATE projects SET description = ?, updated_at = datetime('now') WHERE id = ?`, description, id)
+	return err
+}
+
 // --- Milestones ---
 
 func CreateMilestone(db *sql.DB, m *models.Milestone) error {
@@ -3618,4 +3649,235 @@ func GetPerfSummary(database *sql.DB, limit int) (*models.PerfSummary, error) {
 	}
 
 	return summary, nil
+}
+
+// --- Dashboard Configs ---
+
+func CreateDashboardConfig(db *sql.DB, dc *models.DashboardConfig) error {
+	_, err := db.Exec(
+		`INSERT INTO dashboard_configs (id, project_id, name, layout, is_default) VALUES (?, ?, ?, ?, ?)`,
+		dc.ID, dc.ProjectID, dc.Name, string(dc.Layout), boolToInt(dc.IsDefault),
+	)
+	return err
+}
+
+func GetDashboardConfig(db *sql.DB, id string) (*models.DashboardConfig, error) {
+	row := db.QueryRow(`SELECT id, project_id, name, layout, is_default, created_at FROM dashboard_configs WHERE id = ?`, id)
+	dc := &models.DashboardConfig{}
+	var isDefault int
+	var layout string
+	err := row.Scan(&dc.ID, &dc.ProjectID, &dc.Name, &layout, &isDefault, &dc.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	dc.Layout = json.RawMessage(layout)
+	dc.IsDefault = isDefault == 1
+	return dc, nil
+}
+
+func ListDashboardConfigs(db *sql.DB, projectID string) ([]models.DashboardConfig, error) {
+	rows, err := db.Query(
+		`SELECT id, project_id, name, layout, is_default, created_at FROM dashboard_configs WHERE project_id = ? ORDER BY created_at`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.DashboardConfig
+	for rows.Next() {
+		var dc models.DashboardConfig
+		var isDefault int
+		var layout string
+		if err := rows.Scan(&dc.ID, &dc.ProjectID, &dc.Name, &layout, &isDefault, &dc.CreatedAt); err != nil {
+			return nil, err
+		}
+		dc.Layout = json.RawMessage(layout)
+		dc.IsDefault = isDefault == 1
+		out = append(out, dc)
+	}
+	return out, rows.Err()
+}
+
+func DeleteDashboardConfig(db *sql.DB, id string) error {
+	res, err := db.Exec(`DELETE FROM dashboard_configs WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func SetDefaultDashboard(db *sql.DB, projectID, id string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Clear existing default for this project.
+	if _, err := tx.Exec(`UPDATE dashboard_configs SET is_default = 0 WHERE project_id = ?`, projectID); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE dashboard_configs SET is_default = 1 WHERE id = ? AND project_id = ?`, id, projectID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
+// AddAgentCapability registers a capability for an agent.
+func AddAgentCapability(db *sql.DB, agentID, capability string) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO agent_capabilities (agent_id, capability) VALUES (?, ?)`,
+		agentID, capability,
+	)
+	return err
+}
+
+// RemoveAgentCapability removes a capability from an agent.
+func RemoveAgentCapability(db *sql.DB, agentID, capability string) error {
+	res, err := db.Exec(
+		`DELETE FROM agent_capabilities WHERE agent_id = ? AND capability = ?`,
+		agentID, capability,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("capability %q not found for agent %q", capability, agentID)
+	}
+	return nil
+}
+
+// ListAgentCapabilities returns capabilities for a specific agent.
+func ListAgentCapabilities(db *sql.DB, agentID string) ([]string, error) {
+	rows, err := db.Query(
+		`SELECT capability FROM agent_capabilities WHERE agent_id = ? ORDER BY capability`,
+		agentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var caps []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		caps = append(caps, c)
+	}
+	return caps, rows.Err()
+}
+
+// ListAllAgentCapabilities returns a map of agent ID → capabilities.
+func ListAllAgentCapabilities(db *sql.DB) (map[string][]string, error) {
+	rows, err := db.Query(
+		`SELECT agent_id, capability FROM agent_capabilities ORDER BY agent_id, capability`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	out := make(map[string][]string)
+	for rows.Next() {
+		var agentID, cap string
+		if err := rows.Scan(&agentID, &cap); err != nil {
+			return nil, err
+		}
+		out[agentID] = append(out[agentID], cap)
+	}
+	return out, rows.Err()
+}
+
+// --- Undo Log ---
+
+func InsertUndoEntry(database *sql.DB, entry *models.UndoEntry) error {
+	_, err := database.Exec(
+		`INSERT INTO undo_log (project_id, operation, entity_type, entity_id, before_data, after_data)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		entry.ProjectID, entry.Operation, entry.EntityType, entry.EntityID, entry.BeforeData, entry.AfterData,
+	)
+	return err
+}
+
+func GetLastUndoEntry(database *sql.DB, projectID string) (*models.UndoEntry, error) {
+	row := database.QueryRow(`
+		SELECT id, project_id, operation, entity_type, entity_id, before_data, after_data, undone, created_at
+		FROM undo_log
+		WHERE project_id = ? AND undone = 0
+		ORDER BY id DESC LIMIT 1`, projectID)
+	e := &models.UndoEntry{}
+	var undone int
+	err := row.Scan(&e.ID, &e.ProjectID, &e.Operation, &e.EntityType, &e.EntityID,
+		&e.BeforeData, &e.AfterData, &undone, &e.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	e.Undone = undone == 1
+	return e, nil
+}
+
+func GetLastUndoneEntry(database *sql.DB, projectID string) (*models.UndoEntry, error) {
+	row := database.QueryRow(`
+		SELECT id, project_id, operation, entity_type, entity_id, before_data, after_data, undone, created_at
+		FROM undo_log
+		WHERE project_id = ? AND undone = 1
+		ORDER BY id DESC LIMIT 1`, projectID)
+	e := &models.UndoEntry{}
+	var undone int
+	err := row.Scan(&e.ID, &e.ProjectID, &e.Operation, &e.EntityType, &e.EntityID,
+		&e.BeforeData, &e.AfterData, &undone, &e.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	e.Undone = undone == 1
+	return e, nil
+}
+
+func ListUndoEntries(database *sql.DB, projectID string, limit int) ([]models.UndoEntry, error) {
+	rows, err := database.Query(`
+		SELECT id, project_id, operation, entity_type, entity_id, before_data, after_data, undone, created_at
+		FROM undo_log
+		WHERE project_id = ?
+		ORDER BY id DESC LIMIT ?`, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.UndoEntry
+	for rows.Next() {
+		var e models.UndoEntry
+		var undone int
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.Operation, &e.EntityType, &e.EntityID,
+			&e.BeforeData, &e.AfterData, &undone, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Undone = undone == 1
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func MarkUndone(database *sql.DB, id int64) error {
+	_, err := database.Exec(`UPDATE undo_log SET undone = 1 WHERE id = ?`, id)
+	return err
+}
+
+func MarkRedone(database *sql.DB, id int64) error {
+	_, err := database.Exec(`UPDATE undo_log SET undone = 0 WHERE id = ?`, id)
+	return err
 }

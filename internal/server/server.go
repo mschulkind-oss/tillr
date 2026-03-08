@@ -162,6 +162,10 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	mux.HandleFunc("/api/decisions", apiHandler(database, handleDecisions))
 	mux.HandleFunc("/api/decisions/", apiHandler(database, handleDecisionDetail))
 
+	// Dashboard config routes
+	mux.HandleFunc("/api/dashboards", apiHandler(database, handleDashboards))
+	mux.HandleFunc("/api/dashboards/", apiHandler(database, handleDashboardDetail))
+
 	// Export routes
 	mux.HandleFunc("/api/export/features", handleExport(database, "features"))
 	mux.HandleFunc("/api/export/roadmap", handleExport(database, "roadmap"))
@@ -2240,6 +2244,35 @@ func handleDecisionDetail(database *sql.DB, w http.ResponseWriter, r *http.Reque
 		return writeJSON(w, map[string]string{"error": "decision not found"})
 	}
 	return writeJSON(w, d)
+}
+
+func handleDashboards(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	configs, err := db.ListDashboardConfigs(database, p.ID)
+	if err != nil {
+		return err
+	}
+	if configs == nil {
+		configs = []models.DashboardConfig{}
+	}
+	return writeJSON(w, configs)
+}
+
+func handleDashboardDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	id := strings.TrimPrefix(r.URL.Path, "/api/dashboards/")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return writeJSON(w, map[string]string{"error": "dashboard id required"})
+	}
+	dc, err := db.GetDashboardConfig(database, id)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return writeJSON(w, map[string]string{"error": "dashboard not found"})
+	}
+	return writeJSON(w, dc)
 }
 
 func handleExport(database *sql.DB, entity string) http.HandlerFunc {
