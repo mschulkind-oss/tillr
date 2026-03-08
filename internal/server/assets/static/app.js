@@ -218,6 +218,32 @@ const App = {
         </div>`;
     },
 
+    updateBreadcrumbs() {
+        const el = document.getElementById('breadcrumb');
+        if (!el) return;
+        const labels = {
+            dashboard: 'Dashboard', features: 'Features', roadmap: 'Roadmap',
+            cycles: 'Cycles', stats: 'Stats', history: 'History',
+            discussions: 'Discussions', qa: 'QA', agents: 'Agents',
+            ideas: 'Ideas', context: 'Context', spec: 'Spec Doc', adrs: 'Decisions'
+        };
+        const page = this.currentPage;
+        const label = labels[page] || page.charAt(0).toUpperCase() + page.slice(1);
+        let html = '<span class="breadcrumb-item' + (this._breadcrumbDetail ? '' : ' active') + '"'
+            + (this._breadcrumbDetail ? ' onclick="App._breadcrumbDetail=null;App._breadcrumbSub=null;App.navigate(\'' + page + '\');return false" style="cursor:pointer"' : '')
+            + '>' + label + '</span>';
+        if (this._breadcrumbDetail) {
+            html += '<span class="breadcrumb-separator" aria-hidden="true">›</span>'
+                + '<span class="breadcrumb-item' + (this._breadcrumbSub ? '' : ' active') + '">'
+                + esc(this._breadcrumbDetail) + '</span>';
+        }
+        if (this._breadcrumbSub) {
+            html += '<span class="breadcrumb-separator" aria-hidden="true">›</span>'
+                + '<span class="breadcrumb-item active">' + esc(this._breadcrumbSub) + '</span>';
+        }
+        el.innerHTML = html;
+    },
+
     applyStaggerAnimation(container) {
         const items = container.querySelectorAll('.card, .stat-card, .roadmap-item, .kanban-card, .roadmap-section');
         items.forEach((el, i) => { el.style.animationDelay = `${Math.min(i * 0.06, 0.42)}s`; });
