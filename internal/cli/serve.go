@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/mschulkind/lifecycle/internal/config"
 	"github.com/mschulkind/lifecycle/internal/db"
@@ -34,15 +35,22 @@ var serveCmd = &cobra.Command{
 		rateBurst, _ := cmd.Flags().GetInt("rate-burst")
 		noAuth, _ := cmd.Flags().GetBool("no-auth")
 		logFile, _ := cmd.Flags().GetString("log-file")
+		noLog, _ := cmd.Flags().GetBool("no-log")
 
-		// Set up log file if specified
+		// Default: auto-log to context/lifecycle-{port}.log (unique per port so
+		// jail and host instances don't collide on the shared filesystem).
+		if logFile == "" && !noLog {
+			logDir := filepath.Join(root, "context")
+			_ = os.MkdirAll(logDir, 0755)
+			logFile = filepath.Join(logDir, fmt.Sprintf("lifecycle-%d.log", cfg.ServerPort))
+		}
+
 		if logFile != "" {
 			f, ferr := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if ferr != nil {
 				return fmt.Errorf("opening log file %s: %w", logFile, ferr)
 			}
 			defer f.Close() //nolint:errcheck
-			// Write to both stdout and log file
 			multi := io.MultiWriter(os.Stdout, f)
 			log.SetOutput(multi)
 			fmt.Fprintf(os.Stderr, "Logging to %s\n", logFile)
@@ -81,5 +89,6 @@ func init() {
 	serveCmd.Flags().Float64("rate-limit", 100, "API rate limit in requests per second (0 to disable)")
 	serveCmd.Flags().Int("rate-burst", 200, "API rate limit burst capacity")
 	serveCmd.Flags().Bool("no-auth", false, "Disable API key authentication even when configured")
-	serveCmd.Flags().String("log-file", "", "Write server logs to file (in addition to stdout)")
+	serveCmd.Flags().String("log-file", "", "Write server logs to file (default: context/lifecycle-{port}.log)")
+	serveCmd.Flags().Bool("no-log", false, "Disable automatic log file creation")
 }
