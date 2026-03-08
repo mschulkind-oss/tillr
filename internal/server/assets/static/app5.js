@@ -766,7 +766,7 @@ document.addEventListener('click', function(e) {
             window._statsNavFilter[kv[0]] = kv[1];
         });
     }
-    window.location.hash = '#' + page;
+    App.navigate(page);
 });
 
 // Apply stats navigation filter on Features page

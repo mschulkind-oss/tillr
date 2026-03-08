@@ -289,7 +289,7 @@ body {
     border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
     transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
-.card:hover { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-1px); }
+.card:hover { border-color: var(--accent); box-shadow: var(--shadow); }
 .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .card-title { font-size: 0.9rem; font-weight: 600; }
 
@@ -306,7 +306,7 @@ body {
     background: linear-gradient(135deg, transparent 60%, rgba(88,166,255,0.04));
     pointer-events: none;
 }
-.stat-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px rgba(88,166,255,0.1); transform: translateY(-2px); }
+.stat-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px rgba(88,166,255,0.1); }
 .stat-card-info { flex: 1; min-width: 0; }
 .stat-value { font-size: 1.75rem; font-weight: 800; color: var(--accent); line-height: 1; letter-spacing: -0.03em; }
 .stat-label { font-size: 0.675rem; color: var(--text-secondary); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
@@ -436,9 +436,9 @@ body {
 .features-search-wrap { position: relative; flex: 1; min-width: 200px; }
 .features-search-wrap::before { content: '🔍'; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 0.8rem; pointer-events: none; opacity: 0.5; }
 .filter-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.filter-pill { padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1); white-space: nowrap; transform: translateY(0); }
-.filter-pill:hover { border-color: var(--text-muted); color: var(--text-primary); transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-.filter-pill:active { transform: translateY(0) scale(0.97); }
+.filter-pill { padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1); white-space: nowrap; }
+.filter-pill:hover { border-color: var(--text-muted); color: var(--text-primary); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.filter-pill:active { transform: scale(0.97); }
 .filter-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 2px 12px rgba(88,166,255,0.3); }
 .filter-pill .pill-count { display: inline-block; margin-left: 5px; padding: 0 6px; border-radius: 10px; background: rgba(255,255,255,0.15); font-size: 0.7rem; line-height: 1.5; transition: background 0.25s ease; }
 .filter-pill.active .pill-count { background: rgba(255,255,255,0.25); }
@@ -520,7 +520,7 @@ body {
 
 /* Kanban cards */
 .kanban-card { background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius); padding: 10px; margin-bottom: 6px; cursor: pointer; transition: all var(--transition); }
-.kanban-card:hover { border-color: var(--accent); border-left-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.kanban-card:hover { border-color: var(--accent); border-left-color: var(--accent); box-shadow: var(--shadow-lg); }
 .kanban-card-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kanban-card-meta { font-size: 0.7rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
 .kanban-card-priority { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -637,8 +637,8 @@ body {
 .roadmap-item.st-proposed:nth-child(even) { background: rgba(127,127,127,0.02); }
 
 /* Hover: lift + priority-colored glow */
-.roadmap-item:hover { transform: translateY(-3px); }
-.roadmap-item:hover::before { transform: translateY(-50%) scale(1.4); }
+.roadmap-item:hover { }
+.roadmap-item:hover::before { }
 .roadmap-section.pri-critical .roadmap-item:hover { box-shadow: 0 8px 24px rgba(248,81,73,0.12), 0 0 0 1px rgba(248,81,73,0.3); }
 .roadmap-section.pri-critical .roadmap-item:hover::before { background: var(--danger); box-shadow: 0 0 8px rgba(248,81,73,0.5); }
 .roadmap-section.pri-high .roadmap-item:hover { box-shadow: 0 8px 24px rgba(210,153,34,0.12), 0 0 0 1px rgba(210,153,34,0.3); }
@@ -885,7 +885,7 @@ body {
     transition: all 0.2s ease; min-width: 120px;
     background: var(--bg-secondary);
 }
-.dep-node:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.dep-node:hover { box-shadow: var(--shadow-lg); }
 .dep-node-name { font-size: 0.82rem; font-weight: 600; margin-bottom: 2px; word-break: break-word; }
 .dep-node-status { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
 
@@ -2154,7 +2154,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .roadmap-filter-pill:hover {
     border-color: var(--text-muted);
     color: var(--text-primary);
-    transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 .roadmap-filter-pill:active {
@@ -2240,7 +2239,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 /* ── Score Dots (Dashboard) ── */
 .score-dots-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .score-dot { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 24px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; cursor: default; transition: transform 0.15s ease; }
-.score-dot:hover { transform: scale(1.15); }
+.score-dot:hover { }
 .score-dot.score-green { background: rgba(63,185,80,0.15); color: var(--success); }
 .score-dot.score-yellow { background: rgba(210,153,34,0.15); color: var(--warning); }
 .score-dot.score-red { background: rgba(248,81,73,0.15); color: var(--danger); }
@@ -2461,7 +2460,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 }
 .cycle-type-ref:hover {
     border-left-color: var(--purple);
-    transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(88,166,255,0.12);
 }
 .cycle-type-ref .card-title {
@@ -2500,7 +2498,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .btn-approve:hover {
     background: var(--success);
     color: #fff;
-    transform: translateY(-1px);
     box-shadow: 0 4px 16px rgba(63,185,80,0.35);
 }
 .btn-reject {
@@ -2514,7 +2511,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .btn-reject:hover {
     background: var(--danger);
     color: #fff;
-    transform: translateY(-1px);
     box-shadow: 0 4px 16px rgba(248,81,73,0.35);
 }
 
@@ -2524,7 +2520,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     transition: all 0.25s ease;
 }
 .qa-review-card:hover {
-    transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(0,0,0,0.15);
 }
 
@@ -2548,7 +2543,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     width: 28px; height: 28px; font-size: 0.75rem;
     transition: transform 0.2s ease;
 }
-.timeline-item:hover .timeline-dot { transform: scale(1.15); }
+.timeline-item:hover .timeline-dot { }
 .timeline-item {
     border-radius: var(--radius);
     transition: background 0.2s ease;
@@ -2596,7 +2591,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .card[style*="cursor:pointer"]:hover,
 .card[onclick]:hover {
     border-color: var(--accent);
-    transform: translateY(-2px);
 }
 .disc-row:hover td { background: var(--bg-hover); }
 
@@ -3092,7 +3086,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
 .roadmap-status-actions { display: flex; align-items: center; gap: 10px; padding: 10px 0; margin-top: 8px; border-top: 1px solid var(--border); }
 .roadmap-status-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .roadmap-status-btn { padding: 4px 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; white-space: nowrap; }
-.roadmap-status-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.roadmap-status-btn:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
 .roadmap-status-btn:active { transform: scale(0.97); }
 .roadmap-status-btn.rs-active { pointer-events: none; opacity: 0.5; }
 .roadmap-status-btn.rs-proposed { border-color: var(--text-muted); }
@@ -3580,7 +3574,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     padding: 4px 12px; border-radius: 20px; font-size: 0.72rem; font-weight: 600;
     border: 1px solid transparent; transition: transform 0.15s ease;
 }
-.rm-status-pill:hover { transform: scale(1.05); }
+.rm-status-pill:hover { }
 .rm-status-pill-count { font-size: 0.85rem; font-weight: 800; }
 .rm-status-pill-label { font-size: 0.68rem; }
 .rm-st-proposed { background: rgba(127,127,127,0.1); border-color: rgba(127,127,127,0.25); color: var(--text-secondary); }
@@ -3596,7 +3590,7 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     padding: 3px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 600;
     text-transform: capitalize; transition: transform 0.15s ease;
 }
-.rm-cat-chip:hover { transform: scale(1.05); }
+.rm-cat-chip:hover { }
 .rm-cat-chip-count { font-size: 0.65rem; opacity: 0.7; }
 
 /* Priority Mini-Bars */
@@ -3665,7 +3659,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s ease;
 }
 .rm-card-enhanced:hover {
-    transform: translateY(-4px) scale(1.005);
 }
 
 /* ── Timeline View ── */
@@ -3714,7 +3707,6 @@ button:active, [class*="qa-"]:active { transform: scale(0.95); }
     display: flex; align-items: center; padding: 0 10px; gap: 6px;
 }
 .rm-tl-block:hover {
-    transform: translateY(-2px) scale(1.03);
     box-shadow: 0 4px 16px rgba(0,0,0,0.12), 0 0 0 2px var(--block-color);
     z-index: 2;
 }
@@ -3947,7 +3939,6 @@ body .animate-flash-update {
 .app4-btn:hover {
     border-color: var(--border-hover);
     background: var(--bg-tertiary);
-    transform: translateY(-1px);
     box-shadow: var(--shadow);
 }
 .app4-btn:active {
@@ -4665,7 +4656,6 @@ details[open] > .app4-idea-spec-summary::before {
 }
 .app4-ctx-card:hover {
     border-color: var(--accent);
-    transform: translateY(-1px);
 }
 .app4-ctx-card-header {
     display: flex;
@@ -4921,7 +4911,6 @@ details[open] > .app4-idea-spec-summary::before {
     background: #2ea043;
     border-color: #2ea043;
     color: #ffffff;
-    transform: translateY(-1px);
     box-shadow: 0 4px 16px rgba(46, 160, 67, 0.4);
 }
 .btn-approve:active {
@@ -4942,7 +4931,6 @@ details[open] > .app4-idea-spec-summary::before {
     background: #da3633;
     border-color: #da3633;
     color: #ffffff;
-    transform: translateY(-1px);
     box-shadow: 0 4px 16px rgba(218, 54, 51, 0.4);
 }
 .btn-reject:active {
@@ -5058,7 +5046,6 @@ details[open] > .app4-idea-spec-summary::before {
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .qa-review-card:hover {
-    transform: translateY(-3px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
     border-left-color: var(--accent);
 }
@@ -5489,7 +5476,6 @@ details[open] > .app4-idea-spec-summary::before {
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .kanban-card:hover {
-    transform: translateY(-3px);
     box-shadow: 0 8px 25px rgba(0,0,0,0.2);
 }
 [data-theme="light"] .kanban-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
@@ -5608,7 +5594,6 @@ details[open] > .app4-idea-spec-summary::before {
 }
 .stats-card:hover {
     box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-    transform: translateY(-1px);
 }
 [data-theme="light"] .stats-card:hover {
     box-shadow: 0 6px 20px rgba(0,0,0,0.08);
@@ -5789,7 +5774,6 @@ details[open] > .app4-idea-spec-summary::before {
 }
 .filter-btn:hover {
     background: var(--bg-active);
-    transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 .filter-btn.active {
@@ -5844,7 +5828,6 @@ details[open] > .app4-idea-spec-summary::before {
 .timeline-load-more:hover {
     background: var(--accent);
     color: #fff;
-    transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
 }
 
@@ -6136,7 +6119,6 @@ details[open] > .app4-idea-spec-summary::before {
     transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
 }
 .cd-score-card:hover {
-    transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
@@ -6166,7 +6148,6 @@ details[open] > .app4-idea-spec-summary::before {
     transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease, border-left-color 0.2s ease;
 }
 .disc-list-item:hover {
-    transform: translateY(-1px);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 .disc-card-accent-open { border-left-color: #4ade80; }
@@ -6882,7 +6863,6 @@ details[open] > .app4-idea-spec-summary::before {
   transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .kanban-card:hover {
-  transform: translateY(-3px) scale(1.01);
   box-shadow: 0 8px 24px rgba(0,0,0,0.15);
 }
 [data-theme="light"] .kanban-card:hover {
@@ -7150,7 +7130,6 @@ details[open] > .app4-idea-spec-summary::before {
   box-shadow: 0 2px 6px rgba(0,0,0,0.08);
 }
 .dep-node:hover {
-  transform: translateY(-3px) scale(1.02);
   box-shadow: 0 8px 24px rgba(0,0,0,0.15);
   z-index: 2;
 }
@@ -7306,7 +7285,6 @@ details[open] > .app4-idea-spec-summary::before {
 }
 .roadmap-filter-pill:hover {
   box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-  transform: translateY(-1px);
 }
 .roadmap-filter-pill.active {
   box-shadow: 0 3px 12px rgba(88,166,255,0.2);
@@ -7430,7 +7408,6 @@ details[open] > .app4-idea-spec-summary::before {
   transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .roadmap-status-btn:hover {
-  transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0,0,0,0.12);
 }
 [data-theme="light"] .roadmap-status-btn:hover {
@@ -7933,7 +7910,6 @@ details[open] > .app4-idea-spec-summary::before {
     background: var(--accent-hover);
     border-color: var(--accent-hover);
     box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
-    transform: translateY(-1px);
 }
 .feedback-submit-btn:active {
     transform: scale(0.97);
@@ -8854,7 +8830,6 @@ textarea:focus-visible,
     justify-content: center;
 }
 .wf-node:hover {
-    transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
 }
 

@@ -12,26 +12,37 @@ const App = {
         this._navContext = {};
         this._breadcrumbDetail = null;
         this._breadcrumbSub = null;
-        window.addEventListener('hashchange', () => {
-            const parsed = this.parseHash();
+        window.addEventListener('popstate', () => {
+            const parsed = this.parsePath();
             if (parsed.page) {
                 this._navContext = parsed.context || {};
                 this._breadcrumbDetail = null;
                 this._breadcrumbSub = null;
-                this.navigate(parsed.page);
+                this.navigate(parsed.page, null, true);
             }
         });
-        const initial = this.parseHash();
+        const initial = this.parsePath();
         if (initial.context) this._navContext = initial.context;
         App.initKeyboardShortcuts();
-        await this.navigate(initial.page || 'dashboard');
+        await this.navigate(initial.page || 'dashboard', null, true);
         this.updateQABadge();
     },
 
-    parseHash() {
+    parsePath() {
+        // Support both /page/id paths and legacy #page/id hashes
         const hash = window.location.hash.replace(/^#/, '');
-        if (!hash) return { page: null, context: {} };
-        const parts = hash.split('/');
+        if (hash) {
+            // Legacy hash URL — redirect to real URL
+            const parts = hash.split('/');
+            const page = parts[0];
+            const id = parts.slice(1).join('/');
+            const newPath = '/' + page + (id ? '/' + id : '');
+            history.replaceState(null, '', newPath);
+            return { page, context: id ? { id: decodeURIComponent(id) } : {} };
+        }
+        const path = window.location.pathname.replace(/^\//, '');
+        if (!path) return { page: null, context: {} };
+        const parts = path.split('/');
         const page = parts[0];
         const context = parts.slice(1).length ? { id: decodeURIComponent(parts.slice(1).join('/')) } : {};
         return { page, context };
@@ -156,12 +167,12 @@ const App = {
         }
     },
 
-    async navigate(page, context) {
+    async navigate(page, context, skipPush) {
         if (context) this._navContext = context;
         this.currentPage = page;
         const ctxId = this._navContext?.id ? '/' + encodeURIComponent(this._navContext.id) : '';
-        const newHash = '#' + page + ctxId;
-        if (window.location.hash !== newHash) history.replaceState(null, '', newHash);
+        const newPath = '/' + page + ctxId;
+        if (!skipPush && window.location.pathname !== newPath) history.pushState(null, '', newPath);
         document.querySelectorAll('.nav-link').forEach(l => {
             const isActive = l.dataset.page === page;
             l.classList.toggle('active', isActive);
@@ -1604,18 +1615,28 @@ const App = {
             bindClickableFeatures();
         }
         if (page === 'qa') {
-            document.querySelectorAll('.qa-approve').forEach(btn => btn.addEventListener('click', async () => {
-                btn.style.transform = 'scale(0.95)';
-                const notes = document.querySelector(`.qa-notes[data-feature="${btn.dataset.feature}"]`)?.value || 'Approved via web';
-                try { await this.apiPost('qa/' + btn.dataset.feature + '/approve', { notes }); App.toast('✓ Feature approved', 'success'); } catch(e) { App.toast('Error approving', 'error'); }
-                this.navigate('qa');
-            }));
-            document.querySelectorAll('.qa-reject').forEach(btn => btn.addEventListener('click', async () => {
-                btn.style.transform = 'scale(0.95)';
-                const notes = document.querySelector(`.qa-notes[data-feature="${btn.dataset.feature}"]`)?.value || 'Rejected via web';
-                try { await this.apiPost('qa/' + btn.dataset.feature + '/reject', { notes }); App.toast('✗ Feature rejected', 'error'); } catch(e) { App.toast('Error rejecting', 'error'); }
-                this.navigate('qa');
-            }));
+            document.querySelectorAll('.qa-approve').forEach(btn => {
+                if (btn.dataset.bound) return;
+                btn.dataset.bound = '1';
+                btn.addEventListener('click', async () => {
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    const notes = document.querySelector(`.qa-notes[data-feature="${btn.dataset.feature}"]`)?.value || 'Approved via web';
+                    try { await this.apiPost('qa/' + btn.dataset.feature + '/approve', { notes }); App.toast('✓ Feature approved', 'success'); } catch(e) { App.toast('Error approving', 'error'); }
+                    this.navigate('qa');
+                });
+            });
+            document.querySelectorAll('.qa-reject').forEach(btn => {
+                if (btn.dataset.bound) return;
+                btn.dataset.bound = '1';
+                btn.addEventListener('click', async () => {
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    const notes = document.querySelector(`.qa-notes[data-feature="${btn.dataset.feature}"]`)?.value || 'Rejected via web';
+                    try { await this.apiPost('qa/' + btn.dataset.feature + '/reject', { notes }); App.toast('✗ Feature rejected', 'error'); } catch(e) { App.toast('Error rejecting', 'error'); }
+                    this.navigate('qa');
+                });
+            });
         }
         if (page === 'stats') {
             App.drawStatsCharts();

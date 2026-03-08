@@ -962,7 +962,7 @@ App.showFeedbackModal = function() {
     // Show captured context
     var ctxEl = document.getElementById('feedbackContextInfo');
     if (ctxEl) {
-        var pg = (window.location.hash || '#dashboard').replace('#', '');
+        var pg = window.location.pathname.replace(/^\//, '') || 'dashboard';
         ctxEl.textContent = '\u{1F4CD} Captured from: ' + pg.charAt(0).toUpperCase() + pg.slice(1) + ' page';
     }
     // Restore draft from localStorage
@@ -1009,7 +1009,7 @@ document.addEventListener('submit', function(e) {
     var title = lines[0].substring(0, 100);
     var description = lines.slice(1).join('\n').trim();
     // Capture page context
-    var sourcePage = window.location.hash || '#dashboard';
+    var sourcePage = window.location.pathname || '/dashboard';
     var context = { page: sourcePage };
     try {
         var featureEls = document.querySelectorAll('[data-feature-id]');
