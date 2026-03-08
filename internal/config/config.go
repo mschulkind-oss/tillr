@@ -30,6 +30,13 @@ type Config struct {
 
 	// API key for server authentication (stored in .lifecycle.json only)
 	ApiKey string `json:"api_key,omitempty" yaml:"-"`
+
+	// EncryptionKeyHash stores SHA-256 hash of the encryption password for
+	// verification. The actual key is NEVER stored.
+	EncryptionKeyHash string `json:"encryption_key_hash,omitempty" yaml:"-"`
+
+	// ActiveProject is the currently selected project ID for multi-project support.
+	ActiveProject string `json:"active_project,omitempty" yaml:"active_project"`
 }
 
 // Defaults returns a Config with sensible defaults.
