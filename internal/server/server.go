@@ -196,10 +196,23 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		}
 	})
 
-	// Static assets
-	assetsFS, err := fs.Sub(embeddedAssets, "assets")
-	if err != nil {
-		return fmt.Errorf("loading embedded assets: %w", err)
+	// Static assets — prefer React build (assets/dist) if available, fall back to legacy (assets)
+	var assetsFS fs.FS
+	distFS, distErr := fs.Sub(embeddedAssets, "assets/dist")
+	if distErr == nil {
+		// Check if dist/index.html exists (React build was run)
+		if _, err := fs.Stat(distFS, "index.html"); err == nil {
+			assetsFS = distFS
+			log.Printf("Serving React frontend from embedded dist/")
+		}
+	}
+	if assetsFS == nil {
+		legacyFS, legacyErr := fs.Sub(embeddedAssets, "assets")
+		if legacyErr != nil {
+			return fmt.Errorf("loading embedded assets: %w", legacyErr)
+		}
+		assetsFS = legacyFS
+		log.Printf("Serving legacy frontend from embedded assets/")
 	}
 	fileServer := http.FileServer(http.FS(assetsFS))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -208,9 +221,14 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		if path == "/" || (!strings.Contains(path, ".") && !strings.HasPrefix(path, "/api/") && path != "/ws") {
 			r.URL.Path = "/"
 		}
-		// Prevent caching of static assets during development
+		// Cache-bust during development, cache hashed assets in production
 		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			if strings.Contains(path, "/assets/") {
+				// Vite hashed filenames — safe to cache
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
 		}
 		fileServer.ServeHTTP(w, r)
 	})

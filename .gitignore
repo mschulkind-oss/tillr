@@ -31,3 +31,4 @@ node_modules/
 
 # Lifecycle project config (created by `lifecycle init`)
 .lifecycle.json
+.pnpm-store/
