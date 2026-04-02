@@ -44,7 +44,6 @@ jobs:
             --license Apache-2.0 \
             --url https://github.com/mschulkind-oss/tillr \
             --set-version-var github.com/mschulkind-oss/tillr/internal/version.Version \
-            --platforms linux/amd64,linux/arm64,darwin/amd64,darwin/arm64 \
             --version "$version"
 
       - name: Upload build artifacts
