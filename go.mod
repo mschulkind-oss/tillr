@@ -1,13 +1,13 @@
 module github.com/mschulkind-oss/tillr
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sqlite3 v1.14.38
 	github.com/spf13/cobra v1.9.1
-	golang.org/x/sys v0.33.0
+	golang.org/x/sys v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.37.0
 )
