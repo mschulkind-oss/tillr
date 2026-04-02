@@ -40,6 +40,7 @@ test-cov:
     go tool cover -html=coverage.out -o coverage.html
 
 # Full dev environment: Go backend (air live-reload) + Vite frontend (HMR)
+# Runs daemonized via overmind — no dedicated terminal needed.
 # Auto-detects jail vs host and picks non-colliding ports.
 # Inside jail:  backend=3847  frontend=3848  (both forwarded by yolo-jail)
 # On host:      backend=3850  frontend=5173  (avoids jail port-forwarding)
@@ -55,10 +56,6 @@ dev:
     fi
     export TILLR_PORT="$BACKEND_PORT"
     export VITE_PORT="$FRONTEND_PORT"
-    echo "🚀 Starting dev environment"
-    echo "   Backend (Go+air):  http://localhost:$BACKEND_PORT"
-    echo "   Frontend (Vite):   http://localhost:$FRONTEND_PORT  ← open this"
-    echo ""
     if command -v air &>/dev/null; then
         printf 'backend: air -- serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
             "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
@@ -67,7 +64,25 @@ dev:
         printf 'backend: go run ./cmd/tillr serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
             "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
     fi
-    hivemind -d "$(pwd)" /tmp/Procfile.tillr
+    overmind start -f /tmp/Procfile.tillr -D
+    echo "Dev environment started (overmind, daemonized)"
+    echo "  Backend:  http://localhost:$BACKEND_PORT"
+    echo "  Frontend: http://localhost:$FRONTEND_PORT"
+    echo ""
+    echo "  just dev-logs         # tail all logs"
+    echo "  just dev-stop         # stop everything"
+    echo "  just dev-restart      # restart everything"
+
+# Tail dev environment logs
+dev-logs:
+    overmind echo
+
+# Stop dev environment
+dev-stop:
+    overmind quit
+
+# Restart dev environment
+dev-restart: dev-stop dev
 
 # Start Go backend only (with live reload if air is installed)
 dev-backend port="3847":
