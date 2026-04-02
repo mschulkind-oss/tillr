@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // Server implements a minimal MCP (Model Context Protocol) server over stdio.
-// It exposes lifecycle tools via JSON-RPC 2.0 so AI agents can interact
+// It exposes tillr tools via JSON-RPC 2.0 so AI agents can interact
 // with the project without subprocess CLI calls.
 type Server struct {
 	db        *sql.DB
@@ -100,7 +100,7 @@ func (s *Server) HandleRequest(req Request) Response {
 			Result: map[string]any{
 				"protocolVersion": "2024-11-05",
 				"capabilities":    map[string]any{"tools": map[string]any{}},
-				"serverInfo":      map[string]any{"name": "lifecycle", "version": "0.1.0"},
+				"serverInfo":      map[string]any{"name": "tillr", "version": "0.1.0"},
 			},
 		}
 	case "tools/list":
@@ -123,7 +123,7 @@ func (s *Server) HandleRequest(req Request) Response {
 func (s *Server) listTools() []Tool {
 	return []Tool{
 		{
-			Name:        "lifecycle_next",
+			Name:        "tillr_next",
 			Description: "Get the next work item for an agent to work on. Returns full context including feature spec, cycle state, and prior results.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -133,7 +133,7 @@ func (s *Server) listTools() []Tool {
 			},
 		},
 		{
-			Name:        "lifecycle_done",
+			Name:        "tillr_done",
 			Description: "Mark the current work item as complete with a result summary.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -143,7 +143,7 @@ func (s *Server) listTools() []Tool {
 			},
 		},
 		{
-			Name:        "lifecycle_fail",
+			Name:        "tillr_fail",
 			Description: "Mark the current work item as failed with a reason.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -153,7 +153,7 @@ func (s *Server) listTools() []Tool {
 			},
 		},
 		{
-			Name:        "lifecycle_status",
+			Name:        "tillr_status",
 			Description: "Get project status overview including feature counts, milestones, active cycles, and recent events.",
 			InputSchema: map[string]any{
 				"type":       "object",
@@ -161,7 +161,7 @@ func (s *Server) listTools() []Tool {
 			},
 		},
 		{
-			Name:        "lifecycle_features",
+			Name:        "tillr_features",
 			Description: "List all features with optional status filter.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -171,7 +171,7 @@ func (s *Server) listTools() []Tool {
 			},
 		},
 		{
-			Name:        "lifecycle_feedback",
+			Name:        "tillr_feedback",
 			Description: "Submit feedback, feature ideas, or bug reports to the project idea queue.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -222,17 +222,17 @@ func (s *Server) handleToolCall(req Request) Response {
 
 func (s *Server) dispatchTool(name string, args json.RawMessage) (string, error) {
 	switch name {
-	case "lifecycle_next":
+	case "tillr_next":
 		return s.toolNext(args)
-	case "lifecycle_done":
+	case "tillr_done":
 		return s.toolDone(args)
-	case "lifecycle_fail":
+	case "tillr_fail":
 		return s.toolFail(args)
-	case "lifecycle_status":
+	case "tillr_status":
 		return s.toolStatus()
-	case "lifecycle_features":
+	case "tillr_features":
 		return s.toolFeatures(args)
-	case "lifecycle_feedback":
+	case "tillr_feedback":
 		return s.toolFeedback(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)

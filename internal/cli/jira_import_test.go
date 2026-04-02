@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 func TestParseJiraExport(t *testing.T) {

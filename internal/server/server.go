@@ -17,11 +17,11 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/export"
-	"github.com/mschulkind/lifecycle/internal/models"
-	"github.com/mschulkind/lifecycle/internal/vcs"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/export"
+	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind/tillr/internal/vcs"
 )
 
 //go:embed all:assets
@@ -72,11 +72,12 @@ func Start(database *sql.DB, port int) error {
 // StartWithDBPath launches the server and watches the given DB file for changes.
 // ServerConfig holds configuration for the HTTP server.
 type ServerConfig struct {
-	Port      int
-	DBPath    string
-	RateLimit float64 // requests per second (0 = disabled)
-	RateBurst int     // burst capacity
-	ApiKey    string  // API key for authentication (empty = no auth)
+	Port       int
+	DBPath     string
+	RateLimit  float64 // requests per second (0 = disabled)
+	RateBurst  int     // burst capacity
+	ApiKey     string  // API key for authentication (empty = no auth)
+	VantageURL string  // Vantage documentation viewer URL (optional)
 }
 
 // StartWithDBPath starts the server with default rate limiting disabled.
@@ -88,25 +89,17 @@ func StartWithDBPath(database *sql.DB, port int, dbPath string) error {
 	})
 }
 
-// StartWithConfig starts the HTTP server with the given configuration.
-func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
-	port := cfg.Port
-	dbPath := cfg.DBPath
-	// Ignore signals that could terminate the server unexpectedly
-	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG,
-		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGWINCH,
-		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU)
-	// Only SIGINT/SIGTERM cause graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		log.Printf("Received %v, shutting down", sig)
-		os.Exit(0)
-	}()
-
+// BuildMux creates the HTTP mux with all API routes for a single project.
+// This is used by both the single-project serve command and the multi-project daemon.
+func BuildMux(database *sql.DB, cfg ServerConfig) *http.ServeMux {
 	hub := newHub()
 	mux := http.NewServeMux()
+
+	// Health check (exempt from auth and rate limiting)
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
+	})
 
 	// API routes
 	mux.HandleFunc("/api/status", apiHandler(database, handleStatus))
@@ -151,6 +144,16 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	// Queue management route
 	mux.HandleFunc("/api/queue", apiHandler(database, handleQueue))
 
+	// Client config (exposes non-sensitive settings to the frontend)
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"vantage_url": cfg.VantageURL}) //nolint:errcheck
+	})
+
+	// Workstream routes
+	mux.HandleFunc("/api/workstreams", apiHandler(database, handleWorkstreams))
+	mux.HandleFunc("/api/workstreams/", apiHandler(database, handleWorkstreamDetail))
+
 	// Context routes
 	mux.HandleFunc("/api/context", apiHandler(database, handleContext))
 	mux.HandleFunc("/api/context/", apiHandler(database, handleContextDetail))
@@ -166,6 +169,10 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	mux.HandleFunc("/api/dashboards", apiHandler(database, handleDashboards))
 	mux.HandleFunc("/api/dashboards/", apiHandler(database, handleDashboardDetail))
 
+	// Notification routes
+	mux.HandleFunc("/api/notifications", apiHandler(database, handleNotifications))
+	mux.HandleFunc("/api/notifications/", apiHandler(database, handleNotificationAction))
+
 	// Export routes
 	mux.HandleFunc("/api/export/features", handleExport(database, "features"))
 	mux.HandleFunc("/api/export/roadmap", handleExport(database, "roadmap"))
@@ -174,6 +181,7 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 
 	// API documentation page
 	mux.HandleFunc("/api/docs", handleAPIDocs)
+	mux.HandleFunc("/api/openapi.json", handleOpenAPISpec)
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -196,50 +204,15 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		}
 	})
 
-	// Static assets — prefer React build (assets/dist) if available, fall back to legacy (assets)
-	var assetsFS fs.FS
-	distFS, distErr := fs.Sub(embeddedAssets, "assets/dist")
-	if distErr == nil {
-		// Check if dist/index.html exists (React build was run)
-		if _, err := fs.Stat(distFS, "index.html"); err == nil {
-			assetsFS = distFS
-			log.Printf("Serving React frontend from embedded dist/")
-		}
+	// Watch DB file for changes and broadcast to WebSocket clients
+	if cfg.DBPath != "" {
+		go watchDBFile(cfg.DBPath, hub)
 	}
-	if assetsFS == nil {
-		legacyFS, legacyErr := fs.Sub(embeddedAssets, "assets")
-		if legacyErr != nil {
-			return fmt.Errorf("loading embedded assets: %w", legacyErr)
-		}
-		assetsFS = legacyFS
-		log.Printf("Serving legacy frontend from embedded assets/")
-	}
-	fileServer := http.FileServer(http.FS(assetsFS))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// SPA: serve index.html for non-file paths
-		path := r.URL.Path
-		if path == "/" || (!strings.Contains(path, ".") && !strings.HasPrefix(path, "/api/") && path != "/ws") {
-			r.URL.Path = "/"
-		}
-		// Cache-bust during development, cache hashed assets in production
-		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
-			if strings.Contains(path, "/assets/") {
-				// Vite hashed filenames — safe to cache
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			}
-		}
-		fileServer.ServeHTTP(w, r)
-	})
-
-	addr := fmt.Sprintf(":%d", port)
 
 	// Periodic stale agent cleanup (every 5 minutes)
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		// Also run once at startup after a brief delay
 		time.Sleep(10 * time.Second)
 		cleanupStaleAgents(database)
 		for range ticker.C {
@@ -247,10 +220,71 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 		}
 	}()
 
-	// Watch DB file for changes and broadcast to WebSocket clients
-	if dbPath != "" {
-		go watchDBFile(dbPath, hub)
+	return mux
+}
+
+// ServeSPAFromEmbedded adds SPA (single-page app) serving of the embedded React
+// build to the given mux. Handles client-side routing by falling back to index.html.
+func ServeSPAFromEmbedded(mux *http.ServeMux) error {
+	distFS, distErr := fs.Sub(embeddedAssets, "assets/dist")
+	if distErr != nil {
+		return fmt.Errorf("loading embedded assets: %w", distErr)
 	}
+	if _, err := fs.Stat(distFS, "index.html"); err != nil {
+		return fmt.Errorf("react build not found — run 'cd web && pnpm build' first")
+	}
+	assetsFS := distFS
+	log.Printf("Serving React frontend from embedded dist/")
+	fileServer := http.FileServer(http.FS(assetsFS))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		// Skip API and WebSocket routes
+		if strings.HasPrefix(path, "/api/") || path == "/ws" {
+			http.NotFound(w, r)
+			return
+		}
+		cleanPath := strings.TrimPrefix(path, "/")
+		if cleanPath != "" {
+			if _, err := fs.Stat(assetsFS, cleanPath); err != nil {
+				r.URL.Path = "/"
+			}
+		}
+		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
+			if strings.Contains(path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+	return nil
+}
+
+// StartWithConfig starts the HTTP server with the given configuration.
+func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
+	port := cfg.Port
+	// Ignore signals that could terminate the server unexpectedly
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG,
+		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGWINCH,
+		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU)
+	// Only SIGINT/SIGTERM cause graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received %v, shutting down", sig)
+		os.Exit(0)
+	}()
+
+	mux := BuildMux(database, cfg)
+
+	// Static assets — serve React build from assets/dist
+	if err := ServeSPAFromEmbedded(mux); err != nil {
+		return err
+	}
+
+	addr := fmt.Sprintf(":%d", port)
 
 	// Wrap mux with request logging + panic recovery
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -275,9 +309,10 @@ func StartWithConfig(database *sql.DB, cfg ServerConfig) error {
 	}
 
 	// Apply API key authentication if configured (outermost = runs first).
+	// Uses AuthMiddlewareWithDB to support both config API key and DB-backed tokens.
 	if cfg.ApiKey != "" {
-		handler = AuthMiddleware(cfg.ApiKey, handler)
-		log.Printf("API key authentication enabled")
+		handler = AuthMiddlewareWithDB(cfg.ApiKey, database, handler)
+		log.Printf("API key authentication enabled (config key + DB tokens)")
 	}
 
 	return http.ListenAndServe(addr, handler)
@@ -675,11 +710,45 @@ func handleFeaturePRs(database *sql.DB, w http.ResponseWriter, featureID string)
 	return writeJSON(w, prs)
 }
 
-func handleMilestones(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+func handleMilestones(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	p, err := db.GetProject(database)
 	if err != nil {
 		return err
 	}
+
+	if r.Method == "POST" {
+		var body struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			SortOrder   int    `json:"sort_order"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.ID == "" || body.Name == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "id and name are required"})
+		}
+		m := &models.Milestone{
+			ID:          body.ID,
+			ProjectID:   p.ID,
+			Name:        body.Name,
+			Description: body.Description,
+			SortOrder:   body.SortOrder,
+		}
+		if err := db.CreateMilestone(database, m); err != nil {
+			return fmt.Errorf("creating milestone: %w", err)
+		}
+		created, err := db.GetMilestone(database, body.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created milestone: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, created)
+	}
+
 	milestones, err := db.ListMilestones(database, p.ID)
 	if err != nil {
 		return err
@@ -746,6 +815,50 @@ func handleRoadmap(database *sql.DB, w http.ResponseWriter, r *http.Request) err
 		return err
 	}
 
+	if r.Method == "POST" {
+		var body struct {
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			Category    string `json:"category"`
+			Priority    string `json:"priority"`
+			Effort      string `json:"effort"`
+			Status      string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "invalid request body"})
+		}
+		if body.ID == "" || body.Title == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return writeJSON(w, map[string]string{"error": "id and title are required"})
+		}
+		if body.Priority == "" {
+			body.Priority = "medium"
+		}
+		ri := &models.RoadmapItem{
+			ID:          body.ID,
+			ProjectID:   p.ID,
+			Title:       body.Title,
+			Description: body.Description,
+			Category:    body.Category,
+			Priority:    body.Priority,
+			Effort:      body.Effort,
+		}
+		if body.Status != "" && validRoadmapStatuses[body.Status] {
+			ri.Status = body.Status
+		}
+		if err := db.CreateRoadmapItem(database, ri); err != nil {
+			return fmt.Errorf("creating roadmap item: %w", err)
+		}
+		item, err := db.GetRoadmapItem(database, body.ID)
+		if err != nil {
+			return fmt.Errorf("fetching created roadmap item: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, item)
+	}
+
 	category := r.URL.Query().Get("category")
 	priority := r.URL.Query().Get("priority")
 	status := r.URL.Query().Get("status")
@@ -763,6 +876,132 @@ func handleRoadmap(database *sql.DB, w http.ResponseWriter, r *http.Request) err
 
 func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	path := r.URL.Path
+
+	// POST /api/cycles/{id}/advance — approve or reject a human-owned cycle step
+	if strings.HasSuffix(path, "/advance") && r.Method == "POST" {
+		idStr := strings.TrimPrefix(path, "/api/cycles/")
+		idStr = strings.TrimSuffix(idStr, "/advance")
+		var cycleID int
+		if _, err := fmt.Sscanf(idStr, "%d", &cycleID); err != nil {
+			return fmt.Errorf("invalid cycle ID: %s", idStr)
+		}
+
+		var body struct {
+			Action string `json:"action"` // "approve" or "reject"
+			Notes  string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		if body.Action != "approve" && body.Action != "reject" {
+			return fmt.Errorf("action must be 'approve' or 'reject'")
+		}
+
+		cycle, err := db.GetCycleByID(database, cycleID)
+		if err != nil {
+			return fmt.Errorf("cycle not found: %w", err)
+		}
+
+		// Resolve cycle type (built-in or custom template)
+		var ct *models.CycleType
+		for i := range models.CycleTypes {
+			if models.CycleTypes[i].Name == cycle.CycleType {
+				ct = &models.CycleTypes[i]
+				break
+			}
+		}
+		if ct == nil {
+			if t, err := db.GetCycleTemplate(database, cycle.CycleType); err == nil && t != nil {
+				ct = &models.CycleType{Name: t.Name, Description: t.Description, Steps: t.Steps}
+			}
+		}
+		if ct == nil {
+			return fmt.Errorf("unknown cycle type: %s", cycle.CycleType)
+		}
+		if cycle.CurrentStep >= len(ct.Steps) {
+			return fmt.Errorf("cycle is beyond its defined steps")
+		}
+		if !ct.IsHumanStep(cycle.CurrentStep) {
+			return fmt.Errorf("current step %q is not human-owned", ct.Steps[cycle.CurrentStep].Name)
+		}
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+		stepName := ct.Steps[cycle.CurrentStep].Name
+
+		if body.Action == "reject" {
+			_ = db.InsertEvent(database, &models.Event{
+				ProjectID: p.ID,
+				FeatureID: cycle.EntityID,
+				EventType: "cycle.step.rejected",
+				Data:      fmt.Sprintf(`{"step":%q,"notes":%q}`, stepName, body.Notes),
+			})
+			return writeJSON(w, map[string]any{
+				"feature": cycle.EntityID,
+				"step":    stepName,
+				"action":  "rejected",
+				"notes":   body.Notes,
+			})
+		}
+
+		// Approve: log event
+		_ = db.InsertEvent(database, &models.Event{
+			ProjectID: p.ID,
+			FeatureID: cycle.EntityID,
+			EventType: "cycle.step.approved",
+			Data:      fmt.Sprintf(`{"step":%q,"notes":%q}`, stepName, body.Notes),
+		})
+
+		nextStep := cycle.CurrentStep + 1
+		if nextStep >= len(ct.Steps) {
+			// Complete the cycle
+			if err := db.UpdateCycleInstance(database, cycle.ID, cycle.CurrentStep, cycle.Iteration, "completed"); err != nil {
+				return fmt.Errorf("completing cycle: %w", err)
+			}
+			_ = db.InsertEvent(database, &models.Event{
+				ProjectID: p.ID,
+				FeatureID: cycle.EntityID,
+				EventType: "cycle.completed",
+				Data:      fmt.Sprintf(`{"cycle_type":%q}`, cycle.CycleType),
+			})
+			return writeJSON(w, map[string]any{
+				"feature": cycle.EntityID,
+				"step":    stepName,
+				"action":  "approved",
+				"result":  "completed",
+			})
+		}
+
+		// Advance to next step
+		if err := db.UpdateCycleInstance(database, cycle.ID, nextStep, cycle.Iteration, "active"); err != nil {
+			return fmt.Errorf("advancing cycle: %w", err)
+		}
+		nextStepName := ct.Steps[nextStep].Name
+		_ = db.InsertEvent(database, &models.Event{
+			ProjectID: p.ID,
+			FeatureID: cycle.EntityID,
+			EventType: "cycle.advanced",
+			Data:      fmt.Sprintf(`{"from":%q,"to":%q}`, stepName, nextStepName),
+		})
+
+		// Create work item for agent steps
+		if !ct.Steps[nextStep].Human {
+			_ = db.CreateWorkItem(database, &models.WorkItem{
+				FeatureID: cycle.EntityID,
+				WorkType:  nextStepName,
+			})
+		}
+
+		return writeJSON(w, map[string]any{
+			"feature":   cycle.EntityID,
+			"step":      stepName,
+			"action":    "approved",
+			"next_step": nextStepName,
+		})
+	}
+
 	// /api/cycles/{id}/scores
 	if strings.HasSuffix(path, "/scores") {
 		idStr := strings.TrimPrefix(path, "/api/cycles/")
@@ -808,7 +1047,7 @@ func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 				scores = []models.CycleScore{}
 			}
 			// Resolve step names from cycle type
-			var steps []string
+			var steps []models.CycleStep
 			for _, ct := range models.CycleTypes {
 				if ct.Name == cycle.CycleType {
 					steps = ct.Steps
@@ -816,7 +1055,7 @@ func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 				}
 			}
 			if steps == nil {
-				steps = []string{}
+				steps = []models.CycleStep{}
 			}
 			return writeJSON(w, models.CycleDetail{
 				Cycle:  *cycle,
@@ -965,6 +1204,93 @@ func handleStatsActivityHeatmap(database *sql.DB, w http.ResponseWriter, r *http
 	return writeJSON(w, counts)
 }
 
+func handleAudit(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	featureID := r.URL.Query().Get("feature")
+	eventType := r.URL.Query().Get("type")
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+	limit := 100
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		fmt.Sscanf(o, "%d", &offset)
+	}
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+
+	events, total, err := db.ListEventsPaginated(database, p.ID, featureID, eventType, since, until, limit, offset)
+	if err != nil {
+		return err
+	}
+	if events == nil {
+		events = []models.Event{}
+	}
+	return writeJSON(w, map[string]any{
+		"events": events,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+func handleAuditStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	stats, err := db.GetEventStats(database, p.ID)
+	if err != nil {
+		return err
+	}
+	byType := make(map[string]int)
+	total := 0
+	for _, s := range stats {
+		byType[s.EventType] = s.Count
+		total += s.Count
+	}
+	return writeJSON(w, map[string]any{
+		"by_type": byType,
+		"total":   total,
+	})
+}
+
+func handleAnalyticsHeatmap(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+	grid, err := db.GetHeatmapGrid(database, p.ID)
+	if err != nil {
+		return err
+	}
+	// Convert to JSON-friendly format
+	type cell struct {
+		Day   int `json:"day"`
+		Hour  int `json:"hour"`
+		Count int `json:"count"`
+	}
+	var cells []cell
+	for d := 0; d < 7; d++ {
+		for h := 0; h < 24; h++ {
+			c := grid.Cells[d*24+h]
+			if c > 0 {
+				cells = append(cells, cell{Day: d, Hour: h, Count: c})
+			}
+		}
+	}
+	return writeJSON(w, map[string]any{
+		"cells":     cells,
+		"max_count": grid.MaxCount,
+	})
+}
+
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	path := strings.TrimPrefix(r.URL.Path, "/api/qa/")
 
@@ -1080,6 +1406,17 @@ func handleRoadmapStatus(database *sql.DB, w http.ResponseWriter, r *http.Reques
 			return fmt.Errorf("reordering roadmap items: %w", err)
 		}
 		return writeJSON(w, map[string]bool{"ok": true})
+	}
+
+	// GET /api/roadmap/{id} — return single item
+	if r.Method == "GET" {
+		id := strings.Split(path, "/")[0]
+		item, err := db.GetRoadmapItem(database, id)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return writeJSON(w, map[string]string{"error": "roadmap item not found"})
+		}
+		return writeJSON(w, item)
 	}
 
 	if r.Method != "PATCH" {
@@ -2388,12 +2725,105 @@ func handleAPIDocs(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, apiDocsHTML) //nolint:errcheck
 }
 
+// GenerateOpenAPISpec builds a complete OpenAPI 3.0 specification for the tillr API,
+// enumerating all registered routes with their methods, summaries, and tags.
+func GenerateOpenAPISpec() map[string]any {
+	type apiRoute struct{ method, path, summary, desc, tag string }
+	rr := []apiRoute{
+		{"GET", "/api/status", "Project overview dashboard", "", "Project"},
+		{"GET", "/api/stats", "Project statistics", "", "Project"},
+		{"GET", "/api/stats/burndown", "Burndown chart data", "", "Project"},
+		{"GET", "/api/stats/heatmap", "Activity heatmap data", "", "Project"},
+		{"GET", "/api/stats/activity-heatmap", "Daily activity heatmap", "", "Project"},
+		{"GET", "/api/search", "Full-text search", "Query: ?q=term", "Project"},
+		{"GET", "/api/history", "Event history", "Params: ?feature, ?type, ?since, ?limit", "Project"},
+		{"GET", "/api/features", "List features", "Params: ?status, ?milestone", "Features"},
+		{"GET", "/api/features/{id}", "Feature details", "", "Features"},
+		{"GET", "/api/tags", "List feature tags", "", "Features"},
+		{"GET", "/api/milestones", "List milestones", "", "Milestones"},
+		{"GET", "/api/milestones/{id}", "Milestone details", "", "Milestones"},
+		{"GET", "/api/roadmap", "List roadmap items", "", "Roadmap"},
+		{"PATCH", "/api/roadmap/{id}", "Update roadmap status", "", "Roadmap"},
+		{"GET", "/api/cycles", "List active cycles", "", "Cycles"},
+		{"GET", "/api/cycles/{id}", "Cycle details", "", "Cycles"},
+		{"GET", "/api/qa/{feature-id}", "QA results", "", "QA"},
+		{"POST", "/api/qa/{feature-id}", "Submit QA result", "", "QA"},
+		{"GET", "/api/ideas", "List ideas", "", "Ideas"},
+		{"POST", "/api/ideas", "Submit idea", "", "Ideas"},
+		{"GET", "/api/ideas/{id}", "Idea details", "", "Ideas"},
+		{"GET", "/api/decisions", "List decisions", "", "Decisions"},
+		{"GET", "/api/decisions/{id}", "Decision details", "", "Decisions"},
+		{"GET", "/api/discussions", "List discussions", "", "Discussions"},
+		{"GET", "/api/discussions/{id}", "Discussion details", "", "Discussions"},
+		{"GET", "/api/agents", "List agent sessions", "", "Agents"},
+		{"GET", "/api/agents/{id}", "Agent details", "", "Agents"},
+		{"GET", "/api/agents/coordination", "Coordination status", "", "Agents"},
+		{"GET", "/api/agents/status", "Heartbeat dashboard", "", "Agents"},
+		{"GET", "/api/worktrees", "List worktrees", "", "Worktrees"},
+		{"GET", "/api/worktrees/{id}", "Worktree details", "", "Worktrees"},
+		{"GET", "/api/git/log", "Git commit log", "", "Git"},
+		{"GET", "/api/git/branches", "Git branches", "", "Git"},
+		{"GET", "/api/context", "List context entries", "", "Context"},
+		{"GET", "/api/context/{id}", "Context entry details", "", "Context"},
+		{"GET", "/api/queue", "Work queue with stats", "", "Queue"},
+		{"GET", "/api/export/features", "Export features", "?format=json|md|csv", "Export"},
+		{"GET", "/api/export/roadmap", "Export roadmap", "?format=json|md|csv", "Export"},
+		{"GET", "/api/export/decisions", "Export decisions", "?format=json|md|csv", "Export"},
+		{"GET", "/api/export/all", "Export all data", "?format=json|md", "Export"},
+		{"GET", "/api/dashboards", "List dashboards", "", "Dashboards"},
+		{"GET", "/api/dashboards/{id}", "Dashboard details", "", "Dashboards"},
+		{"GET", "/api/spec-document", "Aggregate spec document", "", "Spec"},
+		{"GET", "/api/docs", "API docs page", "", "Docs"},
+		{"GET", "/api/openapi.json", "OpenAPI 3.0 spec", "", "Docs"},
+		{"GET", "/api/dependencies", "Dependency graph", "", "Dependencies"},
+		{"GET", "/ws", "WebSocket updates", "", "WebSocket"},
+	}
+	paths := map[string]any{}
+	tagSet := map[string]bool{}
+	for _, r := range rr {
+		tagSet[r.tag] = true
+		m := strings.ToLower(r.method)
+		op := map[string]any{"summary": r.summary, "tags": []string{r.tag}, "responses": map[string]any{"200": map[string]any{"description": "OK"}}}
+		if r.desc != "" {
+			op["description"] = r.desc
+		}
+		if _, ok := paths[r.path]; !ok {
+			paths[r.path] = map[string]any{}
+		}
+		paths[r.path].(map[string]any)[m] = op
+	}
+	var tagList []map[string]string
+	for t := range tagSet {
+		tagList = append(tagList, map[string]string{"name": t})
+	}
+	return map[string]any{
+		"openapi": "3.0.3",
+		"info":    map[string]any{"title": "Tillr API", "description": "REST API for tillr project management.", "version": "1.0.0"},
+		"servers": []map[string]any{{"url": "http://localhost:3847", "description": "Local development server"}},
+		"paths":   paths,
+		"tags":    tagList,
+	}
+}
+
+func handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	spec := GenerateOpenAPISpec()
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(spec)
+}
+
 const apiDocsHTML = `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lifecycle API Documentation</title>
+<title>Tillr API Documentation</title>
 <style>
   :root {
     --bg-primary: #0d1117;
@@ -2504,8 +2934,8 @@ const apiDocsHTML = `<!DOCTYPE html>
 </head>
 <body>
 <div class="container">
-<h1>Lifecycle API</h1>
-<p class="subtitle">REST API reference for the Lifecycle project management server. All endpoints return JSON unless noted.</p>
+<h1>Tillr API</h1>
+<p class="subtitle">REST API reference for the Tillr project management server. All endpoints return JSON unless noted.</p>
 
 <div class="toc">
 <h2>Sections</h2>
@@ -3673,3 +4103,329 @@ function tryIt(btn, url) {
 </script>
 </body>
 </html>`
+
+// --- Notification Handlers ---
+
+func handleNotifications(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		recipient := r.URL.Query().Get("recipient")
+		unreadOnly := r.URL.Query().Get("unread") == "true"
+		notifications, err := db.ListNotifications(database, p.ID, recipient, unreadOnly, 100)
+		if err != nil {
+			return err
+		}
+		if notifications == nil {
+			notifications = []models.Notification{}
+		}
+		unread, _ := db.CountUnreadNotifications(database, p.ID, recipient)
+		return writeJSON(w, map[string]any{
+			"notifications": notifications,
+			"unread_count":  unread,
+		})
+	case http.MethodPost:
+		var n models.Notification
+		if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		n.ProjectID = p.ID
+		if err := db.CreateNotification(database, &n); err != nil {
+			return fmt.Errorf("creating notification: %w", err)
+		}
+		return writeJSON(w, n)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return nil
+	}
+}
+
+func handleNotificationAction(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	p, err := db.GetProject(database)
+	if err != nil {
+		return err
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/notifications/")
+
+	if path == "clear" && r.Method == http.MethodPost {
+		recipient := r.URL.Query().Get("recipient")
+		if err := db.ClearNotifications(database, p.ID, recipient); err != nil {
+			return err
+		}
+		return writeJSON(w, map[string]string{"status": "cleared"})
+	}
+
+	// /api/notifications/<id>/read
+	parts := strings.Split(path, "/")
+	if len(parts) >= 1 {
+		id := 0
+		fmt.Sscanf(parts[0], "%d", &id)
+		if id == 0 {
+			http.Error(w, "invalid notification ID", http.StatusBadRequest)
+			return nil
+		}
+
+		if len(parts) >= 2 && parts[1] == "read" && r.Method == http.MethodPost {
+			if err := db.MarkNotificationRead(database, id); err != nil {
+				return err
+			}
+			return writeJSON(w, map[string]any{"id": id, "read": true})
+		}
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+	return nil
+}
+
+// --- Workstream handlers ---
+
+func handleWorkstreams(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	switch r.Method {
+	case http.MethodGet:
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			status = "active"
+		}
+		projectID := r.URL.Query().Get("project_id")
+		ws, err := db.ListWorkstreams(database, projectID, status)
+		if err != nil {
+			return err
+		}
+		if ws == nil {
+			ws = []models.Workstream{}
+		}
+		return writeJSON(w, ws)
+
+	case http.MethodPost:
+		var body struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			ParentID    string `json:"parent_id"`
+			Tags        string `json:"tags"`
+			ProjectID   string `json:"project_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		if body.Name == "" {
+			http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
+			return nil
+		}
+		id := body.ID
+		if id == "" {
+			id = slugify(body.Name)
+		}
+		ws := &models.Workstream{
+			ID:          id,
+			ProjectID:   body.ProjectID,
+			ParentID:    body.ParentID,
+			Name:        body.Name,
+			Description: body.Description,
+			Status:      "active",
+			Tags:        body.Tags,
+		}
+		if err := db.CreateWorkstream(database, ws); err != nil {
+			return fmt.Errorf("creating workstream: %w", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, ws)
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return nil
+}
+
+func handleWorkstreamDetail(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	// Parse path: /api/workstreams/{id}[/notes[/{nid}]][/links[/{lid}]]
+	path := strings.TrimPrefix(r.URL.Path, "/api/workstreams/")
+	parts := strings.SplitN(path, "/", 3)
+	id := parts[0]
+
+	if len(parts) >= 2 && parts[1] == "notes" {
+		return handleWorkstreamNotes(database, w, r, id, parts)
+	}
+	if len(parts) >= 2 && parts[1] == "links" {
+		return handleWorkstreamLinks(database, w, r, id, parts)
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		detail, err := db.GetWorkstreamDetail(database, id)
+		if err != nil {
+			http.Error(w, `{"error":"workstream not found"}`, http.StatusNotFound)
+			return nil
+		}
+		return writeJSON(w, detail)
+
+	case http.MethodPatch:
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		allowed := map[string]bool{"name": true, "description": true, "status": true, "tags": true, "parent_id": true}
+		updates := make(map[string]any)
+		for k, v := range body {
+			if allowed[k] {
+				updates[k] = v
+			}
+		}
+		if err := db.UpdateWorkstream(database, id, updates); err != nil {
+			return err
+		}
+		ws, _ := db.GetWorkstream(database, id)
+		return writeJSON(w, ws)
+
+	case http.MethodDelete:
+		if err := db.ArchiveWorkstream(database, id); err != nil {
+			return err
+		}
+		return writeJSON(w, map[string]string{"archived": id})
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return nil
+}
+
+func handleWorkstreamNotes(database *sql.DB, w http.ResponseWriter, r *http.Request, wsID string, parts []string) error {
+	switch r.Method {
+	case http.MethodGet:
+		notes, err := db.ListWorkstreamNotes(database, wsID)
+		if err != nil {
+			return err
+		}
+		if notes == nil {
+			notes = []models.WorkstreamNote{}
+		}
+		return writeJSON(w, notes)
+
+	case http.MethodPost:
+		var body struct {
+			Content  string `json:"content"`
+			NoteType string `json:"note_type"`
+			Source   string `json:"source"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		if body.NoteType == "" {
+			body.NoteType = "note"
+		}
+		n := &models.WorkstreamNote{
+			WorkstreamID: wsID,
+			Content:      body.Content,
+			NoteType:     body.NoteType,
+			Source:       body.Source,
+		}
+		if err := db.CreateWorkstreamNote(database, n); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, n)
+
+	case http.MethodPatch:
+		if len(parts) < 3 {
+			http.Error(w, "note ID required", http.StatusBadRequest)
+			return nil
+		}
+		noteID := 0
+		fmt.Sscanf(parts[2], "%d", &noteID)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		allowed := map[string]bool{"content": true, "resolved": true, "note_type": true}
+		updates := make(map[string]any)
+		for k, v := range body {
+			if allowed[k] {
+				updates[k] = v
+			}
+		}
+		return db.UpdateWorkstreamNote(database, noteID, updates)
+
+	case http.MethodDelete:
+		if len(parts) < 3 {
+			http.Error(w, "note ID required", http.StatusBadRequest)
+			return nil
+		}
+		noteID := 0
+		fmt.Sscanf(parts[2], "%d", &noteID)
+		return db.DeleteWorkstreamNote(database, noteID)
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return nil
+}
+
+func handleWorkstreamLinks(database *sql.DB, w http.ResponseWriter, r *http.Request, wsID string, parts []string) error {
+	switch r.Method {
+	case http.MethodGet:
+		links, err := db.ListWorkstreamLinks(database, wsID)
+		if err != nil {
+			return err
+		}
+		if links == nil {
+			links = []models.WorkstreamLink{}
+		}
+		return writeJSON(w, links)
+
+	case http.MethodPost:
+		var body struct {
+			LinkType  string `json:"link_type"`
+			TargetID  string `json:"target_id"`
+			TargetURL string `json:"target_url"`
+			Label     string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		l := &models.WorkstreamLink{
+			WorkstreamID: wsID,
+			LinkType:     body.LinkType,
+			TargetID:     body.TargetID,
+			TargetURL:    body.TargetURL,
+			Label:        body.Label,
+		}
+		if err := db.CreateWorkstreamLink(database, l); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusCreated)
+		return writeJSON(w, l)
+
+	case http.MethodDelete:
+		if len(parts) < 3 {
+			http.Error(w, "link ID required", http.StatusBadRequest)
+			return nil
+		}
+		linkID := 0
+		fmt.Sscanf(parts[2], "%d", &linkID)
+		return db.DeleteWorkstreamLink(database, linkID)
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return nil
+}
+
+// slugify creates a URL-safe slug from a name.
+func slugify(name string) string {
+	s := strings.ToLower(name)
+	s = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		if r == ' ' || r == '-' || r == '_' {
+			return '-'
+		}
+		return -1
+	}, s)
+	// Collapse multiple dashes
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	return strings.Trim(s, "-")
+}

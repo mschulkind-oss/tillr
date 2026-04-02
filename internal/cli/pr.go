@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -29,9 +29,9 @@ var prCmd = &cobra.Command{
 	Short: "Manage pull request links for features",
 	Long: `Associate GitHub pull requests with features for traceability.
 
-  lifecycle pr link <feature-id> <pr-url>    Link a PR to a feature
-  lifecycle pr list [--feature <id>]          List PR links
-  lifecycle pr unlink <feature-id> <pr-url>   Remove a PR link`,
+  tillr pr link <feature-id> <pr-url>    Link a PR to a feature
+  tillr pr list [--feature <id>]          List PR links
+  tillr pr unlink <feature-id> <pr-url>   Remove a PR link`,
 }
 
 var prLinkCmd = &cobra.Command{
@@ -175,9 +175,111 @@ var prUnlinkCmd = &cobra.Command{
 	},
 }
 
+var prScanCmd = &cobra.Command{
+	Use:   "scan",
+	Short: "Scan PR titles/URLs for feature ID references and auto-link",
+	Long: `Scans all features and attempts to find PRs that reference them by feature ID
+in the PR title or description. This is a dry-run scan that shows potential matches.
+Use --link to automatically create the associations.`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		doLink, _ := cmd.Flags().GetBool("link")
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		features, err := db.ListFeatures(database, p.ID, "", "")
+		if err != nil {
+			return fmt.Errorf("listing features: %w", err)
+		}
+
+		prs, err := db.ListAllPRs(database)
+		if err != nil {
+			return fmt.Errorf("listing PRs: %w", err)
+		}
+
+		// Build a set of existing links
+		existingLinks := make(map[string]bool)
+		for _, pr := range prs {
+			existingLinks[pr.FeatureID+"|"+pr.PRURL] = true
+		}
+
+		// Check each PR URL for feature ID references in the URL path
+		type match struct {
+			FeatureID string `json:"feature_id"`
+			PRURL     string `json:"pr_url"`
+			PRNumber  int    `json:"pr_number"`
+			Repo      string `json:"repo"`
+		}
+		var matches []match
+		var linked int
+
+		for _, pr := range prs {
+			for _, f := range features {
+				// Check if the feature ID appears in the PR URL (common pattern)
+				if strings.Contains(strings.ToLower(pr.PRURL), strings.ToLower(f.ID)) {
+					key := f.ID + "|" + pr.PRURL
+					if existingLinks[key] {
+						continue
+					}
+					m := match{FeatureID: f.ID, PRURL: pr.PRURL, PRNumber: pr.PRNumber, Repo: pr.Repo}
+					matches = append(matches, m)
+
+					if doLink {
+						newPR := &models.FeaturePR{
+							FeatureID: f.ID,
+							PRURL:     pr.PRURL,
+							PRNumber:  pr.PRNumber,
+							Repo:      pr.Repo,
+							Status:    pr.Status,
+						}
+						if err := db.LinkFeaturePR(database, newPR); err == nil {
+							linked++
+						}
+					}
+				}
+			}
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]any{
+				"matches": matches,
+				"linked":  linked,
+			})
+		}
+
+		if len(matches) == 0 {
+			fmt.Println("No new PR-feature matches found.")
+			return nil
+		}
+
+		fmt.Printf("Found %d potential PR-feature matches:\n\n", len(matches))
+		for _, m := range matches {
+			status := "found"
+			if doLink {
+				status = "linked"
+			}
+			fmt.Printf("  [%s] PR #%d (%s) -> feature %s\n", status, m.PRNumber, m.Repo, m.FeatureID)
+		}
+		if !doLink && len(matches) > 0 {
+			fmt.Printf("\nRe-run with --link to create these associations.\n")
+		}
+		return nil
+	},
+}
+
 func init() {
 	prListCmd.Flags().StringP("feature", "f", "", "Filter by feature ID")
+	prScanCmd.Flags().Bool("link", false, "Actually create the PR-feature links")
 	prCmd.AddCommand(prLinkCmd)
 	prCmd.AddCommand(prListCmd)
 	prCmd.AddCommand(prUnlinkCmd)
+	prCmd.AddCommand(prScanCmd)
 }

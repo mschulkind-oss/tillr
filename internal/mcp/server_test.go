@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
 )
 
 func setupTestDB(t *testing.T) *Server {
@@ -47,8 +47,8 @@ func TestInitialize(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected serverInfo map, got %T", result["serverInfo"])
 	}
-	if info["name"] != "lifecycle" {
-		t.Errorf("expected server name lifecycle, got %v", info["name"])
+	if info["name"] != "tillr" {
+		t.Errorf("expected server name tillr, got %v", info["name"])
 	}
 }
 
@@ -74,12 +74,12 @@ func TestToolsList(t *testing.T) {
 	}
 
 	expectedTools := map[string]bool{
-		"lifecycle_next":     false,
-		"lifecycle_done":     false,
-		"lifecycle_fail":     false,
-		"lifecycle_status":   false,
-		"lifecycle_features": false,
-		"lifecycle_feedback": false,
+		"tillr_next":     false,
+		"tillr_done":     false,
+		"tillr_fail":     false,
+		"tillr_status":   false,
+		"tillr_features": false,
+		"tillr_feedback": false,
 	}
 
 	for _, tool := range tools {
@@ -99,7 +99,7 @@ func TestToolCallStatus(t *testing.T) {
 	s := setupTestDB(t)
 
 	params, _ := json.Marshal(map[string]any{
-		"name":      "lifecycle_status",
+		"name":      "tillr_status",
 		"arguments": map[string]any{},
 	})
 
@@ -153,7 +153,7 @@ func TestToolCallFeatures(t *testing.T) {
 	}
 
 	params, _ := json.Marshal(map[string]any{
-		"name":      "lifecycle_features",
+		"name":      "tillr_features",
 		"arguments": map[string]any{},
 	})
 
@@ -192,7 +192,7 @@ func TestToolCallFeaturesWithStatusFilter(t *testing.T) {
 
 	// Filter for a status that doesn't match — should return empty
 	params, _ := json.Marshal(map[string]any{
-		"name":      "lifecycle_features",
+		"name":      "tillr_features",
 		"arguments": map[string]any{"status": "done"},
 	})
 
@@ -225,7 +225,7 @@ func TestToolCallFeedback(t *testing.T) {
 	s := setupTestDB(t)
 
 	params, _ := json.Marshal(map[string]any{
-		"name": "lifecycle_feedback",
+		"name": "tillr_feedback",
 		"arguments": map[string]any{
 			"title":       "Add dark mode",
 			"description": "Would be nice to have dark mode support",
@@ -266,7 +266,7 @@ func TestToolCallFeedbackMissingTitle(t *testing.T) {
 	s := setupTestDB(t)
 
 	params, _ := json.Marshal(map[string]any{
-		"name":      "lifecycle_feedback",
+		"name":      "tillr_feedback",
 		"arguments": map[string]any{},
 	})
 

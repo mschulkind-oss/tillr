@@ -5,7 +5,7 @@
 
 ## The Problem: Out-of-Band Context
 
-Before this iteration, when an agent ran `lifecycle next --json`, it got back:
+Before this iteration, when an agent ran `tillr next --json`, it got back:
 
 ```json
 {"id": 42, "feature_id": "user-documentation", "work_type": "develop", "agent_prompt": "Cycle feature-implementation, step: develop for feature user-documentation"}
@@ -15,12 +15,12 @@ That tells you NOTHING about what to build. The agent prompt is a stub. The spec
 
 ## The Fix: Everything In-Band
 
-Now features carry a `spec` field (detailed acceptance criteria) and a `roadmap_item_id` (traceability). And `lifecycle next --json` returns a rich `WorkContext` object with everything an agent needs.
+Now features carry a `spec` field (detailed acceptance criteria) and a `roadmap_item_id` (traceability). And `tillr next --json` returns a rich `WorkContext` object with everything an agent needs.
 
 Let's walk through a complete iteration to see it work.
 
 ```bash
-bin/lifecycle cycle start feature-implementation in-band-context
+bin/tillr cycle start feature-implementation in-band-context
 ```
 
 ```output
@@ -30,10 +30,10 @@ bin/lifecycle cycle start feature-implementation in-band-context
 
 ## Step 1: Research — See the Full Context
 
-Now run `lifecycle next --json` and observe the enriched WorkContext. This is what an agent receives — ALL context in one payload:
+Now run `tillr next --json` and observe the enriched WorkContext. This is what an agent receives — ALL context in one payload:
 
 ```bash
-bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
+bin/tillr next --json 2>/dev/null | python3 -m json.tool
 ```
 
 ```output
@@ -43,16 +43,16 @@ bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
         "feature_id": "in-band-context",
         "work_type": "research",
         "status": "active",
-        "agent_prompt": "Cycle feature-implementation, step: research for feature \"In-Band Context\" \u2014 Features carry full spec and acceptance criteria so agents need no OOB context\n\nSpec: Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. lifecycle feature add accepts --spec and --roadmap-item flags\n3. lifecycle feature edit accepts --spec and --roadmap-item flags\n4. lifecycle feature show displays spec and roadmap link\n5. lifecycle next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched lifecycle next output\n10. All existing tests pass",
+        "agent_prompt": "Cycle feature-implementation, step: research for feature \"In-Band Context\" \u2014 Features carry full spec and acceptance criteria so agents need no OOB context\n\nSpec: Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. tillr feature add accepts --spec and --roadmap-item flags\n3. tillr feature edit accepts --spec and --roadmap-item flags\n4. tillr feature show displays spec and roadmap link\n5. tillr next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched tillr next output\n10. All existing tests pass",
         "created_at": "2026-03-07 04:44:29"
     },
     "feature": {
         "id": "in-band-context",
-        "project_id": "lifecycle",
+        "project_id": "tillr",
         "milestone_id": "v0.2-self-hosting",
         "name": "In-Band Context",
         "description": "Features carry full spec and acceptance criteria so agents need no OOB context",
-        "spec": "Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. lifecycle feature add accepts --spec and --roadmap-item flags\n3. lifecycle feature edit accepts --spec and --roadmap-item flags\n4. lifecycle feature show displays spec and roadmap link\n5. lifecycle next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched lifecycle next output\n10. All existing tests pass",
+        "spec": "Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. tillr feature add accepts --spec and --roadmap-item flags\n3. tillr feature edit accepts --spec and --roadmap-item flags\n4. tillr feature show displays spec and roadmap link\n5. tillr next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched tillr next output\n10. All existing tests pass",
         "status": "draft",
         "priority": 8,
         "roadmap_item_id": "self-hosting-bootstrap",
@@ -83,9 +83,9 @@ bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
     },
     "roadmap_item": {
         "id": "self-hosting-bootstrap",
-        "project_id": "lifecycle",
+        "project_id": "tillr",
         "title": "Self-Hosting Bootstrap",
-        "description": "Use lifecycle to track lifecycle development, update AGENTS.md",
+        "description": "Use tillr to track tillr development, update AGENTS.md",
         "category": "core",
         "priority": "high",
         "status": "proposed",
@@ -94,7 +94,7 @@ bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
         "created_at": "2026-03-07 00:07:02",
         "updated_at": "2026-03-07 00:07:02"
     },
-    "agent_guidance": "You are working on feature \"In-Band Context\": Features carry full spec and acceptance criteria so agents need no OOB context\n\nCurrent task: Cycle feature-implementation, step: research for feature \"In-Band Context\" \u2014 Features carry full spec and acceptance criteria so agents need no OOB context\n\nSpec: Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. lifecycle feature add accepts --spec and --roadmap-item flags\n3. lifecycle feature edit accepts --spec and --roadmap-item flags\n4. lifecycle feature show displays spec and roadmap link\n5. lifecycle next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched lifecycle next output\n10. All existing tests pass (work type: research)\n\n## Feature Spec\nAcceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. lifecycle feature add accepts --spec and --roadmap-item flags\n3. lifecycle feature edit accepts --spec and --roadmap-item flags\n4. lifecycle feature show displays spec and roadmap link\n5. lifecycle next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched lifecycle next output\n10. All existing tests pass\n\n## Cycle Context\nCycle type: Feature Implementation (step 1/5: research)\nAll steps: research \u2192 develop \u2192 agent-qa \u2192 judge \u2192 human-qa\n\n## Roadmap Context\nTitle: Self-Hosting Bootstrap\nPriority: high\nDescription: Use lifecycle to track lifecycle development, update AGENTS.md"
+    "agent_guidance": "You are working on feature \"In-Band Context\": Features carry full spec and acceptance criteria so agents need no OOB context\n\nCurrent task: Cycle feature-implementation, step: research for feature \"In-Band Context\" \u2014 Features carry full spec and acceptance criteria so agents need no OOB context\n\nSpec: Acceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. tillr feature add accepts --spec and --roadmap-item flags\n3. tillr feature edit accepts --spec and --roadmap-item flags\n4. tillr feature show displays spec and roadmap link\n5. tillr next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched tillr next output\n10. All existing tests pass (work type: research)\n\n## Feature Spec\nAcceptance criteria:\n1. Features table has spec TEXT and roadmap_item_id TEXT columns\n2. tillr feature add accepts --spec and --roadmap-item flags\n3. tillr feature edit accepts --spec and --roadmap-item flags\n4. tillr feature show displays spec and roadmap link\n5. tillr next --json returns WorkContext with: feature (inc spec), cycle, cycle_type, roadmap_item, prior_results, agent_guidance\n6. agent_guidance field is a human-readable summary built from all context\n7. feature.created events include description, has_spec, roadmap_item_id\n8. Work item prompts include feature description and spec\n9. AGENTS.md updated to document enriched tillr next output\n10. All existing tests pass\n\n## Cycle Context\nCycle type: Feature Implementation (step 1/5: research)\nAll steps: research \u2192 develop \u2192 agent-qa \u2192 judge \u2192 human-qa\n\n## Roadmap Context\nTitle: Self-Hosting Bootstrap\nPriority: high\nDescription: Use tillr to track tillr development, update AGENTS.md"
 }
 ```
 
@@ -114,7 +114,7 @@ No chat history needed. No separate spec document. No "check AGENTS.md for conte
 Now let's complete the research step and watch prior_results accumulate:
 
 ```bash
-bin/lifecycle done --result "Research complete: Verified all 10 acceptance criteria are implemented. Schema migration adds spec+roadmap_item_id columns. Feature model updated. CRUD queries handle new fields. CLI has --spec and --roadmap-item flags. lifecycle next returns WorkContext. AGENTS.md updated."
+bin/tillr done --result "Research complete: Verified all 10 acceptance criteria are implemented. Schema migration adds spec+roadmap_item_id columns. Feature model updated. CRUD queries handle new fields. CLI has --spec and --roadmap-item flags. tillr next returns WorkContext. AGENTS.md updated."
 ```
 
 ```output
@@ -122,13 +122,13 @@ bin/lifecycle done --result "Research complete: Verified all 10 acceptance crite
 ```
 
 ```bash
-bin/lifecycle cycle score 9.0 --notes "All acceptance criteria verified as implemented. Spec field carries detailed requirements. Roadmap linkage provides provenance."
+bin/tillr cycle score 9.0 --notes "All acceptance criteria verified as implemented. Spec field carries detailed requirements. Roadmap linkage provides provenance."
 ```
 
 ```output
 Error: no active work item and no --feature specified
 Usage:
-  lifecycle cycle score <score> [flags]
+  tillr cycle score <score> [flags]
 
 Flags:
       --feature string   Feature ID (if not auto-detected)
@@ -143,10 +143,10 @@ no active work item and no --feature specified
 
 ## Step 2: Develop — Prior Results Flow Forward
 
-After scoring the research step (9.0), a new work item is auto-created for the develop step. Now watch — `lifecycle next --json` includes the prior research results:
+After scoring the research step (9.0), a new work item is auto-created for the develop step. Now watch — `tillr next --json` includes the prior research results:
 
 ```bash
-bin/lifecycle next --json 2>/dev/null | python3 -c "
+bin/tillr next --json 2>/dev/null | python3 -c "
 import json, sys
 ctx = json.load(sys.stdin)
 print(\"=== Work Item ===\")
@@ -186,8 +186,8 @@ print(f\"  {ri.get(\"title\",\"none\")} (priority: {ri.get(\"priority\",\"?\")})
 === Spec (first 200 chars) ===
   Acceptance criteria:
 1. Features table has spec TEXT and roadmap_item_id TEXT columns
-2. lifecycle feature add accepts --spec and --roadmap-item flags
-3. lifecycle feature edit accepts --spec and --ro...
+2. tillr feature add accepts --spec and --roadmap-item flags
+3. tillr feature edit accepts --spec and --ro...
 
 === Roadmap Link ===
   Self-Hosting Bootstrap (priority: high)
@@ -208,21 +208,21 @@ This is the difference between "Cycle feature-implementation, step: develop for 
 The in-band-context feature went through all 5 steps with scores: 9.0 → 9.5 → 9.0 → 9.5 → 9.5. Let's see the event trail:
 
 ```bash
-bin/lifecycle history --feature in-band-context 2>/dev/null
+bin/tillr history --feature in-band-context 2>/dev/null
 ```
 
 ```output
 2026-03-07 04:46:14  feature.status_changed   [in-band-context] [from=draft to=done]
-2026-03-07 04:46:09  work.completed           [in-band-context] [work_type=human-qa result=Human QA: Approved. The enriched lifecycle next output is exactly what was requested — full in-band context with spec, roadmap link, prior results, and agent guidance.]
+2026-03-07 04:46:09  work.completed           [in-band-context] [work_type=human-qa result=Human QA: Approved. The enriched tillr next output is exactly what was requested — full in-band context with spec, roadmap link, prior results, and agent guidance.]
 2026-03-07 04:46:09  cycle.scored             [in-band-context] [step=human-qa score=9.5]
 2026-03-07 04:46:03  work.completed           [in-band-context] [work_type=judge result=Judge: 9.5/10. Excellent implementation. All 10 acceptance criteria met. Enriched WorkContext provides complete agent autonomy. Spec field eliminates OOB dependency. Roadmap linkage provides full traceability. Only minor: agent_guidance duplicates spec content — could be deduplicated.]
 2026-03-07 04:46:03  cycle.scored             [in-band-context] [step=judge score=9.5]
-2026-03-07 04:45:56  work.completed           [in-band-context] [work_type=agent-qa result=Agent QA passed: go test ./... passes all 16 tests, golangci-lint 0 issues, migration applies cleanly to existing DB, lifecycle next --json returns valid WorkContext.]
+2026-03-07 04:45:56  work.completed           [in-band-context] [work_type=agent-qa result=Agent QA passed: go test ./... passes all 16 tests, golangci-lint 0 issues, migration applies cleanly to existing DB, tillr next --json returns valid WorkContext.]
 2026-03-07 04:45:56  cycle.scored             [in-band-context] [step=agent-qa score=9]
-2026-03-07 04:45:41  work.completed           [in-band-context] [work_type=develop result=Develop complete: Implemented migration 5 (spec + roadmap_item_id columns), updated Feature model, CreateFeature/GetFeature/ListFeatures queries, added --spec and --roadmap-item CLI flags, enriched lifecycle next to return WorkContext with full feature/cycle/roadmap/prior_results/agent_guidance, updated AGENTS.md with in-band context instructions.]
+2026-03-07 04:45:41  work.completed           [in-band-context] [work_type=develop result=Develop complete: Implemented migration 5 (spec + roadmap_item_id columns), updated Feature model, CreateFeature/GetFeature/ListFeatures queries, added --spec and --roadmap-item CLI flags, enriched tillr next to return WorkContext with full feature/cycle/roadmap/prior_results/agent_guidance, updated AGENTS.md with in-band context instructions.]
 2026-03-07 04:45:41  cycle.scored             [in-band-context] [step=develop score=9.5]
 2026-03-07 04:45:07  cycle.scored             [in-band-context] [score=9 step=research]
-2026-03-07 04:44:57  work.completed           [in-band-context] [work_type=research result=Research complete: Verified all 10 acceptance criteria are implemented. Schema migration adds spec+roadmap_item_id columns. Feature model updated. CRUD queries handle new fields. CLI has --spec and --roadmap-item flags. lifecycle next returns WorkContext. AGENTS.md updated.]
+2026-03-07 04:44:57  work.completed           [in-band-context] [work_type=research result=Research complete: Verified all 10 acceptance criteria are implemented. Schema migration adds spec+roadmap_item_id columns. Feature model updated. CRUD queries handle new fields. CLI has --spec and --roadmap-item flags. tillr next returns WorkContext. AGENTS.md updated.]
 2026-03-07 04:44:29  cycle.started            [in-band-context] [cycle_type=feature-implementation step=research]
 2026-03-07 04:43:50  feature.created          [in-band-context] [name=In-Band Context priority=8 description=Features carry full spec and acceptance criteria so agents need no OOB context has_spec=true roadmap_item_id=self-hosting-bootstrap]
 ```
@@ -239,11 +239,11 @@ Look at the very last event: `feature.created` now records:
 Every step of the cycle is logged with its result text. An auditor (or future agent) can reconstruct exactly what happened, why, and what was decided at each step.
 
 ```bash
-bin/lifecycle status 2>/dev/null
+bin/tillr status 2>/dev/null
 ```
 
 ```output
-Project: Lifecycle
+Project: Tillr
 
 Features: 11 total
   done           8
@@ -271,14 +271,14 @@ Recent Activity:
 
 1. **Features carry their own spec** — `--spec` flag on `feature add/edit`
 2. **Features trace to roadmap** — `--roadmap-item` flag creates provenance
-3. **`lifecycle next --json` is self-contained** — returns WorkContext with feature, spec, cycle state, prior results, roadmap item, and agent guidance
+3. **`tillr next --json` is self-contained** — returns WorkContext with feature, spec, cycle state, prior results, roadmap item, and agent guidance
 4. **No OOB context needed** — agents can work from the tool output alone
 5. **Full event audit trail** — feature.created events now capture description, spec presence, and roadmap link
 
 ### Viewing in the web UI
 
 ```bash
-lifecycle serve --port 3847
+tillr serve --port 3847
 # Open http://localhost:3847
 ```
 

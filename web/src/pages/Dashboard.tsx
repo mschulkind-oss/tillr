@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { getStatus, getFeatures, getMilestones, getRoadmap, getHistory } from '../api/client'
+import { getStatus, getFeatures, getMilestones, getRoadmap, getHistory, getAgentDashboard } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
+import { EntityLink } from '../components/EntityLink'
 import { Link } from 'react-router-dom'
 import { formatTimeAgo, groupBy, cn } from '../lib/utils'
 import type { Feature, RoadmapItem, Milestone, Event } from '../api/types'
@@ -14,6 +15,7 @@ export function Dashboard() {
   const milestones = useQuery({ queryKey: ['milestones'], queryFn: getMilestones })
   const roadmap = useQuery({ queryKey: ['roadmap'], queryFn: getRoadmap })
   const history = useQuery({ queryKey: ['history', { limit: 15 }], queryFn: () => getHistory({ limit: 15 }) })
+  const agents = useQuery({ queryKey: ['agent-dashboard'], queryFn: getAgentDashboard })
 
   if (status.isLoading) return <PageSkeleton />
 
@@ -51,9 +53,9 @@ export function Dashboard() {
           accent="text-warning"
         />
         <StatCard
-          label="Active Cycles"
-          value={status.data?.active_cycles || 0}
-          icon="🔄"
+          label="Open Discussions"
+          value={status.data?.open_discussions || 0}
+          icon="💬"
           accent="text-accent"
         />
       </div>
@@ -78,6 +80,12 @@ export function Dashboard() {
         <div className="space-y-6">
           {/* Milestone progress */}
           <MilestonePanel milestones={milestones.data || []} />
+
+          {/* Active agents */}
+          <AgentsPanel
+            activeCount={agents.data?.active_count ?? 0}
+            totalSessions={agents.data?.total_sessions ?? 0}
+          />
 
           {/* Roadmap highlights */}
           <RoadmapHighlights items={roadmap.data || []} />
@@ -168,7 +176,9 @@ function MilestonePanel({ milestones }: { milestones: Milestone[] }) {
           return (
             <div key={m.id}>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-text-primary">{m.name}</span>
+                <span className="text-sm text-text-primary">
+                  <EntityLink type="milestone" id={m.id} name={m.name} />
+                </span>
                 <span className="text-xs text-text-muted">{pct}%</span>
               </div>
               <div className="h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
@@ -200,16 +210,15 @@ function RoadmapHighlights({ items }: { items: RoadmapItem[] }) {
       </div>
       <div className="space-y-2">
         {active.map((item) => (
-          <Link
+          <div
             key={item.id}
-            to="/roadmap"
-            className="block text-sm text-text-secondary hover:text-text-primary transition-colors"
+            className="flex items-center text-sm text-text-secondary"
           >
             <span className="mr-2">
               {item.priority === 'critical' ? '🔴' : item.priority === 'high' ? '🟠' : '🔵'}
             </span>
-            {item.title}
-          </Link>
+            <EntityLink type="roadmap" id={item.id} name={item.title} />
+          </div>
         ))}
       </div>
     </div>
@@ -231,7 +240,7 @@ function ActivityFeed({ events }: { events: Event[] }) {
             <span className="text-text-muted shrink-0">{eventIcon(event.event_type)}</span>
             <div className="min-w-0 flex-1">
               <span className="text-text-secondary">
-                {formatEventText(event)}
+                <EventText event={event} />
               </span>
               <span className="text-text-muted ml-1.5">
                 {formatTimeAgo(event.created_at)}
@@ -253,19 +262,40 @@ function eventIcon(type: string): string {
   return '📌'
 }
 
-function formatEventText(event: Event): string {
+function AgentsPanel({ activeCount, totalSessions }: { activeCount: number; totalSessions: number }) {
+  return (
+    <div className="bg-bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-text-primary">Agents</h3>
+        <Link to="/agents" className="text-xs text-accent hover:underline">View all →</Link>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">🤖</span>
+        <div>
+          <div className={cn('text-lg font-bold', activeCount > 0 ? 'text-success' : 'text-text-muted')}>
+            {activeCount} active
+          </div>
+          <div className="text-[10px] text-text-muted">{totalSessions} total sessions</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EventText({ event }: { event: Event }) {
   const type = event.event_type
-  const feature = event.feature_id || ''
+  const featureId = event.feature_id
+  const featureLink = featureId ? <EntityLink type="feature" id={featureId} /> : null
 
   if (type === 'feature.status_changed') {
     try {
       const data = JSON.parse(event.data || '{}')
-      return `${feature} → ${data.to}`
+      return <>{featureLink} → {data.to}</>
     } catch {
-      return `${feature} status changed`
+      return <>{featureLink} status changed</>
     }
   }
-  if (type === 'feature.created') return `${feature} created`
-  if (type.includes('cycle')) return `Cycle event: ${feature}`
-  return `${type.replace('feature.', '')}: ${feature}`
+  if (type === 'feature.created') return <>{featureLink} created</>
+  if (type.includes('cycle')) return <>Cycle event: {featureLink}</>
+  return <>{type.replace('feature.', '')}: {featureLink || ''}</>
 }

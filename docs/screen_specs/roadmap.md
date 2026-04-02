@@ -16,7 +16,7 @@ The page is rendered client-side by `renderRoadmap()` in `app.js` (line 614), wi
 |---------|-------------|-------------|
 | **Product Owner** | Human stakeholder who defines priorities and approves work. | Review strategic priorities, reorder items, change statuses, approve/defer work. |
 | **Agent Operator** | Human managing AI agents working on the project. | Understand what the agents should work on next, verify linked feature progress. |
-| **AI Agent** | Automated system consuming `lifecycle next --json`. | Indirectly affected — roadmap priority determines what `lifecycle next` returns. |
+| **AI Agent** | Automated system consuming `tillr next --json`. | Indirectly affected — roadmap priority determines what `tillr next` returns. |
 | **Stakeholder** | Non-technical viewer needing a project overview. | View the timeline, print/export the roadmap for presentations. |
 
 ---
@@ -51,7 +51,7 @@ Then I see an empty state with:
   - A 🗺️ icon
   - The message "Your roadmap is wide open"
   - The hint "Chart the course for your project by adding your first roadmap item."
-  - A CLI prompt: `$ lifecycle roadmap add <title>`
+  - A CLI prompt: `$ tillr roadmap add <title>`
 ```
 
 ### US-2: View Items Grouped by Priority
@@ -727,7 +727,7 @@ Relevant Feature fields used on this page:
 
 ### Client-Side State
 
-| Variable | Type | Purpose | Lifecycle |
+| Variable | Type | Purpose | Tillr |
 |----------|------|---------|-----------|
 | `_roadmapData` | `RoadmapItem[]` | Cached API response for current render | Set on each render; used by drag-and-drop |
 | `_roadmapFeatures` | `Feature[]` | Cached features list | Set on each render; used by dependency highlighting |

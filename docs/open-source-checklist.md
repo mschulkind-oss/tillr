@@ -1,6 +1,6 @@
-# Open-Source Checklist — lifecycle
+# Open-Source Checklist — tillr
 
-> Checklist for preparing lifecycle for public release.
+> Checklist for preparing tillr for public release.
 > Follows the 11-section pattern from vantage/yolo_jail.
 
 ---
@@ -49,7 +49,7 @@
 
 ## 1. Name Decision
 
-- [ ] Finalize project name (currently "lifecycle")
+- [ ] Finalize project name (currently "tillr")
 - [ ] Check PyPI availability for chosen name
 - [ ] Check npm availability for chosen name
 - [ ] Check crates.io availability for chosen name

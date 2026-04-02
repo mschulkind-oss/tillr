@@ -1,18 +1,18 @@
-# Lifecycle Self-Hosting Demo
+# Tillr Self-Hosting Demo
 
 *2026-03-07T01:04:42Z by Showboat 0.6.1*
 <!-- showboat-id: d075623d-afd8-467a-975a-b7c981514aa9 -->
 
-This demo shows Lifecycle managing its own development — full self-hosting. We ran 3 complete iteration cycles using the `lifecycle next/done/score` workflow to build real features, and the web dashboard updated in real-time via WebSocket.
+This demo shows Tillr managing its own development — full self-hosting. We ran 3 complete iteration cycles using the `tillr next/done/score` workflow to build real features, and the web dashboard updated in real-time via WebSocket.
 
 ## Project Status
 
 ```bash
-bin/lifecycle status
+bin/tillr status
 ```
 
 ```output
-Project: Lifecycle
+Project: Tillr
 
 Features: 10 total
   done           6
@@ -37,7 +37,7 @@ Recent Activity:
 ## Features — 6 Done, 4 Draft
 
 ```bash
-bin/lifecycle feature list
+bin/tillr feature list
 ```
 
 ```output
@@ -58,7 +58,7 @@ sqlite-storage       done           1    SQLite Storage
 ## Milestones — v0.1 MVP 100% Complete
 
 ```bash
-bin/lifecycle milestone list
+bin/tillr milestone list
 ```
 
 ```output
@@ -69,13 +69,13 @@ v1.0-production      [░░░░░░░░░░░░░░░░░░░�
 
 ## Cycle History — 3 Completed Feature-Implementation Cycles
 
-Three features were implemented through lifecycle's own iteration cycle workflow:
+Three features were implemented through tillr's own iteration cycle workflow:
 1. **real-time-updates**: WebSocket live updates (research → develop → agent-qa → judge → human-qa)
 2. **cycle-engine**: Enhanced cycles page with scores & sparklines
 3. **agent-workflow**: History filters, QA integration
 
 ```bash
-bin/lifecycle cycle history real-time-updates
+bin/tillr cycle history real-time-updates
 ```
 
 ```output
@@ -85,7 +85,7 @@ bin/lifecycle cycle history real-time-updates
 ## Roadmap
 
 ```bash
-bin/lifecycle roadmap show
+bin/tillr roadmap show
 ```
 
 ```output
@@ -120,38 +120,38 @@ bin/lifecycle roadmap show
 
 ## The Agent Loop — How Self-Hosting Works
 
-The core of self-hosting is the `lifecycle next → done → score` loop. Here's what one iteration looks like:
+The core of self-hosting is the `tillr next → done → score` loop. Here's what one iteration looks like:
 
 ```bash
 echo "# Step 1: Get next work item"
-echo "$ lifecycle next --json"
+echo "$ tillr next --json"
 echo ""
 echo "# Step 2: Do the work (implement the feature)"  
 echo ""
 echo "# Step 3: Report completion"
-echo "$ lifecycle done --result \"Implemented feature X\""
+echo "$ tillr done --result \"Implemented feature X\""
 echo ""
 echo "# Step 4: Score the cycle step"
-echo "$ lifecycle cycle score 9.0 --feature X --notes \"Great work\""
+echo "$ tillr cycle score 9.0 --feature X --notes \"Great work\""
 echo ""
-echo "# Step 5: Repeat — lifecycle advances to the next step automatically"
-echo "$ lifecycle next --json"
+echo "# Step 5: Repeat — tillr advances to the next step automatically"
+echo "$ tillr next --json"
 ```
 
 ```output
 # Step 1: Get next work item
-$ lifecycle next --json
+$ tillr next --json
 
 # Step 2: Do the work (implement the feature)
 
 # Step 3: Report completion
-$ lifecycle done --result "Implemented feature X"
+$ tillr done --result "Implemented feature X"
 
 # Step 4: Score the cycle step
-$ lifecycle cycle score 9.0 --feature X --notes "Great work"
+$ tillr cycle score 9.0 --feature X --notes "Great work"
 
-# Step 5: Repeat — lifecycle advances to the next step automatically
-$ lifecycle next --json
+# Step 5: Repeat — tillr advances to the next step automatically
+$ tillr next --json
 ```
 
 ## Web Dashboard — Browse It Live
@@ -159,7 +159,7 @@ $ lifecycle next --json
 Start the web viewer and explore:
 
 ```
-lifecycle serve --port 3847
+tillr serve --port 3847
 ```
 
 Then open http://localhost:3847 in your browser. Here's what to look at:
@@ -188,9 +188,9 @@ Then open http://localhost:3847 in your browser. Here's what to look at:
 The dashboard updates in real-time via WebSocket. Try running CLI commands in another terminal — the browser refreshes automatically:
 
 ```
-lifecycle feature add "test-feature" --priority 1
+tillr feature add "test-feature" --priority 1
 # Watch the dashboard update instantly!
-lifecycle feature remove test-feature
+tillr feature remove test-feature
 ```
 
 ## What Was Built in These 3 Iterations
@@ -201,10 +201,10 @@ lifecycle feature remove test-feature
 | 2 | cycle-engine | Enriched cycles page with scores, sparklines, type reference |
 | 3 | agent-workflow | History filters, scores API, all pages interactive |
 
-All three features were developed entirely through lifecycle's own `next/done/score` workflow — proving self-hosting works.
+All three features were developed entirely through tillr's own `next/done/score` workflow — proving self-hosting works.
 
 ```bash {image}
-![Dashboard — Lifecycle self-hosting with real data](scratch/demo-dashboard.png)
+![Dashboard — Tillr self-hosting with real data](scratch/demo-dashboard.png)
 ```
 
-![Dashboard — Lifecycle self-hosting with real data](c6200b3f-2026-03-07.png)
+![Dashboard — Tillr self-hosting with real data](c6200b3f-2026-03-07.png)

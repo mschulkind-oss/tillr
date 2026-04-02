@@ -1,122 +1,236 @@
 import { useQuery } from '@tanstack/react-query'
-import { getRoadmap } from '../api/client'
+import { getRoadmap, getFeatures, getMilestones } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
 import { formatTimeAgo, cn, groupBy } from '../lib/utils'
 import { useState, useMemo } from 'react'
-import type { RoadmapItem } from '../api/types'
+import { Link } from 'react-router-dom'
+import type { RoadmapItem, Feature, Milestone } from '../api/types'
 
-const PRIORITY_ORDER = ['critical', 'high', 'medium', 'low', 'nice-to-have']
-const PRIORITY_COLORS: Record<string, string> = {
-  critical: 'text-danger bg-danger/10 border-danger/20',
-  high: 'text-orange bg-orange/10 border-orange/20',
-  medium: 'text-warning bg-warning/10 border-warning/20',
-  low: 'text-accent bg-accent/10 border-accent/20',
-  'nice-to-have': 'text-text-muted bg-bg-tertiary border-border',
-}
 const EFFORT_LABELS: Record<string, string> = {
   xs: 'XS', s: 'S', m: 'M', l: 'L', xl: 'XL',
 }
 
+const STATUS_ORDER = ['proposed', 'accepted', 'in-progress', 'done', 'deferred', 'rejected']
+
 export function Roadmap() {
   const roadmap = useQuery({ queryKey: ['roadmap'], queryFn: getRoadmap })
+  const featuresQuery = useQuery({ queryKey: ['features'], queryFn: getFeatures })
+  const milestonesQuery = useQuery({ queryKey: ['milestones'], queryFn: getMilestones })
+
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
-  const [priorityFilter, setPriorityFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [viewMode, setViewMode] = useState<'priority' | 'category' | 'status'>('priority')
+  const [viewMode, setViewMode] = useState<'milestone' | 'status' | 'category'>('milestone')
+  const [showDone, setShowDone] = useState(false)
 
   const items = roadmap.data || []
+  const features = featuresQuery.data || []
+  const milestones = milestonesQuery.data || []
+
+  // Build lookup maps
+  const featureByRoadmapId = useMemo(() => {
+    const map: Record<string, Feature> = {}
+    for (const f of features) {
+      if (f.roadmap_item_id) map[f.roadmap_item_id] = f
+    }
+    return map
+  }, [features])
+
+  const milestoneById = useMemo(() => {
+    const map: Record<string, Milestone> = {}
+    for (const m of milestones) map[m.id] = m
+    return map
+  }, [milestones])
+
+  // Map roadmap item -> milestone via linked feature
+  const itemMilestoneId = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const item of items) {
+      const feat = featureByRoadmapId[item.id]
+      if (feat?.milestone_id) map[item.id] = feat.milestone_id
+    }
+    return map
+  }, [items, featureByRoadmapId])
 
   const categories = useMemo(() => [...new Set(items.map((i) => i.category).filter(Boolean))].sort(), [items])
   const statuses = useMemo(() => [...new Set(items.map((i) => i.status))].sort(), [items])
 
   const filtered = useMemo(() => {
     let result = items
+    // Hide done by default
+    if (!showDone) result = result.filter((i) => i.status !== 'done')
     if (categoryFilter !== 'all') result = result.filter((i) => i.category === categoryFilter)
-    if (priorityFilter !== 'all') result = result.filter((i) => i.priority === priorityFilter)
     if (statusFilter !== 'all') result = result.filter((i) => i.status === statusFilter)
     return result
-  }, [items, categoryFilter, priorityFilter, statusFilter])
+  }, [items, categoryFilter, statusFilter, showDone])
 
   const grouped = useMemo(() => {
-    if (viewMode === 'priority') return groupBy(filtered, (i) => i.priority)
-    if (viewMode === 'category') return groupBy(filtered, (i) => i.category || 'uncategorized')
-    return groupBy(filtered, (i) => i.status)
-  }, [filtered, viewMode])
+    if (viewMode === 'milestone') {
+      return groupBy(filtered, (i) => {
+        const msId = itemMilestoneId[i.id]
+        return msId || 'no-milestone'
+      })
+    }
+    if (viewMode === 'status') return groupBy(filtered, (i) => i.status)
+    return groupBy(filtered, (i) => i.category || 'uncategorized')
+  }, [filtered, viewMode, itemMilestoneId])
 
-  const groupOrder = viewMode === 'priority' ? PRIORITY_ORDER : Object.keys(grouped).sort()
+  // Sort milestones by completion (100% last, then by progress)
+  const milestoneOrder = useMemo(() => {
+    return [...milestones].sort((a, b) => {
+      const aPct = (a.total_features || 0) > 0 ? (a.done_features || 0) / (a.total_features || 1) : 0
+      const bPct = (b.total_features || 0) > 0 ? (b.done_features || 0) / (b.total_features || 1) : 0
+      // Completed milestones go last
+      if (aPct >= 1 && bPct < 1) return 1
+      if (bPct >= 1 && aPct < 1) return -1
+      // Otherwise sort by progress ascending (least done first = most work remaining)
+      return aPct - bPct
+    })
+  }, [milestones])
 
-  if (roadmap.isLoading) return <PageSkeleton />
+  const groupOrder = useMemo(() => {
+    if (viewMode === 'status') return STATUS_ORDER.filter((s) => grouped[s]?.length > 0)
+    if (viewMode === 'milestone') {
+      const ordered = milestoneOrder.map((m) => m.id).filter((id) => grouped[id]?.length > 0)
+      if (grouped['no-milestone']?.length > 0) ordered.push('no-milestone')
+      return ordered
+    }
+    return Object.keys(grouped).sort((a, b) => {
+      if (a === 'uncategorized') return 1
+      if (b === 'uncategorized') return -1
+      return a.localeCompare(b)
+    })
+  }, [grouped, viewMode, milestoneOrder])
 
-  // Stats for hero banner
+  const isLoading = roadmap.isLoading || featuresQuery.isLoading || milestonesQuery.isLoading
+  if (isLoading) return <PageSkeleton />
+
+  // Stats (always from all items, not filtered)
   const totalItems = items.length
   const doneCount = items.filter((i) => i.status === 'done').length
   const inProgressCount = items.filter((i) => i.status === 'in-progress').length
-  const pct = totalItems ? Math.round((doneCount / totalItems) * 100) : 0
+  const proposedCount = items.filter((i) => i.status === 'proposed' || i.status === 'accepted').length
+  const deferredCount = items.filter((i) => i.status === 'deferred').length
+  const remainingCount = totalItems - doneCount
+
+  const donePct = totalItems ? (doneCount / totalItems) * 100 : 0
+  const inProgressPct = totalItems ? (inProgressCount / totalItems) * 100 : 0
+  const proposedPct = totalItems ? (proposedCount / totalItems) * 100 : 0
+
+  const groupLabel = (key: string): string => {
+    if (viewMode === 'milestone') {
+      if (key === 'no-milestone') return 'No Milestone'
+      return milestoneById[key]?.name || key
+    }
+    return key
+  }
 
   return (
     <div className="space-y-6">
-      {/* Hero banner */}
-      <div className="bg-gradient-to-r from-accent/10 via-purple/10 to-pink/10 border border-accent/20 rounded-xl p-6">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-accent/10 via-purple/10 to-pink/10 border border-accent/20 rounded-xl p-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-text-primary">Roadmap</h1>
             <p className="text-sm text-text-secondary mt-1">
-              {totalItems} items · {doneCount} completed · {inProgressCount} in progress
+              {remainingCount} items remaining &middot; {inProgressCount} in progress
             </p>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <div className="text-3xl font-bold text-accent">{pct}%</div>
-              <div className="text-xs text-text-muted">complete</div>
-            </div>
-            <div className="w-32 h-3 bg-bg-tertiary rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent rounded-full transition-all duration-700"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
+          <div className="text-right">
+            <div className="text-3xl font-bold text-accent">{Math.round(donePct)}%</div>
+            <div className="text-xs text-text-muted">overall complete</div>
           </div>
         </div>
+
+        {/* Stacked progress bar */}
+        <div>
+          <div className="w-full h-3 bg-bg-tertiary rounded-full overflow-hidden flex">
+            {donePct > 0 && (
+              <div className="h-full bg-success transition-all duration-700" style={{ width: `${donePct}%` }} />
+            )}
+            {inProgressPct > 0 && (
+              <div className="h-full bg-accent transition-all duration-700" style={{ width: `${inProgressPct}%` }} />
+            )}
+            {proposedPct > 0 && (
+              <div className="h-full bg-bg-hover transition-all duration-700" style={{ width: `${proposedPct}%` }} />
+            )}
+          </div>
+          <div className="flex items-center gap-4 mt-2 text-[10px] text-text-muted">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-success inline-block" /> {doneCount} Done</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent inline-block" /> {inProgressCount} In Progress</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-bg-hover inline-block" /> {proposedCount} Proposed</span>
+            {deferredCount > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-warning inline-block" /> {deferredCount} Deferred</span>}
+          </div>
+        </div>
+
+        {/* Milestone progress cards */}
+        {milestones.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Milestone Progress</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              {milestoneOrder.map((ms) => {
+                const total = ms.total_features || 0
+                const done = ms.done_features || 0
+                const msPct = total > 0 ? Math.round((done / total) * 100) : 0
+                return (
+                  <Link
+                    key={ms.id}
+                    to={`/milestones/${ms.id}`}
+                    className="bg-bg-card/60 border border-border rounded-lg px-3 py-2 hover:border-accent/40 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-medium text-text-primary group-hover:text-accent transition-colors truncate mr-2">
+                        {ms.name}
+                      </span>
+                      <span className="text-[10px] font-mono text-text-muted shrink-0">{msPct}%</span>
+                    </div>
+                    <div className="w-full h-1 bg-bg-tertiary rounded-full overflow-hidden">
+                      <div
+                        className={cn('h-full rounded-full transition-all duration-500', msPct >= 100 ? 'bg-success' : 'bg-accent')}
+                        style={{ width: `${msPct}%` }}
+                      />
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-1">{done}/{total}</div>
+                  </Link>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Filters */}
+      {/* Filters and controls */}
       <div className="flex flex-wrap items-center gap-3">
         <select
           value={categoryFilter}
           onChange={(e) => setCategoryFilter(e.target.value)}
-          className="bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary"
+          className="bg-bg-input border border-border rounded-md px-3 py-1.5 text-sm text-text-primary"
         >
           <option value="all">All categories</option>
-          {categories.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-
-        <select
-          value={priorityFilter}
-          onChange={(e) => setPriorityFilter(e.target.value)}
-          className="bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary"
-        >
-          <option value="all">All priorities</option>
-          {PRIORITY_ORDER.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
 
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary"
+          className="bg-bg-input border border-border rounded-md px-3 py-1.5 text-sm text-text-primary"
         >
           <option value="all">All statuses</option>
-          {statuses.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
+          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
 
+        <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showDone}
+            onChange={(e) => setShowDone(e.target.checked)}
+            className="rounded border-border"
+          />
+          Show completed ({doneCount})
+        </label>
+
         <div className="ml-auto flex bg-bg-secondary border border-border rounded-md overflow-hidden">
-          {(['priority', 'category', 'status'] as const).map((mode) => (
+          {(['milestone', 'status', 'category'] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
@@ -133,67 +247,116 @@ export function Roadmap() {
         </div>
       </div>
 
-      {/* Grouped items */}
+      {/* Grouped list */}
       <div className="space-y-8">
         {groupOrder
           .filter((group) => grouped[group]?.length > 0)
-          .map((group) => (
-            <div key={group}>
-              <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-lg font-semibold text-text-primary capitalize">{group}</h2>
-                <span className="text-xs text-text-muted font-mono bg-bg-tertiary px-2 py-0.5 rounded">
-                  {grouped[group].length}
-                </span>
+          .map((group) => {
+            const ms = viewMode === 'milestone' && group !== 'no-milestone' ? milestoneById[group] : undefined
+            const msTotal = ms?.total_features || 0
+            const msDone = ms?.done_features || 0
+            const msPct = msTotal > 0 ? Math.round((msDone / msTotal) * 100) : 0
+            const groupItems = grouped[group]
+
+            return (
+              <div key={group}>
+                {/* Group header */}
+                <div className="flex items-center gap-3 mb-3">
+                  {ms ? (
+                    <Link to={`/milestones/${ms.id}`} className="text-base font-semibold text-text-primary hover:text-accent transition-colors">
+                      {ms.name}
+                    </Link>
+                  ) : (
+                    <h2 className="text-base font-semibold text-text-primary capitalize">{groupLabel(group)}</h2>
+                  )}
+                  <span className="text-xs text-text-muted font-mono bg-bg-tertiary px-1.5 py-0.5 rounded">
+                    {groupItems.length}
+                  </span>
+                  {ms && (
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
+                        <div className={cn('h-full rounded-full', msPct >= 100 ? 'bg-success' : 'bg-accent')} style={{ width: `${msPct}%` }} />
+                      </div>
+                      <span className="text-xs text-text-muted">{msPct}%</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* List rows */}
+                <div className="border border-border rounded-lg overflow-hidden divide-y divide-border">
+                  {groupItems.map((item) => (
+                    <RoadmapRow
+                      key={item.id}
+                      item={item}
+                      linkedFeature={featureByRoadmapId[item.id]}
+                    />
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {grouped[group].map((item) => (
-                  <RoadmapCard key={item.id} item={item} />
-                ))}
-              </div>
-            </div>
-          ))}
+            )
+          })}
       </div>
 
       {filtered.length === 0 && (
         <div className="text-center py-12 text-text-muted text-sm">
-          No roadmap items match your filters
+          {showDone ? 'No roadmap items match your filters' : 'All items are done! Toggle "Show completed" to see them.'}
         </div>
       )}
     </div>
   )
 }
 
-function RoadmapCard({ item }: { item: RoadmapItem }) {
-  const priorityClass = PRIORITY_COLORS[item.priority] || PRIORITY_COLORS['medium']
-
+function RoadmapRow({ item, linkedFeature }: { item: RoadmapItem; linkedFeature?: Feature }) {
   return (
-    <div className="bg-bg-card border border-border rounded-lg p-4 space-y-3">
-      {/* Title + status */}
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text-primary leading-snug">{item.title}</h3>
-        <StatusBadge status={item.status} />
-      </div>
+    <Link
+      to={`/roadmap/${item.id}`}
+      className="flex items-center gap-3 px-4 py-3 bg-bg-card hover:bg-bg-hover transition-colors group"
+      data-list-item
+    >
+      {/* Status indicator dot */}
+      <span className={cn(
+        'w-2 h-2 rounded-full shrink-0',
+        item.status === 'done' ? 'bg-success' :
+        item.status === 'in-progress' ? 'bg-accent' :
+        item.status === 'deferred' ? 'bg-warning' :
+        'bg-text-muted',
+      )} />
 
-      {/* Description */}
-      {item.description && (
-        <p className="text-xs text-text-secondary line-clamp-2">{item.description}</p>
+      {/* Title */}
+      <span className="text-sm text-text-primary group-hover:text-accent transition-colors min-w-0 truncate flex-1">
+        {item.title}
+      </span>
+
+      {/* Category */}
+      {item.category && (
+        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-purple/10 text-purple border-purple/20 shrink-0 hidden sm:inline">
+          {item.category}
+        </span>
       )}
 
-      {/* Meta row */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className={cn('text-[10px] font-medium px-2 py-0.5 rounded-full border', priorityClass)}>
-          {item.priority}
+      {/* Effort */}
+      {item.effort && (
+        <span className="text-[10px] font-mono bg-bg-tertiary text-text-muted px-1.5 py-0.5 rounded shrink-0 hidden md:inline">
+          {EFFORT_LABELS[item.effort] || item.effort}
         </span>
-        {item.effort && (
-          <span className="text-[10px] font-mono bg-bg-tertiary text-text-muted px-1.5 py-0.5 rounded">
-            {EFFORT_LABELS[item.effort] || item.effort}
-          </span>
-        )}
-        {item.category && (
-          <span className="text-[10px] text-text-muted">{item.category}</span>
-        )}
-        <span className="text-[10px] text-text-muted ml-auto">{formatTimeAgo(item.updated_at)}</span>
-      </div>
-    </div>
+      )}
+
+      {/* Feature status if linked and differs */}
+      {linkedFeature && (
+        <span className="shrink-0 hidden lg:inline">
+          <StatusBadge status={linkedFeature.status} />
+        </span>
+      )}
+
+      {/* Roadmap status */}
+      <span className="shrink-0">
+        <StatusBadge status={item.status} />
+      </span>
+
+      {/* Updated */}
+      <span className="text-[10px] text-text-muted shrink-0 w-16 text-right hidden md:inline">
+        {formatTimeAgo(item.updated_at)}
+      </span>
+    </Link>
   )
 }

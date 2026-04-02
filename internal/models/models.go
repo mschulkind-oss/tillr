@@ -140,17 +140,41 @@ type Heartbeat struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// CycleType defines a predefined iteration cycle.
-type CycleType struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Steps       []string `json:"steps"`
+// CycleStep defines a single step within a cycle type.
+type CycleStep struct {
+	Name  string `json:"name"`
+	Human bool   `json:"human,omitempty"` // true = human-owned step (no agent work item)
 }
 
-// CycleInstance is a running cycle for a feature.
+// CycleType defines a predefined iteration cycle.
+type CycleType struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Steps       []CycleStep `json:"steps"`
+}
+
+// StepNames returns the step names as a string slice (convenience helper).
+func (ct CycleType) StepNames() []string {
+	names := make([]string, len(ct.Steps))
+	for i, s := range ct.Steps {
+		names[i] = s.Name
+	}
+	return names
+}
+
+// IsHumanStep returns true if the step at the given index is human-owned.
+func (ct CycleType) IsHumanStep(idx int) bool {
+	if idx < 0 || idx >= len(ct.Steps) {
+		return false
+	}
+	return ct.Steps[idx].Human
+}
+
+// CycleInstance is a running cycle attached to any entity (feature, workstream, etc.).
 type CycleInstance struct {
 	ID          int    `json:"id"`
-	FeatureID   string `json:"feature_id"`
+	EntityType  string `json:"entity_type"`  // "feature", "workstream", "roadmap_item", etc.
+	EntityID    string `json:"entity_id"`
 	CycleType   string `json:"cycle_type"`
 	CurrentStep int    `json:"current_step"`
 	Iteration   int    `json:"iteration"`
@@ -219,15 +243,16 @@ type VoteSummary struct {
 
 // StatusOverview is the project dashboard summary.
 type StatusOverview struct {
-	Project        *Project       `json:"project"`
-	FeatureCounts  map[string]int `json:"feature_counts"`
-	MilestoneCount int            `json:"milestone_count"`
-	ActiveCycles   int            `json:"active_cycles"`
-	RecentEvents   []Event        `json:"recent_events"`
-	ActiveWork     []WorkItem     `json:"active_work"`
+	Project           *Project       `json:"project"`
+	FeatureCounts     map[string]int `json:"feature_counts"`
+	MilestoneCount    int            `json:"milestone_count"`
+	ActiveCycles      int            `json:"active_cycles"`
+	OpenDiscussions   int            `json:"open_discussions"`
+	RecentEvents      []Event        `json:"recent_events"`
+	ActiveWork        []WorkItem     `json:"active_work"`
 }
 
-// WorkContext is the enriched response from `lifecycle next --json`.
+// WorkContext is the enriched response from `tillr next --json`.
 // It carries ALL context an agent needs to do the work — no OOB info needed.
 type WorkContext struct {
 	WorkItem      *WorkItem      `json:"work_item"`
@@ -245,7 +270,7 @@ type WorkContext struct {
 type CycleDetail struct {
 	Cycle  CycleInstance `json:"cycle"`
 	Scores []CycleScore  `json:"scores"`
-	Steps  []string      `json:"steps"`
+	Steps  []CycleStep   `json:"steps"`
 }
 
 // AgentSession tracks an active agent work session.
@@ -421,17 +446,24 @@ type ActivityDayCount struct {
 	Count int    `json:"count"`
 }
 
+// step is a shorthand constructor for agent-owned steps.
+func step(name string) CycleStep { return CycleStep{Name: name} }
+
+// humanStep is a shorthand constructor for human-owned steps.
+func humanStep(name string) CycleStep { return CycleStep{Name: name, Human: true} }
+
 // Predefined cycle types
 var CycleTypes = []CycleType{
-	{Name: "ui-refinement", Description: "UI Refinement", Steps: []string{"design", "ux-review", "develop", "manual-qa", "judge"}},
-	{Name: "feature-implementation", Description: "Feature Implementation", Steps: []string{"research", "develop", "agent-qa", "judge", "human-qa"}},
-	{Name: "roadmap-planning", Description: "Roadmap Planning", Steps: []string{"research", "plan", "create-roadmap", "prioritize", "human-review"}},
-	{Name: "bug-triage", Description: "Bug Triage", Steps: []string{"report", "reproduce", "root-cause", "fix", "verify"}},
-	{Name: "documentation", Description: "Documentation", Steps: []string{"research", "draft", "review", "edit", "publish"}},
-	{Name: "architecture-review", Description: "Architecture Review", Steps: []string{"analyze", "propose", "discuss", "decide", "implement"}},
-	{Name: "release", Description: "Release", Steps: []string{"freeze", "qa", "fix", "staging", "verify", "ship"}},
-	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []string{"try", "friction-log", "improve", "verify", "document"}},
-	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []string{"research", "draft-spec", "review", "judge", "human-review"}},
+	{Name: "ui-refinement", Description: "UI Refinement", Steps: []CycleStep{step("design"), step("ux-review"), step("develop"), step("manual-qa"), step("judge")}},
+	{Name: "feature-implementation", Description: "Feature Implementation", Steps: []CycleStep{step("research"), step("develop"), step("agent-qa"), step("judge"), humanStep("human-qa")}},
+	{Name: "roadmap-planning", Description: "Roadmap Planning", Steps: []CycleStep{step("research"), step("plan"), step("create-roadmap"), step("prioritize"), humanStep("human-review")}},
+	{Name: "bug-triage", Description: "Bug Triage", Steps: []CycleStep{step("report"), step("reproduce"), step("root-cause"), step("fix"), step("verify")}},
+	{Name: "documentation", Description: "Documentation", Steps: []CycleStep{step("research"), step("draft"), step("review"), step("edit"), step("publish")}},
+	{Name: "architecture-review", Description: "Architecture Review", Steps: []CycleStep{step("analyze"), step("propose"), step("discuss"), step("decide"), step("implement")}},
+	{Name: "release", Description: "Release", Steps: []CycleStep{step("freeze"), step("qa"), step("fix"), step("staging"), step("verify"), step("ship")}},
+	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []CycleStep{step("try"), step("friction-log"), step("improve"), step("verify"), step("document")}},
+	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []CycleStep{step("research"), step("draft-spec"), step("review"), step("judge"), humanStep("human-review")}},
+	{Name: "collaborative-design", Description: "Collaborative Design (human-in-the-loop)", Steps: []CycleStep{step("intake"), step("research"), humanStep("human-review"), step("design"), humanStep("human-approve")}},
 }
 
 // AgentWorkTypeStat holds average completion time for a work type.
@@ -469,7 +501,7 @@ type AgentThroughput struct {
 	ItemsPerHour float64 `json:"items_per_hour"`
 }
 
-// AgentStats is the full response for `lifecycle agent stats`.
+// AgentStats is the full response for `tillr agent stats`.
 type AgentStats struct {
 	TotalCompleted int                 `json:"total_completed"`
 	TotalFailed    int                 `json:"total_failed"`
@@ -594,14 +626,77 @@ type FeaturePR struct {
 
 // CycleTemplate is a user-defined or built-in iteration cycle template.
 type CycleTemplate struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Steps       []string `json:"steps"`
-	IsBuiltin   bool     `json:"is_builtin"`
-	CreatedAt   string   `json:"created_at,omitempty"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Steps       []CycleStep `json:"steps"`
+	IsBuiltin   bool        `json:"is_builtin"`
+	CreatedAt   string      `json:"created_at,omitempty"`
+}
+
+// ParseStepsJSON unmarshals a JSON steps column, supporting both the legacy
+// format (["step1","step2"]) and the new format ([{"name":"step1","human":false}]).
+func ParseStepsJSON(raw string) ([]CycleStep, error) {
+	// Try new format first
+	var steps []CycleStep
+	if err := json.Unmarshal([]byte(raw), &steps); err == nil && len(steps) > 0 && steps[0].Name != "" {
+		return steps, nil
+	}
+	// Fall back to legacy string array
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err != nil {
+		return nil, err
+	}
+	steps = make([]CycleStep, len(names))
+	for i, n := range names {
+		steps[i] = CycleStep{Name: n}
+	}
+	return steps, nil
 }
 
 // CommandMetric records a single CLI command execution with timing data.
+// Workstream is a human-tracked thread of work.
+type Workstream struct {
+	ID          string `json:"id"`
+	ProjectID   string `json:"project_id"`
+	ParentID    string `json:"parent_id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	Tags        string `json:"tags"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// WorkstreamNote is a timestamped entry on a workstream.
+type WorkstreamNote struct {
+	ID           int    `json:"id"`
+	WorkstreamID string `json:"workstream_id"`
+	Content      string `json:"content"`
+	NoteType     string `json:"note_type"`
+	Source       string `json:"source,omitempty"`
+	Resolved     int    `json:"resolved"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// WorkstreamLink connects a workstream to a feature, doc, URL, or discussion.
+type WorkstreamLink struct {
+	ID           int    `json:"id"`
+	WorkstreamID string `json:"workstream_id"`
+	LinkType     string `json:"link_type"`
+	TargetID     string `json:"target_id,omitempty"`
+	TargetURL    string `json:"target_url,omitempty"`
+	Label        string `json:"label,omitempty"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// WorkstreamDetail is the enriched response for GET /api/workstreams/{id}.
+type WorkstreamDetail struct {
+	Workstream Workstream       `json:"workstream"`
+	Notes      []WorkstreamNote `json:"notes"`
+	Links      []WorkstreamLink `json:"links"`
+	Children   []Workstream     `json:"children"`
+}
+
 type CommandMetric struct {
 	ID         int     `json:"id"`
 	Command    string  `json:"command"`
@@ -659,4 +754,67 @@ type DashboardWidget struct {
 	Title  string         `json:"title"`
 	Size   string         `json:"size"` // "small", "medium", "large"
 	Config map[string]any `json:"config,omitempty"`
+}
+
+// Notification represents an in-app notification.
+type Notification struct {
+	ID         int    `json:"id"`
+	ProjectID  string `json:"project_id"`
+	Recipient  string `json:"recipient"`
+	Type       string `json:"type"` // mention, qa_needed, approved, rejected, blocked, assigned
+	Message    string `json:"message"`
+	EntityType string `json:"entity_type,omitempty"`
+	EntityID   string `json:"entity_id,omitempty"`
+	Read       bool   `json:"read"`
+	CreatedAt  string `json:"created_at"`
+}
+
+// DiscussionPoll represents a poll within a discussion.
+type DiscussionPoll struct {
+	ID           int                    `json:"id"`
+	DiscussionID int                    `json:"discussion_id"`
+	Question     string                 `json:"question"`
+	PollType     string                 `json:"poll_type"` // single, multiple
+	Status       string                 `json:"status"`    // open, closed
+	CreatedBy    string                 `json:"created_by"`
+	CreatedAt    string                 `json:"created_at"`
+	Options      []DiscussionPollOption `json:"options,omitempty"`
+}
+
+// DiscussionPollOption is a single option in a poll.
+type DiscussionPollOption struct {
+	ID        int    `json:"id"`
+	PollID    int    `json:"poll_id"`
+	Label     string `json:"label"`
+	SortOrder int    `json:"sort_order"`
+	Votes     int    `json:"votes,omitempty"` // computed
+}
+
+// DiscussionPollVote is a vote on a poll option.
+type DiscussionPollVote struct {
+	PollID    int    `json:"poll_id"`
+	OptionID  int    `json:"option_id"`
+	Voter     string `json:"voter"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// DiscussionTemplate is a reusable template for discussion creation.
+type DiscussionTemplate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Body        string `json:"body"`
+	IsBuiltin   bool   `json:"is_builtin"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// APIToken represents a stored API token for authentication.
+type APIToken struct {
+	ID        int      `json:"id"`
+	ProjectID string   `json:"project_id"`
+	Name      string   `json:"name"`
+	TokenHash string   `json:"-"`              // never expose the hash
+	Scopes    []string `json:"scopes"`
+	CreatedAt string   `json:"created_at"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
+	RevokedAt string   `json:"revoked_at,omitempty"`
 }

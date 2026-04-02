@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // findCycleType resolves a cycle type by name, checking built-in types first,
@@ -19,7 +20,7 @@ func findCycleType(database *sql.DB, name string) *models.CycleType {
 		}
 	}
 	// Fall back to custom templates in the DB.
-	if t, err := db.GetCycleTemplate(database, name); err == nil {
+	if t, err := db.GetCycleTemplate(database, name); err == nil && t != nil {
 		return &models.CycleType{
 			Name:        t.Name,
 			Description: t.Description,
@@ -109,7 +110,8 @@ func TransitionFeature(database *sql.DB, projectID, featureID, newStatus string)
 		return fmt.Errorf("getting feature: %w", err)
 	}
 	if !IsValidTransition(f.Status, newStatus) {
-		return fmt.Errorf("invalid transition from %q to %q: features must go through human-qa before done", f.Status, newStatus)
+		allowed := ValidTransitions[f.Status]
+		return fmt.Errorf("invalid transition from %q to %q for feature %q: allowed transitions are %v", f.Status, newStatus, featureID, allowed)
 	}
 	oldStatus := f.Status
 	if err := db.UpdateFeature(database, featureID, map[string]any{"status": newStatus}); err != nil {
@@ -317,35 +319,35 @@ func GetWorkContext(database *sql.DB, w *models.WorkItem) (*models.WorkContext, 
 
 func buildAgentGuidance(ctx *models.WorkContext) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("You are working on feature %q", ctx.Feature.Name))
+	fmt.Fprintf(&b, "You are working on feature %q", ctx.Feature.Name)
 	if ctx.Feature.Description != "" {
-		b.WriteString(fmt.Sprintf(": %s", ctx.Feature.Description))
+		fmt.Fprintf(&b, ": %s", ctx.Feature.Description)
 	}
-	b.WriteString(fmt.Sprintf("\n\nCurrent task: %s (work type: %s)", ctx.WorkItem.AgentPrompt, ctx.WorkItem.WorkType))
+	fmt.Fprintf(&b, "\n\nCurrent task: %s (work type: %s)", ctx.WorkItem.AgentPrompt, ctx.WorkItem.WorkType)
 
 	if ctx.Feature.Spec != "" {
-		b.WriteString(fmt.Sprintf("\n\n## Feature Spec\n%s", ctx.Feature.Spec))
+		fmt.Fprintf(&b, "\n\n## Feature Spec\n%s", ctx.Feature.Spec)
 	}
 
 	if ctx.Cycle != nil && ctx.CycleType != nil {
-		b.WriteString(fmt.Sprintf("\n\n## Cycle Context\nCycle type: %s (step %d/%d: %s)",
+		fmt.Fprintf(&b, "\n\n## Cycle Context\nCycle type: %s (step %d/%d: %s)",
 			ctx.CycleType.Description, ctx.Cycle.CurrentStep+1, len(ctx.CycleType.Steps),
-			ctx.CycleType.Steps[ctx.Cycle.CurrentStep]))
-		b.WriteString(fmt.Sprintf("\nAll steps: %s", strings.Join(ctx.CycleType.Steps, " → ")))
+			ctx.CycleType.Steps[ctx.Cycle.CurrentStep].Name)
+		fmt.Fprintf(&b, "\nAll steps: %s", strings.Join(ctx.CycleType.StepNames(), " → "))
 	}
 
 	if len(ctx.PriorResults) > 0 {
 		b.WriteString("\n\n## Prior Step Results")
 		for _, pr := range ctx.PriorResults {
 			if pr.Result != "" {
-				b.WriteString(fmt.Sprintf("\n- [%s] %s", pr.WorkType, pr.Result))
+				fmt.Fprintf(&b, "\n- [%s] %s", pr.WorkType, pr.Result)
 			}
 		}
 	}
 
 	if ctx.RoadmapItem != nil {
-		b.WriteString(fmt.Sprintf("\n\n## Roadmap Context\nTitle: %s\nPriority: %s\nDescription: %s",
-			ctx.RoadmapItem.Title, ctx.RoadmapItem.Priority, ctx.RoadmapItem.Description))
+		fmt.Fprintf(&b, "\n\n## Roadmap Context\nTitle: %s\nPriority: %s\nDescription: %s",
+			ctx.RoadmapItem.Title, ctx.RoadmapItem.Priority, ctx.RoadmapItem.Description)
 	}
 
 	return b.String()
@@ -382,18 +384,18 @@ func CompleteWorkItemAndReturn(database *sql.DB, result string) (*models.WorkIte
 			ct := findCycleType(database, c.CycleType)
 			if ct != nil {
 				// Only advance if current step matches the completed work type
-				if c.CurrentStep < len(ct.Steps) && ct.Steps[c.CurrentStep] == w.WorkType {
+				if c.CurrentStep < len(ct.Steps) && ct.Steps[c.CurrentStep].Name == w.WorkType {
 					nextStep := c.CurrentStep + 1
 					if nextStep >= len(ct.Steps) {
 						// Cycle complete
 						_ = db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed")
 					} else {
-						// Advance and create next work item (unless it's a judge step — those need scoring)
-						if ct.Steps[nextStep] != "judge" {
-							prompt := buildWorkItemPrompt(database, w.FeatureID, c.CycleType, ct.Steps[nextStep])
+						// Advance and create next work item unless it's a judge or human step
+						if ct.Steps[nextStep].Name != "judge" && !ct.Steps[nextStep].Human {
+							prompt := buildWorkItemPrompt(database, w.FeatureID, c.CycleType, ct.Steps[nextStep].Name)
 							_ = db.CreateWorkItem(database, &models.WorkItem{
 								FeatureID:   w.FeatureID,
-								WorkType:    ct.Steps[nextStep],
+								WorkType:    ct.Steps[nextStep].Name,
 								AgentPrompt: prompt,
 							})
 						}
@@ -403,7 +405,7 @@ func CompleteWorkItemAndReturn(database *sql.DB, result string) (*models.WorkIte
 								ProjectID: p.ID,
 								FeatureID: w.FeatureID,
 								EventType: "cycle.advanced",
-								Data:      fmt.Sprintf(`{"step":%q,"step_index":%d}`, ct.Steps[nextStep], nextStep),
+								Data:      fmt.Sprintf(`{"step":%q,"step_index":%d}`, ct.Steps[nextStep].Name, nextStep),
 							})
 						}
 					}
@@ -441,6 +443,30 @@ func ReclaimStaleWorkItems(database *sql.DB, staleMins int) (int, error) {
 }
 
 // StartCycle starts a new iteration cycle for a feature.
+// StartCycleForEntity starts a cycle for any entity type.
+func StartCycleForEntity(database *sql.DB, projectID, entityType, entityID, cycleType string) (*models.CycleInstance, error) {
+	ct := findCycleType(database, cycleType)
+	if ct == nil {
+		return nil, fmt.Errorf("unknown cycle type: %s", cycleType)
+	}
+	if existing, err := db.GetActiveCycleForEntity(database, entityType, entityID); err == nil {
+		return nil, fmt.Errorf("%s already has active cycle: %s (step %d)", entityType, existing.CycleType, existing.CurrentStep)
+	}
+	c := &models.CycleInstance{
+		EntityType: entityType,
+		EntityID:   entityID,
+		CycleType:  cycleType,
+		Status:     "active",
+		Iteration:  1,
+	}
+	if err := db.CreateCycleInstance(database, c); err != nil {
+		return nil, fmt.Errorf("creating cycle: %w", err)
+	}
+	c.StepName = ct.Steps[0].Name
+	return c, nil
+}
+
+// StartCycle starts a cycle for a feature (backward compat wrapper).
 func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*models.CycleInstance, error) {
 	// Validate cycle type
 	ct := findCycleType(database, cycleType)
@@ -454,7 +480,7 @@ func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*mode
 	}
 
 	c := &models.CycleInstance{
-		FeatureID: featureID,
+		EntityType: "feature", EntityID: featureID,
 		CycleType: cycleType,
 		Status:    "active",
 		Iteration: 1,
@@ -462,23 +488,23 @@ func StartCycle(database *sql.DB, projectID, featureID, cycleType string) (*mode
 	if err := db.CreateCycleInstance(database, c); err != nil {
 		return nil, fmt.Errorf("creating cycle: %w", err)
 	}
-	c.StepName = ct.Steps[0]
+	c.StepName = ct.Steps[0].Name
 
-	// Build enriched prompt with feature context
-	prompt := buildWorkItemPrompt(database, featureID, cycleType, ct.Steps[0])
-
-	// Auto-create work item for the first cycle step
-	_ = db.CreateWorkItem(database, &models.WorkItem{
-		FeatureID:   featureID,
-		WorkType:    ct.Steps[0],
-		AgentPrompt: prompt,
-	})
+	// Only create work item for agent steps (not human-owned steps)
+	if !ct.Steps[0].Human {
+		prompt := buildWorkItemPrompt(database, featureID, cycleType, ct.Steps[0].Name)
+		_ = db.CreateWorkItem(database, &models.WorkItem{
+			FeatureID:   featureID,
+			WorkType:    ct.Steps[0].Name,
+			AgentPrompt: prompt,
+		})
+	}
 
 	_ = db.InsertEvent(database, &models.Event{
 		ProjectID: projectID,
 		FeatureID: featureID,
 		EventType: "cycle.started",
-		Data:      fmt.Sprintf(`{"cycle_type":%q,"step":%q}`, cycleType, ct.Steps[0]),
+		Data:      fmt.Sprintf(`{"cycle_type":%q,"step":%q}`, cycleType, ct.Steps[0].Name),
 	})
 
 	return c, nil
@@ -510,7 +536,7 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 		ProjectID: projectID,
 		FeatureID: featureID,
 		EventType: "cycle.scored",
-		Data:      fmt.Sprintf(`{"step":%q,"score":%.1f}`, ct.Steps[c.CurrentStep], score),
+		Data:      fmt.Sprintf(`{"step":%q,"score":%.1f}`, ct.Steps[c.CurrentStep].Name, score),
 	})
 
 	// Advance to next step or complete
@@ -518,14 +544,40 @@ func ScoreCycleStep(database *sql.DB, projectID, featureID string, score float64
 	if nextStep >= len(ct.Steps) {
 		return db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed")
 	}
-	// Auto-create work item for the next cycle step
-	prompt := buildWorkItemPrompt(database, featureID, c.CycleType, ct.Steps[nextStep])
-	_ = db.CreateWorkItem(database, &models.WorkItem{
-		FeatureID:   featureID,
-		WorkType:    ct.Steps[nextStep],
-		AgentPrompt: prompt,
-	})
+	// Only create work item for agent steps (not human or judge steps)
+	if !ct.Steps[nextStep].Human && ct.Steps[nextStep].Name != "judge" {
+		prompt := buildWorkItemPrompt(database, featureID, c.CycleType, ct.Steps[nextStep].Name)
+		_ = db.CreateWorkItem(database, &models.WorkItem{
+			FeatureID:   featureID,
+			WorkType:    ct.Steps[nextStep].Name,
+			AgentPrompt: prompt,
+		})
+	}
 	return db.UpdateCycleInstance(database, c.ID, nextStep, c.Iteration, "active")
+}
+
+// EvaluateQARule checks QA rules for a feature and returns the action and matched rule.
+// This is called when a feature transitions to human-qa to determine if it should be auto-approved.
+func EvaluateQARule(database *sql.DB, cfg *config.Config, featureID string) (action string, matchedRule string) {
+	f, err := db.GetFeature(database, featureID)
+	if err != nil {
+		return "review", ""
+	}
+
+	// Get tags
+	tags, _ := db.GetFeatureTags(database, featureID)
+
+	// Get cycle type and last score
+	var cycleType string
+	var lastScore float64
+	if c, cErr := db.GetActiveCycle(database, featureID); cErr == nil {
+		cycleType = c.CycleType
+		if scores, sErr := db.ListCycleScores(database, c.ID); sErr == nil && len(scores) > 0 {
+			lastScore = scores[len(scores)-1].Score
+		}
+	}
+
+	return cfg.EvaluateQARules(f.Priority, tags, cycleType, lastScore)
 }
 
 // ApproveFeatureQA approves a feature and transitions it to done.
@@ -596,6 +648,9 @@ func GetStatusOverview(database *sql.DB) (*models.StatusOverview, error) {
 		overview.ActiveWork = []models.WorkItem{*active}
 	}
 
+	openDisc, _ := db.CountOpenDiscussions(database, p.ID)
+	overview.OpenDiscussions = openDisc
+
 	return overview, nil
 }
 
@@ -623,12 +678,12 @@ func buildWorkItemPrompt(database *sql.DB, featureID, cycleType, stepName string
 		return fmt.Sprintf("Cycle %s, step: %s for feature %s", cycleType, stepName, featureID)
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Cycle %s, step: %s for feature %q", cycleType, stepName, f.Name))
+	fmt.Fprintf(&b, "Cycle %s, step: %s for feature %q", cycleType, stepName, f.Name)
 	if f.Description != "" {
-		b.WriteString(fmt.Sprintf(" — %s", f.Description))
+		fmt.Fprintf(&b, " — %s", f.Description)
 	}
 	if f.Spec != "" {
-		b.WriteString(fmt.Sprintf("\n\nSpec: %s", f.Spec))
+		fmt.Fprintf(&b, "\n\nSpec: %s", f.Spec)
 	}
 	return b.String()
 }

@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +28,7 @@ func init() {
 	ideaCmd.AddCommand(ideaSpecCmd)
 	ideaCmd.AddCommand(ideaApproveCmd)
 	ideaCmd.AddCommand(ideaRejectCmd)
+	ideaCmd.AddCommand(ideaProcessCmd)
 
 	ideaSubmitCmd.Flags().String("description", "", "Markdown description (required)")
 	ideaSubmitCmd.Flags().String("type", "feature", "Idea type (feature or bug)")
@@ -164,7 +165,7 @@ var ideaShowCmd = &cobra.Command{
 
 		idea, err := db.GetIdea(database, id)
 		if err != nil {
-			return fmt.Errorf("idea #%s not found. Run 'lifecycle idea list' to see available ideas", args[0])
+			return fmt.Errorf("idea #%s not found. Run 'tillr idea list' to see available ideas", args[0])
 		}
 
 		if jsonOutput {
@@ -259,7 +260,7 @@ var ideaApproveCmd = &cobra.Command{
 
 		idea, err := db.GetIdea(database, id)
 		if err != nil {
-			return fmt.Errorf("idea #%s not found. Run 'lifecycle idea list' to see available ideas", args[0])
+			return fmt.Errorf("idea #%s not found. Run 'tillr idea list' to see available ideas", args[0])
 		}
 
 		notes, _ := cmd.Flags().GetString("notes")
@@ -433,6 +434,93 @@ var bugListCmd = &cobra.Command{
 		for _, b := range bugs {
 			fmt.Printf("%-6d %-12s %s\n", b.ID, b.Status, b.Title)
 		}
+		return nil
+	},
+}
+
+var ideaProcessCmd = &cobra.Command{
+	Use:   "process [id]",
+	Short: "Auto-process pending ideas (categorize, rewrite, create features)",
+	Long: `Automatically processes pending ideas from the idea queue.
+
+For each pending idea:
+  1. Categorizes as bug/feature based on content analysis
+  2. Rewrites title and description for clarity
+  3. Generates a specification
+  4. Creates a linked feature with high priority
+  5. No human approval gate required
+
+If an ID is provided, processes only that specific idea.
+Without an ID, processes all pending ideas.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		if len(args) == 1 {
+			// Process a single idea
+			id, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid idea ID: %s", args[0])
+			}
+
+			idea, err := db.GetIdea(database, id)
+			if err != nil {
+				return fmt.Errorf("idea #%s not found", args[0])
+			}
+
+			if idea.Status != "pending" {
+				return fmt.Errorf("idea #%d is not pending (status: %s)", id, idea.Status)
+			}
+
+			f, err := engine.ProcessIdea(database, p.ID, idea)
+			if err != nil {
+				return fmt.Errorf("processing idea: %w", err)
+			}
+
+			if jsonOutput {
+				return printJSON(map[string]any{
+					"idea_id":      id,
+					"feature_id":   f.ID,
+					"feature_name": f.Name,
+					"category":     idea.IdeaType,
+				})
+			}
+			fmt.Printf("Processed idea #%d -> feature %s (%s)\n", id, f.ID, f.Name)
+			return nil
+		}
+
+		// Process all pending ideas
+		results, err := engine.ProcessPendingIdeas(database, p.ID)
+		if err != nil {
+			return fmt.Errorf("processing ideas: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(results)
+		}
+
+		if len(results) == 0 {
+			fmt.Println("No pending ideas to process.")
+			return nil
+		}
+
+		for _, r := range results {
+			if r.Error != "" {
+				fmt.Printf("  idea #%d: FAILED - %s\n", r.IdeaID, r.Error)
+			} else {
+				fmt.Printf("  idea #%d -> feature %s [%s]\n", r.IdeaID, r.FeatureID, r.Category)
+			}
+		}
+		fmt.Printf("\nProcessed %d idea(s).\n", len(results))
 		return nil
 	},
 }

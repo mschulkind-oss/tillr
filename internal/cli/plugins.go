@@ -6,22 +6,22 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/plugin"
+	"github.com/mschulkind/tillr/internal/plugin"
 	"github.com/spf13/cobra"
 )
 
 var pluginCmd = &cobra.Command{
 	Use:   "plugin",
-	Short: "Manage lifecycle plugins",
-	Long: `Discover and run external lifecycle plugins.
+	Short: "Manage tillr plugins",
+	Long: `Discover and run external tillr plugins.
 
-Plugins are external executables named lifecycle-plugin-<name> found on your PATH.
+Plugins are external executables named tillr-plugin-<name> found on your PATH.
 They communicate via JSON over stdin/stdout.
 
 EXAMPLES
-  lifecycle plugin list              List discovered plugins
-  lifecycle plugin info <name>       Show plugin details
-  lifecycle plugin run <name> <cmd>  Run a plugin command`,
+  tillr plugin list              List discovered plugins
+  tillr plugin info <name>       Show plugin details
+  tillr plugin run <name> <cmd>  Run a plugin command`,
 }
 
 var pluginListCmd = &cobra.Command{
@@ -63,7 +63,7 @@ func runPluginList(_ *cobra.Command, _ []string) error {
 
 	if len(plugins) == 0 {
 		fmt.Println("No plugins found.")
-		fmt.Println("Plugins are executables named lifecycle-plugin-<name> on your PATH.")
+		fmt.Println("Plugins are executables named tillr-plugin-<name> on your PATH.")
 		return nil
 	}
 

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 const (
@@ -34,22 +34,21 @@ func GenerateWebhookID() string {
 }
 
 // DispatchWebhooks sends an event to all matching active webhooks asynchronously.
-// It does not block the caller.
+// Called from InsertEvent's deferred goroutine — already running async, so no
+// need to spawn another goroutine for the DB query.
 func DispatchWebhooks(database *sql.DB, event *models.Event) {
-	go func() {
-		webhooks, err := db.ListActiveWebhooks(database)
-		if err != nil {
-			log.Printf("webhook: failed to list webhooks: %v", err)
-			return
-		}
+	webhooks, err := db.ListActiveWebhooks(database)
+	if err != nil {
+		log.Printf("webhook: failed to list webhooks: %v", err)
+		return
+	}
 
-		for _, wh := range webhooks {
-			if !matchesEvent(wh.Events, event.EventType) {
-				continue
-			}
-			go deliverWebhook(wh, event)
+	for _, wh := range webhooks {
+		if !matchesEvent(wh.Events, event.EventType) {
+			continue
 		}
-	}()
+		go deliverWebhook(wh, event)
+	}
 }
 
 // matchesEvent checks if a webhook's event filter matches the given event type.

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -382,7 +382,7 @@ var updateCmd = &cobra.Command{
 		if agentID == "" {
 			sessions, listErr := db.ListAgentSessions(database, p.ID, "active")
 			if listErr != nil || len(sessions) == 0 {
-				return fmt.Errorf("no active agent session found; use --agent <id> or start a session with 'lifecycle agent start'")
+				return fmt.Errorf("no active agent session found; use --agent <id> or start a session with 'tillr agent start'")
 			}
 			agentID = sessions[0].ID
 		}

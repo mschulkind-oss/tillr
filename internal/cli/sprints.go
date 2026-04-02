@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +52,7 @@ var sprintCreateCmd = &cobra.Command{
 			return fmt.Errorf("checking active sprints: %w", err)
 		}
 		if hasActive {
-			return fmt.Errorf("an active sprint already exists. Close it first with 'lifecycle sprint close <id>'")
+			return fmt.Errorf("an active sprint already exists. Close it first with 'tillr sprint close <id>'")
 		}
 
 		startStr, _ := cmd.Flags().GetString("start")
@@ -123,7 +123,7 @@ var sprintAddCmd = &cobra.Command{
 		sprintID := args[0]
 		s, err := db.GetSprint(database, sprintID)
 		if err != nil {
-			return fmt.Errorf("sprint %q not found. Run 'lifecycle sprint list' to see available sprints", sprintID)
+			return fmt.Errorf("sprint %q not found. Run 'tillr sprint list' to see available sprints", sprintID)
 		}
 		if s.Status == "closed" {
 			return fmt.Errorf("sprint %q is closed. Cannot add features to a closed sprint", sprintID)
@@ -227,7 +227,7 @@ var sprintListCmd = &cobra.Command{
 		}
 
 		if len(sprints) == 0 {
-			fmt.Println("No sprints found. Create one with 'lifecycle sprint create <name>'.")
+			fmt.Println("No sprints found. Create one with 'tillr sprint create <name>'.")
 			return nil
 		}
 
@@ -261,7 +261,7 @@ var sprintShowCmd = &cobra.Command{
 
 		s, err := db.GetSprint(database, args[0])
 		if err != nil {
-			return fmt.Errorf("sprint %q not found. Run 'lifecycle sprint list' to see available sprints", args[0])
+			return fmt.Errorf("sprint %q not found. Run 'tillr sprint list' to see available sprints", args[0])
 		}
 
 		features, err := db.ListSprintFeatures(database, args[0])
@@ -322,7 +322,7 @@ var sprintActiveCmd = &cobra.Command{
 				if jsonOutput {
 					return printJSON(nil)
 				}
-				fmt.Println("No active sprint. Create one with 'lifecycle sprint create <name>'.")
+				fmt.Println("No active sprint. Create one with 'tillr sprint create <name>'.")
 				return nil
 			}
 			return err
@@ -377,7 +377,7 @@ var sprintCloseCmd = &cobra.Command{
 
 		s, err := db.GetSprint(database, args[0])
 		if err != nil {
-			return fmt.Errorf("sprint %q not found. Run 'lifecycle sprint list' to see available sprints", args[0])
+			return fmt.Errorf("sprint %q not found. Run 'tillr sprint list' to see available sprints", args[0])
 		}
 		if s.Status == "closed" {
 			return fmt.Errorf("sprint %q is already closed", args[0])

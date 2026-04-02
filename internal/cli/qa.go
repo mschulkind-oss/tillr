@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -133,7 +133,7 @@ var qaChecklistCmd = &cobra.Command{
 
 		f, err := db.GetFeature(database, args[0])
 		if err != nil {
-			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", args[0])
+			return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", args[0])
 		}
 
 		results, err := db.ListQAResults(database, args[0])

@@ -1,6 +1,6 @@
-# Lifecycle User Guide
+# Tillr User Guide
 
-Lifecycle is a human-in-the-loop project management tool for agentic software development. It gives you a CLI to define features, assign work to AI agents through structured iteration cycles, gate quality with human QA, and visualize everything in a live-updating web dashboard.
+Tillr is a human-in-the-loop project management tool for agentic software development. It gives you a CLI to define features, assign work to AI agents through structured iteration cycles, gate quality with human QA, and visualize everything in a live-updating web dashboard.
 
 ---
 
@@ -24,24 +24,24 @@ Get a project running in two minutes:
 
 ```bash
 # 1. Initialize a new project
-lifecycle init my-app
+tillr init my-app
 
 # 2. Add a milestone and a feature
-lifecycle milestone add "v1.0"
-lifecycle feature add "User authentication" --milestone v1.0 --priority high
+tillr milestone add "v1.0"
+tillr feature add "User authentication" --milestone v1.0 --priority high
 
 # 3. Start a cycle and hand work to an agent
-lifecycle cycle start implement feat-1
-lifecycle next          # Returns JSON with agentPrompt
+tillr cycle start implement feat-1
+tillr next          # Returns JSON with agentPrompt
 
 # 4. Agent completes work; mark it done
-lifecycle done --result "Implemented JWT auth with refresh tokens"
+tillr done --result "Implemented JWT auth with refresh tokens"
 
 # 5. Review the result
-lifecycle qa approve feat-1 --notes "Looks good, tests pass"
+tillr qa approve feat-1 --notes "Looks good, tests pass"
 
 # 6. See everything in the web viewer
-lifecycle serve
+tillr serve
 # Open http://localhost:3847
 ```
 
@@ -49,19 +49,19 @@ lifecycle serve
 
 ## Installation
 
-Lifecycle is a single Go binary. Build from source:
+Tillr is a single Go binary. Build from source:
 
 ```bash
-cd /path/to/lifecycle
-just build          # or: go build -o lifecycle ./cmd/lifecycle
+cd /path/to/tillr
+just build          # or: go build -o tillr ./cmd/tillr
 ```
 
-Place the resulting `lifecycle` binary somewhere on your `$PATH`.
+Place the resulting `tillr` binary somewhere on your `$PATH`.
 
 Verify the install:
 
 ```bash
-lifecycle doctor
+tillr doctor
 ```
 
 ### Requirements
@@ -74,26 +74,26 @@ lifecycle doctor
 
 ## Onboarding an Existing Project
 
-The Quick Start above covers brand-new projects. But most of the time you already have a codebase with history, milestones, and half-finished work. This section walks you through bringing an existing project under lifecycle management.
+The Quick Start above covers brand-new projects. But most of the time you already have a codebase with history, milestones, and half-finished work. This section walks you through bringing an existing project under tillr management.
 
 ### When to Use Onboarding
 
 Use this workflow when:
 
-- You have a working codebase and want lifecycle to track its features going forward.
+- You have a working codebase and want tillr to track its features going forward.
 - You want to retroactively record completed work so the dashboard reflects reality.
-- You're adopting lifecycle mid-project and need to capture in-progress and planned work.
+- You're adopting tillr mid-project and need to capture in-progress and planned work.
 
 You don't need to model everything — just the user-facing capabilities you want to track, iterate on, and QA.
 
 ### The Onboard Command
 
 ```bash
-lifecycle onboard --name my-project --scan
+tillr onboard --name my-project --scan
 # Scanning project...
 # Detected: Go (go.mod), Git history (847 commits), CI config (.github/workflows/ci.yml), README.md
 # Initialized project "my-project"
-# Suggested milestones and features written to .lifecycle-onboard.json — review and apply.
+# Suggested milestones and features written to .tillr-onboard.json — review and apply.
 ```
 
 The `--scan` flag inspects your repository for:
@@ -108,7 +108,7 @@ The scan produces suggestions, not changes. You review them and decide what to t
 For non-interactive use (CI or agent-driven onboarding), pass `--yes` to automatically create suggested milestones and features:
 
 ```bash
-lifecycle onboard --name my-project --yes
+tillr onboard --name my-project --yes
 ```
 
 You can also run the steps below manually for full control.
@@ -117,14 +117,14 @@ You can also run the steps below manually for full control.
 
 #### 1. Initialize the Project
 
-Start by creating the lifecycle database in your project root:
+Start by creating the tillr database in your project root:
 
 ```bash
 cd ~/projects/my-api
-lifecycle init my-api
+tillr init my-api
 # Initializing project: my-api
-# Created .lifecycle.json
-# Created lifecycle.db
+# Created .tillr.json
+# Created tillr.db
 # Project "my-api" is ready.
 ```
 
@@ -133,9 +133,9 @@ lifecycle init my-api
 Think about how your project is organized — shipped releases, the current sprint, and what's next. Create a milestone for each:
 
 ```bash
-lifecycle milestone add "v1.0 — Launch"
-lifecycle milestone add "v1.1 — Performance"
-lifecycle milestone add "v2.0 — Multi-tenant"
+tillr milestone add "v1.0 — Launch"
+tillr milestone add "v1.1 — Performance"
+tillr milestone add "v2.0 — Multi-tenant"
 ```
 
 #### 3. Record Completed Features
@@ -143,14 +143,14 @@ lifecycle milestone add "v2.0 — Multi-tenant"
 For work that's already shipped, add features with `--status done` so the dashboard reflects your actual progress:
 
 ```bash
-lifecycle feature add "REST API endpoints" --milestone "v1.0 — Launch" --priority high
-lifecycle feature edit feat-1 --status done
+tillr feature add "REST API endpoints" --milestone "v1.0 — Launch" --priority high
+tillr feature edit feat-1 --status done
 
-lifecycle feature add "Database migrations" --milestone "v1.0 — Launch" --priority high
-lifecycle feature edit feat-2 --status done
+tillr feature add "Database migrations" --milestone "v1.0 — Launch" --priority high
+tillr feature edit feat-2 --status done
 
-lifecycle feature add "CI/CD pipeline" --milestone "v1.0 — Launch" --priority medium
-lifecycle feature edit feat-3 --status done
+tillr feature add "CI/CD pipeline" --milestone "v1.0 — Launch" --priority medium
+tillr feature edit feat-3 --status done
 ```
 
 This gives you an accurate history and makes milestone progress bars meaningful from day one.
@@ -160,11 +160,11 @@ This gives you an accurate history and makes milestone progress bars meaningful 
 Capture what's actively being worked on:
 
 ```bash
-lifecycle feature add "Rate limiting" --milestone "v1.1 — Performance" --priority high
-lifecycle feature edit feat-4 --status implementing
+tillr feature add "Rate limiting" --milestone "v1.1 — Performance" --priority high
+tillr feature edit feat-4 --status implementing
 
-lifecycle feature add "Response caching" --milestone "v1.1 — Performance" --priority medium
-lifecycle feature edit feat-5 --status implementing
+tillr feature add "Response caching" --milestone "v1.1 — Performance" --priority medium
+tillr feature edit feat-5 --status implementing
 ```
 
 #### 5. Add Planned Features as Drafts
@@ -172,9 +172,9 @@ lifecycle feature edit feat-5 --status implementing
 Future work stays in `draft` until you're ready to plan it:
 
 ```bash
-lifecycle feature add "Tenant isolation" --milestone "v2.0 — Multi-tenant" --priority high
-lifecycle feature add "Per-tenant billing" --milestone "v2.0 — Multi-tenant" --priority medium
-lifecycle feature add "Admin dashboard" --milestone "v2.0 — Multi-tenant" --priority low
+tillr feature add "Tenant isolation" --milestone "v2.0 — Multi-tenant" --priority high
+tillr feature add "Per-tenant billing" --milestone "v2.0 — Multi-tenant" --priority medium
+tillr feature add "Admin dashboard" --milestone "v2.0 — Multi-tenant" --priority low
 ```
 
 #### 6. Set Up Roadmap Items
@@ -182,9 +182,9 @@ lifecycle feature add "Admin dashboard" --milestone "v2.0 — Multi-tenant" --pr
 The roadmap gives a higher-level, categorized view of where the project is headed. Add items for themes that span multiple features:
 
 ```bash
-lifecycle roadmap add "API performance overhaul" --priority high --category Performance
-lifecycle roadmap add "Multi-tenancy support" --priority high --category Architecture
-lifecycle roadmap add "Developer portal" --priority medium --category DX
+tillr roadmap add "API performance overhaul" --priority high --category Performance
+tillr roadmap add "Multi-tenancy support" --priority high --category Architecture
+tillr roadmap add "Developer portal" --priority medium --category DX
 ```
 
 ### Tips for Choosing What to Track
@@ -200,21 +200,21 @@ Once you've added your milestones and features, verify that everything looks rig
 
 ```bash
 # Check project health
-lifecycle doctor
-# ✓ .lifecycle.json found
-# ✓ lifecycle.db schema is current (v1)
+tillr doctor
+# ✓ .tillr.json found
+# ✓ tillr.db schema is current (v1)
 # ✓ No orphaned work items
 # All checks passed.
 
 # Review the overall picture
-lifecycle status
+tillr status
 # Project: my-api
 #
 # Features:  3 draft · 2 implementing · 3 done
 # Milestones: v1.0 — Launch (3/3 done) · v1.1 — Performance (0/2 done) · v2.0 — Multi-tenant (0/3 done)
 
 # See it all in the web viewer
-lifecycle serve
+tillr serve
 # Listening on http://localhost:3847
 ```
 
@@ -226,18 +226,18 @@ Open the web viewer and confirm the dashboard, feature board, and roadmap all re
 
 ### Projects and Initialization
 
-A lifecycle project is a directory containing a `.lifecycle.json` config file and a `lifecycle.db` SQLite database. Running `lifecycle init` creates both:
+A tillr project is a directory containing a `.tillr.json` config file and a `tillr.db` SQLite database. Running `tillr init` creates both:
 
 ```
 my-app/
-├── .lifecycle.json    # Project configuration
-├── lifecycle.db       # All project data (features, milestones, events, …)
+├── .tillr.json    # Project configuration
+├── tillr.db       # All project data (features, milestones, events, …)
 └── …your source code…
 ```
 
-Lifecycle finds your project by walking up from the current directory until it finds `.lifecycle.json`, so you can run commands from any subdirectory.
+Tillr finds your project by walking up from the current directory until it finds `.tillr.json`, so you can run commands from any subdirectory.
 
-### Features and Lifecycle States
+### Features and Tillr States
 
 A **feature** is the primary unit of work. Every feature moves through a linear pipeline of states:
 
@@ -268,7 +268,7 @@ A **milestone** groups related features into a deliverable. Milestones track agg
 Features can depend on other features. A feature cannot enter `implementing` until all its dependencies are `done`. Declare dependencies at creation time:
 
 ```bash
-lifecycle feature add "OAuth provider" --depends-on feat-1
+tillr feature add "OAuth provider" --depends-on feat-1
 ```
 
 ### Iteration Cycles
@@ -281,7 +281,7 @@ When a feature reaches `human-qa`, it appears in the QA queue. You review the wo
 
 ### SQLite Storage
 
-All data lives in a single `lifecycle.db` file — features, milestones, work items, events, QA results, and heartbeats. This makes projects portable (copy the file), inspectable (open it with any SQLite client), and version-controllable (back it up alongside your code).
+All data lives in a single `tillr.db` file — features, milestones, work items, events, QA results, and heartbeats. This makes projects portable (copy the file), inspectable (open it with any SQLite client), and version-controllable (back it up alongside your code).
 
 ---
 
@@ -289,26 +289,26 @@ All data lives in a single `lifecycle.db` file — features, milestones, work it
 
 ### Project Management
 
-#### `lifecycle init <name>`
+#### `tillr init <name>`
 
-Initialize a new lifecycle project in the current directory.
+Initialize a new tillr project in the current directory.
 
 ```bash
-lifecycle init my-app
+tillr init my-app
 # Initializing project: my-app
-# Created .lifecycle.json
-# Created lifecycle.db
+# Created .tillr.json
+# Created tillr.db
 # Project "my-app" is ready.
 ```
 
-This creates `.lifecycle.json` with default settings and initializes the SQLite database with the full schema.
+This creates `.tillr.json` with default settings and initializes the SQLite database with the full schema.
 
-#### `lifecycle status`
+#### `tillr status`
 
 Show project status overview: features by state, milestone progress, and active agents.
 
 ```bash
-lifecycle status
+tillr status
 # Project: my-app
 #
 # Features:  2 draft · 1 implementing · 1 human-qa · 3 done
@@ -316,14 +316,14 @@ lifecycle status
 # Active:    1 agent working on feat-4 (implement cycle, round 2)
 ```
 
-#### `lifecycle doctor`
+#### `tillr doctor`
 
 Validate your environment and project setup. Checks for a valid config, database integrity, Go version, and common misconfigurations.
 
 ```bash
-lifecycle doctor
-# ✓ .lifecycle.json found
-# ✓ lifecycle.db schema is current (v1)
+tillr doctor
+# ✓ .tillr.json found
+# ✓ tillr.db schema is current (v1)
 # ✓ Go 1.24.2 detected
 # ✓ No orphaned work items
 # All checks passed.
@@ -331,17 +331,17 @@ lifecycle doctor
 
 ---
 
-### Feature Lifecycle
+### Feature Tillr
 
-#### `lifecycle feature add <name>`
+#### `tillr feature add <name>`
 
 Add a new feature. Starts in `draft` state.
 
 ```bash
-lifecycle feature add "User authentication" --milestone v1.0 --priority high
+tillr feature add "User authentication" --milestone v1.0 --priority high
 # Created feature feat-1: "User authentication" (draft, milestone: v1.0)
 
-lifecycle feature add "OAuth provider" --depends-on feat-1
+tillr feature add "OAuth provider" --depends-on feat-1
 # Created feature feat-2: "OAuth provider" (draft, depends on: feat-1)
 ```
 
@@ -351,33 +351,33 @@ lifecycle feature add "OAuth provider" --depends-on feat-1
 | `--priority P` | Set priority: `low`, `medium`, `high`, `critical` |
 | `--depends-on F` | Declare a dependency on another feature ID |
 
-#### `lifecycle feature list`
+#### `tillr feature list`
 
 List features with optional filters.
 
 ```bash
-lifecycle feature list
+tillr feature list
 # ID      Status         Priority  Name
 # feat-1  implementing   high      User authentication
 # feat-2  draft          medium    OAuth provider
 # feat-3  done           high      Database schema
 
-lifecycle feature list --status human-qa --milestone v1.0
+tillr feature list --status human-qa --milestone v1.0
 # ID      Status    Priority  Name
 # feat-4  human-qa  high      Payment processing
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--status S` | Filter by lifecycle state |
+| `--status S` | Filter by tillr state |
 | `--milestone M` | Filter by milestone |
 
-#### `lifecycle feature show <id>`
+#### `tillr feature show <id>`
 
 Show full details and history for a feature.
 
 ```bash
-lifecycle feature show feat-1
+tillr feature show feat-1
 # Feature: feat-1
 # Name:    User authentication
 # Status:  implementing
@@ -393,12 +393,12 @@ lifecycle feature show feat-1
 #   2025-01-15 10:30  cycle round 1 complete (score: 6/10)
 ```
 
-#### `lifecycle feature edit <id>`
+#### `tillr feature edit <id>`
 
 Edit a feature's metadata.
 
 ```bash
-lifecycle feature edit feat-1 --name "JWT Authentication" --priority critical
+tillr feature edit feat-1 --name "JWT Authentication" --priority critical
 # Updated feat-1: name → "JWT Authentication", priority → critical
 ```
 
@@ -408,12 +408,12 @@ lifecycle feature edit feat-1 --name "JWT Authentication" --priority critical
 | `--priority P` | Change priority |
 | `--status S` | Manually override status (use with care) |
 
-#### `lifecycle feature remove <id>`
+#### `tillr feature remove <id>`
 
 Remove a feature. Prompts for confirmation unless `--yes` is passed.
 
 ```bash
-lifecycle feature remove feat-2
+tillr feature remove feat-2
 # Remove feature feat-2 "OAuth provider"? (y/N) y
 # Removed feat-2.
 ```
@@ -422,12 +422,12 @@ lifecycle feature remove feat-2
 
 ### Agent Work Items
 
-#### `lifecycle next [--cycle C]`
+#### `tillr next [--cycle C]`
 
 Get the next work item for an agent. Returns JSON to stdout for easy consumption by agent tooling.
 
 ```bash
-lifecycle next
+tillr next
 ```
 
 ```json
@@ -452,22 +452,22 @@ If no work is available, exits with code 0 and an empty JSON object.
 |------|-------------|
 | `--cycle C` | Only return items from a specific cycle type |
 
-#### `lifecycle done [--result R]`
+#### `tillr done [--result R]`
 
 Mark the current work item as complete.
 
 ```bash
-lifecycle done --result "Implemented all three endpoints with full test coverage"
+tillr done --result "Implemented all three endpoints with full test coverage"
 # Marked work item 42 as done.
 # Feature feat-1: cycle round 2 complete.
 ```
 
-#### `lifecycle fail [--reason R]`
+#### `tillr fail [--reason R]`
 
 Mark the current work item as failed. The cycle will decide whether to retry or escalate.
 
 ```bash
-lifecycle fail --reason "Cannot connect to external API for OAuth verification"
+tillr fail --reason "Cannot connect to external API for OAuth verification"
 # Marked work item 42 as failed.
 # Feature feat-1: work item failed, cycle will retry.
 ```
@@ -476,32 +476,32 @@ lifecycle fail --reason "Cannot connect to external API for OAuth verification"
 
 ### Milestone Management
 
-#### `lifecycle milestone add <name>`
+#### `tillr milestone add <name>`
 
 Create a milestone.
 
 ```bash
-lifecycle milestone add "v1.0" --description "Initial public release"
+tillr milestone add "v1.0" --description "Initial public release"
 # Created milestone: v1.0
 ```
 
-#### `lifecycle milestone list`
+#### `tillr milestone list`
 
 List milestones with progress.
 
 ```bash
-lifecycle milestone list
+tillr milestone list
 # Milestone  Status  Progress
 # v1.0       active  4/7 features done (57%)
 # v1.1       active  0/3 features done (0%)
 ```
 
-#### `lifecycle milestone show <id>`
+#### `tillr milestone show <id>`
 
 Show milestone details including all assigned features.
 
 ```bash
-lifecycle milestone show v1.0
+tillr milestone show v1.0
 # Milestone: v1.0
 # Description: Initial public release
 # Status: active
@@ -521,12 +521,12 @@ lifecycle milestone show v1.0
 
 ### Iteration Cycles
 
-#### `lifecycle cycle list`
+#### `tillr cycle list`
 
 List available iteration cycle types.
 
 ```bash
-lifecycle cycle list
+tillr cycle list
 # Cycle         Description
 # implement     Full implementation cycle (plan → code → test → review)
 # ui-refine     UI polish with designer and reviewer agents
@@ -534,45 +534,45 @@ lifecycle cycle list
 # roadmap-plan  Collaborative roadmap planning cycle
 ```
 
-#### `lifecycle cycle start <cycle-name> <feature-id>`
+#### `tillr cycle start <cycle-name> <feature-id>`
 
 Start an iteration cycle for a feature.
 
 ```bash
-lifecycle cycle start implement feat-1
+tillr cycle start implement feat-1
 # Started "implement" cycle for feat-1 (User authentication)
-# Round 1 of 5 · work item created · run "lifecycle next" to begin
+# Round 1 of 5 · work item created · run "tillr next" to begin
 ```
 
-#### `lifecycle cycle status`
+#### `tillr cycle status`
 
 Show active cycle progress.
 
 ```bash
-lifecycle cycle status
+tillr cycle status
 # Feature  Cycle      Round  Score  Agent Role
 # feat-1   implement  2/5    6/10   developer
 # feat-7   ui-refine  1/3    —      designer
 ```
 
-#### `lifecycle cycle history <feature-id>`
+#### `tillr cycle history <feature-id>`
 
 Show cycle history for a feature — every round, score, and result.
 
 ```bash
-lifecycle cycle history feat-1
+tillr cycle history feat-1
 # Cycle: implement
 # Round 1  score: 6/10  "Implemented login only"
 # Round 2  score: 8/10  "Added logout and refresh, tests passing"
 # Round 3  (active)
 ```
 
-#### `lifecycle cycle score <score>`
+#### `tillr cycle score <score>`
 
 Submit a judge score for the current cycle step. Scores are numeric (e.g. 0–10) and recorded against the active cycle step for the feature.
 
 ```bash
-lifecycle cycle score 8.5 --feature feat-1 --notes "Good implementation but accessibility needs work"
+tillr cycle score 8.5 --feature feat-1 --notes "Good implementation but accessibility needs work"
 # Scored feat-1 cycle step: 8.5
 ```
 
@@ -585,12 +585,12 @@ lifecycle cycle score 8.5 --feature feat-1 --notes "Good implementation but acce
 
 ### Roadmap
 
-#### `lifecycle roadmap show`
+#### `tillr roadmap show`
 
 Display the current roadmap, grouped by category and sorted by priority.
 
 ```bash
-lifecycle roadmap show
+tillr roadmap show
 # Roadmap: my-app
 #
 # [Core]
@@ -603,58 +603,58 @@ lifecycle roadmap show
 #   5. ★★  Monitoring & alerting         proposed
 ```
 
-#### `lifecycle roadmap add <title>`
+#### `tillr roadmap add <title>`
 
 Add an item to the roadmap.
 
 ```bash
-lifecycle roadmap add "WebSocket notifications" --priority high --category Core
+tillr roadmap add "WebSocket notifications" --priority high --category Core
 # Added roadmap item: "WebSocket notifications" (Core, high priority)
 ```
 
-#### `lifecycle roadmap prioritize`
+#### `tillr roadmap prioritize`
 
 Interactive prioritization session — presents items pairwise and asks you to choose.
 
-#### `lifecycle roadmap export`
+#### `tillr roadmap export`
 
 Export the roadmap as Markdown or JSON.
 
 ```bash
-lifecycle roadmap export --format md > ROADMAP.md
-lifecycle roadmap export --format json | jq .
+tillr roadmap export --format md > ROADMAP.md
+tillr roadmap export --format json | jq .
 ```
 
 ---
 
 ### QA
 
-#### `lifecycle qa pending`
+#### `tillr qa pending`
 
 Show features waiting for human QA review.
 
 ```bash
-lifecycle qa pending
+tillr qa pending
 # ID      Priority  Name                    Waiting Since
 # feat-4  high      Payment processing      2 hours ago
 # feat-8  medium    Search functionality     15 minutes ago
 ```
 
-#### `lifecycle qa approve <feature-id>`
+#### `tillr qa approve <feature-id>`
 
 Approve a feature — moves it from `human-qa` to `done`.
 
 ```bash
-lifecycle qa approve feat-4 --notes "All tests pass, UI looks correct"
+tillr qa approve feat-4 --notes "All tests pass, UI looks correct"
 # Approved feat-4: "Payment processing" → done
 ```
 
-#### `lifecycle qa reject <feature-id>`
+#### `tillr qa reject <feature-id>`
 
 Reject a feature — sends it back to `implementing` for another cycle iteration.
 
 ```bash
-lifecycle qa reject feat-8 --notes "Search results not sorted by relevance"
+tillr qa reject feat-8 --notes "Search results not sorted by relevance"
 # Rejected feat-8: "Search functionality" → implementing (back to cycle)
 ```
 
@@ -662,12 +662,12 @@ lifecycle qa reject feat-8 --notes "Search results not sorted by relevance"
 
 ### History & Search
 
-#### `lifecycle history`
+#### `tillr history`
 
 Browse the event history log. Every state change, QA decision, and cycle event is recorded.
 
 ```bash
-lifecycle history --feature feat-1 --since 2025-01-15
+tillr history --feature feat-1 --since 2025-01-15
 # 2025-01-15 09:00  feat-1  created
 # 2025-01-15 09:05  feat-1  status_change  draft → planning
 # 2025-01-15 09:10  feat-1  status_change  planning → implementing
@@ -681,12 +681,12 @@ lifecycle history --feature feat-1 --since 2025-01-15
 | `--since S` | Show events after this date/time |
 | `--type T` | Filter by event type (`status_change`, `cycle_round`, `qa_decision`, …) |
 
-#### `lifecycle search <query>`
+#### `tillr search <query>`
 
 Full-text search across all project data — feature names, descriptions, QA notes, agent results, and event data.
 
 ```bash
-lifecycle search "JWT"
+tillr search "JWT"
 # feat-1   "User authentication"    agent_prompt: "…JWT-based authentication…"
 # feat-1   cycle result (round 2):  "…added JWT refresh token rotation…"
 ```
@@ -695,12 +695,12 @@ lifecycle search "JWT"
 
 ### Architecture Decision Records (ADRs)
 
-#### `lifecycle decision add <title>`
+#### `tillr decision add <title>`
 
 Record an architecture decision.
 
 ```bash
-lifecycle decision add "Use PostgreSQL for primary storage" \
+tillr decision add "Use PostgreSQL for primary storage" \
   --context "Need a reliable RDBMS for transactional data" \
   --decision "PostgreSQL 16 with connection pooling" \
   --consequences "Team needs PostgreSQL expertise; adds ops complexity" \
@@ -716,22 +716,22 @@ lifecycle decision add "Use PostgreSQL for primary storage" \
 | `--feature F` | Link to a feature ID |
 | `--status S` | Status: `proposed`, `accepted`, `rejected`, `superseded`, `deprecated` (default: `proposed`) |
 
-#### `lifecycle decision list`
+#### `tillr decision list`
 
 List all architecture decisions.
 
 ```bash
-lifecycle decision list
+tillr decision list
 # ID  Status    Title
 # 1   accepted  Use PostgreSQL for primary storage
 # 2   proposed  JWT vs session-based auth
 ```
 
-#### `lifecycle decision show <id>`
+#### `tillr decision show <id>`
 
 Show full decision details, including context, decision text, consequences, and linked feature.
 
-#### `lifecycle decision edit <id>`
+#### `tillr decision edit <id>`
 
 Edit a decision's properties (status, context, decision text, consequences).
 
@@ -739,37 +739,37 @@ Edit a decision's properties (status, context, decision text, consequences).
 
 ### Configuration Management
 
-#### `lifecycle config init`
+#### `tillr config init`
 
-Create a `.lifecycle.yaml` configuration file with default values.
+Create a `.tillr.yaml` configuration file with default values.
 
 ```bash
-lifecycle config init
-# Created .lifecycle.yaml with defaults
+tillr config init
+# Created .tillr.yaml with defaults
 ```
 
-#### `lifecycle config show`
+#### `tillr config show`
 
 Show the current configuration (merged defaults + file overrides).
 
 ```bash
-lifecycle config show
+tillr config show
 # default_milestone: ""
 # default_priority: 5
 # server_port: 3847
 # theme: system
 # agent_timeout_minutes: 30
-# db_path: lifecycle.db
+# db_path: tillr.db
 ```
 
-#### `lifecycle config set <key> <value>`
+#### `tillr config set <key> <value>`
 
-Set a configuration value in `.lifecycle.yaml`.
+Set a configuration value in `.tillr.yaml`.
 
 ```bash
-lifecycle config set server_port 8080
-lifecycle config set default_priority 7
-lifecycle config set theme dark
+tillr config set server_port 8080
+tillr config set default_priority 7
+tillr config set theme dark
 ```
 
 ---
@@ -778,32 +778,32 @@ lifecycle config set theme dark
 
 Export project data in multiple formats.
 
-#### `lifecycle export features`
+#### `tillr export features`
 
 ```bash
-lifecycle export features --format md > FEATURES.md
-lifecycle export features --format csv > features.csv
-lifecycle export features --format json | jq .
+tillr export features --format md > FEATURES.md
+tillr export features --format csv > features.csv
+tillr export features --format json | jq .
 ```
 
-#### `lifecycle export roadmap`
+#### `tillr export roadmap`
 
 ```bash
-lifecycle export roadmap --format md > ROADMAP.md
+tillr export roadmap --format md > ROADMAP.md
 ```
 
-#### `lifecycle export decisions`
+#### `tillr export decisions`
 
 ```bash
-lifecycle export decisions --format md > DECISIONS.md
+tillr export decisions --format md > DECISIONS.md
 ```
 
-#### `lifecycle export all`
+#### `tillr export all`
 
 Export all project data (features, roadmap, and decisions) at once.
 
 ```bash
-lifecycle export all --format json > project-export.json
+tillr export all --format json > project-export.json
 ```
 
 | Flag | Description |
@@ -814,43 +814,43 @@ lifecycle export all --format json > project-export.json
 
 ### Queue Management
 
-#### `lifecycle queue list`
+#### `tillr queue list`
 
 List pending work items in priority order.
 
 ```bash
-lifecycle queue list
+tillr queue list
 # ID   Feature            Type        Priority  Claimed
 # 12   feat-4             implement   high      agent-1
 # 15   feat-7             research    medium    (unclaimed)
 ```
 
-#### `lifecycle queue stats`
+#### `tillr queue stats`
 
 Show queue statistics — pending, claimed, and completed counts.
 
 ```bash
-lifecycle queue stats
+tillr queue stats
 # Pending:   3
 # Claimed:   1
 # Completed: 12
 ```
 
-#### `lifecycle queue reassign <work-item-id>`
+#### `tillr queue reassign <work-item-id>`
 
 Release a claimed work item back to the pending queue so another agent can pick it up.
 
 ```bash
-lifecycle queue reassign 12
+tillr queue reassign 12
 # Released work item 12 back to pending queue.
 ```
 
-#### `lifecycle queue reclaim`
+#### `tillr queue reclaim`
 
 Reclaim stale work items that have had no heartbeat for 30+ minutes.
 
 ```bash
-lifecycle queue reclaim
+tillr queue reclaim
 # Reclaimed 2 stale work item(s).
 ```
 
@@ -858,34 +858,34 @@ lifecycle queue reclaim
 
 ### Git / VCS Integration
 
-Lifecycle auto-detects whether your project uses `git` or `jj` (Jujutsu).
+Tillr auto-detects whether your project uses `git` or `jj` (Jujutsu).
 
-#### `lifecycle git log`
+#### `tillr git log`
 
 Show recent commits.
 
 ```bash
-lifecycle git log -n 10
+tillr git log -n 10
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-n N` | Number of commits to show (default: 20) |
 
-#### `lifecycle git branches`
+#### `tillr git branches`
 
 Show branches and their linked features.
 
 ```bash
-lifecycle git branches
+tillr git branches
 ```
 
-#### `lifecycle git link <feature-id> <commit-hash>`
+#### `tillr git link <feature-id> <commit-hash>`
 
 Link a commit to a feature for traceability.
 
 ```bash
-lifecycle git link feat-1 abc123f
+tillr git link feat-1 abc123f
 # Linked commit abc123f to feat-1.
 ```
 
@@ -896,28 +896,28 @@ lifecycle git link feat-1 abc123f
 Start a Model Context Protocol (MCP) server for direct agent integration over stdio.
 
 ```bash
-lifecycle mcp
+tillr mcp
 ```
 
-The MCP server exposes lifecycle tools (`lifecycle_next`, `lifecycle_done`, `lifecycle_fail`, `lifecycle_status`, `lifecycle_features`, `lifecycle_feedback`) via JSON-RPC 2.0 over stdin/stdout. This allows AI agents to interact with lifecycle directly without subprocess CLI calls.
+The MCP server exposes tillr tools (`tillr_next`, `tillr_done`, `tillr_fail`, `tillr_status`, `tillr_features`, `tillr_feedback`) via JSON-RPC 2.0 over stdin/stdout. This allows AI agents to interact with tillr directly without subprocess CLI calls.
 
 ---
 
 ### Batch Operations
 
-#### `lifecycle feature batch`
+#### `tillr feature batch`
 
 Update multiple features at once.
 
 ```bash
 # Set status for multiple features
-lifecycle feature batch --ids feat-1,feat-2,feat-3 --status implementing
+tillr feature batch --ids feat-1,feat-2,feat-3 --status implementing
 
 # Set milestone for multiple features
-lifecycle feature batch --ids feat-1,feat-2 --milestone v1.0
+tillr feature batch --ids feat-1,feat-2 --milestone v1.0
 
 # Set priority for multiple features
-lifecycle feature batch --ids feat-1,feat-2,feat-3 --priority 8
+tillr feature batch --ids feat-1,feat-2,feat-3 --priority 8
 ```
 
 | Flag | Description |
@@ -934,9 +934,9 @@ lifecycle feature batch --ids feat-1,feat-2,feat-3 --priority 8
 Start the web viewer:
 
 ```bash
-lifecycle serve
-# Lifecycle web viewer running at http://localhost:3847
-# Watching lifecycle.db for changes…
+tillr serve
+# Tillr web viewer running at http://localhost:3847
+# Watching tillr.db for changes…
 ```
 
 | Flag | Description |
@@ -947,7 +947,7 @@ The web viewer is **read-only by design** — it renders the data that the CLI m
 
 ### Dashboard
 
-The landing page shows project health at a glance. A kanban board groups features by lifecycle state — click any column header to filter the features list. Below the kanban you'll find milestone progress bars, a recent activity feed, roadmap highlights, a priority distribution chart, and a preview of active cycles.
+The landing page shows project health at a glance. A kanban board groups features by tillr state — click any column header to filter the features list. Below the kanban you'll find milestone progress bars, a recent activity feed, roadmap highlights, a priority distribution chart, and a preview of active cycles.
 
 ### Feature Board
 
@@ -983,7 +983,7 @@ Press **`?`** on any page to see all available keyboard shortcuts. Shortcuts inc
 
 ### Quick Feedback Button
 
-A small **⊕** button floats in the bottom-right corner of every page. Click it to open a minimal text input — just type and press Enter to submit feedback, bug reports, or feature ideas. No forms, no dropdowns. Submissions appear in the idea queue (`lifecycle idea list`).
+A small **⊕** button floats in the bottom-right corner of every page. Click it to open a minimal text input — just type and press Enter to submit feedback, bug reports, or feature ideas. No forms, no dropdowns. Submissions appear in the idea queue (`tillr idea list`).
 
 ### Live Updates / WebSocket
 
@@ -993,33 +993,33 @@ The web viewer maintains a WebSocket connection to the server. When any data cha
 
 ## Agent Integration Guide
 
-Lifecycle is designed so that AI agents interact with your project through the CLI. The typical agent loop:
+Tillr is designed so that AI agents interact with your project through the CLI. The typical agent loop:
 
 ```
 ┌─────────────────────────────────┐
-│  lifecycle next                 │  ← Agent asks for work
+│  tillr next                 │  ← Agent asks for work
 │  → receives JSON agentPrompt   │
 ├─────────────────────────────────┤
 │  Agent performs the work        │  ← Code, test, design, review
 ├─────────────────────────────────┤
-│  lifecycle done --result "…"    │  ← Agent reports success
-│  lifecycle fail --reason "…"    │  ← …or failure
+│  tillr done --result "…"    │  ← Agent reports success
+│  tillr fail --reason "…"    │  ← …or failure
 └─────────────────────────────────┘
         ↓ (cycle continues or ends)
 ```
 
 ### Setting Up an Agent
 
-1. **Point the agent at your project directory** — the agent must run lifecycle commands from within the project tree (any subdirectory works).
+1. **Point the agent at your project directory** — the agent must run tillr commands from within the project tree (any subdirectory works).
 
 2. **Teach the agent the protocol:**
-   - Call `lifecycle next` to get a work item. Parse the JSON response.
+   - Call `tillr next` to get a work item. Parse the JSON response.
    - Read the `agentPrompt` field for instructions.
    - Do the work (write code, run tests, etc.).
-   - Call `lifecycle done --result "description of what was done"` on success.
-   - Call `lifecycle fail --reason "what went wrong"` on failure.
+   - Call `tillr done --result "description of what was done"` on success.
+   - Call `tillr fail --reason "what went wrong"` on failure.
 
-3. **The cycle handles the rest.** The iteration cycle manages rounds, scoring, and state transitions. The agent doesn't need to know about lifecycle states — it just picks up work and reports results.
+3. **The cycle handles the rest.** The iteration cycle manages rounds, scoring, and state transitions. The agent doesn't need to know about tillr states — it just picks up work and reports results.
 
 ### Example: Agent Script
 
@@ -1027,7 +1027,7 @@ Lifecycle is designed so that AI agents interact with your project through the C
 #!/usr/bin/env bash
 # Simple agent loop
 while true; do
-  WORK=$(lifecycle next)
+  WORK=$(tillr next)
   if [ "$WORK" = "{}" ]; then
     echo "No work available. Sleeping…"
     sleep 30
@@ -1037,7 +1037,7 @@ while true; do
   PROMPT=$(echo "$WORK" | jq -r '.agentPrompt')
   # Send prompt to your AI agent, get result…
 
-  lifecycle done --result "$AGENT_RESULT"
+  tillr done --result "$AGENT_RESULT"
 done
 ```
 
@@ -1046,14 +1046,14 @@ done
 Long-running agents should send periodic heartbeats to signal they're still alive:
 
 ```bash
-lifecycle heartbeat --message "Running integration tests"
+tillr heartbeat --message "Running integration tests"
 # Heartbeat recorded.
 ```
 
 The web viewer shows agent activity and heartbeat status in real time. Work items with no heartbeat for 30+ minutes are considered stale and can be reclaimed:
 
 ```bash
-lifecycle queue reclaim
+tillr queue reclaim
 # Reclaimed 1 stale work item(s).
 ```
 
@@ -1061,28 +1061,28 @@ lifecycle queue reclaim
 
 ## Configuration Reference
 
-Lifecycle uses two configuration files:
+Tillr uses two configuration files:
 
-### Project File: `.lifecycle.json`
+### Project File: `.tillr.json`
 
-Created by `lifecycle init`, this file identifies the project root and stores core settings:
+Created by `tillr init`, this file identifies the project root and stores core settings:
 
 ```json
 {
   "project_dir": ".",
-  "db_path": "lifecycle.db",
+  "db_path": "tillr.db",
   "server_port": 3847
 }
 ```
 
-Lifecycle finds your project by walking up from the current directory until it finds `.lifecycle.json`, so you can run commands from any subdirectory.
+Tillr finds your project by walking up from the current directory until it finds `.tillr.json`, so you can run commands from any subdirectory.
 
-### Defaults File: `.lifecycle.yaml`
+### Defaults File: `.tillr.yaml`
 
-Created by `lifecycle config init`, this optional file stores configuration defaults. It is merged with built-in defaults at runtime. Create it with:
+Created by `tillr config init`, this optional file stores configuration defaults. It is merged with built-in defaults at runtime. Create it with:
 
 ```bash
-lifecycle config init
+tillr config init
 ```
 
 Available fields:
@@ -1094,39 +1094,39 @@ Available fields:
 | `server_port` | `3847` | Port for the web viewer |
 | `theme` | `system` | Web viewer theme: `light`, `dark`, or `system` |
 | `agent_timeout_minutes` | `30` | Minutes before an agent is considered stale |
-| `db_path` | `lifecycle.db` | Path to the SQLite database file |
+| `db_path` | `tillr.db` | Path to the SQLite database file |
 
 View current configuration (merged defaults + file):
 
 ```bash
-lifecycle config show
+tillr config show
 ```
 
 Set individual values:
 
 ```bash
-lifecycle config set server_port 8080
-lifecycle config set theme dark
+tillr config set server_port 8080
+tillr config set theme dark
 ```
 
 ### Project Discovery
 
-Lifecycle walks up from the current working directory to find `.lifecycle.json`. This means you can run commands from any subdirectory:
+Tillr walks up from the current working directory to find `.tillr.json`. This means you can run commands from any subdirectory:
 
 ```bash
 cd my-app/src/auth
-lifecycle status   # finds ../../.lifecycle.json
+tillr status   # finds ../../.tillr.json
 ```
 
 ### Database
 
-All data is stored in a single SQLite file (`lifecycle.db` by default). Key tables:
+All data is stored in a single SQLite file (`tillr.db` by default). Key tables:
 
 | Table | Purpose |
 |-------|---------|
 | `projects` | Project metadata |
 | `milestones` | Milestone definitions and status |
-| `features` | Features with lifecycle state, priority, and assignment |
+| `features` | Features with tillr state, priority, and assignment |
 | `feature_deps` | Dependency graph between features |
 | `work_items` | Individual work items with agent prompts and results |
 | `events` | Full audit log of every state change |
@@ -1137,24 +1137,24 @@ All data is stored in a single SQLite file (`lifecycle.db` by default). Key tabl
 You can inspect the database directly with any SQLite client:
 
 ```bash
-sqlite3 lifecycle.db "SELECT id, name, status FROM features"
+sqlite3 tillr.db "SELECT id, name, status FROM features"
 ```
 
 ---
 
 ## Troubleshooting / FAQ
 
-### "No .lifecycle.json found"
+### "No .tillr.json found"
 
-You're not inside a lifecycle project. Run `lifecycle init <name>` to create one, or `cd` into an existing project directory.
+You're not inside a tillr project. Run `tillr init <name>` to create one, or `cd` into an existing project directory.
 
 ### "Database schema version mismatch"
 
-Your `lifecycle.db` was created with a different version of lifecycle. Run `lifecycle doctor` to diagnose. Future versions will include automatic migrations.
+Your `tillr.db` was created with a different version of tillr. Run `tillr doctor` to diagnose. Future versions will include automatic migrations.
 
-### Can I use lifecycle with multiple agents?
+### Can I use tillr with multiple agents?
 
-Yes. Multiple agents can call `lifecycle next` concurrently. Each call returns a different work item — work items are assigned atomically to prevent double-assignment.
+Yes. Multiple agents can call `tillr next` concurrently. Each call returns a different work item — work items are assigned atomically to prevent double-assignment.
 
 ### Can I edit the database directly?
 
@@ -1162,11 +1162,11 @@ You can, but it's not recommended for state changes. Use the CLI to ensure event
 
 ### How do I back up my project?
 
-Copy `.lifecycle.json` and `lifecycle.db`. That's everything. Both are regular files — commit them, sync them, or back them up however you like.
+Copy `.tillr.json` and `tillr.db`. That's everything. Both are regular files — commit them, sync them, or back them up however you like.
 
 ### Where are logs stored?
 
-Events are stored in the `events` table inside `lifecycle.db`. Use `lifecycle history` or query the table directly. There are no external log files.
+Events are stored in the `events` table inside `tillr.db`. Use `tillr history` or query the table directly. There are no external log files.
 
 ### Can the web viewer modify data?
 

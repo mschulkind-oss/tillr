@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -106,7 +106,7 @@ var featureTemplates = map[string]struct {
 		Spec: `## CLI Command Specification
 
 1. **Command Signature**
-   - Command: lifecycle ...
+   - Command: tillr ...
    - Arguments: 
    - Description: 
 
@@ -122,16 +122,16 @@ var featureTemplates = map[string]struct {
 4. **Examples**
    ` + "```bash" + `
    # Basic usage
-   lifecycle ...
+   tillr ...
 
    # With flags
-   lifecycle ... --flag value
+   tillr ... --flag value
    ` + "```" + `
 
 5. **Error Cases**
    - Missing required arguments: 
    - Invalid flag values: 
-   - Not in a lifecycle project: 
+   - Not in a tillr project: 
 
 6. **Acceptance Criteria**
    - [ ] Command executes successfully with valid input
@@ -284,6 +284,7 @@ func init() {
 	featureCmd.AddCommand(featureTemplatesCmd)
 	featureCmd.AddCommand(featureFindCmd)
 	featureCmd.AddCommand(featureCompareCmd)
+	featureCmd.AddCommand(featureBulkCmd)
 
 	featureAddCmd.Flags().String("milestone", "", "Assign to milestone")
 	featureAddCmd.Flags().String("template", "", "Use a feature template (api-endpoint, ui-component, cli-command, migration, integration, bug-fix)")
@@ -325,8 +326,8 @@ var featureFindCmd = &cobra.Command{
 	Short: "Search features by name, description, or spec",
 	Long:  `Full-text search across feature names, descriptions, and specs with prefix matching.`,
 	Args:  cobra.ExactArgs(1),
-	Example: `  lifecycle feature find auth
-  lifecycle feature find "user login" --limit 5`,
+	Example: `  tillr feature find auth
+  tillr feature find "user login" --limit 5`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -380,13 +381,13 @@ var featureAddCmd = &cobra.Command{
 	Short: "Add a new feature",
 	Args:  cobra.ExactArgs(1),
 	Example: `  # Add a new feature
-  lifecycle feature add "User Auth" --description "JWT-based authentication" --priority 8
+  tillr feature add "User Auth" --description "JWT-based authentication" --priority 8
 
   # Add with full spec for agents
-  lifecycle feature add "Search" --spec "1. Full-text search via FTS5\n2. Results ranked by relevance" --milestone v1.0
+  tillr feature add "Search" --spec "1. Full-text search via FTS5\n2. Results ranked by relevance" --milestone v1.0
 
   # Onboarding: add already-completed feature
-  lifecycle feature add "Database Layer" --status done --spec "..." --priority 10`,
+  tillr feature add "Database Layer" --status done --spec "..." --priority 10`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -549,7 +550,7 @@ var featureShowCmd = &cobra.Command{
 	Long: `Display detailed information about a specific feature including its status,
 priority, milestone, dependencies, tags, spec, and timestamps.
 
-Use 'lifecycle feature list' to find feature IDs.`,
+Use 'tillr feature list' to find feature IDs.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
@@ -560,7 +561,7 @@ Use 'lifecycle feature list' to find feature IDs.`,
 
 		f, err := db.GetFeature(database, args[0])
 		if err != nil {
-			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", args[0])
+			return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", args[0])
 		}
 
 		if jsonOutput {
@@ -614,7 +615,7 @@ var featureEditCmd = &cobra.Command{
 	Use:   "edit <id>",
 	Short: "Edit feature properties",
 	Long: `Update one or more properties of a feature. Status transitions are validated
-through the lifecycle engine to enforce the QA gate (features must pass
+through the tillr engine to enforce the QA gate (features must pass
 through human-qa before being marked done).
 
 Editable fields: --name, --description, --spec, --status, --milestone,
@@ -714,7 +715,7 @@ var featureRemoveCmd = &cobra.Command{
 	Long: `Permanently remove a feature from the project. This also removes any
 associated dependencies, tags, and work items.
 
-Use 'lifecycle feature list' to find feature IDs.`,
+Use 'tillr feature list' to find feature IDs.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
@@ -749,7 +750,7 @@ var featureDepsCmd = &cobra.Command{
 	Long: `Display the dependency tree for a feature, showing what it depends on
 and what depends on it. Blocking dependencies are highlighted.
 
-Use 'lifecycle feature add --depends-on <id>' to create dependencies.`,
+Use 'tillr feature add --depends-on <id>' to create dependencies.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
@@ -761,7 +762,7 @@ Use 'lifecycle feature add --depends-on <id>' to create dependencies.`,
 		featureID := args[0]
 		f, err := db.GetFeature(database, featureID)
 		if err != nil {
-			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", featureID)
+			return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", featureID)
 		}
 
 		dependents, _ := db.GetFeatureDependents(database, featureID)
@@ -843,13 +844,13 @@ var featureBatchCmd = &cobra.Command{
 	Use:   "batch",
 	Short: "Batch update multiple features",
 	Example: `  # Set status for multiple features
-  lifecycle feature batch --ids f1,f2,f3 --status implementing
+  tillr feature batch --ids f1,f2,f3 --status implementing
 
   # Set milestone for multiple features
-  lifecycle feature batch --ids f1,f2 --milestone v1.0-mvp
+  tillr feature batch --ids f1,f2 --milestone v1.0-mvp
 
   # Set priority for multiple features
-  lifecycle feature batch --ids f1,f2,f3 --priority 8`,
+  tillr feature batch --ids f1,f2,f3 --priority 8`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -1080,7 +1081,7 @@ var featureTagsCmd = &cobra.Command{
 var featureTemplatesCmd = &cobra.Command{
 	Use:   "templates",
 	Short: "List available feature templates",
-	Long: `List all available feature templates that can be used with 'lifecycle feature add --template <name>'.
+	Long: `List all available feature templates that can be used with 'tillr feature add --template <name>'.
 
 Templates provide pre-populated spec content for common feature types,
 giving a structured starting point for acceptance criteria.`,
@@ -1114,7 +1115,7 @@ giving a structured starting point for acceptance criteria.`,
 			fmt.Printf("  %-20s %s\n", name, tmpl.Description)
 		}
 		fmt.Println()
-		fmt.Println("Usage: lifecycle feature add <name> --template <template>")
+		fmt.Println("Usage: tillr feature add <name> --template <template>")
 		return nil
 	},
 }
@@ -1134,8 +1135,8 @@ differences in status, priority, milestone, estimates, tags, dependencies,
 specs, and cycle history.
 
 Example:
-  lifecycle feature compare auth-module search-api
-  lifecycle feature compare f1 f2 f3 --json`,
+  tillr feature compare auth-module search-api
+  tillr feature compare f1 f2 f3 --json`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
@@ -1148,7 +1149,7 @@ Example:
 		for _, id := range args {
 			f, fErr := db.GetFeature(database, id)
 			if fErr != nil {
-				return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", id)
+				return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", id)
 			}
 			entry := featureCompareEntry{Feature: f}
 			cycles, _ := db.ListCycleHistory(database, f.ID)

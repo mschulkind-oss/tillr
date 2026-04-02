@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
+	"github.com/mschulkind/tillr/internal/db"
 	"github.com/spf13/cobra"
 )
 

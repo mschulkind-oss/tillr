@@ -4,10 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // --- Projects ---
@@ -436,7 +437,7 @@ func GetNextPendingWorkItem(database *sql.DB) (*models.WorkItem, error) {
 		COALESCE(w.assigned_agent,''), COALESCE(w.started_at,''), COALESCE(w.completed_at,''), w.created_at
 		FROM work_items w
 		LEFT JOIN features f ON w.feature_id = f.id
-		LEFT JOIN cycle_instances ci ON ci.feature_id = w.feature_id AND ci.status = 'active'
+		LEFT JOIN cycle_instances ci ON ci.entity_id = w.feature_id AND ci.status = 'active'
 		WHERE w.status = 'pending'
 		ORDER BY COALESCE(f.priority, 0) DESC, COALESCE(ci.current_step, 0) ASC, w.created_at ASC
 		LIMIT 1`)
@@ -521,8 +522,17 @@ func InsertEvent(db *sql.DB, e *models.Event) error {
 	if e.CreatedAt == "" {
 		e.CreatedAt = time.Now().UTC().Format("2006-01-02 15:04:05")
 	}
+	// Dispatch webhooks asynchronously with a small delay so the caller
+	// can finish its remaining DB operations before the webhook goroutine
+	// tries to query the webhooks table. This prevents SQLITE_BUSY errors
+	// when InsertEvent is called mid-sequence (e.g. during ScoreCycleStep).
 	if WebhookDispatchFunc != nil {
-		WebhookDispatchFunc(db, e)
+		dispatch := WebhookDispatchFunc
+		evt := *e // copy so the goroutine doesn't race on the caller's pointer
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			dispatch(db, &evt)
+		}()
 	}
 	return nil
 }
@@ -577,6 +587,13 @@ func ListEventsFiltered(db *sql.DB, projectID, featureID, eventType, since, unti
 // --- Roadmap Items ---
 
 func CreateRoadmapItem(db *sql.DB, r *models.RoadmapItem) error {
+	if r.Status != "" {
+		_, err := db.Exec(
+			`INSERT INTO roadmap_items (id, project_id, title, description, category, priority, sort_order, effort, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.ID, r.ProjectID, r.Title, r.Description, r.Category, r.Priority, r.SortOrder, r.Effort, r.Status,
+		)
+		return err
+	}
 	_, err := db.Exec(
 		`INSERT INTO roadmap_items (id, project_id, title, description, category, priority, sort_order, effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.ProjectID, r.Title, r.Description, r.Category, r.Priority, r.SortOrder, r.Effort,
@@ -915,9 +932,12 @@ func CreateHeartbeat(db *sql.DB, h *models.Heartbeat) error {
 // --- Cycles ---
 
 func CreateCycleInstance(db *sql.DB, c *models.CycleInstance) error {
+	if c.EntityType == "" {
+		c.EntityType = "feature"
+	}
 	res, err := db.Exec(
-		`INSERT INTO cycle_instances (feature_id, cycle_type, current_step, iteration, status) VALUES (?, ?, ?, ?, ?)`,
-		c.FeatureID, c.CycleType, c.CurrentStep, c.Iteration, c.Status,
+		`INSERT INTO cycle_instances (entity_type, entity_id, cycle_type, current_step, iteration, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		c.EntityType, c.EntityID, c.CycleType, c.CurrentStep, c.Iteration, c.Status,
 	)
 	if err != nil {
 		return err
@@ -927,11 +947,17 @@ func CreateCycleInstance(db *sql.DB, c *models.CycleInstance) error {
 	return nil
 }
 
-func GetActiveCycle(db *sql.DB, featureID string) (*models.CycleInstance, error) {
-	row := db.QueryRow(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
-		FROM cycle_instances WHERE feature_id = ? AND status = 'active' LIMIT 1`, featureID)
+// GetActiveCycle finds an active cycle for the given entity (defaults to entity_type="feature").
+func GetActiveCycle(db *sql.DB, entityID string) (*models.CycleInstance, error) {
+	return GetActiveCycleForEntity(db, "feature", entityID)
+}
+
+// GetActiveCycleForEntity finds an active cycle for any entity type.
+func GetActiveCycleForEntity(db *sql.DB, entityType, entityID string) (*models.CycleInstance, error) {
+	row := db.QueryRow(`SELECT id, entity_type, entity_id, cycle_type, current_step, iteration, status, created_at, updated_at
+		FROM cycle_instances WHERE entity_type = ? AND entity_id = ? AND status = 'active' LIMIT 1`, entityType, entityID)
 	c := &models.CycleInstance{}
-	err := row.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.EntityType, &c.EntityID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -939,10 +965,10 @@ func GetActiveCycle(db *sql.DB, featureID string) (*models.CycleInstance, error)
 }
 
 func GetCycleByID(db *sql.DB, id int) (*models.CycleInstance, error) {
-	row := db.QueryRow(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
+	row := db.QueryRow(`SELECT id, entity_type, entity_id, cycle_type, current_step, iteration, status, created_at, updated_at
 		FROM cycle_instances WHERE id = ?`, id)
 	c := &models.CycleInstance{}
-	err := row.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.EntityType, &c.EntityID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -950,7 +976,7 @@ func GetCycleByID(db *sql.DB, id int) (*models.CycleInstance, error) {
 }
 
 func ListActiveCycles(db *sql.DB) ([]models.CycleInstance, error) {
-	rows, err := db.Query(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
+	rows, err := db.Query(`SELECT id, entity_type, entity_id, cycle_type, current_step, iteration, status, created_at, updated_at
 		FROM cycle_instances WHERE status = 'active' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -960,7 +986,7 @@ func ListActiveCycles(db *sql.DB) ([]models.CycleInstance, error) {
 	var out []models.CycleInstance
 	for rows.Next() {
 		var c models.CycleInstance
-		if err := rows.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.EntityType, &c.EntityID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -969,7 +995,7 @@ func ListActiveCycles(db *sql.DB) ([]models.CycleInstance, error) {
 }
 
 func ListAllCycles(db *sql.DB) ([]models.CycleInstance, error) {
-	rows, err := db.Query(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
+	rows, err := db.Query(`SELECT id, entity_type, entity_id, cycle_type, current_step, iteration, status, created_at, updated_at
 		FROM cycle_instances ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -979,7 +1005,7 @@ func ListAllCycles(db *sql.DB) ([]models.CycleInstance, error) {
 	var out []models.CycleInstance
 	for rows.Next() {
 		var c models.CycleInstance
-		if err := rows.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.EntityType, &c.EntityID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -993,9 +1019,9 @@ func UpdateCycleInstance(db *sql.DB, id int, step, iteration int, status string)
 	return err
 }
 
-func ListCycleHistory(db *sql.DB, featureID string) ([]models.CycleInstance, error) {
-	rows, err := db.Query(`SELECT id, feature_id, cycle_type, current_step, iteration, status, created_at, updated_at
-		FROM cycle_instances WHERE feature_id = ? ORDER BY created_at`, featureID)
+func ListCycleHistory(db *sql.DB, entityID string) ([]models.CycleInstance, error) {
+	rows, err := db.Query(`SELECT id, entity_type, entity_id, cycle_type, current_step, iteration, status, created_at, updated_at
+		FROM cycle_instances WHERE entity_id = ? ORDER BY created_at`, entityID)
 	if err != nil {
 		return nil, err
 	}
@@ -1004,7 +1030,7 @@ func ListCycleHistory(db *sql.DB, featureID string) ([]models.CycleInstance, err
 	var out []models.CycleInstance
 	for rows.Next() {
 		var c models.CycleInstance
-		if err := rows.Scan(&c.ID, &c.FeatureID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.EntityType, &c.EntityID, &c.CycleType, &c.CurrentStep, &c.Iteration, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1336,11 +1362,11 @@ func GetProjectStats(database *sql.DB, projectID string) (*ProjectStats, error) 
 	// Cycle stats
 	var totalCycles, totalIterations int
 	var avgScore sql.NullFloat64
-	err = database.QueryRow(`SELECT COUNT(*), COALESCE(SUM(iteration), 0) FROM cycle_instances WHERE feature_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&totalCycles, &totalIterations)
+	err = database.QueryRow(`SELECT COUNT(*), COALESCE(SUM(iteration), 0) FROM cycle_instances WHERE entity_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&totalCycles, &totalIterations)
 	if err != nil {
 		return nil, fmt.Errorf("getting cycle counts: %w", err)
 	}
-	err = database.QueryRow(`SELECT AVG(cs.score) FROM cycle_scores cs JOIN cycle_instances ci ON cs.cycle_id = ci.id WHERE ci.feature_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&avgScore)
+	err = database.QueryRow(`SELECT AVG(cs.score) FROM cycle_scores cs JOIN cycle_instances ci ON cs.cycle_id = ci.id WHERE ci.entity_id IN (SELECT id FROM features WHERE project_id = ?)`, projectID).Scan(&avgScore)
 	if err != nil {
 		return nil, fmt.Errorf("getting avg score: %w", err)
 	}
@@ -1353,7 +1379,7 @@ func GetProjectStats(database *sql.DB, projectID string) (*ProjectStats, error) 
 	scoreRows, err := database.Query(`SELECT date(cs.created_at) AS d, cs.score, ci.cycle_type
 		FROM cycle_scores cs
 		JOIN cycle_instances ci ON cs.cycle_id = ci.id
-		WHERE ci.feature_id IN (SELECT id FROM features WHERE project_id = ?)
+		WHERE ci.entity_type = 'feature' AND ci.entity_id IN (SELECT id FROM features WHERE project_id = ?)
 		ORDER BY cs.created_at`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("getting scores over time: %w", err)
@@ -1462,6 +1488,84 @@ func CountDiscussions(db *sql.DB, projectID string) (int, error) {
 	var count int
 	err := db.QueryRow(`SELECT COUNT(*) FROM discussions WHERE project_id = ?`, projectID).Scan(&count)
 	return count, err
+}
+
+// CountOpenDiscussions returns the number of open discussions.
+func CountOpenDiscussions(db *sql.DB, projectID string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM discussions WHERE project_id = ? AND status = 'open'`, projectID).Scan(&count)
+	return count, err
+}
+
+// --- Discussion Templates ---
+
+// CreateDiscussionTemplate inserts a new discussion template.
+func CreateDiscussionTemplate(db *sql.DB, t *models.DiscussionTemplate) error {
+	_, err := db.Exec(`INSERT INTO discussion_templates (name, description, body, is_builtin) VALUES (?, ?, ?, ?)`,
+		t.Name, t.Description, t.Body, boolToInt(t.IsBuiltin))
+	return err
+}
+
+// GetDiscussionTemplate retrieves a discussion template by name.
+func GetDiscussionTemplate(db *sql.DB, name string) (*models.DiscussionTemplate, error) {
+	t := &models.DiscussionTemplate{}
+	var isBuiltin int
+	err := db.QueryRow(`SELECT name, description, body, is_builtin, created_at FROM discussion_templates WHERE name = ?`, name).
+		Scan(&t.Name, &t.Description, &t.Body, &isBuiltin, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	t.IsBuiltin = isBuiltin != 0
+	return t, nil
+}
+
+// ListDiscussionTemplates returns all discussion templates.
+func ListDiscussionTemplates(db *sql.DB) ([]models.DiscussionTemplate, error) {
+	rows, err := db.Query(`SELECT name, description, body, is_builtin, created_at FROM discussion_templates ORDER BY is_builtin DESC, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var templates []models.DiscussionTemplate
+	for rows.Next() {
+		var t models.DiscussionTemplate
+		var isBuiltin int
+		if err := rows.Scan(&t.Name, &t.Description, &t.Body, &isBuiltin, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		t.IsBuiltin = isBuiltin != 0
+		templates = append(templates, t)
+	}
+	return templates, nil
+}
+
+// UpdateDiscussionTemplate updates a discussion template.
+func UpdateDiscussionTemplate(db *sql.DB, name string, fields map[string]any) error {
+	var sets []string
+	var vals []any
+	for k, v := range fields {
+		sets = append(sets, k+" = ?")
+		vals = append(vals, v)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	vals = append(vals, name)
+	_, err := db.Exec("UPDATE discussion_templates SET "+strings.Join(sets, ", ")+" WHERE name = ?", vals...)
+	return err
+}
+
+// DeleteDiscussionTemplate removes a discussion template.
+func DeleteDiscussionTemplate(db *sql.DB, name string) error {
+	_, err := db.Exec(`DELETE FROM discussion_templates WHERE name = ?`, name)
+	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // CountMilestones returns the total number of milestones.
@@ -1975,6 +2079,11 @@ func UpdateIdeaStatus(db *sql.DB, id int, status string) error {
 	return err
 }
 
+func UpdateIdeaType(db *sql.DB, id int, ideaType string) error {
+	_, err := db.Exec("UPDATE idea_queue SET idea_type = ?, updated_at = datetime('now') WHERE id = ?", ideaType, id)
+	return err
+}
+
 func SetIdeaSpec(db *sql.DB, id int, specMD string) error {
 	_, err := db.Exec("UPDATE idea_queue SET spec_md = ?, status = 'spec-ready', updated_at = datetime('now') WHERE id = ?", specMD, id)
 	return err
@@ -2082,13 +2191,6 @@ func SearchContext(db *sql.DB, projectID, query string) ([]models.ContextEntry, 
 		out = append(out, e)
 	}
 	return out, rows.Err()
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // extractJSONField extracts a simple string field value from a JSON string.
@@ -2330,7 +2432,7 @@ func GetQueuedWorkItems(database *sql.DB) ([]models.QueueEntry, error) {
 		w.status, w.created_at
 		FROM work_items w
 		LEFT JOIN features f ON w.feature_id = f.id
-		LEFT JOIN cycle_instances ci ON ci.feature_id = w.feature_id AND ci.status = 'active'
+		LEFT JOIN cycle_instances ci ON ci.entity_id = w.feature_id AND ci.status = 'active'
 		WHERE w.status IN ('pending','active')
 		ORDER BY
 			CASE w.status WHEN 'active' THEN 0 ELSE 1 END,
@@ -2583,6 +2685,240 @@ func SearchFTSFiltered(database *sql.DB, query string, entityType string, limit 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// FuzzySearch performs fuzzy matching across features, roadmap items, and ideas.
+// It uses substring matching with edit-distance scoring to tolerate typos.
+func FuzzySearch(database *sql.DB, query string, entityType string, limit int) ([]models.SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return nil, nil
+	}
+
+	type candidate struct {
+		entityType string
+		entityID   string
+		title      string
+		content    string
+	}
+
+	var candidates []candidate
+
+	// Load features
+	if entityType == "" || entityType == "feature" {
+		rows, err := database.Query(`SELECT id, name, COALESCE(description, '') || ' ' || COALESCE(spec, '') FROM features`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var c candidate
+				rows.Scan(&c.entityID, &c.title, &c.content)
+				c.entityType = "feature"
+				candidates = append(candidates, c)
+			}
+		}
+	}
+
+	// Load roadmap items
+	if entityType == "" || entityType == "roadmap" {
+		rows, err := database.Query(`SELECT id, title, COALESCE(description, '') FROM roadmap_items`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var c candidate
+				rows.Scan(&c.entityID, &c.title, &c.content)
+				c.entityType = "roadmap"
+				candidates = append(candidates, c)
+			}
+		}
+	}
+
+	// Load ideas
+	if entityType == "" || entityType == "idea" {
+		rows, err := database.Query(`SELECT CAST(id AS TEXT), title, COALESCE(raw_input, '') FROM idea_queue`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var c candidate
+				rows.Scan(&c.entityID, &c.title, &c.content)
+				c.entityType = "idea"
+				candidates = append(candidates, c)
+			}
+		}
+	}
+
+	type scored struct {
+		models.SearchResult
+		score int
+	}
+
+	var results []scored
+	for _, c := range candidates {
+		titleLower := strings.ToLower(c.title)
+		contentLower := strings.ToLower(c.content)
+		fullText := titleLower + " " + contentLower
+
+		score := fuzzyScore(query, titleLower, contentLower)
+		if score > 0 {
+			snippet := fuzzySnippet(query, fullText)
+			results = append(results, scored{
+				SearchResult: models.SearchResult{
+					EntityType: c.entityType,
+					EntityID:   c.entityID,
+					Title:      c.title,
+					Snippet:    snippet,
+					Rank:       float64(-score), // negative so higher score = better rank
+				},
+				score: score,
+			})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	out := make([]models.SearchResult, len(results))
+	for i, r := range results {
+		out[i] = r.SearchResult
+	}
+	return out, nil
+}
+
+// fuzzyScore returns a relevance score (0 = no match) for how well query matches the title/content.
+func fuzzyScore(query, title, content string) int {
+	score := 0
+
+	// Exact substring match in title (highest score)
+	if strings.Contains(title, query) {
+		score += 100
+		// Bonus for matching at word boundary
+		if strings.HasPrefix(title, query) || strings.Contains(title, " "+query) {
+			score += 50
+		}
+	}
+
+	// Exact substring match in content
+	if strings.Contains(content, query) {
+		score += 30
+	}
+
+	// Per-word matching (for multi-word queries)
+	queryWords := strings.Fields(query)
+	if len(queryWords) > 1 {
+		matchedWords := 0
+		for _, w := range queryWords {
+			if strings.Contains(title, w) || strings.Contains(content, w) {
+				matchedWords++
+			}
+		}
+		if matchedWords > 0 {
+			score += matchedWords * 20
+		}
+	}
+
+	// Subsequence matching (characters appear in order — tolerates missing chars)
+	if score == 0 {
+		if fuzzySubsequenceMatch(query, title) {
+			score += 15
+		} else if fuzzySubsequenceMatch(query, content) {
+			score += 5
+		}
+	}
+
+	// Trigram matching for typo tolerance
+	if score == 0 {
+		titleSim := trigramSimilarity(query, title)
+		contentSim := trigramSimilarity(query, content)
+		if titleSim > 0.3 {
+			score += int(titleSim * 40)
+		} else if contentSim > 0.3 {
+			score += int(contentSim * 15)
+		}
+	}
+
+	return score
+}
+
+// fuzzySubsequenceMatch checks if all chars of query appear in order within text.
+func fuzzySubsequenceMatch(query, text string) bool {
+	qi := 0
+	for i := 0; i < len(text) && qi < len(query); i++ {
+		if text[i] == query[qi] {
+			qi++
+		}
+	}
+	return qi == len(query)
+}
+
+// trigramSimilarity returns a similarity score [0,1] based on shared trigrams.
+func trigramSimilarity(a, b string) float64 {
+	if len(a) < 3 || len(b) < 3 {
+		return 0
+	}
+	trigramsA := make(map[string]bool)
+	for i := 0; i <= len(a)-3; i++ {
+		trigramsA[a[i:i+3]] = true
+	}
+	trigramsB := make(map[string]bool)
+	for i := 0; i <= len(b)-3; i++ {
+		trigramsB[b[i:i+3]] = true
+	}
+
+	shared := 0
+	for t := range trigramsA {
+		if trigramsB[t] {
+			shared++
+		}
+	}
+	total := len(trigramsA) + len(trigramsB) - shared
+	if total == 0 {
+		return 0
+	}
+	return float64(shared) / float64(total)
+}
+
+// fuzzySnippet extracts a snippet around the first match of query in text.
+func fuzzySnippet(query, text string) string {
+	idx := strings.Index(text, query)
+	if idx < 0 {
+		// Try first word
+		words := strings.Fields(query)
+		if len(words) > 0 {
+			idx = strings.Index(text, words[0])
+		}
+	}
+	if idx < 0 {
+		if len(text) > 100 {
+			return text[:100] + "..."
+		}
+		return text
+	}
+
+	start := idx - 30
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(query) + 70
+	if end > len(text) {
+		end = len(text)
+	}
+
+	snippet := text[start:end]
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(text) {
+		snippet = snippet + "..."
+	}
+	return snippet
 }
 
 // SearchFeaturesFTS searches features by name, description, and spec via FTS5.
@@ -3507,7 +3843,7 @@ func ListAllPRs(db *sql.DB) ([]models.FeaturePR, error) {
 
 // --- Cycle Templates ---
 
-func InsertCycleTemplate(db *sql.DB, name, description string, steps []string) error {
+func InsertCycleTemplate(db *sql.DB, name, description string, steps []models.CycleStep) error {
 	stepsJSON, err := json.Marshal(steps)
 	if err != nil {
 		return fmt.Errorf("marshaling steps: %w", err)
@@ -3535,9 +3871,11 @@ func ListCycleTemplates(db *sql.DB) ([]models.CycleTemplate, error) {
 			return nil, err
 		}
 		t.IsBuiltin = isBuiltin != 0
-		if err := json.Unmarshal([]byte(stepsJSON), &t.Steps); err != nil {
-			return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, err)
+		steps, parseErr := models.ParseStepsJSON(stepsJSON)
+		if parseErr != nil {
+			return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, parseErr)
 		}
+		t.Steps = steps
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -3552,9 +3890,11 @@ func GetCycleTemplate(db *sql.DB, name string) (*models.CycleTemplate, error) {
 		return nil, err
 	}
 	t.IsBuiltin = isBuiltin != 0
-	if err := json.Unmarshal([]byte(stepsJSON), &t.Steps); err != nil {
-		return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, err)
+	steps, parseErr := models.ParseStepsJSON(stepsJSON)
+	if parseErr != nil {
+		return nil, fmt.Errorf("unmarshaling steps for %s: %w", t.Name, parseErr)
 	}
+	t.Steps = steps
 	return &t, nil
 }
 
@@ -3904,4 +4244,632 @@ func CountPendingHighPriorityItems(database *sql.DB) (int, int, error) {
 		return 0, 0, fmt.Errorf("counting high-priority features: %w", err)
 	}
 	return ideaCount, featureCount, nil
+}
+
+// --- Notifications ---
+
+// CreateNotification inserts a new notification.
+func CreateNotification(database *sql.DB, n *models.Notification) error {
+	result, err := database.Exec(
+		`INSERT INTO notifications (project_id, recipient, type, message, entity_type, entity_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		n.ProjectID, n.Recipient, n.Type, n.Message, n.EntityType, n.EntityID,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := result.LastInsertId()
+	n.ID = int(id)
+	return nil
+}
+
+// ListNotifications returns notifications for a project, optionally filtered by recipient.
+func ListNotifications(database *sql.DB, projectID, recipient string, unreadOnly bool, limit int) ([]models.Notification, error) {
+	query := `SELECT id, project_id, recipient, type, message, entity_type, entity_id, read, created_at FROM notifications WHERE project_id = ?`
+	args := []any{projectID}
+	if recipient != "" {
+		query += ` AND recipient = ?`
+		args = append(args, recipient)
+	}
+	if unreadOnly {
+		query += ` AND read = 0`
+	}
+	query += ` ORDER BY created_at DESC`
+	if limit > 0 {
+		query += fmt.Sprintf(` LIMIT %d`, limit)
+	}
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var notifications []models.Notification
+	for rows.Next() {
+		var n models.Notification
+		if err := rows.Scan(&n.ID, &n.ProjectID, &n.Recipient, &n.Type, &n.Message, &n.EntityType, &n.EntityID, &n.Read, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		notifications = append(notifications, n)
+	}
+	return notifications, rows.Err()
+}
+
+// MarkNotificationRead marks a notification as read.
+func MarkNotificationRead(database *sql.DB, id int) error {
+	_, err := database.Exec(`UPDATE notifications SET read = 1 WHERE id = ?`, id)
+	return err
+}
+
+// ClearNotifications marks all notifications as read for a project/recipient.
+func ClearNotifications(database *sql.DB, projectID, recipient string) error {
+	query := `UPDATE notifications SET read = 1 WHERE project_id = ?`
+	args := []any{projectID}
+	if recipient != "" {
+		query += ` AND recipient = ?`
+		args = append(args, recipient)
+	}
+	_, err := database.Exec(query, args...)
+	return err
+}
+
+// CountUnreadNotifications returns count of unread notifications.
+func CountUnreadNotifications(database *sql.DB, projectID, recipient string) (int, error) {
+	query := `SELECT COUNT(*) FROM notifications WHERE project_id = ? AND read = 0`
+	args := []any{projectID}
+	if recipient != "" {
+		query += ` AND recipient = ?`
+		args = append(args, recipient)
+	}
+	var count int
+	err := database.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
+// --- Discussion Polls ---
+
+// CreateDiscussionPoll creates a poll in a discussion.
+func CreateDiscussionPoll(database *sql.DB, poll *models.DiscussionPoll, options []string) error {
+	result, err := database.Exec(
+		`INSERT INTO discussion_polls (discussion_id, question, poll_type, created_by) VALUES (?, ?, ?, ?)`,
+		poll.DiscussionID, poll.Question, poll.PollType, poll.CreatedBy,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := result.LastInsertId()
+	poll.ID = int(id)
+
+	for i, opt := range options {
+		optResult, oErr := database.Exec(
+			`INSERT INTO discussion_poll_options (poll_id, label, sort_order) VALUES (?, ?, ?)`,
+			poll.ID, opt, i,
+		)
+		if oErr != nil {
+			return oErr
+		}
+		optID, _ := optResult.LastInsertId()
+		poll.Options = append(poll.Options, models.DiscussionPollOption{
+			ID:        int(optID),
+			PollID:    poll.ID,
+			Label:     opt,
+			SortOrder: i,
+		})
+	}
+	return nil
+}
+
+// GetDiscussionPoll retrieves a poll with its options and vote counts.
+func GetDiscussionPoll(database *sql.DB, pollID int) (*models.DiscussionPoll, error) {
+	poll := &models.DiscussionPoll{}
+	err := database.QueryRow(
+		`SELECT id, discussion_id, question, poll_type, status, created_by, created_at FROM discussion_polls WHERE id = ?`,
+		pollID,
+	).Scan(&poll.ID, &poll.DiscussionID, &poll.Question, &poll.PollType, &poll.Status, &poll.CreatedBy, &poll.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := database.Query(
+		`SELECT o.id, o.poll_id, o.label, o.sort_order, COUNT(v.voter) as votes
+		FROM discussion_poll_options o
+		LEFT JOIN discussion_poll_votes v ON v.option_id = o.id
+		WHERE o.poll_id = ?
+		GROUP BY o.id ORDER BY o.sort_order`, pollID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var opt models.DiscussionPollOption
+		if err := rows.Scan(&opt.ID, &opt.PollID, &opt.Label, &opt.SortOrder, &opt.Votes); err != nil {
+			return nil, err
+		}
+		poll.Options = append(poll.Options, opt)
+	}
+	return poll, rows.Err()
+}
+
+// ListDiscussionPolls returns all polls for a discussion.
+func ListDiscussionPolls(database *sql.DB, discussionID int) ([]models.DiscussionPoll, error) {
+	rows, err := database.Query(
+		`SELECT id, discussion_id, question, poll_type, status, created_by, created_at FROM discussion_polls WHERE discussion_id = ? ORDER BY created_at`,
+		discussionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var polls []models.DiscussionPoll
+	for rows.Next() {
+		var p models.DiscussionPoll
+		if err := rows.Scan(&p.ID, &p.DiscussionID, &p.Question, &p.PollType, &p.Status, &p.CreatedBy, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		polls = append(polls, p)
+	}
+	return polls, rows.Err()
+}
+
+// VoteOnPoll records a vote on a poll option.
+func VoteOnPoll(database *sql.DB, pollID, optionID int, voter string) error {
+	_, err := database.Exec(
+		`INSERT OR IGNORE INTO discussion_poll_votes (poll_id, option_id, voter) VALUES (?, ?, ?)`,
+		pollID, optionID, voter,
+	)
+	return err
+}
+
+// CloseDiscussionPoll closes a poll.
+func CloseDiscussionPoll(database *sql.DB, pollID int) error {
+	_, err := database.Exec(`UPDATE discussion_polls SET status = 'closed' WHERE id = ?`, pollID)
+	return err
+}
+
+// --- API Tokens ---
+
+// CreateAPIToken inserts a new API token record and returns its ID.
+func CreateAPIToken(database *sql.DB, projectID, name, tokenHash string, scopes []string, expiresAt string) (int64, error) {
+	scopesJSON, _ := json.Marshal(scopes)
+	var res sql.Result
+	var err error
+	if expiresAt != "" {
+		res, err = database.Exec(
+			`INSERT INTO api_tokens (project_id, name, token_hash, scopes, expires_at) VALUES (?, ?, ?, ?, ?)`,
+			projectID, name, tokenHash, string(scopesJSON), expiresAt,
+		)
+	} else {
+		res, err = database.Exec(
+			`INSERT INTO api_tokens (project_id, name, token_hash, scopes) VALUES (?, ?, ?, ?)`,
+			projectID, name, tokenHash, string(scopesJSON),
+		)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListAPITokens returns all API tokens for a project (including revoked).
+func ListAPITokens(database *sql.DB, projectID string) ([]models.APIToken, error) {
+	rows, err := database.Query(
+		`SELECT id, project_id, name, token_hash, scopes, created_at, COALESCE(expires_at,''), COALESCE(revoked_at,'')
+		 FROM api_tokens WHERE project_id = ? ORDER BY created_at DESC`, projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []models.APIToken
+	for rows.Next() {
+		var t models.APIToken
+		var scopesJSON string
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Name, &t.TokenHash, &scopesJSON, &t.CreatedAt, &t.ExpiresAt, &t.RevokedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(scopesJSON), &t.Scopes)
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
+// GetAPITokenByHash returns a non-revoked, non-expired token by its hash.
+func GetAPITokenByHash(database *sql.DB, tokenHash string) (*models.APIToken, error) {
+	row := database.QueryRow(
+		`SELECT id, project_id, name, token_hash, scopes, created_at, COALESCE(expires_at,''), COALESCE(revoked_at,'')
+		 FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL
+		 AND (expires_at IS NULL OR expires_at > datetime('now'))`, tokenHash,
+	)
+	var t models.APIToken
+	var scopesJSON string
+	if err := row.Scan(&t.ID, &t.ProjectID, &t.Name, &t.TokenHash, &scopesJSON, &t.CreatedAt, &t.ExpiresAt, &t.RevokedAt); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(scopesJSON), &t.Scopes)
+	return &t, nil
+}
+
+// RevokeAPIToken marks a token as revoked.
+func RevokeAPIToken(database *sql.DB, tokenID int) error {
+	res, err := database.Exec(
+		`UPDATE api_tokens SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL`, tokenID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("token not found or already revoked")
+	}
+	return nil
+}
+
+// EventStat holds a count for a single event type.
+type EventStat struct {
+	EventType string `json:"event_type"`
+	Count     int    `json:"count"`
+}
+
+// GetEventStats returns event counts grouped by event_type.
+func GetEventStats(database *sql.DB, projectID string) ([]EventStat, error) {
+	rows, err := database.Query(`
+		SELECT event_type, COUNT(*) as cnt
+		FROM events
+		WHERE project_id = ?
+		GROUP BY event_type
+		ORDER BY cnt DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []EventStat
+	for rows.Next() {
+		var s EventStat
+		if err := rows.Scan(&s.EventType, &s.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ListEventsPaginated returns events with pagination support.
+func ListEventsPaginated(database *sql.DB, projectID, featureID, eventType, since, until string, limit, offset int) ([]models.Event, int, error) {
+	// Count total
+	countQ := `SELECT COUNT(*) FROM events WHERE project_id = ?`
+	args := []any{projectID}
+	if featureID != "" {
+		countQ += " AND feature_id = ?"
+		args = append(args, featureID)
+	}
+	if eventType != "" {
+		countQ += " AND event_type = ?"
+		args = append(args, eventType)
+	}
+	if since != "" {
+		countQ += " AND created_at >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		countQ += " AND created_at <= ?"
+		args = append(args, until)
+	}
+
+	var total int
+	if err := database.QueryRow(countQ, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// Build the data query using the same filters
+	dataQ := `SELECT id, project_id, COALESCE(feature_id,''), event_type, COALESCE(data,''), created_at
+		FROM events WHERE project_id = ?`
+	dataArgs := []any{projectID}
+	if featureID != "" {
+		dataQ += " AND feature_id = ?"
+		dataArgs = append(dataArgs, featureID)
+	}
+	if eventType != "" {
+		dataQ += " AND event_type = ?"
+		dataArgs = append(dataArgs, eventType)
+	}
+	if since != "" {
+		dataQ += " AND created_at >= ?"
+		dataArgs = append(dataArgs, since)
+	}
+	if until != "" {
+		dataQ += " AND created_at <= ?"
+		dataArgs = append(dataArgs, until)
+	}
+	dataQ += " ORDER BY created_at DESC"
+	if limit > 0 {
+		dataQ += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	if offset > 0 {
+		dataQ += fmt.Sprintf(" OFFSET %d", offset)
+	}
+
+	rows, err := database.Query(dataQ, dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.Event
+	for rows.Next() {
+		var e models.Event
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.FeatureID, &e.EventType, &e.Data, &e.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, e)
+	}
+	return out, total, rows.Err()
+}
+
+// HeatmapGrid holds aggregated counts by day-of-week (0-6) and hour-of-day (0-23).
+type HeatmapGrid struct {
+	Cells    [168]int `json:"cells"` // 7 days * 24 hours
+	MaxCount int      `json:"max_count"`
+}
+
+// GetHeatmapGrid returns event counts by hour-of-day and day-of-week.
+func GetHeatmapGrid(database *sql.DB, projectID string) (*HeatmapGrid, error) {
+	rows, err := database.Query(`
+		SELECT CAST(strftime('%w', created_at) AS INTEGER) AS dow,
+		       CAST(strftime('%H', created_at) AS INTEGER) AS hour,
+		       COUNT(*) AS cnt
+		FROM events
+		WHERE project_id = ?
+		GROUP BY dow, hour`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying heatmap grid: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	grid := &HeatmapGrid{}
+	for rows.Next() {
+		var dow, hour, cnt int
+		if err := rows.Scan(&dow, &hour, &cnt); err != nil {
+			return nil, err
+		}
+		idx := dow*24 + hour
+		if idx >= 0 && idx < 168 {
+			grid.Cells[idx] = cnt
+			if cnt > grid.MaxCount {
+				grid.MaxCount = cnt
+			}
+		}
+	}
+	return grid, rows.Err()
+}
+
+// --- Workstreams ---
+
+func CreateWorkstream(db *sql.DB, w *models.Workstream) error {
+	_, err := db.Exec(
+		`INSERT INTO workstreams (id, project_id, parent_id, name, description, status, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		w.ID, w.ProjectID, nullStr(w.ParentID), w.Name, w.Description, w.Status, w.Tags,
+	)
+	return err
+}
+
+func GetWorkstream(db *sql.DB, id string) (*models.Workstream, error) {
+	row := db.QueryRow(`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE id = ?`, id)
+	w := &models.Workstream{}
+	if err := row.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func ListWorkstreams(db *sql.DB, projectID, status string) ([]models.Workstream, error) {
+	query := `SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE 1=1`
+	var args []any
+	if projectID != "" {
+		query += ` AND project_id = ?`
+		args = append(args, projectID)
+	}
+	if status != "" && status != "all" {
+		query += ` AND status = ?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY updated_at DESC`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.Workstream
+	for rows.Next() {
+		var w models.Workstream
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func UpdateWorkstream(db *sql.DB, id string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	setClauses := []string{"updated_at = datetime('now')"}
+	var args []any
+	for col, val := range updates {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	args = append(args, id)
+	_, err := db.Exec(
+		fmt.Sprintf(`UPDATE workstreams SET %s WHERE id = ?`, strings.Join(setClauses, ", ")),
+		args...,
+	)
+	return err
+}
+
+func ArchiveWorkstream(db *sql.DB, id string) error {
+	_, err := db.Exec(`UPDATE workstreams SET status = 'archived', updated_at = datetime('now') WHERE id = ?`, id)
+	return err
+}
+
+// --- Workstream Notes ---
+
+func CreateWorkstreamNote(db *sql.DB, n *models.WorkstreamNote) error {
+	res, err := db.Exec(
+		`INSERT INTO workstream_notes (workstream_id, content, note_type, source, resolved) VALUES (?, ?, ?, ?, ?)`,
+		n.WorkstreamID, n.Content, n.NoteType, n.Source, n.Resolved,
+	)
+	if err != nil {
+		return err
+	}
+	if id, idErr := res.LastInsertId(); idErr == nil {
+		n.ID = int(id)
+	}
+	_, _ = db.Exec(`UPDATE workstreams SET updated_at = datetime('now') WHERE id = ?`, n.WorkstreamID)
+	return nil
+}
+
+func ListWorkstreamNotes(db *sql.DB, workstreamID string) ([]models.WorkstreamNote, error) {
+	rows, err := db.Query(
+		`SELECT id, workstream_id, content, note_type, source, resolved, created_at FROM workstream_notes WHERE workstream_id = ? ORDER BY created_at DESC`,
+		workstreamID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.WorkstreamNote
+	for rows.Next() {
+		var n models.WorkstreamNote
+		if err := rows.Scan(&n.ID, &n.WorkstreamID, &n.Content, &n.NoteType, &n.Source, &n.Resolved, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func UpdateWorkstreamNote(db *sql.DB, id int, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	var setClauses []string
+	var args []any
+	for col, val := range updates {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	args = append(args, id)
+	_, err := db.Exec(
+		fmt.Sprintf(`UPDATE workstream_notes SET %s WHERE id = ?`, strings.Join(setClauses, ", ")),
+		args...,
+	)
+	return err
+}
+
+func DeleteWorkstreamNote(db *sql.DB, id int) error {
+	_, err := db.Exec(`DELETE FROM workstream_notes WHERE id = ?`, id)
+	return err
+}
+
+// --- Workstream Links ---
+
+func CreateWorkstreamLink(db *sql.DB, l *models.WorkstreamLink) error {
+	res, err := db.Exec(
+		`INSERT INTO workstream_links (workstream_id, link_type, target_id, target_url, label) VALUES (?, ?, ?, ?, ?)`,
+		l.WorkstreamID, l.LinkType, l.TargetID, l.TargetURL, l.Label,
+	)
+	if err != nil {
+		return err
+	}
+	if id, idErr := res.LastInsertId(); idErr == nil {
+		l.ID = int(id)
+	}
+	_, _ = db.Exec(`UPDATE workstreams SET updated_at = datetime('now') WHERE id = ?`, l.WorkstreamID)
+	return nil
+}
+
+func ListWorkstreamLinks(db *sql.DB, workstreamID string) ([]models.WorkstreamLink, error) {
+	rows, err := db.Query(
+		`SELECT id, workstream_id, link_type, target_id, target_url, label, created_at FROM workstream_links WHERE workstream_id = ? ORDER BY created_at DESC`,
+		workstreamID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.WorkstreamLink
+	for rows.Next() {
+		var l models.WorkstreamLink
+		if err := rows.Scan(&l.ID, &l.WorkstreamID, &l.LinkType, &l.TargetID, &l.TargetURL, &l.Label, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func DeleteWorkstreamLink(db *sql.DB, id int) error {
+	_, err := db.Exec(`DELETE FROM workstream_links WHERE id = ?`, id)
+	return err
+}
+
+func GetWorkstreamDetail(db *sql.DB, id string) (*models.WorkstreamDetail, error) {
+	w, err := GetWorkstream(db, id)
+	if err != nil {
+		return nil, err
+	}
+	notes, err := ListWorkstreamNotes(db, id)
+	if err != nil {
+		return nil, err
+	}
+	links, err := ListWorkstreamLinks(db, id)
+	if err != nil {
+		return nil, err
+	}
+	children, err := listWorkstreamChildren(db, id)
+	if err != nil {
+		return nil, err
+	}
+	if notes == nil {
+		notes = []models.WorkstreamNote{}
+	}
+	if links == nil {
+		links = []models.WorkstreamLink{}
+	}
+	if children == nil {
+		children = []models.Workstream{}
+	}
+	return &models.WorkstreamDetail{
+		Workstream: *w,
+		Notes:      notes,
+		Links:      links,
+		Children:   children,
+	}, nil
+}
+
+func listWorkstreamChildren(db *sql.DB, parentID string) ([]models.Workstream, error) {
+	rows, err := db.Query(
+		`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE parent_id = ? ORDER BY created_at`,
+		parentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.Workstream
+	for rows.Next() {
+		var w models.Workstream
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }

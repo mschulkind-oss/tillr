@@ -3,17 +3,17 @@ package cli
 import (
 	"fmt"
 
-	"github.com/mschulkind/lifecycle/internal/config"
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
 var projectCmd = &cobra.Command{
 	Use:   "project",
 	Short: "Manage multiple projects within a single database",
-	Long: `Manage multiple projects stored in the same lifecycle database.
+	Long: `Manage multiple projects stored in the same tillr database.
 
 Use 'project list' to see all projects, 'project switch <id>' to change
 the active project, and 'project create <name>' to add a new one.`,

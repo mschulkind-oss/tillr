@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
+	"github.com/mschulkind/tillr/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -57,7 +57,7 @@ func readFeatureIDsFromStdinOrArgs(args []string) ([]string, error) {
 		return nil, fmt.Errorf("no feature IDs received from stdin")
 	}
 
-	// Try JSON array of objects with "id" field (e.g. from `lifecycle feature list --json`)
+	// Try JSON array of objects with "id" field (e.g. from `tillr feature list --json`)
 	var objects []map[string]any
 	if err := json.Unmarshal([]byte(input), &objects); err == nil {
 		var ids []string
@@ -122,12 +122,12 @@ var batchStatusCmd = &cobra.Command{
 	Long: `Set the status of multiple features at once.
 
 Feature IDs can be passed as arguments or piped from stdin (one per line,
-or JSON array from 'lifecycle feature list --json').`,
+or JSON array from 'tillr feature list --json').`,
 	Example: `  # Set multiple features to implementing
-  lifecycle feature batch status implementing feat-1 feat-2
+  tillr feature batch status implementing feat-1 feat-2
 
   # Pipe from feature list
-  lifecycle feature list --status draft --json | lifecycle feature batch status planning`,
+  tillr feature list --status draft --json | tillr feature batch status planning`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		status := args[0]
@@ -172,12 +172,12 @@ var batchTagCmd = &cobra.Command{
 	Long: `Add a tag to multiple features at once.
 
 Feature IDs can be passed as arguments or piped from stdin (one per line,
-or JSON array from 'lifecycle feature list --json').`,
+or JSON array from 'tillr feature list --json').`,
 	Example: `  # Tag multiple features
-  lifecycle feature batch tag backend feat-1 feat-2
+  tillr feature batch tag backend feat-1 feat-2
 
   # Pipe from feature list
-  lifecycle feature list --status implementing --json | lifecycle feature batch tag sprint-3`,
+  tillr feature list --status implementing --json | tillr feature batch tag sprint-3`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		tag := args[0]
@@ -222,12 +222,12 @@ var batchMilestoneCmd = &cobra.Command{
 	Long: `Assign multiple features to a milestone at once.
 
 Feature IDs can be passed as arguments or piped from stdin (one per line,
-or JSON array from 'lifecycle feature list --json').`,
+or JSON array from 'tillr feature list --json').`,
 	Example: `  # Move features to a milestone
-  lifecycle feature batch milestone v2.0-polish feat-1 feat-2
+  tillr feature batch milestone v2.0-polish feat-1 feat-2
 
   # Pipe from feature list
-  lifecycle feature list --status draft --json | lifecycle feature batch milestone v1.0-mvp`,
+  tillr feature list --status draft --json | tillr feature batch milestone v1.0-mvp`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		milestoneID := args[0]
@@ -272,12 +272,12 @@ var batchPriorityCmd = &cobra.Command{
 	Long: `Set the priority of multiple features at once.
 
 Feature IDs can be passed as arguments or piped from stdin (one per line,
-or JSON array from 'lifecycle feature list --json').`,
+or JSON array from 'tillr feature list --json').`,
 	Example: `  # Set priority for multiple features
-  lifecycle feature batch priority 8 feat-1 feat-2
+  tillr feature batch priority 8 feat-1 feat-2
 
   # Pipe from feature list
-  lifecycle feature list --status draft --json | lifecycle feature batch priority 5`,
+  tillr feature list --status draft --json | tillr feature batch priority 5`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		priority, parseErr := strconv.Atoi(args[0])

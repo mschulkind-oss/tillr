@@ -1,10 +1,10 @@
-# Lifecycle
+# Tillr
 
-[![CI](https://github.com/mschulkind/lifecycle/actions/workflows/ci.yml/badge.svg)](https://github.com/mschulkind/lifecycle/actions/workflows/ci.yml)
+[![CI](https://github.com/mschulkind/tillr/actions/workflows/ci.yml/badge.svg)](https://github.com/mschulkind/tillr/actions/workflows/ci.yml)
 
 **Human-in-the-loop project management for agentic software development.**
 
-Lifecycle is the project manager that sits between humans and AI agents. It defines structured iteration cycles — plan, implement, review, approve — ensuring every piece of work flows through a pipeline with human checkpoints. Agents do the heavy lifting. Humans retain steering authority. Everything is captured in a local SQLite database for full visibility and searchability.
+Tillr is the project manager that sits between humans and AI agents. It defines structured iteration cycles — plan, implement, review, approve — ensuring every piece of work flows through a pipeline with human checkpoints. Agents do the heavy lifting. Humans retain steering authority. Everything is captured in a local SQLite database for full visibility and searchability.
 
 > **Platform:** Linux. macOS is untested and unsupported. Windows is not supported.
 
@@ -25,22 +25,22 @@ Lifecycle is the project manager that sits between humans and AI agents. It defi
 
 ```bash
 # Install from source
-git clone https://github.com/mschulkind/lifecycle.git
-cd lifecycle
+git clone https://github.com/mschulkind/tillr.git
+cd tillr
 just install
 
 # Initialize a project
-lifecycle init
+tillr init
 
 # Add features to the roadmap
-lifecycle add "User authentication system"
-lifecycle add "API rate limiting"
+tillr add "User authentication system"
+tillr add "API rate limiting"
 
 # Run an iteration cycle
-lifecycle cycle start
+tillr cycle start
 
 # Launch the web viewer
-lifecycle serve
+tillr serve
 ```
 
 ---
@@ -48,12 +48,12 @@ lifecycle serve
 ## 🔧 CLI Reference
 
 ```
-lifecycle init                  # Initialize a new project
-lifecycle add <feature>         # Add a feature to the roadmap
-lifecycle cycle start           # Start an iteration cycle
-lifecycle cycle status          # Show current cycle status
-lifecycle serve                 # Start the web viewer
-lifecycle --version             # Show version
+tillr init                  # Initialize a new project
+tillr add <feature>         # Add a feature to the roadmap
+tillr cycle start           # Start an iteration cycle
+tillr cycle status          # Show current cycle status
+tillr serve                 # Start the web viewer
+tillr --version             # Show version
 ```
 
 See [docs/guides/](docs/guides/) for the full user guide.
@@ -70,12 +70,12 @@ See [docs/design/](docs/design/) for the full design documentation.
 
 ## ⚙️ Configuration
 
-Lifecycle stores its configuration in `.lifecycle.json` in the project root.
+Tillr stores its configuration in `.tillr.json` in the project root.
 
 ```json
 {
   "project": "my-project",
-  "database": ".lifecycle.db"
+  "database": ".tillr.db"
 }
 ```
 

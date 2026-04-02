@@ -9,29 +9,29 @@ import (
 var completionCmd = &cobra.Command{
 	Use:   "completion [bash|zsh|fish|powershell]",
 	Short: "Generate shell completion scripts",
-	Long: `Generate shell completion scripts for lifecycle.
+	Long: `Generate shell completion scripts for tillr.
 
 To load completions:
 
 Bash:
-  $ source <(lifecycle completion bash)
+  $ source <(tillr completion bash)
 
   # To load completions for each session, execute once:
   # Linux:
-  $ lifecycle completion bash > /etc/bash_completion.d/lifecycle
+  $ tillr completion bash > /etc/bash_completion.d/tillr
   # macOS:
-  $ lifecycle completion bash > $(brew --prefix)/etc/bash_completion.d/lifecycle
+  $ tillr completion bash > $(brew --prefix)/etc/bash_completion.d/tillr
 
 Zsh:
   $ echo "autoload -U compinit; compinit" >> ~/.zshrc  # if not already enabled
-  $ lifecycle completion zsh > "${fpath[1]}/_lifecycle"
+  $ tillr completion zsh > "${fpath[1]}/_tillr"
 
 Fish:
-  $ lifecycle completion fish | source
-  $ lifecycle completion fish > ~/.config/fish/completions/lifecycle.fish
+  $ tillr completion fish | source
+  $ tillr completion fish > ~/.config/fish/completions/tillr.fish
 
 PowerShell:
-  PS> lifecycle completion powershell | Out-String | Invoke-Expression
+  PS> tillr completion powershell | Out-String | Invoke-Expression
 `,
 	DisableFlagsInUseLine: true,
 	ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},

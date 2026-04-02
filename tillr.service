@@ -1,0 +1,19 @@
+[Unit]
+Description=Tillr - Project management daemon for agentic development
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/go/bin/tillr daemon
+Restart=on-failure
+RestartSec=5
+
+# Environment
+Environment=HOME=%h
+
+# Logging is handled by journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

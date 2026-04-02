@@ -6,9 +6,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -73,15 +73,15 @@ an agent needs to execute the task without additional context.
 
 If no work items are available, returns a "no_work" status.`,
 	Example: `  # Get next work item as JSON (primary agent interface)
-  lifecycle next --json
+  tillr next --json
 
   # Filter by cycle type
-  lifecycle next --cycle feature-implementation --json
+  tillr next --cycle feature-implementation --json
 
   # Typical agent loop:
-  #   WORK=$(lifecycle next --json)
+  #   WORK=$(tillr next --json)
   #   # Read agent_guidance field, do the work
-  #   lifecycle done --result "Completed: ..."`,
+  #   tillr done --result "Completed: ..."`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -134,7 +134,7 @@ The --result flag should summarize what was accomplished. This result is
 stored in the work item history and passed to subsequent cycle steps.
 
 If no work item is active, this command will return an error. Use
-'lifecycle next' to claim a work item first.`,
+'tillr next' to claim a work item first.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -254,12 +254,12 @@ var advanceCmd = &cobra.Command{
 work item. This is the preferred agent command — it eliminates the
 gap between "done" and "next" where another agent could steal work.
 
-Returns the same enriched WorkContext as "lifecycle next --json" but
+Returns the same enriched WorkContext as "tillr next --json" but
 also includes a "completed" field showing what was just finished.`,
 	Example: `  # Agent loop using advance:
-  WORK=$(lifecycle next --json)     # bootstrap first item
+  WORK=$(tillr next --json)     # bootstrap first item
   # ... do the work ...
-  WORK=$(lifecycle advance --result "Implemented X" --json)
+  WORK=$(tillr advance --result "Implemented X" --json)
   # WORK now contains the next assignment`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()

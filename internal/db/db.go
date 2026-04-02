@@ -10,17 +10,23 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Open opens or creates a lifecycle SQLite database at the given path.
+// Open opens or creates a tillr SQLite database at the given path.
 func Open(dbPath string) (*sql.DB, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// SQLite WAL mode allows concurrent readers but only one writer.
+	// Keep a small connection pool so the HTTP server can serve concurrent
+	// reads, but limit total connections to avoid write contention.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 
 	if err := migrate(db); err != nil {
 		_ = db.Close()
@@ -238,7 +244,7 @@ var migrations = []string{
 	// Migration 7: Add body column to discussions
 	`ALTER TABLE discussions ADD COLUMN body TEXT NOT NULL DEFAULT '';`,
 
-	// Migration 8: Agent-first lifecycle tables
+	// Migration 8: Agent-first tillr tables
 	`CREATE TABLE IF NOT EXISTS agent_sessions (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL REFERENCES projects(id),
@@ -503,4 +509,110 @@ var migrations = []string{
 	// Migration 27: Add source_page and context to idea_queue
 	`ALTER TABLE idea_queue ADD COLUMN source_page TEXT DEFAULT '';
 	ALTER TABLE idea_queue ADD COLUMN context TEXT DEFAULT '';`,
+
+	// Migration 28: Notifications table
+	`CREATE TABLE IF NOT EXISTS notifications (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		recipient TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL CHECK(type IN ('mention','qa_needed','approved','rejected','blocked','assigned')),
+		message TEXT NOT NULL,
+		entity_type TEXT NOT NULL DEFAULT '',
+		entity_id TEXT NOT NULL DEFAULT '',
+		read INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id);
+	CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient);
+	CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);`,
+
+	// Migration 29: Discussion polls
+	`CREATE TABLE IF NOT EXISTS discussion_polls (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		discussion_id INTEGER NOT NULL REFERENCES discussions(id),
+		question TEXT NOT NULL,
+		poll_type TEXT NOT NULL DEFAULT 'single' CHECK(poll_type IN ('single','multiple')),
+		status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
+		created_by TEXT NOT NULL DEFAULT 'agent',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS discussion_poll_options (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		poll_id INTEGER NOT NULL REFERENCES discussion_polls(id),
+		label TEXT NOT NULL,
+		sort_order INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE IF NOT EXISTS discussion_poll_votes (
+		poll_id INTEGER NOT NULL REFERENCES discussion_polls(id),
+		option_id INTEGER NOT NULL REFERENCES discussion_poll_options(id),
+		voter TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(poll_id, option_id, voter)
+	);
+	CREATE INDEX IF NOT EXISTS idx_discussion_polls_discussion ON discussion_polls(discussion_id);
+	CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON discussion_poll_votes(poll_id);`,
+
+	// Migration 30: Discussion templates (custom, persisted)
+	`CREATE TABLE IF NOT EXISTS discussion_templates (
+		name TEXT PRIMARY KEY,
+		description TEXT NOT NULL DEFAULT '',
+		body TEXT NOT NULL DEFAULT '',
+		is_builtin INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
+
+	// Migration 31: API tokens for multi-key authentication
+	`CREATE TABLE IF NOT EXISTS api_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id TEXT NOT NULL REFERENCES projects(id),
+		name TEXT NOT NULL,
+		token_hash TEXT NOT NULL UNIQUE,
+		scopes TEXT NOT NULL DEFAULT '["read","write"]',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		expires_at TEXT,
+		revoked_at TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_api_tokens_project ON api_tokens(project_id);
+	CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);`,
+
+	// Migration 32: Human workstreams — lightweight journal for tracking parallel threads of work
+	`CREATE TABLE IF NOT EXISTS workstreams (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL DEFAULT '',
+		parent_id TEXT DEFAULT NULL REFERENCES workstreams(id),
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+		tags TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS workstream_notes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workstream_id TEXT NOT NULL REFERENCES workstreams(id),
+		content TEXT NOT NULL,
+		note_type TEXT NOT NULL DEFAULT 'note' CHECK(note_type IN ('note', 'question', 'decision', 'idea', 'import')),
+		source TEXT NOT NULL DEFAULT '',
+		resolved INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS workstream_links (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workstream_id TEXT NOT NULL REFERENCES workstreams(id),
+		link_type TEXT NOT NULL CHECK(link_type IN ('feature', 'doc', 'url', 'discussion')),
+		target_id TEXT NOT NULL DEFAULT '',
+		target_url TEXT NOT NULL DEFAULT '',
+		label TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_workstreams_project ON workstreams(project_id);
+	CREATE INDEX IF NOT EXISTS idx_workstreams_parent ON workstreams(parent_id);
+	CREATE INDEX IF NOT EXISTS idx_workstreams_status ON workstreams(status);
+	CREATE INDEX IF NOT EXISTS idx_workstream_notes_ws ON workstream_notes(workstream_id);
+	CREATE INDEX IF NOT EXISTS idx_workstream_links_ws ON workstream_links(workstream_id);`,
+
+	// Migration 33: Polymorphic cycles — attach cycles to any entity type, not just features
+	`ALTER TABLE cycle_instances ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'feature';
+	ALTER TABLE cycle_instances RENAME COLUMN feature_id TO entity_id;
+	CREATE INDEX IF NOT EXISTS idx_cycles_entity ON cycle_instances(entity_type, entity_id);`,
 }

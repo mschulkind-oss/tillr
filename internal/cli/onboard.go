@@ -9,17 +9,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/config"
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
 var onboardCmd = &cobra.Command{
 	Use:   "onboard [flags]",
-	Short: "Onboard an existing project for lifecycle management",
-	Long: `Onboard scans an existing project directory, initializes lifecycle tracking
+	Short: "Onboard an existing project for tillr management",
+	Long: `Onboard scans an existing project directory, initializes tillr tracking
 if needed, and outputs a structured analysis with guidance for agents.
 
 This is the recommended entry point for agents working with a new codebase.
@@ -33,16 +33,16 @@ In non-interactive mode (--yes), the command will automatically:
   - Create features from detected work items (recent commits, GitHub issues)
   - Create a "Self-Hosting Bootstrap" roadmap item if none exists`,
 	Example: `  # Onboard an existing project (interactive)
-  lifecycle onboard
+  tillr onboard
 
   # Onboard with a specific name, non-interactive
-  lifecycle onboard --name my-project --yes
+  tillr onboard --name my-project --yes
 
   # Scan project and output analysis as JSON (for agents)
-  lifecycle onboard --json
+  tillr onboard --json
 
   # Scan only, don't create anything
-  lifecycle onboard --scan --json`,
+  tillr onboard --scan --json`,
 	RunE: runOnboard,
 }
 
@@ -703,7 +703,7 @@ func applyOnboardSuggestions(cwd string, analysis *ProjectAnalysis, autoYes bool
 				ID:          bootstrapID,
 				ProjectID:   p.ID,
 				Title:       "Self-Hosting Bootstrap",
-				Description: "Set up lifecycle to manage its own development. Import existing work, create milestones, and establish iteration cycles.",
+				Description: "Set up tillr to manage its own development. Import existing work, create milestones, and establish iteration cycles.",
 				Category:    "meta",
 				Priority:    "high",
 				Effort:      "m",
@@ -751,10 +751,10 @@ func extToLanguage(ext string) string {
 func buildGuidanceText() string {
 	return `Next Steps for Agents:
   1. Create milestones to organize work phases:
-     lifecycle milestone add "v1.0 MVP" --description "Core functionality"
+     tillr milestone add "v1.0 MVP" --description "Core functionality"
 
   2. Add existing features (use --status for work already done):
-     lifecycle feature add "Feature Name" \
+     tillr feature add "Feature Name" \
        --description "What it does" \
        --spec "1. Acceptance criteria..." \
        --milestone v1.0-mvp \
@@ -764,25 +764,25 @@ func buildGuidanceText() string {
        --status draft         # For planned work
 
   3. Set up your roadmap:
-     lifecycle roadmap add "Item Title" \
+     tillr roadmap add "Item Title" \
        --description "Full description" \
        --priority critical --category core --effort m
 
   4. Link features to roadmap items:
-     lifecycle feature edit <id> --roadmap-item <roadmap-id>
+     tillr feature edit <id> --roadmap-item <roadmap-id>
 
   5. Add full specs to every feature:
-     lifecycle feature edit <id> --spec "1. First criterion\n2. Second..."
+     tillr feature edit <id> --spec "1. First criterion\n2. Second..."
 
   6. Start development cycles:
-     lifecycle cycle start feature-implementation <feature-id>
+     tillr cycle start feature-implementation <feature-id>
 
   7. Check project health:
-     lifecycle doctor
+     tillr doctor
 
   8. View your project:
-     lifecycle serve
+     tillr serve
      # Open http://localhost:3847
 
-For the complete guide: lifecycle help onboard`
+For the complete guide: tillr help onboard`
 }

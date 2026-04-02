@@ -1,11 +1,11 @@
-// Package plugin implements discovery and execution of external lifecycle plugins.
+// Package plugin implements discovery and execution of external tillr plugins.
 //
-// Plugins are external executables following the naming convention lifecycle-plugin-<name>.
+// Plugins are external executables following the naming convention tillr-plugin-<name>.
 // They communicate via JSON over stdin/stdout.
 //
 // Protocol:
-//   - lifecycle-plugin-<name> info → returns PluginInfo JSON on stdout
-//   - lifecycle-plugin-<name> <command> → reads JSON on stdin, writes JSON on stdout
+//   - tillr-plugin-<name> info → returns PluginInfo JSON on stdout
+//   - tillr-plugin-<name> <command> → reads JSON on stdin, writes JSON on stdout
 //   - Exit 0 = success, non-zero = error (stderr has message)
 package plugin
 
@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-const pluginPrefix = "lifecycle-plugin-"
+const pluginPrefix = "tillr-plugin-"
 
 // Plugin represents a discovered plugin executable.
 type Plugin struct {
@@ -31,7 +31,7 @@ type Plugin struct {
 	Commands    []string `json:"commands,omitempty"`
 }
 
-// PluginInfo is the JSON structure returned by `lifecycle-plugin-<name> info`.
+// PluginInfo is the JSON structure returned by `tillr-plugin-<name> info`.
 type PluginInfo struct {
 	Name        string   `json:"name"`
 	Version     string   `json:"version"`
@@ -58,7 +58,7 @@ func (e *PluginError) Error() string {
 }
 
 // Discover scans the directories in PATH for executables matching the
-// lifecycle-plugin-* naming convention. It returns one Plugin per unique
+// tillr-plugin-* naming convention. It returns one Plugin per unique
 // name (first match wins, matching shell PATH precedence).
 func Discover() ([]Plugin, error) {
 	return DiscoverInPath(os.Getenv("PATH"))
@@ -127,7 +127,7 @@ func ParsePluginName(filename string) string {
 	return name
 }
 
-// QueryInfo executes `lifecycle-plugin-<name> info` and parses the result.
+// QueryInfo executes `tillr-plugin-<name> info` and parses the result.
 func QueryInfo(p Plugin) (Plugin, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command(p.Path, "info") //nolint:gosec

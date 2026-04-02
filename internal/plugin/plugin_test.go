@@ -12,12 +12,12 @@ func TestParsePluginName(t *testing.T) {
 		filename string
 		want     string
 	}{
-		{"lifecycle-plugin-foo", "foo"},
-		{"lifecycle-plugin-bar-baz", "bar-baz"},
-		{"lifecycle-plugin-", ""},
-		{"lifecycle-plugin", ""},
+		{"tillr-plugin-foo", "foo"},
+		{"tillr-plugin-bar-baz", "bar-baz"},
+		{"tillr-plugin-", ""},
+		{"tillr-plugin", ""},
 		{"not-a-plugin", ""},
-		{"lifecycle-foo", ""},
+		{"tillr-foo", ""},
 		{"", ""},
 	}
 
@@ -35,9 +35,9 @@ func TestParsePluginNameWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-only test")
 	}
-	got := ParsePluginName("lifecycle-plugin-foo.exe")
+	got := ParsePluginName("tillr-plugin-foo.exe")
 	if got != "foo" {
-		t.Errorf("ParsePluginName(%q) = %q, want %q", "lifecycle-plugin-foo.exe", got, "foo")
+		t.Errorf("ParsePluginName(%q) = %q, want %q", "tillr-plugin-foo.exe", got, "foo")
 	}
 }
 
@@ -46,13 +46,13 @@ func TestDiscoverInPath(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a valid plugin executable.
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-test")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-test")
 	if err := os.WriteFile(pluginPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create another valid plugin.
-	plugin2Path := filepath.Join(tmpDir, "lifecycle-plugin-hello")
+	plugin2Path := filepath.Join(tmpDir, "tillr-plugin-hello")
 	if err := os.WriteFile(plugin2Path, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -64,13 +64,13 @@ func TestDiscoverInPath(t *testing.T) {
 	}
 
 	// Create a file with the right name but not executable — should be ignored.
-	noExec := filepath.Join(tmpDir, "lifecycle-plugin-noexec")
+	noExec := filepath.Join(tmpDir, "tillr-plugin-noexec")
 	if err := os.WriteFile(noExec, []byte("#!/bin/sh\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create a directory with plugin name — should be ignored.
-	dirPlugin := filepath.Join(tmpDir, "lifecycle-plugin-isdir")
+	dirPlugin := filepath.Join(tmpDir, "tillr-plugin-isdir")
 	if err := os.Mkdir(dirPlugin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -115,18 +115,18 @@ func TestDiscoverInPathMultipleDirs(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 
-	p1 := filepath.Join(dir1, "lifecycle-plugin-alpha")
+	p1 := filepath.Join(dir1, "tillr-plugin-alpha")
 	if err := os.WriteFile(p1, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	p2 := filepath.Join(dir2, "lifecycle-plugin-beta")
+	p2 := filepath.Join(dir2, "tillr-plugin-beta")
 	if err := os.WriteFile(p2, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Put the same plugin name in dir2 — should be shadowed by dir1.
-	p1dup := filepath.Join(dir2, "lifecycle-plugin-alpha")
+	p1dup := filepath.Join(dir2, "tillr-plugin-alpha")
 	if err := os.WriteFile(p1dup, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestRunWithMockPlugin(t *testing.T) {
 	script := `#!/bin/sh
 cat
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-echo")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-echo")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestRunWithNilInput(t *testing.T) {
 	script := `#!/bin/sh
 echo '{"status":"ok"}'
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-noinput")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-noinput")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestRunPluginError(t *testing.T) {
 echo "something went wrong" >&2
 exit 1
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-fail")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-fail")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestRunPluginInvalidJSON(t *testing.T) {
 	script := `#!/bin/sh
 echo "not json at all"
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-badjson")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-badjson")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestRunPluginEmptyOutput(t *testing.T) {
 	script := `#!/bin/sh
 # No output
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-silent")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-silent")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestQueryInfo(t *testing.T) {
 	script := `#!/bin/sh
 echo '{"name":"test","version":"1.0.0","description":"A test plugin","commands":["greet","farewell"]}'
 `
-	pluginPath := filepath.Join(tmpDir, "lifecycle-plugin-test")
+	pluginPath := filepath.Join(tmpDir, "tillr-plugin-test")
 	if err := os.WriteFile(pluginPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

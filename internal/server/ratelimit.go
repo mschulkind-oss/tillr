@@ -64,6 +64,41 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return false
 }
 
+// Remaining returns the number of tokens currently available for key (without consuming).
+func (rl *RateLimiter) Remaining(key string) int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	b, ok := rl.buckets[key]
+	if !ok {
+		return int(rl.burst)
+	}
+
+	elapsed := time.Since(b.lastRefill).Seconds()
+	tokens := math.Min(rl.burst, b.tokens+elapsed*rl.rate)
+	return int(math.Floor(tokens))
+}
+
+// ResetTime returns the Unix timestamp when the bucket will be fully refilled.
+func (rl *RateLimiter) ResetTime(key string) int64 {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	b, ok := rl.buckets[key]
+	if !ok {
+		return time.Now().Unix()
+	}
+
+	elapsed := time.Since(b.lastRefill).Seconds()
+	tokens := math.Min(rl.burst, b.tokens+elapsed*rl.rate)
+	if tokens >= rl.burst {
+		return time.Now().Unix()
+	}
+	deficit := rl.burst - tokens
+	secs := deficit / rl.rate
+	return time.Now().Add(time.Duration(secs * float64(time.Second))).Unix()
+}
+
 // RetryAfter returns the number of seconds until a token is available for key.
 func (rl *RateLimiter) RetryAfter(key string) int {
 	rl.mu.Lock()
@@ -82,6 +117,11 @@ func (rl *RateLimiter) RetryAfter(key string) int {
 	deficit := 1.0 - tokens
 	secs := deficit / rl.rate
 	return int(math.Ceil(secs))
+}
+
+// Limit returns the burst capacity (max tokens).
+func (rl *RateLimiter) Limit() int {
+	return int(rl.burst)
 }
 
 // Stop terminates the background cleanup goroutine.
@@ -110,6 +150,25 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
+// rateLimitKey determines the rate limiting key for a request.
+// Uses API key if present (from Bearer token or query param), otherwise client IP.
+func rateLimitKey(r *http.Request) string {
+	// Check for API key first (per-key limiting)
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
+			token := strings.TrimSpace(after)
+			if token != "" {
+				return "apikey:" + token
+			}
+		}
+	}
+	if qk := r.URL.Query().Get("api_key"); qk != "" {
+		return "apikey:" + qk
+	}
+	// Fall back to client IP
+	return "ip:" + clientIP(r)
+}
+
 // clientIP extracts the client IP from the request, respecting X-Forwarded-For
 // and X-Real-IP headers, and stripping the port from RemoteAddr.
 func clientIP(r *http.Request) string {
@@ -123,7 +182,7 @@ func clientIP(r *http.Request) string {
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return strings.TrimSpace(xri)
 	}
-	// Strip port from RemoteAddr (e.g. "192.168.1.1:12345" → "192.168.1.1").
+	// Strip port from RemoteAddr (e.g. "192.168.1.1:12345" -> "192.168.1.1").
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
 		ip = ip[:idx]
@@ -131,23 +190,58 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
+// isExemptFromRateLimit returns true for paths that should not be rate limited.
+func isExemptFromRateLimit(r *http.Request) bool {
+	path := r.URL.Path
+	// Exempt non-API routes (static files, SPA)
+	if !strings.HasPrefix(path, "/api/") {
+		return true
+	}
+	// Exempt health check
+	if path == "/api/health" || path == "/api/docs" {
+		return true
+	}
+	return false
+}
+
 // RateLimitMiddleware returns an http.Handler that applies rate limiting
-// to /api/* paths only. Static files and WebSocket connections are not limited.
+// to /api/* paths only. Health check, docs, static files, and WebSocket
+// connections are not limited. Adds standard rate limit headers to responses.
 func RateLimitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			ip := clientIP(r)
-			if !rl.Allow(ip) {
-				retry := rl.RetryAfter(ip)
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("Retry-After", strconv.Itoa(retry))
-				w.WriteHeader(http.StatusTooManyRequests)
-				json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
-					"error": "rate limit exceeded",
-				})
-				return
-			}
+		// Skip WebSocket upgrades
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
 		}
+
+		if isExemptFromRateLimit(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		key := rateLimitKey(r)
+
+		// Always set rate limit headers on API responses
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(rl.Limit()))
+
+		if !rl.Allow(key) {
+			retry := rl.RetryAfter(key)
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(rl.ResetTime(key), 10))
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+				"error": "rate limit exceeded",
+			})
+			return
+		}
+
+		// Set remaining/reset after allowing (token was consumed)
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(rl.Remaining(key)))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(rl.ResetTime(key), 10))
+
 		next.ServeHTTP(w, r)
 	})
 }

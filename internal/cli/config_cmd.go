@@ -1,10 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
-	"github.com/mschulkind/lifecycle/internal/config"
+	"github.com/mschulkind/tillr/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,7 @@ var configShowCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 		cfg, err := config.Load(root)
 		if err != nil {
@@ -57,11 +58,11 @@ var configShowCmd = &cobra.Command{
 
 var configInitCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Create .lifecycle.yaml with defaults",
+	Short: "Create .tillr.yaml with defaults",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 
 		cfg := config.Defaults()
@@ -79,12 +80,12 @@ var configInitCmd = &cobra.Command{
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
-	Short: "Set a configuration value in .lifecycle.yaml",
+	Short: "Set a configuration value in .tillr.yaml",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 
 		// Load existing YAML or start from defaults
@@ -123,8 +124,20 @@ var configSetCmd = &cobra.Command{
 			cfg.AgentTimeout = v
 		case "db_path":
 			cfg.DBPath = value
+		case "rate_limit":
+			v, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return fmt.Errorf("rate_limit must be a number")
+			}
+			cfg.RateLimit = v
+		case "rate_burst":
+			v, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("rate_burst must be an integer")
+			}
+			cfg.RateBurst = v
 		case "api-key":
-			// API key is stored in .lifecycle.json, not .lifecycle.yaml
+			// API key is stored in .tillr.json, not .tillr.yaml
 			jsonCfg, loadErr := config.Load(root)
 			if loadErr != nil {
 				return fmt.Errorf("loading config: %w", loadErr)
@@ -138,8 +151,14 @@ var configSetCmd = &cobra.Command{
 			}
 			fmt.Printf("✓ Set api-key = %s\n", config.MaskAPIKey(value))
 			return nil
+		case "qa_rules":
+			var qaCfg config.QAConfig
+			if err := json.Unmarshal([]byte(value), &qaCfg); err != nil {
+				return fmt.Errorf("qa_rules must be valid JSON: %w. Example: {\"rules\":[{\"type\":\"score_threshold\",\"threshold\":9.0,\"action\":\"auto_approve\"}],\"review_all\":true}", err)
+			}
+			cfg.QA = &qaCfg
 		default:
-			return fmt.Errorf("unknown config key %q. Valid keys: default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path, api-key", key)
+			return fmt.Errorf("unknown config key %q. Valid keys: default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path, rate_limit, rate_burst, api-key, qa_rules", key)
 		}
 
 		if err := config.SaveYAML(cfg, root); err != nil {
@@ -168,7 +187,7 @@ var configGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 
 		cfg, err := config.Load(root)
@@ -200,8 +219,19 @@ var configGetCmd = &cobra.Command{
 			value = strconv.Itoa(cfg.AgentTimeout)
 		case "db_path":
 			value = cfg.DBPath
+		case "rate_limit":
+			value = strconv.FormatFloat(cfg.RateLimit, 'f', -1, 64)
+		case "rate_burst":
+			value = strconv.Itoa(cfg.RateBurst)
+		case "qa_rules":
+			if cfg.QA == nil {
+				value = "(default: review everything)"
+			} else {
+				b, _ := json.Marshal(cfg.QA)
+				value = string(b)
+			}
 		default:
-			return fmt.Errorf("unknown config key %q. Valid keys: api-key, default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path", key)
+			return fmt.Errorf("unknown config key %q. Valid keys: api-key, default_milestone, default_priority, server_port, theme, agent_timeout_minutes, db_path, qa_rules", key)
 		}
 
 		if jsonOutput {
@@ -218,7 +248,7 @@ var configGenerateAPIKeyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 
 		key, err := config.GenerateAPIKey()

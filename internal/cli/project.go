@@ -9,18 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/config"
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/export"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/export"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init [project-name]",
-	Short: "Initialize a new lifecycle project",
-	Long: `Initialize a new lifecycle project in the current directory.
+	Short: "Initialize a new tillr project",
+	Long: `Initialize a new tillr project in the current directory.
 
 Use --template to pre-populate the project with milestones, features,
 roadmap items, and discussions for common project types.
@@ -55,7 +55,7 @@ Use --list-templates to see available templates.`,
 				fmt.Printf("  %-12s %s\n", t.Name, t.Description)
 			}
 			fmt.Println()
-			fmt.Println("Usage: lifecycle init <name> --template <template>")
+			fmt.Println("Usage: tillr init <name> --template <template>")
 			return nil
 		}
 
@@ -185,13 +185,13 @@ var statusCmd = &cobra.Command{
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Validate environment and project setup",
-	Long: `Doctor validates the lifecycle environment and project health.
+	Long: `Doctor validates the tillr environment and project health.
 
 It checks for required tools, project configuration, database integrity,
 and provides actionable suggestions for any issues found.
 
 Checks performed:
-  project     .lifecycle.json found
+  project     .tillr.json found
   config      Configuration file valid
   database    SQLite database opens and has expected tables
   schema      Schema version matches expected migration count
@@ -202,8 +202,8 @@ Checks performed:
   skills      Agent configuration files (AGENTS.md, copilot-instructions.md)
 
 Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
-	Example: `  lifecycle doctor          # Human-readable health report
-  lifecycle doctor --json   # Structured output for automation`,
+	Example: `  tillr doctor          # Human-readable health report
+  tillr doctor --json   # Structured output for automation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		type Check struct {
 			Name   string `json:"name"`
@@ -232,8 +232,8 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 			checks = append(checks, Check{
 				Name:   "project",
 				Status: "fail",
-				Detail: "No .lifecycle.json found",
-				Fix:    "Run 'lifecycle init <name>' or 'lifecycle onboard' to initialize",
+				Detail: "No .tillr.json found",
+				Fix:    "Run 'tillr init <name>' or 'tillr onboard' to initialize",
 			})
 		} else {
 			checks = append(checks, Check{Name: "project", Status: "ok", Detail: root})
@@ -249,7 +249,7 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 					Name:   "config",
 					Status: "fail",
 					Detail: err.Error(),
-					Fix:    "Check .lifecycle.json is valid JSON",
+					Fix:    "Check .tillr.json is valid JSON",
 				})
 			} else {
 				checks = append(checks, Check{Name: "config", Status: "ok", Detail: cfg.DBPath})
@@ -261,7 +261,7 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 						Name:   "database",
 						Status: "fail",
 						Detail: err.Error(),
-						Fix:    "Check database file permissions or re-initialize with 'lifecycle init'",
+						Fix:    "Check database file permissions or re-initialize with 'tillr init'",
 					})
 				} else {
 					database = d
@@ -280,7 +280,7 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 							Name:   "database",
 							Status: "warn",
 							Detail: "Database exists but no project found",
-							Fix:    "Run 'lifecycle init <name>' to create a project",
+							Fix:    "Run 'tillr init <name>' to create a project",
 						})
 					}
 				}
@@ -368,7 +368,7 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 				Name:   "skills",
 				Status: "warn",
 				Detail: "No agent configuration files found",
-				Fix:    "Create AGENTS.md or .github/copilot-instructions.md for agent guidance",
+				Fix:    "Run 'tillr sync-agents' to generate AGENTS.md, or create .github/copilot-instructions.md",
 			})
 		}
 
@@ -392,7 +392,7 @@ Each check reports: ✓ ok, ! warn, or ✗ fail with fix suggestions.`,
 						Name:   "schema",
 						Status: "warn",
 						Detail: fmt.Sprintf("schema version %d, expected %d", schemaVersion, expected),
-						Fix:    "Re-open the database to apply pending migrations, or re-initialize with 'lifecycle init'",
+						Fix:    "Re-open the database to apply pending migrations, or re-initialize with 'tillr init'",
 					})
 				}
 			}
@@ -571,7 +571,7 @@ var historyCmd = &cobra.Command{
 var historyExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export event history for auditing",
-	Long:  "Export lifecycle events in JSON, CSV, or Markdown format for compliance and auditing.",
+	Long:  "Export tillr events in JSON, CSV, or Markdown format for compliance and auditing.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -626,9 +626,9 @@ var searchCmd = &cobra.Command{
 Supports prefix matching (e.g., "feat" matches "feature"), multi-word queries,
 and results grouped by entity type with context snippets.`,
 	Args: cobra.ExactArgs(1),
-	Example: `  lifecycle search auth
-  lifecycle search "user login" --type feature
-  lifecycle search deploy --limit 5`,
+	Example: `  tillr search auth
+  tillr search "user login" --type feature
+  tillr search deploy --limit 5`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -638,8 +638,14 @@ and results grouped by entity type with context snippets.`,
 
 		searchType, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
+		fuzzy, _ := cmd.Flags().GetBool("fuzzy")
 
-		results, err := db.SearchFTSFiltered(database, args[0], searchType, limit)
+		var results []models.SearchResult
+		if fuzzy {
+			results, err = db.FuzzySearch(database, args[0], searchType, limit)
+		} else {
+			results, err = db.SearchFTSFiltered(database, args[0], searchType, limit)
+		}
 		if err != nil {
 			return fmt.Errorf("search failed: %w", err)
 		}
@@ -778,6 +784,7 @@ func init() {
 
 	searchCmd.Flags().String("type", "", "Filter by entity type (feature, roadmap, idea)")
 	searchCmd.Flags().Int("limit", 20, "Max results to return")
+	searchCmd.Flags().Bool("fuzzy", false, "Use fuzzy matching instead of FTS (tolerates typos)")
 }
 
 func eventIcon(eventType string) string {

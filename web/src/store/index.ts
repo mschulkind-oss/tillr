@@ -31,6 +31,10 @@ interface AppState {
   clearNotifications: () => void
   unreadCount: () => number
 
+  // Help modal
+  helpModalOpen: boolean
+  setHelpModalOpen: (open: boolean) => void
+
   // Toasts
   toasts: Toast[]
   addToast: (message: string, type?: Toast['type']) => void
@@ -66,6 +70,10 @@ export const useStore = create<AppState>()(
       clearNotifications: () => set({ notifications: [] }),
       unreadCount: () => get().notifications.filter((n) => !n.read).length,
 
+      // Help modal
+      helpModalOpen: false,
+      setHelpModalOpen: (open) => set({ helpModalOpen: open }),
+
       // Toasts
       toasts: [],
       addToast: (message, type = 'info') => {
@@ -79,7 +87,7 @@ export const useStore = create<AppState>()(
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
     }),
     {
-      name: 'lifecycle-store',
+      name: 'tillr-store',
       partialize: (state) => ({ theme: state.theme }),
     }
   )

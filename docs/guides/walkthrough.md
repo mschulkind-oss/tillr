@@ -1,6 +1,6 @@
-# Lifecycle Product Walkthrough
+# Tillr Product Walkthrough
 
-A visual tour of every page in the Lifecycle web viewer.
+A visual tour of every page in the Tillr web viewer.
 
 ## Dashboard
 
@@ -24,7 +24,7 @@ The Roadmap page displays a prioritized, categorized view of strategic work item
 
 ![Cycles](../screenshots/cycles.png)
 
-The Cycles page shows active iteration cycles — the structured workflows that drive features through steps like research, develop, QA, and judge. You can see the current step, iteration count, and score history. Use this page to monitor in-flight work and understand where each feature is in its lifecycle.
+The Cycles page shows active iteration cycles — the structured workflows that drive features through steps like research, develop, QA, and judge. You can see the current step, iteration count, and score history. Use this page to monitor in-flight work and understand where each feature is in its tillr.
 
 ## QA
 

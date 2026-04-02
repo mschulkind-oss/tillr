@@ -14,9 +14,9 @@ import (
 var backupCmd = &cobra.Command{
 	Use:   "backup",
 	Short: "Backup the project database",
-	Long: `Create a timestamped backup of the lifecycle database.
+	Long: `Create a timestamped backup of the tillr database.
 
-Backups are stored in .lifecycle-backups/ by default. Use --output to specify
+Backups are stored in .tillr-backups/ by default. Use --output to specify
 a custom path. The backup uses SQLite's VACUUM INTO for a consistent snapshot
 that is safe even when the server is running.`,
 	Args: cobra.NoArgs,
@@ -33,7 +33,7 @@ var backupListCmd = &cobra.Command{
 var restoreCmd = &cobra.Command{
 	Use:   "restore <backup-file>",
 	Short: "Restore database from a backup",
-	Long: `Restore the lifecycle database from a backup file.
+	Long: `Restore the tillr database from a backup file.
 
 This is a destructive operation — the current database will be overwritten.
 A pre-restore backup is created automatically before restoring.
@@ -71,12 +71,12 @@ func runBackup(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("creating output directory: %w", err)
 		}
 	} else {
-		backupDir := filepath.Join(cfg.ProjectDir, ".lifecycle-backups")
+		backupDir := filepath.Join(cfg.ProjectDir, ".tillr-backups")
 		if err := os.MkdirAll(backupDir, 0o755); err != nil {
 			return fmt.Errorf("creating backup directory: %w", err)
 		}
 		ts := time.Now().Format("20060102-150405")
-		destPath = filepath.Join(backupDir, fmt.Sprintf("lifecycle-%s.db", ts))
+		destPath = filepath.Join(backupDir, fmt.Sprintf("tillr-%s.db", ts))
 	}
 
 	// Use VACUUM INTO for a consistent, safe backup even with concurrent access
@@ -110,7 +110,7 @@ func runBackupList(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	backupDir := filepath.Join(cfg.ProjectDir, ".lifecycle-backups")
+	backupDir := filepath.Join(cfg.ProjectDir, ".tillr-backups")
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -200,13 +200,13 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create pre-restore backup using VACUUM INTO
-	backupDir := filepath.Join(cfg.ProjectDir, ".lifecycle-backups")
+	backupDir := filepath.Join(cfg.ProjectDir, ".tillr-backups")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		database.Close() //nolint:errcheck
 		return fmt.Errorf("creating backup directory: %w", err)
 	}
 	ts := time.Now().Format("20060102-150405")
-	preRestorePath := filepath.Join(backupDir, fmt.Sprintf("lifecycle-pre-restore-%s.db", ts))
+	preRestorePath := filepath.Join(backupDir, fmt.Sprintf("tillr-pre-restore-%s.db", ts))
 
 	_, err = database.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, strings.ReplaceAll(preRestorePath, "'", "''")))
 	if err != nil {

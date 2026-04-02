@@ -1,4 +1,4 @@
-# Contributing to Lifecycle
+# Contributing to Tillr
 
 Thank you for your interest in contributing! Here's how to get started.
 
@@ -16,8 +16,8 @@ Thank you for your interest in contributing! Here's how to get started.
 ### Getting Started
 
 ```bash
-git clone https://github.com/mschulkind/lifecycle.git
-cd lifecycle
+git clone https://github.com/mschulkind/tillr.git
+cd tillr
 mise install        # Install tool versions
 go mod download     # Fetch Go dependencies
 just check          # Format, lint, and test — verify everything works
@@ -60,7 +60,7 @@ docs: update CLI reference for serve command
 
 ## Versioning
 
-Lifecycle follows [Semantic Versioning](https://semver.org/):
+Tillr follows [Semantic Versioning](https://semver.org/):
 
 - **MAJOR** (x.0.0) — breaking changes to CLI, config format, or API
 - **MINOR** (0.x.0) — new features, backward-compatible
@@ -87,7 +87,7 @@ While in 0.x.y, the API is not considered stable and minor versions may include 
 Please include:
 - Steps to reproduce
 - Expected vs actual behavior
-- Lifecycle version (`lifecycle --version`)
+- Tillr version (`tillr --version`)
 - OS and Go version
 
 ## License

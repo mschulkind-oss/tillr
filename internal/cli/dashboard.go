@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -136,7 +136,7 @@ var dashboardShowCmd = &cobra.Command{
 
 		dc, err := db.GetDashboardConfig(database, args[0])
 		if err != nil {
-			return fmt.Errorf("dashboard %q not found. Run 'lifecycle dashboard list' to see available dashboards", args[0])
+			return fmt.Errorf("dashboard %q not found. Run 'tillr dashboard list' to see available dashboards", args[0])
 		}
 
 		if jsonOutput {

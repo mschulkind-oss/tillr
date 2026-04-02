@@ -3,8 +3,8 @@ package cli
 import (
 	"os"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/export"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/export"
 	"github.com/spf13/cobra"
 )
 
@@ -27,9 +27,9 @@ Formats:
   html  Styled HTML with inline CSS, suitable for printing to PDF
 
 Examples:
-  lifecycle export report                    # Markdown to stdout
-  lifecycle export report --format html      # HTML to stdout
-  lifecycle export report --format html > report.html  # Save as HTML file`,
+  tillr export report                    # Markdown to stdout
+  tillr export report --format html      # HTML to stdout
+  tillr export report --format html > report.html  # Save as HTML file`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {

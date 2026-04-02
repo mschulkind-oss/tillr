@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -81,8 +81,8 @@ type JiraImportSummary struct {
 
 var jiraImportCmd = &cobra.Command{
 	Use:   "jira <file.json>",
-	Short: "Import Jira issues as lifecycle features",
-	Long: `Import issues from a Jira JSON export file as lifecycle features.
+	Short: "Import Jira issues as tillr features",
+	Long: `Import issues from a Jira JSON export file as tillr features.
 
 Each imported issue becomes a feature with:
   - Title from issue summary
@@ -90,21 +90,21 @@ Each imported issue becomes a feature with:
   - Status mapped from Jira status (To Do/Open/Backlog → draft,
     In Progress/In Development → implementing, In Review/In QA → human-qa,
     Done/Closed/Resolved → done)
-  - Jira labels mapped to lifecycle tags
-  - Jira fixVersions matched to lifecycle milestones (if they exist)
+  - Jira labels mapped to tillr tags
+  - Jira fixVersions matched to tillr milestones (if they exist)
 
 An event is recorded for each imported issue.`,
 	Example: `  # Import all issues from a Jira export
-  lifecycle import jira export.json
+  tillr import jira export.json
 
   # Import only issues from project PROJ
-  lifecycle import jira export.json --project PROJ
+  tillr import jira export.json --project PROJ
 
   # Preview what would be imported
-  lifecycle import jira export.json --dry-run
+  tillr import jira export.json --dry-run
 
   # Limit the number of imported issues
-  lifecycle import jira export.json --limit 10`,
+  tillr import jira export.json --limit 10`,
 	Args: cobra.ExactArgs(1),
 	RunE: runJiraImport,
 }
@@ -237,7 +237,7 @@ func parseJiraExport(data []byte, projectKey string) ([]JiraIssue, error) {
 	return issues, nil
 }
 
-// mapJiraStatus converts a Jira status name to a lifecycle feature status.
+// mapJiraStatus converts a Jira status name to a tillr feature status.
 func mapJiraStatus(jiraStatus string) string {
 	switch strings.ToLower(strings.TrimSpace(jiraStatus)) {
 	case "to do", "open", "backlog":
@@ -253,7 +253,7 @@ func mapJiraStatus(jiraStatus string) string {
 	}
 }
 
-// mapJiraLabelsToTags converts Jira labels to lifecycle tags.
+// mapJiraLabelsToTags converts Jira labels to tillr tags.
 func mapJiraLabelsToTags(labels []string) []string {
 	tags := make([]string, 0, len(labels))
 	for _, l := range labels {
@@ -264,7 +264,7 @@ func mapJiraLabelsToTags(labels []string) []string {
 	return tags
 }
 
-// matchJiraVersion finds a lifecycle milestone ID matching a Jira fixVersion.
+// matchJiraVersion finds a tillr milestone ID matching a Jira fixVersion.
 func matchJiraVersion(versions []JiraVersion, milestoneMap map[string]string) string {
 	for _, v := range versions {
 		if id, ok := milestoneMap[strings.ToLower(v.Name)]; ok {
@@ -274,7 +274,7 @@ func matchJiraVersion(versions []JiraVersion, milestoneMap map[string]string) st
 	return ""
 }
 
-// importSingleJiraIssue imports one Jira issue as a lifecycle feature.
+// importSingleJiraIssue imports one Jira issue as a tillr feature.
 func importSingleJiraIssue(database *sql.DB, projectID string, issue JiraIssue, milestoneMap map[string]string, dryRun bool) JiraImportResult {
 	status := mapJiraStatus(issue.Fields.Status.Name)
 	tags := mapJiraLabelsToTags(issue.Fields.Labels)
