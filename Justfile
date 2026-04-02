@@ -10,21 +10,29 @@ build:
 run *args:
     go run ./cmd/tillr -- {{args}}
 
-# The universal quality gate
+# The universal quality gate (auto-fixes formatting)
 check: format lint test
+
+# Read-only quality gate (used by pre-commit hook and CI)
+check-ci: lint-ci test
 
 # Format all Go code
 format:
     gofmt -w .
     goimports -w .
 
-# Lint with golangci-lint
+# Lint with golangci-lint (auto-fix)
 lint:
+    golangci-lint run ./... --fix
+
+# Lint without auto-fix (CI mode)
+lint-ci:
+    gofmt -l . | xargs -r false  # fail if any files need formatting
     golangci-lint run ./...
 
 # Run all tests
-test:
-    go test ./... -v -count=1
+test *args:
+    go test ./... -v -count=1 {{args}}
 
 # Run tests with coverage
 test-cov:
@@ -127,24 +135,3 @@ docker-run:
 # Bootstrap self-management
 bootstrap:
     bash scripts/bootstrap.sh
-
-# Push jj bookmarks to remotes
-push:
-    jj git push --bookmark main --remote public
-    jj git push --bookmark main --bookmark dev --bookmark staging --remote private
-
-# Pre-promote quality gate
-prepromote: check
-    @echo "All checks passed — ready to promote"
-
-# Promote staging to main
-promote: prepromote
-    #!/usr/bin/env bash
-    set -euo pipefail
-    jj bookmark set main -r staging
-    jj new staging
-    jj bookmark set staging -r @
-    jj new
-    jj bookmark set dev -r @
-    just push
-    @echo "Promoted staging → main, created fresh staging + dev"

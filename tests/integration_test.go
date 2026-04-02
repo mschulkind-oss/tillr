@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
-	os.RemoveAll(tmp)
+	os.RemoveAll(tmp) //nolint:errcheck
 	os.Exit(code)
 }
 
@@ -97,7 +97,7 @@ func freePort(t *testing.T) int {
 		t.Fatalf("finding free port: %v", err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	l.Close() //nolint:errcheck
 	return port
 }
 
@@ -109,12 +109,12 @@ func TestFullWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	defer os.RemoveAll(projectDir)
+	defer os.RemoveAll(projectDir) //nolint:errcheck
 
 	// Initialize a git repo (tillr expects one)
-	exec.Command("git", "init", projectDir).Run()
-	exec.Command("git", "-C", projectDir, "config", "user.email", "test@test.com").Run()
-	exec.Command("git", "-C", projectDir, "config", "user.name", "Test").Run()
+	exec.Command("git", "init", projectDir).Run()                                        //nolint:errcheck
+	exec.Command("git", "-C", projectDir, "config", "user.email", "test@test.com").Run() //nolint:errcheck
+	exec.Command("git", "-C", projectDir, "config", "user.name", "Test").Run()           //nolint:errcheck
 
 	// Step 1: Init project
 	out := run(t, projectDir, "init", "test-project")
@@ -203,9 +203,9 @@ func TestServerStartsAndResponds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	defer os.RemoveAll(projectDir)
+	defer os.RemoveAll(projectDir) //nolint:errcheck
 
-	exec.Command("git", "init", projectDir).Run()
+	exec.Command("git", "init", projectDir).Run() //nolint:errcheck
 	run(t, projectDir, "init", "server-test")
 	run(t, projectDir, "feature", "add", "Test Feature")
 
@@ -219,8 +219,8 @@ func TestServerStartsAndResponds(t *testing.T) {
 		t.Fatalf("starting server: %v", err)
 	}
 	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		cmd.Process.Kill() //nolint:errcheck
+		cmd.Wait()         //nolint:errcheck
 	}()
 
 	// Wait for server to be ready
@@ -229,7 +229,7 @@ func TestServerStartsAndResponds(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		resp, err := http.Get(baseURL + "/api/status")
 		if err == nil {
-			resp.Body.Close()
+			resp.Body.Close() //nolint:errcheck
 			if resp.StatusCode == 200 {
 				lastErr = nil
 				break
@@ -258,7 +258,7 @@ func TestServerStartsAndResponds(t *testing.T) {
 			t.Errorf("GET %s: %v", ep.path, err)
 			continue
 		}
-		resp.Body.Close()
+		resp.Body.Close() //nolint:errcheck
 		if resp.StatusCode != ep.expectCode {
 			t.Errorf("GET %s: expected %d, got %d", ep.path, ep.expectCode, resp.StatusCode)
 		}
@@ -269,7 +269,7 @@ func TestServerStartsAndResponds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/status: %v", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	var status map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		t.Fatalf("decoding status response: %v", err)
@@ -288,9 +288,9 @@ func TestCycleAdvanceWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	defer os.RemoveAll(projectDir)
+	defer os.RemoveAll(projectDir) //nolint:errcheck
 
-	exec.Command("git", "init", projectDir).Run()
+	exec.Command("git", "init", projectDir).Run() //nolint:errcheck
 	run(t, projectDir, "init", "cycle-test")
 	run(t, projectDir, "feature", "add", "Cycle Feature")
 
@@ -324,9 +324,9 @@ func TestDoubleInitFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	defer os.RemoveAll(projectDir)
+	defer os.RemoveAll(projectDir) //nolint:errcheck
 
-	exec.Command("git", "init", projectDir).Run()
+	exec.Command("git", "init", projectDir).Run() //nolint:errcheck
 	run(t, projectDir, "init", "first-project")
 
 	// Second init should fail (project already exists)

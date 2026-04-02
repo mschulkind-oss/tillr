@@ -68,12 +68,12 @@ var templateShowCmd = &cobra.Command{
 
 		if jsonOutput {
 			data := map[string]any{
-				"name":         tmpl.Name,
-				"description":  tmpl.Description,
-				"milestones":   tmpl.Milestones,
-				"features":     tmpl.Features,
+				"name":          tmpl.Name,
+				"description":   tmpl.Description,
+				"milestones":    tmpl.Milestones,
+				"features":      tmpl.Features,
 				"roadmap_items": tmpl.RoadmapItems,
-				"discussions":  tmpl.Discussions,
+				"discussions":   tmpl.Discussions,
 			}
 			b, _ := json.MarshalIndent(data, "", "  ")
 			fmt.Println(string(b))

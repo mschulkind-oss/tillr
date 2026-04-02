@@ -31,4 +31,21 @@ node_modules/
 
 # Lifecycle project config (created by `tillr init`)
 .tillr.json
+.tillr.yaml
+.lifecycle.json
+.lifecycle.yaml
 .pnpm-store/
+
+# Swarf (private side-files, managed externally)
+swarf/
+
+# Swept files (symlinks managed by swarf)
+AGENTS.md
+yolo-jail.jsonc
+
+# Agent config
+.copilot/
+.gemini/
+
+# Jujutsu (legacy, pending removal)
+.jj/

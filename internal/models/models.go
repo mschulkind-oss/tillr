@@ -173,7 +173,7 @@ func (ct CycleType) IsHumanStep(idx int) bool {
 // CycleInstance is a running cycle attached to any entity (feature, workstream, etc.).
 type CycleInstance struct {
 	ID          int    `json:"id"`
-	EntityType  string `json:"entity_type"`  // "feature", "workstream", "roadmap_item", etc.
+	EntityType  string `json:"entity_type"` // "feature", "workstream", "roadmap_item", etc.
 	EntityID    string `json:"entity_id"`
 	CycleType   string `json:"cycle_type"`
 	CurrentStep int    `json:"current_step"`
@@ -243,13 +243,13 @@ type VoteSummary struct {
 
 // StatusOverview is the project dashboard summary.
 type StatusOverview struct {
-	Project           *Project       `json:"project"`
-	FeatureCounts     map[string]int `json:"feature_counts"`
-	MilestoneCount    int            `json:"milestone_count"`
-	ActiveCycles      int            `json:"active_cycles"`
-	OpenDiscussions   int            `json:"open_discussions"`
-	RecentEvents      []Event        `json:"recent_events"`
-	ActiveWork        []WorkItem     `json:"active_work"`
+	Project         *Project       `json:"project"`
+	FeatureCounts   map[string]int `json:"feature_counts"`
+	MilestoneCount  int            `json:"milestone_count"`
+	ActiveCycles    int            `json:"active_cycles"`
+	OpenDiscussions int            `json:"open_discussions"`
+	RecentEvents    []Event        `json:"recent_events"`
+	ActiveWork      []WorkItem     `json:"active_work"`
 }
 
 // WorkContext is the enriched response from `tillr next --json`.
@@ -812,7 +812,7 @@ type APIToken struct {
 	ID        int      `json:"id"`
 	ProjectID string   `json:"project_id"`
 	Name      string   `json:"name"`
-	TokenHash string   `json:"-"`              // never expose the hash
+	TokenHash string   `json:"-"` // never expose the hash
 	Scopes    []string `json:"scopes"`
 	CreatedAt string   `json:"created_at"`
 	ExpiresAt string   `json:"expires_at,omitempty"`

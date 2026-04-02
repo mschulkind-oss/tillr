@@ -14,7 +14,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open: %v\n", err)
 		os.Exit(1)
 	}
-	defer database.Close()
+	defer database.Close() //nolint:errcheck
 
 	// Find the active cycle for human-workstreams
 	cycle, err := db.GetActiveCycle(database, "human-workstreams")

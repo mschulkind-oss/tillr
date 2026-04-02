@@ -1204,93 +1204,6 @@ func handleStatsActivityHeatmap(database *sql.DB, w http.ResponseWriter, r *http
 	return writeJSON(w, counts)
 }
 
-func handleAudit(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
-	p, err := db.GetProject(database)
-	if err != nil {
-		return err
-	}
-	featureID := r.URL.Query().Get("feature")
-	eventType := r.URL.Query().Get("type")
-	since := r.URL.Query().Get("since")
-	until := r.URL.Query().Get("until")
-	limit := 100
-	offset := 0
-	if l := r.URL.Query().Get("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
-	}
-	if o := r.URL.Query().Get("offset"); o != "" {
-		fmt.Sscanf(o, "%d", &offset)
-	}
-	if limit < 1 || limit > 1000 {
-		limit = 100
-	}
-
-	events, total, err := db.ListEventsPaginated(database, p.ID, featureID, eventType, since, until, limit, offset)
-	if err != nil {
-		return err
-	}
-	if events == nil {
-		events = []models.Event{}
-	}
-	return writeJSON(w, map[string]any{
-		"events": events,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
-}
-
-func handleAuditStats(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
-	p, err := db.GetProject(database)
-	if err != nil {
-		return err
-	}
-	stats, err := db.GetEventStats(database, p.ID)
-	if err != nil {
-		return err
-	}
-	byType := make(map[string]int)
-	total := 0
-	for _, s := range stats {
-		byType[s.EventType] = s.Count
-		total += s.Count
-	}
-	return writeJSON(w, map[string]any{
-		"by_type": byType,
-		"total":   total,
-	})
-}
-
-func handleAnalyticsHeatmap(database *sql.DB, w http.ResponseWriter, _ *http.Request) error {
-	p, err := db.GetProject(database)
-	if err != nil {
-		return err
-	}
-	grid, err := db.GetHeatmapGrid(database, p.ID)
-	if err != nil {
-		return err
-	}
-	// Convert to JSON-friendly format
-	type cell struct {
-		Day   int `json:"day"`
-		Hour  int `json:"hour"`
-		Count int `json:"count"`
-	}
-	var cells []cell
-	for d := 0; d < 7; d++ {
-		for h := 0; h < 24; h++ {
-			c := grid.Cells[d*24+h]
-			if c > 0 {
-				cells = append(cells, cell{Day: d, Hour: h, Count: c})
-			}
-		}
-	}
-	return writeJSON(w, map[string]any{
-		"cells":     cells,
-		"max_count": grid.MaxCount,
-	})
-}
-
 func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 	path := strings.TrimPrefix(r.URL.Path, "/api/qa/")
 
@@ -4164,7 +4077,7 @@ func handleNotificationAction(database *sql.DB, w http.ResponseWriter, r *http.R
 	parts := strings.Split(path, "/")
 	if len(parts) >= 1 {
 		id := 0
-		fmt.Sscanf(parts[0], "%d", &id)
+		_, _ = fmt.Sscanf(parts[0], "%d", &id)
 		if id == 0 {
 			http.Error(w, "invalid notification ID", http.StatusBadRequest)
 			return nil
@@ -4334,7 +4247,7 @@ func handleWorkstreamNotes(database *sql.DB, w http.ResponseWriter, r *http.Requ
 			return nil
 		}
 		noteID := 0
-		fmt.Sscanf(parts[2], "%d", &noteID)
+		_, _ = fmt.Sscanf(parts[2], "%d", &noteID)
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
@@ -4354,7 +4267,7 @@ func handleWorkstreamNotes(database *sql.DB, w http.ResponseWriter, r *http.Requ
 			return nil
 		}
 		noteID := 0
-		fmt.Sscanf(parts[2], "%d", &noteID)
+		_, _ = fmt.Sscanf(parts[2], "%d", &noteID)
 		return db.DeleteWorkstreamNote(database, noteID)
 	}
 
@@ -4403,7 +4316,7 @@ func handleWorkstreamLinks(database *sql.DB, w http.ResponseWriter, r *http.Requ
 			return nil
 		}
 		linkID := 0
-		fmt.Sscanf(parts[2], "%d", &linkID)
+		_, _ = fmt.Sscanf(parts[2], "%d", &linkID)
 		return db.DeleteWorkstreamLink(database, linkID)
 	}
 

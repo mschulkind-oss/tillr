@@ -70,7 +70,7 @@ func CategorizeIdea(idea *models.IdeaQueueItem) (ideaType string, title string, 
 // GenerateIdeaSpec creates a basic spec from the categorized idea.
 func GenerateIdeaSpec(ideaType, title, description string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# %s\n\n", title))
+	fmt.Fprintf(&b, "# %s\n\n", title)
 
 	switch ideaType {
 	case "bug":
