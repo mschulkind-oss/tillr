@@ -132,7 +132,7 @@ export function QA() {
   const qaIds = new Set(needsReview.map((f) => f.id))
 
   // Groups for the active drilldown
-  const workstreamGroups = activeWorkstream && activeWsFeatures.data
+  const workstreamGroups = activeWorkstream && Array.isArray(activeWsFeatures.data)
     ? groupByWorkstream(needsReview, activeWsFeatures.data)
     : []
 
@@ -340,7 +340,7 @@ function WorkstreamCard({ ws, qaIds, onSelect }: {
     queryFn: () => getWorkstreamFeatures(ws.id),
   })
 
-  const counts = wsFeatures.data ? countQAFeatures(qaIds, wsFeatures.data) : { owned: 0, deps: 0 }
+  const counts = Array.isArray(wsFeatures.data) ? countQAFeatures(qaIds, wsFeatures.data) : { owned: 0, deps: 0 }
   const qaOwned = counts.owned
   const qaDeps = counts.deps
   const total = qaOwned + qaDeps
