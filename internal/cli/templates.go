@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/engine"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/engine"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 // templateMilestone defines a milestone to create as part of a project template.

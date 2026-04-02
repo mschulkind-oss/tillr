@@ -1,4 +1,4 @@
-module github.com/mschulkind/tillr
+module github.com/mschulkind-oss/tillr
 
 go 1.24
 

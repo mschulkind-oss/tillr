@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/export"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/export"
 	"github.com/spf13/cobra"
 )
 

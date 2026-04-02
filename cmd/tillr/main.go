@@ -1,6 +1,6 @@
 package main
 
-import "github.com/mschulkind/tillr/internal/cli"
+import "github.com/mschulkind-oss/tillr/internal/cli"
 
 func main() {
 	cli.Execute()

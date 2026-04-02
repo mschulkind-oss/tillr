@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/config"
 	"github.com/spf13/cobra"
 )
 

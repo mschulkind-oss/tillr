@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 func TestParseGitHubIssues(t *testing.T) {

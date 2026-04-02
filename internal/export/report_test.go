@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mschulkind/tillr/internal/export"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/export"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 func TestReportMarkdown(t *testing.T) {

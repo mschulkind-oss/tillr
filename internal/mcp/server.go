@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/engine"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/engine"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 // Server implements a minimal MCP (Model Context Protocol) server over stdio.

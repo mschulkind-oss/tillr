@@ -1,6 +1,6 @@
 # Tillr
 
-[![CI](https://github.com/mschulkind/tillr/actions/workflows/ci.yml/badge.svg)](https://github.com/mschulkind/tillr/actions/workflows/ci.yml)
+[![CI](https://github.com/mschulkind-oss/tillr/actions/workflows/ci.yml/badge.svg)](https://github.com/mschulkind-oss/tillr/actions/workflows/ci.yml)
 
 **Human-in-the-loop project management for agentic software development.**
 
@@ -25,7 +25,7 @@ Tillr is the project manager that sits between humans and AI agents. It defines 
 
 ```bash
 # Install from source
-git clone https://github.com/mschulkind/tillr.git
+git clone https://github.com/mschulkind-oss/tillr.git
 cd tillr
 just install
 

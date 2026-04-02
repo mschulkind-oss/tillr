@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 // ReportData holds all the data needed to generate a project report.

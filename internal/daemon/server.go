@@ -13,9 +13,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/mschulkind/tillr/internal/config"
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/server"
+	"github.com/mschulkind-oss/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/server"
 )
 
 // ProjectHandle holds an open database and config for a single project.

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/db"
 	"github.com/spf13/cobra"
 )
 

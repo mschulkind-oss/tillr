@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/config"
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/engine"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/engine"
+	"github.com/mschulkind-oss/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 

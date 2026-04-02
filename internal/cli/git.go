@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/models"
-	"github.com/mschulkind/tillr/internal/vcs"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/vcs"
 	"github.com/spf13/cobra"
 )
 
