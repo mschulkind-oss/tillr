@@ -30,6 +30,9 @@ context/
 # Node modules (for web dev tooling if needed)
 node_modules/
 
+# Overmind socket
+.overmind.sock
+
 # Lifecycle project config (created by `tillr init`)
 .tillr.json
 .tillr.yaml

@@ -39,35 +39,29 @@ test-cov:
     go test ./... -v -coverprofile=coverage.out
     go tool cover -html=coverage.out -o coverage.html
 
-# Full dev environment: Go backend (air live-reload) + Vite frontend (HMR)
+# Install all dependencies (Go modules + frontend packages)
+setup:
+    go mod download
+    cd web && pnpm install
+
+# Full dev environment: Go backend + Vite frontend (HMR)
 # Runs daemonized via overmind — no dedicated terminal needed.
-# Auto-detects jail vs host and picks non-colliding ports.
-# Inside jail:  backend=3847  frontend=3848  (both forwarded by yolo-jail)
-# On host:      backend=3850  frontend=5173  (avoids jail port-forwarding)
+# Override ports via .env or env vars: TILLR_PORT, VITE_PORT
 dev:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then
-        BACKEND_PORT=3847
-        FRONTEND_PORT=3848
-    else
-        BACKEND_PORT=3850
-        FRONTEND_PORT=5173
+    overmind start -f Procfile.dev -D
+    # Give overmind a moment to either stabilize or crash
+    sleep 2
+    socket="${OVERMIND_SOCKET:-./.overmind.sock}"
+    if [ ! -S "$socket" ]; then
+        echo "ERROR: overmind exited immediately — processes likely crashed."
+        echo ""
+        echo "Run without daemonizing to see the error:"
+        echo "  overmind start -f Procfile.dev"
+        exit 1
     fi
-    export TILLR_PORT="$BACKEND_PORT"
-    export VITE_PORT="$FRONTEND_PORT"
-    if command -v air &>/dev/null; then
-        printf 'backend: air -- serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
-            "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
-    else
-        echo "⚠  air not found — backend won't live-reload (install: go install github.com/air-verse/air@latest)"
-        printf 'backend: go run ./cmd/tillr serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
-            "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
-    fi
-    overmind start -f /tmp/Procfile.tillr -D
     echo "Dev environment started (overmind, daemonized)"
-    echo "  Backend:  http://localhost:$BACKEND_PORT"
-    echo "  Frontend: http://localhost:$FRONTEND_PORT"
     echo ""
     echo "  just dev-logs         # tail all logs"
     echo "  just dev-stop         # stop everything"
@@ -75,10 +69,25 @@ dev:
 
 # Tail dev environment logs
 dev-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    socket="${OVERMIND_SOCKET:-./.overmind.sock}"
+    if [ ! -S "$socket" ]; then
+        echo "No running dev environment (socket not found at $socket)."
+        echo "Start one with: just dev"
+        exit 1
+    fi
     overmind echo
 
 # Stop dev environment
 dev-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    socket="${OVERMIND_SOCKET:-./.overmind.sock}"
+    if [ ! -S "$socket" ]; then
+        echo "No running dev environment to stop."
+        exit 0
+    fi
     overmind quit
 
 # Restart dev environment
@@ -105,12 +114,12 @@ dev-frontend port="3847":
 serve port="3847":
     TILLR_PORT={{port}} go run ./cmd/tillr serve --port {{port}}
 
-# Install the binary locally
+# Build frontend + install binary to $GOPATH/bin
 install:
     cd web && pnpm build
     go install ./cmd/tillr
 
-# Install systemd user service
+# Install systemd user service (one-time setup for self-hosting)
 install-service:
     mkdir -p ~/.config/systemd/user
     cp tillr.service ~/.config/systemd/user/tillr.service
@@ -118,7 +127,7 @@ install-service:
     systemctl --user enable tillr
     @echo "Service installed. Start with: just restart-service"
 
-# Deploy: build, install, restart
+# Build, install, and restart the systemd service (self-hosting deploy)
 deploy: install
     systemctl --user restart tillr
     @echo "Tillr deployed and service restarted"
