@@ -1030,6 +1030,11 @@ func handleCycles(database *sql.DB, w http.ResponseWriter, r *http.Request) erro
 		return writeJSON(w, cycles)
 	}
 
+	// GET /api/cycles/types — list predefined cycle types
+	if strings.TrimPrefix(path, "/api/cycles/") == "types" && r.Method == "GET" {
+		return writeJSON(w, models.CycleTypes)
+	}
+
 	// GET /api/cycles/{id} — single cycle detail with scores and step names
 	trimmed := strings.TrimPrefix(path, "/api/cycles/")
 	if trimmed != "" && trimmed != path {
@@ -4165,6 +4170,16 @@ func handleWorkstreamDetail(database *sql.DB, w http.ResponseWriter, r *http.Req
 	}
 	if len(parts) >= 2 && parts[1] == "links" {
 		return handleWorkstreamLinks(database, w, r, id, parts)
+	}
+	if len(parts) >= 2 && parts[1] == "features" && r.Method == "GET" {
+		features, err := db.ListWorkstreamFeatures(database, id)
+		if err != nil {
+			return err
+		}
+		if features == nil {
+			features = []models.WorkstreamFeature{}
+		}
+		return writeJSON(w, features)
 	}
 
 	switch r.Method {

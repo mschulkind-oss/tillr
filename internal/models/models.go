@@ -142,8 +142,9 @@ type Heartbeat struct {
 
 // CycleStep defines a single step within a cycle type.
 type CycleStep struct {
-	Name  string `json:"name"`
-	Human bool   `json:"human,omitempty"` // true = human-owned step (no agent work item)
+	Name         string `json:"name"`
+	Human        bool   `json:"human,omitempty"`        // true = human-owned step (no agent work item)
+	Instructions string `json:"instructions,omitempty"` // markdown instructions for human steps
 }
 
 // CycleType defines a predefined iteration cycle.
@@ -450,20 +451,71 @@ type ActivityDayCount struct {
 func step(name string) CycleStep { return CycleStep{Name: name} }
 
 // humanStep is a shorthand constructor for human-owned steps.
-func humanStep(name string) CycleStep { return CycleStep{Name: name, Human: true} }
+func humanStep(name, instructions string) CycleStep {
+	return CycleStep{Name: name, Human: true, Instructions: instructions}
+}
 
 // Predefined cycle types
 var CycleTypes = []CycleType{
 	{Name: "ui-refinement", Description: "UI Refinement", Steps: []CycleStep{step("design"), step("ux-review"), step("develop"), step("manual-qa"), step("judge")}},
-	{Name: "feature-implementation", Description: "Feature Implementation", Steps: []CycleStep{step("research"), step("develop"), step("agent-qa"), step("judge"), humanStep("human-qa")}},
-	{Name: "roadmap-planning", Description: "Roadmap Planning", Steps: []CycleStep{step("research"), step("plan"), step("create-roadmap"), step("prioritize"), humanStep("human-review")}},
+	{Name: "feature-implementation", Description: "Feature Implementation", Steps: []CycleStep{
+		step("research"), step("develop"), step("agent-qa"), step("judge"),
+		humanStep("human-qa", `## Manual QA Checklist
+
+1. **Verify the feature works end-to-end** — follow the feature spec and confirm each acceptance criterion
+2. **Check edge cases** — empty states, error states, boundary values
+3. **Test the UI** — responsive layout, keyboard navigation, loading states
+4. **Check for regressions** — ensure existing functionality still works
+5. **Review the code changes** — look for anything suspicious or incomplete
+
+> Approve if all criteria pass. Reject with notes describing what failed.`),
+	}},
+	{Name: "roadmap-planning", Description: "Roadmap Planning", Steps: []CycleStep{
+		step("research"), step("plan"), step("create-roadmap"), step("prioritize"),
+		humanStep("human-review", `## Roadmap Review
+
+1. **Check prioritization** — are the highest-impact items at the top?
+2. **Validate scope** — are items appropriately sized? Split anything too large.
+3. **Confirm dependencies** — are blocking relationships captured correctly?
+4. **Sanity-check timelines** — do estimates feel realistic given current velocity?
+
+> Approve to finalize the roadmap. Reject with notes on what needs adjustment.`),
+	}},
 	{Name: "bug-triage", Description: "Bug Triage", Steps: []CycleStep{step("report"), step("reproduce"), step("root-cause"), step("fix"), step("verify")}},
 	{Name: "documentation", Description: "Documentation", Steps: []CycleStep{step("research"), step("draft"), step("review"), step("edit"), step("publish")}},
 	{Name: "architecture-review", Description: "Architecture Review", Steps: []CycleStep{step("analyze"), step("propose"), step("discuss"), step("decide"), step("implement")}},
 	{Name: "release", Description: "Release", Steps: []CycleStep{step("freeze"), step("qa"), step("fix"), step("staging"), step("verify"), step("ship")}},
 	{Name: "onboarding-dx", Description: "Onboarding/DX", Steps: []CycleStep{step("try"), step("friction-log"), step("improve"), step("verify"), step("document")}},
-	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []CycleStep{step("research"), step("draft-spec"), step("review"), step("judge"), humanStep("human-review")}},
-	{Name: "collaborative-design", Description: "Collaborative Design (human-in-the-loop)", Steps: []CycleStep{step("intake"), step("research"), humanStep("human-review"), step("design"), humanStep("human-approve")}},
+	{Name: "spec-iteration", Description: "Spec Iteration", Steps: []CycleStep{
+		step("research"), step("draft-spec"), step("review"), step("judge"),
+		humanStep("human-review", `## Spec Review
+
+1. **Read the spec** — does it clearly describe the problem and proposed solution?
+2. **Check completeness** — are edge cases, error handling, and migration covered?
+3. **Validate trade-offs** — are the chosen approaches well-justified?
+4. **Assess feasibility** — can this be built with current architecture and constraints?
+
+> Approve to move to implementation. Reject with specific feedback on what to revise.`),
+	}},
+	{Name: "collaborative-design", Description: "Collaborative Design (human-in-the-loop)", Steps: []CycleStep{
+		step("intake"), step("research"),
+		humanStep("human-review", `## Design Review
+
+1. **Review research findings** — are the key insights captured?
+2. **Validate problem framing** — does the research address the right questions?
+3. **Provide direction** — add notes on what the design should prioritize
+
+> Approve to proceed to design phase. Reject to request more research.`),
+		step("design"),
+		humanStep("human-approve", `## Design Approval
+
+1. **Review the design** — does it solve the problem identified in research?
+2. **Check visual consistency** — does it match existing UI patterns and style?
+3. **Validate interactions** — are user flows intuitive and complete?
+4. **Confirm scope** — is the design implementable within current constraints?
+
+> Approve to finalize. Reject with specific design feedback.`),
+	}},
 }
 
 // AgentWorkTypeStat holds average completion time for a work type.
@@ -695,6 +747,12 @@ type WorkstreamDetail struct {
 	Notes      []WorkstreamNote `json:"notes"`
 	Links      []WorkstreamLink `json:"links"`
 	Children   []Workstream     `json:"children"`
+}
+
+// WorkstreamFeature is a feature linked to a workstream with the relationship type.
+type WorkstreamFeature struct {
+	Feature      Feature `json:"feature"`
+	Relationship string  `json:"relationship"` // "owned" or "dependency"
 }
 
 type CommandMetric struct {

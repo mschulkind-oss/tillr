@@ -34,6 +34,7 @@ import type {
   WorkstreamNote,
   WorkstreamLink,
   WorkstreamDetail,
+  WorkstreamFeature,
   AppConfig,
 } from './types'
 import { rewriteApiUrl } from './projects'
@@ -203,6 +204,7 @@ export const resolveWorkstreamNote = (wsId: string, noteId: number) =>
   patchJson<void>(`/api/workstreams/${wsId}/notes/${noteId}`, { resolved: 1 })
 export const addWorkstreamLink = (wsId: string, data: { link_type: string; target_id?: string; target_url?: string; label?: string }) =>
   postJson<WorkstreamLink>(`/api/workstreams/${wsId}/links`, data)
+export const getWorkstreamFeatures = (wsId: string) => fetchJson<WorkstreamFeature[]>(`/api/workstreams/${wsId}/features`)
 
 // Config
 export const getConfig = () => fetchJson<AppConfig>('/api/config')

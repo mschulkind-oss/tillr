@@ -3,6 +3,7 @@ import { getCycleDetail, getFeature, advanceCycle } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { EntityLink } from '../components/EntityLink'
 import { PageSkeleton } from '../components/Skeleton'
+import { MarkdownContent } from '../components/MarkdownContent'
 import { useParams, Link } from 'react-router-dom'
 import { formatTimestamp, cn } from '../lib/utils'
 import type { CycleScore } from '../api/types'
@@ -50,7 +51,7 @@ function ScoreCard({ score }: { score: CycleScore }) {
   )
 }
 
-function CycleApproveRejectCard({ cycleId, stepName }: { cycleId: number; stepName: string }) {
+function CycleApproveRejectCard({ cycleId, stepName, instructions }: { cycleId: number; stepName: string; instructions?: string }) {
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const queryClient = useQueryClient()
@@ -69,17 +70,26 @@ function CycleApproveRejectCard({ cycleId, stepName }: { cycleId: number; stepNa
   }
 
   return (
-    <div className={cn('bg-warning/5 border border-warning/30 rounded-lg p-5')}>
-      <h2 className="text-sm font-semibold text-warning mb-3">
+    <div className={cn('bg-warning/5 border border-warning/30 rounded-lg p-5 space-y-4')}>
+      <h2 className="text-sm font-semibold text-warning">
         Waiting for human input: {stepName}
       </h2>
+
+      {instructions && (
+        <div className="bg-bg-secondary rounded-lg p-4 border border-border-light">
+          <div className="prose prose-sm prose-invert max-w-none text-sm text-text-secondary">
+            <MarkdownContent>{instructions}</MarkdownContent>
+          </div>
+        </div>
+      )}
+
       <textarea
         value={notes}
         onChange={e => setNotes(e.target.value)}
-        placeholder="Notes (optional)..."
+        placeholder="Review notes (optional)..."
         className="w-full min-h-[60px] p-2 rounded-md border border-border bg-bg-primary text-text-primary text-sm resize-y font-[inherit]"
       />
-      <div className="flex gap-2 mt-3">
+      <div className="flex gap-2">
         <button
           onClick={() => handleAction('approve')}
           disabled={submitting}
@@ -220,7 +230,8 @@ export function CycleDetail() {
         const isHuman = typeof step === 'object' && step.human
         if (!isHuman) return null
         const stepName = typeof step === 'string' ? step : step.name
-        return <CycleApproveRejectCard cycleId={cycle.id} stepName={stepName} />
+        const instructions = typeof step === 'object' ? step.instructions : undefined
+        return <CycleApproveRejectCard cycleId={cycle.id} stepName={stepName} instructions={instructions} />
       })()}
 
       {/* Scores */}

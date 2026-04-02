@@ -4814,6 +4814,68 @@ func ListWorkstreamLinks(db *sql.DB, workstreamID string) ([]models.WorkstreamLi
 	return out, rows.Err()
 }
 
+// ListWorkstreamFeatures returns all features linked to a workstream (owned + dependencies).
+func ListWorkstreamFeatures(db *sql.DB, workstreamID string) ([]models.WorkstreamFeature, error) {
+	rows, err := db.Query(`
+		SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''),
+			COALESCE(f.spec,''), f.status, f.priority, COALESCE(f.assigned_cycle,''),
+			COALESCE(f.roadmap_item_id,''), f.created_at, f.updated_at,
+			COALESCE(f.previous_status,''), COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,''),
+			COALESCE(m.name,'') AS milestone_name,
+			CASE wl.link_type WHEN 'feature' THEN 'owned' ELSE 'dependency' END AS relationship
+		FROM workstream_links wl
+		JOIN features f ON f.id = wl.target_id
+		LEFT JOIN milestones m ON m.id = f.milestone_id
+		WHERE wl.workstream_id = ? AND wl.link_type IN ('feature', 'feature-dependency')
+		ORDER BY relationship, f.priority DESC, f.name`,
+		workstreamID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.WorkstreamFeature
+	for rows.Next() {
+		var wf models.WorkstreamFeature
+		if err := rows.Scan(
+			&wf.Feature.ID, &wf.Feature.ProjectID, &wf.Feature.MilestoneID,
+			&wf.Feature.Name, &wf.Feature.Description, &wf.Feature.Spec,
+			&wf.Feature.Status, &wf.Feature.Priority, &wf.Feature.AssignedCycle,
+			&wf.Feature.RoadmapItemID, &wf.Feature.CreatedAt, &wf.Feature.UpdatedAt,
+			&wf.Feature.PreviousStatus, &wf.Feature.EstimatePoints, &wf.Feature.EstimateSize,
+			&wf.Feature.MilestoneName, &wf.Relationship,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, wf)
+	}
+	return out, rows.Err()
+}
+
+// ListFeatureWorkstreams returns workstream IDs and relationship types for a given feature.
+func ListFeatureWorkstreams(db *sql.DB, featureID string) ([]models.WorkstreamLink, error) {
+	rows, err := db.Query(
+		`SELECT id, workstream_id, link_type, target_id, target_url, label, created_at
+		FROM workstream_links WHERE target_id = ? AND link_type IN ('feature', 'feature-dependency')
+		ORDER BY created_at`, featureID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.WorkstreamLink
+	for rows.Next() {
+		var l models.WorkstreamLink
+		if err := rows.Scan(&l.ID, &l.WorkstreamID, &l.LinkType, &l.TargetID, &l.TargetURL, &l.Label, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 func DeleteWorkstreamLink(db *sql.DB, id int) error {
 	_, err := db.Exec(`DELETE FROM workstream_links WHERE id = ?`, id)
 	return err

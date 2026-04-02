@@ -97,7 +97,7 @@ export interface CycleInstance {
 export interface CycleType {
   name: string
   description: string
-  steps: string[]
+  steps: CycleStep[]
 }
 
 export interface CycleScore {
@@ -472,9 +472,15 @@ export interface WorkstreamDetail {
   children: Workstream[]
 }
 
+export interface WorkstreamFeature {
+  feature: Feature
+  relationship: 'owned' | 'dependency'
+}
+
 export interface CycleStep {
   name: string
   human?: boolean
+  instructions?: string
 }
 
 export interface AppConfig {

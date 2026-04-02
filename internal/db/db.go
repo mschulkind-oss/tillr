@@ -615,4 +615,20 @@ var migrations = []string{
 	`ALTER TABLE cycle_instances ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'feature';
 	ALTER TABLE cycle_instances RENAME COLUMN feature_id TO entity_id;
 	CREATE INDEX IF NOT EXISTS idx_cycles_entity ON cycle_instances(entity_type, entity_id);`,
+
+	// Migration 34: Add feature-dependency link type to workstream_links
+	`CREATE TABLE workstream_links_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workstream_id TEXT NOT NULL REFERENCES workstreams(id),
+		link_type TEXT NOT NULL CHECK(link_type IN ('feature', 'feature-dependency', 'doc', 'url', 'discussion')),
+		target_id TEXT NOT NULL DEFAULT '',
+		target_url TEXT NOT NULL DEFAULT '',
+		label TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	INSERT INTO workstream_links_new SELECT * FROM workstream_links;
+	DROP TABLE workstream_links;
+	ALTER TABLE workstream_links_new RENAME TO workstream_links;
+	CREATE INDEX IF NOT EXISTS idx_workstream_links_ws ON workstream_links(workstream_id);
+	CREATE INDEX IF NOT EXISTS idx_workstream_links_target ON workstream_links(link_type, target_id);`,
 }

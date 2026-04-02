@@ -36,7 +36,8 @@ func init() {
 	workstreamNoteCmd.Flags().String("type", "note", "Note type (note|question|decision|idea|import)")
 	workstreamNoteCmd.Flags().String("source", "", "Note source (e.g. slack)")
 
-	workstreamLinkCmd.Flags().String("feature", "", "Link to feature ID")
+	workstreamLinkCmd.Flags().String("feature", "", "Link to feature ID (owned by this workstream)")
+	workstreamLinkCmd.Flags().String("depends", "", "Link to feature ID (workstream depends on this)")
 	workstreamLinkCmd.Flags().String("doc", "", "Link to document path")
 	workstreamLinkCmd.Flags().String("url", "", "Link to URL")
 	workstreamLinkCmd.Flags().String("discussion", "", "Link to discussion ID")
@@ -320,6 +321,7 @@ var workstreamLinkCmd = &cobra.Command{
 	Short: "Link a workstream to a feature, doc, URL, or discussion",
 	Args:  cobra.ExactArgs(1),
 	Example: `  tillr workstream link auth-redesign --feature user-auth --label "Main feature"
+  tillr workstream link auth-redesign --depends api-auth --label "Needs auth first"
   tillr workstream link auth-redesign --url "https://wiki.example.com/auth" --label "Wiki page"
   tillr workstream link auth-redesign --doc docs/auth-spec.md
   tillr workstream link auth-redesign --discussion 5`,
@@ -336,6 +338,7 @@ var workstreamLinkCmd = &cobra.Command{
 		}
 
 		featureID, _ := cmd.Flags().GetString("feature")
+		dependsID, _ := cmd.Flags().GetString("depends")
 		docPath, _ := cmd.Flags().GetString("doc")
 		url, _ := cmd.Flags().GetString("url")
 		discussionID, _ := cmd.Flags().GetString("discussion")
@@ -350,6 +353,9 @@ var workstreamLinkCmd = &cobra.Command{
 		case featureID != "":
 			l.LinkType = "feature"
 			l.TargetID = featureID
+		case dependsID != "":
+			l.LinkType = "feature-dependency"
+			l.TargetID = dependsID
 		case docPath != "":
 			l.LinkType = "doc"
 			l.TargetURL = docPath
@@ -360,7 +366,7 @@ var workstreamLinkCmd = &cobra.Command{
 			l.LinkType = "discussion"
 			l.TargetID = discussionID
 		default:
-			return fmt.Errorf("specify one of --feature, --doc, --url, or --discussion")
+			return fmt.Errorf("specify one of --feature, --depends, --doc, --url, or --discussion")
 		}
 
 		if err := db.CreateWorkstreamLink(database, l); err != nil {
