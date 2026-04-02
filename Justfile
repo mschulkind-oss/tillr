@@ -39,8 +39,10 @@ test-cov:
     go test ./... -v -coverprofile=coverage.out
     go tool cover -html=coverage.out -o coverage.html
 
-# Install all dependencies (Go modules + frontend packages)
+# Install all dependencies (Go modules, frontend packages, dev tools)
 setup:
+    mise install
+    go install golang.org/x/tools/cmd/goimports@latest
     go mod download
     cd web && pnpm install
 
