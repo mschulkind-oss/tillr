@@ -8,7 +8,7 @@
 //   3. Create v2.0-scale milestone if missing
 //   4. Recategorize roadmap items into: core, web-ui, integrations, analytics, workflow, dx
 
-const BASE = process.env.LIFECYCLE_URL || "http://localhost:9879";
+const BASE = process.env.TILLR_URL || "http://localhost:9879";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

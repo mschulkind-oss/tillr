@@ -1,6 +1,6 @@
 # Open Questions
 
-> Tracking unresolved decisions and design questions for lifecycle.
+> Tracking unresolved decisions and design questions for tillr.
 
 ---
 
@@ -9,12 +9,12 @@
 ### OQ-001: Project Name
 **Status:** Active
 **Raised:** 2025-07-17
-**Context:** The current working name "lifecycle" is generic and may conflict with other packages on PyPI, npm, or Go module registries. A more distinctive name would improve discoverability and reduce confusion.
+**Context:** The current working name "tillr" is generic and may conflict with other packages on PyPI, npm, or Go module registries. A more distinctive name would improve discoverability and reduce confusion.
 
-**Question:** Should we rename from "lifecycle" to something more distinctive?
+**Question:** Should we rename from "tillr" to something more distinctive?
 
 **Options:**
-- Keep "lifecycle" — it's descriptive and clear
+- Keep "tillr" — it's descriptive and clear
 - Rename to something from the name candidates list (see docs/NAME_CANDIDATES.md)
 
 **Dependencies:** Blocks section 1 of open-source checklist. Name must be decided before public repo setup.
@@ -41,7 +41,7 @@
 ### OQ-003: Agent Protocol
 **Status:** Active
 **Raised:** 2025-07-17
-**Context:** Agents need to interact with lifecycle to report status, request human input, and receive instructions. CLI commands are universal and work with any agent, but a stdin/stdout JSON protocol would be faster for tight iteration loops and richer data exchange.
+**Context:** Agents need to interact with tillr to report status, request human input, and receive instructions. CLI commands are universal and work with any agent, but a stdin/stdout JSON protocol would be faster for tight iteration loops and richer data exchange.
 
 **Question:** Should agents interact via CLI commands only, or also support a stdin/stdout JSON protocol?
 
@@ -58,7 +58,7 @@
 ### OQ-004: Database Strategy
 **Status:** Active
 **Raised:** 2025-07-17
-**Context:** lifecycle needs to persist project state, iteration history, and configuration. A single global database is simpler to query across projects but couples them. Per-project databases provide isolation but make cross-project views harder.
+**Context:** tillr needs to persist project state, iteration history, and configuration. A single global database is simpler to query across projects but couples them. Per-project databases provide isolation but make cross-project views harder.
 
 **Question:** One global DB or one DB per managed project?
 
@@ -84,7 +84,7 @@
 - Separate queue: ideas bypass roadmap priority entirely, always processed first
 - Weighted boost: ideas get +2 priority score bonus but still compete with roadmap
 
-**Dependencies:** Affects `lifecycle next` work ordering and agent dispatch.
+**Dependencies:** Affects `tillr next` work ordering and agent dispatch.
 
 ---
 
@@ -96,7 +96,7 @@
 **Question:** What level of agent workflow visualization is desired?
 
 **Options:**
-- Static Mermaid diagram showing the lifecycle flow (simplest, already have diagram export)
+- Static Mermaid diagram showing the tillr flow (simplest, already have diagram export)
 - Interactive page with current agent status and work item flow (medium)
 - Full animated real-time visualization with WebSocket-driven state transitions (complex)
 

@@ -13,9 +13,9 @@ import (
 )
 
 // getAgentSessionID returns a stable agent session ID.
-// Priority: LIFECYCLE_AGENT_ID env var > "agent-{hostname}-{pid}".
+// Priority: TILLR_AGENT_ID env var > "agent-{hostname}-{pid}".
 func getAgentSessionID() string {
-	if id := os.Getenv("LIFECYCLE_AGENT_ID"); id != "" {
+	if id := os.Getenv("TILLR_AGENT_ID"); id != "" {
 		return id
 	}
 	host, _ := os.Hostname()

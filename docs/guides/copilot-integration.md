@@ -130,7 +130,7 @@ Always send heartbeats during long tasks:
 Set these for consistent agent identification:
 
 ```bash
-export LIFECYCLE_AGENT_ID="copilot-$(hostname)"
+export TILLR_AGENT_ID="copilot-$(hostname)"
 ```
 
 ## Workflow Patterns
@@ -211,7 +211,7 @@ tillr hooks
 
 ### Agent not showing in dashboard
 
-Ensure `LIFECYCLE_AGENT_ID` is set, or the agent will use a PID-based ID
+Ensure `TILLR_AGENT_ID` is set, or the agent will use a PID-based ID
 that changes each session.
 
 ### Work items not appearing

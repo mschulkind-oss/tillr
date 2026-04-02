@@ -287,7 +287,7 @@ func validateTableColumn(table, column string) error {
 }
 
 func readEncryptionKey(cfg *config.Config) ([]byte, error) {
-	keyEnv := os.Getenv("LIFECYCLE_ENCRYPT_KEY")
+	keyEnv := os.Getenv("TILLR_ENCRYPT_KEY")
 	if keyEnv != "" {
 		return crypto.DeriveKey(keyEnv), nil
 	}

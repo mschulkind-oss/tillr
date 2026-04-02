@@ -21,7 +21,7 @@ var cmdStartTime time.Time
 var rootCmd = &cobra.Command{
 	Use:   "tillr",
 	Short: "Human-in-the-loop project management for agentic development",
-	Long: `Lifecycle is a project management tool that bridges human product owners
+	Long: `Tillr is a project management tool that bridges human product owners
 and AI agents. It tracks, visualizes, and steers work as it flows through
 defined iteration cycles — acting as the project manager for agentic development.
 

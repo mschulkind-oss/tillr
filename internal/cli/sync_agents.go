@@ -141,7 +141,7 @@ This command is also checked by 'tillr doctor'.`,
 
 		b.WriteString("### Environment Variables\n\n")
 		b.WriteString("```bash\n")
-		b.WriteString("LIFECYCLE_AGENT_ID=\"my-agent\"  # Stable agent identifier\n")
+		b.WriteString("TILLR_AGENT_ID=\"my-agent\"  # Stable agent identifier\n")
 		b.WriteString("```\n\n")
 
 		b.WriteString("## Important Rules\n\n")

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "🚀 Bootstrapping Lifecycle self-management..."
+echo "🚀 Bootstrapping Tillr self-management..."
 
 # Build if needed
 if [ ! -f bin/tillr ]; then
