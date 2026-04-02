@@ -9,15 +9,14 @@ permissions:
   id-token: write
 
 jobs:
-  publish:
+  build-wheels:
     runs-on: ubuntu-latest
-    environment: pypi
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version-file: go.mod
 
       - uses: pnpm/action-setup@v4
         with:
@@ -32,7 +31,7 @@ jobs:
       - name: Build frontend
         run: cd web && pnpm install --frozen-lockfile && pnpm build
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
         run: |
@@ -45,7 +44,27 @@ jobs:
             --license Apache-2.0 \
             --url https://github.com/mschulkind-oss/tillr \
             --set-version-var github.com/mschulkind-oss/tillr/internal/version.Version \
+            --platforms linux/amd64,linux/arm64,darwin/amd64,darwin/arm64 \
             --version "$version"
 
-      - name: Publish
-        run: uv publish
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Publish to PyPI
+        run: uv publish dist/* --check-url https://pypi.org/simple/

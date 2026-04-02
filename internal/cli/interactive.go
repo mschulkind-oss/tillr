@@ -15,7 +15,7 @@ import (
 	"github.com/mschulkind-oss/tillr/internal/engine"
 	"github.com/mschulkind-oss/tillr/internal/models"
 	"github.com/spf13/cobra"
-	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // ANSI escape sequences.
@@ -84,25 +84,12 @@ func tuiProgressBar(current, total, width int) string {
 
 // --- Terminal raw mode ---
 
-func enableRawMode(fd int) (*unix.Termios, error) {
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return nil, fmt.Errorf("getting terminal state (not a terminal?): %w", err)
-	}
-	raw := *old
-	// Disable echo and canonical mode for character-at-a-time input.
-	// Keep ISIG so Ctrl-C still generates SIGINT for safe cleanup.
-	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN
-	raw.Cc[unix.VMIN] = 0
-	raw.Cc[unix.VTIME] = 1 // 100ms read timeout
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
-		return nil, fmt.Errorf("setting raw mode: %w", err)
-	}
-	return old, nil
+func enableRawMode(fd int) (*term.State, error) {
+	return term.MakeRaw(fd)
 }
 
-func restoreTerminal(fd int, state *unix.Termios) {
-	_ = unix.IoctlSetTermios(fd, unix.TCSETS, state)
+func restoreTerminal(fd int, state *term.State) {
+	_ = term.Restore(fd, state)
 }
 
 func readKey() byte {

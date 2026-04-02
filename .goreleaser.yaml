@@ -24,7 +24,7 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "tillr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -38,16 +38,13 @@ changelog:
       - "^chore:"
       - "^test:"
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: tillr
+    repository:
       owner: mschulkind-oss
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
     homepage: "https://github.com/mschulkind-oss/tillr"
     description: "Human-in-the-loop project management for agentic development"
-    license: "Apache-2.0"
-    install: |
-      bin.install "tillr"
-    test: |
-      system "#{bin}/tillr", "--version"
+    url:
+      verified: "github.com/mschulkind-oss/tillr"
