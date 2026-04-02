@@ -1,11 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFeature, getFeatureDeps, getQAResults, patchFeature } from '../api/client'
+import { getFeature, getFeatureDeps, getQAResults, patchFeature, getDiscussions, getFeaturePRs } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
+import { EntityLink } from '../components/EntityLink'
 import { useParams, Link } from 'react-router-dom'
 import { formatTimestamp, cn } from '../lib/utils'
 import { useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { MarkdownContent } from '../components/MarkdownContent'
 import { useStore } from '../store'
 
 export function FeatureDetail() {
@@ -31,6 +32,17 @@ export function FeatureDetail() {
     enabled: !!id,
   })
 
+  const discussions = useQuery({
+    queryKey: ['discussions'],
+    queryFn: getDiscussions,
+  })
+
+  const prs = useQuery({
+    queryKey: ['feature-prs', id],
+    queryFn: () => getFeaturePRs(id!),
+    enabled: !!id,
+  })
+
   const [editing, setEditing] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
 
@@ -46,7 +58,7 @@ export function FeatureDetail() {
   })
 
   if (feature.isLoading) return <PageSkeleton />
-  if (!feature.data) {
+  if (!feature.data?.feature) {
     return (
       <div className="text-center py-12 text-text-muted">
         Feature not found
@@ -54,7 +66,9 @@ export function FeatureDetail() {
     )
   }
 
-  const f = feature.data
+  const f = feature.data.feature
+  const featureCycles = feature.data.cycles || []
+  const featureDiscussions = (discussions.data || []).filter((d) => d.feature_id === id)
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -132,11 +146,20 @@ export function FeatureDetail() {
             {f.priority}
           </span>
         } />
-        <MetaItem label="Milestone" value={f.milestone_name || '—'} />
+        <MetaItem label="Milestone" value={
+          f.milestone_id
+            ? <EntityLink type="milestone" id={f.milestone_id} name={f.milestone_name || f.milestone_id} />
+            : '—'
+        } />
         <MetaItem label="Created" value={formatTimestamp(f.created_at)} />
         <MetaItem label="Updated" value={formatTimestamp(f.updated_at)} />
         {f.estimate_size && <MetaItem label="Estimate" value={f.estimate_size.toUpperCase()} />}
-        {f.assigned_cycle && <MetaItem label="Cycle" value={f.assigned_cycle} />}
+        {f.assigned_cycle && <MetaItem label="Cycle" value={
+          <EntityLink type="cycle" id={f.assigned_cycle} name={f.assigned_cycle} />
+        } />}
+        {f.roadmap_item_id && <MetaItem label="Roadmap" value={
+          <EntityLink type="roadmap" id={f.roadmap_item_id} name="View Roadmap Item" showIcon />
+        } />}
       </div>
 
       {/* Tags */}
@@ -155,14 +178,14 @@ export function FeatureDetail() {
       {f.spec && (
         <div className="bg-bg-card border border-border rounded-lg p-5">
           <h2 className="text-sm font-semibold text-text-primary mb-3">Feature Spec</h2>
-          <div className="prose prose-sm prose-invert max-w-none text-text-secondary">
-            <ReactMarkdown>{f.spec}</ReactMarkdown>
-          </div>
+          <MarkdownContent className="prose prose-sm prose-invert max-w-none text-text-secondary">
+            {f.spec}
+          </MarkdownContent>
         </div>
       )}
 
       {/* Dependencies */}
-      {deps.data && (deps.data.depends_on?.length > 0 || deps.data.blocks?.length > 0) && (
+      {deps.data && (deps.data.depends_on?.length > 0 || deps.data.depended_by?.length > 0) && (
         <div className="bg-bg-card border border-border rounded-lg p-5">
           <h2 className="text-sm font-semibold text-text-primary mb-3">Dependencies</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -170,30 +193,34 @@ export function FeatureDetail() {
               <div>
                 <h3 className="text-xs text-text-muted uppercase tracking-wider mb-2">Depends on</h3>
                 <div className="space-y-1">
-                  {deps.data.depends_on.map((depId) => (
-                    <Link
-                      key={depId}
-                      to={`/features/${depId}`}
-                      className="block text-sm text-accent hover:underline"
-                    >
-                      {depId}
-                    </Link>
+                  {deps.data.depends_on.map((dep) => (
+                    <div key={dep.id} className="flex items-center gap-2">
+                      <Link
+                        to={`/features/${dep.id}`}
+                        className="text-sm text-accent hover:underline"
+                      >
+                        {dep.name}
+                      </Link>
+                      <StatusBadge status={dep.status} />
+                    </div>
                   ))}
                 </div>
               </div>
             )}
-            {deps.data.blocks?.length > 0 && (
+            {deps.data.depended_by?.length > 0 && (
               <div>
                 <h3 className="text-xs text-text-muted uppercase tracking-wider mb-2">Blocks</h3>
                 <div className="space-y-1">
-                  {deps.data.blocks.map((blockId) => (
-                    <Link
-                      key={blockId}
-                      to={`/features/${blockId}`}
-                      className="block text-sm text-warning hover:underline"
-                    >
-                      {blockId}
-                    </Link>
+                  {deps.data.depended_by.map((dep) => (
+                    <div key={dep.id} className="flex items-center gap-2">
+                      <Link
+                        to={`/features/${dep.id}`}
+                        className="text-sm text-warning hover:underline"
+                      >
+                        {dep.name}
+                      </Link>
+                      <StatusBadge status={dep.status} />
+                    </div>
                   ))}
                 </div>
               </div>
@@ -225,6 +252,80 @@ export function FeatureDetail() {
                 <span className="ml-auto text-xs text-text-muted">{formatTimestamp(r.created_at)}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pull Requests */}
+      {prs.data && prs.data.length > 0 && (
+        <div className="bg-bg-card border border-border rounded-lg p-5">
+          <h2 className="text-sm font-semibold text-text-primary mb-3">Pull Requests</h2>
+          <div className="space-y-2">
+            {prs.data.map((pr) => (
+              <a
+                key={pr.pr_url}
+                href={pr.pr_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-3 rounded border border-border-light hover:border-accent/30 transition-colors text-sm"
+              >
+                <span className={cn(
+                  'text-xs font-medium px-2 py-0.5 rounded',
+                  pr.status === 'merged' ? 'bg-purple/10 text-purple' :
+                  pr.status === 'open' ? 'bg-success/10 text-success' :
+                  'bg-danger/10 text-danger'
+                )}>
+                  {pr.status}
+                </span>
+                <span className="font-mono text-text-muted">#{pr.pr_number}</span>
+                <span className="text-text-secondary">{pr.repo}</span>
+                <span className="ml-auto text-xs text-accent">View</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Related */}
+      {(featureCycles.length > 0 || featureDiscussions.length > 0) && (
+        <div className="bg-bg-card border border-border rounded-lg p-5">
+          <h2 className="text-sm font-semibold text-text-primary mb-3">Related</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {featureCycles.length > 0 && (
+              <div>
+                <h3 className="text-xs text-text-muted uppercase tracking-wider mb-2">Cycles</h3>
+                <div className="space-y-1">
+                  {featureCycles.map((c) => (
+                    <div key={c.id}>
+                      <EntityLink
+                        type="cycle"
+                        id={c.id}
+                        name={`${c.cycle_type} #${c.iteration}`}
+                        showIcon
+                      />
+                      <span className="ml-2 text-xs text-text-muted">({c.status})</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {featureDiscussions.length > 0 && (
+              <div>
+                <h3 className="text-xs text-text-muted uppercase tracking-wider mb-2">Discussions</h3>
+                <div className="space-y-1">
+                  {featureDiscussions.map((d) => (
+                    <div key={d.id}>
+                      <EntityLink
+                        type="discussion"
+                        id={d.id}
+                        name={d.title}
+                        showIcon
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

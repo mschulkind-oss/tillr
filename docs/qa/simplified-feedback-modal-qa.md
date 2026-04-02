@@ -13,7 +13,7 @@ The Quick Feedback modal (triggered by pressing `F` or clicking the feedback but
 
 ## Test Environment
 
-1. Start the server: `bin/lifecycle serve --port 3847`
+1. Start the server: `bin/tillr serve --port 3847`
 2. Open browser to `http://localhost:3847`
 3. Ensure you're on any page (Dashboard works fine)
 
@@ -53,7 +53,7 @@ The Quick Feedback modal (triggered by pressing `F` or clicking the feedback but
 1. Open the modal
 2. Type "Hello world"
 3. Open browser DevTools → Application → Local Storage
-4. Look for key `lifecycle_feedback_draft`
+4. Look for key `tillr_feedback_draft`
 
 **Expected:**
 - [ ] The localStorage entry appears with value "Hello world"
@@ -145,10 +145,10 @@ The Quick Feedback modal (triggered by pressing `F` or clicking the feedback but
 
 To approve this feature:
 ```bash
-lifecycle qa approve simplified-feedback-modal-with-localstorage-persistence --notes "QA passed"
+tillr qa approve simplified-feedback-modal-with-localstorage-persistence --notes "QA passed"
 ```
 
 To reject and send back for rework:
 ```bash
-lifecycle qa reject simplified-feedback-modal-with-localstorage-persistence --notes "Issue: <describe what failed>"
+tillr qa reject simplified-feedback-modal-with-localstorage-persistence --notes "Issue: <describe what failed>"
 ```

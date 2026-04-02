@@ -1,14 +1,14 @@
 default:
     @just --list
 
-# Build the lifecycle binary
+# Build the tillr binary
 build:
     cd web && pnpm build
-    go build -o bin/lifecycle ./cmd/lifecycle
+    go build -o bin/tillr ./cmd/tillr
 
-# Run lifecycle CLI with args
+# Run tillr CLI with args
 run *args:
-    go run ./cmd/lifecycle -- {{args}}
+    go run ./cmd/tillr -- {{args}}
 
 # The universal quality gate
 check: format lint test
@@ -31,17 +31,86 @@ test-cov:
     go test ./... -v -coverprofile=coverage.out
     go tool cover -html=coverage.out -o coverage.html
 
-# Start the web viewer dev server (default port 3847, override with: just dev 3848)
-dev port="":
-    go run ./cmd/lifecycle serve {{ if port != "" { "--port " + port } else { "" } }}
+# Full dev environment: Go backend (air live-reload) + Vite frontend (HMR)
+# Auto-detects jail vs host and picks non-colliding ports.
+# Inside jail:  backend=3847  frontend=3848  (both forwarded by yolo-jail)
+# On host:      backend=3850  frontend=5173  (avoids jail port-forwarding)
+dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then
+        BACKEND_PORT=3847
+        FRONTEND_PORT=3848
+    else
+        BACKEND_PORT=3850
+        FRONTEND_PORT=5173
+    fi
+    export TILLR_PORT="$BACKEND_PORT"
+    export VITE_PORT="$FRONTEND_PORT"
+    echo "🚀 Starting dev environment"
+    echo "   Backend (Go+air):  http://localhost:$BACKEND_PORT"
+    echo "   Frontend (Vite):   http://localhost:$FRONTEND_PORT  ← open this"
+    echo ""
+    if command -v air &>/dev/null; then
+        printf 'backend: air -- serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
+            "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
+    else
+        echo "⚠  air not found — backend won't live-reload (install: go install github.com/air-verse/air@latest)"
+        printf 'backend: go run ./cmd/tillr serve --port %s\nfrontend: cd web && TILLR_PORT=%s VITE_PORT=%s pnpm dev\n' \
+            "$BACKEND_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" > /tmp/Procfile.tillr
+    fi
+    hivemind -d "$(pwd)" /tmp/Procfile.tillr
 
-# Start Vite dev server for frontend development (proxies API to Go server)
-dev-frontend:
-    cd web && pnpm dev
+# Start Go backend only (with live reload if air is installed)
+dev-backend port="3847":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export TILLR_PORT={{port}}
+    if command -v air &>/dev/null; then
+        air -- serve --port {{port}}
+    else
+        echo "Install air for live reload: go install github.com/air-verse/air@latest"
+        echo "Falling back to plain go run..."
+        go run ./cmd/tillr serve --port {{port}}
+    fi
+
+# Start Vite dev server only (proxies API to Go server on given port)
+dev-frontend port="3847":
+    cd web && TILLR_PORT={{port}} pnpm dev
+
+# Start Go server without live reload (for production-like testing)
+serve port="3847":
+    TILLR_PORT={{port}} go run ./cmd/tillr serve --port {{port}}
 
 # Install the binary locally
 install:
-    go install ./cmd/lifecycle
+    cd web && pnpm build
+    go install ./cmd/tillr
+
+# Install systemd user service
+install-service:
+    mkdir -p ~/.config/systemd/user
+    cp tillr.service ~/.config/systemd/user/tillr.service
+    systemctl --user daemon-reload
+    systemctl --user enable tillr
+    @echo "Service installed. Start with: just restart-service"
+
+# Deploy: build, install, restart
+deploy: install
+    systemctl --user restart tillr
+    @echo "Tillr deployed and service restarted"
+
+# Restart the systemd user service
+restart-service:
+    systemctl --user restart tillr
+
+# Show service status
+status:
+    systemctl --user status tillr
+
+# Follow service logs
+logs:
+    journalctl --user -u tillr -f
 
 # Clean build artifacts
 clean:
@@ -49,11 +118,11 @@ clean:
 
 # Docker build
 docker-build:
-    docker build -t lifecycle:latest .
+    docker build -t tillr:latest .
 
 # Docker run with local DB
 docker-run:
-    docker run -p 3847:3847 -v $(pwd)/.lifecycle.db:/app/.lifecycle.db lifecycle:latest
+    docker run -p 3847:3847 -v $(pwd)/.tillr.db:/app/.tillr.db tillr:latest
 
 # Bootstrap self-management
 bootstrap:

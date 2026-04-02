@@ -6,9 +6,31 @@ import { Features } from './pages/Features'
 import { FeatureDetail } from './pages/FeatureDetail'
 import { QA } from './pages/QA'
 import { Roadmap } from './pages/Roadmap'
-import { PlaceholderPage } from './pages/Placeholder'
-import { useEffect } from 'react'
+import { MilestoneDetail } from './pages/MilestoneDetail'
+import { RoadmapDetail } from './pages/RoadmapDetail'
+import { Agents } from './pages/Agents'
+import { AgentDetail } from './pages/AgentDetail'
+import { Cycles } from './pages/Cycles'
+import { CycleDetail } from './pages/CycleDetail'
+import { Ideas } from './pages/Ideas'
+import { IdeaDetail } from './pages/IdeaDetail'
+import { Discussions } from './pages/Discussions'
+import { DiscussionDetail } from './pages/DiscussionDetail'
+import { Decisions } from './pages/Decisions'
+import { DecisionDetail } from './pages/DecisionDetail'
+import { Context } from './pages/Context'
+import { History } from './pages/History'
+import { Workflow } from './pages/Workflow'
+import { Stats } from './pages/Stats'
+import { Spec } from './pages/Spec'
+import { Timeline } from './pages/Timeline'
+import Workstreams from './pages/Workstreams'
+import WorkstreamDetail from './pages/WorkstreamDetail'
+import { useEffect, useState } from 'react'
 import { useStore } from './store'
+import { KeyboardShortcuts } from './components/KeyboardShortcuts'
+import { HelpModal } from './components/HelpModal'
+import { initProjects } from './api/projects'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,10 +51,26 @@ function ThemeInit() {
 }
 
 export default function App() {
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    initProjects().then(() => setReady(true))
+  }, [])
+
+  if (!ready) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-bg-primary text-text-muted text-sm">
+        Loading...
+      </div>
+    )
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeInit />
       <BrowserRouter>
+        <KeyboardShortcuts />
+        <HelpModal />
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -41,20 +79,27 @@ export default function App() {
             <Route path="/features/:id" element={<FeatureDetail />} />
             <Route path="/qa" element={<QA />} />
             <Route path="/roadmap" element={<Roadmap />} />
-            {/* Phase 2 pages - placeholders for now */}
-            <Route path="/cycles" element={<PlaceholderPage title="Cycles" icon="🔄" />} />
-            <Route path="/cycles/:id" element={<PlaceholderPage title="Cycle Detail" icon="🔄" />} />
-            <Route path="/agents" element={<PlaceholderPage title="Agents" icon="🤖" />} />
-            <Route path="/ideas" element={<PlaceholderPage title="Ideas" icon="💡" />} />
-            <Route path="/discussions" element={<PlaceholderPage title="Discussions" icon="💬" />} />
-            <Route path="/discussions/:id" element={<PlaceholderPage title="Discussion Detail" icon="💬" />} />
-            <Route path="/decisions" element={<PlaceholderPage title="Decisions" icon="⚖️" />} />
-            <Route path="/history" element={<PlaceholderPage title="History" icon="📜" />} />
-            <Route path="/stats" element={<PlaceholderPage title="Stats" icon="📈" />} />
-            <Route path="/timeline" element={<PlaceholderPage title="Timeline" icon="📅" />} />
-            <Route path="/spec" element={<PlaceholderPage title="Spec Doc" icon="📄" />} />
-            <Route path="/context" element={<PlaceholderPage title="Context" icon="📚" />} />
-            <Route path="/workflow" element={<PlaceholderPage title="Workflow" icon="⚡" />} />
+            <Route path="/roadmap/:id" element={<RoadmapDetail />} />
+            <Route path="/milestones/:id" element={<MilestoneDetail />} />
+            {/* Agents & Cycles */}
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/agents/:id" element={<AgentDetail />} />
+            <Route path="/cycles" element={<Cycles />} />
+            <Route path="/cycles/:id" element={<CycleDetail />} />
+            <Route path="/ideas" element={<Ideas />} />
+            <Route path="/ideas/:id" element={<IdeaDetail />} />
+            <Route path="/discussions" element={<Discussions />} />
+            <Route path="/discussions/:id" element={<DiscussionDetail />} />
+            <Route path="/decisions" element={<Decisions />} />
+            <Route path="/decisions/:id" element={<DecisionDetail />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/stats" element={<Stats />} />
+            <Route path="/timeline" element={<Timeline />} />
+            <Route path="/spec" element={<Spec />} />
+            <Route path="/context" element={<Context />} />
+            <Route path="/workstreams" element={<Workstreams />} />
+            <Route path="/workstreams/:id" element={<WorkstreamDetail />} />
+            <Route path="/workflow" element={<Workflow />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Routes>

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -20,8 +20,8 @@ Supported operations:
   - Feature status changes (restores previous status)
   - Feature deletions (re-inserts the deleted feature)
 
-Use 'lifecycle undo list' to see recent undoable operations.
-Use 'lifecycle redo' to redo the last undone operation.`,
+Use 'tillr undo list' to see recent undoable operations.
+Use 'tillr redo' to redo the last undone operation.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -121,7 +121,7 @@ var redoCmd = &cobra.Command{
 	Short: "Redo the last undone operation",
 	Long: `Redo the most recently undone operation, re-applying the change.
 
-Only operations that were undone via 'lifecycle undo' can be redone.`,
+Only operations that were undone via 'tillr undo' can be redone.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

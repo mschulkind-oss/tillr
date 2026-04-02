@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Stats page is the quantitative analytics hub of the Lifecycle app. It aggregates project-wide metrics—feature completion rates, cycle performance scores, roadmap distribution, milestone progress, burndown trajectories, and weekly velocity—into a single, live-updating dashboard. The page is designed for at-a-glance health checks by project leads and for trend analysis by agents and developers over time.
+The Stats page is the quantitative analytics hub of the Tillr app. It aggregates project-wide metrics—feature completion rates, cycle performance scores, roadmap distribution, milestone progress, burndown trajectories, and weekly velocity—into a single, live-updating dashboard. The page is designed for at-a-glance health checks by project leads and for trend analysis by agents and developers over time.
 
 **Primary navigation entry:** Sidebar nav item "Stats" (renders via `App.renderStats()`).
 
@@ -21,7 +21,7 @@ The Stats page is the quantitative analytics hub of the Lifecycle app. It aggreg
 |---|---|---|
 | **Project Lead** | Human decision-maker steering the product. | Monitor overall health, assess milestone risk, approve/reject based on score trends. |
 | **Agent Operator** | Human or system dispatching AI agents to work items. | Track cycle throughput, spot stalled iterations, gauge velocity. |
-| **AI Agent** | Automated worker consuming `lifecycle next --json`. | Read `/api/stats` (JSON) to self-assess performance and adapt strategy. |
+| **AI Agent** | Automated worker consuming `tillr next --json`. | Read `/api/stats` (JSON) to self-assess performance and adapt strategy. |
 | **Stakeholder** | Non-technical reviewer (PM, exec). | Glance at completion %, milestone bars, and burndown shape during check-ins. |
 
 ---

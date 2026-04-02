@@ -1,12 +1,13 @@
 package cli
 
 import (
+	"database/sql"
 	"fmt"
 	"strconv"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -21,9 +22,16 @@ func init() {
 	cycleCmd.AddCommand(cycleStatusCmd)
 	cycleCmd.AddCommand(cycleHistoryCmd)
 	cycleCmd.AddCommand(cycleScoreCmd)
+	cycleCmd.AddCommand(cycleAdvanceCmd)
 
 	cycleScoreCmd.Flags().String("notes", "", "Score notes")
 	cycleScoreCmd.Flags().String("feature", "", "Feature ID (if not auto-detected)")
+
+	cycleAdvanceCmd.Flags().String("feature", "", "Feature ID (required)")
+	cycleAdvanceCmd.Flags().Bool("approve", false, "Approve the current human step and advance")
+	cycleAdvanceCmd.Flags().Bool("reject", false, "Reject the current human step (stays on step)")
+	cycleAdvanceCmd.Flags().String("notes", "", "Notes for the approval/rejection")
+	_ = cycleAdvanceCmd.MarkFlagRequired("feature")
 }
 
 var cycleListCmd = &cobra.Command{
@@ -47,7 +55,7 @@ var cycleStartCmd = &cobra.Command{
 	Short: "Start a cycle for a feature",
 	Args:  cobra.ExactArgs(2),
 	Example: `  # Start a feature implementation cycle
-  lifecycle cycle start feature-implementation my-feature
+  tillr cycle start feature-implementation my-feature
 
   # Available cycle types: feature-implementation, ui-refinement, bug-triage,
   # documentation, architecture-review, release, roadmap-planning, onboarding-dx`,
@@ -71,7 +79,7 @@ var cycleStartCmd = &cobra.Command{
 		if jsonOutput {
 			return printJSON(c)
 		}
-		fmt.Printf("✓ Started %s cycle for feature %s\n", c.CycleType, c.FeatureID)
+		fmt.Printf("✓ Started %s cycle for feature %s\n", c.CycleType, c.EntityID)
 		fmt.Printf("  Current step: %s\n", c.StepName)
 		return nil
 	},
@@ -104,7 +112,7 @@ var cycleStatusCmd = &cobra.Command{
 		for _, c := range cycles {
 			stepName := getStepName(c.CycleType, c.CurrentStep)
 			fmt.Printf("%-20s %-25s step %d/%d (%s)  iter %d\n",
-				c.FeatureID, c.CycleType, c.CurrentStep+1,
+				c.EntityID, c.CycleType, c.CurrentStep+1,
 				getTotalSteps(c.CycleType), stepName, c.Iteration)
 		}
 		return nil
@@ -181,7 +189,7 @@ var cycleScoreCmd = &cobra.Command{
 			// Try to find from active work item
 			w, err := db.GetActiveWorkItem(database)
 			if err != nil {
-				return fmt.Errorf("no active work item and no --feature specified. Use --feature <id> or start work with 'lifecycle next'")
+				return fmt.Errorf("no active work item and no --feature specified. Use --feature <id> or start work with 'tillr next'")
 			}
 			featureID = w.FeatureID
 		}
@@ -198,13 +206,17 @@ var cycleScoreCmd = &cobra.Command{
 	},
 }
 
-func joinSteps(steps []string) string {
+func joinSteps(steps []models.CycleStep) string {
 	result := ""
 	for i, s := range steps {
 		if i > 0 {
 			result += " → "
 		}
-		result += s
+		label := s.Name
+		if s.Human {
+			label += " (human)"
+		}
+		result += label
 	}
 	return result
 }
@@ -212,14 +224,14 @@ func joinSteps(steps []string) string {
 func getStepName(cycleType string, step int) string {
 	for _, ct := range models.CycleTypes {
 		if ct.Name == cycleType && step < len(ct.Steps) {
-			return ct.Steps[step]
+			return ct.Steps[step].Name
 		}
 	}
 	// Check custom templates in DB.
 	if database, _, err := openDB(); err == nil {
 		defer database.Close() //nolint:errcheck
 		if t, err := db.GetCycleTemplate(database, cycleType); err == nil && step < len(t.Steps) {
-			return t.Steps[step]
+			return t.Steps[step].Name
 		}
 	}
 	return "unknown"
@@ -239,4 +251,169 @@ func getTotalSteps(cycleType string) int {
 		}
 	}
 	return 0
+}
+
+var cycleAdvanceCmd = &cobra.Command{
+	Use:   "advance",
+	Short: "Manually advance a human-owned cycle step",
+	Long: `Advance (approve) or reject the current human-owned cycle step.
+Only human-owned steps can be advanced manually; agent steps must be
+completed through the normal agent workflow.`,
+	Example: `  # Approve the current human step
+  tillr cycle advance --feature my-feature --approve --notes "Looks good"
+
+  # Reject the current human step
+  tillr cycle advance --feature my-feature --reject --notes "Needs more work on error handling"`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		featureID, _ := cmd.Flags().GetString("feature")
+		approve, _ := cmd.Flags().GetBool("approve")
+		reject, _ := cmd.Flags().GetBool("reject")
+		notes, _ := cmd.Flags().GetString("notes")
+
+		if !approve && !reject {
+			return fmt.Errorf("specify --approve or --reject")
+		}
+		if approve && reject {
+			return fmt.Errorf("cannot specify both --approve and --reject")
+		}
+
+		p, err := db.GetProject(database)
+		if err != nil {
+			return err
+		}
+
+		c, err := db.GetActiveCycle(database, featureID)
+		if err != nil {
+			return fmt.Errorf("no active cycle for feature %s", featureID)
+		}
+
+		ct := findCycleType(database, c.CycleType)
+		if ct == nil {
+			return fmt.Errorf("unknown cycle type: %s", c.CycleType)
+		}
+
+		if c.CurrentStep >= len(ct.Steps) {
+			return fmt.Errorf("cycle is beyond its defined steps")
+		}
+
+		if !ct.IsHumanStep(c.CurrentStep) {
+			return fmt.Errorf("current step %q is not human-owned; use the agent workflow to advance it", ct.Steps[c.CurrentStep].Name)
+		}
+
+		stepName := ct.Steps[c.CurrentStep].Name
+
+		if reject {
+			_ = db.InsertEvent(database, &models.Event{
+				ProjectID: p.ID,
+				FeatureID: featureID,
+				EventType: "cycle.step.rejected",
+				Data:      fmt.Sprintf(`{"step":%q,"notes":%q}`, stepName, notes),
+			})
+
+			if jsonOutput {
+				return printJSON(map[string]any{
+					"feature":  featureID,
+					"step":     stepName,
+					"action":   "rejected",
+					"notes":    notes,
+				})
+			}
+			fmt.Printf("Rejected step %q for feature %s (staying on current step)\n", stepName, featureID)
+			if notes != "" {
+				fmt.Printf("  Notes: %s\n", notes)
+			}
+			return nil
+		}
+
+		// Approve: advance to next step or complete
+		_ = db.InsertEvent(database, &models.Event{
+			ProjectID: p.ID,
+			FeatureID: featureID,
+			EventType: "cycle.step.approved",
+			Data:      fmt.Sprintf(`{"step":%q,"notes":%q}`, stepName, notes),
+		})
+
+		nextStep := c.CurrentStep + 1
+		if nextStep >= len(ct.Steps) {
+			// Complete the cycle
+			if err := db.UpdateCycleInstance(database, c.ID, c.CurrentStep, c.Iteration, "completed"); err != nil {
+				return fmt.Errorf("completing cycle: %w", err)
+			}
+
+			_ = db.InsertEvent(database, &models.Event{
+				ProjectID: p.ID,
+				FeatureID: featureID,
+				EventType: "cycle.completed",
+				Data:      fmt.Sprintf(`{"cycle_type":%q}`, c.CycleType),
+			})
+
+			if jsonOutput {
+				return printJSON(map[string]any{
+					"feature":  featureID,
+					"step":     stepName,
+					"action":   "approved",
+					"result":   "completed",
+				})
+			}
+			fmt.Printf("Approved step %q for feature %s - cycle completed!\n", stepName, featureID)
+			return nil
+		}
+
+		// Advance to next step
+		if err := db.UpdateCycleInstance(database, c.ID, nextStep, c.Iteration, "active"); err != nil {
+			return fmt.Errorf("advancing cycle: %w", err)
+		}
+
+		nextStepName := ct.Steps[nextStep].Name
+
+		_ = db.InsertEvent(database, &models.Event{
+			ProjectID: p.ID,
+			FeatureID: featureID,
+			EventType: "cycle.advanced",
+			Data:      fmt.Sprintf(`{"from":%q,"to":%q}`, stepName, nextStepName),
+		})
+
+		// Create work item for agent steps
+		if !ct.Steps[nextStep].Human {
+			_ = db.CreateWorkItem(database, &models.WorkItem{
+				FeatureID: featureID,
+				WorkType:  nextStepName,
+			})
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]any{
+				"feature":   featureID,
+				"step":      stepName,
+				"action":    "approved",
+				"next_step": nextStepName,
+			})
+		}
+		fmt.Printf("Approved step %q for feature %s -> now at %q\n", stepName, featureID, nextStepName)
+		return nil
+	},
+}
+
+// findCycleType resolves a cycle type by name, checking built-in types first,
+// then custom templates in the DB.
+func findCycleType(database *sql.DB, name string) *models.CycleType {
+	for i := range models.CycleTypes {
+		if models.CycleTypes[i].Name == name {
+			return &models.CycleTypes[i]
+		}
+	}
+	if t, err := db.GetCycleTemplate(database, name); err == nil && t != nil {
+		return &models.CycleType{
+			Name:        t.Name,
+			Description: t.Description,
+			Steps:       t.Steps,
+		}
+	}
+	return nil
 }

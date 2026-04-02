@@ -21,7 +21,7 @@ The page fetches its data from the `GET /api/spec-document` endpoint, which asse
 |---------|-------------|--------------------------|
 | **Product Owner** | Human stakeholder who defines features and reviews progress | Read the full specification, print it for meetings, verify feature coverage per milestone |
 | **Engineering Lead** | Technical leader overseeing implementation | Review feature statuses, check dependency chains, assess milestone progress |
-| **Agent (AI)** | Automated agent performing development work | Generally does not use this page directly (agents use `lifecycle next --json` via CLI), but the underlying API could be consumed programmatically |
+| **Agent (AI)** | Automated agent performing development work | Generally does not use this page directly (agents use `tillr next --json` via CLI), but the underlying API could be consumed programmatically |
 | **QA Reviewer** | Human or agent performing quality assurance | Cross-reference the spec document against implemented features, verify completeness |
 | **External Stakeholder** | Non-technical viewer (e.g., client, manager) | Read the printed version for a high-level understanding of project scope and progress |
 

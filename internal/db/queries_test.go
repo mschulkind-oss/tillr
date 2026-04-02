@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -212,7 +212,7 @@ func TestCycles(t *testing.T) {
 	db.CreateFeature(database, &models.Feature{ID: "f1", ProjectID: "p1", Name: "F1"}) //nolint:errcheck
 
 	c := &models.CycleInstance{
-		FeatureID: "f1", CycleType: "feature-implementation",
+		EntityType: "feature", EntityID: "f1", CycleType: "feature-implementation",
 		Status: "active", Iteration: 1,
 	}
 	if err := db.CreateCycleInstance(database, c); err != nil {

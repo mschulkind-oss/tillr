@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Features page is the central work-tracking surface of the Lifecycle app. It presents every feature in the managed project as an interactive table with status-colored rows, expandable detail panels, drag-and-drop priority reordering, dependency visualization, and inline status editing. Users can filter by status, search by text, and toggle between a **list view** and a **dependency graph view** rendered on an HTML canvas.
+The Features page is the central work-tracking surface of the Tillr app. It presents every feature in the managed project as an interactive table with status-colored rows, expandable detail panels, drag-and-drop priority reordering, dependency visualization, and inline status editing. Users can filter by status, search by text, and toggle between a **list view** and a **dependency graph view** rendered on an HTML canvas.
 
 ### Page URL
 
@@ -54,7 +54,7 @@ Then I see a page header reading "Features" with subtitle "{N} features tracked"
 
 > **As a** product owner,
 > **I want to** filter the feature list by status using pill buttons,
-> **So that** I can focus on features in a specific lifecycle stage.
+> **So that** I can focus on features in a specific tillr stage.
 
 **Acceptance Criteria**
 
@@ -135,7 +135,7 @@ Then it collapses and the row loses the "expanded" class
 
 > **As a** product owner,
 > **I want to** change a feature's status from a dropdown in the detail panel,
-> **So that** I can advance features through the lifecycle without using the CLI.
+> **So that** I can advance features through the tillr without using the CLI.
 
 **Acceptance Criteria**
 
@@ -360,7 +360,7 @@ Then I see an empty state with:
   - Icon: ✨
   - Text: "No features yet"
   - Hint: "Features are the building blocks of your project…"
-  - CTA: "$ lifecycle feature add <name>"
+  - CTA: "$ tillr feature add <name>"
 
 Given features exist but my filter/search matches none
 When no rows pass the filter

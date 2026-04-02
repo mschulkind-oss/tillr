@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // p is a write helper that tracks the first error.

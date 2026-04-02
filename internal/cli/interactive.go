@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/unix"
 )
@@ -327,7 +327,7 @@ func renderTUIDashboard(database *sql.DB) {
 		for _, c := range cycles {
 			fmt.Printf("  %s · %s · %s\n",
 				colorize(c.CycleType, colorYellow),
-				c.FeatureID,
+				c.EntityID,
 				tuiCycleStepInfo(c))
 		}
 		fmt.Println()
@@ -447,7 +447,7 @@ func tuiCycleStepInfo(c models.CycleInstance) string {
 			if c.CurrentStep >= 0 && c.CurrentStep < total {
 				return fmt.Sprintf("Step %d/%d (%s)",
 					c.CurrentStep+1, total,
-					colorize(ct.Steps[c.CurrentStep], colorCyan))
+					colorize(ct.Steps[c.CurrentStep].Name, colorCyan))
 			}
 			return fmt.Sprintf("Step %d/%d", c.CurrentStep+1, total)
 		}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Dashboard is the default landing page of the Lifecycle web viewer. It provides a real-time, at-a-glance view of project health — summarizing feature progress, milestone completion, active iteration cycles, recent activity, roadmap highlights, and quality metrics. It is the first screen every user sees and serves as the primary navigation hub for drilling into specific areas of the project.
+The Dashboard is the default landing page of the Tillr web viewer. It provides a real-time, at-a-glance view of project health — summarizing feature progress, milestone completion, active iteration cycles, recent activity, roadmap highlights, and quality metrics. It is the first screen every user sees and serves as the primary navigation hub for drilling into specific areas of the project.
 
 The page fetches six API endpoints in parallel on load (`/api/status`, `/api/features`, `/api/milestones`, `/api/roadmap`, `/api/cycles`, `/api/discussions`) and renders seven distinct sections. All data updates in real-time via WebSocket push.
 
@@ -65,7 +65,7 @@ The page fetches six API endpoints in parallel on load (`/api/status`, `/api/fea
 - **Given** a milestone has 5 features and 3 are done, **When** I view its card, **Then** the progress bar is filled to 60% and the percentage reads "60%".
 - **Given** a milestone is 100% complete, **When** I view its progress bar, **Then** the fill uses a success/green color and the card is styled as `milestone-complete`.
 - **Given** a milestone is partially complete (0% < progress < 100%), **When** I view its card, **Then** the card is styled as `milestone-active`.
-- **Given** no milestones exist, **When** the Dashboard loads, **Then** the card shows an empty state with a 🏔️ icon, "No milestones yet", and the hint `$ lifecycle milestone add <name>`.
+- **Given** no milestones exist, **When** the Dashboard loads, **Then** the card shows an empty state with a 🏔️ icon, "No milestones yet", and the hint `$ tillr milestone add <name>`.
 
 ### US-DASH-006: Navigate to features from a milestone card
 
@@ -184,7 +184,7 @@ The page fetches six API endpoints in parallel on load (`/api/status`, `/api/fea
 **As a** new user, **I want** to see a helpful welcome message when my project has no data, **so that** I know how to get started.
 
 **Acceptance Criteria:**
-- **Given** the project has zero features and zero milestones, **When** the Dashboard loads, **Then** I see a welcome screen with a 🚀 emoji, the heading "Welcome to your project!", a hint "Start building by adding your first feature and milestone.", and a CLI example `$ lifecycle feature add <name>`.
+- **Given** the project has zero features and zero milestones, **When** the Dashboard loads, **Then** I see a welcome screen with a 🚀 emoji, the heading "Welcome to your project!", a hint "Start building by adding your first feature and milestone.", and a CLI example `$ tillr feature add <name>`.
 - **Given** the project has at least one feature or one milestone, **When** the Dashboard loads, **Then** the welcome screen is not shown — the full Dashboard renders instead.
 
 ### US-DASH-017: Real-time updates via WebSocket
@@ -330,8 +330,8 @@ The Dashboard uses `async/await` with `Promise.all()` for data fetching. There i
 
 | Condition | Presentation |
 |---|---|
-| **No features AND no milestones** | Full-page welcome: 🚀 "Welcome to your project!" with hint and CLI example `$ lifecycle feature add <name>`. No other sections render. |
-| **No milestones (features exist)** | Milestones card shows: 🏔️ "No milestones yet" with hint `$ lifecycle milestone add <name>`. |
+| **No features AND no milestones** | Full-page welcome: 🚀 "Welcome to your project!" with hint and CLI example `$ tillr feature add <name>`. No other sections render. |
+| **No milestones (features exist)** | Milestones card shows: 🏔️ "No milestones yet" with hint `$ tillr milestone add <name>`. |
 | **No recent events** | Activity card shows: ⏳ "No activity yet" with hint "Events will appear here as you work on features." |
 | **No roadmap items** | Roadmap Highlights card shows: "No roadmap items yet" in muted text. |
 | **No active cycles** | Active Cycles sub-section shows: "No active cycles" in muted text. |

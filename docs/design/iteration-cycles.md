@@ -292,7 +292,7 @@ VALUES ('proj-1', 'feat-1', 'cycle-iteration', '{"cycle": "ui-refinement", "iter
 #### Database Representation
 
 ```sql
--- Feature flows through lifecycle statuses mapped to cycle roles
+-- Feature flows through tillr statuses mapped to cycle roles
 -- draft → planning (research) → implementing (develop) → agent-qa → human-qa → done
 
 -- Research phase
@@ -1142,7 +1142,7 @@ VALUES ('feat-dx-1', 'dx-try', 'done',
 
 INSERT INTO work_items (feature_id, work_type, status, result)
 VALUES ('feat-dx-1', 'dx-friction', 'done',
-        '{"friction_points": [{"id": "f1", "type": "missing-dep", "severity": "blocker", "description": "go not found in PATH"}, {"id": "f2", "type": "unclear-step", "severity": "painful", "description": "No explanation of what lifecycle init does"}]}');
+        '{"friction_points": [{"id": "f1", "type": "missing-dep", "severity": "blocker", "description": "go not found in PATH"}, {"id": "f2", "type": "unclear-step", "severity": "painful", "description": "No explanation of what tillr init does"}]}');
 
 INSERT INTO work_items (feature_id, work_type, status, result)
 VALUES ('feat-dx-1', 'dx-improve', 'done',
@@ -1258,12 +1258,12 @@ The cycle engine (in `internal/engine/`) is responsible for:
 4. **Enforcing limits**: Halting and escalating when `max_iterations` is reached.
 5. **Recording history**: Creating `work_items`, `qa_results`, and `events` for every transition.
 
-The `lifecycle next` CLI command queries the engine for the next pending work item across all active features, respecting cycle order and feature priority. The `lifecycle done` command marks work complete and advances the cycle state.
+The `tillr next` CLI command queries the engine for the next pending work item across all active features, respecting cycle order and feature priority. The `tillr done` command marks work complete and advances the cycle state.
 
 ```
-lifecycle next    →  "Feature 'auth-redesign' needs 'implement' (feature-impl, iteration 2)"
-lifecycle done    →  advances to 'agent-qa' role
-lifecycle next    →  "Feature 'auth-redesign' needs 'agent-qa' (feature-impl, iteration 2)"
+tillr next    →  "Feature 'auth-redesign' needs 'implement' (feature-impl, iteration 2)"
+tillr done    →  advances to 'agent-qa' role
+tillr next    →  "Feature 'auth-redesign' needs 'agent-qa' (feature-impl, iteration 2)"
 ```
 
 This ensures agents always know exactly what to do next, and the cycle's structure is enforced regardless of which agent picks up the work.

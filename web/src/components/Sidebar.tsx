@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useStore } from '../store'
+import { isDaemonMode, getProjects, getActiveProject, setActiveProject } from '../api/projects'
 
 interface NavItem {
   path: string
@@ -16,12 +17,17 @@ const sections: { title: string; items: NavItem[] }[] = [
       { path: '/roadmap', label: 'Roadmap', icon: '🗺️' },
       { path: '/cycles', label: 'Cycles', icon: '🔄' },
       { path: '/agents', label: 'Agents', icon: '🤖' },
+      { path: '/workstreams', label: 'Workstreams', icon: '🧵' },
+      { path: '/workflow', label: 'Workflow', icon: '⚡' },
       { path: '/timeline', label: 'Timeline', icon: '📅' },
     ],
   },
   {
     title: 'Intake',
-    items: [{ path: '/ideas', label: 'Ideas', icon: '💡' }],
+    items: [
+      { path: '/ideas', label: 'Ideas', icon: '💡' },
+      { path: '/context', label: 'Context', icon: '📎' },
+    ],
   },
   {
     title: 'Review',
@@ -46,6 +52,7 @@ export function Sidebar() {
   const setSidebarOpen = useStore((s) => s.setSidebarOpen)
   const theme = useStore((s) => s.theme)
   const toggleTheme = useStore((s) => s.toggleTheme)
+  const setHelpModalOpen = useStore((s) => s.setHelpModalOpen)
 
   return (
     <>
@@ -67,9 +74,29 @@ export function Sidebar() {
       >
         {/* Logo */}
         <div className="flex items-center gap-2 px-4 h-14 border-b border-border">
-          <span className="text-lg">🔄</span>
-          <span className="font-semibold text-text-primary text-sm">Lifecycle</span>
+          <span className="text-lg">🌱</span>
+          <span className="font-semibold text-text-primary text-sm">Tillr</span>
         </div>
+
+        {/* Project switcher (daemon mode only) */}
+        {isDaemonMode() && (
+          <div className="px-3 py-2 border-b border-border">
+            <select
+              value={getActiveProject() || ''}
+              onChange={(e) => {
+                setActiveProject(e.target.value)
+                window.location.reload()
+              }}
+              className="w-full px-2 py-1.5 rounded-md bg-bg-secondary border border-border text-text-primary text-sm cursor-pointer"
+            >
+              {getProjects().map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-2">
@@ -102,7 +129,16 @@ export function Sidebar() {
         </nav>
 
         {/* Footer */}
-        <div className="border-t border-border p-3">
+        <div className="border-t border-border p-3 space-y-1">
+          <button
+            onClick={() => setHelpModalOpen(true)}
+            className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-text-secondary hover:bg-sidebar-hover hover:text-text-primary transition-colors"
+            title="Keyboard shortcuts (?)"
+          >
+            <span className="text-sm">&#x2328;</span>
+            <span>Shortcuts</span>
+            <kbd className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-bg-secondary border border-border text-text-muted font-mono">?</kbd>
+          </button>
           <button
             onClick={toggleTheme}
             className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-text-secondary hover:bg-sidebar-hover hover:text-text-primary transition-colors"

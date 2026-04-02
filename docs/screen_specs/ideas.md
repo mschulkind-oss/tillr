@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Ideas** page is the primary intake funnel for the Lifecycle app. It allows humans to submit raw ideas (features or bugs), agents to generate structured specifications from those ideas, and humans to approve or reject the resulting specs — converting approved ideas into tracked features.
+The **Ideas** page is the primary intake funnel for the Tillr app. It allows humans to submit raw ideas (features or bugs), agents to generate structured specifications from those ideas, and humans to approve or reject the resulting specs — converting approved ideas into tracked features.
 
 **Route:** `#ideas` (SPA hash route)
 **Page title:** 💡 Idea Queue
@@ -366,7 +366,7 @@ The page subtitle displays a live summary: `{total} idea(s) · {pending} pending
 | `Title` | `string` | `title` | **Yes** | — | Idea title (validated on submit) |
 | `RawInput` | `string` | `raw_input` | No | `""` | Markdown description body |
 | `IdeaType` | `string` | `idea_type` | No | `"feature"` | `"feature"` or `"bug"` |
-| `Status` | `string` | `status` | No | `"pending"` | See status lifecycle below |
+| `Status` | `string` | `status` | No | `"pending"` | See status tillr below |
 | `SpecMD` | `string` | `spec_md` | No | `""` | Agent-generated markdown spec (omitted from JSON if empty) |
 | `AutoImplement` | `bool` | `auto_implement` | No | `false` | Whether to auto-implement on approval |
 | `SubmittedBy` | `string` | `submitted_by` | No | `"human"` | Submitter identifier |
@@ -375,7 +375,7 @@ The page subtitle displays a live summary: `{total} idea(s) · {pending} pending
 | `CreatedAt` | `string` | `created_at` | Auto | `CURRENT_TIMESTAMP` | ISO 8601 creation time |
 | `UpdatedAt` | `string` | `updated_at` | Auto | `CURRENT_TIMESTAMP` | ISO 8601 last-modified time |
 
-### Status Lifecycle
+### Status Tillr
 
 ```
 pending ──→ processing ──→ spec-ready ──→ approved

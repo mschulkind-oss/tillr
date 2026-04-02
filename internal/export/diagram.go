@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // statusEmoji returns a status indicator for Mermaid node labels.
@@ -190,7 +190,7 @@ func DiagramMermaid(features []models.Feature, milestones []models.Milestone, w 
 func DiagramDOT(features []models.Feature, milestones []models.Milestone, w io.Writer) error {
 	pr := newPrinter(w)
 
-	pr.println("digraph lifecycle {")
+	pr.println("digraph tillr {")
 	pr.println("    rankdir=TD;")
 	pr.println("    node [shape=box, style=filled, fontname=\"Helvetica\"];")
 

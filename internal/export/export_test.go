@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mschulkind/lifecycle/internal/export"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/export"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 func TestFeaturesJSON(t *testing.T) {

@@ -1,5 +1,5 @@
 ---
-name: Committing Changes
+name: Committing-Changes
 description: >
   How to commit changes in this project using Jujutsu (jj) with
   the public/private two-remote model. Public changes squash into
@@ -15,51 +15,83 @@ This project uses **jj (Jujutsu)** colocated with git, and a **public/private tw
 ```
 @  (working copy — your changes go here)
 │
-○  dev           → private remote only (AGENTS.md, internal docs)
+○  dev           → private remote only (AGENTS.md, internal docs, scratch)
 │
-○  staging       → private remote only (accumulates public changes)
+○  staging       → private remote only (accumulates public changes for next release)
 │
-◆  main          → BOTH public and private remotes
+◆  main          → BOTH public and private remotes (the public face)
 ```
 
 ## How to Commit
 
+**All work happens in the working copy (@), then gets squashed into the right bookmark.**
+
 ### Public changes (source code, tests, public docs)
 ```bash
-# Squash into staging
+# Describe your work
+jj describe -m "feat: add new API endpoint for search"
+
+# Squash into staging (accumulates until promoted to main)
 jj squash --into staging
 ```
 
-### Private changes (AGENTS.md, OPEN_QUESTIONS.md, internal docs)
+### Private changes (agent config, internal docs)
 ```bash
-# Squash into dev
+jj describe -m "update AGENTS.md with new workflow"
+
+# Squash into dev (never goes public)
 jj squash --into dev
 ```
 
-### What Goes Where
+### Mixed changes (both public and private files)
+```bash
+# Squash specific public files into staging
+jj squash --into staging cmd/ internal/ web/ go.mod go.sum
+
+# Squash remaining private files into dev
+jj squash --into dev
+```
+
+## What Goes Where
 
 **Public (squash into staging):**
-- `cmd/`, `internal/`, `web/`, `tests/`
-- `go.mod`, `go.sum`
-- `Justfile`, `mise.toml`, `.gitignore`
-- `README.md`, `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`
-- `.github/`
-- `docs/VISION.md`, `docs/design/`, `docs/guides/`
+- `cmd/`, `internal/`, `web/`, `tests/` — all source code
+- `go.mod`, `go.sum` — dependencies
+- `Justfile`, `mise.toml`, `Dockerfile`, `.air.toml`, `.gitignore` — build config
+- `README.md`, `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CHANGELOG.md` — community files
+- `.github/` — CI/CD workflows
+- `docs/design/`, `docs/guides/`, `docs/plans/` — public documentation
+- `scripts/` — public scripts
 
 **Private (squash into dev):**
-- `AGENTS.md`, `OPEN_QUESTIONS.md`
-- `.copilot/`, `.gemini/`, `.yolo/`
-- `yolo-jail.jsonc`
-- `docs/open-source-checklist.md`, `docs/NAME_CANDIDATES.md`
-- `scratch/`, `trash/`, `context/`
+- `AGENTS.md`, `OPEN_QUESTIONS.md` — internal development docs
+- `.copilot/`, `.gemini/`, `.yolo/` — AI agent configuration
+- `yolo-jail.jsonc` — dev environment config
+- `scratch/`, `trash/`, `context/` — working files
+
+See `scripts/public-files.txt` for the canonical list.
+
+## Pushing
+
+```bash
+just push
+```
+
+This pushes:
+- `main` → public remote + private remote
+- `staging`, `dev` → private remote only
 
 ## Promoting to Main
 
+When staging has enough changes for a release:
+
 ```bash
+# 1. Make sure staging has a proper description
+jj describe -r staging -m "feat: your release description"
+
+# 2. Promote (runs quality gate, moves main forward, pushes)
 just promote
 ```
-
-This runs `prepromote` (quality gate), fast-forwards `main` to `staging`, creates a fresh `staging` and `dev`, and pushes everything.
 
 ## Commit Message Convention
 
@@ -74,4 +106,23 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 Always include the Co-authored-by trailer:
 ```
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+```
+
+## Quick Reference
+
+```bash
+# See current bookmark state
+jj --no-pager log --limit 10
+
+# See what's in staging
+jj --no-pager diff -r staging --stat
+
+# See what's in dev
+jj --no-pager diff -r dev --stat
+
+# Push everything
+just push
+
+# Full release cycle
+just promote
 ```

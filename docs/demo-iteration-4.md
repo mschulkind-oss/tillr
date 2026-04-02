@@ -3,18 +3,18 @@
 *2026-03-07T03:02:49Z by Showboat 0.6.1*
 <!-- showboat-id: 55565bff-69ef-4841-8bdc-62fb53e55ba7 -->
 
-This document walks through a complete lifecycle iteration — from start to finish — explaining every command, why we run it, and what every piece of output means. This is iteration 4 of lifecycle self-hosting: building the **User Documentation** feature.
+This document walks through a complete tillr iteration — from start to finish — explaining every command, why we run it, and what every piece of output means. This is iteration 4 of tillr self-hosting: building the **User Documentation** feature.
 
 Every code block below is executable and verified by showboat. Re-run with `showboat verify docs/demo-iteration-4.md` to confirm everything still works.
 
 ## Step 1: Starting the Cycle
 
-**Why we run this:** Before doing any work, we tell lifecycle which feature we want to develop and which process (cycle type) to follow. The `feature-implementation` cycle has 5 steps: research → develop → agent-qa → judge → human-qa. Starting a cycle creates a tracking record and automatically queues the first work item.
+**Why we run this:** Before doing any work, we tell tillr which feature we want to develop and which process (cycle type) to follow. The `feature-implementation` cycle has 5 steps: research → develop → agent-qa → judge → human-qa. Starting a cycle creates a tracking record and automatically queues the first work item.
 
 **Who uses this:** An agent runs this when it is assigned a feature. A human PM runs it when kicking off a new development effort.
 
 ```bash
-bin/lifecycle cycle start feature-implementation user-documentation
+bin/tillr cycle start feature-implementation user-documentation
 ```
 
 ```output
@@ -26,16 +26,16 @@ bin/lifecycle cycle start feature-implementation user-documentation
 - `✓ Started feature-implementation cycle` — confirms the cycle was created in the database. The cycle type determines the step sequence.
 - `Current step: research` — tells us which step is active. An agent reading this knows it should start researching, not coding.
 
-The cycle has also auto-created a work item for the "research" step. This is the key integration point: cycles drive work items, and work items are what `lifecycle next` returns.
+The cycle has also auto-created a work item for the "research" step. This is the key integration point: cycles drive work items, and work items are what `tillr next` returns.
 
 ## Step 2: Getting the Next Work Item
 
-**Why we run this:** This is the heart of the agent loop. `lifecycle next --json` asks "what should I work on?" It returns a structured JSON payload that tells an agent exactly what to do. Without `--json`, it prints human-readable text instead.
+**Why we run this:** This is the heart of the agent loop. `tillr next --json` asks "what should I work on?" It returns a structured JSON payload that tells an agent exactly what to do. Without `--json`, it prints human-readable text instead.
 
 **Who uses this:** Agents call this in a loop. It is the single entry point for all agent work — no need to manually check features, cycles, or queues.
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -57,17 +57,17 @@ bin/lifecycle next --json
 - `"agent_prompt"` — A structured instruction telling the agent what to do. In a full production system, this would contain rich context (feature description, acceptance criteria, related files).
 - `"created_at"` — When this work item was created. Useful for tracking velocity and detecting stale items.
 
-**For agents:** Parse this JSON, read the `work_type` to decide what to do, use `feature_id` for context. When done, call `lifecycle done`.
+**For agents:** Parse this JSON, read the `work_type` to decide what to do, use `feature_id` for context. When done, call `tillr done`.
 **For humans:** Check this to see what the agent is working on and whether it is stuck.
 
 ## Step 3: Completing Research
 
-**Why we run this:** After doing the research work, we report findings back to lifecycle. The `--result` text is stored in the event log — it becomes permanent project history. This is how an agent communicates what it learned to the human PM.
+**Why we run this:** After doing the research work, we report findings back to tillr. The `--result` text is stored in the event log — it becomes permanent project history. This is how an agent communicates what it learned to the human PM.
 
 **Who uses this:** The agent calls this when it finishes its current work item. The result text should be substantive — it is the audit trail.
 
 ```bash
-bin/lifecycle done --result "Research complete: User guide has 718 lines with 20+ sections marked Coming Soon that are now implemented. Need to: (1) remove stale Coming Soon markers from milestone, cycle, roadmap, QA, history sections, (2) add WebSocket live updates documentation, (3) update Web Viewer Guide with actual page descriptions, (4) add cycle scoring docs."
+bin/tillr done --result "Research complete: User guide has 718 lines with 20+ sections marked Coming Soon that are now implemented. Need to: (1) remove stale Coming Soon markers from milestone, cycle, roadmap, QA, history sections, (2) add WebSocket live updates documentation, (3) update Web Viewer Guide with actual page descriptions, (4) add cycle scoring docs."
 ```
 
 ```output
@@ -77,7 +77,7 @@ bin/lifecycle done --result "Research complete: User guide has 718 lines with 20
 **Reading the output:**
 - `✓ Work item marked as done.` — The active work item (id 16, research) is now complete. The result text is stored as an event in the database. The cycle engine now knows this step is finished.
 
-Behind the scenes, lifecycle logged a `work.completed` event with the result text. This appears in the History page and in `lifecycle history` output.
+Behind the scenes, tillr logged a `work.completed` event with the result text. This appears in the History page and in `tillr history` output.
 
 ## Step 4: Scoring the Research Step
 
@@ -86,7 +86,7 @@ Behind the scenes, lifecycle logged a `work.completed` event with the result tex
 **Who uses this:** A judge agent or human reviewer scores after each step. The scores appear as sparkline charts on the Cycles page and feed into quality metrics.
 
 ```bash
-bin/lifecycle cycle score 8.5 --feature user-documentation --notes "Thorough gap analysis of existing docs. Clear action items identified."
+bin/tillr cycle score 8.5 --feature user-documentation --notes "Thorough gap analysis of existing docs. Clear action items identified."
 ```
 
 ```output
@@ -109,7 +109,7 @@ This is the bridge between "scoring" and "getting new work" — without scoring,
 **The agent loop pattern:** `next → (do work) → done → score → next → ...` This is all an agent needs to know.
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -136,13 +136,13 @@ The develop step is where actual code/content changes happen. For user-documenta
 - Removed 19 "🚧 Coming Soon" markers from now-implemented features
 - Updated Web Viewer Guide with actual page descriptions (Dashboard, Features, Roadmap, Cycles, History, QA)
 - Added WebSocket live updates documentation
-- Added `lifecycle cycle score` command reference
+- Added `tillr cycle score` command reference
 - Kept Heartbeats as the only remaining Coming Soon item
 
 Now we report this work as done:
 
 ```bash
-bin/lifecycle done --result "Updated user-guide.md: removed 19 Coming Soon markers, added WebSocket live updates docs, updated all Web Viewer page descriptions, added cycle score command reference. Only Heartbeats remains as Coming Soon."
+bin/tillr done --result "Updated user-guide.md: removed 19 Coming Soon markers, added WebSocket live updates docs, updated all Web Viewer page descriptions, added cycle score command reference. Only Heartbeats remains as Coming Soon."
 ```
 
 ```output
@@ -154,7 +154,7 @@ bin/lifecycle done --result "Updated user-guide.md: removed 19 Coming Soon marke
 Now we score the develop step and advance to agent-qa:
 
 ```bash
-bin/lifecycle cycle score 9.0 --feature user-documentation --notes "Comprehensive doc update, 19 stale markers removed, all new features documented"
+bin/tillr cycle score 9.0 --feature user-documentation --notes "Comprehensive doc update, 19 stale markers removed, all new features documented"
 ```
 
 ```output
@@ -168,7 +168,7 @@ bin/lifecycle cycle score 9.0 --feature user-documentation --notes "Comprehensiv
 **Who uses this:** A QA-focused agent, or the same development agent in a different mode. The key insight is that *a different role* reviews the work, even if it is the same agent.
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -182,7 +182,7 @@ bin/lifecycle next --json
 }
 ```
 
-**Reading the output:** `"work_type": "agent-qa"` — note how the cycle progressed automatically. The agent does not manage state transitions; lifecycle handles that. The agent just reads the work type and acts accordingly.
+**Reading the output:** `"work_type": "agent-qa"` — note how the cycle progressed automatically. The agent does not manage state transitions; tillr handles that. The agent just reads the work type and acts accordingly.
 
 Verifying: all tests pass, the guide is valid markdown, and the server starts correctly:
 
@@ -193,9 +193,9 @@ just check 2>&1 | tail -5
 ```output
 --- PASS: TestSlug (0.00s)
 PASS
-ok  	github.com/mschulkind/lifecycle/internal/engine	0.033s
-?   	github.com/mschulkind/lifecycle/internal/models	[no test files]
-?   	github.com/mschulkind/lifecycle/internal/server	[no test files]
+ok  	github.com/mschulkind/tillr/internal/engine	0.033s
+?   	github.com/mschulkind/tillr/internal/models	[no test files]
+?   	github.com/mschulkind/tillr/internal/server	[no test files]
 ```
 
 **Reading the output:** All tests pass. `just check` runs format + lint + test — it is the universal quality gate for this project. If this fails, the work is not done.
@@ -203,7 +203,7 @@ ok  	github.com/mschulkind/lifecycle/internal/engine	0.033s
 Completing QA:
 
 ```bash
-bin/lifecycle done --result "Agent QA passed: all 7 tests pass, 0 lint issues, user-guide.md is valid markdown with consistent heading structure."
+bin/tillr done --result "Agent QA passed: all 7 tests pass, 0 lint issues, user-guide.md is valid markdown with consistent heading structure."
 ```
 
 ```output
@@ -211,7 +211,7 @@ bin/lifecycle done --result "Agent QA passed: all 7 tests pass, 0 lint issues, u
 ```
 
 ```bash
-bin/lifecycle cycle score 9.0 --feature user-documentation --notes "All tests pass, docs well-structured"
+bin/tillr cycle score 9.0 --feature user-documentation --notes "All tests pass, docs well-structured"
 ```
 
 ```output
@@ -229,7 +229,7 @@ These steps ensure no feature ships without both automated and human review.
 Processing the judge step:
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -244,7 +244,7 @@ bin/lifecycle next --json
 ```
 
 ```bash
-bin/lifecycle done --result "Judge: 9/10. Documentation thoroughly updated. 19 stale markers removed, all implemented features now documented. WebSocket docs added. Only Heartbeats remains as Coming Soon — appropriate since it is not yet built."
+bin/tillr done --result "Judge: 9/10. Documentation thoroughly updated. 19 stale markers removed, all implemented features now documented. WebSocket docs added. Only Heartbeats remains as Coming Soon — appropriate since it is not yet built."
 ```
 
 ```output
@@ -252,7 +252,7 @@ bin/lifecycle done --result "Judge: 9/10. Documentation thoroughly updated. 19 s
 ```
 
 ```bash
-bin/lifecycle cycle score 9.0 --feature user-documentation --notes "Excellent documentation update, comprehensive and accurate"
+bin/tillr cycle score 9.0 --feature user-documentation --notes "Excellent documentation update, comprehensive and accurate"
 ```
 
 ```output
@@ -262,7 +262,7 @@ bin/lifecycle cycle score 9.0 --feature user-documentation --notes "Excellent do
 Now the final step — human QA. In a real workflow, this would block until a human approves via the web UI or CLI. For this demo, we are acting as both agent and human:
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -283,7 +283,7 @@ bin/lifecycle next --json
 Completing the cycle:
 
 ```bash
-bin/lifecycle done --result "Human QA: Approved. Documentation is comprehensive and accurate."
+bin/tillr done --result "Human QA: Approved. Documentation is comprehensive and accurate."
 ```
 
 ```output
@@ -291,7 +291,7 @@ bin/lifecycle done --result "Human QA: Approved. Documentation is comprehensive 
 ```
 
 ```bash
-bin/lifecycle cycle score 9.5 --feature user-documentation --notes "Approved — docs now match reality"
+bin/tillr cycle score 9.5 --feature user-documentation --notes "Approved — docs now match reality"
 ```
 
 ```output
@@ -303,7 +303,7 @@ bin/lifecycle cycle score 9.5 --feature user-documentation --notes "Approved —
 **Why we run this:** The cycle is complete (all 5 steps scored), but the feature itself needs to be explicitly moved to "done" status. This is a deliberate design choice — completing a cycle does not auto-close the feature, because there might be follow-up work or multiple cycles per feature.
 
 ```bash
-bin/lifecycle feature edit user-documentation --status done
+bin/tillr feature edit user-documentation --status done
 ```
 
 ```output
@@ -312,16 +312,16 @@ bin/lifecycle feature edit user-documentation --status done
 
 ## Step 10: Reviewing the Final State
 
-**Why we run this:** After completing a feature, review the project health. `lifecycle status` gives the 30-second overview — are things on track?
+**Why we run this:** After completing a feature, review the project health. `tillr status` gives the 30-second overview — are things on track?
 
 **Who uses this:** Both humans and agents. A human PM checks this daily. An agent checks it to understand what is left to do.
 
 ```bash
-bin/lifecycle status
+bin/tillr status
 ```
 
 ```output
-Project: Lifecycle
+Project: Tillr
 
 Features: 10 total
   done           7
@@ -354,7 +354,7 @@ Recent Activity:
 ## Milestone Progress After Iteration 4
 
 ```bash
-bin/lifecycle milestone list
+bin/tillr milestone list
 ```
 
 ```output
@@ -374,10 +374,10 @@ v1.0-production      [██████░░░░░░░░░░░░░�
 
 The roadmap is accessible through both CLI and web UI. Here is how to use each:
 
-### CLI: `lifecycle roadmap show`
+### CLI: `tillr roadmap show`
 
 ```bash
-bin/lifecycle roadmap show
+bin/tillr roadmap show
 ```
 
 ```output
@@ -424,13 +424,13 @@ To change the priority or status of a roadmap item:
 
 ```bash
 # Reprioritize an item
-lifecycle roadmap edit <id> --priority high
+tillr roadmap edit <id> --priority high
 
 # Change status (e.g., mark as accepted for development)
-lifecycle roadmap edit <id> --status accepted
+tillr roadmap edit <id> --status accepted
 
 # Add a new item with your ideas
-lifecycle roadmap add "My New Idea" --priority medium --category ux --effort m --description "Detailed description here"
+tillr roadmap add "My New Idea" --priority medium --category ux --effort m --description "Detailed description here"
 ```
 
 ### Exporting the Roadmap
@@ -438,11 +438,11 @@ lifecycle roadmap add "My New Idea" --priority medium --category ux --effort m -
 You can export in markdown or JSON:
 
 ```bash
-bin/lifecycle roadmap export --format md 2>&1 | head -25
+bin/tillr roadmap export --format md 2>&1 | head -25
 ```
 
 ```output
-# 🗺️ Project Roadmap — Lifecycle
+# 🗺️ Project Roadmap — Tillr
 
 *Generated: March 7, 2026*
 
@@ -473,7 +473,7 @@ bin/lifecycle roadmap export --format md 2>&1 | head -25
 
 ### Web UI: Roadmap Page
 
-In the web viewer (`lifecycle serve`), the **Roadmap** page shows the same data visually:
+In the web viewer (`tillr serve`), the **Roadmap** page shows the same data visually:
 - Items grouped by priority with colored headers
 - Click any item to expand its full description
 - Effort sizing badges (XS/S/M/L/XL) for planning
@@ -486,7 +486,7 @@ Navigate to http://localhost:3847 → click "Roadmap" in the sidebar to see it l
 Every action taken during this iteration is recorded. Here are the events for user-documentation:
 
 ```bash
-bin/lifecycle history --feature user-documentation 2>&1 | head -25
+bin/tillr history --feature user-documentation 2>&1 | head -25
 ```
 
 ```output
@@ -518,14 +518,14 @@ bin/lifecycle history --feature user-documentation 2>&1 | head -25
 11. `work.completed [human-qa]` — Human approved
 12. `cycle.scored [human-qa: 9.5]` — Final score: 9.5
 
-**This is the complete audit trail.** Every decision, every result, every score is permanent and searchable. This is what makes lifecycle useful for compliance, retrospectives, and velocity tracking.
+**This is the complete audit trail.** Every decision, every result, every score is permanent and searchable. This is what makes tillr useful for compliance, retrospectives, and velocity tracking.
 
 ## Browsing This Iteration in the Web UI
 
 Start the server and browse through the results:
 
 ```bash
-lifecycle serve --port 3847
+tillr serve --port 3847
 # Open http://localhost:3847
 ```
 

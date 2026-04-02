@@ -7,25 +7,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
 var changelogCmd = &cobra.Command{
 	Use:   "changelog",
 	Short: "Generate a changelog from project events",
-	Long: `Generate a changelog from lifecycle events in Keep a Changelog format.
+	Long: `Generate a changelog from tillr events in Keep a Changelog format.
 
 Events are categorized into Added, Changed, Fixed, and Removed sections,
 grouped by date. Supports markdown (default) and JSON output formats.
 
 EXAMPLES
-  lifecycle changelog
-  lifecycle changelog --since 2025-01-01
-  lifecycle changelog --since 2025-01-01 --until 2025-06-30
-  lifecycle changelog --format json
-  lifecycle changelog -o CHANGELOG.md`,
+  tillr changelog
+  tillr changelog --since 2025-01-01
+  tillr changelog --since 2025-01-01 --until 2025-06-30
+  tillr changelog --format json
+  tillr changelog -o CHANGELOG.md`,
 	RunE: runChangelog,
 }
 
@@ -273,7 +273,7 @@ func renderChangelogMarkdown(data changelogData) string {
 	categoryOrder := []changelogCategory{categoryAdded, categoryChanged, categoryFixed, categoryRemoved}
 
 	for _, day := range data.Days {
-		sb.WriteString(fmt.Sprintf("## [%s]\n\n", day.Date))
+		fmt.Fprintf(&sb, "## [%s]\n\n", day.Date)
 
 		// Group entries by category within the day
 		byCategory := map[changelogCategory][]changelogEntry{}
@@ -286,12 +286,12 @@ func renderChangelogMarkdown(data changelogData) string {
 			if !ok {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("### %s\n", cat))
+			fmt.Fprintf(&sb, "### %s\n", cat)
 			for _, e := range entries {
 				if e.FeatureID != "" {
-					sb.WriteString(fmt.Sprintf("- %s (%s)\n", e.Summary, e.FeatureID))
+					fmt.Fprintf(&sb, "- %s (%s)\n", e.Summary, e.FeatureID)
 				} else {
-					sb.WriteString(fmt.Sprintf("- %s\n", e.Summary))
+					fmt.Fprintf(&sb, "- %s\n", e.Summary)
 				}
 			}
 			sb.WriteString("\n")

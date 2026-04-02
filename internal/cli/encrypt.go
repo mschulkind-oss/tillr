@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/config"
-	"github.com/mschulkind/lifecycle/internal/crypto"
+	"github.com/mschulkind/tillr/internal/config"
+	"github.com/mschulkind/tillr/internal/crypto"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +36,7 @@ var encryptSetKeyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := config.FindProjectRoot()
 		if err != nil {
-			return fmt.Errorf("no lifecycle project found. Run 'lifecycle init <name>' first")
+			return fmt.Errorf("no tillr project found. Run 'tillr init <name>' first")
 		}
 		cfg, err := config.Load(root)
 		if err != nil {
@@ -85,7 +85,7 @@ You will be prompted for the encryption key (or pipe it via stdin
 after the key prompt).
 
 Example:
-  lifecycle encrypt field features description my-feature-id`,
+  tillr encrypt field features description my-feature-id`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		table, column, id := args[0], args[1], args[2]
@@ -239,7 +239,7 @@ var encryptStatusCmd = &cobra.Command{
 		if keyConfigured {
 			fmt.Println("Encryption key: configured ✓")
 		} else {
-			fmt.Println("Encryption key: not set (run 'lifecycle encrypt set-key')")
+			fmt.Println("Encryption key: not set (run 'tillr encrypt set-key')")
 		}
 
 		if total == 0 {
@@ -306,7 +306,7 @@ func readEncryptionKey(cfg *config.Config) ([]byte, error) {
 	if cfg.EncryptionKeyHash != "" {
 		h := sha256.Sum256([]byte(password))
 		if hex.EncodeToString(h[:]) != cfg.EncryptionKeyHash {
-			return nil, fmt.Errorf("encryption key does not match the stored key hash. Use the same key you set with 'lifecycle encrypt set-key'")
+			return nil, fmt.Errorf("encryption key does not match the stored key hash. Use the same key you set with 'tillr encrypt set-key'")
 		}
 	}
 

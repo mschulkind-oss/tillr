@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 // templateMilestone defines a milestone to create as part of a project template.
@@ -286,6 +286,86 @@ var projectTemplates = map[string]projectTemplate{
 			{
 				Title:  "RFC: Error Handling Strategy",
 				Body:   "## Context\nWe need a consistent error handling approach across the API.\n\n## Options\n1. Sentinel errors with errors.Is() checks\n2. Typed error structs with errors.As()\n3. Error code enums\n\n## Considerations\n- Backward compatibility when adding new error types\n- User experience when handling errors\n- Stack trace and context preservation",
+				Author: "template",
+			},
+		},
+	},
+	"microservice": {
+		Name:        "Microservice",
+		Description: "Microservice with API, health checks, observability, and deployment",
+		Milestones: []templateMilestone{
+			{Name: "Core Service", Description: "Core service with API endpoints and data layer", Order: 1},
+			{Name: "Production Ready", Description: "Observability, resilience, and deployment pipeline", Order: 2},
+			{Name: "Scaling", Description: "Performance optimization and horizontal scaling", Order: 3},
+		},
+		Features: []templateFeature{
+			{
+				Name:        "Service Skeleton",
+				Description: "Base service structure with configuration and dependency injection",
+				Spec:        "1. Service entrypoint with graceful shutdown\n2. Configuration from env vars and config files\n3. Dependency injection / service container\n4. Health check endpoints (liveness + readiness)\n5. Structured logging setup",
+				Milestone:   "Core Service",
+				Priority:    10,
+			},
+			{
+				Name:        "API Endpoints",
+				Description: "Core business logic API endpoints",
+				Spec:        "1. RESTful or gRPC endpoint definitions\n2. Request validation and error handling\n3. Input/output serialization\n4. API versioning strategy\n5. OpenAPI or protobuf schema",
+				Milestone:   "Core Service",
+				Priority:    9,
+				DependsOn:   []string{"Service Skeleton"},
+			},
+			{
+				Name:        "Data Layer",
+				Description: "Database integration and data access",
+				Spec:        "1. Database connection with pooling\n2. Migration framework\n3. Repository pattern for data access\n4. Transaction support\n5. Seed data for development",
+				Milestone:   "Core Service",
+				Priority:    9,
+				DependsOn:   []string{"Service Skeleton"},
+			},
+			{
+				Name:        "Observability",
+				Description: "Metrics, tracing, and structured logging",
+				Spec:        "1. Prometheus metrics endpoint\n2. Distributed tracing (OpenTelemetry)\n3. Structured JSON logging with correlation IDs\n4. Request/response logging middleware\n5. Custom business metrics",
+				Milestone:   "Production Ready",
+				Priority:    8,
+			},
+			{
+				Name:        "Deployment",
+				Description: "Container build and deployment pipeline",
+				Spec:        "1. Multi-stage Dockerfile\n2. Kubernetes manifests or Helm chart\n3. CI/CD pipeline (build, test, deploy)\n4. Environment-specific configuration\n5. Secret management integration",
+				Milestone:   "Production Ready",
+				Priority:    7,
+			},
+			{
+				Name:        "Resilience",
+				Description: "Circuit breakers, retries, and graceful degradation",
+				Spec:        "1. Circuit breaker for external dependencies\n2. Retry with exponential backoff\n3. Timeout configuration per dependency\n4. Graceful degradation patterns\n5. Bulkhead isolation",
+				Milestone:   "Scaling",
+				Priority:    6,
+			},
+		},
+		RoadmapItems: []templateRoadmapItem{
+			{
+				Title:       "Event-Driven Architecture",
+				Description: "Add message queue integration for async processing and event sourcing",
+				Category:    "architecture",
+				Priority:    "high",
+				Effort:      "l",
+				Order:       1,
+			},
+			{
+				Title:       "Service Mesh Integration",
+				Description: "Integrate with service mesh for mTLS, traffic management, and observability",
+				Category:    "infrastructure",
+				Priority:    "medium",
+				Effort:      "m",
+				Order:       2,
+			},
+		},
+		Discussions: []templateDiscussion{
+			{
+				Title:  "RFC: Inter-Service Communication",
+				Body:   "## Context\nWe need to decide how this service communicates with other services.\n\n## Options\n1. Synchronous REST/gRPC calls\n2. Asynchronous message queue (Kafka, RabbitMQ)\n3. Hybrid approach\n\n## Considerations\n- Latency requirements\n- Data consistency needs\n- Failure handling and retry semantics",
 				Author: "template",
 			},
 		},

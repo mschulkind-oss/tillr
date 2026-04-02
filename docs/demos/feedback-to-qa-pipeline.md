@@ -1,11 +1,11 @@
-# Lifecycle Pipeline Demo: Feedback → Human QA
+# Tillr Pipeline Demo: Feedback → Human QA
 
 *2026-03-07T20:34:44Z by Showboat 0.6.1*
 <!-- showboat-id: ff05164b-660e-4077-b2bf-3f30ff0ac9fe -->
 
-This demo traces a single piece of user feedback through the **entire Lifecycle pipeline** — from raw input captured in the idea queue, through feature creation, cycle management, implementation, automated QA, judge scoring, and finally landing in the human QA review queue.
+This demo traces a single piece of user feedback through the **entire Tillr pipeline** — from raw input captured in the idea queue, through feature creation, cycle management, implementation, automated QA, judge scoring, and finally landing in the human QA review queue.
 
-Every command shown below is real. Every output is captured live. This is how Lifecycle manages the full lifecycle of a feature from a user's thought to a reviewable deliverable.
+Every command shown below is real. Every output is captured live. This is how Tillr manages the full tillr of a feature from a user's thought to a reviewable deliverable.
 
 ## The Pipeline
 
@@ -21,7 +21,7 @@ Each arrow represents a CLI command. Data flows forward automatically — the en
 The idea queue holds raw feedback from users. Items arrive via the Quick Feedback modal (press F in the web viewer) or the CLI. Each item has a title, type (feedback/idea/bug), and status. We pick the next unprocessed item.
 
 ```bash
-bin/lifecycle idea list
+bin/tillr idea list
 ```
 
 ```output
@@ -39,9 +39,9 @@ We select **feedback #3**: *"The roadmap cards jump around when data loads"*. Th
 Let's look at the full feedback entry to understand the context:
 
 ```bash
-bin/lifecycle idea show 3 --json 2>/dev/null || python3 -c "
+bin/tillr idea show 3 --json 2>/dev/null || python3 -c "
 import sqlite3, json
-conn = sqlite3.connect(\"lifecycle.db\")
+conn = sqlite3.connect(\"tillr.db\")
 row = conn.execute(\"SELECT id, title, description, idea_type, status, submitted_by, created_at FROM idea_queue WHERE id=3\").fetchone()
 print(json.dumps({\"id\": row[0], \"title\": row[1], \"description\": row[2] or \"\", \"type\": row[3], \"status\": row[4], \"submitted_by\": row[5], \"created_at\": row[6]}, indent=2))
 "
@@ -50,7 +50,7 @@ print(json.dumps({\"id\": row[0], \"title\": row[1], \"description\": row[2] or 
 ```output
 {
   "id": 3,
-  "project_id": "lifecycle",
+  "project_id": "tillr",
   "title": "The roadmap cards jump around when data loads",
   "raw_input": "",
   "idea_type": "feedback",
@@ -74,7 +74,7 @@ The feedback describes a UX bug: layout shift on the roadmap page. We create a *
 The spec is critical — it's the contract between the human who requested this and the agent who will implement it. Every criterion must be testable.
 
 ```bash
-bin/lifecycle feature add 'Fix Roadmap Layout Shift (CLS)' \
+bin/tillr feature add 'Fix Roadmap Layout Shift (CLS)' \
   --description 'Roadmap cards jump around when async data loads, causing poor visual stability. Fix layout shift by reserving space with min-height, skeleton placeholders, or fixed-size containers.' \
   --spec '1. Roadmap cards must not visually jump or reflow after initial render
 2. Use CSS min-height or skeleton placeholders to reserve space before data loads
@@ -93,7 +93,7 @@ bin/lifecycle feature add 'Fix Roadmap Layout Shift (CLS)' \
 The engine generates a slug ID: `fix-roadmap-layout-shift-cls`. This ID is used everywhere — CLI commands, API endpoints, database queries, web viewer URLs. Let's verify the feature was created with our full spec:
 
 ```bash
-bin/lifecycle feature show fix-roadmap-layout-shift-cls
+bin/tillr feature show fix-roadmap-layout-shift-cls
 ```
 
 ```output
@@ -125,7 +125,7 @@ Now we attach an **iteration cycle** to this feature. The `feature-implementatio
 Starting a cycle creates the first work item (research) and puts it in the agent work queue. From here, the engine auto-advances through steps as agents complete work.
 
 ```bash
-bin/lifecycle cycle start feature-implementation fix-roadmap-layout-shift-cls
+bin/tillr cycle start feature-implementation fix-roadmap-layout-shift-cls
 ```
 
 ```output
@@ -135,7 +135,7 @@ bin/lifecycle cycle start feature-implementation fix-roadmap-layout-shift-cls
 
 ## Step 4: RESEARCH — Agent Gets Work from the Queue
 
-This is the critical integration point. An agent calls `lifecycle next --json` and receives a **WorkContext** — a single JSON payload containing everything needed to do the work:
+This is the critical integration point. An agent calls `tillr next --json` and receives a **WorkContext** — a single JSON payload containing everything needed to do the work:
 
 - **work_item**: The task to perform (type, prompt)
 - **feature**: Full feature details including spec
@@ -147,7 +147,7 @@ This is the critical integration point. An agent calls `lifecycle next --json` a
 The agent never needs to look anywhere else. All context is in-band.
 
 ```bash
-bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
+bin/tillr next --json 2>/dev/null | python3 -m json.tool
 ```
 
 ```output
@@ -162,7 +162,7 @@ bin/lifecycle next --json 2>/dev/null | python3 -m json.tool
     },
     "feature": {
         "id": "fix-roadmap-layout-shift-cls",
-        "project_id": "lifecycle",
+        "project_id": "tillr",
         "milestone_id": "v0.2-self-hosting",
         "name": "Fix Roadmap Layout Shift (CLS)",
         "description": "Roadmap cards jump around when async data loads, causing poor visual stability. Fix layout shift by reserving space with min-height, skeleton placeholders, or fixed-size containers.",
@@ -204,12 +204,12 @@ The agent reads this, does research on the roadmap rendering code, and reports b
 
 ## Step 5: ADVANCE — Complete Research & Get Next Assignment
 
-Here we use the new `lifecycle advance` command. Instead of two separate calls (`lifecycle done` + `lifecycle next`), this atomically completes the current work and returns the next assignment. This eliminates race conditions in multi-agent environments where another agent could steal work between the two calls.
+Here we use the new `tillr advance` command. Instead of two separate calls (`tillr done` + `tillr next`), this atomically completes the current work and returns the next assignment. This eliminates race conditions in multi-agent environments where another agent could steal work between the two calls.
 
 The agent submits its research findings and immediately receives the develop task:
 
 ```bash
-bin/lifecycle advance --result 'Research complete. Roadmap rendering is in app.js renderRoadmapPage() around line 1200. Cards are dynamically sized by content — no min-height set. Progress bars load async via /api/roadmap which causes reflow when data arrives. Fix: add CSS min-height to .roadmap-card, use skeleton placeholders during load, set fixed heights for progress bar containers.' --json 2>/dev/null | python3 -m json.tool
+bin/tillr advance --result 'Research complete. Roadmap rendering is in app.js renderRoadmapPage() around line 1200. Cards are dynamically sized by content — no min-height set. Progress bars load async via /api/roadmap which causes reflow when data arrives. Fix: add CSS min-height to .roadmap-card, use skeleton placeholders during load, set fixed heights for progress bar containers.' --json 2>/dev/null | python3 -m json.tool
 ```
 
 ```output
@@ -231,7 +231,7 @@ bin/lifecycle advance --result 'Research complete. Roadmap rendering is in app.j
         },
         "feature": {
             "id": "fix-roadmap-layout-shift-cls",
-            "project_id": "lifecycle",
+            "project_id": "tillr",
             "milestone_id": "v0.2-self-hosting",
             "name": "Fix Roadmap Layout Shift (CLS)",
             "description": "Roadmap cards jump around when async data loads, causing poor visual stability. Fix layout shift by reserving space with min-height, skeleton placeholders, or fixed-size containers.",
@@ -295,7 +295,7 @@ This is the key innovation: each step's results accumulate. The develop agent kn
 The agent now implements the CLS fix. In a real workflow, this is where code changes happen. The agent reads the spec, applies the research findings, and writes CSS/JS fixes. For this demo, we'll simulate the implementation and advance:
 
 ```bash
-bin/lifecycle cycle status
+bin/tillr cycle status
 ```
 
 ```output
@@ -311,7 +311,7 @@ The cycle has auto-advanced through research → develop and is now at **step 3/
 The agent-qa step runs automated checks against the acceptance criteria. An agent picks up this work item, verifies each spec criterion, and reports pass/fail:
 
 ```bash
-bin/lifecycle advance --result 'Agent QA passed all 6 criteria: (1) cards have min-height, (2) skeleton placeholders during load, (3) progress bars in 24px containers, (4) filter pills fixed-width, (5) timeline/deps use CSS grid, (6) no visible CLS on navigation' 2>&1
+bin/tillr advance --result 'Agent QA passed all 6 criteria: (1) cards have min-height, (2) skeleton placeholders during load, (3) progress bars in 24px containers, (4) filter pills fixed-width, (5) timeline/deps use CSS grid, (6) no visible CLS on navigation' 2>&1
 ```
 
 ```output
@@ -326,7 +326,7 @@ The advance command reports "No more work items available" — this is by design
 The judge evaluates the implementation against the spec and assigns a numeric score. This creates a measurable quality trend over iterations:
 
 ```bash
-bin/lifecycle cycle score 8.5 --feature fix-roadmap-layout-shift-cls --notes 'All 6 CLS criteria addressed. Skeleton placeholders prevent layout shift.' 2>&1 || echo '(Score already applied)'
+bin/tillr cycle score 8.5 --feature fix-roadmap-layout-shift-cls --notes 'All 6 CLS criteria addressed. Skeleton placeholders prevent layout shift.' 2>&1 || echo '(Score already applied)'
 ```
 
 ```output
@@ -340,7 +340,7 @@ The cycle has reached its final step: **human-qa**. This is a blocking gate — 
 We transition the feature status to `human-qa` to make it appear in the QA review queue:
 
 ```bash
-bin/lifecycle feature edit fix-roadmap-layout-shift-cls --status implementing 2>&1 && bin/lifecycle feature edit fix-roadmap-layout-shift-cls --status human-qa 2>&1
+bin/tillr feature edit fix-roadmap-layout-shift-cls --status implementing 2>&1 && bin/tillr feature edit fix-roadmap-layout-shift-cls --status human-qa 2>&1
 ```
 
 ```output
@@ -355,7 +355,7 @@ Let's verify the complete pipeline result. The feature should show:
 - Cycle at step 5/5 (human-qa)
 
 ```bash
-bin/lifecycle feature show fix-roadmap-layout-shift-cls
+bin/tillr feature show fix-roadmap-layout-shift-cls
 ```
 
 ```output
@@ -375,7 +375,7 @@ Feature: Fix Roadmap Layout Shift (CLS)
 ```
 
 ```bash
-bin/lifecycle cycle history fix-roadmap-layout-shift-cls
+bin/tillr cycle history fix-roadmap-layout-shift-cls
 ```
 
 ```output
@@ -383,7 +383,7 @@ bin/lifecycle cycle history fix-roadmap-layout-shift-cls
 ```
 
 ```bash
-bin/lifecycle qa pending
+bin/tillr qa pending
 ```
 
 ```output
@@ -413,14 +413,14 @@ Our feedback has traveled the full pipeline:
 
 | Step | Command | What Happened |
 |------|---------|---------------|
-| 1. INTAKE | `lifecycle idea list` | Read feedback from idea queue |
-| 2. ROUTE | `lifecycle feature add` | Created feature with 6-point spec |
-| 3. START | `lifecycle cycle start` | Launched 5-step implementation cycle |
-| 4. RESEARCH | `lifecycle next --json` → `lifecycle advance` | Agent researched codebase, found root cause |
-| 5. DEVELOP | `lifecycle advance` | Agent implemented CSS fixes |
-| 6. AGENT QA | `lifecycle advance` | Automated verification of all criteria |
-| 7. JUDGE | `lifecycle cycle score 8.5` | Quality score recorded |
-| 8. HUMAN QA | `lifecycle feature edit --status human-qa` | Feature lands in QA review queue |
+| 1. INTAKE | `tillr idea list` | Read feedback from idea queue |
+| 2. ROUTE | `tillr feature add` | Created feature with 6-point spec |
+| 3. START | `tillr cycle start` | Launched 5-step implementation cycle |
+| 4. RESEARCH | `tillr next --json` → `tillr advance` | Agent researched codebase, found root cause |
+| 5. DEVELOP | `tillr advance` | Agent implemented CSS fixes |
+| 6. AGENT QA | `tillr advance` | Automated verification of all criteria |
+| 7. JUDGE | `tillr cycle score 8.5` | Quality score recorded |
+| 8. HUMAN QA | `tillr feature edit --status human-qa` | Feature lands in QA review queue |
 
 **Time elapsed**: ~2 minutes from raw feedback to reviewable feature.
 
@@ -431,13 +431,13 @@ Our feedback has traveled the full pipeline:
 To approve:
 
 ```
-lifecycle qa approve fix-roadmap-layout-shift-cls --notes "Verified — no more CLS"
+tillr qa approve fix-roadmap-layout-shift-cls --notes "Verified — no more CLS"
 ```
 
 To reject and iterate:
 
 ```
-lifecycle qa reject fix-roadmap-layout-shift-cls --notes "Still seeing shift on mobile"
+tillr qa reject fix-roadmap-layout-shift-cls --notes "Still seeing shift on mobile"
 ```
 
 ```bash {image}

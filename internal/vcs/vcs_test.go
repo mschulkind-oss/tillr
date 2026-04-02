@@ -5,7 +5,7 @@ import (
 )
 
 func TestDetectVCS(t *testing.T) {
-	// This test runs inside the lifecycle repo which has both .jj and .git
+	// This test runs inside the tillr repo which has both .jj and .git
 	result := DetectVCS()
 	if result != "jj" && result != "git" && result != "" {
 		t.Errorf("DetectVCS() returned unexpected value: %q", result)

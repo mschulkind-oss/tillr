@@ -1,20 +1,20 @@
-# Lifecycle — A Guided Tour
+# Tillr — A Guided Tour
 
 *2026-03-06T23:32:43Z by Showboat 0.6.1*
 <!-- showboat-id: a59c062f-3b01-466f-8a6c-a61a0141cac5 -->
 
-Welcome to **Lifecycle** — a human-in-the-loop project management tool for agentic software development. This walkthrough demonstrates the CLI, web viewer, and workflow patterns.
+Welcome to **Tillr** — a human-in-the-loop project management tool for agentic software development. This walkthrough demonstrates the CLI, web viewer, and workflow patterns.
 
 Let's start by initializing a project right here in this repository.
 
 ```bash
-bin/lifecycle init 'Lifecycle Development'
+bin/tillr init 'Tillr Development'
 ```
 
 ```output
-✓ Initialized project "Lifecycle Development" in /workspace
-  Database: /workspace/lifecycle.db
-  Config:   /workspace/.lifecycle.json
+✓ Initialized project "Tillr Development" in /workspace
+  Database: /workspace/tillr.db
+  Config:   /workspace/.tillr.json
 ```
 
 ## Adding Features
@@ -22,7 +22,7 @@ bin/lifecycle init 'Lifecycle Development'
 Features are the core unit of work. Each has a priority, status, and optional milestone. Let's add several features representing our current development plan.
 
 ```bash
-bin/lifecycle feature add "Web Dashboard" --priority 1 --description "Live-updating SPA with dark/light themes, kanban board, and real-time WebSocket updates"
+bin/tillr feature add "Web Dashboard" --priority 1 --description "Live-updating SPA with dark/light themes, kanban board, and real-time WebSocket updates"
 ```
 
 ```output
@@ -30,7 +30,7 @@ bin/lifecycle feature add "Web Dashboard" --priority 1 --description "Live-updat
 ```
 
 ```bash
-bin/lifecycle feature add "CLI Tool" --priority 1 --description "Complete command-line interface with JSON output for agent integration"
+bin/tillr feature add "CLI Tool" --priority 1 --description "Complete command-line interface with JSON output for agent integration"
 ```
 
 ```output
@@ -38,7 +38,7 @@ bin/lifecycle feature add "CLI Tool" --priority 1 --description "Complete comman
 ```
 
 ```bash
-bin/lifecycle feature add "Agent Workflow" --priority 2 --description "next/done/fail/heartbeat commands for autonomous agent loops"
+bin/tillr feature add "Agent Workflow" --priority 2 --description "next/done/fail/heartbeat commands for autonomous agent loops"
 ```
 
 ```output
@@ -46,7 +46,7 @@ bin/lifecycle feature add "Agent Workflow" --priority 2 --description "next/done
 ```
 
 ```bash
-bin/lifecycle feature add "Iteration Cycles" --priority 2 --description "Structured multi-step workflows: UI refinement, feature implementation, bug triage"
+bin/tillr feature add "Iteration Cycles" --priority 2 --description "Structured multi-step workflows: UI refinement, feature implementation, bug triage"
 ```
 
 ```output
@@ -54,7 +54,7 @@ bin/lifecycle feature add "Iteration Cycles" --priority 2 --description "Structu
 ```
 
 ```bash
-bin/lifecycle feature add "QA Pipeline" --priority 3 --description "Human-in-the-loop quality assurance with approve/reject workflow"
+bin/tillr feature add "QA Pipeline" --priority 3 --description "Human-in-the-loop quality assurance with approve/reject workflow"
 ```
 
 ```output
@@ -62,7 +62,7 @@ bin/lifecycle feature add "QA Pipeline" --priority 3 --description "Human-in-the
 ```
 
 ```bash
-bin/lifecycle feature add "Search & History" --priority 3 --description "Full-text search and audit trail across all project events"
+bin/tillr feature add "Search & History" --priority 3 --description "Full-text search and audit trail across all project events"
 ```
 
 ```output
@@ -72,7 +72,7 @@ bin/lifecycle feature add "Search & History" --priority 3 --description "Full-te
 Now let's see our feature board:
 
 ```bash
-bin/lifecycle feature list
+bin/tillr feature list
 ```
 
 ```output
@@ -91,7 +91,7 @@ cli-tool             draft          1    CLI Tool
 Group features into release milestones to track progress at a higher level.
 
 ```bash
-bin/lifecycle milestone add "v1.0 MVP" --description "Core CLI + web viewer with all essential features"
+bin/tillr milestone add "v1.0 MVP" --description "Core CLI + web viewer with all essential features"
 ```
 
 ```output
@@ -99,7 +99,7 @@ bin/lifecycle milestone add "v1.0 MVP" --description "Core CLI + web viewer with
 ```
 
 ```bash
-bin/lifecycle milestone add "v1.1 Agent Integration" --description "Full agent workflow with iteration cycles"
+bin/tillr milestone add "v1.1 Agent Integration" --description "Full agent workflow with iteration cycles"
 ```
 
 ```output
@@ -107,7 +107,7 @@ bin/lifecycle milestone add "v1.1 Agent Integration" --description "Full agent w
 ```
 
 ```bash
-bin/lifecycle milestone list
+bin/tillr milestone list
 ```
 
 ```output
@@ -120,7 +120,7 @@ v1.1-agent-integration [░░░░░░░░░░░░░░░░░░�
 The roadmap captures strategic priorities beyond individual features. Items have priorities (critical → nice-to-have), categories, and effort estimates (t-shirt sizes).
 
 ```bash
-bin/lifecycle roadmap add "Real-time WebSocket Updates" --priority critical --category feature --effort l --description "Push live updates to the web viewer when DB changes — no manual refresh needed"
+bin/tillr roadmap add "Real-time WebSocket Updates" --priority critical --category feature --effort l --description "Push live updates to the web viewer when DB changes — no manual refresh needed"
 ```
 
 ```output
@@ -128,7 +128,7 @@ bin/lifecycle roadmap add "Real-time WebSocket Updates" --priority critical --ca
 ```
 
 ```bash
-bin/lifecycle roadmap add "Plugin Architecture" --priority high --category architecture --effort xl --description "Extensible plugin system for custom cycle types and integrations"
+bin/tillr roadmap add "Plugin Architecture" --priority high --category architecture --effort xl --description "Extensible plugin system for custom cycle types and integrations"
 ```
 
 ```output
@@ -136,7 +136,7 @@ bin/lifecycle roadmap add "Plugin Architecture" --priority high --category archi
 ```
 
 ```bash
-bin/lifecycle roadmap add "CI/CD Integration" --priority critical --category feature --effort m --description "GitHub Actions / GitLab CI integration for automated cycle triggers"
+bin/tillr roadmap add "CI/CD Integration" --priority critical --category feature --effort m --description "GitHub Actions / GitLab CI integration for automated cycle triggers"
 ```
 
 ```output
@@ -144,7 +144,7 @@ bin/lifecycle roadmap add "CI/CD Integration" --priority critical --category fea
 ```
 
 ```bash
-bin/lifecycle roadmap add "Performance Benchmarks" --priority medium --category improvement --effort s --description "Benchmark suite for CLI response times and DB query performance"
+bin/tillr roadmap add "Performance Benchmarks" --priority medium --category improvement --effort s --description "Benchmark suite for CLI response times and DB query performance"
 ```
 
 ```output
@@ -152,7 +152,7 @@ bin/lifecycle roadmap add "Performance Benchmarks" --priority medium --category 
 ```
 
 ```bash
-bin/lifecycle roadmap add "User Authentication" --priority high --category feature --effort l --description "Multi-user support with role-based access control"
+bin/tillr roadmap add "User Authentication" --priority high --category feature --effort l --description "Multi-user support with role-based access control"
 ```
 
 ```output
@@ -160,7 +160,7 @@ bin/lifecycle roadmap add "User Authentication" --priority high --category featu
 ```
 
 ```bash
-bin/lifecycle roadmap add "API Documentation" --priority medium --category documentation --effort m --description "OpenAPI spec and interactive API docs for all endpoints"
+bin/tillr roadmap add "API Documentation" --priority medium --category documentation --effort m --description "OpenAPI spec and interactive API docs for all endpoints"
 ```
 
 ```output
@@ -168,7 +168,7 @@ bin/lifecycle roadmap add "API Documentation" --priority medium --category docum
 ```
 
 ```bash
-bin/lifecycle roadmap add "Dark Mode Polish" --priority low --category improvement --effort xs --description "Fine-tune dark theme colors, contrast, and animations"
+bin/tillr roadmap add "Dark Mode Polish" --priority low --category improvement --effort xs --description "Fine-tune dark theme colors, contrast, and animations"
 ```
 
 ```output
@@ -176,7 +176,7 @@ bin/lifecycle roadmap add "Dark Mode Polish" --priority low --category improveme
 ```
 
 ```bash
-bin/lifecycle roadmap add "Webhook Notifications" --priority nice-to-have --category feature --effort m --description "Notify external services on lifecycle events via webhooks"
+bin/tillr roadmap add "Webhook Notifications" --priority nice-to-have --category feature --effort m --description "Notify external services on tillr events via webhooks"
 ```
 
 ```output
@@ -186,7 +186,7 @@ bin/lifecycle roadmap add "Webhook Notifications" --priority nice-to-have --cate
 Check the roadmap health at a glance:
 
 ```bash
-bin/lifecycle roadmap stats
+bin/tillr roadmap stats
 ```
 
 ```output
@@ -216,10 +216,10 @@ bin/lifecycle roadmap stats
 
 ## Feature Workflow
 
-Features move through a lifecycle: **draft → planning → implementing → agent-qa → human-qa → done**. Let's advance some features to simulate active development.
+Features move through a tillr: **draft → planning → implementing → agent-qa → human-qa → done**. Let's advance some features to simulate active development.
 
 ```bash
-bin/lifecycle feature edit web-dashboard --status implementing
+bin/tillr feature edit web-dashboard --status implementing
 ```
 
 ```output
@@ -227,7 +227,7 @@ bin/lifecycle feature edit web-dashboard --status implementing
 ```
 
 ```bash
-bin/lifecycle feature edit cli-tool --status done
+bin/tillr feature edit cli-tool --status done
 ```
 
 ```output
@@ -235,7 +235,7 @@ bin/lifecycle feature edit cli-tool --status done
 ```
 
 ```bash
-bin/lifecycle feature edit agent-workflow --status implementing
+bin/tillr feature edit agent-workflow --status implementing
 ```
 
 ```output
@@ -243,7 +243,7 @@ bin/lifecycle feature edit agent-workflow --status implementing
 ```
 
 ```bash
-bin/lifecycle feature edit iteration-cycles --status planning
+bin/tillr feature edit iteration-cycles --status planning
 ```
 
 ```output
@@ -251,7 +251,7 @@ bin/lifecycle feature edit iteration-cycles --status planning
 ```
 
 ```bash
-bin/lifecycle feature edit qa-pipeline --status human-qa
+bin/tillr feature edit qa-pipeline --status human-qa
 ```
 
 ```output
@@ -261,7 +261,7 @@ bin/lifecycle feature edit qa-pipeline --status human-qa
 See how the board looks now with features in various stages:
 
 ```bash
-bin/lifecycle feature list
+bin/tillr feature list
 ```
 
 ```output
@@ -280,11 +280,11 @@ cli-tool             done           1    CLI Tool
 The `status` command gives you a bird's-eye view of the entire project:
 
 ```bash
-bin/lifecycle status
+bin/tillr status
 ```
 
 ```output
-Project: Lifecycle Development
+Project: Tillr Development
 
 Features: 6 total
   human-qa       1
@@ -311,10 +311,10 @@ Recent Activity:
 
 ## Agent Integration
 
-Agents interact with Lifecycle via the `next`/`done`/`fail` commands. This is how an AI agent gets its next task:
+Agents interact with Tillr via the `next`/`done`/`fail` commands. This is how an AI agent gets its next task:
 
 ```bash
-bin/lifecycle next --json
+bin/tillr next --json
 ```
 
 ```output
@@ -326,7 +326,7 @@ bin/lifecycle next --json
 No work items queued yet — agents pull from explicit work items. Let's look at what iteration cycles are available:
 
 ```bash
-bin/lifecycle cycle list
+bin/tillr cycle list
 ```
 
 ```output
@@ -361,7 +361,7 @@ onboarding-dx             Onboarding/DX
 Features in `human-qa` status are waiting for human review. Check what's pending:
 
 ```bash
-bin/lifecycle qa pending
+bin/tillr qa pending
 ```
 
 ```output
@@ -373,7 +373,7 @@ qa-pipeline          3    QA Pipeline
 Approve the QA Pipeline feature:
 
 ```bash
-bin/lifecycle qa approve qa-pipeline --notes "Solid implementation, approve for release"
+bin/tillr qa approve qa-pipeline --notes "Solid implementation, approve for release"
 ```
 
 ```output
@@ -385,7 +385,7 @@ bin/lifecycle qa approve qa-pipeline --notes "Solid implementation, approve for 
 Every action is logged. Search across all project data:
 
 ```bash
-bin/lifecycle search "QA"
+bin/tillr search "QA"
 ```
 
 ```output
@@ -394,7 +394,7 @@ bin/lifecycle search "QA"
 ```
 
 ```bash
-bin/lifecycle log
+bin/tillr log
 ```
 
 ```output
@@ -420,7 +420,7 @@ bin/lifecycle log
 
 ## Web Viewer
 
-Start the web viewer with `lifecycle serve` to get a live dashboard at http://localhost:3847. Here's what each page looks like:
+Start the web viewer with `tillr serve` to get a live dashboard at http://localhost:3847. Here's what each page looks like:
 
 ### Dashboard
 
@@ -434,7 +434,7 @@ The dashboard shows project health at a glance — stat cards, kanban board, mil
 
 ### Features
 
-Filter, search, and track features across their full lifecycle. Status pills show where each feature stands.
+Filter, search, and track features across their full tillr. Status pills show where each feature stands.
 
 ```bash {image}
 ![Features page with search bar, filter pills, status badges, and priority dots](docs/demo-features.png)
@@ -480,17 +480,17 @@ Features awaiting human review appear here. Approve or reject with notes — the
 
 ## JSON Output for Agents
 
-Every command supports `--json` for structured output — this is how agents interact with Lifecycle programmatically:
+Every command supports `--json` for structured output — this is how agents interact with Tillr programmatically:
 
 ```bash
-bin/lifecycle feature list --json | python3 -m json.tool | head -20
+bin/tillr feature list --json | python3 -m json.tool | head -20
 ```
 
 ```output
 [
     {
         "id": "qa-pipeline",
-        "project_id": "lifecycle-development",
+        "project_id": "tillr-development",
         "name": "QA Pipeline",
         "description": "Human-in-the-loop quality assurance with approve/reject workflow",
         "status": "done",
@@ -500,7 +500,7 @@ bin/lifecycle feature list --json | python3 -m json.tool | head -20
     },
     {
         "id": "search--history",
-        "project_id": "lifecycle-development",
+        "project_id": "tillr-development",
         "name": "Search & History",
         "description": "Full-text search and audit trail across all project events",
         "status": "draft",
@@ -514,11 +514,11 @@ bin/lifecycle feature list --json | python3 -m json.tool | head -20
 Export your roadmap as presentation-quality markdown:
 
 ```bash
-bin/lifecycle roadmap export --format md | head -35
+bin/tillr roadmap export --format md | head -35
 ```
 
 ```output
-# 🗺️ Project Roadmap — Lifecycle Development
+# 🗺️ Project Roadmap — Tillr Development
 
 *Generated: March 6, 2026*
 
@@ -568,10 +568,10 @@ The web viewer is running at **http://localhost:3847** — go explore! Try:
 From the CLI, keep experimenting:
 
 ```bash
-lifecycle feature show web-dashboard    # Deep-dive on a feature
-lifecycle roadmap stats --json          # Programmatic roadmap health
-lifecycle doctor                        # Validate your setup
-lifecycle cycle start ui-refinement web-dashboard  # Start an iteration cycle
+tillr feature show web-dashboard    # Deep-dive on a feature
+tillr roadmap stats --json          # Programmatic roadmap health
+tillr doctor                        # Validate your setup
+tillr cycle start ui-refinement web-dashboard  # Start an iteration cycle
 ```
 
 Happy building! 🚀

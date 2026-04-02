@@ -51,6 +51,13 @@ export type FeatureStatus =
   | 'done'
   | 'blocked'
 
+export interface FeatureDetailResponse {
+  feature: Feature
+  cycles: CycleInstance[]
+  scores: CycleScore[]
+  work_items: WorkItem[]
+}
+
 export interface RoadmapItem {
   id: string
   project_id: string
@@ -76,7 +83,8 @@ export interface Event {
 
 export interface CycleInstance {
   id: number
-  feature_id: string
+  entity_type: string
+  entity_id: string
   cycle_type: string
   current_step: number
   iteration: number
@@ -152,25 +160,98 @@ export interface WorkItem {
 
 export interface AgentSession {
   id: string
-  agent_type: string
-  status: 'active' | 'completed' | 'failed'
-  current_feature?: string
-  capabilities?: string
+  project_id: string
+  feature_id?: string
+  name: string
+  task_description?: string
+  status: 'active' | 'paused' | 'completed' | 'failed' | 'abandoned'
+  progress_pct: number
+  current_phase?: string
+  eta?: string
+  context_snapshot?: string
   created_at: string
   updated_at: string
+}
+
+export interface StatusUpdate {
+  id: number
+  agent_session_id: string
+  message_md: string
+  progress_pct?: number
+  phase?: string
+  created_at: string
+}
+
+export interface AgentHeartbeatInfo {
+  session: AgentSession
+  heartbeat_status: 'active' | 'stale' | 'failed'
+  session_duration_secs: number
+  current_work_item?: WorkItem
+  feature_name?: string
+  completed_count: number
+  failed_count: number
+}
+
+export interface AgentStatusDashboard {
+  agents: AgentHeartbeatInfo[]
+  total_sessions: number
+  active_count: number
+  stale_count: number
+  failed_count: number
+  completed_count: number
+  total_work_done: number
 }
 
 export interface Idea {
   id: number
   project_id: string
   title: string
-  description?: string
-  source: string
-  status: 'pending' | 'approved' | 'rejected' | 'implemented'
-  priority?: number
+  raw_input: string
+  idea_type: string
+  status: string
+  spec_md?: string
+  auto_implement: boolean
+  submitted_by: string
+  assigned_agent?: string
+  feature_id?: string
+  source_page?: string
+  context?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Decision {
+  id: string
+  title: string
+  status: 'proposed' | 'accepted' | 'rejected' | 'superseded' | 'deprecated'
+  context: string
+  decision: string
+  consequences: string
+  superseded_by?: string
   feature_id?: string
   created_at: string
   updated_at: string
+}
+
+export interface CycleDetail {
+  cycle: CycleInstance
+  scores: CycleScore[]
+  steps: CycleStep[]
+}
+
+export interface SearchResult {
+  entity_type: string
+  entity_id: string
+  title: string
+  snippet: string
+  rank: number
+}
+
+export interface GroupedSearchResults {
+  query: string
+  total: number
+  groups: Record<string, SearchResult[]>
+  ordered_types: string[]
 }
 
 export interface StatusResponse {
@@ -178,41 +259,164 @@ export interface StatusResponse {
   feature_counts: Record<string, number>
   milestone_count: number
   active_cycles: number
+  open_discussions: number
   recent_events: Event[]
 }
 
 export interface StatsResponse {
-  features: {
+  feature_stats: {
     total: number
     by_status: Record<string, number>
-    avg_priority: number
     completion_rate: number
   }
-  cycles: {
-    total: number
-    active: number
-    completed: number
+  cycle_stats: {
+    total_cycles: number
+    total_iterations: number
     avg_score: number
-    by_type: Record<string, number>
+    scores_over_time?: Array<{ date: string; score: number; cycle: string }>
   }
-  roadmap: {
+  roadmap_stats: {
     total: number
     by_status: Record<string, number>
     by_priority: Record<string, number>
     by_category: Record<string, number>
   }
-  milestones: Milestone[]
-  recent_activity: Event[]
+  milestone_stats: Array<{ name: string; total: number; done: number; progress: number }>
+  activity: {
+    total_events: number
+    events_last_7_days: number
+    events_last_30_days: number
+  }
+}
+
+export interface BurndownPoint {
+  date: string
+  remaining: number
+  completed: number
+}
+
+export interface WeekVelocity {
+  week: string
+  completed_count: number
+}
+
+export interface BurndownData {
+  points: BurndownPoint[]
+  velocity: WeekVelocity[]
+}
+
+export interface HeatmapDay {
+  date: string
+  count: number
+  events: Record<string, number>
+}
+
+export interface ActivityDayCount {
+  date: string
+  count: number
+}
+
+export interface QueueEntry {
+  work_item_id: number
+  feature_id: string
+  feature_name: string
+  work_type: string
+  priority: number
+  cycle_type: string
+  assigned_agent: string
+  status: string
+  created_at: string
+}
+
+export interface QueueStats {
+  total_pending: number
+  total_claimed: number
+  total_completed_today: number
+}
+
+export interface QueueResponse {
+  queue: QueueEntry[]
+  stats: QueueStats
+}
+
+export interface DependencyGraph {
+  nodes: Array<{ id: string; name: string; status: string }>
+  edges: Array<{ from: string; to: string }>
+}
+
+export interface SpecSection {
+  id: string
+  title: string
+  content_md: string
+  level: number
+  features?: Array<{
+    id: string
+    name: string
+    status: string
+    priority: number
+    spec_md: string
+    description: string
+    dependencies?: string[]
+  }>
+}
+
+export interface SpecDocument {
+  title: string
+  generated_at: string
+  sections: SpecSection[]
+  stats: {
+    total_features: number
+    done: number
+    in_progress: number
+    blocked: number
+    total_milestones: number
+    total_roadmap_items: number
+  }
+}
+
+export interface FeaturePR {
+  feature_id: string
+  pr_url: string
+  pr_number: number
+  repo: string
+  status: 'open' | 'closed' | 'merged'
+  created_at: string
+}
+
+export interface TagCount {
+  tag: string
+  count: number
+}
+
+export interface HeatmapGrid {
+  cells: Array<{ day: number; hour: number; count: number }>
+  max_count: number
+}
+
+export interface AuditEvent {
+  id: number
+  project_id: string
+  feature_id?: string
+  event_type: string
+  data?: string
+  created_at: string
+}
+
+export interface AuditStatsResponse {
+  by_type: Record<string, number>
+  total: number
 }
 
 export interface ContextEntry {
   id: number
   project_id: string
-  key: string
-  value: string
-  category?: string
+  feature_id?: string
+  context_type: string
+  title: string
+  content_md: string
+  author: string
+  tags?: string
   created_at: string
-  updated_at: string
 }
 
 export interface CoordinationStatus {
@@ -225,4 +429,55 @@ export interface CoordinationStatus {
   }>
   queue_depth: number
   claimed_items: number
+}
+
+// Workstreams
+
+export interface Workstream {
+  id: string
+  project_id: string
+  parent_id?: string
+  name: string
+  description: string
+  status: 'active' | 'archived'
+  tags: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkstreamNote {
+  id: number
+  workstream_id: string
+  content: string
+  note_type: 'note' | 'question' | 'decision' | 'idea' | 'import'
+  source?: string
+  resolved: number
+  created_at: string
+}
+
+export interface WorkstreamLink {
+  id: number
+  workstream_id: string
+  link_type: 'feature' | 'doc' | 'url' | 'discussion'
+  target_id?: string
+  target_url?: string
+  label?: string
+  created_at: string
+}
+
+export interface WorkstreamDetail {
+  workstream: Workstream
+  notes: WorkstreamNote[]
+  links: WorkstreamLink[]
+  children: Workstream[]
+}
+
+export interface CycleStep {
+  name: string
+  human?: boolean
+}
+
+export interface AppConfig {
+  vantage_url?: string
+  project_id?: string
 }

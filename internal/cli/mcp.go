@@ -4,29 +4,29 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/mcp"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Start MCP server for agent integration",
-	Long: `Start a Model Context Protocol (MCP) server that exposes lifecycle tools
-over stdio. This allows AI agents to interact with lifecycle directly via
+	Long: `Start a Model Context Protocol (MCP) server that exposes tillr tools
+over stdio. This allows AI agents to interact with tillr directly via
 JSON-RPC 2.0 instead of subprocess CLI calls.
 
 The server reads line-delimited JSON-RPC requests from stdin and writes
-responses to stdout. It implements the MCP protocol lifecycle: initialize,
+responses to stdout. It implements the MCP protocol tillr: initialize,
 tools/list, and tools/call.
 
 Exposed tools:
-  lifecycle_next       Get next work item with full context
-  lifecycle_done       Mark current work item complete
-  lifecycle_fail       Mark current work item as failed
-  lifecycle_status     Project status overview
-  lifecycle_features   List features (optional status filter)
-  lifecycle_feedback   Submit feedback/ideas/bugs`,
+  tillr_next       Get next work item with full context
+  tillr_done       Mark current work item complete
+  tillr_fail       Mark current work item as failed
+  tillr_status     Project status overview
+  tillr_features   List features (optional status filter)
+  tillr_feedback   Submit feedback/ideas/bugs`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
-	"github.com/mschulkind/lifecycle/internal/server"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind/tillr/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -15,13 +15,13 @@ var webhookCmd = &cobra.Command{
 	Use:   "webhook",
 	Short: "Manage webhook notifications",
 	Long: `Register, list, remove, and test webhook endpoints.
-Webhooks receive HTTP POST notifications when lifecycle events occur.
+Webhooks receive HTTP POST notifications when tillr events occur.
 
 Each delivery includes:
   - JSON payload with event details
-  - X-Lifecycle-Event header with the event type
-  - X-Lifecycle-Signature header (HMAC-SHA256, if secret is configured)
-  - X-Lifecycle-Delivery header with a unique delivery ID`,
+  - X-Tillr-Event header with the event type
+  - X-Tillr-Signature header (HMAC-SHA256, if secret is configured)
+  - X-Tillr-Delivery header with a unique delivery ID`,
 }
 
 func init() {
@@ -118,7 +118,7 @@ var webhookListCmd = &cobra.Command{
 		}
 
 		if len(webhooks) == 0 {
-			fmt.Println("No webhooks registered. Use 'lifecycle webhook add <url>' to register one.")
+			fmt.Println("No webhooks registered. Use 'tillr webhook add <url>' to register one.")
 			return nil
 		}
 

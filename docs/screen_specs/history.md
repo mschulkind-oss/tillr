@@ -2,7 +2,7 @@
 
 ## Overview
 
-The History page is a searchable, filterable event timeline that provides a complete audit trail of every action taken within a Lifecycle-managed project. It answers the question *"what happened, when, and to what?"* — surfacing feature lifecycle transitions, cycle events, QA decisions, agent heartbeats, and all other system events in reverse-chronological order.
+The History page is a searchable, filterable event timeline that provides a complete audit trail of every action taken within a Tillr-managed project. It answers the question *"what happened, when, and to what?"* — surfacing feature tillr transitions, cycle events, QA decisions, agent heartbeats, and all other system events in reverse-chronological order.
 
 **Route:** `#history`
 **API endpoint:** `GET /api/history`

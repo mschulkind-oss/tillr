@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -11,24 +12,45 @@ import (
 )
 
 const (
-	DefaultDBName     = "lifecycle.db"
+	DefaultDBName     = "tillr.db"
 	DefaultServerPort = 3847
-	ConfigFileName    = ".lifecycle.json"
-	YAMLConfigName    = ".lifecycle.yaml"
+	ConfigFileName    = ".tillr.json"
+	YAMLConfigName    = ".tillr.yaml"
 )
+
+// QARule defines a single QA review rule for automatic evaluation.
+type QARule struct {
+	Type      string  `json:"type" yaml:"type"`             // "priority_threshold", "tag", "cycle_type", "score_threshold"
+	Value     string  `json:"value" yaml:"value"`           // threshold value or match string
+	Action    string  `json:"action" yaml:"action"`         // "review" or "auto_approve"
+	Threshold float64 `json:"threshold" yaml:"threshold"`   // numeric threshold (for score/priority rules)
+}
+
+// QAConfig holds QA review configuration.
+type QAConfig struct {
+	Rules          []QARule `json:"rules" yaml:"rules"`
+	ReviewAll      bool     `json:"review_all" yaml:"review_all"` // default: true (review everything)
+}
 
 type Config struct {
 	ProjectDir string `json:"-" yaml:"-"`
 	DBPath     string `json:"db_path" yaml:"db_path"`
 	ServerPort int    `json:"server_port" yaml:"server_port"`
 
-	// Extended defaults (from .lifecycle.yaml)
+	// Extended defaults (from .tillr.yaml)
 	DefaultMilestone string `json:"default_milestone,omitempty" yaml:"default_milestone"`
 	DefaultPriority  int    `json:"default_priority,omitempty" yaml:"default_priority"`
 	Theme            string `json:"theme,omitempty" yaml:"theme"`
 	AgentTimeout     int    `json:"agent_timeout_minutes,omitempty" yaml:"agent_timeout_minutes"`
 
-	// API key for server authentication (stored in .lifecycle.json only)
+	// QA review rules
+	QA *QAConfig `json:"qa,omitempty" yaml:"qa"`
+
+	// Rate limiting configuration
+	RateLimit float64 `json:"rate_limit,omitempty" yaml:"rate_limit"`  // requests per second (0 = disabled)
+	RateBurst int     `json:"rate_burst,omitempty" yaml:"rate_burst"`  // burst capacity
+
+	// API key for server authentication (stored in .tillr.json only)
 	ApiKey string `json:"api_key,omitempty" yaml:"-"`
 
 	// EncryptionKeyHash stores SHA-256 hash of the encryption password for
@@ -37,6 +59,50 @@ type Config struct {
 
 	// ActiveProject is the currently selected project ID for multi-project support.
 	ActiveProject string `json:"active_project,omitempty" yaml:"active_project"`
+
+	// VantageURL is the base URL for the Vantage documentation viewer.
+	// If set, doc links in the web UI open in Vantage for rendered markdown.
+	// Can also be set via LIFECYCLE_VANTAGE_URL env var.
+	VantageURL string `json:"vantage_url,omitempty" yaml:"vantage_url"`
+}
+
+// DefaultQAConfig returns the default QA config (review everything).
+func DefaultQAConfig() *QAConfig {
+	return &QAConfig{ReviewAll: true}
+}
+
+// EvaluateQARules checks QA rules against a feature and returns the action
+// ("review" or "auto_approve") and which rule matched (empty string if default).
+func (cfg *Config) EvaluateQARules(priority int, tags []string, cycleType string, lastScore float64) (action string, matchedRule string) {
+	if cfg.QA == nil || len(cfg.QA.Rules) == 0 {
+		return "review", ""
+	}
+	for _, rule := range cfg.QA.Rules {
+		switch rule.Type {
+		case "priority_threshold":
+			if float64(priority) >= rule.Threshold {
+				return rule.Action, fmt.Sprintf("priority_threshold>=%.0f", rule.Threshold)
+			}
+		case "tag":
+			for _, t := range tags {
+				if t == rule.Value {
+					return rule.Action, fmt.Sprintf("tag=%s", rule.Value)
+				}
+			}
+		case "cycle_type":
+			if cycleType == rule.Value {
+				return rule.Action, fmt.Sprintf("cycle_type=%s", rule.Value)
+			}
+		case "score_threshold":
+			if lastScore >= rule.Threshold {
+				return rule.Action, fmt.Sprintf("score_threshold>=%.1f", rule.Threshold)
+			}
+		}
+	}
+	if cfg.QA.ReviewAll {
+		return "review", ""
+	}
+	return "review", ""
 }
 
 // Defaults returns a Config with sensible defaults.
@@ -50,7 +116,7 @@ func Defaults() *Config {
 	}
 }
 
-// FindProjectRoot walks up from cwd looking for .lifecycle.json
+// FindProjectRoot walks up from cwd looking for .tillr.json
 func FindProjectRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -70,7 +136,7 @@ func FindProjectRoot() (string, error) {
 }
 
 // Load reads the project config from the given root directory.
-// It loads .lifecycle.json first, then overlays .lifecycle.yaml defaults.
+// It loads .tillr.json first, then overlays .tillr.yaml defaults.
 func Load(root string) (*Config, error) {
 	data, err := os.ReadFile(filepath.Join(root, ConfigFileName))
 	if err != nil {
@@ -95,10 +161,15 @@ func Load(root string) (*Config, error) {
 		cfg.ServerPort = DefaultServerPort
 	}
 
+	// Environment variable overrides
+	if v := os.Getenv("LIFECYCLE_VANTAGE_URL"); v != "" {
+		cfg.VantageURL = v
+	}
+
 	return cfg, nil
 }
 
-// loadYAMLOverlay reads .lifecycle.yaml and applies non-zero values onto cfg.
+// loadYAMLOverlay reads .tillr.yaml and applies non-zero values onto cfg.
 func loadYAMLOverlay(cfg *Config, root string) {
 	yamlPath := filepath.Join(root, YAMLConfigName)
 	data, err := os.ReadFile(yamlPath)
@@ -138,9 +209,21 @@ func loadYAMLOverlay(cfg *Config, root string) {
 	if y.DBPath != "" && cfg.DBPath == "" {
 		cfg.DBPath = y.DBPath
 	}
+	if y.QA != nil && cfg.QA == nil {
+		cfg.QA = y.QA
+	}
+	if y.RateLimit != 0 && cfg.RateLimit == 0 {
+		cfg.RateLimit = y.RateLimit
+	}
+	if y.RateBurst != 0 && cfg.RateBurst == 0 {
+		cfg.RateBurst = y.RateBurst
+	}
+	if y.VantageURL != "" && cfg.VantageURL == "" {
+		cfg.VantageURL = y.VantageURL
+	}
 }
 
-// LoadYAML reads only the .lifecycle.yaml file from root (or $HOME).
+// LoadYAML reads only the .tillr.yaml file from root (or $HOME).
 func LoadYAML(root string) (*Config, error) {
 	yamlPath := filepath.Join(root, YAMLConfigName)
 	data, err := os.ReadFile(yamlPath)

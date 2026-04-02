@@ -36,7 +36,7 @@ Needs to see which cycles are blocked on human input (human-qa, human-review ste
 An AI agent (or its supervisor) checking which step is active, what the current score trajectory looks like, and whether a cycle is looping excessively (high iteration count may signal a problem).
 
 ### Developer / Contributor
-Wants to understand where a feature stands in its lifecycle, what steps remain, and what feedback judges or reviewers have given on prior steps.
+Wants to understand where a feature stands in its tillr, what steps remain, and what feedback judges or reviewers have given on prior steps.
 
 ### Project Manager
 Monitors cycle throughput, identifies bottlenecks (cycles stuck on one step), and tracks quality score trends across the project.
@@ -243,7 +243,7 @@ Monitors cycle throughput, identifies bottlenecks (cycles stuck on one step), an
 
 **Given** the project has no cycles,
 **When** I navigate to the Cycles page,
-**Then** an empty state message is displayed indicating no cycles are running, with guidance on how to start one via the CLI (`lifecycle cycle start <type> <feature>`).
+**Then** an empty state message is displayed indicating no cycles are running, with guidance on how to start one via the CLI (`tillr cycle start <type> <feature>`).
 
 ### US-15: Expanded Cycle Card with Judge Scores Table
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
-	"github.com/mschulkind/lifecycle/internal/vcs"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind/tillr/internal/vcs"
 	"github.com/spf13/cobra"
 )
 
@@ -87,7 +87,7 @@ var gitLinkCmd = &cobra.Command{
 		// Verify feature exists and get project ID
 		feat, err := db.GetFeature(database, featureID)
 		if err != nil {
-			return fmt.Errorf("feature %q not found. Run 'lifecycle feature list' to see available features", featureID)
+			return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", featureID)
 		}
 
 		// Store as an event

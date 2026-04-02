@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/mschulkind/lifecycle/internal/db"
+	"github.com/mschulkind/tillr/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -28,9 +28,9 @@ var perfShowCmd = &cobra.Command{
   - Recent slow commands
 
 Examples:
-  lifecycle perf show              # Show perf summary
-  lifecycle perf show --json       # JSON output
-  lifecycle perf show --limit 20   # Show top 20 slow commands`,
+  tillr perf show              # Show perf summary
+  tillr perf show --json       # JSON output
+  tillr perf show --limit 20   # Show top 20 slow commands`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -55,7 +55,7 @@ Examples:
 
 		if summary.TotalCommands == 0 {
 			fmt.Println("No command metrics recorded yet.")
-			fmt.Println("Metrics are collected automatically as you use lifecycle commands.")
+			fmt.Println("Metrics are collected automatically as you use tillr commands.")
 			return nil
 		}
 

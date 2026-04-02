@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mschulkind/lifecycle/internal/export"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/export"
+	"github.com/mschulkind/tillr/internal/models"
 )
 
 func TestDiagramMermaidBasic(t *testing.T) {
@@ -173,7 +173,7 @@ func TestDiagramDOTBasic(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.HasPrefix(out, "digraph lifecycle {\n") {
+	if !strings.HasPrefix(out, "digraph tillr {\n") {
 		t.Errorf("expected digraph header, got: %s", out[:30])
 	}
 	if !strings.Contains(out, "subgraph cluster_0") {
@@ -199,7 +199,7 @@ func TestDiagramDOTEmpty(t *testing.T) {
 		t.Fatalf("DiagramDOT empty: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "digraph lifecycle") {
+	if !strings.Contains(out, "digraph tillr") {
 		t.Errorf("expected digraph header for empty diagram")
 	}
 	if !strings.Contains(out, `label="No features"`) {

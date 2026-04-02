@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/export"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/export"
 	"github.com/spf13/cobra"
 )
 
@@ -142,11 +142,11 @@ dependencies. Milestones are rendered as subgraphs grouping their features.
 Output can be pasted into GitHub Markdown (Mermaid) or rendered with Graphviz (DOT).
 
 Examples:
-  lifecycle export diagram                      # Mermaid to stdout
-  lifecycle export diagram --format dot          # Graphviz DOT to stdout
-  lifecycle export diagram -o arch.md            # Write to file
-  lifecycle export diagram --milestone v1        # Only features in milestone v1
-  lifecycle export diagram --status implementing # Only implementing features`,
+  tillr export diagram                      # Mermaid to stdout
+  tillr export diagram --format dot          # Graphviz DOT to stdout
+  tillr export diagram -o arch.md            # Write to file
+  tillr export diagram --milestone v1        # Only features in milestone v1
+  tillr export diagram --status implementing # Only implementing features`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {

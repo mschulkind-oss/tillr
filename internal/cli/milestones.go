@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -124,7 +124,7 @@ var milestoneShowCmd = &cobra.Command{
 
 		m, err := db.GetMilestone(database, args[0])
 		if err != nil {
-			return fmt.Errorf("milestone %q not found. Run 'lifecycle milestone list' to see available milestones", args[0])
+			return fmt.Errorf("milestone %q not found. Run 'tillr milestone list' to see available milestones", args[0])
 		}
 
 		if jsonOutput {

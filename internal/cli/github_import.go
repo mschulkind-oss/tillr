@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/engine"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/engine"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -69,8 +69,8 @@ var importCmd = &cobra.Command{
 
 var githubImportCmd = &cobra.Command{
 	Use:   "github <owner/repo>",
-	Short: "Import GitHub issues as lifecycle features",
-	Long: `Import issues from a GitHub repository as lifecycle features.
+	Short: "Import GitHub issues as tillr features",
+	Long: `Import issues from a GitHub repository as tillr features.
 
 Requires the GitHub CLI (gh) to be installed and authenticated.
 Install it from: https://cli.github.com/
@@ -79,21 +79,21 @@ Each imported issue becomes a feature with:
   - Title from issue title
   - Description from issue body
   - Status mapped: open → draft, closed → done
-  - GitHub labels mapped to lifecycle tags
-  - GitHub milestone matched to lifecycle milestone (if exists)
+  - GitHub labels mapped to tillr tags
+  - GitHub milestone matched to tillr milestone (if exists)
 
 An event is recorded for each imported issue.`,
 	Example: `  # Import open issues from a repo
-  lifecycle import github octocat/hello-world
+  tillr import github octocat/hello-world
 
   # Import with filters
-  lifecycle import github octocat/hello-world --labels bug,enhancement --state all
+  tillr import github octocat/hello-world --labels bug,enhancement --state all
 
   # Preview what would be imported
-  lifecycle import github octocat/hello-world --dry-run
+  tillr import github octocat/hello-world --dry-run
 
   # Import issues from a specific milestone
-  lifecycle import github octocat/hello-world --milestone v1.0`,
+  tillr import github octocat/hello-world --milestone v1.0`,
 	Args: cobra.ExactArgs(1),
 	RunE: runGitHubImport,
 }
@@ -249,7 +249,7 @@ func parseGitHubIssues(data []byte) ([]GitHubIssue, error) {
 	return issues, nil
 }
 
-// mapGitHubStatus converts a GitHub issue state to a lifecycle feature status.
+// mapGitHubStatus converts a GitHub issue state to a tillr feature status.
 func mapGitHubStatus(ghState string) string {
 	switch strings.ToUpper(ghState) {
 	case "CLOSED":
@@ -259,7 +259,7 @@ func mapGitHubStatus(ghState string) string {
 	}
 }
 
-// mapLabelsToTags converts GitHub labels to lifecycle tags.
+// mapLabelsToTags converts GitHub labels to tillr tags.
 func mapLabelsToTags(labels []GitHubLabel) []string {
 	tags := make([]string, 0, len(labels))
 	for _, l := range labels {
@@ -283,7 +283,7 @@ func buildMilestoneMap(database *sql.DB, projectID string) (map[string]string, e
 	return m, nil
 }
 
-// matchMilestone finds a lifecycle milestone ID matching a GitHub milestone title.
+// matchMilestone finds a tillr milestone ID matching a GitHub milestone title.
 func matchMilestone(ghMilestone *GitHubMilestone, milestoneMap map[string]string) string {
 	if ghMilestone == nil || ghMilestone.Title == "" {
 		return ""
@@ -294,7 +294,7 @@ func matchMilestone(ghMilestone *GitHubMilestone, milestoneMap map[string]string
 	return ""
 }
 
-// importSingleIssue imports one GitHub issue as a lifecycle feature.
+// importSingleIssue imports one GitHub issue as a tillr feature.
 func importSingleIssue(database *sql.DB, projectID, repo string, issue GitHubIssue, milestoneMap map[string]string, dryRun bool) ImportResult {
 	status := mapGitHubStatus(issue.State)
 	tags := mapLabelsToTags(issue.Labels)

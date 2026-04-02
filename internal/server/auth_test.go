@@ -82,7 +82,7 @@ func TestAuthMiddleware_SkipsStaticFiles(t *testing.T) {
 	})
 	handler := AuthMiddleware("test-secret-key", next)
 
-	for _, path := range []string{"/", "/index.html", "/static/app.js", "/ws"} {
+	for _, path := range []string{"/", "/index.html", "/assets/index.css", "/ws"} {
 		req := httptest.NewRequest("GET", path, nil)
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)

@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { getFeatures, getMilestones } from '../api/client'
+import { getFeatures, getMilestones, getTags } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
+import { EntityLink } from '../components/EntityLink'
 import { Link } from 'react-router-dom'
 import { formatTimeAgo, cn, truncate } from '../lib/utils'
 import { useState, useMemo } from 'react'
@@ -12,9 +13,11 @@ const ALL_STATUSES: FeatureStatus[] = ['draft', 'planning', 'implementing', 'age
 export function Features() {
   const features = useQuery({ queryKey: ['features'], queryFn: getFeatures })
   const milestones = useQuery({ queryKey: ['milestones'], queryFn: getMilestones })
+  const tags = useQuery({ queryKey: ['tags'], queryFn: getTags })
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<FeatureStatus | 'all'>('all')
   const [milestoneFilter, setMilestoneFilter] = useState<string>('all')
+  const [tagFilter, setTagFilter] = useState<string>('all')
   const [sortBy, setSortBy] = useState<'priority' | 'name' | 'updated'>('priority')
 
   const filtered = useMemo(() => {
@@ -37,6 +40,10 @@ export function Features() {
       items = items.filter((f) => f.milestone_id === milestoneFilter)
     }
 
+    if (tagFilter !== 'all') {
+      items = items.filter((f) => f.tags?.includes(tagFilter))
+    }
+
     items = [...items].sort((a, b) => {
       if (sortBy === 'priority') return b.priority - a.priority
       if (sortBy === 'name') return a.name.localeCompare(b.name)
@@ -44,7 +51,7 @@ export function Features() {
     })
 
     return items
-  }, [features.data, search, statusFilter, milestoneFilter, sortBy])
+  }, [features.data, search, statusFilter, milestoneFilter, tagFilter, sortBy])
 
   if (features.isLoading) return <PageSkeleton />
 
@@ -101,6 +108,18 @@ export function Features() {
           <option value="all">All milestones</option>
           {(milestones.data || []).map((m) => (
             <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+
+        {/* Tag filter */}
+        <select
+          value={tagFilter}
+          onChange={(e) => setTagFilter(e.target.value)}
+          className="bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary"
+        >
+          <option value="all">All tags</option>
+          {(tags.data || []).map((t) => (
+            <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
           ))}
         </select>
 
@@ -199,12 +218,13 @@ function FeatureRow({ feature }: { feature: Feature }) {
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {feature.tags?.slice(0, 2).map((tag) => (
-            <span key={tag} className="text-[10px] bg-bg-tertiary text-text-muted px-1.5 py-0.5 rounded">
-              {tag}
-            </span>
+          {feature.tags?.slice(0, 3).map((tag) => (
+            <TagPill key={tag} tag={tag} />
           ))}
-          {feature.milestone_name && (
+          {feature.milestone_name && feature.milestone_id && (
+            <EntityLink type="milestone" id={feature.milestone_id} name={feature.milestone_name} className="text-xs hidden md:inline" />
+          )}
+          {feature.milestone_name && !feature.milestone_id && (
             <span className="text-xs text-text-muted hidden md:inline">{feature.milestone_name}</span>
           )}
           <StatusBadge status={feature.status} />
@@ -214,5 +234,31 @@ function FeatureRow({ feature }: { feature: Feature }) {
         </div>
       </div>
     </Link>
+  )
+}
+
+const TAG_COLORS = [
+  'bg-accent/15 text-accent',
+  'bg-purple/15 text-purple',
+  'bg-success/15 text-success',
+  'bg-warning/15 text-warning',
+  'bg-pink/15 text-pink',
+  'bg-cyan/15 text-cyan',
+  'bg-orange/15 text-orange',
+]
+
+function tagColor(tag: string): string {
+  let hash = 0
+  for (let i = 0; i < tag.length; i++) {
+    hash = tag.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length]
+}
+
+function TagPill({ tag }: { tag: string }) {
+  return (
+    <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded-full', tagColor(tag))}>
+      {tag}
+    </span>
   )
 }

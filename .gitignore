@@ -1,6 +1,6 @@
 # Binaries
 bin/
-/lifecycle
+/tillr
 
 # Environment
 .env
@@ -29,6 +29,6 @@ context/
 # Node modules (for web dev tooling if needed)
 node_modules/
 
-# Lifecycle project config (created by `lifecycle init`)
-.lifecycle.json
+# Lifecycle project config (created by `tillr init`)
+.tillr.json
 .pnpm-store/

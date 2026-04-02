@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mschulkind/lifecycle/internal/db"
-	"github.com/mschulkind/lifecycle/internal/models"
+	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -123,10 +123,10 @@ var cycleTemplateAddCmd = &cobra.Command{
 	Short: "Add a custom cycle template",
 	Args:  cobra.ExactArgs(1),
 	Example: `  # Create a simple review cycle
-  lifecycle cycle template add code-review --steps "review,revise,approve" --description "Code Review"
+  tillr cycle template add code-review --steps "review,revise,approve" --description "Code Review"
 
   # Create a testing cycle
-  lifecycle cycle template add integration-test --steps "setup,test,teardown,report"`,
+  tillr cycle template add integration-test --steps "setup,test,teardown,report"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
@@ -202,12 +202,12 @@ var cycleTemplateRemoveCmd = &cobra.Command{
 	},
 }
 
-func parseSteps(s string) []string {
-	var steps []string
-	for _, step := range strings.Split(s, ",") {
-		step = strings.TrimSpace(step)
-		if step != "" {
-			steps = append(steps, step)
+func parseSteps(s string) []models.CycleStep {
+	var steps []models.CycleStep
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			steps = append(steps, models.CycleStep{Name: part})
 		}
 	}
 	return steps

@@ -1,4 +1,4 @@
-# Lifecycle: Vision
+# Tillr: Vision
 
 ## The Problem We're Solving
 
@@ -10,17 +10,17 @@ The result is predictable: wasted compute, inconsistent quality, developer fatig
 
 ## The Vision
 
-Lifecycle is the project manager that sits between humans and agents.
+Tillr is the project manager that sits between humans and agents.
 
 It doesn't replace agents — it gives them structure. It doesn't replace humans — it amplifies their judgment. It defines clear iteration cycles and ensures every piece of work flows through a structured pipeline with human checkpoints. It captures everything, forgets nothing, and makes the entire process visible and steerable.
 
-Think of it as a cockpit, not autopilot. The agents are the engines. The human is the pilot. Lifecycle is the instrument panel, the flight plan, and the control surfaces.
+Think of it as a cockpit, not autopilot. The agents are the engines. The human is the pilot. Tillr is the instrument panel, the flight plan, and the control surfaces.
 
-Every feature, every refinement, every bug fix moves through a defined lifecycle: plan → implement → review → approve. Within each phase, specialized agents play distinct roles — designing, building, testing, judging — while humans retain the authority to steer, pause, or redirect at any point. The cycle converges toward quality through iteration, not through luck.
+Every feature, every refinement, every bug fix moves through a defined tillr: plan → implement → review → approve. Within each phase, specialized agents play distinct roles — designing, building, testing, judging — while humans retain the authority to steer, pause, or redirect at any point. The cycle converges toward quality through iteration, not through luck.
 
 ## Human Utility
 
-Lifecycle is built around a simple belief: **the human's time is the scarcest resource.** Every design decision flows from this.
+Tillr is built around a simple belief: **the human's time is the scarcest resource.** Every design decision flows from this.
 
 ### See everything at a glance
 
@@ -28,7 +28,7 @@ A live-updating web dashboard shows what's in progress, what's waiting for revie
 
 ### Steer without interrupting
 
-Priorities shift. Requirements evolve. With lifecycle, humans adjust direction through structured inputs — reprioritizing the roadmap, refining requirements, adding context — without breaking the agents' flow. The tool mediates, so neither side blocks the other.
+Priorities shift. Requirements evolve. With tillr, humans adjust direction through structured inputs — reprioritizing the roadmap, refining requirements, adding context — without breaking the agents' flow. The tool mediates, so neither side blocks the other.
 
 ### QA as a first-class checkpoint
 
@@ -40,19 +40,19 @@ Every decision, every iteration, every piece of feedback is captured in a local 
 
 ### Roadmap as a living document
 
-The roadmap isn't a static list in a markdown file. It lives in the tool, is visible and prioritized, and evolves through structured conversation between humans and agents. Requirements flow through lifecycle, are captured as concrete artifacts, and can be visualized in context.
+The roadmap isn't a static list in a markdown file. It lives in the tool, is visible and prioritized, and evolves through structured conversation between humans and agents. Requirements flow through tillr, are captured as concrete artifacts, and can be visualized in context.
 
 ## Quality Output
 
-Speed without quality is just mess-making at scale. Lifecycle encodes quality into the process itself.
+Speed without quality is just mess-making at scale. Tillr encodes quality into the process itself.
 
 **Iteration cycles with convergence.** Work progresses through defined rounds. A judge agent scores each iteration against criteria. Scores trend upward or the cycle surfaces the problem. This prevents both infinite loops and premature completion.
 
-**Specialized agent roles.** A single agent doing everything produces single-perspective output. Lifecycle orchestrates multiple roles — designer, developer, QA, judge — each bringing a different lens to the same work. The designer cares about coherence. The developer cares about correctness. QA cares about edge cases. The judge cares about the whole.
+**Specialized agent roles.** A single agent doing everything produces single-perspective output. Tillr orchestrates multiple roles — designer, developer, QA, judge — each bringing a different lens to the same work. The designer cares about coherence. The developer cares about correctness. QA cares about edge cases. The judge cares about the whole.
 
 **Human QA as the final gate.** Agents can get very good at satisfying automated criteria while missing the point entirely. The human checkpoint exists because some things — taste, priorities, user empathy — can't be scored by a function.
 
-**Structured cycles prevent waste.** Without structure, agents will happily iterate forever, burning tokens and producing diminishing returns. Lifecycle's predefined cycles encode best practices: when to stop, when to escalate, when to ship.
+**Structured cycles prevent waste.** Without structure, agents will happily iterate forever, burning tokens and producing diminishing returns. Tillr's predefined cycles encode best practices: when to stop, when to escalate, when to ship.
 
 ## Design Principles
 
@@ -62,7 +62,7 @@ Speed without quality is just mess-making at scale. Lifecycle encodes quality in
 
 **Visible.** The web viewer makes the invisible visible. It doesn't add functionality — it renders the data the CLI already manages into something a human can absorb at a glance. Read-only by design. The CLI acts, the viewer observes.
 
-**Opinionated.** Lifecycle ships with predefined cycles that encode best practices for common workflows: UI refinement, feature implementation, roadmap planning, bug triage. You can start productive work immediately without designing your own process.
+**Opinionated.** Tillr ships with predefined cycles that encode best practices for common workflows: UI refinement, feature implementation, roadmap planning, bug triage. You can start productive work immediately without designing your own process.
 
 **Extensible.** When the built-in cycles don't fit, define your own. Custom cycles for custom workflows, with the same structured pipeline, the same quality gates, the same visibility.
 
@@ -70,14 +70,14 @@ Speed without quality is just mess-making at scale. Lifecycle encodes quality in
 
 ## Who This Is For
 
-Lifecycle is for developers who use AI agents for real work — not demos, not experiments, but production software development. People who have felt both the power and the friction of agentic tools. Who want the output quality to match the development speed. Who know that "just let the agent handle it" isn't a strategy.
+Tillr is for developers who use AI agents for real work — not demos, not experiments, but production software development. People who have felt both the power and the friction of agentic tools. Who want the output quality to match the development speed. Who know that "just let the agent handle it" isn't a strategy.
 
-If you're using Copilot, Gemini, Claude Code, or similar tools and you've ever thought *"this is powerful but chaotic"* — lifecycle is the structure you're missing.
+If you're using Copilot, Gemini, Claude Code, or similar tools and you've ever thought *"this is powerful but chaotic"* — tillr is the structure you're missing.
 
 ## The Future We're Building Toward
 
 We believe human-agent collaboration will become as natural and productive as human-human collaboration. But that future doesn't arrive by accident. It requires tools purpose-built for this new paradigm — tools that respect both the agent's capabilities and the human's judgment.
 
-Lifecycle is a bet that the right abstraction isn't a better prompt or a smarter agent. It's a better *process*. One where humans and agents each do what they're best at, with clear interfaces between them, and where the work product gets better every cycle.
+Tillr is a bet that the right abstraction isn't a better prompt or a smarter agent. It's a better *process*. One where humans and agents each do what they're best at, with clear interfaces between them, and where the work product gets better every cycle.
 
 The age of ad-hoc agentic development is ending. What comes next should be structured, visible, and under human control. That's what we're building.

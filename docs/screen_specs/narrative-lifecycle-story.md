@@ -1,18 +1,18 @@
 # From Idea to Done in 47 Minutes
 
-## A Narrative Walkthrough of the Lifecycle App
+## A Narrative Walkthrough of the Tillr App
 
 ---
 
 ## Introduction
 
-Imagine a world where you could casually mention an idea over coffee, and 47 minutes later it's been researched, specified, implemented, tested, and shipped — with a full audit trail documenting every step. That's the world Lifecycle creates.
+Imagine a world where you could casually mention an idea over coffee, and 47 minutes later it's been researched, specified, implemented, tested, and shipped — with a full audit trail documenting every step. That's the world Tillr creates.
 
-**Lifecycle** is a project management tool built for the age of agentic development. It sits between human product owners and AI agents, providing the structure, guardrails, and visibility needed to let autonomous agents do great work while keeping humans firmly in control. Think of it as the operating system for human-AI collaboration: humans make decisions, agents do the work, and Lifecycle makes sure nothing falls through the cracks.
+**Tillr** is a project management tool built for the age of agentic development. It sits between human product owners and AI agents, providing the structure, guardrails, and visibility needed to let autonomous agents do great work while keeping humans firmly in control. Think of it as the operating system for human-AI collaboration: humans make decisions, agents do the work, and Tillr makes sure nothing falls through the cracks.
 
 This isn't a tool for micro-managing agents. It's a tool for *trusting* them — because you can see exactly what they're doing, exactly where every feature stands, and exactly when your attention is needed. The QA gate ensures no feature reaches "done" without a human saying "yes." Everything else? The agents handle it.
 
-Let's follow a feature through its entire lifecycle, from a spark of inspiration to a shipped product improvement. Along the way, you'll meet every page in the app and see how they work together.
+Let's follow a feature through its entire tillr, from a spark of inspiration to a shipped product improvement. Along the way, you'll meet every page in the app and see how they work together.
 
 ---
 
@@ -22,7 +22,7 @@ Let's follow a feature through its entire lifecycle, from a spark of inspiration
 
 **DevBot** — An AI agent that picks up work items, writes code, runs tests, and reports progress. It doesn't get tired, it doesn't get distracted, and it follows the spec.
 
-**The Lifecycle App** — The web dashboard Sarah keeps open in a browser tab. It shows her everything she needs to know and pushes updates to her in real time via WebSocket — no refresh needed.
+**The Tillr App** — The web dashboard Sarah keeps open in a browser tab. It shows her everything she needs to know and pushes updates to her in real time via WebSocket — no refresh needed.
 
 ---
 
@@ -32,7 +32,7 @@ Let's follow a feature through its entire lifecycle, from a spark of inspiration
 
 It's Tuesday morning. Sarah is reading through customer feedback over coffee when she notices a pattern: three separate users have asked for a dark mode toggle. "We should just do this," she thinks.
 
-She switches to her browser tab where Lifecycle is already open. In the sidebar, she clicks **💡 Ideas** to open the Idea Queue. The page header reads:
+She switches to her browser tab where Tillr is already open. In the sidebar, she clicks **💡 Ideas** to open the Idea Queue. The page header reads:
 
 > **💡 Idea Queue**
 > *8 idea(s) · 1 pending · 1 ready for review*
@@ -268,7 +268,7 @@ She notices the status dropdown — a styled `<select>` element with a ▾ arrow
 
 ### ✅ The QA Page
 
-Sarah clicks **✅ QA** in the sidebar. This is the gatekeeper — the page that enforces Lifecycle's most important rule: *no feature reaches "done" without explicit human approval.*
+Sarah clicks **✅ QA** in the sidebar. This is the gatekeeper — the page that enforces Tillr's most important rule: *no feature reaches "done" without explicit human approval.*
 
 The page is divided into two columns. On the left: **Pending Review**. On the right: **Recently Reviewed**.
 
@@ -398,7 +398,7 @@ Sarah smiles. The feature she casually mentioned over coffee is now live, tested
 
 ## The State Machine: Why This Works
 
-At the heart of Lifecycle is a state machine that governs how every feature moves through its journey. It's simple, strict, and deliberately designed to keep humans in control:
+At the heart of Tillr is a state machine that governs how every feature moves through its journey. It's simple, strict, and deliberately designed to keep humans in control:
 
 ```
 draft → planning → implementing → agent-qa → human-qa → done
@@ -420,13 +420,13 @@ The key insight is the **QA gate**. Look at the valid transitions:
 
 Notice what's *not* there: you cannot go from `implementing` to `done`. You cannot go from `agent-qa` to `done`. The *only* path to "done" passes through `human-qa`. Every single time. No shortcuts, no overrides.
 
-This is what makes Lifecycle trustworthy for agentic development. Agents can research, build, and test with full autonomy. But the final "ship it" decision always belongs to a human.
+This is what makes Tillr trustworthy for agentic development. Agents can research, build, and test with full autonomy. But the final "ship it" decision always belongs to a human.
 
 ---
 
 ## The Feedback Loop
 
-What Sarah experienced is the core loop of Lifecycle, and it works the same whether the idea takes 47 minutes or 47 days:
+What Sarah experienced is the core loop of Tillr, and it works the same whether the idea takes 47 minutes or 47 days:
 
 ```
     ┌─────────┐     ┌─────────┐     ┌─────────┐
@@ -462,11 +462,11 @@ What Sarah experienced is the core loop of Lifecycle, and it works the same whet
 
 Traditional project management tools were built for humans managing humans. They assume someone will update a Jira ticket, someone will remember to write a test, someone will notice that a pull request has been sitting for three days.
 
-Lifecycle is built for humans managing agents. The agents don't forget to update status — the state machine does it for them. The agents don't skip QA — the transition rules make it impossible. The agents don't go silent — heartbeats and status updates stream in real time.
+Tillr is built for humans managing agents. The agents don't forget to update status — the state machine does it for them. The agents don't skip QA — the transition rules make it impossible. The agents don't go silent — heartbeats and status updates stream in real time.
 
 And for the humans? The cognitive load drops dramatically. Sarah didn't write a spec. She didn't create a ticket. She didn't assign a developer. She didn't check in on progress. She didn't merge a PR. She typed one sentence, reviewed one spec, and approved one feature. Three decisions. Everything else was handled.
 
-That's the promise of Lifecycle: **you make the decisions that matter, and the machines handle everything else.** The tool makes sure nothing falls through the cracks, nothing ships without approval, and everything leaves a trail.
+That's the promise of Tillr: **you make the decisions that matter, and the machines handle everything else.** The tool makes sure nothing falls through the cracks, nothing ships without approval, and everything leaves a trail.
 
 Sarah finishes her coffee. The dark mode toggle is live. She opens the Idea Queue again — there are two more ideas waiting. She smiles and clicks **"+ Submit Idea."**
 

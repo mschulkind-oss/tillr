@@ -1,0 +1,18 @@
+root = "."
+tmp_dir = "context/air"
+
+[build]
+  cmd = "go build -o ./context/air/tillr ./cmd/tillr"
+  bin = "./context/air/tillr"
+  args_bin = ["serve"]
+  include_ext = ["go", "html"]
+  exclude_dir = ["web", "node_modules", "trash", "scratch", "context", "bin", ".jj", ".git"]
+  exclude_regex = ["_test\\.go$"]
+  delay = 500
+
+[log]
+  time = false
+  main_only = true
+
+[misc]
+  clean_on_exit = true

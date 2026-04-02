@@ -24,6 +24,13 @@ const statusConfig: Record<string, { label: string; classes: string }> = {
   resolved: { label: 'Resolved', classes: 'bg-success/20 text-success' },
   merged: { label: 'Merged', classes: 'bg-purple/20 text-purple' },
   closed: { label: 'Closed', classes: 'bg-bg-tertiary text-text-muted' },
+  // Decision
+  superseded: { label: 'Superseded', classes: 'bg-bg-tertiary text-text-muted' },
+  deprecated: { label: 'Deprecated', classes: 'bg-bg-tertiary text-text-muted' },
+  // Idea
+  pending: { label: 'Pending', classes: 'bg-warning/20 text-warning' },
+  approved: { label: 'Approved', classes: 'bg-success/20 text-success' },
+  implemented: { label: 'Implemented', classes: 'bg-accent/20 text-accent' },
 }
 
 export function StatusBadge({ status }: { status: FeatureStatus | string }) {

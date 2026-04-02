@@ -2,11 +2,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQAPending, approveFeature, rejectFeature, getQAResults } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
+import { EntityLink } from '../components/EntityLink'
 import { useStore } from '../store'
 import { formatTimestamp, cn } from '../lib/utils'
 import { useState } from 'react'
 import type { Feature, QAResult } from '../api/types'
-import ReactMarkdown from 'react-markdown'
+import { MarkdownContent } from '../components/MarkdownContent'
 
 export function QA() {
   const queryClient = useQueryClient()
@@ -77,7 +78,9 @@ export function QA() {
             {otherQA.map((f) => (
               <div key={f.id} className="bg-bg-card border border-border rounded-lg p-4 flex items-center justify-between">
                 <div>
-                  <span className="text-sm font-medium text-text-primary">{f.name}</span>
+                  <span className="text-sm font-medium text-text-primary">
+                    <EntityLink type="feature" id={f.id} name={f.name} />
+                  </span>
                   <span className="ml-2"><StatusBadge status={f.status} /></span>
                 </div>
                 <span className="text-xs text-text-muted">{formatTimestamp(f.updated_at)}</span>
@@ -122,12 +125,17 @@ function QACard({ feature, onApprove, onReject, isApproving, isRejecting }: {
             {reviewRound > 1 ? '🔁' : '🆕'}
           </span>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary truncate">{feature.name}</h3>
+            <h3 className="text-sm font-semibold text-text-primary truncate">
+              <EntityLink type="feature" id={feature.id} name={feature.name} />
+            </h3>
             <p className="text-xs text-text-secondary mt-0.5 truncate">{feature.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {feature.milestone_name && (
+          {feature.milestone_name && feature.milestone_id && (
+            <EntityLink type="milestone" id={feature.milestone_id} name={feature.milestone_name} className="text-xs" />
+          )}
+          {feature.milestone_name && !feature.milestone_id && (
             <span className="text-xs text-text-muted">{feature.milestone_name}</span>
           )}
           <span className={cn(
@@ -160,7 +168,7 @@ function QACard({ feature, onApprove, onReject, isApproving, isRejecting }: {
                 Feature Spec & QA Instructions
               </h4>
               <div className="prose prose-sm prose-invert max-w-none text-sm text-text-secondary">
-                <ReactMarkdown>{feature.spec}</ReactMarkdown>
+                <MarkdownContent>{feature.spec}</MarkdownContent>
               </div>
             </div>
           )}
