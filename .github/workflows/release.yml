@@ -2,7 +2,8 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -29,11 +30,66 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    runs-on: ubuntu-latest
+    needs: goreleaser
+    steps:
+      - name: Update Homebrew formula
+        env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          TARBALL="https://github.com/mschulkind-oss/tillr/archive/refs/tags/${TAG}.tar.gz"
+          SHA256=$(curl -sL "$TARBALL" | sha256sum | cut -d' ' -f1)
+
+          cat > tillr.rb <<FORMULA
+          class Tillr < Formula
+            desc "Human-in-the-loop project management for agentic development"
+            homepage "https://github.com/mschulkind-oss/tillr"
+            url "${TARBALL}"
+            sha256 "${SHA256}"
+            license "Apache-2.0"
+
+            depends_on "go" => :build
+            depends_on "node" => :build
+
+            def install
+              system "npm", "install", "-g", "pnpm"
+              system "pnpm", "--dir", "web", "install", "--frozen-lockfile"
+              system "pnpm", "--dir", "web", "build"
+
+              ldflags = %W[
+                -s -w
+                -X github.com/mschulkind-oss/tillr/internal/version.Version=#{version}
+                -X github.com/mschulkind-oss/tillr/internal/version.GitCommit=#{Utils.git_short_head}
+              ]
+              system "go", "build", *std_go_args(ldflags:), "./cmd/tillr"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/tillr --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' tillr.rb
+
+          # Push to tap repo
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/mschulkind-oss/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp tillr.rb tap/Formula/tillr.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/tillr.rb
+          git commit -m "tillr ${VERSION}"
+          git push
