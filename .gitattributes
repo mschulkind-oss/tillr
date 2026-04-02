@@ -1,0 +1,9 @@
+# Exclude from source tarballs (used by Homebrew, go-to-wheel, etc.)
+docs/               export-ignore
+tests/              export-ignore
+scripts/            export-ignore
+.github/            export-ignore
+.goreleaser.yaml    export-ignore
+Procfile.dev        export-ignore
+Justfile            export-ignore
+swarf/              export-ignore
