@@ -60,9 +60,9 @@ jobs:
 
             depends_on "go" => :build
             depends_on "node" => :build
+            depends_on "pnpm" => :build
 
             def install
-              system "npm", "install", "-g", "pnpm"
               system "pnpm", "--dir", "web", "install", "--frozen-lockfile"
               system "pnpm", "--dir", "web", "build"
 
