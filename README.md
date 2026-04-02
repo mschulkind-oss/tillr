@@ -4,89 +4,92 @@
 
 **Human-in-the-loop project management for agentic software development.**
 
-Tillr is the project manager that sits between humans and AI agents. It defines structured iteration cycles — plan, implement, review, approve — ensuring every piece of work flows through a pipeline with human checkpoints. Agents do the heavy lifting. Humans retain steering authority. Everything is captured in a local SQLite database for full visibility and searchability.
-
-> **Platform:** Linux. macOS is untested and unsupported. Windows is not supported.
+Tillr sits between humans and AI agents. It defines structured iteration cycles with human checkpoints, so agents do the heavy lifting while humans retain steering authority. Everything is captured in a local SQLite database.
 
 ---
 
-## ✨ Features
-
-- **CLI-Driven Workflow** — Manage features, iterations, and quality gates from the command line
-- **Web Viewer** — Live-updating dashboard showing project status, iteration progress, and history
-- **Structured Iteration Cycles** — Plan → implement → review → approve, with scoring and convergence
-- **SQLite Storage** — All state stored locally in a single SQLite database, fully queryable
-- **Agent Integration** — Designed for AI agents to consume and produce structured work items
-- **Human Checkpoints** — Nothing ships without human approval; QA is a first-class stage
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
-# Install from source
+# Install from source (requires Go 1.24+, Node 22+, pnpm)
 git clone https://github.com/mschulkind-oss/tillr.git
 cd tillr
 just install
 
 # Initialize a project
-tillr init
+cd ~/my-project
+tillr init my-project
 
-# Add features to the roadmap
-tillr add "User authentication system"
-tillr add "API rate limiting"
+# Add features
+tillr feature add "User authentication"
+tillr feature add "API rate limiting"
 
-# Run an iteration cycle
-tillr cycle start
+# Start an iteration cycle
+tillr cycle start collaborative-design <feature-id>
 
-# Launch the web viewer
+# Launch the web dashboard
 tillr serve
 ```
 
 ---
 
-## 🔧 CLI Reference
+## CLI Overview
 
 ```
-tillr init                  # Initialize a new project
-tillr add <feature>         # Add a feature to the roadmap
-tillr cycle start           # Start an iteration cycle
-tillr cycle status          # Show current cycle status
-tillr serve                 # Start the web viewer
-tillr --version             # Show version
+tillr init <name>               Initialize a new project
+tillr status                    Project overview
+
+tillr feature add <name>        Add a feature
+tillr feature list              List features (--status, --json)
+tillr feature show <id>         Feature details with history
+
+tillr cycle start <type> <id>   Start an iteration cycle
+tillr cycle status              Active cycle progress
+tillr cycle advance --approve   Advance past a human checkpoint
+
+tillr next --json               Get next work item (for agents)
+tillr done --result "..."       Complete current work
+tillr fail --reason "..."       Report failure
+
+tillr serve                     Single-project web dashboard
+tillr daemon                    Multi-project server daemon
 ```
 
-See [docs/guides/](docs/guides/) for the full user guide.
+See [docs/guides/user-guide.md](docs/guides/user-guide.md) for the full guide.
 
 ---
 
-## 🔄 Iteration Cycles
+## Multi-Project Daemon
 
-Work progresses through structured rounds with defined phases and quality gates. Each cycle converges toward completion through iteration, not luck.
+Run Tillr as a system service managing multiple projects:
 
-See [docs/design/](docs/design/) for the full design documentation.
+```bash
+# Configure projects
+tillr daemon init ~/code/project-a ~/code/project-b
 
----
+# Install systemd user service
+just install-service
 
-## ⚙️ Configuration
-
-Tillr stores its configuration in `.tillr.json` in the project root.
-
-```json
-{
-  "project": "my-project",
-  "database": ".tillr.db"
-}
+# Deploy (build + restart)
+just deploy
 ```
 
----
-
-## 🤝 Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and the PR process.
+The daemon serves all projects on a single port with a project switcher in the UI.
 
 ---
 
-## 📄 License
+## Development
+
+```bash
+just dev        # Backend (air live-reload) + Vite frontend
+just check      # Format + lint + test
+just build      # Build binary to bin/tillr
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development setup.
+
+---
+
+## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
