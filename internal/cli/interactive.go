@@ -225,7 +225,7 @@ func renderTUIView(database *sql.DB, view tuiView) {
 func renderTUIHeader(title string) {
 	line := strings.Repeat("─", 60)
 	fmt.Printf("  %s\n", colorize(line, colorCyan))
-	fmt.Printf("  %s  %s\n", colorize("LIFECYCLE", colorCyan), tuiBold(title))
+	fmt.Printf("  %s  %s\n", colorize("TILLR", colorCyan), tuiBold(title))
 	fmt.Printf("  %s\n\n", colorize(line, colorCyan))
 }
 

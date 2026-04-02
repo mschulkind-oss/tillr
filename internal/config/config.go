@@ -62,7 +62,7 @@ type Config struct {
 
 	// VantageURL is the base URL for the Vantage documentation viewer.
 	// If set, doc links in the web UI open in Vantage for rendered markdown.
-	// Can also be set via LIFECYCLE_VANTAGE_URL env var.
+	// Can also be set via TILLR_VANTAGE_URL env var.
 	VantageURL string `json:"vantage_url,omitempty" yaml:"vantage_url"`
 }
 
@@ -162,7 +162,7 @@ func Load(root string) (*Config, error) {
 	}
 
 	// Environment variable overrides
-	if v := os.Getenv("LIFECYCLE_VANTAGE_URL"); v != "" {
+	if v := os.Getenv("TILLR_VANTAGE_URL"); v != "" {
 		cfg.VantageURL = v
 	}
 

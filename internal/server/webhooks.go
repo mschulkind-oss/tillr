@@ -108,13 +108,13 @@ func deliverWebhook(wh models.Webhook, event *models.Event) {
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "Lifecycle-Webhook/1.0")
-		req.Header.Set("X-Lifecycle-Event", event.EventType)
-		req.Header.Set("X-Lifecycle-Delivery", delivery.ID)
+		req.Header.Set("User-Agent", "Tillr-Webhook/1.0")
+		req.Header.Set("X-Tillr-Event", event.EventType)
+		req.Header.Set("X-Tillr-Delivery", delivery.ID)
 
 		if wh.Secret != "" {
 			sig := computeHMAC(body, wh.Secret)
-			req.Header.Set("X-Lifecycle-Signature", "sha256="+sig)
+			req.Header.Set("X-Tillr-Signature", "sha256="+sig)
 		}
 
 		resp, err := client.Do(req)
@@ -156,7 +156,7 @@ func SendTestWebhook(wh *models.Webhook) (int, error) {
 		Event:     "webhook.test",
 		Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		Data: map[string]any{
-			"message": "This is a test webhook delivery from Lifecycle.",
+			"message": "This is a test webhook delivery from Tillr.",
 		},
 	}
 
@@ -173,13 +173,13 @@ func SendTestWebhook(wh *models.Webhook) (int, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Lifecycle-Webhook/1.0")
-	req.Header.Set("X-Lifecycle-Event", "webhook.test")
-	req.Header.Set("X-Lifecycle-Delivery", delivery.ID)
+	req.Header.Set("User-Agent", "Tillr-Webhook/1.0")
+	req.Header.Set("X-Tillr-Event", "webhook.test")
+	req.Header.Set("X-Tillr-Delivery", delivery.ID)
 
 	if wh.Secret != "" {
 		sig := computeHMAC(body, wh.Secret)
-		req.Header.Set("X-Lifecycle-Signature", "sha256="+sig)
+		req.Header.Set("X-Tillr-Signature", "sha256="+sig)
 	}
 
 	resp, err := client.Do(req)

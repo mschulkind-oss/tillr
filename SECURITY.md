@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Lifecycle, please report it responsibly.
+If you discover a security vulnerability in Tillr, please report it responsibly.
 
 **Email:** mschulkind@gmail.com
 
