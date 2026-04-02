@@ -716,9 +716,9 @@ var discussPollCmd = &cobra.Command{
 }
 
 var discussPollCreateCmd = &cobra.Command{
-	Use:   "create <discussion-id> <question> <option1> <option2> [option3...]",
-	Short: "Create a poll in a discussion",
-	Args:  cobra.MinimumNArgs(4),
+	Use:     "create <discussion-id> <question> <option1> <option2> [option3...]",
+	Short:   "Create a poll in a discussion",
+	Args:    cobra.MinimumNArgs(4),
 	Example: `  tillr discuss poll create 1 "Which API style?" "REST" "GraphQL" "gRPC"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()

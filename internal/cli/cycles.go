@@ -318,10 +318,10 @@ completed through the normal agent workflow.`,
 
 			if jsonOutput {
 				return printJSON(map[string]any{
-					"feature":  featureID,
-					"step":     stepName,
-					"action":   "rejected",
-					"notes":    notes,
+					"feature": featureID,
+					"step":    stepName,
+					"action":  "rejected",
+					"notes":   notes,
 				})
 			}
 			fmt.Printf("Rejected step %q for feature %s (staying on current step)\n", stepName, featureID)
@@ -355,10 +355,10 @@ completed through the normal agent workflow.`,
 
 			if jsonOutput {
 				return printJSON(map[string]any{
-					"feature":  featureID,
-					"step":     stepName,
-					"action":   "approved",
-					"result":   "completed",
+					"feature": featureID,
+					"step":    stepName,
+					"action":  "approved",
+					"result":  "completed",
 				})
 			}
 			fmt.Printf("Approved step %q for feature %s - cycle completed!\n", stepName, featureID)

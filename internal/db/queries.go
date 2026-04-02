@@ -1525,7 +1525,7 @@ func ListDiscussionTemplates(db *sql.DB) ([]models.DiscussionTemplate, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var templates []models.DiscussionTemplate
 	for rows.Next() {
 		var t models.DiscussionTemplate
@@ -2711,10 +2711,10 @@ func FuzzySearch(database *sql.DB, query string, entityType string, limit int) (
 	if entityType == "" || entityType == "feature" {
 		rows, err := database.Query(`SELECT id, name, COALESCE(description, '') || ' ' || COALESCE(spec, '') FROM features`)
 		if err == nil {
-			defer rows.Close()
+			defer rows.Close() //nolint:errcheck
 			for rows.Next() {
 				var c candidate
-				rows.Scan(&c.entityID, &c.title, &c.content)
+				rows.Scan(&c.entityID, &c.title, &c.content) //nolint:errcheck
 				c.entityType = "feature"
 				candidates = append(candidates, c)
 			}
@@ -2725,10 +2725,10 @@ func FuzzySearch(database *sql.DB, query string, entityType string, limit int) (
 	if entityType == "" || entityType == "roadmap" {
 		rows, err := database.Query(`SELECT id, title, COALESCE(description, '') FROM roadmap_items`)
 		if err == nil {
-			defer rows.Close()
+			defer rows.Close() //nolint:errcheck
 			for rows.Next() {
 				var c candidate
-				rows.Scan(&c.entityID, &c.title, &c.content)
+				rows.Scan(&c.entityID, &c.title, &c.content) //nolint:errcheck
 				c.entityType = "roadmap"
 				candidates = append(candidates, c)
 			}
@@ -2739,10 +2739,10 @@ func FuzzySearch(database *sql.DB, query string, entityType string, limit int) (
 	if entityType == "" || entityType == "idea" {
 		rows, err := database.Query(`SELECT CAST(id AS TEXT), title, COALESCE(raw_input, '') FROM idea_queue`)
 		if err == nil {
-			defer rows.Close()
+			defer rows.Close() //nolint:errcheck
 			for rows.Next() {
 				var c candidate
-				rows.Scan(&c.entityID, &c.title, &c.content)
+				rows.Scan(&c.entityID, &c.title, &c.content) //nolint:errcheck
 				c.entityType = "idea"
 				candidates = append(candidates, c)
 			}

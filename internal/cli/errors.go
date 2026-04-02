@@ -9,9 +9,9 @@ import (
 
 // Exit codes
 const (
-	ExitSuccess    = 0
-	ExitUserError  = 1
-	ExitSysError   = 2
+	ExitSuccess   = 0
+	ExitUserError = 1
+	ExitSysError  = 2
 )
 
 // CLIError wraps an error with context, hint, and exit code.
@@ -37,16 +37,6 @@ func userError(context string, cause error, hint string) *CLIError {
 		Cause:    cause,
 		Hint:     hint,
 		ExitCode: ExitUserError,
-	}
-}
-
-// sysError creates a system error (exit code 2) with an optional hint.
-func sysError(context string, cause error, hint string) *CLIError {
-	return &CLIError{
-		Context:  context,
-		Cause:    cause,
-		Hint:     hint,
-		ExitCode: ExitSysError,
 	}
 }
 
@@ -86,14 +76,14 @@ func formatError(err error) {
 // Common error hints for recovery suggestions
 var errorHints = map[string]string{
 	"no tillr project found": "Run 'tillr init <name>' to create a new project, or 'tillr onboard' to onboard an existing one.",
-	"feature not found":          "Run 'tillr feature list' to see available features.",
-	"milestone not found":        "Run 'tillr milestone list' to see available milestones.",
-	"discussion not found":       "Run 'tillr discuss list' to see available discussions.",
-	"no active cycle":            "Run 'tillr cycle start <type> <feature-id>' to start a cycle.",
-	"no pending work items":      "All work items are completed or in progress. Create new features or start cycles.",
-	"no active work item":        "Run 'tillr next' to get the next work item.",
-	"invalid transition":         "Run 'tillr feature show <id>' to see current status and valid transitions.",
-	"already initialized":        "This directory already has a tillr project. Use 'tillr status' to view it.",
+	"feature not found":      "Run 'tillr feature list' to see available features.",
+	"milestone not found":    "Run 'tillr milestone list' to see available milestones.",
+	"discussion not found":   "Run 'tillr discuss list' to see available discussions.",
+	"no active cycle":        "Run 'tillr cycle start <type> <feature-id>' to start a cycle.",
+	"no pending work items":  "All work items are completed or in progress. Create new features or start cycles.",
+	"no active work item":    "Run 'tillr next' to get the next work item.",
+	"invalid transition":     "Run 'tillr feature show <id>' to see current status and valid transitions.",
+	"already initialized":    "This directory already has a tillr project. Use 'tillr status' to view it.",
 }
 
 // hintForError returns a recovery hint based on the error message.

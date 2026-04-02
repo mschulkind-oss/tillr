@@ -186,9 +186,9 @@ func formatSpecAsText(spec map[string]any) string {
 	})
 
 	for _, r := range routes {
-		b.WriteString(fmt.Sprintf("  %-7s %-40s %s\n", r.method, r.path, r.summary))
+		fmt.Fprintf(&b, "  %-7s %-40s %s\n", r.method, r.path, r.summary)
 	}
 
-	b.WriteString(fmt.Sprintf("\nTotal endpoints: %d\n", len(routes)))
+	fmt.Fprintf(&b, "\nTotal endpoints: %d\n", len(routes))
 	return b.String()
 }

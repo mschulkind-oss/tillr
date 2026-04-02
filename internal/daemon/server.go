@@ -205,7 +205,9 @@ func StartDaemon(cfg *DaemonConfig) error {
 	})
 
 	// Serve the SPA frontend — same embedded assets as single-project mode
-	server.ServeSPAFromEmbedded(mux)
+	if err := server.ServeSPAFromEmbedded(mux); err != nil {
+		return fmt.Errorf("loading frontend assets: %w", err)
+	}
 
 	// Wrap with logging
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

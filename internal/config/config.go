@@ -20,16 +20,16 @@ const (
 
 // QARule defines a single QA review rule for automatic evaluation.
 type QARule struct {
-	Type      string  `json:"type" yaml:"type"`             // "priority_threshold", "tag", "cycle_type", "score_threshold"
-	Value     string  `json:"value" yaml:"value"`           // threshold value or match string
-	Action    string  `json:"action" yaml:"action"`         // "review" or "auto_approve"
-	Threshold float64 `json:"threshold" yaml:"threshold"`   // numeric threshold (for score/priority rules)
+	Type      string  `json:"type" yaml:"type"`           // "priority_threshold", "tag", "cycle_type", "score_threshold"
+	Value     string  `json:"value" yaml:"value"`         // threshold value or match string
+	Action    string  `json:"action" yaml:"action"`       // "review" or "auto_approve"
+	Threshold float64 `json:"threshold" yaml:"threshold"` // numeric threshold (for score/priority rules)
 }
 
 // QAConfig holds QA review configuration.
 type QAConfig struct {
-	Rules          []QARule `json:"rules" yaml:"rules"`
-	ReviewAll      bool     `json:"review_all" yaml:"review_all"` // default: true (review everything)
+	Rules     []QARule `json:"rules" yaml:"rules"`
+	ReviewAll bool     `json:"review_all" yaml:"review_all"` // default: true (review everything)
 }
 
 type Config struct {
@@ -47,8 +47,8 @@ type Config struct {
 	QA *QAConfig `json:"qa,omitempty" yaml:"qa"`
 
 	// Rate limiting configuration
-	RateLimit float64 `json:"rate_limit,omitempty" yaml:"rate_limit"`  // requests per second (0 = disabled)
-	RateBurst int     `json:"rate_burst,omitempty" yaml:"rate_burst"`  // burst capacity
+	RateLimit float64 `json:"rate_limit,omitempty" yaml:"rate_limit"` // requests per second (0 = disabled)
+	RateBurst int     `json:"rate_burst,omitempty" yaml:"rate_burst"` // burst capacity
 
 	// API key for server authentication (stored in .tillr.json only)
 	ApiKey string `json:"api_key,omitempty" yaml:"-"`
