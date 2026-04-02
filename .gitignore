@@ -17,6 +17,7 @@ Thumbs.db
 # Build artifacts
 coverage.out
 coverage.html
+internal/server/assets/dist/
 
 # Project data (gitignored — each user has their own)
 context/
