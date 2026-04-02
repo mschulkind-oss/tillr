@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/plugin"
+	"github.com/mschulkind-oss/tillr/internal/plugin"
 	"github.com/spf13/cobra"
 )
 

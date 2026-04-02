@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 // --- Projects ---

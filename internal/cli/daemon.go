@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/daemon"
+	"github.com/mschulkind-oss/tillr/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/config"
-	"github.com/mschulkind/tillr/internal/crypto"
+	"github.com/mschulkind-oss/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/crypto"
 	"github.com/spf13/cobra"
 )
 

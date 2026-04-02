@@ -16,7 +16,7 @@ Thank you for your interest in contributing! Here's how to get started.
 ### Getting Started
 
 ```bash
-git clone https://github.com/mschulkind/tillr.git
+git clone https://github.com/mschulkind-oss/tillr.git
 cd tillr
 mise install        # Install tool versions
 go mod download     # Fetch Go dependencies

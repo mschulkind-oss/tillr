@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mschulkind/tillr/internal/config"
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/server"
+	"github.com/mschulkind-oss/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/server"
 	"github.com/spf13/cobra"
 )
 

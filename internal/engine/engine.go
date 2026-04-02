@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/config"
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/config"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 // findCycleType resolves a cycle type by name, checking built-in types first,

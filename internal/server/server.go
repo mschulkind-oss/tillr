@@ -17,11 +17,11 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/engine"
-	"github.com/mschulkind/tillr/internal/export"
-	"github.com/mschulkind/tillr/internal/models"
-	"github.com/mschulkind/tillr/internal/vcs"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/engine"
+	"github.com/mschulkind-oss/tillr/internal/export"
+	"github.com/mschulkind-oss/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/vcs"
 )
 
 //go:embed all:assets

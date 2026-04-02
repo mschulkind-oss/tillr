@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mschulkind/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/db"
 )
 
 // AuthMiddleware returns an http.Handler that requires a valid API key for

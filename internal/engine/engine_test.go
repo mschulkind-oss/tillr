@@ -3,9 +3,9 @@ package engine_test
 import (
 	"testing"
 
-	"github.com/mschulkind/tillr/internal/db"
-	"github.com/mschulkind/tillr/internal/engine"
-	"github.com/mschulkind/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/db"
+	"github.com/mschulkind-oss/tillr/internal/engine"
+	"github.com/mschulkind-oss/tillr/internal/models"
 )
 
 func TestInitProject(t *testing.T) {
