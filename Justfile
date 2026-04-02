@@ -4,7 +4,7 @@ default:
 # Build the tillr binary
 build:
     cd web && pnpm build
-    go build -o bin/tillr ./cmd/tillr
+    go build -ldflags "-X github.com/mschulkind-oss/tillr/internal/version.Version=dev-$(git rev-parse --short HEAD) -X github.com/mschulkind-oss/tillr/internal/version.GitCommit=$(git rev-parse --short HEAD)" -o bin/tillr ./cmd/tillr
 
 # Run tillr CLI with args
 run *args:

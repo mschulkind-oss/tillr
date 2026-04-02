@@ -8,14 +8,27 @@ Tillr sits between humans and AI agents. It defines structured iteration cycles 
 
 ---
 
+## Install
+
+```bash
+# Homebrew
+brew tap mschulkind-oss/tap && brew install tillr
+
+# PyPI (works in any Python environment)
+pipx install tillr   # or: uvx tillr
+
+# Go
+go install github.com/mschulkind-oss/tillr/cmd/tillr@latest
+
+# From source (requires Go 1.24+, Node 22+, pnpm)
+git clone https://github.com/mschulkind-oss/tillr.git && cd tillr && just install
+```
+
+---
+
 ## Quick Start
 
 ```bash
-# Install from source (requires Go 1.24+, Node 22+, pnpm)
-git clone https://github.com/mschulkind-oss/tillr.git
-cd tillr
-just install
-
 # Initialize a project
 cd ~/my-project
 tillr init my-project

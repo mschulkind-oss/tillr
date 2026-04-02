@@ -1,0 +1,53 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+    # Build the embedded frontend before Go compilation.
+    - sh -c "cd web && pnpm install --frozen-lockfile && pnpm build"
+
+builds:
+  - main: ./cmd/tillr
+    binary: tillr
+    ldflags:
+      - -s -w
+      - -X github.com/mschulkind-oss/tillr/internal/version.Version={{.Version}}
+      - -X github.com/mschulkind-oss/tillr/internal/version.GitCommit={{.ShortCommit}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "tillr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+
+brews:
+  - repository:
+      owner: mschulkind-oss
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/mschulkind-oss/tillr"
+    description: "Human-in-the-loop project management for agentic development"
+    license: "Apache-2.0"
+    install: |
+      bin.install "tillr"
+    test: |
+      system "#{bin}/tillr", "--version"

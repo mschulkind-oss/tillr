@@ -1,0 +1,51 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build frontend
+        run: cd web && pnpm install --frozen-lockfile && pnpm build
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build wheels
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          uvx go-to-wheel . \
+            --name tillr \
+            --readme README.md \
+            --description "Human-in-the-loop project management for agentic development" \
+            --author "Matthew Schulkind" \
+            --license Apache-2.0 \
+            --url https://github.com/mschulkind-oss/tillr \
+            --set-version-var github.com/mschulkind-oss/tillr/internal/version.Version \
+            --version "$version"
+
+      - name: Publish
+        run: uv publish
