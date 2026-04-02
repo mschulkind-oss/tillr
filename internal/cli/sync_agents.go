@@ -144,12 +144,57 @@ This command is also checked by 'tillr doctor'.`,
 		b.WriteString("TILLR_AGENT_ID=\"my-agent\"  # Stable agent identifier\n")
 		b.WriteString("```\n\n")
 
+		// Prescriptive guide (same content as `tillr guide`, condensed)
+		b.WriteString("## How to Structure Work\n\n")
+		b.WriteString("Run `tillr guide` for the full prescriptive guide. Key points:\n\n")
+
+		b.WriteString("### Entity Hierarchy\n\n")
+		b.WriteString("```\n")
+		b.WriteString("Project\n")
+		b.WriteString("├── Workstreams (goals: \"API Security\", \"Multi-tenant Support\")\n")
+		b.WriteString("│   ├── owned features (--feature: created for this workstream)\n")
+		b.WriteString("│   └── dependencies (--depends: needed but owned elsewhere)\n")
+		b.WriteString("├── Milestones (release targets: v0.1, v1.0)\n")
+		b.WriteString("│   └── Features (units of shippable work)\n")
+		b.WriteString("│       └── Cycles (iteration loops with human gates)\n")
+		b.WriteString("└── Roadmap Items (strategic goals above features)\n")
+		b.WriteString("```\n\n")
+
+		b.WriteString("### When to Create What\n\n")
+		b.WriteString("- **Feature:** A discrete, testable deliverable (1-5 days of work). " +
+			"Include a spec with acceptance criteria if non-obvious.\n")
+		b.WriteString("- **Workstream:** A goal spanning 3+ features. Link features as " +
+			"owned (--feature) or dependency (--depends). QA deps first.\n")
+		b.WriteString("- **Milestone:** A release boundary (3-6 per project, not per sprint).\n")
+		b.WriteString("- **Workstream notes:** Capture decisions, questions, and context " +
+			"as they happen (types: decision, question, note, import).\n\n")
+
+		b.WriteString("### Priority Scale\n\n")
+		b.WriteString("- 9-10: Blocking. Use rarely.\n")
+		b.WriteString("- 7-8: Important for current milestone.\n")
+		b.WriteString("- 5-6: Should happen, can slip.\n")
+		b.WriteString("- 3-4: Nice to have.\n")
+		b.WriteString("- 1-2: Backlog.\n\n")
+
+		b.WriteString("### Naming Conventions\n\n")
+		b.WriteString("- Feature IDs: kebab-case, descriptive (\"add-webhook-retry\")\n")
+		b.WriteString("- Workstream IDs: kebab-case, goal-oriented (\"api-security\")\n")
+		b.WriteString("- Milestone IDs: version-like (\"v1.0\", \"mvp\")\n\n")
+
+		b.WriteString("### Keeping Things Current\n\n")
+		b.WriteString("The planner agent should maintain workstream-feature links as part " +
+			"of planning. When breaking down work, always ask: which workstream " +
+			"does this serve? What does it depend on?\n\n")
+
 		b.WriteString("## Important Rules\n\n")
 		b.WriteString("- Always use `--json` flag when consuming output programmatically\n")
 		b.WriteString("- Send heartbeats during long-running tasks to prevent stale detection\n")
 		b.WriteString("- Features must go through `human-qa` before being marked `done`\n")
 		b.WriteString("- Use `tillr search` to find relevant context before starting work\n")
 		b.WriteString("- Check `tillr feature show <id> --json` for specs before implementing\n")
+		b.WriteString("- Run `tillr guide` for the complete prescriptive workflow guide\n")
+		b.WriteString("- **Commit after every logical change.** Keep the working directory clean.\n")
+		b.WriteString("  Do not batch unrelated changes into a single commit.\n")
 
 		content := b.String()
 

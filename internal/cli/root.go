@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr/internal/db"
 	"github.com/mschulkind-oss/tillr/internal/models"
 	"github.com/mschulkind-oss/tillr/internal/server"
+	"github.com/mschulkind-oss/tillr/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -82,8 +83,14 @@ HISTORY & SEARCH
 WEB VIEWER
   tillr serve                    Start web dashboard at :3847
 
+GETTING STARTED (for agents)
+  tillr guide                    How to structure and manage work (read this first)
+  tillr onboard --yes            Scan project and bootstrap tracking
+  tillr sync-agents              Generate AGENTS.md with project-specific instructions
+
 Use "tillr [command] --help" for detailed information about any command.
 Use "tillr --json" on any command for structured output (critical for agents).`,
+	Version: version.Version,
 }
 
 func Execute() {
@@ -187,6 +194,7 @@ func init() {
 	rootCmd.AddCommand(apiKeyCmd)
 	rootCmd.AddCommand(workstreamCmd)
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(guideCmd)
 
 	// Short aliases for common commands (CLI Aliases roadmap item)
 	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))
