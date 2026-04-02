@@ -69,7 +69,6 @@ jobs:
               ldflags = %W[
                 -s -w
                 -X github.com/mschulkind-oss/tillr/internal/version.Version=#{version}
-                -X github.com/mschulkind-oss/tillr/internal/version.GitCommit=#{Utils.git_short_head}
               ]
               system "go", "build", *std_go_args(ldflags:), "./cmd/tillr"
             end
