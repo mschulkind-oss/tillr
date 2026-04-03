@@ -1,8 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link } from 'react-router-dom'
-import { getWorkstream, addWorkstreamNote, resolveWorkstreamNote, addWorkstreamLink, getConfig, getFeature, getCycleDetail, advanceCycle } from '../api/client'
-import type { WorkstreamNote, WorkstreamLink, AppConfig, CycleStep } from '../api/types'
-import { useState } from 'react'
+import { getWorkstream, addWorkstreamNote, resolveWorkstreamNote, addWorkstreamLink, getConfig, getFeature, getCycleDetail, advanceCycle, getWorkstreamFeatures, approveFeature, rejectFeature, getQAResults, getCycleTypes } from '../api/client'
+import type { WorkstreamNote, WorkstreamLink, AppConfig, CycleStep, WorkstreamFeature, FeatureStatus, Feature, QAResult, CycleType } from '../api/types'
+import { useState, useMemo, useCallback } from 'react'
+import { StatusBadge } from '../components/StatusBadge'
+import { MarkdownContent } from '../components/MarkdownContent'
+import { useStore } from '../store'
+import { cn, truncate, formatTimestamp } from '../lib/utils'
 
 const NOTE_COLORS: Record<string, { bg: string; border: string; label: string }> = {
   note:     { bg: 'var(--color-bg-tertiary)', border: 'var(--color-border)', label: 'Note' },
@@ -201,6 +205,71 @@ function CycleApproveReject({ cycleId, stepName }: { cycleId: number; stepName: 
   )
 }
 
+function NeedsAttentionSummary({ features, openQuestionCount }: {
+  features: WorkstreamFeature[]
+  openQuestionCount: number
+}) {
+  const qaFeatures = features.filter(wf => wf.feature.status === 'human-qa')
+  const blockedFeatures = features.filter(wf => wf.feature.status === 'blocked')
+
+  const hasItems = qaFeatures.length > 0 || openQuestionCount > 0 || blockedFeatures.length > 0
+
+  const scrollTo = useCallback((targetId: string) => {
+    document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  if (!hasItems) {
+    return (
+      <div className="mb-5 rounded-lg px-4 py-2.5 text-sm text-[var(--color-text-muted)]"
+        style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+        All clear — nothing needs your attention
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-5 rounded-lg overflow-hidden"
+      style={{
+        background: 'rgba(245, 158, 11, 0.08)',
+        border: '1px solid rgba(245, 158, 11, 0.2)',
+        borderLeft: '3px solid rgb(245, 158, 11)',
+      }}>
+      <div className="px-4 py-3 flex flex-col gap-1.5">
+        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'rgb(245, 158, 11)' }}>
+          Needs Attention
+        </div>
+        {qaFeatures.length > 0 && (
+          <button
+            onClick={() => scrollTo('qa-features')}
+            className="text-left text-sm font-medium hover:underline cursor-pointer bg-transparent border-none p-0"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            {qaFeatures.length} feature{qaFeatures.length > 1 ? 's' : ''} awaiting QA review
+          </button>
+        )}
+        {openQuestionCount > 0 && (
+          <button
+            onClick={() => scrollTo('open-questions')}
+            className="text-left text-sm font-medium hover:underline cursor-pointer bg-transparent border-none p-0"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            {openQuestionCount} open question{openQuestionCount > 1 ? 's' : ''}
+          </button>
+        )}
+        {blockedFeatures.length > 0 && (
+          <button
+            onClick={() => scrollTo('blocked-features')}
+            className="text-left text-sm font-medium hover:underline cursor-pointer bg-transparent border-none p-0"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            {blockedFeatures.length} blocked feature{blockedFeatures.length > 1 ? 's' : ''}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function WorkstreamDetail() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -274,6 +343,34 @@ export default function WorkstreamDetail() {
     enabled: !!activeCycleRef?.id,
   })
 
+  const { data: wsFeatures } = useQuery({
+    queryKey: ['workstream-features', id],
+    queryFn: () => getWorkstreamFeatures(id!),
+    enabled: !!id,
+  })
+
+  const featureGroups = useMemo(() => {
+    const features = wsFeatures || []
+    const groups: Record<string, WorkstreamFeature[]> = {
+      attention: [],
+      inProgress: [],
+      backlog: [],
+      completed: [],
+    }
+    for (const wf of features) {
+      const s = wf.feature.status
+      if (s === 'human-qa' || s === 'blocked') groups.attention.push(wf)
+      else if (s === 'implementing' || s === 'agent-qa' || s === 'planning') groups.inProgress.push(wf)
+      else if (s === 'draft') groups.backlog.push(wf)
+      else if (s === 'done') groups.completed.push(wf)
+    }
+    // Sort each group by priority DESC
+    for (const key of Object.keys(groups)) {
+      groups[key].sort((a, b) => b.feature.priority - a.feature.priority)
+    }
+    return groups
+  }, [wsFeatures])
+
   if (isLoading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--color-text-muted)' }}>Loading...</div>
   if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--color-text-muted)' }}>Workstream not found</div>
 
@@ -325,16 +422,11 @@ export default function WorkstreamDetail() {
         </div>
       )}
 
-      {/* Open questions summary */}
-      {openQuestions.length > 0 && (
-        <div style={{
-          padding: '10px 16px', borderRadius: 8, marginBottom: 20,
-          background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)',
-          fontSize: 13, color: 'rgb(245, 158, 11)', fontWeight: 600,
-        }}>
-          {openQuestions.length} open question{openQuestions.length > 1 ? 's' : ''} waiting for input
-        </div>
-      )}
+      {/* Needs Attention Summary */}
+      <NeedsAttentionSummary
+        features={wsFeatures || []}
+        openQuestionCount={openQuestions.length}
+      />
 
       {/* Active Cycle */}
       {activeCycle && (
@@ -391,6 +483,88 @@ export default function WorkstreamDetail() {
             if (!step?.human) return null
             return <CycleApproveReject cycleId={activeCycle.id} stepName={step.name} />
           })()}
+        </div>
+      )}
+
+      {/* Feature groups with scroll-target ids */}
+      {featureGroups.attention.filter(wf => wf.feature.status === 'human-qa').length > 0 && (
+        <div id="qa-features" className="mb-5">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>Awaiting QA Review</h2>
+          <div className="flex flex-col gap-1.5">
+            {featureGroups.attention.filter(wf => wf.feature.status === 'human-qa').map(wf => (
+              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
+                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
+                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+                <span className="font-semibold">{wf.feature.name}</span>
+                {' '}
+                <StatusBadge status={wf.feature.status} />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+      {featureGroups.attention.filter(wf => wf.feature.status === 'blocked').length > 0 && (
+        <div id="blocked-features" className="mb-5">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>Blocked</h2>
+          <div className="flex flex-col gap-1.5">
+            {featureGroups.attention.filter(wf => wf.feature.status === 'blocked').map(wf => (
+              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
+                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
+                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+                <span className="font-semibold">{wf.feature.name}</span>
+                {' '}
+                <StatusBadge status={wf.feature.status} />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+      {featureGroups.inProgress.length > 0 && (
+        <div className="mb-5">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>In Progress</h2>
+          <div className="flex flex-col gap-1.5">
+            {featureGroups.inProgress.map(wf => (
+              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
+                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
+                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+                <span className="font-semibold">{wf.feature.name}</span>
+                {' '}
+                <StatusBadge status={wf.feature.status} />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+      {featureGroups.backlog.length > 0 && (
+        <div className="mb-5">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>Backlog</h2>
+          <div className="flex flex-col gap-1.5">
+            {featureGroups.backlog.map(wf => (
+              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
+                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
+                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+                <span className="font-semibold">{wf.feature.name}</span>
+                {' '}
+                <StatusBadge status={wf.feature.status} />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+      {featureGroups.completed.length > 0 && (
+        <div className="mb-5">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>Completed</h2>
+          <div className="flex flex-col gap-1.5">
+            {featureGroups.completed.map(wf => (
+              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
+                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
+                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
+                <span className="font-semibold">{wf.feature.name}</span>
+                {' '}
+                <StatusBadge status={wf.feature.status} />
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 
@@ -496,7 +670,7 @@ export default function WorkstreamDetail() {
       </div>
 
       {/* Notes timeline */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div id="open-questions" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {notes.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--color-text-muted)', padding: '8px 0' }}>No notes yet. Add one above to start tracking your thinking.</div>
         ) : notes.map(note => (
