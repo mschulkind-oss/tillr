@@ -9,19 +9,23 @@ import { useState, useMemo } from 'react'
 import type { Feature, FeatureStatus } from '../api/types'
 
 const ALL_STATUSES: FeatureStatus[] = ['draft', 'planning', 'implementing', 'agent-qa', 'human-qa', 'done', 'blocked']
+const ACTIVE_STATUSES: FeatureStatus[] = ['draft', 'planning', 'implementing', 'agent-qa', 'human-qa', 'blocked']
 
 export function Features() {
   const features = useQuery({ queryKey: ['features'], queryFn: getFeatures })
   const milestones = useQuery({ queryKey: ['milestones'], queryFn: getMilestones })
   const tags = useQuery({ queryKey: ['tags'], queryFn: getTags })
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<FeatureStatus | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<FeatureStatus | 'all' | 'active'>('active')
   const [milestoneFilter, setMilestoneFilter] = useState<string>('all')
   const [tagFilter, setTagFilter] = useState<string>('all')
   const [sortBy, setSortBy] = useState<'priority' | 'name' | 'updated'>('priority')
+  const [showDone, setShowDone] = useState(false)
 
-  const filtered = useMemo(() => {
-    let items = features.data || []
+  const allFeatures = features.data || []
+
+  const { active, done } = useMemo(() => {
+    let items = allFeatures
 
     if (search) {
       const q = search.toLowerCase()
@@ -32,7 +36,7 @@ export function Features() {
       )
     }
 
-    if (statusFilter !== 'all') {
+    if (statusFilter !== 'all' && statusFilter !== 'active') {
       items = items.filter((f) => f.status === statusFilter)
     }
 
@@ -44,22 +48,31 @@ export function Features() {
       items = items.filter((f) => f.tags?.includes(tagFilter))
     }
 
-    items = [...items].sort((a, b) => {
+    const sorted = [...items].sort((a, b) => {
       if (sortBy === 'priority') return b.priority - a.priority
       if (sortBy === 'name') return a.name.localeCompare(b.name)
       return b.updated_at.localeCompare(a.updated_at)
     })
 
-    return items
-  }, [features.data, search, statusFilter, milestoneFilter, tagFilter, sortBy])
+    // When showing a specific status (including 'done'), don't split
+    if (statusFilter !== 'all' && statusFilter !== 'active') {
+      return { active: sorted, done: [] }
+    }
+
+    return {
+      active: sorted.filter((f) => f.status !== 'done'),
+      done: sorted.filter((f) => f.status === 'done'),
+    }
+  }, [allFeatures, search, statusFilter, milestoneFilter, tagFilter, sortBy])
 
   if (features.isLoading) return <PageSkeleton />
 
-  const allFeatures = features.data || []
   const statusCounts = ALL_STATUSES.reduce((acc, s) => {
     acc[s] = allFeatures.filter((f) => f.status === s).length
     return acc
   }, {} as Record<string, number>)
+
+  const activeCount = ACTIVE_STATUSES.reduce((sum, s) => sum + (statusCounts[s] || 0), 0)
 
   return (
     <div className="space-y-6">
@@ -88,9 +101,10 @@ export function Features() {
         {/* Status filter */}
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as FeatureStatus | 'all')}
+          onChange={(e) => setStatusFilter(e.target.value as FeatureStatus | 'all' | 'active')}
           className="bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary"
         >
+          <option value="active">Active ({activeCount})</option>
           <option value="all">All statuses ({allFeatures.length})</option>
           {ALL_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -141,21 +155,42 @@ export function Features() {
       {/* Results count */}
       {search && (
         <p className="text-xs text-text-muted">
-          {filtered.length} result{filtered.length !== 1 ? 's' : ''} matching "{search}"
+          {active.length + done.length} result{active.length + done.length !== 1 ? 's' : ''} matching "{search}"
         </p>
       )}
 
-      {/* Feature list */}
+      {/* Active feature list */}
       <div className="space-y-2">
-        {filtered.map((feature) => (
+        {active.map((feature) => (
           <FeatureRow key={feature.id} feature={feature} />
         ))}
-        {filtered.length === 0 && (
+        {active.length === 0 && done.length === 0 && (
           <div className="text-center py-12 text-text-muted text-sm">
             No features match your filters
           </div>
         )}
       </div>
+
+      {/* Done features — collapsed by default */}
+      {done.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowDone(!showDone)}
+            className="flex items-center gap-2 text-sm text-text-muted hover:text-text-secondary transition-colors w-full"
+          >
+            <span className="text-xs">{showDone ? '▼' : '▶'}</span>
+            <span>Completed ({done.length})</span>
+            <div className="flex-1 border-t border-border ml-2" />
+          </button>
+          {showDone && (
+            <div className="space-y-2 mt-3">
+              {done.map((feature) => (
+                <FeatureRow key={feature.id} feature={feature} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
