@@ -2,11 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQAPending, approveFeature, rejectFeature, getQAResults, getCycleTypes, getWorkstreams, getWorkstreamFeatures } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
-import { EntityLink } from '../components/EntityLink'
 import { useStore } from '../store'
 import { formatTimestamp, cn } from '../lib/utils'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 import type { Feature, QAResult, CycleType, Workstream, WorkstreamFeature } from '../api/types'
 import { MarkdownContent } from '../components/MarkdownContent'
 
@@ -72,7 +71,6 @@ function groupByWorkstream(
   return groups
 }
 
-/** Count how many QA features belong to a workstream (needs prefetched wsFeatures map) */
 function countQAFeatures(qaIds: Set<string>, wsFeatures: WorkstreamFeature[]): { owned: number; deps: number } {
   let owned = 0, deps = 0
   for (const wf of wsFeatures) {
@@ -84,6 +82,8 @@ function countQAFeatures(qaIds: Set<string>, wsFeatures: WorkstreamFeature[]): {
 }
 
 export function QA() {
+  const { workstreamId } = useParams<{ workstreamId?: string }>()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const addToast = useStore((s) => s.addToast)
   const pending = useQuery({ queryKey: ['qa-pending'], queryFn: getQAPending })
@@ -94,13 +94,12 @@ export function QA() {
 
   const [groupMode, setGroupMode] = useState<GroupMode>('workstream')
   const [activeMilestone, setActiveMilestone] = useState<string | null>(null)
-  const [activeWorkstream, setActiveWorkstream] = useState<string | null>(null)
 
   // Fetch features for the active workstream only
   const activeWsFeatures = useQuery({
-    queryKey: ['workstream-features', activeWorkstream],
-    queryFn: () => getWorkstreamFeatures(activeWorkstream!),
-    enabled: !!activeWorkstream,
+    queryKey: ['workstream-features', workstreamId],
+    queryFn: () => getWorkstreamFeatures(workstreamId!),
+    enabled: !!workstreamId,
   })
 
   const approveMutation = useMutation({
@@ -131,12 +130,12 @@ export function QA() {
   const otherQA = features.filter((f) => f.status !== 'human-qa')
   const qaIds = new Set(needsReview.map((f) => f.id))
 
-  // Groups for the active drilldown
-  const workstreamGroups = activeWorkstream && Array.isArray(activeWsFeatures.data)
+  const workstreamGroups = workstreamId && Array.isArray(activeWsFeatures.data)
     ? groupByWorkstream(needsReview, activeWsFeatures.data)
     : []
 
   const milestoneGroups = groupByMilestone(needsReview)
+  const activeWs = workstreams.find((ws) => ws.id === workstreamId)
 
   return (
     <div className="space-y-6">
@@ -155,76 +154,62 @@ export function QA() {
         </div>
       ) : (
         <>
-          {/* Mode toggle */}
-          <div className="flex items-center gap-4">
-            <div className="flex rounded-lg border border-border overflow-hidden">
-              <button
-                onClick={() => { setGroupMode('workstream'); setActiveMilestone(null); setActiveWorkstream(null) }}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium transition-colors',
-                  groupMode === 'workstream'
-                    ? 'bg-accent/20 text-accent'
-                    : 'bg-bg-card text-text-secondary hover:text-text-primary'
-                )}
-              >
-                By Workstream
-              </button>
-              <button
-                onClick={() => { setGroupMode('milestone'); setActiveWorkstream(null) }}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium border-l border-border transition-colors',
-                  groupMode === 'milestone'
-                    ? 'bg-accent/20 text-accent'
-                    : 'bg-bg-card text-text-secondary hover:text-text-primary'
-                )}
-              >
-                By Milestone
-              </button>
-            </div>
-          </div>
-
-          {/* ===== Workstream mode ===== */}
-          {groupMode === 'workstream' && !activeWorkstream && (
-            <div className="grid gap-3 md:grid-cols-2">
-              {workstreams.map((ws) => (
-                <WorkstreamCard
-                  key={ws.id}
-                  ws={ws}
-                  qaIds={qaIds}
-                  onSelect={() => setActiveWorkstream(ws.id)}
-                />
-              ))}
+          {/* Mode toggle — only show when not drilled into a workstream */}
+          {!workstreamId && (
+            <div className="flex items-center gap-4">
+              <div className="flex rounded-lg border border-border overflow-hidden">
+                <button
+                  onClick={() => { setGroupMode('workstream'); setActiveMilestone(null) }}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium transition-colors',
+                    groupMode === 'workstream'
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-bg-card text-text-secondary hover:text-text-primary'
+                  )}
+                >
+                  By Workstream
+                </button>
+                <button
+                  onClick={() => { setGroupMode('milestone') }}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium border-l border-border transition-colors',
+                    groupMode === 'milestone'
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-bg-card text-text-secondary hover:text-text-primary'
+                  )}
+                >
+                  By Milestone
+                </button>
+              </div>
             </div>
           )}
 
-          {groupMode === 'workstream' && activeWorkstream && (
+          {/* ===== Workstream drill-down (URL-driven) ===== */}
+          {workstreamId && (
             <>
-              {/* Workstream header */}
               <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setActiveWorkstream(null)}
+                    <Link
+                      to="/qa"
                       className="text-xs text-text-muted hover:text-accent transition-colors"
                     >
                       ← All workstreams
-                    </button>
+                    </Link>
                     <span className="text-border">|</span>
                     <span className="text-sm font-medium text-accent">
-                      {workstreams.find((ws) => ws.id === activeWorkstream)?.name}
+                      {activeWs?.name}
                     </span>
                   </div>
                   <Link
-                    to={`/workstreams/${activeWorkstream}`}
+                    to={`/workstreams/${workstreamId}`}
                     className="text-xs text-accent hover:text-accent/80 transition-colors"
                   >
-                    View full workstream →
+                    View full workstream
                   </Link>
                 </div>
-                {workstreams.find((ws) => ws.id === activeWorkstream)?.description && (
-                  <p className="text-xs text-text-muted mt-1">
-                    {workstreams.find((ws) => ws.id === activeWorkstream)?.description}
-                  </p>
+                {activeWs?.description && (
+                  <p className="text-xs text-text-muted mt-1">{activeWs.description}</p>
                 )}
               </div>
 
@@ -253,8 +238,22 @@ export function QA() {
             </>
           )}
 
+          {/* ===== Workstream grid (top-level) ===== */}
+          {!workstreamId && groupMode === 'workstream' && (
+            <div className="grid gap-3 md:grid-cols-2">
+              {workstreams.map((ws) => (
+                <WorkstreamCard
+                  key={ws.id}
+                  ws={ws}
+                  qaIds={qaIds}
+                  onSelect={() => navigate(`/qa/${ws.id}`)}
+                />
+              ))}
+            </div>
+          )}
+
           {/* ===== Milestone mode ===== */}
-          {groupMode === 'milestone' && (
+          {!workstreamId && groupMode === 'milestone' && (
             <>
               {milestoneGroups.length > 1 && (
                 <div className="flex flex-wrap gap-2">
@@ -315,9 +314,7 @@ export function QA() {
             {otherQA.map((f) => (
               <div key={f.id} className="bg-bg-card border border-border rounded-lg p-4 flex items-center justify-between">
                 <div>
-                  <span className="text-sm font-medium text-text-primary">
-                    <EntityLink type="feature" id={f.id} name={f.name} />
-                  </span>
+                  <span className="text-sm font-medium text-text-primary">{f.name}</span>
                   <span className="ml-2"><StatusBadge status={f.status} /></span>
                 </div>
                 <span className="text-xs text-text-muted">{formatTimestamp(f.updated_at)}</span>
@@ -368,9 +365,7 @@ function WorkstreamCard({ ws, qaIds, onSelect }: {
 
       {total > 0 && (
         <div className="flex items-center gap-3 mt-3 text-xs text-text-muted">
-          {qaOwned > 0 && (
-            <span>{qaOwned} owned</span>
-          )}
+          {qaOwned > 0 && <span>{qaOwned} owned</span>}
           {qaDeps > 0 && (
             <span className="text-warning">{qaDeps} prerequisite{qaDeps !== 1 ? 's' : ''}</span>
           )}
@@ -386,21 +381,6 @@ function WorkstreamCard({ ws, qaIds, onSelect }: {
           ))}
         </div>
       )}
-
-      <div className="flex items-center justify-between mt-3">
-        <Link
-          to={`/workstreams/${ws.id}`}
-          onClick={(e) => e.stopPropagation()}
-          className="text-[10px] text-accent hover:text-accent/80 transition-colors"
-        >
-          Full details →
-        </Link>
-        {total > 0 && (
-          <span className="text-[10px] text-accent font-medium">
-            Review QA →
-          </span>
-        )}
-      </div>
     </div>
   )
 }
@@ -415,7 +395,6 @@ function GroupSection({ group, cycleTypes, onApprove, onReject, isApproving, isR
   defaultExpanded: boolean
 }) {
   const [collapsed, setCollapsed] = useState(!defaultExpanded)
-  const isMilestone = group.key !== UNGROUPED && !group.relationship
 
   return (
     <div>
@@ -425,11 +404,7 @@ function GroupSection({ group, cycleTypes, onApprove, onReject, isApproving, isR
       >
         <span className="text-text-muted text-xs">{collapsed ? '▶' : '▼'}</span>
         <h2 className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
-          {isMilestone ? (
-            <EntityLink type="milestone" id={group.key} name={group.label} />
-          ) : (
-            group.label
-          )}
+          {group.label}
         </h2>
         <span className="text-xs text-text-muted font-mono">
           {group.features.length}
@@ -497,7 +472,7 @@ function QACard({ feature, cycleTypes, onApprove, onReject, isApproving, isRejec
           </span>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-text-primary truncate">
-              <EntityLink type="feature" id={feature.id} name={feature.name} />
+              {feature.name}
             </h3>
             <p className="text-xs text-text-secondary mt-0.5 truncate">{feature.description}</p>
           </div>
@@ -619,6 +594,15 @@ function QACard({ feature, cycleTypes, onApprove, onReject, isApproving, isRejec
                 </button>
               )}
             </div>
+          </div>
+
+          <div className="pt-2 border-t border-border">
+            <Link
+              to={`/features/${feature.id}`}
+              className="text-xs text-accent hover:text-accent/80 transition-colors"
+            >
+              View full feature details →
+            </Link>
           </div>
         </div>
       )}

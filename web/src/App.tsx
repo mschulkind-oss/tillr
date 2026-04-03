@@ -78,6 +78,7 @@ export default function App() {
             <Route path="/features" element={<Features />} />
             <Route path="/features/:id" element={<FeatureDetail />} />
             <Route path="/qa" element={<QA />} />
+            <Route path="/qa/:workstreamId" element={<QA />} />
             <Route path="/roadmap" element={<Roadmap />} />
             <Route path="/roadmap/:id" element={<RoadmapDetail />} />
             <Route path="/milestones/:id" element={<MilestoneDetail />} />
