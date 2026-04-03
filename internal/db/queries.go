@@ -4647,23 +4647,23 @@ func GetHeatmapGrid(database *sql.DB, projectID string) (*HeatmapGrid, error) {
 
 func CreateWorkstream(db *sql.DB, w *models.Workstream) error {
 	_, err := db.Exec(
-		`INSERT INTO workstreams (id, project_id, parent_id, name, description, status, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		w.ID, w.ProjectID, nullStr(w.ParentID), w.Name, w.Description, w.Status, w.Tags,
+		`INSERT INTO workstreams (id, project_id, parent_id, name, description, status, tags, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		w.ID, w.ProjectID, nullStr(w.ParentID), w.Name, w.Description, w.Status, w.Tags, w.SortOrder,
 	)
 	return err
 }
 
 func GetWorkstream(db *sql.DB, id string) (*models.Workstream, error) {
-	row := db.QueryRow(`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, sort_order, created_at, updated_at FROM workstreams WHERE id = ?`, id)
 	w := &models.Workstream{}
-	if err := row.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+	if err := row.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.SortOrder, &w.CreatedAt, &w.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
 func ListWorkstreams(db *sql.DB, projectID, status string) ([]models.Workstream, error) {
-	query := `SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE 1=1`
+	query := `SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, sort_order, created_at, updated_at FROM workstreams WHERE 1=1`
 	var args []any
 	if projectID != "" {
 		query += ` AND project_id = ?`
@@ -4673,7 +4673,7 @@ func ListWorkstreams(db *sql.DB, projectID, status string) ([]models.Workstream,
 		query += ` AND status = ?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY updated_at DESC`
+	query += ` ORDER BY sort_order DESC, updated_at DESC`
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -4684,7 +4684,7 @@ func ListWorkstreams(db *sql.DB, projectID, status string) ([]models.Workstream,
 	var out []models.Workstream
 	for rows.Next() {
 		var w models.Workstream
-		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.SortOrder, &w.CreatedAt, &w.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -4917,7 +4917,7 @@ func GetWorkstreamDetail(db *sql.DB, id string) (*models.WorkstreamDetail, error
 
 func listWorkstreamChildren(db *sql.DB, parentID string) ([]models.Workstream, error) {
 	rows, err := db.Query(
-		`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, created_at, updated_at FROM workstreams WHERE parent_id = ? ORDER BY created_at`,
+		`SELECT id, project_id, COALESCE(parent_id,''), name, description, status, tags, sort_order, created_at, updated_at FROM workstreams WHERE parent_id = ? ORDER BY sort_order DESC, created_at`,
 		parentID,
 	)
 	if err != nil {
@@ -4928,7 +4928,7 @@ func listWorkstreamChildren(db *sql.DB, parentID string) ([]models.Workstream, e
 	var out []models.Workstream
 	for rows.Next() {
 		var w models.Workstream
-		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.CreatedAt, &w.UpdatedAt); err != nil {
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.ParentID, &w.Name, &w.Description, &w.Status, &w.Tags, &w.SortOrder, &w.CreatedAt, &w.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, w)

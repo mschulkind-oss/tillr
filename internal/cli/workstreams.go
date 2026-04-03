@@ -19,6 +19,7 @@ var workstreamCmd = &cobra.Command{
 
 func init() {
 	workstreamCmd.AddCommand(workstreamCreateCmd)
+	workstreamCmd.AddCommand(workstreamEditCmd)
 	workstreamCmd.AddCommand(workstreamListCmd)
 	workstreamCmd.AddCommand(workstreamShowCmd)
 	workstreamCmd.AddCommand(workstreamNoteCmd)
@@ -30,6 +31,12 @@ func init() {
 	workstreamCreateCmd.Flags().String("tags", "", "Comma-separated tags")
 	workstreamCreateCmd.Flags().String("parent", "", "Parent workstream ID")
 	workstreamCreateCmd.Flags().String("id", "", "Vanity slug (auto-generated from name if omitted)")
+	workstreamCreateCmd.Flags().Int("priority", 0, "Sort priority (higher = shown first)")
+
+	workstreamEditCmd.Flags().String("name", "", "Rename workstream")
+	workstreamEditCmd.Flags().String("description", "", "Update description")
+	workstreamEditCmd.Flags().String("tags", "", "Update tags")
+	workstreamEditCmd.Flags().Int("priority", -1, "Sort priority (higher = shown first)")
 
 	workstreamListCmd.Flags().Bool("all", false, "Include closed/archived workstreams")
 
@@ -66,6 +73,7 @@ var workstreamCreateCmd = &cobra.Command{
 		tags, _ := cmd.Flags().GetString("tags")
 		parentID, _ := cmd.Flags().GetString("parent")
 		vanityID, _ := cmd.Flags().GetString("id")
+		priority, _ := cmd.Flags().GetInt("priority")
 
 		id := vanityID
 		if id == "" {
@@ -80,6 +88,7 @@ var workstreamCreateCmd = &cobra.Command{
 			Description: description,
 			Status:      "active",
 			Tags:        tags,
+			SortOrder:   priority,
 		}
 		if err := db.CreateWorkstream(database, w); err != nil {
 			return fmt.Errorf("creating workstream: %w", err)
@@ -95,6 +104,60 @@ var workstreamCreateCmd = &cobra.Command{
 			return printJSON(w)
 		}
 		fmt.Printf("Created workstream %s: %s\n", w.ID, w.Name)
+		return nil
+	},
+}
+
+var workstreamEditCmd = &cobra.Command{
+	Use:   "edit <id>",
+	Short: "Edit a workstream",
+	Args:  cobra.ExactArgs(1),
+	Example: `  tillr workstream edit my-ws --priority 10
+  tillr workstream edit my-ws --name "New Name" --description "Updated desc"`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		id := args[0]
+		updates := make(map[string]any)
+
+		if cmd.Flags().Changed("name") {
+			v, _ := cmd.Flags().GetString("name")
+			updates["name"] = v
+		}
+		if cmd.Flags().Changed("description") {
+			v, _ := cmd.Flags().GetString("description")
+			updates["description"] = v
+		}
+		if cmd.Flags().Changed("tags") {
+			v, _ := cmd.Flags().GetString("tags")
+			updates["tags"] = v
+		}
+		if cmd.Flags().Changed("priority") {
+			v, _ := cmd.Flags().GetInt("priority")
+			updates["sort_order"] = v
+		}
+
+		if len(updates) == 0 {
+			return fmt.Errorf("no changes specified")
+		}
+
+		if err := db.UpdateWorkstream(database, id, updates); err != nil {
+			return fmt.Errorf("updating workstream: %w", err)
+		}
+
+		ws, err := db.GetWorkstream(database, id)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(ws)
+		}
+		fmt.Printf("Updated workstream %s\n", ws.ID)
 		return nil
 	},
 }

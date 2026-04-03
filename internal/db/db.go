@@ -631,4 +631,7 @@ var migrations = []string{
 	ALTER TABLE workstream_links_new RENAME TO workstream_links;
 	CREATE INDEX IF NOT EXISTS idx_workstream_links_ws ON workstream_links(workstream_id);
 	CREATE INDEX IF NOT EXISTS idx_workstream_links_target ON workstream_links(link_type, target_id);`,
+
+	// Migration 35: Add sort_order to workstreams for manual priority ordering
+	`ALTER TABLE workstreams ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;`,
 }

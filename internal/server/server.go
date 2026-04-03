@@ -4127,6 +4127,7 @@ func handleWorkstreams(database *sql.DB, w http.ResponseWriter, r *http.Request)
 			ParentID    string `json:"parent_id"`
 			Tags        string `json:"tags"`
 			ProjectID   string `json:"project_id"`
+			SortOrder   int    `json:"sort_order"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
@@ -4147,6 +4148,7 @@ func handleWorkstreams(database *sql.DB, w http.ResponseWriter, r *http.Request)
 			Description: body.Description,
 			Status:      "active",
 			Tags:        body.Tags,
+			SortOrder:   body.SortOrder,
 		}
 		if err := db.CreateWorkstream(database, ws); err != nil {
 			return fmt.Errorf("creating workstream: %w", err)
@@ -4196,7 +4198,7 @@ func handleWorkstreamDetail(database *sql.DB, w http.ResponseWriter, r *http.Req
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
-		allowed := map[string]bool{"name": true, "description": true, "status": true, "tags": true, "parent_id": true}
+		allowed := map[string]bool{"name": true, "description": true, "status": true, "tags": true, "parent_id": true, "sort_order": true}
 		updates := make(map[string]any)
 		for k, v := range body {
 			if allowed[k] {

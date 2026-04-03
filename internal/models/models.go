@@ -715,6 +715,7 @@ type Workstream struct {
 	Description string `json:"description"`
 	Status      string `json:"status"`
 	Tags        string `json:"tags"`
+	SortOrder   int    `json:"sort_order"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }

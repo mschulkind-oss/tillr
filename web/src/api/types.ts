@@ -441,6 +441,7 @@ export interface Workstream {
   description: string
   status: 'active' | 'archived'
   tags: string
+  sort_order: number
   created_at: string
   updated_at: string
 }
