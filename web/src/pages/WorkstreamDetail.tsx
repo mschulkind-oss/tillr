@@ -490,15 +490,9 @@ export default function WorkstreamDetail() {
       {featureGroups.attention.filter(wf => wf.feature.status === 'human-qa').length > 0 && (
         <div id="qa-features" className="mb-5">
           <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>Awaiting QA Review</h2>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             {featureGroups.attention.filter(wf => wf.feature.status === 'human-qa').map(wf => (
-              <Link key={wf.feature.id} to={`/features/${wf.feature.id}`}
-                className="block rounded-md px-3.5 py-2.5 no-underline text-inherit text-sm"
-                style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
-                <span className="font-semibold">{wf.feature.name}</span>
-                {' '}
-                <StatusBadge status={wf.feature.status} />
-              </Link>
+              <InlineQACard key={wf.feature.id} feature={wf.feature} relationship={wf.relationship} wsId={id!} />
             ))}
           </div>
         </div>
@@ -677,6 +671,214 @@ export default function WorkstreamDetail() {
           <NoteCard key={note.id} note={note} onResolve={() => resolveMut.mutate(note.id)} />
         ))}
       </div>
+    </div>
+  )
+}
+
+function InlineQACard({ feature, relationship, wsId }: {
+  feature: Feature
+  relationship: 'owned' | 'dependency'
+  wsId: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [showRejectConfirm, setShowRejectConfirm] = useState(false)
+  const queryClient = useQueryClient()
+  const addToast = useStore((s) => s.addToast)
+
+  const cycleTypesQuery = useQuery({ queryKey: ['cycle-types'], queryFn: getCycleTypes })
+  const cycleTypes: CycleType[] = cycleTypesQuery.data || []
+
+  const qaResults = useQuery({
+    queryKey: ['qa-results', feature.id],
+    queryFn: () => getQAResults(feature.id),
+    enabled: expanded,
+  })
+
+  const reviewHistory = (qaResults.data || []) as QAResult[]
+  const reviewRound = reviewHistory.length + 1
+
+  const cycleType = cycleTypes.find((ct) => ct.name === feature.assigned_cycle)
+  const humanStep = cycleType?.steps?.find((s) => s.human && s.instructions)
+  const testPlanInstructions = humanStep?.instructions
+
+  const approveMutation = useMutation({
+    mutationFn: (approveNotes?: string) => approveFeature(feature.id, approveNotes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['qa-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['features'] })
+      queryClient.invalidateQueries({ queryKey: ['status'] })
+      queryClient.invalidateQueries({ queryKey: ['workstream-features', wsId] })
+      queryClient.invalidateQueries({ queryKey: ['workstream', wsId] })
+      addToast('Feature approved', 'success')
+      setNotes('')
+      setExpanded(false)
+    },
+    onError: (err) => addToast(`Approve failed: ${err.message}`, 'error'),
+  })
+
+  const rejectMutation = useMutation({
+    mutationFn: (rejectNotes?: string) => rejectFeature(feature.id, rejectNotes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['qa-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['features'] })
+      queryClient.invalidateQueries({ queryKey: ['status'] })
+      queryClient.invalidateQueries({ queryKey: ['workstream-features', wsId] })
+      queryClient.invalidateQueries({ queryKey: ['workstream', wsId] })
+      addToast('Feature rejected -- sent back to development', 'info')
+      setNotes('')
+      setExpanded(false)
+      setShowRejectConfirm(false)
+    },
+    onError: (err) => addToast(`Reject failed: ${err.message}`, 'error'),
+  })
+
+  return (
+    <div className="bg-bg-card border border-border rounded-lg overflow-hidden">
+      <div
+        className="flex items-center justify-between p-3 cursor-pointer hover:bg-bg-hover/30 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-lg">{reviewRound > 1 ? '\u{1f501}' : '\u{1f195}'}</span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-primary truncate">{feature.name}</h3>
+            {feature.description && (
+              <p className="text-xs text-text-secondary mt-0.5 truncate">{truncate(feature.description, 80)}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {relationship === 'dependency' && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/20">dep</span>
+          )}
+          <StatusBadge status={feature.status} />
+          <span className={cn(
+            'text-xs font-mono px-1.5 py-0.5 rounded',
+            feature.priority >= 8 ? 'bg-danger/10 text-danger' :
+            feature.priority >= 5 ? 'bg-warning/10 text-warning' :
+            'bg-bg-tertiary text-text-muted'
+          )}>
+            P{feature.priority}
+          </span>
+          <span className="text-text-muted text-sm">{expanded ? '\u25B2' : '\u25BC'}</span>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-border p-4 space-y-4">
+          {reviewRound > 1 && (
+            <div className="flex items-center gap-2 text-xs text-warning bg-warning/5 border border-warning/20 rounded-md px-3 py-2">
+              <span>\u26A0\uFE0F</span>
+              <span>Review round #{reviewRound} -- previously reviewed {reviewRound - 1} time{reviewRound > 2 ? 's' : ''}</span>
+            </div>
+          )}
+
+          {testPlanInstructions && (
+            <div className="bg-warning/5 rounded-lg p-4 border border-warning/20">
+              <h4 className="text-xs font-semibold text-warning uppercase tracking-wider mb-2">
+                Test Plan
+              </h4>
+              <div className="prose prose-sm prose-invert max-w-none text-sm text-text-secondary">
+                <MarkdownContent>{testPlanInstructions}</MarkdownContent>
+              </div>
+            </div>
+          )}
+
+          {feature.spec && (
+            <div className="rounded-lg p-4 border" style={{ background: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}>
+              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                Feature Spec
+              </h4>
+              <div className="prose prose-sm prose-invert max-w-none text-sm text-text-secondary">
+                <MarkdownContent>{feature.spec}</MarkdownContent>
+              </div>
+            </div>
+          )}
+
+          {reviewHistory.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                Review History
+              </h4>
+              <div className="space-y-2">
+                {reviewHistory.map((r) => (
+                  <div
+                    key={r.id}
+                    className={cn(
+                      'text-xs p-2.5 rounded border',
+                      r.passed
+                        ? 'bg-success/5 border-success/20 text-success'
+                        : 'bg-danger/5 border-danger/20 text-danger'
+                    )}
+                  >
+                    <span className="font-medium">{r.passed ? 'Approved' : 'Rejected'}</span>
+                    {r.notes && <span className="ml-2 text-text-secondary">-- {r.notes}</span>}
+                    <span className="ml-2 text-text-muted">{formatTimestamp(r.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Review notes (optional)"
+              className="flex-1 border rounded-md px-3 py-2 text-sm focus:outline-none"
+              style={{
+                background: 'var(--color-bg-primary)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            />
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => approveMutation.mutate(notes || undefined)}
+                disabled={approveMutation.isPending}
+                className="px-4 py-2 bg-success/20 text-success border border-success/30 rounded-md text-sm font-medium hover:bg-success/30 transition-colors disabled:opacity-50"
+              >
+                {approveMutation.isPending ? 'Approving...' : 'Approve'}
+              </button>
+              {showRejectConfirm ? (
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => rejectMutation.mutate(notes || undefined)}
+                    disabled={rejectMutation.isPending}
+                    className="px-3 py-2 bg-danger text-white rounded-md text-sm font-medium hover:bg-danger/80 transition-colors disabled:opacity-50"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setShowRejectConfirm(false)}
+                    className="px-3 py-2 bg-bg-tertiary text-text-secondary rounded-md text-sm hover:bg-bg-hover transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowRejectConfirm(true)}
+                  className="px-4 py-2 bg-danger/10 text-danger border border-danger/20 rounded-md text-sm font-medium hover:bg-danger/20 transition-colors"
+                >
+                  Reject
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-border">
+            <Link
+              to={`/features/${feature.id}`}
+              className="text-xs text-accent hover:text-accent/80 transition-colors"
+            >
+              View full feature details
+            </Link>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
