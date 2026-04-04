@@ -5,11 +5,14 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -143,6 +146,7 @@ func BuildMux(database *sql.DB, cfg ServerConfig) *http.ServeMux {
 
 	// Queue management route
 	mux.HandleFunc("/api/queue", apiHandler(database, handleQueue))
+	mux.HandleFunc("/api/queue/features", apiHandler(database, handleQueueFeatures))
 
 	// Client config (exposes non-sensitive settings to the frontend)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
@@ -172,6 +176,14 @@ func BuildMux(database *sql.DB, cfg ServerConfig) *http.ServeMux {
 	// Notification routes
 	mux.HandleFunc("/api/notifications", apiHandler(database, handleNotifications))
 	mux.HandleFunc("/api/notifications/", apiHandler(database, handleNotificationAction))
+
+	// Attachment routes
+	mux.HandleFunc("/api/attachments", apiHandler(database, handleAttachments))
+	attachDir := ""
+	if cfg.DBPath != "" {
+		attachDir = filepath.Join(filepath.Dir(cfg.DBPath), ".tillr", "attachments")
+	}
+	mux.HandleFunc("/api/attachments/", handleAttachmentFile(database, attachDir))
 
 	// Export routes
 	mux.HandleFunc("/api/export/features", handleExport(database, "features"))
@@ -1242,6 +1254,18 @@ func handleQA(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		return writeJSON(w, events)
+	}
+
+	// GET /api/qa/{feature-id} — QA results for a specific feature
+	if r.Method == "GET" && !strings.Contains(path, "/") {
+		results, err := db.ListQAResults(database, path)
+		if err != nil {
+			return err
+		}
+		if results == nil {
+			results = []models.QAResult{}
+		}
+		return writeJSON(w, results)
 	}
 
 	if r.Method != "POST" {
@@ -2402,6 +2426,46 @@ func handleQueue(database *sql.DB, w http.ResponseWriter, r *http.Request) error
 		return fmt.Errorf("getting queue stats: %w", err)
 	}
 	return writeJSON(w, models.QueueResponse{Queue: queue, Stats: *stats})
+}
+
+func handleQueueFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return writeJSON(w, map[string]string{"error": "method not allowed"})
+	}
+
+	p, err := db.GetProject(database)
+	if err != nil {
+		return fmt.Errorf("getting project: %w", err)
+	}
+
+	scope, err := db.GetQueueScopeMap(database)
+	if err != nil {
+		scope = make(map[string]string)
+	}
+
+	// Allow query params to override scope
+	if ws := r.URL.Query().Get("workstream"); ws != "" {
+		scope["workstream"] = ws
+	}
+	if mp := r.URL.Query().Get("min_priority"); mp != "" {
+		scope["min-priority"] = mp
+	}
+
+	// days=N returns completed items from the last N extra days (0 = today only)
+	days := 0
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v >= 0 {
+			days = v
+		}
+	}
+
+	resp, err := db.GetImplementationQueue(database, p.ID, scope, days)
+	if err != nil {
+		return fmt.Errorf("getting implementation queue: %w", err)
+	}
+
+	return writeJSON(w, resp)
 }
 
 // --- Decision log (ADR) handlers ---
@@ -4358,4 +4422,183 @@ func slugify(name string) string {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
 	return strings.Trim(s, "-")
+}
+
+// handleAttachments handles POST /api/attachments (multipart upload) and GET /api/attachments?entity_type=...&entity_id=...
+func handleAttachments(database *sql.DB, w http.ResponseWriter, r *http.Request) error {
+	switch r.Method {
+	case http.MethodGet:
+		entityType := r.URL.Query().Get("entity_type")
+		entityID := r.URL.Query().Get("entity_id")
+		if entityType == "" || entityID == "" {
+			http.Error(w, `{"error":"entity_type and entity_id required"}`, http.StatusBadRequest)
+			return nil
+		}
+		atts, err := db.ListAttachments(database, entityType, entityID)
+		if err != nil {
+			return err
+		}
+		if atts == nil {
+			atts = []models.Attachment{}
+		}
+		return json.NewEncoder(w).Encode(atts)
+
+	case http.MethodPost:
+		// Parse multipart form (max 32MB)
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, `{"error":"invalid multipart form"}`, http.StatusBadRequest)
+			return nil
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, `{"error":"file field required"}`, http.StatusBadRequest)
+			return nil
+		}
+		defer file.Close() //nolint:errcheck
+
+		entityType := r.FormValue("entity_type")
+		entityID := r.FormValue("entity_id")
+		label := r.FormValue("label")
+		if entityType == "" || entityID == "" {
+			http.Error(w, `{"error":"entity_type and entity_id required"}`, http.StatusBadRequest)
+			return nil
+		}
+
+		// Determine content type
+		contentType := header.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+
+		// Build filename: timestamp-slug.ext
+		ext := filepath.Ext(header.Filename)
+		slug := slugify(entityID)
+		ts := time.Now().Format("20060102-150405")
+		filename := fmt.Sprintf("%s-%s%s", ts, slug, ext)
+
+		// Find attachments directory relative to project root
+		attachDir, err := findAttachDir()
+		if err != nil {
+			return fmt.Errorf("finding attachment directory: %w", err)
+		}
+		if err := os.MkdirAll(attachDir, 0o755); err != nil {
+			return fmt.Errorf("creating attachment directory: %w", err)
+		}
+
+		dst, err := os.Create(filepath.Join(attachDir, filename))
+		if err != nil {
+			return fmt.Errorf("creating file: %w", err)
+		}
+		defer dst.Close() //nolint:errcheck
+
+		if _, err := io.Copy(dst, file); err != nil {
+			return fmt.Errorf("writing file: %w", err)
+		}
+
+		att := &models.Attachment{
+			EntityType:   entityType,
+			EntityID:     entityID,
+			Filename:     filename,
+			OriginalName: header.Filename,
+			Label:        label,
+			ContentType:  contentType,
+		}
+		if err := db.CreateAttachment(database, att); err != nil {
+			return err
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		return json.NewEncoder(w).Encode(att)
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return nil
+	}
+}
+
+// findAttachDir finds the .tillr/attachments directory relative to the project root.
+func findAttachDir() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	// Walk up looking for .tillr.json
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".tillr.json")); err == nil {
+			return filepath.Join(dir, ".tillr", "attachments"), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	// Fallback: use cwd
+	cwd, _ := os.Getwd()
+	return filepath.Join(cwd, ".tillr", "attachments"), nil
+}
+
+// handleAttachmentFile serves individual attachment files: GET /api/attachments/{filename}
+// and handles DELETE /api/attachments/{filename}.
+func handleAttachmentFile(database *sql.DB, attachDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == "OPTIONS" {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			return
+		}
+
+		filename := strings.TrimPrefix(r.URL.Path, "/api/attachments/")
+		if filename == "" {
+			http.Error(w, "filename required", http.StatusBadRequest)
+			return
+		}
+
+		// Prevent path traversal
+		filename = filepath.Base(filename)
+
+		switch r.Method {
+		case http.MethodGet:
+			dir := attachDir
+			if dir == "" {
+				d, err := findAttachDir()
+				if err != nil {
+					http.Error(w, "attachment directory not found", http.StatusInternalServerError)
+					return
+				}
+				dir = d
+			}
+			filePath := filepath.Join(dir, filename)
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			// Set content type from DB record if available
+			att, err := db.GetAttachmentByFilename(database, filename)
+			if err == nil && att.ContentType != "" {
+				w.Header().Set("Content-Type", att.ContentType)
+			}
+			http.ServeFile(w, r, filePath)
+
+		case http.MethodDelete:
+			att, err := db.GetAttachmentByFilename(database, filename)
+			if err != nil {
+				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+				return
+			}
+			dir := attachDir
+			if dir == "" {
+				d, _ := findAttachDir()
+				dir = d
+			}
+			_ = os.Remove(filepath.Join(dir, filename))
+			_ = db.DeleteAttachment(database, att.ID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"deleted": filename}) //nolint:errcheck
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
 }

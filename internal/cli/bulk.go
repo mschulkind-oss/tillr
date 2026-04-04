@@ -181,11 +181,15 @@ var bulkStatusCmd = &cobra.Command{
 		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		if !dryRun {
+			snapshotBeforeBatch(database, cfg, "bulk-status")
+		}
 
 		p, err := db.GetProject(database)
 		if err != nil {
@@ -247,11 +251,15 @@ var bulkPriorityChangeCmd = &cobra.Command{
 		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		if !dryRun {
+			snapshotBeforeBatch(database, cfg, "bulk-priority")
+		}
 
 		p, pErr := db.GetProject(database)
 		if pErr != nil {
@@ -306,11 +314,15 @@ var bulkMilestoneChangeCmd = &cobra.Command{
 		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		if !dryRun {
+			snapshotBeforeBatch(database, cfg, "bulk-milestone")
+		}
 
 		p, pErr := db.GetProject(database)
 		if pErr != nil {

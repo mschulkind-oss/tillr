@@ -57,13 +57,15 @@ type Config struct {
 	// verification. The actual key is NEVER stored.
 	EncryptionKeyHash string `json:"encryption_key_hash,omitempty" yaml:"-"`
 
-	// ActiveProject is the currently selected project ID for multi-project support.
-	ActiveProject string `json:"active_project,omitempty" yaml:"active_project"`
-
 	// VantageURL is the base URL for the Vantage documentation viewer.
 	// If set, doc links in the web UI open in Vantage for rendered markdown.
 	// Can also be set via TILLR_VANTAGE_URL env var.
 	VantageURL string `json:"vantage_url,omitempty" yaml:"vantage_url"`
+
+	// MaxSnapshots is the maximum number of automatic pre-mutation snapshots to
+	// retain in .tillr-backups/. Oldest snapshots beyond this count are deleted
+	// after each new snapshot. Default: 10.
+	MaxSnapshots int `json:"max_snapshots,omitempty" yaml:"max_snapshots"`
 }
 
 // DefaultQAConfig returns the default QA config (review everything).
@@ -112,6 +114,7 @@ func Defaults() *Config {
 		ServerPort:      DefaultServerPort,
 		Theme:           "system",
 		AgentTimeout:    30,
+		MaxSnapshots:    10,
 		DBPath:          DefaultDBName,
 	}
 }

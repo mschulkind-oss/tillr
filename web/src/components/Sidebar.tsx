@@ -19,6 +19,7 @@ const sections: { title: string; items: NavItem[] }[] = [
       { path: '/agents', label: 'Agents', icon: '🤖' },
       { path: '/workstreams', label: 'Workstreams', icon: '🧵' },
       { path: '/workflow', label: 'Workflow', icon: '⚡' },
+      { path: '/queue', label: 'Queue', icon: '🚀' },
       { path: '/timeline', label: 'Timeline', icon: '📅' },
     ],
   },

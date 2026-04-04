@@ -341,16 +341,13 @@ function RoadmapRow({ item, linkedFeature }: { item: RoadmapItem; linkedFeature?
         </span>
       )}
 
-      {/* Feature status if linked and differs */}
-      {linkedFeature && (
-        <span className="shrink-0 hidden lg:inline">
-          <StatusBadge status={linkedFeature.status} />
-        </span>
-      )}
-
-      {/* Roadmap status */}
+      {/* Roadmap status — if linked feature exists and has a different status, show feature status instead */}
       <span className="shrink-0">
-        <StatusBadge status={item.status} />
+        {linkedFeature && linkedFeature.status !== item.status ? (
+          <StatusBadge status={linkedFeature.status} />
+        ) : (
+          <StatusBadge status={item.status} />
+        )}
       </span>
 
       {/* Updated */}

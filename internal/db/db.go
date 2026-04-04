@@ -634,4 +634,58 @@ var migrations = []string{
 
 	// Migration 35: Add sort_order to workstreams for manual priority ordering
 	`ALTER TABLE workstreams ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;`,
+
+	// Migration 36: Agent orchestration — worktree tracking, queue scope, claims, activity log
+	`CREATE TABLE IF NOT EXISTS agent_worktrees (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE,
+		path TEXT NOT NULL,
+		agent_id TEXT,
+		status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','in-use','stale')),
+		last_heartbeat DATETIME,
+		created_at DATETIME DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS queue_scope (
+		id INTEGER PRIMARY KEY,
+		key TEXT NOT NULL UNIQUE,
+		value TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS agent_claims (
+		id INTEGER PRIMARY KEY,
+		agent_id TEXT NOT NULL,
+		feature_id TEXT NOT NULL,
+		worktree_name TEXT,
+		status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','failed','released')),
+		claimed_at DATETIME DEFAULT (datetime('now')),
+		completed_at DATETIME
+	);
+
+	CREATE TABLE IF NOT EXISTS agent_activity (
+		id INTEGER PRIMARY KEY,
+		agent_id TEXT NOT NULL,
+		feature_id TEXT,
+		message TEXT NOT NULL,
+		created_at DATETIME DEFAULT (datetime('now'))
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_agent_worktrees_status ON agent_worktrees(status);
+	CREATE INDEX IF NOT EXISTS idx_agent_claims_agent ON agent_claims(agent_id);
+	CREATE INDEX IF NOT EXISTS idx_agent_claims_feature ON agent_claims(feature_id);
+	CREATE INDEX IF NOT EXISTS idx_agent_claims_status ON agent_claims(status);
+	CREATE INDEX IF NOT EXISTS idx_agent_activity_agent ON agent_activity(agent_id);`,
+
+	// Migration 37: Attachments (images/files attached to features, workstreams, notes)
+	`CREATE TABLE IF NOT EXISTS attachments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		entity_type TEXT NOT NULL,
+		entity_id TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		original_name TEXT NOT NULL,
+		label TEXT,
+		content_type TEXT,
+		created_at DATETIME DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id);`,
 }

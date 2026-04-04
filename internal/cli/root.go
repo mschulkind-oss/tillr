@@ -182,7 +182,6 @@ func init() {
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(redoCmd)
 	rootCmd.AddCommand(encryptCmd)
-	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(dashboardCmd)
 	rootCmd.AddCommand(pluginCmd)
 	rootCmd.AddCommand(interactiveCmd)
@@ -195,6 +194,7 @@ func init() {
 	rootCmd.AddCommand(workstreamCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(guideCmd)
+	rootCmd.AddCommand(attachCmd)
 
 	// Short aliases for common commands (CLI Aliases roadmap item)
 	rootCmd.AddCommand(aliasCmd("f", featureCmd, "Alias for 'feature'"))
@@ -228,14 +228,6 @@ func openDB() (*sql.DB, *config.Config, error) {
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening database: %w", err)
-	}
-
-	// If an active project is configured, validate it exists.
-	if cfg.ActiveProject != "" {
-		if _, err := db.GetProjectByID(database, cfg.ActiveProject); err != nil {
-			database.Close() //nolint:errcheck
-			return nil, nil, fmt.Errorf("active project %q not found. Run 'tillr project list' to see available projects", cfg.ActiveProject)
-		}
 	}
 
 	return database, cfg, nil

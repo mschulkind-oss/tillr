@@ -339,6 +339,41 @@ export interface QueueResponse {
   stats: QueueStats
 }
 
+export interface ImplementationQueueFeature {
+  id: string
+  project_id: string
+  milestone_id?: string
+  name: string
+  description?: string
+  spec?: string
+  status: FeatureStatus
+  priority: number
+  assigned_cycle?: string
+  roadmap_item_id?: string
+  created_at: string
+  updated_at: string
+  previous_status?: string
+  estimate_points?: number
+  estimate_size?: string
+  depends_on?: string[]
+  milestone_name?: string
+  tags?: string[]
+  ready: boolean
+  blocked_by?: string[]
+  qa_notes?: string
+  agent_id?: string
+  claimed_at?: string
+  done_at?: string
+}
+
+export interface ImplementationQueueResponse {
+  scope: Record<string, string>
+  claimable: ImplementationQueueFeature[]
+  in_progress: ImplementationQueueFeature[]
+  in_review: ImplementationQueueFeature[]
+  completed_today: ImplementationQueueFeature[]
+}
+
 export interface DependencyGraph {
   nodes: Array<{ id: string; name: string; status: string }>
   edges: Array<{ from: string; to: string }>
@@ -459,7 +494,7 @@ export interface WorkstreamNote {
 export interface WorkstreamLink {
   id: number
   workstream_id: string
-  link_type: 'feature' | 'doc' | 'url' | 'discussion'
+  link_type: 'feature' | 'feature-dependency' | 'doc' | 'url' | 'discussion'
   target_id?: string
   target_url?: string
   label?: string
@@ -476,12 +511,24 @@ export interface WorkstreamDetail {
 export interface WorkstreamFeature {
   feature: Feature
   relationship: 'owned' | 'dependency'
+  rejection_count: number
 }
 
 export interface CycleStep {
   name: string
   human?: boolean
   instructions?: string
+}
+
+export interface Attachment {
+  id: number
+  entity_type: string
+  entity_id: string
+  filename: string
+  original_name: string
+  label?: string
+  content_type?: string
+  created_at: string
 }
 
 export interface AppConfig {

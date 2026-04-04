@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -26,6 +28,7 @@ func init() {
 	workstreamCmd.AddCommand(workstreamResolveCmd)
 	workstreamCmd.AddCommand(workstreamLinkCmd)
 	workstreamCmd.AddCommand(workstreamCloseCmd)
+	workstreamCmd.AddCommand(workstreamExportStatusCmd)
 
 	workstreamCreateCmd.Flags().String("description", "", "Workstream description")
 	workstreamCreateCmd.Flags().String("tags", "", "Comma-separated tags")
@@ -483,4 +486,212 @@ var workstreamCloseCmd = &cobra.Command{
 		fmt.Printf("Closed workstream %s\n", args[0])
 		return nil
 	},
+}
+
+var workstreamExportStatusCmd = &cobra.Command{
+	Use:   "export-status <workstream-id>",
+	Short: "Export workstream status to a markdown file for Vantage",
+	Long:  `Generates a markdown status file at swarf/workstreams/<workstream-id>.md containing the workstream's name, description, feature table, progress stats, recent notes/decisions, and links.`,
+	Args:  cobra.ExactArgs(1),
+	Example: `  tillr workstream export-status auth-redesign
+  tillr ws export-status api-v2`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		database, cfg, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+
+		wsID := args[0]
+
+		// Fetch workstream detail (workstream + notes + links + children)
+		detail, err := db.GetWorkstreamDetail(database, wsID)
+		if err != nil {
+			return fmt.Errorf("workstream %q not found", wsID)
+		}
+
+		// Fetch features linked to this workstream
+		features, err := db.ListWorkstreamFeatures(database, wsID)
+		if err != nil {
+			return fmt.Errorf("loading features: %w", err)
+		}
+
+		// Build the markdown content
+		md := buildWorkstreamStatusMarkdown(detail, features)
+
+		// Write to swarf/workstreams/<id>.md
+		outDir := filepath.Join(cfg.ProjectDir, "swarf", "workstreams")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return fmt.Errorf("creating output directory: %w", err)
+		}
+
+		outPath := filepath.Join(outDir, wsID+".md")
+		if err := os.WriteFile(outPath, []byte(md), 0o644); err != nil {
+			return fmt.Errorf("writing status file: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]any{
+				"workstream_id": wsID,
+				"path":          outPath,
+			})
+		}
+		fmt.Printf("Exported workstream status to %s\n", outPath)
+		return nil
+	},
+}
+
+func buildWorkstreamStatusMarkdown(detail *models.WorkstreamDetail, features []models.WorkstreamFeature) string {
+	var b strings.Builder
+	w := detail.Workstream
+
+	// Header
+	b.WriteString("# " + w.Name + "\n\n")
+
+	// Metadata
+	b.WriteString("| Field | Value |\n")
+	b.WriteString("|-------|-------|\n")
+	fmt.Fprintf(&b, "| **Status** | %s |\n", w.Status)
+	if w.Tags != "" {
+		fmt.Fprintf(&b, "| **Tags** | %s |\n", w.Tags)
+	}
+	if w.ParentID != "" {
+		fmt.Fprintf(&b, "| **Parent** | %s |\n", w.ParentID)
+	}
+	fmt.Fprintf(&b, "| **Created** | %s |\n", w.CreatedAt)
+	fmt.Fprintf(&b, "| **Updated** | %s |\n", w.UpdatedAt)
+	b.WriteString("\n")
+
+	if w.Description != "" {
+		b.WriteString(w.Description + "\n\n")
+	}
+
+	// Feature table + progress stats
+	if len(features) > 0 {
+		b.WriteString("## Features\n\n")
+
+		// Progress stats
+		total := len(features)
+		done := 0
+		for _, f := range features {
+			if f.Feature.Status == "done" || f.Feature.Status == "released" {
+				done++
+			}
+		}
+		fmt.Fprintf(&b, "**Progress: %d / %d complete**\n\n", done, total)
+
+		b.WriteString("| Feature | Status | Priority | Relationship |\n")
+		b.WriteString("|---------|--------|----------|--------------|\n")
+		for _, f := range features {
+			name := f.Feature.Name
+			priority := fmt.Sprintf("%d", f.Feature.Priority)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
+				name, f.Feature.Status, priority, f.Relationship)
+		}
+		b.WriteString("\n")
+	}
+
+	// Recent notes and decisions
+	if len(detail.Notes) > 0 {
+		b.WriteString("## Notes & Decisions\n\n")
+		// Show most recent notes (already sorted DESC by created_at from the query)
+		limit := len(detail.Notes)
+		if limit > 20 {
+			limit = 20
+		}
+		for _, n := range detail.Notes[:limit] {
+			prefix := ""
+			switch n.NoteType {
+			case "decision":
+				prefix = "[Decision] "
+			case "question":
+				prefix = "[Question] "
+			case "idea":
+				prefix = "[Idea] "
+			case "import":
+				prefix = "[Import] "
+			}
+			resolved := ""
+			if n.Resolved != 0 {
+				resolved = " *(resolved)*"
+			}
+			source := ""
+			if n.Source != "" {
+				source = fmt.Sprintf(" (via %s)", n.Source)
+			}
+			fmt.Fprintf(&b, "- **%s%s**%s%s — %s\n",
+				prefix, truncateNote(n.Content, 200), resolved, source, n.CreatedAt)
+		}
+		if len(detail.Notes) > limit {
+			fmt.Fprintf(&b, "\n*...and %d more notes*\n", len(detail.Notes)-limit)
+		}
+		b.WriteString("\n")
+	}
+
+	// Links
+	nonFeatureLinks := filterNonFeatureLinks(detail.Links)
+	if len(nonFeatureLinks) > 0 {
+		b.WriteString("## Links\n\n")
+		for _, l := range nonFeatureLinks {
+			label := l.Label
+			if label == "" {
+				label = l.LinkType
+			}
+			target := l.TargetURL
+			if target == "" {
+				target = l.TargetID
+			}
+			switch l.LinkType {
+			case "url":
+				fmt.Fprintf(&b, "- [%s](%s)\n", label, target)
+			case "doc":
+				fmt.Fprintf(&b, "- %s: `%s`\n", label, target)
+			case "discussion":
+				fmt.Fprintf(&b, "- Discussion #%s", target)
+				if l.Label != "" {
+					fmt.Fprintf(&b, ": %s", l.Label)
+				}
+				b.WriteString("\n")
+			default:
+				fmt.Fprintf(&b, "- [%s] %s\n", l.LinkType, target)
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Children workstreams
+	if len(detail.Children) > 0 {
+		b.WriteString("## Child Workstreams\n\n")
+		for _, c := range detail.Children {
+			fmt.Fprintf(&b, "- **%s** (`%s`) — %s\n", c.Name, c.ID, c.Status)
+		}
+		b.WriteString("\n")
+	}
+
+	// Footer
+	b.WriteString("---\n")
+	b.WriteString("*Generated by tillr workstream export-status*\n")
+
+	return b.String()
+}
+
+// filterNonFeatureLinks returns links that are not feature/feature-dependency
+// (those are already shown in the Features table).
+func filterNonFeatureLinks(links []models.WorkstreamLink) []models.WorkstreamLink {
+	var out []models.WorkstreamLink
+	for _, l := range links {
+		if l.LinkType != "feature" && l.LinkType != "feature-dependency" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func truncateNote(s string, maxLen int) string {
+	// Replace newlines with spaces for single-line display
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }

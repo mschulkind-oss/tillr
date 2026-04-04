@@ -29,8 +29,9 @@ export function useWebSocket() {
         const msg: WebSocketMessage = JSON.parse(event.data)
 
         if (msg.type === 'refresh') {
-          // Invalidate all queries to trigger refetch
-          queryClient.invalidateQueries()
+          // Refetch active queries in the background (don't invalidate cache —
+          // invalidating removes data and causes loading flashes).
+          queryClient.refetchQueries({ type: 'active' })
 
           // Create notification from event data if available
           if (msg.data && typeof msg.data === 'object') {

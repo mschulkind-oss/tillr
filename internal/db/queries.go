@@ -31,32 +31,6 @@ func GetProject(db *sql.DB) (*models.Project, error) {
 	return p, nil
 }
 
-func ListProjects(db *sql.DB) ([]models.Project, error) {
-	rows, err := db.Query(`SELECT id, name, description, created_at, updated_at FROM projects ORDER BY created_at`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var projects []models.Project
-	for rows.Next() {
-		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, err
-		}
-		projects = append(projects, p)
-	}
-	return projects, rows.Err()
-}
-
-func GetProjectByID(db *sql.DB, id string) (*models.Project, error) {
-	row := db.QueryRow(`SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?`, id)
-	p := &models.Project{}
-	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
 func UpdateProject(db *sql.DB, id, description string) error {
 	_, err := db.Exec(`UPDATE projects SET description = ?, updated_at = datetime('now') WHERE id = ?`, description, id)
 	return err
@@ -4822,7 +4796,8 @@ func ListWorkstreamFeatures(db *sql.DB, workstreamID string) ([]models.Workstrea
 			COALESCE(f.roadmap_item_id,''), f.created_at, f.updated_at,
 			COALESCE(f.previous_status,''), COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,''),
 			COALESCE(m.name,'') AS milestone_name,
-			CASE wl.link_type WHEN 'feature' THEN 'owned' ELSE 'dependency' END AS relationship
+			CASE wl.link_type WHEN 'feature' THEN 'owned' ELSE 'dependency' END AS relationship,
+			COALESCE((SELECT COUNT(*) FROM qa_results qr WHERE qr.feature_id = f.id AND qr.passed = 0), 0) AS rejection_count
 		FROM workstream_links wl
 		JOIN features f ON f.id = wl.target_id
 		LEFT JOIN milestones m ON m.id = f.milestone_id
@@ -4844,7 +4819,7 @@ func ListWorkstreamFeatures(db *sql.DB, workstreamID string) ([]models.Workstrea
 			&wf.Feature.Status, &wf.Feature.Priority, &wf.Feature.AssignedCycle,
 			&wf.Feature.RoadmapItemID, &wf.Feature.CreatedAt, &wf.Feature.UpdatedAt,
 			&wf.Feature.PreviousStatus, &wf.Feature.EstimatePoints, &wf.Feature.EstimateSize,
-			&wf.Feature.MilestoneName, &wf.Relationship,
+			&wf.Feature.MilestoneName, &wf.Relationship, &wf.RejectionCount,
 		); err != nil {
 			return nil, err
 		}
@@ -4934,4 +4909,655 @@ func listWorkstreamChildren(db *sql.DB, parentID string) ([]models.Workstream, e
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+// --- Agent Orchestration: Worktrees ---
+
+func CreateAgentWorktree(database *sql.DB, w *models.AgentWorktree) error {
+	res, err := database.Exec(
+		`INSERT INTO agent_worktrees (name, path, agent_id, status) VALUES (?, ?, ?, ?)`,
+		w.Name, w.Path, nullStr(w.AgentID), w.Status,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	w.ID = int(id)
+	return nil
+}
+
+func GetAgentWorktreeByName(database *sql.DB, name string) (*models.AgentWorktree, error) {
+	row := database.QueryRow(`SELECT id, name, path, COALESCE(agent_id,''), status, COALESCE(last_heartbeat,''), COALESCE(created_at,'')
+		FROM agent_worktrees WHERE name = ?`, name)
+	w := &models.AgentWorktree{}
+	err := row.Scan(&w.ID, &w.Name, &w.Path, &w.AgentID, &w.Status, &w.LastHeartbeat, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func ListAgentWorktrees(database *sql.DB) ([]models.AgentWorktree, error) {
+	rows, err := database.Query(`SELECT id, name, path, COALESCE(agent_id,''), status, COALESCE(last_heartbeat,''), COALESCE(created_at,'')
+		FROM agent_worktrees ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.AgentWorktree
+	for rows.Next() {
+		var w models.AgentWorktree
+		if err := rows.Scan(&w.ID, &w.Name, &w.Path, &w.AgentID, &w.Status, &w.LastHeartbeat, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func UpdateAgentWorktreeStatus(database *sql.DB, name, status, agentID string) error {
+	_, err := database.Exec(
+		`UPDATE agent_worktrees SET status = ?, agent_id = ?, last_heartbeat = datetime('now') WHERE name = ?`,
+		status, nullStr(agentID), name,
+	)
+	return err
+}
+
+func UpdateAgentWorktreeHeartbeat(database *sql.DB, name string) error {
+	_, err := database.Exec(`UPDATE agent_worktrees SET last_heartbeat = datetime('now') WHERE name = ?`, name)
+	return err
+}
+
+func DeleteAgentWorktree(database *sql.DB, name string) error {
+	_, err := database.Exec(`DELETE FROM agent_worktrees WHERE name = ?`, name)
+	return err
+}
+
+// GCStaleAgentWorktrees marks worktrees with heartbeats older than staleMins as stale
+// and returns the count of affected rows.
+func GCStaleAgentWorktrees(database *sql.DB, staleMins int) (int, error) {
+	res, err := database.Exec(
+		`UPDATE agent_worktrees SET status = 'stale', agent_id = NULL
+		 WHERE status = 'in-use'
+		   AND last_heartbeat < datetime('now', ? || ' minutes')`,
+		fmt.Sprintf("-%d", staleMins),
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// --- Agent Orchestration: Queue Scope ---
+
+func SetQueueScope(database *sql.DB, key, value string) error {
+	_, err := database.Exec(
+		`INSERT INTO queue_scope (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	return err
+}
+
+func DeleteQueueScope(database *sql.DB, key string) error {
+	_, err := database.Exec(`DELETE FROM queue_scope WHERE key = ?`, key)
+	return err
+}
+
+func GetQueueScopeMap(database *sql.DB) (map[string]string, error) {
+	rows, err := database.Query(`SELECT key, value FROM queue_scope`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	m := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		m[k] = v
+	}
+	return m, rows.Err()
+}
+
+func ListQueueScope(database *sql.DB) ([]models.QueueScopeEntry, error) {
+	rows, err := database.Query(`SELECT key, value FROM queue_scope ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.QueueScopeEntry
+	for rows.Next() {
+		var e models.QueueScopeEntry
+		if err := rows.Scan(&e.Key, &e.Value); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// --- Agent Orchestration: Claims ---
+
+func CreateAgentClaim(database *sql.DB, c *models.AgentClaim) error {
+	res, err := database.Exec(
+		`INSERT INTO agent_claims (agent_id, feature_id, worktree_name, status) VALUES (?, ?, ?, ?)`,
+		c.AgentID, c.FeatureID, nullStr(c.WorktreeName), c.Status,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	c.ID = int(id)
+	return nil
+}
+
+func GetActiveClaimForAgent(database *sql.DB, agentID string) (*models.AgentClaim, error) {
+	row := database.QueryRow(`SELECT id, agent_id, feature_id, COALESCE(worktree_name,''), status, COALESCE(claimed_at,''), COALESCE(completed_at,'')
+		FROM agent_claims WHERE agent_id = ? AND status = 'active' LIMIT 1`, agentID)
+	c := &models.AgentClaim{}
+	err := row.Scan(&c.ID, &c.AgentID, &c.FeatureID, &c.WorktreeName, &c.Status, &c.ClaimedAt, &c.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func GetActiveClaimForFeature(database *sql.DB, featureID string) (*models.AgentClaim, error) {
+	row := database.QueryRow(`SELECT id, agent_id, feature_id, COALESCE(worktree_name,''), status, COALESCE(claimed_at,''), COALESCE(completed_at,'')
+		FROM agent_claims WHERE feature_id = ? AND status = 'active' LIMIT 1`, featureID)
+	c := &models.AgentClaim{}
+	err := row.Scan(&c.ID, &c.AgentID, &c.FeatureID, &c.WorktreeName, &c.Status, &c.ClaimedAt, &c.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func UpdateAgentClaimStatus(database *sql.DB, id int, status string) error {
+	completedAt := "NULL"
+	if status == "completed" || status == "failed" || status == "released" {
+		completedAt = "datetime('now')"
+	}
+	_, err := database.Exec(
+		fmt.Sprintf(`UPDATE agent_claims SET status = ?, completed_at = %s WHERE id = ?`, completedAt),
+		status, id,
+	)
+	return err
+}
+
+func ListActiveAgentClaims(database *sql.DB) ([]models.AgentClaim, error) {
+	rows, err := database.Query(`SELECT id, agent_id, feature_id, COALESCE(worktree_name,''), status, COALESCE(claimed_at,''), COALESCE(completed_at,'')
+		FROM agent_claims WHERE status = 'active' ORDER BY claimed_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.AgentClaim
+	for rows.Next() {
+		var c models.AgentClaim
+		if err := rows.Scan(&c.ID, &c.AgentID, &c.FeatureID, &c.WorktreeName, &c.Status, &c.ClaimedAt, &c.CompletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// --- Agent Orchestration: Activity Log ---
+
+func InsertAgentActivity(database *sql.DB, agentID, featureID, message string) error {
+	_, err := database.Exec(
+		`INSERT INTO agent_activity (agent_id, feature_id, message) VALUES (?, ?, ?)`,
+		agentID, nullStr(featureID), message,
+	)
+	return err
+}
+
+func ListAgentActivity(database *sql.DB, agentID string, limit int) ([]models.AgentActivityEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := database.Query(
+		`SELECT id, agent_id, COALESCE(feature_id,''), message, COALESCE(created_at,'')
+		 FROM agent_activity WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`,
+		agentID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []models.AgentActivityEntry
+	for rows.Next() {
+		var e models.AgentActivityEntry
+		if err := rows.Scan(&e.ID, &e.AgentID, &e.FeatureID, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// --- Agent Orchestration: Topo-sorted Feature Queue ---
+
+// GetClaimableFeatures returns features claimable by agents:
+// - status is 'draft' or 'planning' (not already being implemented)
+// - all dependencies have status 'done'
+// - not currently claimed by another agent
+// - respects queue scope filters (min-priority, status)
+// Results are ordered by priority DESC then created_at.
+func GetClaimableFeatures(database *sql.DB, projectID string, scope map[string]string) ([]models.Feature, error) {
+	q := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE f.project_id = ?
+		  AND f.status IN ('draft', 'planning')
+		  AND f.id NOT IN (SELECT feature_id FROM agent_claims WHERE status = 'active')`
+
+	args := []any{projectID}
+
+	if minPri, ok := scope["min-priority"]; ok {
+		q += " AND f.priority >= ?"
+		args = append(args, minPri)
+	}
+	if statusFilter, ok := scope["status"]; ok {
+		q += " AND f.status = ?"
+		args = append(args, statusFilter)
+	}
+
+	q += " ORDER BY f.priority DESC, f.created_at"
+
+	rows, err := database.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var features []models.Feature
+	for rows.Next() {
+		var f models.Feature
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		features = append(features, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(features) == 0 {
+		return features, nil
+	}
+
+	// Load all deps
+	depRows, err := database.Query("SELECT feature_id, depends_on FROM feature_deps")
+	if err != nil {
+		return features, nil
+	}
+	defer func() { _ = depRows.Close() }()
+
+	depMap := make(map[string][]string)
+	for depRows.Next() {
+		var fid, dep string
+		if err := depRows.Scan(&fid, &dep); err == nil {
+			depMap[fid] = append(depMap[fid], dep)
+		}
+	}
+
+	// Load statuses for dep checking
+	statusMap := make(map[string]string)
+	statusRows, err := database.Query("SELECT id, status FROM features WHERE project_id = ?", projectID)
+	if err == nil {
+		defer func() { _ = statusRows.Close() }()
+		for statusRows.Next() {
+			var id, st string
+			if err := statusRows.Scan(&id, &st); err == nil {
+				statusMap[id] = st
+			}
+		}
+	}
+
+	// Filter: only return features whose deps are all 'done'
+	var claimable []models.Feature
+	for _, f := range features {
+		deps := depMap[f.ID]
+		f.DependsOn = deps
+		allDone := true
+		for _, dep := range deps {
+			if statusMap[dep] != "done" {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			claimable = append(claimable, f)
+		}
+	}
+
+	// Load tags
+	tagRows, err := database.Query("SELECT feature_id, tag FROM feature_tags ORDER BY tag")
+	if err == nil {
+		defer func() { _ = tagRows.Close() }()
+		tagMap := make(map[string][]string)
+		for tagRows.Next() {
+			var fid, t string
+			if err := tagRows.Scan(&fid, &t); err == nil {
+				tagMap[fid] = append(tagMap[fid], t)
+			}
+		}
+		for i := range claimable {
+			if tags, ok := tagMap[claimable[i].ID]; ok {
+				claimable[i].Tags = tags
+			}
+		}
+	}
+
+	return claimable, nil
+}
+
+// GetImplementationQueue returns the full implementation queue data:
+// claimable features (with blocked info), in-progress (claimed), and completed items.
+// The days parameter controls how many extra days of completed items to include (0 = today only).
+func GetImplementationQueue(database *sql.DB, projectID string, scope map[string]string, days int) (*models.ImplementationQueueResponse, error) {
+	resp := &models.ImplementationQueueResponse{
+		Scope:          scope,
+		Claimable:      []models.ImplementationQueueFeature{},
+		InProgress:     []models.ImplementationQueueFeature{},
+		InReview:       []models.ImplementationQueueFeature{},
+		CompletedToday: []models.ImplementationQueueFeature{},
+	}
+
+	// Clean up stale claims: auto-complete claims where the feature is already done
+	_, _ = database.Exec(`UPDATE agent_claims SET status = 'completed', completed_at = datetime('now')
+		WHERE status = 'active' AND feature_id IN (SELECT id FROM features WHERE status = 'done')`)
+
+	// Load all deps and statuses for readiness checking
+	depMap := make(map[string][]string)
+	depRows, err := database.Query("SELECT feature_id, depends_on FROM feature_deps")
+	if err == nil {
+		defer func() { _ = depRows.Close() }()
+		for depRows.Next() {
+			var fid, dep string
+			if err := depRows.Scan(&fid, &dep); err == nil {
+				depMap[fid] = append(depMap[fid], dep)
+			}
+		}
+	}
+
+	statusMap := make(map[string]string)
+	nameMap := make(map[string]string)
+	statusRows, err := database.Query("SELECT id, status, name FROM features WHERE project_id = ?", projectID)
+	if err == nil {
+		defer func() { _ = statusRows.Close() }()
+		for statusRows.Next() {
+			var id, st, nm string
+			if err := statusRows.Scan(&id, &st, &nm); err == nil {
+				statusMap[id] = st
+				nameMap[id] = nm
+			}
+		}
+	}
+
+	// Load latest QA rejection notes per feature
+	qaNotesMap := make(map[string]string)
+	qaRows, err := database.Query(`SELECT feature_id, notes FROM qa_results
+		WHERE passed = 0 AND notes != ''
+		ORDER BY created_at ASC`)
+	if err == nil {
+		defer func() { _ = qaRows.Close() }()
+		for qaRows.Next() {
+			var fid, notes string
+			if err := qaRows.Scan(&fid, &notes); err == nil {
+				qaNotesMap[fid] = notes // last one wins (ordered ASC)
+			}
+		}
+	}
+
+	// Load tags
+	tagMap := make(map[string][]string)
+	tagRows, err := database.Query("SELECT feature_id, tag FROM feature_tags ORDER BY tag")
+	if err == nil {
+		defer func() { _ = tagRows.Close() }()
+		for tagRows.Next() {
+			var fid, t string
+			if err := tagRows.Scan(&fid, &t); err == nil {
+				tagMap[fid] = append(tagMap[fid], t)
+			}
+		}
+	}
+
+	// Helper to build ImplementationQueueFeature from Feature
+	enrich := func(f models.Feature) models.ImplementationQueueFeature {
+		iqf := models.ImplementationQueueFeature{Feature: f}
+		deps := depMap[f.ID]
+		f.DependsOn = deps
+		iqf.DependsOn = deps
+		iqf.Tags = tagMap[f.ID]
+
+		// Check readiness
+		iqf.Ready = true
+		for _, dep := range deps {
+			if statusMap[dep] != "done" {
+				iqf.Ready = false
+				label := dep
+				if n, ok := nameMap[dep]; ok {
+					label = n
+				}
+				iqf.BlockedBy = append(iqf.BlockedBy, label)
+			}
+		}
+		if notes, ok := qaNotesMap[f.ID]; ok {
+			iqf.QANotes = notes
+		}
+		return iqf
+	}
+
+	// --- Claimable features (draft/planning, not claimed) ---
+	claimableQ := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE f.project_id = ?
+		  AND f.status IN ('draft', 'planning')
+		  AND f.id NOT IN (SELECT feature_id FROM agent_claims WHERE status = 'active')`
+	args := []any{projectID}
+
+	if ws, ok := scope["workstream"]; ok && ws != "" {
+		claimableQ += ` AND f.id IN (SELECT target_id FROM workstream_links WHERE workstream_id = ? AND link_type = 'feature')`
+		args = append(args, ws)
+	}
+	if minPri, ok := scope["min-priority"]; ok {
+		claimableQ += " AND f.priority >= ?"
+		args = append(args, minPri)
+	}
+	if statusFilter, ok := scope["status"]; ok {
+		claimableQ += " AND f.status = ?"
+		args = append(args, statusFilter)
+	}
+	claimableQ += " ORDER BY f.priority DESC, f.created_at"
+
+	rows, err := database.Query(claimableQ, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying claimable: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var f models.Feature
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		resp.Claimable = append(resp.Claimable, enrich(f))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// --- In-progress (features with active claims, implementing status only) ---
+	ipQ := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,''),
+			ac.agent_id, COALESCE(ac.claimed_at,'')
+		FROM agent_claims ac
+		JOIN features f ON f.id = ac.feature_id
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE ac.status = 'active'
+		  AND f.project_id = ?
+		  AND f.status = 'implementing'
+		ORDER BY ac.claimed_at`
+	ipRows, err := database.Query(ipQ, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying in-progress: %w", err)
+	}
+	defer func() { _ = ipRows.Close() }()
+
+	for ipRows.Next() {
+		var f models.Feature
+		var agentID, claimedAt string
+		if err := ipRows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize, &agentID, &claimedAt); err != nil {
+			return nil, err
+		}
+		iqf := enrich(f)
+		iqf.AgentID = agentID
+		iqf.ClaimedAt = claimedAt
+		resp.InProgress = append(resp.InProgress, iqf)
+	}
+
+	// --- In review (features in agent-qa or human-qa status) ---
+	reviewQ := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE f.project_id = ?
+		  AND f.status IN ('agent-qa', 'human-qa')`
+	reviewArgs := []any{projectID}
+
+	if ws, ok := scope["workstream"]; ok && ws != "" {
+		reviewQ += ` AND f.id IN (SELECT target_id FROM workstream_links WHERE workstream_id = ? AND link_type = 'feature')`
+		reviewArgs = append(reviewArgs, ws)
+	}
+	if minPri, ok := scope["min-priority"]; ok {
+		reviewQ += " AND f.priority >= ?"
+		reviewArgs = append(reviewArgs, minPri)
+	}
+	reviewQ += " ORDER BY f.priority DESC"
+
+	reviewRows, err := database.Query(reviewQ, reviewArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying in-review: %w", err)
+	}
+	defer func() { _ = reviewRows.Close() }()
+
+	for reviewRows.Next() {
+		var f models.Feature
+		if err := reviewRows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		resp.InReview = append(resp.InReview, enrich(f))
+	}
+	if err := reviewRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// --- Completed items (today + extra days) ---
+	doneQ := `SELECT f.id, f.project_id, COALESCE(f.milestone_id,''), f.name, COALESCE(f.description,''), COALESCE(f.spec,''),
+			f.status, f.priority, COALESCE(f.assigned_cycle,''), COALESCE(f.roadmap_item_id,''),
+			f.created_at, f.updated_at, COALESCE(m.name,''), COALESCE(f.previous_status,''),
+			COALESCE(f.estimate_points,0), COALESCE(f.estimate_size,'')
+		FROM features f
+		LEFT JOIN milestones m ON f.milestone_id = m.id
+		WHERE f.project_id = ?
+		  AND f.status = 'done'
+		  AND date(f.updated_at) >= date('now', ? || ' days')
+		ORDER BY f.updated_at DESC`
+	dayOffset := fmt.Sprintf("-%d", days)
+	doneRows, err := database.Query(doneQ, projectID, dayOffset)
+	if err != nil {
+		return nil, fmt.Errorf("querying completed today: %w", err)
+	}
+	defer func() { _ = doneRows.Close() }()
+
+	for doneRows.Next() {
+		var f models.Feature
+		if err := doneRows.Scan(&f.ID, &f.ProjectID, &f.MilestoneID, &f.Name, &f.Description, &f.Spec,
+			&f.Status, &f.Priority, &f.AssignedCycle, &f.RoadmapItemID, &f.CreatedAt, &f.UpdatedAt, &f.MilestoneName, &f.PreviousStatus,
+			&f.EstimatePoints, &f.EstimateSize); err != nil {
+			return nil, err
+		}
+		iqf := enrich(f)
+		iqf.DoneAt = f.UpdatedAt
+		resp.CompletedToday = append(resp.CompletedToday, iqf)
+	}
+
+	return resp, nil
+}
+
+// CreateAttachment inserts a new attachment record.
+func CreateAttachment(database *sql.DB, a *models.Attachment) error {
+	res, err := database.Exec(`INSERT INTO attachments (entity_type, entity_id, filename, original_name, label, content_type) VALUES (?, ?, ?, ?, ?, ?)`,
+		a.EntityType, a.EntityID, a.Filename, a.OriginalName, a.Label, a.ContentType)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	a.ID = int(id)
+	return nil
+}
+
+// ListAttachments returns all attachments for the given entity.
+func ListAttachments(database *sql.DB, entityType, entityID string) ([]models.Attachment, error) {
+	rows, err := database.Query(`SELECT id, entity_type, entity_id, filename, original_name, COALESCE(label,''), COALESCE(content_type,''), created_at FROM attachments WHERE entity_type = ? AND entity_id = ? ORDER BY created_at DESC`, entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.Attachment
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(&a.ID, &a.EntityType, &a.EntityID, &a.Filename, &a.OriginalName, &a.Label, &a.ContentType, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// GetAttachmentByFilename returns a single attachment by its stored filename.
+func GetAttachmentByFilename(database *sql.DB, filename string) (*models.Attachment, error) {
+	var a models.Attachment
+	err := database.QueryRow(`SELECT id, entity_type, entity_id, filename, original_name, COALESCE(label,''), COALESCE(content_type,''), created_at FROM attachments WHERE filename = ?`, filename).
+		Scan(&a.ID, &a.EntityType, &a.EntityID, &a.Filename, &a.OriginalName, &a.Label, &a.ContentType, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// DeleteAttachment removes an attachment record by ID.
+func DeleteAttachment(database *sql.DB, id int) error {
+	_, err := database.Exec(`DELETE FROM attachments WHERE id = ?`, id)
+	return err
 }

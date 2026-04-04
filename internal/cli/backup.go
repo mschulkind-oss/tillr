@@ -132,11 +132,18 @@ func runBackupList(_ *cobra.Command, _ []string) error {
 		if err != nil {
 			continue
 		}
+		kind := "manual"
+		if strings.HasPrefix(e.Name(), "pre-") {
+			kind = "auto"
+		} else if strings.Contains(e.Name(), "pre-restore") {
+			kind = "pre-restore"
+		}
 		backups = append(backups, BackupInfo{
 			Name:    e.Name(),
 			Path:    filepath.Join(backupDir, e.Name()),
 			Size:    info.Size(),
 			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+			Kind:    kind,
 		})
 	}
 
@@ -154,9 +161,9 @@ func runBackupList(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	fmt.Printf("%-40s  %10s  %s\n", "NAME", "SIZE", "MODIFIED")
+	fmt.Printf("%-45s  %-12s  %10s  %s\n", "NAME", "KIND", "SIZE", "MODIFIED")
 	for _, b := range backups {
-		fmt.Printf("%-40s  %10s  %s\n", b.Name, formatSize(b.Size), b.ModTime)
+		fmt.Printf("%-45s  %-12s  %10s  %s\n", b.Name, b.Kind, formatSize(b.Size), b.ModTime)
 	}
 	return nil
 }
@@ -261,6 +268,7 @@ type BackupInfo struct {
 	Path    string `json:"path"`
 	Size    int64  `json:"size"`
 	ModTime string `json:"mod_time"`
+	Kind    string `json:"kind"` // "manual", "auto", or "pre-restore"
 }
 
 // RestoreResult is the JSON output for the restore command.

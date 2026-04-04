@@ -1,35 +1,40 @@
 import { useQuery } from '@tanstack/react-query'
 import { getHistory } from '../api/client'
 import { EntityLink } from '../components/EntityLink'
+import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
-import { formatTimeAgo, formatTimestamp, cn } from '../lib/utils'
+import { formatTimeAgo, formatTimestamp, cn, groupBy } from '../lib/utils'
 import { useState, useMemo } from 'react'
 import type { Event } from '../api/types'
 
 const LIMIT_OPTIONS = [50, 100, 200] as const
 
-const EVENT_STYLES: Record<string, { color: string; dot: string; icon: string }> = {
-  'feature.created':        { color: 'text-blue-400',   dot: 'bg-blue-400',   icon: '➕' },
-  'feature_created':        { color: 'text-blue-400',   dot: 'bg-blue-400',   icon: '➕' },
-  'feature.status_changed': { color: 'text-yellow-400', dot: 'bg-yellow-400', icon: '🔀' },
-  'feature_status_changed': { color: 'text-yellow-400', dot: 'bg-yellow-400', icon: '🔀' },
-  'qa_approved':            { color: 'text-green-400',  dot: 'bg-green-400',  icon: '✅' },
-  'qa.approved':            { color: 'text-green-400',  dot: 'bg-green-400',  icon: '✅' },
-  'qa_rejected':            { color: 'text-red-400',    dot: 'bg-red-400',    icon: '❌' },
-  'qa.rejected':            { color: 'text-red-400',    dot: 'bg-red-400',    icon: '❌' },
-  'cycle_started':          { color: 'text-purple-400', dot: 'bg-purple-400', icon: '🔄' },
-  'cycle.started':          { color: 'text-purple-400', dot: 'bg-purple-400', icon: '🔄' },
-  'cycle_completed':        { color: 'text-purple-400', dot: 'bg-purple-400', icon: '🏁' },
-  'cycle.completed':        { color: 'text-purple-400', dot: 'bg-purple-400', icon: '🏁' },
+/* ── Event type visual config ─────────────────────────────────── */
+
+const EVENT_STYLES: Record<string, { accent: string; dot: string; icon: string; label: string }> = {
+  'feature.created':        { accent: 'text-green-400',  dot: 'bg-green-400',  icon: '+',  label: 'Created' },
+  'feature_created':        { accent: 'text-green-400',  dot: 'bg-green-400',  icon: '+',  label: 'Created' },
+  'feature.status_changed': { accent: 'text-yellow-400', dot: 'bg-yellow-400', icon: '~',  label: 'Status Changed' },
+  'feature_status_changed': { accent: 'text-yellow-400', dot: 'bg-yellow-400', icon: '~',  label: 'Status Changed' },
+  'qa_approved':            { accent: 'text-green-400',  dot: 'bg-green-400',  icon: 'ok', label: 'QA Approved' },
+  'qa.approved':            { accent: 'text-green-400',  dot: 'bg-green-400',  icon: 'ok', label: 'QA Approved' },
+  'qa_rejected':            { accent: 'text-red-400',    dot: 'bg-red-400',    icon: 'x',  label: 'QA Rejected' },
+  'qa.rejected':            { accent: 'text-red-400',    dot: 'bg-red-400',    icon: 'x',  label: 'QA Rejected' },
+  'cycle_started':          { accent: 'text-purple-400', dot: 'bg-purple-400', icon: '>',  label: 'Cycle Started' },
+  'cycle.started':          { accent: 'text-purple-400', dot: 'bg-purple-400', icon: '>',  label: 'Cycle Started' },
+  'cycle_completed':        { accent: 'text-purple-400', dot: 'bg-purple-400', icon: '#',  label: 'Cycle Completed' },
+  'cycle.completed':        { accent: 'text-purple-400', dot: 'bg-purple-400', icon: '#',  label: 'Cycle Completed' },
+  'workstream.created':     { accent: 'text-teal-400',   dot: 'bg-teal-400',   icon: '+',  label: 'Workstream Created' },
+  'workstream_created':     { accent: 'text-teal-400',   dot: 'bg-teal-400',   icon: '+',  label: 'Workstream Created' },
 }
 
-const DEFAULT_STYLE = { color: 'text-text-muted', dot: 'bg-text-muted', icon: '📌' }
+const DEFAULT_STYLE = { accent: 'text-text-muted', dot: 'bg-text-muted', icon: '*', label: '' }
 
 function getEventStyle(eventType: string) {
   return EVENT_STYLES[eventType] ?? DEFAULT_STYLE
 }
 
-function formatEventLabel(eventType: string): string {
+function fallbackLabel(eventType: string): string {
   return eventType
     .replace(/^feature\./, '')
     .replace(/^qa\./, 'qa_')
@@ -37,39 +42,71 @@ function formatEventLabel(eventType: string): string {
     .replace(/_/g, ' ')
 }
 
-function formatEventDescription(event: Event): string {
+/* ── Data parsing ─────────────────────────────────────────────── */
+
+interface ParsedEventData {
+  from?: string
+  to?: string
+  name?: string
+  notes?: string
+  cycleType?: string
+  milestoneId?: string
+  score?: string
+  iteration?: string
+  raw: Record<string, unknown>
+}
+
+function parseEventData(event: Event): ParsedEventData {
+  const empty: ParsedEventData = { raw: {} }
+  if (!event.data) return empty
+
   try {
-    const data = JSON.parse(event.data || '{}')
-    const type = event.event_type
-
-    if (type === 'feature.status_changed' || type === 'feature_status_changed') {
-      const from = data.old_status || data.from
-      const to = data.new_status || data.to
-      if (from && to) return `Status changed from ${from} to ${to}`
-      if (to) return `Status changed to ${to}`
-      return 'Status changed'
+    const data = JSON.parse(event.data)
+    return {
+      from: data.old_status || data.from,
+      to: data.new_status || data.to,
+      name: data.name || data.feature_name,
+      notes: data.notes,
+      cycleType: data.cycle_type,
+      milestoneId: data.milestone_id,
+      score: data.score !== undefined ? String(data.score) : undefined,
+      iteration: data.iteration !== undefined ? String(data.iteration) : undefined,
+      raw: data,
     }
-    if (type === 'feature.created' || type === 'feature_created') {
-      return `Feature created: ${data.name || data.feature_name || event.feature_id || ''}`
-    }
-    if (type === 'qa_approved' || type === 'qa.approved') {
-      return `QA approved${data.notes ? ': ' + data.notes : ''}`
-    }
-    if (type === 'qa_rejected' || type === 'qa.rejected') {
-      return `QA rejected${data.notes ? ': ' + data.notes : ''}`
-    }
-    if (type === 'cycle_started' || type === 'cycle.started') {
-      return `Cycle started${data.cycle_type ? ': ' + data.cycle_type : ''}`
-    }
-    if (type === 'cycle_completed' || type === 'cycle.completed') {
-      return `Cycle completed${data.cycle_type ? ': ' + data.cycle_type : ''}`
-    }
-
-    return formatEventLabel(type)
   } catch {
-    return formatEventLabel(event.event_type)
+    return empty
   }
 }
+
+/* ── Day grouping ─────────────────────────────────────────────── */
+
+function dayKey(dateStr: string): string {
+  const d = new Date(dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T') + 'Z')
+  if (isNaN(d.getTime())) return 'Unknown'
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const eventDay = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diffDays = Math.floor((today.getTime() - eventDay.getTime()) / (1000 * 60 * 60 * 24))
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return d.toLocaleDateString('en-US', { weekday: 'long' })
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: now.getFullYear() !== d.getFullYear() ? 'numeric' : undefined })
+}
+
+/* ── Accent bar color per event type ──────────────────────────── */
+
+function accentBorderClass(eventType: string): string {
+  const t = eventType
+  if (t.includes('created') && t.startsWith('feature')) return 'border-l-green-400'
+  if (t.includes('status_changed')) return 'border-l-yellow-400'
+  if (t.includes('qa') && t.includes('approved')) return 'border-l-green-400'
+  if (t.includes('qa') && t.includes('rejected')) return 'border-l-red-400'
+  if (t.includes('cycle')) return 'border-l-purple-400'
+  if (t.includes('workstream')) return 'border-l-teal-400'
+  return 'border-l-border'
+}
+
+/* ── Main component ───────────────────────────────────────────── */
 
 export function History() {
   const [limit, setLimit] = useState<number>(50)
@@ -91,6 +128,12 @@ export function History() {
     const types = [...new Set(events.map((e) => e.event_type))]
     types.sort()
     return types
+  }, [events])
+
+  const dayGroups = useMemo(() => {
+    if (!events) return []
+    const grouped = groupBy(events, (e) => dayKey(e.created_at))
+    return Object.entries(grouped)
   }, [events])
 
   if (isLoading) return <PageSkeleton />
@@ -117,11 +160,14 @@ export function History() {
               className="bg-bg-secondary border border-border rounded px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
             >
               <option value="">All types</option>
-              {uniqueTypes.map((t) => (
-                <option key={t} value={t}>
-                  {formatEventLabel(t)}
-                </option>
-              ))}
+              {uniqueTypes.map((t) => {
+                const s = EVENT_STYLES[t]
+                return (
+                  <option key={t} value={t}>
+                    {s?.label || fallbackLabel(t)}
+                  </option>
+                )
+              })}
             </select>
           </div>
 
@@ -132,7 +178,7 @@ export function History() {
               type="text"
               value={featureFilter}
               onChange={(e) => setFeatureFilter(e.target.value)}
-              placeholder="Filter by feature…"
+              placeholder="Filter by feature..."
               className="bg-bg-secondary border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-48"
             />
           </div>
@@ -160,10 +206,9 @@ export function History() {
         </div>
       </div>
 
-      {/* Timeline */}
+      {/* Timeline grouped by day */}
       {displayEvents.length === 0 ? (
         <div className="bg-bg-card border border-border rounded-lg p-12 text-center">
-          <span className="text-4xl block mb-3">📜</span>
           <p className="text-text-secondary text-sm">No events found</p>
           <p className="text-text-muted text-xs mt-1">
             {typeFilter || featureFilter
@@ -172,17 +217,24 @@ export function History() {
           </p>
         </div>
       ) : (
-        <div className="bg-bg-card border border-border rounded-lg p-4">
-          <div className="relative">
-            {/* Vertical timeline line */}
-            <div className="absolute left-[7.5rem] top-0 bottom-0 w-px bg-border" />
+        <div className="space-y-6">
+          {dayGroups.map(([day, dayEvents]) => (
+            <div key={day}>
+              {/* Day header */}
+              <div className="flex items-center gap-3 mb-3">
+                <h2 className="text-sm font-semibold text-text-secondary whitespace-nowrap">{day}</h2>
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-xs text-text-muted">{dayEvents.length} event{dayEvents.length !== 1 ? 's' : ''}</span>
+              </div>
 
-            <div className="space-y-0">
-              {displayEvents.map((event, idx) => (
-                <EventRow key={event.id} event={event} isLast={idx === displayEvents.length - 1} />
-              ))}
+              {/* Events for this day */}
+              <div className="space-y-2">
+                {dayEvents.map((event) => (
+                  <EventCard key={event.id} event={event} />
+                ))}
+              </div>
             </div>
-          </div>
+          ))}
         </div>
       )}
 
@@ -193,7 +245,7 @@ export function History() {
             onClick={() => setLimit((prev) => prev + 50)}
             className="px-4 py-2 rounded text-sm bg-bg-secondary text-text-secondary border border-border hover:border-accent/50 hover:text-accent transition-colors"
           >
-            Load more events…
+            Load more events...
           </button>
         </div>
       )}
@@ -201,78 +253,127 @@ export function History() {
   )
 }
 
-function EventRow({ event, isLast }: { event: Event; isLast: boolean }) {
+/* ── Event card ───────────────────────────────────────────────── */
+
+function EventCard({ event }: { event: Event }) {
   const style = getEventStyle(event.event_type)
-  const description = formatEventDescription(event)
+  const parsed = parseEventData(event)
+  const eventType = event.event_type
+  const isStatusChange = eventType === 'feature.status_changed' || eventType === 'feature_status_changed'
+  const isFeatureCreated = eventType === 'feature.created' || eventType === 'feature_created'
+  const isWorkstreamCreated = eventType === 'workstream.created' || eventType === 'workstream_created'
 
   return (
-    <div className={cn('flex items-start gap-4 relative', !isLast && 'pb-4')}>
-      {/* Timestamp (left) */}
-      <div className="w-24 shrink-0 text-right pt-1">
-        <span className="text-xs text-text-muted" title={formatTimestamp(event.created_at)}>
-          {formatTimeAgo(event.created_at)}
-        </span>
-      </div>
-
-      {/* Dot (center) */}
-      <div className="relative z-10 shrink-0 mt-1.5">
-        <div className={cn('w-3 h-3 rounded-full border-2 border-bg-card', style.dot)} />
-      </div>
-
-      {/* Content card (right) */}
-      <div className="flex-1 min-w-0 pb-4 border-b border-border/50 last:border-0">
-        <div className="flex items-start gap-2 flex-wrap">
-          {/* Type badge */}
-          <span
-            className={cn(
-              'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-bg-secondary',
-              style.color
-            )}
-          >
-            <span>{style.icon}</span>
-            {formatEventLabel(event.event_type)}
-          </span>
-
-          {/* Feature link */}
-          {event.feature_id && (
-            <EntityLink type="feature" id={event.feature_id} showIcon className="text-xs" />
-          )}
+    <div
+      className={cn(
+        'bg-bg-card border border-border rounded-lg pl-3 pr-4 py-3 border-l-4 transition-colors hover:border-border/80',
+        accentBorderClass(eventType)
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {/* Timeline dot */}
+        <div className="shrink-0 mt-1">
+          <div className={cn('w-2.5 h-2.5 rounded-full', style.dot)} />
         </div>
 
-        <p className="text-sm text-text-secondary mt-1">{description}</p>
+        {/* Main content */}
+        <div className="flex-1 min-w-0">
+          {/* First row: type label + feature link + timestamp */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn('text-xs font-semibold uppercase tracking-wide', style.accent)}>
+              {style.label || fallbackLabel(eventType)}
+            </span>
 
-        {/* Extra data from parsed JSON */}
-        <EventDataDetails event={event} />
+            {event.feature_id && (
+              <EntityLink
+                type="feature"
+                id={event.feature_id}
+                name={isFeatureCreated && parsed.name ? parsed.name : undefined}
+                showIcon
+                className="text-sm font-medium"
+              />
+            )}
+
+            <span className="ml-auto text-xs text-text-muted shrink-0" title={formatTimestamp(event.created_at)}>
+              {formatTimeAgo(event.created_at)}
+            </span>
+          </div>
+
+          {/* Second row: event-specific content */}
+          <div className="mt-1.5">
+            {isStatusChange && (parsed.from || parsed.to) ? (
+              <div className="flex items-center gap-2 flex-wrap">
+                {parsed.from && <StatusBadge status={parsed.from} />}
+                {parsed.from && parsed.to && (
+                  <span className="text-text-muted text-sm">&rarr;</span>
+                )}
+                {parsed.to && <StatusBadge status={parsed.to} />}
+              </div>
+            ) : isFeatureCreated ? (
+              <p className="text-sm text-text-secondary">
+                {parsed.name
+                  ? <>New feature: <span className="text-text-primary font-medium">{parsed.name}</span></>
+                  : 'New feature created'}
+              </p>
+            ) : isWorkstreamCreated ? (
+              <p className="text-sm text-text-secondary">
+                {parsed.name
+                  ? <>New workstream: <span className="text-text-primary font-medium">{parsed.name}</span></>
+                  : 'New workstream created'}
+              </p>
+            ) : (
+              <EventDescription event={event} parsed={parsed} />
+            )}
+          </div>
+
+          {/* Metadata chips */}
+          <EventMetadata parsed={parsed} />
+        </div>
       </div>
     </div>
   )
 }
 
-function EventDataDetails({ event }: { event: Event }) {
-  if (!event.data) return null
+/* ── Fallback description for other event types ───────────────── */
 
-  try {
-    const data = JSON.parse(event.data)
-    const details: { label: string; value: string; entityType?: 'feature' | 'cycle'; entityId?: string }[] = []
+function EventDescription({ event, parsed }: { event: Event; parsed: ParsedEventData }) {
+  const t = event.event_type
 
-    if (data.cycle_type) details.push({ label: 'Cycle', value: data.cycle_type })
-    if (data.milestone_id) details.push({ label: 'Milestone', value: data.milestone_id })
-    if (data.score !== undefined) details.push({ label: 'Score', value: String(data.score) })
-    if (data.iteration !== undefined) details.push({ label: 'Iteration', value: String(data.iteration) })
-
-    if (details.length === 0) return null
-
-    return (
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
-        {details.map((d, i) => (
-          <span key={i} className="text-xs text-text-muted">
-            <span className="text-text-muted/70">{d.label}:</span>{' '}
-            <span className="text-text-secondary">{d.value}</span>
-          </span>
-        ))}
-      </div>
-    )
-  } catch {
-    return null
+  if ((t === 'qa_approved' || t === 'qa.approved') && parsed.notes) {
+    return <p className="text-sm text-text-secondary">{parsed.notes}</p>
   }
+  if ((t === 'qa_rejected' || t === 'qa.rejected') && parsed.notes) {
+    return <p className="text-sm text-text-secondary">{parsed.notes}</p>
+  }
+  if ((t === 'cycle_started' || t === 'cycle.started') && parsed.cycleType) {
+    return <p className="text-sm text-text-secondary">Cycle type: <span className="text-text-primary">{parsed.cycleType}</span></p>
+  }
+  if ((t === 'cycle_completed' || t === 'cycle.completed') && parsed.cycleType) {
+    return <p className="text-sm text-text-secondary">Cycle type: <span className="text-text-primary">{parsed.cycleType}</span></p>
+  }
+
+  return null
+}
+
+/* ── Extra metadata chips ─────────────────────────────────────── */
+
+function EventMetadata({ parsed }: { parsed: ParsedEventData }) {
+  const chips: { label: string; value: string }[] = []
+  if (parsed.cycleType) chips.push({ label: 'Cycle', value: parsed.cycleType })
+  if (parsed.milestoneId) chips.push({ label: 'Milestone', value: parsed.milestoneId })
+  if (parsed.score) chips.push({ label: 'Score', value: parsed.score })
+  if (parsed.iteration) chips.push({ label: 'Iteration', value: parsed.iteration })
+
+  if (chips.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+      {chips.map((c, i) => (
+        <span key={i} className="text-xs text-text-muted">
+          <span className="text-text-muted/70">{c.label}:</span>{' '}
+          <span className="text-text-secondary">{c.value}</span>
+        </span>
+      ))}
+    </div>
+  )
 }

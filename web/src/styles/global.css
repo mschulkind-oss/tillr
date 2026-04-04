@@ -208,3 +208,10 @@ body {
   font-weight: 600;
   color: var(--color-text-primary);
 }
+
+/* Workstream detail: collapse grid to single column on narrow screens */
+@media (max-width: 900px) {
+  .workstream-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

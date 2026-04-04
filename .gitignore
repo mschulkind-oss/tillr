@@ -1,6 +1,7 @@
 # Binaries
 bin/
 /tillr
+/tillr-bin
 
 # Environment
 .env
@@ -36,6 +37,7 @@ node_modules/
 # Lifecycle project config (created by `tillr init`)
 .tillr.json
 .tillr.yaml
+.tillr/
 .lifecycle.json
 .lifecycle.yaml
 .pnpm-store/

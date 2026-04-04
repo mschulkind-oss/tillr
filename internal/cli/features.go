@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -10,6 +12,48 @@ import (
 	"github.com/mschulkind-oss/tillr/internal/models"
 	"github.com/spf13/cobra"
 )
+
+// resolveTextFlag resolves a flag value that may refer to stdin or a file.
+//   - ""           → if stdin is piped, read from stdin; otherwise return ""
+//   - "-"          → read from stdin
+//   - "@filename"  → read from file
+//   - anything else → return as-is
+func resolveTextFlag(value string) (string, error) {
+	switch {
+	case value == "-":
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("reading from stdin: %w", err)
+		}
+		return strings.TrimRight(string(data), "\n"), nil
+
+	case strings.HasPrefix(value, "@"):
+		filename := value[1:]
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return "", fmt.Errorf("reading file %q: %w", filename, err)
+		}
+		return strings.TrimRight(string(data), "\n"), nil
+
+	case value == "":
+		// Check if stdin is piped (not a TTY)
+		stat, err := os.Stdin.Stat()
+		if err != nil {
+			return "", nil
+		}
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return "", fmt.Errorf("reading from stdin: %w", err)
+			}
+			return strings.TrimRight(string(data), "\n"), nil
+		}
+		return "", nil
+
+	default:
+		return value, nil
+	}
+}
 
 // Feature templates provide pre-populated spec content for common feature types.
 var featureTemplates = map[string]struct {
@@ -403,8 +447,24 @@ var featureAddCmd = &cobra.Command{
 		milestone, _ := cmd.Flags().GetString("milestone")
 		priority, _ := cmd.Flags().GetInt("priority")
 		deps, _ := cmd.Flags().GetStringSlice("depends-on")
-		desc, _ := cmd.Flags().GetString("description")
-		spec, _ := cmd.Flags().GetString("spec")
+		descRaw, _ := cmd.Flags().GetString("description")
+		specRaw, _ := cmd.Flags().GetString("spec")
+
+		// Resolve spec from stdin/file first (it may consume stdin)
+		spec, err := resolveTextFlag(specRaw)
+		if err != nil {
+			return fmt.Errorf("resolving --spec: %w", err)
+		}
+		// Only try stdin for description if spec didn't already consume it
+		desc := descRaw
+		if specRaw == "" && spec != "" {
+			// stdin was consumed by spec; use raw description as-is
+		} else {
+			desc, err = resolveTextFlag(descRaw)
+			if err != nil {
+				return fmt.Errorf("resolving --description: %w", err)
+			}
+		}
 		roadmapItem, _ := cmd.Flags().GetString("roadmap-item")
 		status, _ := cmd.Flags().GetString("status")
 		points, _ := cmd.Flags().GetInt("points")
@@ -564,8 +624,26 @@ Use 'tillr feature list' to find feature IDs.`,
 			return fmt.Errorf("feature %q not found. Run 'tillr feature list' to see available features", args[0])
 		}
 
+		// Fetch QA results for rejection notes
+		qaResults, _ := db.ListQAResults(database, f.ID)
+
 		if jsonOutput {
+			if len(qaResults) > 0 {
+				type featureWithQA struct {
+					*models.Feature
+					QAResults []models.QAResult `json:"qa_results"`
+				}
+				return printJSON(featureWithQA{Feature: f, QAResults: qaResults})
+			}
 			return printJSON(f)
+		}
+
+		// Show rejections prominently at the top
+		for _, r := range qaResults {
+			if !r.Passed && r.Notes != "" {
+				fmt.Printf("\u26a0 REJECTED \u2014 %s\n", r.CreatedAt)
+				fmt.Printf("  %s\n\n", r.Notes)
+			}
 		}
 
 		fmt.Printf("Feature: %s\n", f.Name)
@@ -635,11 +713,32 @@ Editable fields: --name, --description, --spec, --status, --milestone,
 		if v, _ := cmd.Flags().GetString("name"); v != "" {
 			updates["name"] = v
 		}
-		if v, _ := cmd.Flags().GetString("description"); v != "" {
-			updates["description"] = v
+
+		// Resolve spec first (may consume stdin)
+		specRaw, _ := cmd.Flags().GetString("spec")
+		specResolved, err := resolveTextFlag(specRaw)
+		if err != nil {
+			return fmt.Errorf("resolving --spec: %w", err)
 		}
-		if v, _ := cmd.Flags().GetString("spec"); v != "" {
-			updates["spec"] = v
+		stdinConsumedBySpec := (specRaw == "" && specResolved != "") || specRaw == "-"
+
+		descRaw, _ := cmd.Flags().GetString("description")
+		if stdinConsumedBySpec {
+			// stdin already consumed by spec; use raw description
+			if descRaw != "" {
+				updates["description"] = descRaw
+			}
+		} else {
+			descResolved, err := resolveTextFlag(descRaw)
+			if err != nil {
+				return fmt.Errorf("resolving --description: %w", err)
+			}
+			if descResolved != "" {
+				updates["description"] = descResolved
+			}
+		}
+		if specResolved != "" {
+			updates["spec"] = specResolved
 		}
 		newStatus, _ := cmd.Flags().GetString("status")
 		if v, _ := cmd.Flags().GetString("milestone"); v != "" {

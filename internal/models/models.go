@@ -7,6 +7,50 @@ type AgentCapability struct {
 	Capability string `json:"capability"`
 }
 
+// AgentWorktree tracks a git worktree used by the agent orchestration system.
+type AgentWorktree struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	AgentID       string `json:"agent_id,omitempty"`
+	Status        string `json:"status"` // available, in-use, stale
+	LastHeartbeat string `json:"last_heartbeat,omitempty"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// QueueScopeEntry is a key-value pair for queue scope configuration.
+type QueueScopeEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// AgentClaim tracks which agent has claimed which feature.
+type AgentClaim struct {
+	ID           int    `json:"id"`
+	AgentID      string `json:"agent_id"`
+	FeatureID    string `json:"feature_id"`
+	WorktreeName string `json:"worktree_name,omitempty"`
+	Status       string `json:"status"` // active, completed, failed, released
+	ClaimedAt    string `json:"claimed_at"`
+	CompletedAt  string `json:"completed_at,omitempty"`
+}
+
+// AgentActivityEntry is a log entry for agent actions.
+type AgentActivityEntry struct {
+	ID        int    `json:"id"`
+	AgentID   string `json:"agent_id"`
+	FeatureID string `json:"feature_id,omitempty"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ClaimableFeature is a feature available for an agent to claim,
+// returned by the topo-sorted queue query.
+type ClaimableFeature struct {
+	Feature
+	DepsSatisfied bool `json:"deps_satisfied"`
+}
+
 type Project struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -390,6 +434,26 @@ type QueueResponse struct {
 	Stats QueueStats   `json:"stats"`
 }
 
+// ImplementationQueueFeature is a feature in the implementation queue with readiness info.
+type ImplementationQueueFeature struct {
+	Feature
+	Ready     bool     `json:"ready"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
+	QANotes   string   `json:"qa_notes,omitempty"`
+	AgentID   string   `json:"agent_id,omitempty"`
+	ClaimedAt string   `json:"claimed_at,omitempty"`
+	DoneAt    string   `json:"done_at,omitempty"`
+}
+
+// ImplementationQueueResponse is the response for GET /api/queue/features.
+type ImplementationQueueResponse struct {
+	Scope          map[string]string            `json:"scope"`
+	Claimable      []ImplementationQueueFeature `json:"claimable"`
+	InProgress     []ImplementationQueueFeature `json:"in_progress"`
+	InReview       []ImplementationQueueFeature `json:"in_review"`
+	CompletedToday []ImplementationQueueFeature `json:"completed_today"`
+}
+
 // Decision represents an Architecture Decision Record (ADR).
 type Decision struct {
 	ID           string `json:"id"`
@@ -752,8 +816,9 @@ type WorkstreamDetail struct {
 
 // WorkstreamFeature is a feature linked to a workstream with the relationship type.
 type WorkstreamFeature struct {
-	Feature      Feature `json:"feature"`
-	Relationship string  `json:"relationship"` // "owned" or "dependency"
+	Feature        Feature `json:"feature"`
+	Relationship   string  `json:"relationship"` // "owned" or "dependency"
+	RejectionCount int     `json:"rejection_count"`
 }
 
 type CommandMetric struct {
@@ -864,6 +929,18 @@ type DiscussionTemplate struct {
 	Body        string `json:"body"`
 	IsBuiltin   bool   `json:"is_builtin"`
 	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// Attachment represents a file (typically an image) attached to a feature, workstream, or note.
+type Attachment struct {
+	ID           int    `json:"id"`
+	EntityType   string `json:"entity_type"`
+	EntityID     string `json:"entity_id"`
+	Filename     string `json:"filename"`
+	OriginalName string `json:"original_name"`
+	Label        string `json:"label,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // APIToken represents a stored API token for authentication.

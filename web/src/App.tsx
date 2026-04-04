@@ -24,6 +24,7 @@ import { Workflow } from './pages/Workflow'
 import { Stats } from './pages/Stats'
 import { Spec } from './pages/Spec'
 import { Timeline } from './pages/Timeline'
+import { Queue } from './pages/Queue'
 import Workstreams from './pages/Workstreams'
 import WorkstreamDetail from './pages/WorkstreamDetail'
 import { useEffect, useState } from 'react'
@@ -100,6 +101,7 @@ export default function App() {
             <Route path="/context" element={<Context />} />
             <Route path="/workstreams" element={<Workstreams />} />
             <Route path="/workstreams/:id" element={<WorkstreamDetail />} />
+            <Route path="/queue" element={<Queue />} />
             <Route path="/workflow" element={<Workflow />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>

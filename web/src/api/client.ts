@@ -23,6 +23,7 @@ import type {
   Decision,
   GroupedSearchResults,
   QueueResponse,
+  ImplementationQueueResponse,
   DependencyGraph,
   SpecDocument,
   FeaturePR,
@@ -35,6 +36,7 @@ import type {
   WorkstreamLink,
   WorkstreamDetail,
   WorkstreamFeature,
+  Attachment,
   AppConfig,
 } from './types'
 import { rewriteApiUrl } from './projects'
@@ -164,6 +166,14 @@ export const getDependencies = () => fetchJson<DependencyGraph>('/api/dependenci
 // Queue
 export const getQueue = () => fetchJson<QueueResponse>('/api/queue')
 export const reclaimStaleItems = () => postJson<{ reclaimed: number }>('/api/queue')
+export const getImplementationQueue = (params?: { workstream?: string; min_priority?: string; days?: number }) => {
+  const query = new URLSearchParams()
+  if (params?.workstream) query.set('workstream', params.workstream)
+  if (params?.min_priority) query.set('min_priority', params.min_priority)
+  if (params?.days !== undefined && params.days > 0) query.set('days', String(params.days))
+  const qs = query.toString()
+  return fetchJson<ImplementationQueueResponse>(`/api/queue/features${qs ? `?${qs}` : ''}`)
+}
 
 // Spec document
 export const getSpecDocument = () => fetchJson<SpecDocument>('/api/spec-document')
@@ -205,6 +215,28 @@ export const resolveWorkstreamNote = (wsId: string, noteId: number) =>
 export const addWorkstreamLink = (wsId: string, data: { link_type: string; target_id?: string; target_url?: string; label?: string }) =>
   postJson<WorkstreamLink>(`/api/workstreams/${wsId}/links`, data)
 export const getWorkstreamFeatures = (wsId: string) => fetchJson<WorkstreamFeature[]>(`/api/workstreams/${wsId}/features`)
+
+// Attachments
+export const getAttachments = (entityType: string, entityId: string) =>
+  fetchJson<Attachment[]>(`/api/attachments?entity_type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}`)
+export const uploadAttachment = async (entityType: string, entityId: string, file: File, label?: string): Promise<Attachment> => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('entity_type', entityType)
+  form.append('entity_id', entityId)
+  if (label) form.append('label', label)
+  const res = await fetch(rewriteApiUrl('/api/attachments'), { method: 'POST', body: form })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Upload failed: ${res.status} ${text}`)
+  }
+  return res.json()
+}
+export const deleteAttachment = async (filename: string): Promise<void> => {
+  const res = await fetch(rewriteApiUrl(`/api/attachments/${filename}`), { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
+}
+export const attachmentUrl = (filename: string) => rewriteApiUrl(`/api/attachments/${filename}`)
 
 // Config
 export const getConfig = () => fetchJson<AppConfig>('/api/config')

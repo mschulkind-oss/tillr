@@ -2,15 +2,33 @@ package cli
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/internal/config"
 	"github.com/mschulkind-oss/tillr/internal/db"
 	"github.com/spf13/cobra"
 )
+
+// snapshotBeforeBatch creates a pre-mutation database snapshot and logs the
+// path to stderr so the user knows a safety net exists. It is a no-op if
+// the snapshot fails (we log the error but don't block the operation).
+func snapshotBeforeBatch(database *sql.DB, cfg *config.Config, operation string) {
+	maxSnap := cfg.MaxSnapshots
+	if maxSnap <= 0 {
+		maxSnap = db.DefaultMaxSnapshots
+	}
+	path, err := db.PreMutationSnapshot(database, cfg.DBPath, operation, maxSnap)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: pre-mutation snapshot failed: %v\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Pre-mutation snapshot: %s\n", path)
+}
 
 type batchItemResult struct {
 	ID      string `json:"id"`
@@ -140,11 +158,13 @@ or JSON array from 'tillr feature list --json').`,
 			return err
 		}
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		snapshotBeforeBatch(database, cfg, "batch-status")
 
 		summary := batchSummary{Operation: "status", Value: status, Total: len(ids)}
 		for _, id := range ids {
@@ -190,11 +210,13 @@ or JSON array from 'tillr feature list --json').`,
 			return err
 		}
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		snapshotBeforeBatch(database, cfg, "batch-tag")
 
 		summary := batchSummary{Operation: "tag", Value: tag, Total: len(ids)}
 		for _, id := range ids {
@@ -240,11 +262,13 @@ or JSON array from 'tillr feature list --json').`,
 			return err
 		}
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		snapshotBeforeBatch(database, cfg, "batch-milestone")
 
 		summary := batchSummary{Operation: "milestone", Value: milestoneID, Total: len(ids)}
 		for _, id := range ids {
@@ -293,11 +317,13 @@ or JSON array from 'tillr feature list --json').`,
 			return err
 		}
 
-		database, _, dbErr := openDB()
+		database, cfg, dbErr := openDB()
 		if dbErr != nil {
 			return dbErr
 		}
 		defer database.Close() //nolint:errcheck
+
+		snapshotBeforeBatch(database, cfg, "batch-priority")
 
 		summary := batchSummary{Operation: "priority", Value: args[0], Total: len(ids)}
 		for _, id := range ids {

@@ -1,12 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFeature, getFeatureDeps, getQAResults, patchFeature, getDiscussions, getFeaturePRs } from '../api/client'
+import { getFeature, getFeatureDeps, getQAResults, patchFeature, getDiscussions, getFeaturePRs, approveFeature, rejectFeature } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 import { PageSkeleton } from '../components/Skeleton'
 import { EntityLink } from '../components/EntityLink'
 import { useParams, Link } from 'react-router-dom'
 import { formatTimestamp, cn } from '../lib/utils'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import type { FeatureStatus, QAResult } from '../api/types'
 import { MarkdownContent } from '../components/MarkdownContent'
+import { AttachmentPanel } from '../components/AttachmentPanel'
 import { useStore } from '../store'
 
 export function FeatureDetail() {
@@ -79,6 +81,13 @@ export function FeatureDetail() {
         <span className="text-text-secondary">{f.name}</span>
       </nav>
 
+      {/* State Machine */}
+      <FeatureStateMachine
+        status={f.status}
+        previousStatus={f.previous_status}
+        qaResults={qaResults.data}
+      />
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -136,6 +145,11 @@ export function FeatureDetail() {
         <StatusBadge status={f.status} />
       </div>
 
+      {/* Inline QA Review — shown when feature is awaiting human QA */}
+      {f.status === 'human-qa' && (
+        <FeatureQAActions featureId={f.id} />
+      )}
+
       {/* Metadata grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <MetaItem label="Priority" value={
@@ -183,6 +197,9 @@ export function FeatureDetail() {
           </MarkdownContent>
         </div>
       )}
+
+      {/* Attachments */}
+      <AttachmentPanel entityType="feature" entityId={id!} />
 
       {/* Dependencies */}
       {deps.data && (deps.data.depends_on?.length > 0 || deps.data.depended_by?.length > 0) && (
@@ -329,6 +346,227 @@ export function FeatureDetail() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const STATE_MACHINE_STEPS: Exclude<FeatureStatus, 'blocked'>[] = [
+  'draft', 'planning', 'implementing', 'agent-qa', 'human-qa', 'done',
+]
+
+const STEP_LABELS: Record<string, string> = {
+  'draft': 'Draft',
+  'planning': 'Planning',
+  'implementing': 'Implementing',
+  'agent-qa': 'Agent QA',
+  'human-qa': 'Human QA',
+  'done': 'Done',
+}
+
+type LifecycleStep = typeof STATE_MACHINE_STEPS[number]
+
+function FeatureStateMachine({
+  status,
+  previousStatus,
+  qaResults,
+}: {
+  status: FeatureStatus
+  previousStatus?: string
+  qaResults?: QAResult[]
+}) {
+  const isBlocked = status === 'blocked'
+  const effectiveStep = (isBlocked ? (previousStatus || 'draft') : status) as LifecycleStep
+  const currentIndex = STATE_MACHINE_STEPS.indexOf(effectiveStep)
+
+  const rejectionCount = useMemo(() => {
+    if (!qaResults || !Array.isArray(qaResults)) return 0
+    return qaResults.filter((r) => r.qa_type === 'human' && !r.passed).length
+  }, [qaResults])
+
+  return (
+    <div className="relative">
+      {isBlocked && (
+        <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-danger bg-danger/10 border border-danger/30 px-2 py-0.5 rounded">
+            Blocked
+          </span>
+        </div>
+      )}
+      <div className={cn('flex gap-0.5 items-start', isBlocked && 'opacity-50')}>
+        {STATE_MACHINE_STEPS.map((step, i) => {
+          const isCurrent = i === currentIndex
+          const isDone = i < currentIndex
+          const isFuture = i > currentIndex
+          const isHumanQa = step === 'human-qa'
+
+          return (
+            <div key={step} className="flex-1 flex flex-col items-center gap-1">
+              <div
+                className={cn(
+                  'h-1.5 w-full rounded-sm',
+                  isDone && 'bg-success',
+                  isCurrent && 'bg-accent',
+                  isFuture && 'bg-bg-tertiary',
+                )}
+              />
+              <span className={cn(
+                'text-[10px] whitespace-nowrap',
+                isCurrent ? 'text-text-primary font-semibold' : 'text-text-muted font-normal',
+              )}>
+                {STEP_LABELS[step]}
+              </span>
+              {isHumanQa && rejectionCount > 0 && (
+                <span className="text-[9px] text-danger font-medium -mt-0.5">
+                  rejected x{rejectionCount}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function FeatureQAActions({ featureId }: { featureId: string }) {
+  const queryClient = useQueryClient()
+  const addToast = useStore((s) => s.addToast)
+  const [showRejectForm, setShowRejectForm] = useState(false)
+  const [rejectNotes, setRejectNotes] = useState('')
+  const [showApproveNotes, setShowApproveNotes] = useState(false)
+  const [approveNotes, setApproveNotes] = useState('')
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['feature', featureId] })
+    queryClient.invalidateQueries({ queryKey: ['features'] })
+    queryClient.invalidateQueries({ queryKey: ['qa-pending'] })
+    queryClient.invalidateQueries({ queryKey: ['qa-results', featureId] })
+    queryClient.invalidateQueries({ queryKey: ['status'] })
+  }
+
+  const approveMut = useMutation({
+    mutationFn: (n?: string) => approveFeature(featureId, n),
+    onSuccess: () => {
+      invalidateAll()
+      addToast('Feature approved', 'success')
+    },
+    onError: (err) => addToast(`Approve failed: ${err.message}`, 'error'),
+  })
+
+  const rejectMut = useMutation({
+    mutationFn: (n?: string) => rejectFeature(featureId, n),
+    onSuccess: () => {
+      invalidateAll()
+      addToast('Feature rejected — sent back to development', 'info')
+    },
+    onError: (err) => addToast(`Reject failed: ${err.message}`, 'error'),
+  })
+
+  return (
+    <div className="bg-warning/5 border border-warning/20 rounded-lg p-5 space-y-4"
+      style={{ borderLeft: '3px solid rgb(245, 158, 11)' }}>
+      <div className="text-sm font-semibold text-warning">Awaiting QA Review</div>
+
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (showApproveNotes) {
+                approveMut.mutate(approveNotes || undefined)
+                setApproveNotes('')
+                setShowApproveNotes(false)
+              } else {
+                approveMut.mutate(undefined)
+              }
+            }}
+            disabled={approveMut.isPending}
+            className="px-5 py-2 bg-success/20 text-success border border-success/30 rounded-md text-sm font-medium hover:bg-success/30 transition-colors disabled:opacity-50"
+          >
+            {approveMut.isPending ? 'Approving...' : 'Approve'}
+          </button>
+          {!showApproveNotes && !showRejectForm && (
+            <button
+              onClick={() => setShowApproveNotes(true)}
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+              title="Add a note with approval"
+            >
+              + note
+            </button>
+          )}
+          <button
+            onClick={() => { setShowRejectForm(!showRejectForm); setShowApproveNotes(false) }}
+            className={cn(
+              'px-5 py-2 rounded-md text-sm font-medium transition-colors',
+              showRejectForm
+                ? 'bg-danger/20 text-danger border border-danger/30'
+                : 'bg-danger/10 text-danger border border-danger/20 hover:bg-danger/20'
+            )}
+          >
+            Reject
+          </button>
+        </div>
+
+        {/* Optional approve notes — small inline input */}
+        {showApproveNotes && !showRejectForm && (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={approveNotes}
+              onChange={(e) => setApproveNotes(e.target.value)}
+              placeholder="Quick note (optional)"
+              className="flex-1 bg-bg-input border border-border rounded-md px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  approveMut.mutate(approveNotes || undefined)
+                  setApproveNotes('')
+                  setShowApproveNotes(false)
+                }
+                if (e.key === 'Escape') setShowApproveNotes(false)
+              }}
+              autoFocus
+            />
+            <button
+              onClick={() => setShowApproveNotes(false)}
+              className="text-xs text-text-muted hover:text-text-secondary"
+            >
+              cancel
+            </button>
+          </div>
+        )}
+
+        {/* Reject form — large textarea for detailed feedback */}
+        {showRejectForm && (
+          <div className="bg-danger/5 border border-danger/20 rounded-lg p-4 space-y-3">
+            <label className="block text-xs font-semibold text-danger uppercase tracking-wider">
+              Rejection feedback
+            </label>
+            <textarea
+              value={rejectNotes}
+              onChange={(e) => setRejectNotes(e.target.value)}
+              placeholder="Describe what needs to change..."
+              rows={5}
+              className="w-full bg-bg-input border border-border rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-danger/50 focus:outline-none resize-y leading-relaxed"
+              style={{ minHeight: 120 }}
+              autoFocus
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { rejectMut.mutate(rejectNotes || undefined); setRejectNotes(''); setShowRejectForm(false) }}
+                disabled={rejectMut.isPending}
+                className="px-4 py-2 bg-danger text-white rounded-md text-sm font-medium hover:bg-danger/80 transition-colors disabled:opacity-50"
+              >
+                {rejectMut.isPending ? 'Rejecting...' : 'Confirm Reject'}
+              </button>
+              <button
+                onClick={() => { setShowRejectForm(false); setRejectNotes('') }}
+                className="px-4 py-2 bg-bg-tertiary text-text-secondary rounded-md text-sm hover:bg-bg-hover transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
