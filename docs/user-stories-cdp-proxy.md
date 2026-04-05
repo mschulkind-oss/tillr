@@ -28,6 +28,74 @@ The proxy solves this: one Chrome instance, many agents, no cross-talk.
 
 ---
 
+## The Cookie Problem (and How Hostnames Fix It)
+
+A shared Chrome instance means a shared browser profile: cookies,
+HTTP cache, service workers, autofill. Most of these are scoped by
+origin (scheme+host+port), so different ports provide some isolation.
+But **cookies are the exception** — they're scoped by domain, not by
+origin. A cookie set on `localhost` by Agent 1's server on port 3848
+is sent to Agent 2's server on port 3849 too. This breaks auth,
+leaks session state across agents, and can mask bugs (Agent 2 sees
+Agent 1's login session and incorrectly concludes its own auth works).
+
+**The fix: per-session hostnames via `*.localhost` subdomains.**
+
+RFC 6761 reserves `localhost` and its subdomains. Chrome resolves
+`anything.localhost` to `127.0.0.1` without any `/etc/hosts` changes.
+The proxy assigns each session a unique subdomain:
+
+```
+Agent 1 → s-abc.localhost:3848  → cookies scoped to s-abc.localhost
+Agent 2 → s-def.localhost:3849  → cookies scoped to s-def.localhost
+Agent 3 → s-ghi.localhost:3850  → cookies scoped to s-ghi.localhost
+```
+
+All three resolve to `127.0.0.1`. The dev servers receive the requests
+normally — they don't care about the `Host` header (usually). But
+Chrome treats each subdomain as a separate cookie domain. Full
+isolation: cookies, localStorage, sessionStorage, IndexedDB, service
+workers, HTTP cache — everything is scoped by origin, and each agent
+has a unique origin.
+
+**Session creation returns the hostname:**
+
+```
+POST /session
+→ {
+    "sessionId": "abc",
+    "hostname": "s-abc.localhost",
+    "wsUrl": "ws://localhost:9223/cdp/abc"
+  }
+```
+
+The agent navigates to `http://s-abc.localhost:3848/inbox` instead of
+`http://localhost:3848/inbox`. The proxy rewrites `Target.createTarget`
+URLs to use the session hostname automatically if the agent forgets.
+
+**One caveat: Host header validation.** Some dev servers validate the
+`Host` header and reject requests from unknown hosts (Next.js,
+webpack-dev-server, Vite with strict mode). Projects using the proxy
+need to allow `*.localhost` in their dev server config. This is a
+one-line config change, not a proxy problem:
+
+```js
+// next.config.js
+allowedDevHosts: ['*.localhost']
+
+// vite.config.ts
+server: { host: true }  // or hmr: { host: 'localhost' }
+
+// webpack-dev-server
+allowedHosts: ['.localhost']
+```
+
+**Without this fix, a shared Chrome is unsafe for any app that uses
+cookies** — which is basically every web app. With hostname isolation,
+shared Chrome is as safe as separate Chrome instances.
+
+---
+
 ## What the Proxy Does
 
 ```
@@ -40,24 +108,25 @@ Chrome DevTools MCP 1           Chrome DevTools MCP 2    Chrome DevTools MCP 3
 ┌──────────────────────────────────────────────────────────────────┐
 │                     CDP Proxy (this tool)                        │
 │                                                                  │
-│  Session A ──► Tab 1 (localhost:3848)                            │
-│  Session B ──► Tab 2 (localhost:3849)                            │
-│  Session C ──► Tab 3 (localhost:3850)                            │
+│  Session A ──► Tab 1 (s-a.localhost:3848)                        │
+│  Session B ──► Tab 2 (s-b.localhost:3849)                        │
+│  Session C ──► Tab 3 (s-c.localhost:3850)                        │
 └──────────────────────────────────────────────────────────────────┘
     │
     ▼
 Chrome (single instance, headless, debug port 9222)
-    ├── Tab 1: localhost:3848 (Agent 1's feature)
-    ├── Tab 2: localhost:3849 (Agent 2's feature)
-    └── Tab 3: localhost:3850 (Agent 3's feature)
+    ├── Tab 1: s-a.localhost:3848 (Agent 1's feature)
+    ├── Tab 2: s-b.localhost:3849 (Agent 2's feature)
+    └── Tab 3: s-c.localhost:3850 (Agent 3's feature)
 ```
 
 The proxy is a lightweight process that:
 1. Manages one shared Chrome instance
 2. Creates isolated sessions — each session owns one or more tabs
-3. Routes CDP commands from a session to its tabs only
-4. Prevents cross-session interference (Agent 1 can't see Agent 2's tabs)
-5. Cleans up tabs when sessions end
+3. Assigns per-session hostnames (`s-{id}.localhost`) for cookie/storage isolation
+4. Routes CDP commands from a session to its tabs only
+5. Prevents cross-session interference (Agent 1 can't see Agent 2's tabs)
+6. Cleans up tabs when sessions end
 
 ---
 
@@ -82,14 +151,15 @@ is already running with a shared Chrome instance.
 
 # MCP server connects to proxy, gets a session
 POST /session
-→ { "sessionId": "abc123", "wsUrl": "ws://localhost:9223/cdp/abc123" }
+→ { "sessionId": "abc123", "hostname": "s-abc123.localhost",
+    "wsUrl": "ws://localhost:9223/cdp/abc123" }
 
 # MCP server connects to the WebSocket
 # All CDP commands sent over this WebSocket are scoped to session abc123
 # The proxy creates tabs for this session and routes commands to them
 
-# Agent navigates
-→ CDP: Target.createTarget { url: "http://localhost:3848/inbox" }
+# Agent navigates (using session hostname for cookie isolation)
+→ CDP: Target.createTarget { url: "http://s-abc123.localhost:3848/inbox" }
 ← CDP: Target.targetCreated { targetId: "tab-7" }
 # Proxy records: session abc123 owns tab-7
 
@@ -125,17 +195,17 @@ t=0   Proxy starts, launches Chrome (one instance)
       Chrome listening on debug port 9222
       Proxy listening on port 9223
 
-t=1   Agent 1's MCP: POST /session → session "s1"
+t=1   Agent 1's MCP: POST /session → session "s1", hostname "s-s1.localhost"
       Agent 1's MCP: connects ws://localhost:9223/cdp/s1
-      Agent 1: createTarget("http://localhost:3848") → tab-1
+      Agent 1: createTarget("http://s-s1.localhost:3848") → tab-1
 
-t=2   Agent 2's MCP: POST /session → session "s2"
+t=2   Agent 2's MCP: POST /session → session "s2", hostname "s-s2.localhost"
       Agent 2's MCP: connects ws://localhost:9223/cdp/s2
-      Agent 2: createTarget("http://localhost:3849") → tab-2
+      Agent 2: createTarget("http://s-s2.localhost:3849") → tab-2
 
-t=3   Agent 3's MCP: POST /session → session "s3"
+t=3   Agent 3's MCP: POST /session → session "s3", hostname "s-s3.localhost"
       Agent 3's MCP: connects ws://localhost:9223/cdp/s3
-      Agent 3: createTarget("http://localhost:3850") → tab-3
+      Agent 3: createTarget("http://s-s3.localhost:3850") → tab-3
 
 t=4   Agent 1: Page.captureScreenshot (on tab-1) → screenshot of inbox
       Agent 2: Page.captureScreenshot (on tab-2) → screenshot of feature detail
@@ -154,6 +224,9 @@ t=10  Agent 1 finishes. DELETE /session/s1 → tab-1 closed
 - `Target.getTargets` from session s1 returns only tab-1
 - If Agent 1 sends a command targeting tab-2, the proxy rejects it
 - Tab lifecycle is tied to session lifecycle — close session, close its tabs
+- Per-session hostnames (`s-s1.localhost`, `s-s2.localhost`) isolate
+  cookies, localStorage, sessionStorage, IndexedDB, and service workers
+  — Chrome treats each subdomain as a separate origin
 
 **Resource usage:**
 - 1 Chrome instance: ~200MB RAM (vs. 600MB for 3 instances)
@@ -340,7 +413,7 @@ works.
 ```
 cdp-proxy
 ├── HTTP server (:9223)
-│   ├── POST /session          → create session, return wsUrl
+│   ├── POST /session          → create session, return wsUrl + hostname
 │   ├── DELETE /session/:id    → close session and its tabs
 │   ├── GET /session           → list active sessions
 │   ├── GET /health            → health check
@@ -358,7 +431,7 @@ cdp-proxy
 │   └── Restarts on crash
 │
 └── Session store (in-memory)
-    ├── session → [targetId, targetId, ...]
+    ├── session → { hostname, [targetId, ...] }
     ├── targetId → session (reverse lookup)
     └── Cleanup on disconnect/timeout
 ```
@@ -403,6 +476,7 @@ ephemeral. The agent just re-navigates.
 - Single Go binary (or Node.js — language TBD based on ecosystem)
 - Launches headless Chrome
 - HTTP API: create/delete/list sessions
+- Per-session hostname assignment (`s-{id}.localhost`) for cookie isolation
 - WebSocket proxy with Target.* interception
 - Session-scoped tab isolation
 - Auto-cleanup on disconnect
@@ -473,3 +547,9 @@ The name should communicate: "multiple users, one Chrome."
    session scoping — all connections see all tabs. Browserless.io does
    something similar as a cloud service. A lightweight local proxy appears
    to be a gap in the ecosystem.
+
+6. **Hostname compatibility.** `*.localhost` resolution is guaranteed by
+   RFC 6761 and works in Chrome/Chromium. Need to verify behavior in
+   Firefox (Gecko) and Safari (WebKit) if agents ever use non-Chromium
+   browsers. Also need to confirm headless Chrome respects RFC 6761 —
+   it should, since it uses the same network stack as headed Chrome.
