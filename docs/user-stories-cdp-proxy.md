@@ -1,0 +1,475 @@
+# User Stories: Chrome DevTools Protocol Proxy for Multi-Agent QA
+
+A standalone utility — separate from tillr — that lets multiple concurrent
+agents share one Chrome instance for UI QA via the Chrome DevTools Protocol.
+
+---
+
+## Why This Exists
+
+When an agent builds a UI feature, it needs to SEE the result. Today's
+workflow: the agent starts a dev server, launches headless Chrome via the
+Chrome DevTools MCP, navigates to the page, takes screenshots, clicks
+buttons, fills forms, verifies layout. This works great for one agent.
+
+The problem is concurrency. When three agents work on three features in
+three worktrees, each needs its own Chrome DevTools connection. The current
+approach (Architecture 2 from the agent-devenv doc) gives each agent its
+own Chrome instance — ~200MB RAM each. That works for 3-5 agents but
+doesn't scale.
+
+More importantly, the Chrome DevTools MCP server is designed for one agent.
+It manages "the current page" as global state. Multiple agents talking to
+the same MCP instance will clobber each other's page selection. Each agent
+spawning its own MCP process (which spawns its own Chrome) is the current
+workaround, but it's wasteful and doesn't compose well.
+
+The proxy solves this: one Chrome instance, many agents, no cross-talk.
+
+---
+
+## What the Proxy Does
+
+```
+Agent 1 (Claude Code)                Agent 2                Agent 3
+    │                                    │                      │
+    ▼                                    ▼                      ▼
+Chrome DevTools MCP 1           Chrome DevTools MCP 2    Chrome DevTools MCP 3
+    │                                    │                      │
+    ▼                                    ▼                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     CDP Proxy (this tool)                        │
+│                                                                  │
+│  Session A ──► Tab 1 (localhost:3848)                            │
+│  Session B ──► Tab 2 (localhost:3849)                            │
+│  Session C ──► Tab 3 (localhost:3850)                            │
+└──────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+Chrome (single instance, headless, debug port 9222)
+    ├── Tab 1: localhost:3848 (Agent 1's feature)
+    ├── Tab 2: localhost:3849 (Agent 2's feature)
+    └── Tab 3: localhost:3850 (Agent 3's feature)
+```
+
+The proxy is a lightweight process that:
+1. Manages one shared Chrome instance
+2. Creates isolated sessions — each session owns one or more tabs
+3. Routes CDP commands from a session to its tabs only
+4. Prevents cross-session interference (Agent 1 can't see Agent 2's tabs)
+5. Cleans up tabs when sessions end
+
+---
+
+## Story 1: Agent Creates a Session and Tests a Page
+
+**Context:** Agent 1 has claimed `global-inbox`, started a dev server on
+port 3848. Its Chrome DevTools MCP needs to connect to a browser.
+
+**Today (no proxy):**
+
+The MCP server launches its own headless Chrome. It manages the browser
+lifecycle. When the agent is done, the MCP server kills Chrome. Each agent
+gets ~200MB of Chrome overhead.
+
+**With the proxy:**
+
+The MCP server connects to the proxy instead of launching Chrome. The proxy
+is already running with a shared Chrome instance.
+
+```
+# Proxy is running on port 9223 (distinct from Chrome's 9222)
+
+# MCP server connects to proxy, gets a session
+POST /session
+→ { "sessionId": "abc123", "wsUrl": "ws://localhost:9223/cdp/abc123" }
+
+# MCP server connects to the WebSocket
+# All CDP commands sent over this WebSocket are scoped to session abc123
+# The proxy creates tabs for this session and routes commands to them
+
+# Agent navigates
+→ CDP: Target.createTarget { url: "http://localhost:3848/inbox" }
+← CDP: Target.targetCreated { targetId: "tab-7" }
+# Proxy records: session abc123 owns tab-7
+
+# Agent takes screenshot
+→ CDP: Page.captureScreenshot (on tab-7)
+← CDP: screenshot data
+
+# Agent is done
+DELETE /session/abc123
+# Proxy closes tab-7, cleans up session state
+```
+
+**What the MCP server sees:** A standard CDP endpoint. It doesn't know or
+care that there's a proxy. It thinks it's talking directly to Chrome. The
+proxy speaks the same protocol.
+
+**What changes in the MCP server:** Instead of launching Chrome itself, it
+connects to an existing CDP endpoint. Most Chrome DevTools MCP
+implementations already support this via a `--cdp-url` or `--browser-url`
+flag. The proxy just provides that URL, scoped to a session.
+
+---
+
+## Story 2: Three Agents Working Concurrently
+
+**Context:** Three agents claimed three features. Tillr allocated ports
+3848, 3849, 3850. The proxy is running.
+
+**Sequence:**
+
+```
+t=0   Proxy starts, launches Chrome (one instance)
+      Chrome listening on debug port 9222
+      Proxy listening on port 9223
+
+t=1   Agent 1's MCP: POST /session → session "s1"
+      Agent 1's MCP: connects ws://localhost:9223/cdp/s1
+      Agent 1: createTarget("http://localhost:3848") → tab-1
+
+t=2   Agent 2's MCP: POST /session → session "s2"
+      Agent 2's MCP: connects ws://localhost:9223/cdp/s2
+      Agent 2: createTarget("http://localhost:3849") → tab-2
+
+t=3   Agent 3's MCP: POST /session → session "s3"
+      Agent 3's MCP: connects ws://localhost:9223/cdp/s3
+      Agent 3: createTarget("http://localhost:3850") → tab-3
+
+t=4   Agent 1: Page.captureScreenshot (on tab-1) → screenshot of inbox
+      Agent 2: Page.captureScreenshot (on tab-2) → screenshot of feature detail
+      Agent 3: Page.captureScreenshot (on tab-3) → screenshot of sidebar
+      # All three screenshots happen concurrently. No cross-talk.
+
+t=5   Agent 1: Runtime.evaluate("document.querySelector('.inbox-item').click()")
+      # Executes on tab-1 only. Agents 2 and 3 are unaffected.
+
+t=10  Agent 1 finishes. DELETE /session/s1 → tab-1 closed
+      Agents 2 and 3 still working, unaffected.
+```
+
+**Isolation guarantees:**
+- Session s1 can only see and interact with tabs it created
+- `Target.getTargets` from session s1 returns only tab-1
+- If Agent 1 sends a command targeting tab-2, the proxy rejects it
+- Tab lifecycle is tied to session lifecycle — close session, close its tabs
+
+**Resource usage:**
+- 1 Chrome instance: ~200MB RAM (vs. 600MB for 3 instances)
+- Proxy overhead: ~10MB RAM
+- Total: ~210MB (vs. ~600MB without proxy)
+- Savings grow linearly with agent count
+
+---
+
+## Story 3: Session Crashes or Agent Disconnects
+
+**Context:** Agent 2 crashes mid-session. Its MCP process dies. The
+WebSocket connection drops.
+
+**What the proxy does:**
+
+1. Detects the WebSocket disconnect for session s2
+2. Waits a grace period (configurable, default 30 seconds) in case of
+   reconnect
+3. No reconnect → closes all tabs owned by s2
+4. Releases session s2
+5. Agents 1 and 3 are completely unaffected
+
+**What about Chrome crashes?**
+
+If Chrome itself crashes (segfault, OOM):
+1. Proxy detects the Chrome process exit
+2. Restarts Chrome
+3. All existing sessions are invalidated — their tabs are gone
+4. Each MCP server gets a WebSocket error
+5. Each MCP server reconnects and creates a new session
+6. Agents restart their browser workflow (navigate, etc.)
+
+This is the same behavior as if each agent's own Chrome crashed, but it
+affects all agents at once. Chrome crashes are rare in headless mode, so
+this is an acceptable tradeoff.
+
+---
+
+## Story 4: MCP Server Integration
+
+**Context:** How does the Chrome DevTools MCP server actually connect to
+the proxy instead of launching its own Chrome?
+
+**Current MCP server startup (typical):**
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["@anthropic/chrome-devtools-mcp", "--headless"]
+    }
+  }
+}
+```
+
+The MCP server launches Chrome internally with `--headless` and connects
+to it via CDP.
+
+**With the proxy:**
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "@anthropic/chrome-devtools-mcp",
+        "--cdp-url", "ws://localhost:9223/cdp/auto"
+      ]
+    }
+  }
+}
+```
+
+The `--cdp-url` flag tells the MCP server to connect to an existing
+browser instead of launching one. The `/cdp/auto` path tells the proxy to
+auto-create a session for this connection.
+
+**If the MCP server doesn't support `--cdp-url`:**
+
+Some MCP implementations don't support connecting to an external browser.
+In that case, the proxy can also present itself as a Chrome instance by
+implementing Chrome's `/json` discovery endpoints:
+
+```
+GET http://localhost:9223/json/version
+→ { "Browser": "Chrome/xxx", "webSocketDebuggerUrl": "ws://..." }
+
+GET http://localhost:9223/json/list
+→ [ { "id": "tab-1", "url": "...", "webSocketDebuggerUrl": "ws://..." } ]
+```
+
+The MCP server discovers "Chrome" at port 9223 and connects. It doesn't
+know it's talking to a proxy.
+
+---
+
+## Story 5: Tillr Integration
+
+**Context:** How does tillr coordinate with the proxy? Who starts it?
+
+**Tillr does NOT manage the proxy.** The proxy is a separate tool that
+runs independently. Tillr's only job is port allocation for dev servers.
+
+**Option A: User starts the proxy manually**
+
+```bash
+# Start the proxy (once, stays running)
+cdp-proxy start
+# → Chrome started on :9222
+# → Proxy listening on :9223
+
+# In another terminal, start agents via tillr
+tillr agent claim global-inbox
+# → Worktree created, port 3848 allocated
+```
+
+The agent's MCP config points to `localhost:9223`. The proxy is already
+running. Simple.
+
+**Option B: Tillr starts the proxy on demand**
+
+```yaml
+# .tillr.yaml
+chrome_proxy:
+  enabled: true
+  port: 9223
+```
+
+When the first agent claims a feature that needs UI QA, tillr starts the
+proxy as a background process. When all agents are done, tillr stops it.
+
+This is convenient but couples tillr to the proxy tool. Not recommended
+for the initial version.
+
+**Option C: The agent starts the proxy if not running**
+
+The agent checks if the proxy is running (health check on port 9223).
+If not, it starts it. This is self-healing but creates a race condition
+if two agents start simultaneously.
+
+**Recommendation: Option A.** The human (or a startup script) runs
+`cdp-proxy start` before running agents. Simple, explicit, no magic.
+The proxy stays running across agent sessions.
+
+---
+
+## Story 6: Human Developer Wants to Watch
+
+**Context:** Val has three agents running. She wants to see what they're
+doing — watch their browser sessions in real-time.
+
+**The proxy can expose a debug UI:**
+
+```
+http://localhost:9223/
+→ Dashboard showing:
+  - Active sessions (3)
+  - Session s1: 1 tab, localhost:3848/inbox, last activity 5s ago
+  - Session s2: 1 tab, localhost:3849/features, last activity 2s ago
+  - Session s3: 2 tabs, localhost:3850/sidebar + /sidebar/settings
+
+  [Click any session to view its tabs]
+  [Click any tab to see live screenshot stream]
+```
+
+This is a nice-to-have, not a must-have. But it's trivial to build because
+Chrome's remote debugging already supports this — the proxy just needs to
+expose Chrome's built-in `devtools://` URLs scoped to each session's tabs.
+
+**Alternatively:** If Chrome is running with `--remote-debugging-port=9222`,
+the human can open `chrome://inspect` in their local Chrome and see all
+tabs. The proxy doesn't need to add anything — Chrome's native tooling
+works.
+
+---
+
+## Architecture
+
+### The Proxy Process
+
+```
+cdp-proxy
+├── HTTP server (:9223)
+│   ├── POST /session          → create session, return wsUrl
+│   ├── DELETE /session/:id    → close session and its tabs
+│   ├── GET /session           → list active sessions
+│   ├── GET /health            → health check
+│   └── GET /json/*            → Chrome discovery protocol emulation
+│
+├── WebSocket server
+│   └── /cdp/:sessionId        → proxied CDP connection
+│       ├── Intercepts Target.* commands (enforce session scope)
+│       ├── Passes through Page.*, Runtime.*, DOM.*, Network.*, etc.
+│       └── Tracks which targets belong to which session
+│
+├── Chrome manager
+│   ├── Launches Chrome with --headless --remote-debugging-port=9222
+│   ├── Monitors Chrome process health
+│   └── Restarts on crash
+│
+└── Session store (in-memory)
+    ├── session → [targetId, targetId, ...]
+    ├── targetId → session (reverse lookup)
+    └── Cleanup on disconnect/timeout
+```
+
+### CDP Command Routing
+
+Not all CDP commands need interception. The proxy's job is scoping, not
+transformation:
+
+**Intercepted (session-scoped):**
+- `Target.createTarget` → proxy records new target in session
+- `Target.closeTarget` → only if target belongs to session
+- `Target.getTargets` → filtered to session's targets only
+- `Target.attachToTarget` → only if target belongs to session
+
+**Passed through (after target validation):**
+- `Page.*` (navigate, screenshot, etc.)
+- `Runtime.*` (evaluate, etc.)
+- `DOM.*` (querySelector, etc.)
+- `Network.*` (intercept, etc.)
+- `Input.*` (click, type, etc.)
+- Everything else
+
+The proxy attaches to each target via `Target.attachToTarget` with
+`flatten: true`, which means CDP commands for a specific target are
+multiplexed over the same WebSocket. The proxy just needs to verify
+that the `sessionId` in each CDP message belongs to the requesting
+session.
+
+### State
+
+All state is in-memory. No database, no files. If the proxy restarts,
+sessions are lost and agents reconnect. This is fine — browser state is
+ephemeral. The agent just re-navigates.
+
+---
+
+## Implementation Plan
+
+### Phase 1: Minimal Viable Proxy
+
+- Single Go binary (or Node.js — language TBD based on ecosystem)
+- Launches headless Chrome
+- HTTP API: create/delete/list sessions
+- WebSocket proxy with Target.* interception
+- Session-scoped tab isolation
+- Auto-cleanup on disconnect
+
+This is ~500 lines of code. The CDP protocol is well-documented and the
+WebSocket proxying is straightforward.
+
+### Phase 2: Robustness
+
+- Chrome crash detection and restart
+- Session timeout (configurable grace period)
+- Health check endpoint
+- Structured logging (which session did what)
+- Resource limits (max sessions, max tabs per session)
+
+### Phase 3: Developer Experience
+
+- Debug dashboard (web UI showing active sessions)
+- Live screenshot streaming for human observers
+- Metrics (sessions created, tabs opened, CDP messages proxied)
+- Chrome discovery protocol emulation (`/json/*` endpoints)
+
+---
+
+## What This Tool Is NOT
+
+- **Not an MCP server.** It speaks CDP, not MCP. MCP servers connect to
+  it as if it were Chrome.
+- **Not part of tillr.** It's a standalone utility. Tillr doesn't know
+  about it. The agent's MCP config points to it directly.
+- **Not a browser automation framework.** It doesn't add features on top
+  of CDP. It just proxies and scopes.
+- **Not a testing tool.** It doesn't run tests. It provides browser access
+  for agents that do their own testing.
+
+---
+
+## Naming
+
+Working name: `cdp-proxy` (descriptive) or `chromux` (Chrome multiplexer).
+The name should communicate: "multiple users, one Chrome."
+
+---
+
+## Open Questions
+
+1. **Language choice.** Go is natural (matches tillr, single binary
+   distribution). Node.js has better CDP libraries (`chrome-remote-interface`,
+   `puppeteer-core`). The proxy is simple enough that either works.
+
+2. **Chrome lifecycle.** Should the proxy launch Chrome itself, or connect
+   to an existing Chrome? Launching is simpler for the user. Connecting
+   gives more control (the user can configure Chrome flags, use a specific
+   version, etc.). Could support both modes.
+
+3. **Auto-session from WebSocket.** If an MCP server connects to
+   `ws://localhost:9223/cdp/auto`, should the proxy auto-create a session?
+   This avoids the HTTP create-session step, which is convenient but means
+   the MCP server can't be told its session ID upfront. Probably fine —
+   the session ID is implicit in the WebSocket URL.
+
+4. **Max tabs per session.** Should the proxy enforce a limit? An agent
+   that opens 50 tabs is probably buggy. A default limit of 10 with
+   override seems reasonable.
+
+5. **Existing tools.** Does something like this already exist? Chrome's
+   `--remote-debugging-port` supports multiple connections, but without
+   session scoping — all connections see all tabs. Browserless.io does
+   something similar as a cloud service. A lightweight local proxy appears
+   to be a gap in the ecosystem.
