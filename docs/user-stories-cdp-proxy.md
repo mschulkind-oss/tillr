@@ -5,7 +5,113 @@ agents share one Chrome instance for UI QA via the Chrome DevTools Protocol.
 
 ---
 
-## Why This Exists
+## Motivation: Is This Worth Building?
+
+### The use case we have
+
+Background agents implementing UI features in parallel. Each agent needs
+a browser to QA its own work — navigate pages, take screenshots, click
+buttons, fill forms, verify layout. Today each agent spawns its own
+Chrome DevTools MCP server, which spawns its own headless Chrome. One
+agent = one Chrome instance = ~200MB RAM. Three agents = ~600MB. Ten
+agents = ~2GB just for browsers.
+
+That's the tillr use case: `tillr agent claim` creates a worktree, the
+agent implements and QAs in that worktree, submits a PR. Multiple agents
+doing this concurrently each need isolated browser access.
+
+### Is that enough?
+
+Honestly, maybe not on its own. Saving 400MB of RAM across 3 agents is
+nice but not compelling — dev machines have 32-64GB. The RAM argument
+only matters at scale (10+ agents), and most people aren't there yet.
+We're not there yet either — the agent workflow isn't even built.
+
+The stronger argument is **operational simplicity**. One Chrome process
+to monitor, one debug port, one thing to restart if it wedges. With 5
+separate Chrome instances, if one hangs, which agent's is it? With a
+proxy, there's one Chrome and a dashboard showing all sessions. But
+this is a convenience, not a necessity.
+
+### Who else would use this?
+
+**Multi-agent coding tools.** Any system that runs multiple AI agents
+concurrently where each needs browser access. This isn't tillr-specific.
+Claude Code with `isolation: "worktree"` spawns agents that could each
+need Chrome. Copilot Workspace, Devin, SWE-agent — any tool running
+parallel AI coding agents with UI testing hits this same problem.
+
+**CI/CD with parallel browser tests.** Test suites that fan out across
+multiple workers, each needing a browser. But this is already well-served
+by Playwright (which manages browser contexts with full isolation) and
+Selenium Grid. Those tools solved multi-tenant browser access years ago.
+A CDP proxy doesn't add much here.
+
+**Web scraping / research agents.** Multiple AI agents browsing different
+sites concurrently. But different domains already isolate cookies, so the
+hostname trick isn't needed. And Browserless.io already serves this market
+as a cloud service. Not a compelling gap.
+
+**Local MCP development.** Someone building or testing an MCP server that
+uses Chrome DevTools and wants to run multiple instances without multiple
+Chromes. Niche but real — MCP development is growing.
+
+### The honest assessment
+
+The primary audience is **multi-agent AI coding tools doing UI work**.
+That's a real and growing category, but it's early. Today, most people
+run one agent at a time. The parallel-agents-with-browsers scenario is
+emerging but not yet mainstream.
+
+The risk: building this before the underlying workflow exists. We don't
+have agents claiming features, working in worktrees, and QAing via
+Chrome DevTools yet. By the time we do, the landscape may have changed
+— Chrome DevTools MCP might support session scoping natively, or agent
+harnesses might manage browser lifecycle themselves.
+
+**The case for building it anyway:**
+
+1. It's small (~500 lines). The CDP protocol is well-documented. The
+   WebSocket proxying is mechanical. This isn't a 6-month project.
+
+2. It's standalone. No coupling to tillr. If it turns out to be useless,
+   nothing depends on it. If it turns out to be useful, it composes with
+   anything that speaks CDP.
+
+3. The hostname isolation trick is genuinely novel. `*.localhost` for
+   per-session cookie scoping in a shared browser is not something
+   existing tools do. If we don't build this, someone will — the
+   multi-agent browser problem is real.
+
+4. It's a forcing function for the agent workflow. Building the proxy
+   means thinking concretely about how agents interact with browsers,
+   which informs the worktree/port/session design in tillr.
+
+**The case for waiting:**
+
+1. Architecture 2 (separate Chrome per agent) works. The RAM cost is
+   acceptable for 3-5 agents. We can always add the proxy later when
+   scale demands it.
+
+2. The agent workflow doesn't exist yet. Building browser infrastructure
+   for agents that don't exist is premature.
+
+3. Chrome DevTools MCP is evolving. The session isolation problem might
+   get solved upstream.
+
+**Recommendation: wait.** Use separate Chrome instances (Architecture 2)
+when the agent workflow is built. Track the pain. If 5+ concurrent agents
+become normal and Chrome RAM is the bottleneck, build the proxy then. The
+design is documented here — it won't be lost.
+
+If the hostname isolation trick proves useful in a different context
+first (testing, development), that's a signal to build it sooner.
+
+---
+
+## Technical Design (For When We Build It)
+
+### What the problem actually is
 
 When an agent builds a UI feature, it needs to SEE the result. Today's
 workflow: the agent starts a dev server, launches headless Chrome via the
@@ -96,7 +202,7 @@ shared Chrome is as safe as separate Chrome instances.
 
 ---
 
-## What the Proxy Does
+### What the Proxy Does
 
 ```
 Agent 1 (Claude Code)                Agent 2                Agent 3
