@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/mattn/go-sqlite3 v1.14.38
+	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/term v0.32.0
 	gopkg.in/yaml.v3 v3.0.1
