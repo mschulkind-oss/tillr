@@ -25,6 +25,33 @@ working with nothing else.)
   architecture decisions, trade-offs encountered
 - Comments attributed to agent role (implementer, reviewer, designer)
 
+### Layer 2b: Cycle Questionnaires (enforced structure)
+
+Layer 2 asks agents to comment on decisions — *soft* guidance. Layer 2b
+hardens that into **mandatory structured output at cycle-step
+boundaries**. A cycle template can attach a questionnaire to any step
+(post-claim, pre-submit, post-review, etc.). The agent cannot advance
+past a step without answering its questions.
+
+- Questionnaires live on cycle templates (see Layer 9), so they're
+  versioned and reviewable like any other config change.
+- Each question has a format (short text, prose, yes/no + justification,
+  list, structured options) and blocking semantics:
+  - `hard_block` — agent waits for explicit PM approval.
+  - `soft_block` — agent waits N minutes, then proceeds and flags
+    "auto-proceeded" in the audit trail.
+  - `log_only` — agent answers, no block.
+- Conditional firing: a checkpoint can be declared conditional on
+  feature attributes (`tag == billing`, `touches internal/auth/**`).
+- Answers are rendered as structured comments on the feature, feeding
+  decision extraction (Layer 5) and knowledge synthesis (Layer 7).
+
+This is the PM's **dial for oversight depth** — routine features get a
+one-question pre-submit checkpoint; high-stakes features get multiple
+hard-blocking checkpoints with rich schemas. See
+[story 24](./stories/24-questionnaires-as-checkpoints.md) for the
+worked example.
+
 ## Layer 3: Cross-Feature Communication
 
 - `cross_refs` table linking entities mentioned in comments

@@ -17,7 +17,7 @@ alone; each subsequent layer compounds on the ones below.
 
 ## Contents
 
-- **[Stories](./stories/README.md)** — 23 narrative scenarios with
+- **[Stories](./stories/README.md)** — 24 narrative scenarios with
   named personas. Each story surfaces load-bearing mechanics and
   explicit gaps. Start with stories 1, 7, 8, 22 to see the core
   thesis in action.
@@ -40,8 +40,11 @@ alone; each subsequent layer compounds on the ones below.
    the agent's perspective, including the claim-response JSON contract.
 6. [Story 23 (failure)](./stories/23-context-graph-failure.md) — the
    confessed blind spot. Read this before trusting the model.
-7. [Implementation layers](./implementation-layers.md) — the roadmap.
-8. [Open questions](./open-questions.md) — what's still unresolved.
+7. [Story 24 (Meera)](./stories/24-questionnaires-as-checkpoints.md) —
+   cycle-template questionnaires as the mid-flight oversight dial.
+   Refines open question #1 and extends layers 2, 9, 10.
+8. [Implementation layers](./implementation-layers.md) — the roadmap.
+9. [Open questions](./open-questions.md) — what's still unresolved.
 
 ## Where this fits in tillr docs
 
@@ -81,8 +84,10 @@ Confidence gradient, high → low:
 
 1. Comments as foundation (story 22 makes this airtight)
 2. Context packet shape (stories 7 and 21 show the structure concretely)
-3. Universal PR pipeline for heterogeneous change types
-4. Estimation-by-analogy (story 17)
-5. Knowledge synthesis (known brittle — acknowledged in story 8)
-6. Cross-feature coordination (story 3 has a timing problem flagged but unsolved)
-7. Context graph code-level edges (story 23 is the confessed blind spot)
+3. Cycle questionnaires as oversight dial (story 24 — concrete mechanism
+   that resolves the mid-flight race condition from stories 2 and 21)
+4. Universal PR pipeline for heterogeneous change types
+5. Estimation-by-analogy (story 17)
+6. Knowledge synthesis (known brittle — acknowledged in story 8)
+7. Cross-feature coordination (story 3 has a timing problem flagged but unsolved)
+8. Context graph code-level edges (story 23 is the confessed blind spot)

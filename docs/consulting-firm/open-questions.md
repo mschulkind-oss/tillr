@@ -11,10 +11,18 @@ interrupt mechanism. Options: polling between phases, a pre-submit
 check, or accepting that PM comments only take effect on the next
 iteration.
 
-_Leaning:_ Pre-submit check. Agent completes its current approach,
-then checks for PM comments before submitting. If a PM comment
-changes direction, the agent re-implements. Simpler than polling,
-handles 90% of cases.
+_Leaning (original):_ Pre-submit check. Agent completes its current
+approach, then checks for PM comments before submitting. If a PM
+comment changes direction, the agent re-implements. Simpler than
+polling, handles 90% of cases.
+
+_Refinement from [story 24](./stories/24-questionnaires-as-checkpoints.md):_
+Invert the direction. Instead of the PM racing to comment before the
+agent submits, the agent **hard-blocks at cycle-template-defined
+checkpoints** and surfaces structured answers. The PM acts when asked,
+not when they notice. Pre-submit check remains as a fallback for PM
+comments that arrive between checkpoints, but the primary oversight
+mechanism becomes mandated pauses.
 
 **Answer:**
 > _(empty — fill in when decided)_
@@ -210,6 +218,114 @@ gap callouts tell agents where to use judgment, and the persona
 grounding prevents agents from building for abstract "users."
 See the "Stories as Specs" section in the consulting firm design
 doc.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+---
+
+## Questions raised by questionnaires (story 24)
+
+The questionnaire mechanism in
+[story 24](./stories/24-questionnaires-as-checkpoints.md) is a new
+proposal. These are its specific open questions.
+
+## 17. Questionnaire scope
+
+Do questionnaires live on cycle templates (per type), on workstreams
+(per area of the codebase), on features (per-feature overrides), or
+all three with layered resolution?
+
+_Leaning:_ Primary home is the cycle template (versioned, reviewable
+via Cycle Template PRs). Per-feature override allowed for "downgrade
+to standard even though the tag says high-risk," logged in audit
+trail. Workstream-level defaults deferred until there's demand.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 18. Blocking semantics default
+
+Should `hard_block` (agent idle until PM approves) or `soft_block`
+(auto-proceed after N minutes) be the default?
+
+_Leaning:_ Hard-block by default. Soft-block is an explicit opt-in
+per question. Rationale: defaults that can auto-proceed past PM
+oversight create surprise when the PM is away. Better to have the
+agent stall loudly than silently move forward. The dial is in the
+PM's hands.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 19. Checkpoint trigger: fixed or conditional?
+
+Should checkpoints fire at fixed cycle-step boundaries (post-claim,
+pre-submit), or should they also support conditional triggers
+("agent proposes a new external dependency", "feature touches
+`internal/billing/**`")?
+
+_Leaning:_ Both, layered. Fixed points are the baseline. Conditional
+triggers add targeted oversight without bloating the default
+questionnaire. Start with file-glob conditions; add "agent declares
+X" conditions once we see which declarations matter.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 20. Answer format schema
+
+Are questions free-form text, or do they support structured types
+(short text, prose, yes/no + justification, list, multiple choice)?
+
+_Leaning:_ A small fixed schema of ~5 question types, with the PM
+authoring specific questions of each type. Rich enough to shape
+answers (e.g., "yes/no + justification if no" forces rationale on
+the risky answer). Simple enough that an agent can reliably produce
+well-formed responses.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 21. Question-quality feedback loop
+
+PM-authored questionnaires can become bureaucracy. A well-meaning
+question that never produces an intervention is pure friction. How
+do we keep the dial tunable *down* as well as up?
+
+_Leaning:_ The retro agent (story 19) analyzes questionnaires and
+flags ones that have been answered N times with no PM intervention,
+proposing removal via Cycle Template PR. Track "PM acted on this
+answer (rejected, commented, requested changes)" as the signal;
+high intervention rate = keep, zero = prune candidate.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 22. Answer drift between checkpoints
+
+Post-claim answers ("no new dependencies") can contradict pre-submit
+reality ("added github.com/foo/bar"). Should the system detect and
+surface this automatically?
+
+_Leaning:_ Yes. Pre-submit checkpoint should render prior answers
+inline, with deltas highlighted for any question that has a
+mechanical correctness check (dependencies added, files touched,
+estimate drift). This makes drift visible without the PM having to
+hold both states in their head.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 23. Checkpoint inbox prioritization
+
+If 3 agents hit hard-block checkpoints at once, the PM has a queue.
+How do we surface the right one first?
+
+_Leaning:_ Inbox sorts blocked checkpoints by wall-clock time lost
+to blocking (oldest first), weighted by cycle priority. Show
+aggregate "agent time stalled today" so the PM can decide whether
+to relax semantics or spend more PM time.
 
 **Answer:**
 > _(empty — fill in when decided)_
