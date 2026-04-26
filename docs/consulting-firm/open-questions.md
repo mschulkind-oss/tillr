@@ -332,4 +332,104 @@ to relax semantics or spend more PM time.
 
 ---
 
+## Questions raised by the style enforcer (story 25)
+
+The style guide + async reviewer dialogue mechanism in
+[story 25](./stories/25-style-enforcer-async-dialogue.md) raises its
+own design questions.
+
+## 24. Style rule format and required examples
+
+What's the minimum viable shape of a style rule? Pure prose, or are
+invalid/valid code examples mandatory?
+
+_Leaning:_ Examples are **required** for `blocking` severity rules,
+**recommended** for `requires-justification`, **optional** for
+`advisory`. Prose alone is too ambiguous for an enforcer to apply
+consistently — the example pair is what makes the rule
+machine-applicable. Tillr should refuse to create a `blocking` rule
+without an example pair.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 25. Style rule conflicts
+
+Two rules might apply to the same code with opposing verdicts. How
+do we resolve?
+
+_Leaning:_ Explicit `priority` field on each rule (integer, higher
+wins). On conflict, the higher-priority rule applies and the lower
+is logged as "shadowed by rule X" in the enforcer's comment. PM can
+re-prioritize via style-rule PR.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 26. Justification erosion / weak-justification bar
+
+If implementers can justify any violation with thin reasoning, rules
+become decorative. Where's the bar, and who calibrates it?
+
+_Leaning:_ The retro agent (story 19) tracks acceptance rate per rule.
+Rules where >50% of justifications are accepted are flagged as
+"miscalibrated — consider tightening or splitting." The enforcer
+itself doesn't have a hard threshold; it accepts well-reasoned
+justifications and the system learns from outcomes.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 27. Stall detection and PM escalation
+
+Long enforcer ↔ implementer loops can stall a PR for days. When does
+the PM get pulled in?
+
+_Leaning:_ After N rounds (default 3) without resolution, escalate
+to PM. Surface "PRs in style-review for >24h" prominently. The PM
+can resolve, or amend the rule, or accept the implementer's stance
+and override the enforcer.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 28. Rule application date semantics
+
+When a new rule is added, does it retroactively flag in-flight PRs?
+
+_Leaning:_ No. Rules apply to PRs that *enter* style-review after the
+rule's `created_at`. PRs already past style-review are not reopened.
+This avoids breaking work in flight; the next PR picks up the new
+rule naturally.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 29. Style guide bloat and domain scoping
+
+With 50 rules, the enforcer's envelope is large and many rules don't
+apply to most diffs. How do we keep envelopes focused?
+
+_Leaning:_ Per-rule `scope` field (file globs and/or tags). Enforcer
+loads only the rules whose scope matches the diff. Default scope is
+"all files" if unspecified. PM can refactor a too-broad rule into
+narrower scoped rules via style-rule PR.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 30. Reviewer-implementer loop iteration limit
+
+Pure async dialogue can loop forever. Should the cycle engine cap
+iterations per step?
+
+_Leaning:_ Soft cap (warning) at 3 iterations, hard cap (PM escalation)
+at 5. Track per-rule iteration counts in the retro report — rules
+that consistently trigger many rounds are signals of mis-scope.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+---
+
 « [Consulting-firm overview](./README.md) · [Implementation layers](./implementation-layers.md) · [All stories](./stories/README.md)

@@ -17,7 +17,7 @@ alone; each subsequent layer compounds on the ones below.
 
 ## Contents
 
-- **[Stories](./stories/README.md)** — 24 narrative scenarios with
+- **[Stories](./stories/README.md)** — 25 narrative scenarios with
   named personas. Each story surfaces load-bearing mechanics and
   explicit gaps. Start with stories 1, 7, 8, 22 to see the core
   thesis in action.
@@ -43,8 +43,11 @@ alone; each subsequent layer compounds on the ones below.
 7. [Story 24 (Meera)](./stories/24-questionnaires-as-checkpoints.md) —
    cycle-template questionnaires as the mid-flight oversight dial.
    Refines open question #1 and extends layers 2, 9, 10.
-8. [Implementation layers](./implementation-layers.md) — the roadmap.
-9. [Open questions](./open-questions.md) — what's still unresolved.
+8. [Story 25 (Henry)](./stories/25-style-enforcer-async-dialogue.md) —
+   style guide + enforcer agent, async reviewer↔implementer dialogue
+   over PR comments. Confirms agent-platform agnosticism.
+9. [Implementation layers](./implementation-layers.md) — the roadmap.
+10. [Open questions](./open-questions.md) — what's still unresolved.
 
 ## Where this fits in tillr docs
 
@@ -86,8 +89,13 @@ Confidence gradient, high → low:
 2. Context packet shape (stories 7 and 21 show the structure concretely)
 3. Cycle questionnaires as oversight dial (story 24 — concrete mechanism
    that resolves the mid-flight race condition from stories 2 and 21)
-4. Universal PR pipeline for heterogeneous change types
-5. Estimation-by-analogy (story 17)
-6. Knowledge synthesis (known brittle — acknowledged in story 8)
-7. Cross-feature coordination (story 3 has a timing problem flagged but unsolved)
-8. Context graph code-level edges (story 23 is the confessed blind spot)
+4. Async reviewer↔implementer dialogue via cycle-state + comments
+   (story 25 — same loop as a real engineering org's PR review)
+5. Universal PR pipeline for heterogeneous change types
+6. Style guide enforcement as a cycle role with focused context envelope
+   (story 25 — rules are curated, examples required, exceptions via
+   style-rule PRs)
+7. Estimation-by-analogy (story 17)
+8. Knowledge synthesis (known brittle — acknowledged in story 8)
+9. Cross-feature coordination (story 3 has a timing problem flagged but unsolved)
+10. Context graph code-level edges (story 23 is the confessed blind spot)

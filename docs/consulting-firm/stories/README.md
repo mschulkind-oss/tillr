@@ -1,6 +1,6 @@
 # Consulting Firm — User Stories
 
-24 narrative stories exploring how tillr behaves when it's modelled as
+25 narrative stories exploring how tillr behaves when it's modelled as
 a consulting firm (client = user, firm = tillr, agents = engineering
 team). Each story follows a named persona through a concrete workflow
 and calls out the gaps we'd need to close.
@@ -50,6 +50,7 @@ sub-question inside an otherwise-worked-through scenario.
 | 22 | [22-derek-progressive-disclosure](./22-derek-progressive-disclosure.md) | Derek (minimalist) | Layer 1 alone (just comments) is valuable | 1 |
 | 23 | [23-context-graph-failure](./23-context-graph-failure.md) | — (failure case) | Graph blind spot: shared DB table, no comment/tag | 6 (gap) |
 | 24 | [24-questionnaires-as-checkpoints](./24-questionnaires-as-checkpoints.md) | Meera (tunable oversight) | Cycle-template questionnaires as enforced mid-flight checkpoints | 2, 9, 10 |
+| 25 | [25-style-enforcer-async-dialogue](./25-style-enforcer-async-dialogue.md) | Henry (staff engineer) | Style guide + enforcer agent + async reviewer↔implementer dialogue | 1, 6, 9 |
 
 See also:
 - [Implementation layers](../implementation-layers.md) — the 10-layer roadmap

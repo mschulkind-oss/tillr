@@ -68,6 +68,27 @@ worked example.
 - Comment-triggered re-evaluation: PM says "change approach" → feature
   goes back to implementing with the comment as context
 
+### Layer 4b: Async Reviewer ↔ Implementer Dialogue
+
+Generalize the comment-triggered re-evaluation from "PM" to **any
+commenter, including reviewer agents**. Reviewer leaves comments →
+cycle state moves to `pending-author-response` → implementer agent's
+inbox → implementer responds via comments → state moves to
+`pending-reviewer-response` → reviewer's inbox → loop until reviewer
+approves or PM intervenes.
+
+This is the substrate for every multi-agent dialogue (style enforcer
+↔ implementer, code reviewer ↔ implementer, designer ↔ reviewer).
+No synchronous coordination primitive — agents process inboxes when
+they next run, exactly like a real engineering org's async PR review.
+See [story 25](./stories/25-style-enforcer-async-dialogue.md) for the
+worked example.
+
+- New cycle states: `<step>-pending-author-response`, `<step>-pending-reviewer-response`
+- Comment metadata flags resolution: `resolved` / `accepted` / `rejected` per finding
+- Stall detection: surface PRs in any `pending-*` state >24h
+- Loop counter: track iterations per cycle step for the retro report
+
 ## Layer 5: Decision Extraction
 
 - Structured decision metadata in comments (what, alternatives, rationale)
@@ -86,6 +107,13 @@ worked example.
   domain, not the entire project history
 - Context packet as part of the claim response — agents receive it
   automatically, no prompt engineering needed
+- **Per-cycle-step envelopes.** Context envelopes are scoped to the
+  cycle step, not the feature. The implementer gets project history;
+  the style enforcer gets the diff + style guide only; the code
+  reviewer gets the diff + project knowledge. Each role loads exactly
+  what its job needs and unloads when the step ends — no token waste,
+  no context pollution between roles. (See
+  [story 25](./stories/25-style-enforcer-async-dialogue.md).)
 
 **This is the highest-leverage layer.** Comments (Layer 1) are
 valuable on their own, but the context graph turns 40 features of
@@ -113,10 +141,27 @@ accumulated knowledge into something no ad-hoc prompting can match.
 ## Layer 9: Universal PR Pipeline
 
 - Unified review pipeline for all change types: code, philosophy,
-  cycle template, knowledge, spec
+  cycle template, knowledge, **style rule**, spec
 - Validation per type: code → build/test, philosophy → conflict check,
-  cycle → schema validation, knowledge → freshness check
+  cycle → schema validation, knowledge → freshness check, style rule
+  → example-pair required for blocking severity
 - Inbox shows all pending proposals, not just code PRs
+
+### Layer 9b: Style Guide as First-Class Artifact
+
+- `style_rules` table: name, description, severity, invalid_example,
+  valid_example, scope (file globs / tags), created_at, superseded_at
+- Severity levels: `blocking` / `requires-justification` / `advisory`
+- `tillr style add/list/show/history` CLI commands
+- Style enforcer agent role with envelope = diff + applicable rules
+- Style-rule PRs carve out exceptions (e.g., "rule X doesn't apply
+  inside `internal/json/bootstrap.go`") and go through the universal
+  PR pipeline
+- Distinct from synthesized anti-patterns (Layer 7) — both coexist:
+  curated rules enforce what the PM has thought to encode, synthesized
+  brief catches the rest
+- See [story 25](./stories/25-style-enforcer-async-dialogue.md) for
+  the worked example
 
 ## Layer 10: Metrics, Estimation, and Reporting
 
