@@ -124,6 +124,25 @@ both and starts over.
 - The reviewer checked both features as a pair.
 - Sana didn't coordinate this. The agents did. She just sees the result.
 
+## Resolution (added later)
+
+The race condition gap flagged in step 4 (Agent-1 can't see Agent-2's
+cross-comment until its next interaction; the cooperation only works
+if both agents happen to be running concurrently) is resolved by
+[Story 27 (Sana — Cross-Feature Coordination, Resolved)](./27-sana-cross-feature-coordination-resolved.md),
+which uses [Layer 4b's async cycle states](../implementation-layers.md).
+
+The mechanism: a cross-feature comment from Agent-2 transitions
+`#payments-refactor` to `pending-author-response`. Agent-1 picks up its
+inbox at the next cycle boundary, regardless of whether the two agents
+are running simultaneously. Coordination happens at cycle boundaries,
+not in real-time — exactly like a real engineering org's PR review.
+
+The "discovery" question (how does Agent-2 know to comment on
+Agent-1's feature in the first place) remains a gap with multiple
+mitigations across stages — see
+[Open Question 34](../open-questions.md#34-initial-discovery-for-cross-feature-comments).
+
 ---
 
 « [All stories](./README.md) · [Consulting-firm overview](../README.md)

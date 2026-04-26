@@ -107,6 +107,26 @@ approve/reject at human-qa. If the agent goes the wrong direction for
 - The ticket thread is the complete decision record. Six months later,
   anyone can see why simple format was chosen over RFC 7807.
 
+## Resolution (added later)
+
+The gap flagged in step 3 ("How does the agent know Marcus
+commented?") has two complementary solutions in later stages:
+
+- [Story 24 (Meera questionnaires)](./24-questionnaires-as-checkpoints.md)
+  inverts the direction: instead of Marcus racing to comment before
+  the agent submits, the **agent hard-blocks at cycle-template-defined
+  checkpoints** and surfaces decisions to Marcus. He acts when asked,
+  not when he notices.
+- [Layer 4b (async dialogue)](../implementation-layers.md) adds cycle
+  states `pending-author-response` / `pending-reviewer-response`. PM
+  comments transition state; the agent picks up its inbox at the next
+  cycle boundary.
+
+The pre-submit check Marcus relies on in this story is still useful as
+a fallback for PM comments that arrive between checkpoints. See
+[Open Question 1](../open-questions.md#1-how-do-agents-see-new-comments-mid-implementation)
+for the fuller answer.
+
 ---
 
 « [All stories](./README.md) · [Consulting-firm overview](../README.md)

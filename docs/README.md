@@ -34,9 +34,10 @@ docs/
 │   ├── friction-points.md         derived roadmap table
 │   └── key-insight.md             one-paragraph distillation
 ├── consulting-firm/               extended proposal: context & conversation layer
-│   ├── stories/                   25 stories, one per file
-│   ├── implementation-layers.md   10-layer build roadmap
-│   └── open-questions.md          30 unresolved design questions
+│   ├── stories/                   29 stories, one per file (sorted by stage)
+│   ├── roadmap.md                 8 shipping stages with risk + validation
+│   ├── implementation-layers.md   architectural layers (10 + sub-layers + adapter + L11)
+│   └── open-questions.md          39 unresolved design questions
 ├── user-stories-as-process.md     where stories live as first-class entities
 ├── user-stories-agent-prs.md      local PR records, agent worktrees
 ├── user-stories-merge-queue.md    isolated QA, sequential merge

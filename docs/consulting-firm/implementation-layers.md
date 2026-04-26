@@ -1,6 +1,32 @@
 # Implementation Layers
 
 Build this incrementally. Each layer delivers value independently.
+This doc decomposes by ARCHITECTURE; for the
+**shipping order** (which layers ship together as stages, with risk
+and validation criteria per stage), see [roadmap.md](./roadmap.md).
+
+## Foundations (parallel concern, not a numbered layer)
+
+### Platform Adapter
+
+Tillr defines a universal protocol — cycle steps, context envelopes,
+comment artifacts, status transitions, role files. The platform-
+specific code is a thin invocation **adapter** per agent platform
+(Claude SDK, Copilot cloud, etc.). The adapter:
+
+- Receives a cycle-step dispatch `(role, envelope, model_class)`
+- Translates to the platform's invocation
+- Captures output as canonical tillr comments via the comments API
+- Reports status / cost / errors back to the cycle engine
+
+Adapters are platform-specific; the protocol is not. See
+[story 29 (Anders)](./stories/29-anders-platform-adapter.md) for the
+worked example, including the
+[Claude vs Copilot capabilities matrix](./stories/29-anders-platform-adapter.md#platform-agnosticism-confirmed-by-research).
+
+The adapter is needed from Stage 1 in its minimal form (~200 lines:
+"call SDK, capture output as a single comment"). Sophistication grows
+alongside subsequent stages.
 
 ## Layer 1: Comments (foundation)
 
@@ -171,6 +197,42 @@ accumulated knowledge into something no ad-hoc prompting can match.
 - Automated retrospectives with recommendations as PRs
 - Stakeholder reports generated from graph data
 
+## Layer 11: Hierarchical Org Structure (far future)
+
+Layers 1-10 develop the flat consulting-firm model: one project, one
+human PM, agents with roles. Layer 11 makes the structure **recursive**:
+a tillr ORG sits above projects; each project may have a human PM or
+an *agent-PM* that escalates to a director.
+
+- `orgs` table: name, projects[], philosophies[], capacity allocations
+- Org-level philosophies propagate to all projects' context packets
+- Director dashboard: cross-project view, escalations from PMs,
+  capacity allocation, aggregated stakeholder reports
+- Cross-project decision propagation (with `scope` field on decisions)
+- Recursive escalation: feature owner → PM → director, with default
+  thresholds + per-org overrides
+- Agent-PM mode: an agent acts as PM for routine decisions, escalates
+  to a human director for non-routine
+
+The hierarchy IS the context-management system: each level adds
+filtered context downward and summarized rollups upward. Solves the
+"context overload" problem the original framing identified — nobody
+reads everything; each role gets the slice appropriate to its
+altitude.
+
+See [story 26 (Olivia)](./stories/26-olivia-director-hierarchy.md) for
+the worked example.
+
+This is **Stage 8 — far future.** Requires Stages 1-7 mature. Highest
+risk because: new data model, aggregate summarization at scale (relies
+on summarization quality earlier stages have proven), cross-project
+context propagation (research problem: which decisions propagate?),
+agent-PM trust calibration (only meaningful once human-PM is solid).
+
+For most teams, the flat single-project model is sufficient. Don't
+build this until you have at least 3 mature tillr projects feeling
+the pain.
+
 ---
 
-« [Consulting-firm overview](./README.md) · [Open questions](./open-questions.md) · [All stories](./stories/README.md)
+« [Consulting-firm overview](./README.md) · [Roadmap](./roadmap.md) · [Open questions](./open-questions.md) · [All stories](./stories/README.md)

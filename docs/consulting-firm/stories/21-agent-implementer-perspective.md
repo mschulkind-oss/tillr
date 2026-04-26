@@ -126,6 +126,27 @@ assembles at claim time.
 - Structured metadata in comments (philosophy_refs, decision_type)
   enables automated analysis later.
 
+## Resolution (added later)
+
+Two of the gaps flagged here are addressed by subsequent stages:
+
+- The "agent went with option 2 per simplicity philosophy; PM might
+  have preferred option 3" gap is resolved by
+  [Story 24 (Meera questionnaires)](./24-questionnaires-as-checkpoints.md):
+  high-stakes decisions get a hard-block checkpoint where the agent
+  presents alternatives BEFORE deciding. The PM picks; the agent
+  doesn't have to guess.
+- The mid-flight correction problem is resolved by
+  [Layer 4b (async dialogue)](../implementation-layers.md) — PM
+  comments transition cycle state to `pending-author-response`, so the
+  agent picks up the comment at its next cycle boundary.
+
+The "context packet is JSON; agent must parse it before any code"
+note is just a description of the protocol, not an unresolved gap.
+See [Story 29 (Anders — platform adapter)](./29-anders-platform-adapter.md)
+for how adapters convert tillr's canonical envelope to platform-
+specific invocation.
+
 ---
 
 « [All stories](./README.md) · [Consulting-firm overview](../README.md)

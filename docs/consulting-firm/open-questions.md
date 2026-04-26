@@ -432,4 +432,159 @@ that consistently trigger many rounds are signals of mis-scope.
 
 ---
 
-« [Consulting-firm overview](./README.md) · [Implementation layers](./implementation-layers.md) · [All stories](./stories/README.md)
+## Questions raised by the director hierarchy (story 26)
+
+The recursive org structure proposal in
+[story 26 (Olivia)](./stories/26-olivia-director-hierarchy.md) introduces
+new design questions specific to hierarchy.
+
+## 31. Context propagation through the hierarchy
+
+How does context flow up and down the org → project → workstream →
+feature → cycle-step tree? Does each level filter / summarize, or is
+context flat?
+
+_Leaning:_ Each level filters downward (org philosophies → project
+context, project patterns → feature context) and summarizes upward
+(cycle-step comments → feature summary → project status → org
+rollup). This is what makes the hierarchy worth having — each role
+sees the slice appropriate to its altitude. Build minimal first
+(philosophies down, status up); add richer flow after Stage 8 is
+proven.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 32. Recursive escalation thresholds
+
+When does a feature owner agent escalate to PM? When does PM (or
+agent-PM) escalate to director?
+
+_Leaning:_ Default thresholds:
+- Feature owner → PM: cycle has looped >5 times, OR PR touches >2
+  packages PM hasn't reviewed before, OR explicit `escalate` flag
+  from style-rule violation
+- PM → Director: cross-project decision, OR philosophy amendment, OR
+  capacity reallocation, OR decision marked `scope: org` by template
+
+Per-org overrides via cycle template configuration. Track escalation
+precision (was the escalation warranted?) in the retro report.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 33. Cross-project decision propagation
+
+Which decisions propagate from one project to another?
+
+_Leaning:_ Decisions get a `scope` field: `feature` / `workstream` /
+`project` / `org`. Org-scope decisions auto-propagate to all
+projects. Project-scope decisions stay local. The director can
+manually promote a project decision to org-scope (story 26 shows the
+LaunchDarkly example). Default scope inferred from the decision
+type: tech choices that affect interop default to `org`; UI
+preferences default to `project`.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 34. Initial discovery for cross-feature comments
+
+In [story 27](./stories/27-sana-cross-feature-coordination-resolved.md),
+how does Agent-2 know to comment on `#payments-refactor` in the first
+place? Three options proposed: Layer 6 context packet (default at
+Stage 5), Layer 3 cross-ref auto-detection, or manual cross-refs from
+the PM.
+
+_Leaning:_ Layer 6 context packet is the default once Stage 5 ships.
+Before Stage 5, manual cross-refs (Option C) are the fallback. Auto-
+detection (Option B) is a refinement that can ship anytime after
+Stage 1 — the heuristic is "comment mentions an entity name in
+another active feature → suggest cross-ref."
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 35. Validation period between stages
+
+Story 28 (Sasha) emphasizes "validate before adding the next stage."
+How long is the validation period? What metrics?
+
+_Leaning:_ Minimum 4 weeks of real usage with at least 10-20 features
+flowing through the new stage. Metrics per stage are in roadmap.md.
+"Real usage" means the team is actually using the new stage's
+features, not just having them installed. If the team finds workarounds
+to avoid the new stage, that's a signal the stage isn't valuable
+yet — diagnose before adding the next.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 36. Output normalization across platforms
+
+Story 29 (Anders) shows different agent platforms producing different
+output formats. The adapter normalizes to canonical tillr comments.
+What's the canonical comment shape?
+
+_Leaning:_ Body (markdown text) + author (role from cycle context) +
+metadata block (decision_type, philosophy_refs, severity if applicable).
+Adapter is responsible for stripping platform noise (Copilot session
+preamble, Claude tool-use blocks). Edge cases fall back to "raw
+output as one comment" with a warning surfaced to Anders.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 37. Platform feature drift handling
+
+When one agent platform adds capability X (e.g., browsing) and another
+doesn't, what happens to cycle templates that depend on X?
+
+_Leaning:_ Cycle templates declare `requires_capabilities: [...]`. The
+engine refuses to dispatch a step through an adapter that lacks
+required capabilities — surfaces a clear error ("step needs
+'browsing' capability; adapter X does not support; use adapter Y or
+remove the requirement"). PM either re-routes via different adapter
+or relaxes the cycle template.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 38. Cost tracking and per-platform / per-model accounting
+
+How does tillr track and report cost across multiple platforms with
+different pricing models?
+
+_Leaning:_ Adapter reports `tokens_in`, `tokens_out`, and `cost_usd`
+(when known) per invocation. Tillr stores per-step. Layer 10
+metrics aggregate by feature, cycle template, agent role, platform,
+and model. PM sees cost per feature in the inbox. PM time and agent
+cost are reported as separate line items so they can be optimized
+independently.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 39. Sub-agent invocation as Claude-specific optimization
+
+Should tillr support sub-agent invocation (Claude Task tool style)
+where a parent agent spawns a sub-agent inside its run, instead of
+the cycle engine dispatching as a separate step?
+
+This was considered for the style enforcer role and dismissed in
+favor of cycle-step-as-abstraction. But the pattern might be useful
+for short, mechanical reviews where invocation overhead matters more
+than abstraction purity.
+
+_Leaning:_ No, for now. Keep cycle-step abstraction universal.
+Re-evaluate if we observe significant cost / latency overhead from
+separate invocations for short reviews. If we ever do support it, it
+becomes a Claude-specific optimization in the adapter, not a
+protocol-level concept.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+---
+
+« [Consulting-firm overview](./README.md) · [Roadmap](./roadmap.md) · [Implementation layers](./implementation-layers.md) · [All stories](./stories/README.md)
