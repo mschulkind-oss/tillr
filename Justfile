@@ -27,7 +27,8 @@ lint:
 
 # Lint without auto-fix (CI mode)
 lint-ci:
-    gofmt -l . | xargs -r false  # fail if any files need formatting
+    # Scope to tracked files; .yolo/ etc. contain malformed Go testdata
+    git ls-files '*.go' | xargs gofmt -l | xargs -r false
     golangci-lint run ./...
 
 # Run all tests
