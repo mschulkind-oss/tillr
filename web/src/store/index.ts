@@ -1,13 +1,8 @@
+// Post-reset minimal client state. Theme, sidebar, toasts.
+// Notifications / help-modal / hotkeys removed; reintroduce per the
+// consulting-firm roadmap.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-
-export interface Notification {
-  id: string
-  type: 'info' | 'success' | 'warning' | 'error'
-  message: string
-  timestamp: string
-  read: boolean
-}
 
 interface Toast {
   id: string
@@ -16,26 +11,12 @@ interface Toast {
 }
 
 interface AppState {
-  // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
 
-  // Sidebar
   sidebarOpen: boolean
   setSidebarOpen: (open: boolean) => void
 
-  // Notifications
-  notifications: Notification[]
-  addNotification: (n: Notification) => void
-  markAllRead: () => void
-  clearNotifications: () => void
-  unreadCount: () => number
-
-  // Help modal
-  helpModalOpen: boolean
-  setHelpModalOpen: (open: boolean) => void
-
-  // Toasts
   toasts: Toast[]
   addToast: (message: string, type?: Toast['type']) => void
   removeToast: (id: string) => void
@@ -43,8 +24,7 @@ interface AppState {
 
 export const useStore = create<AppState>()(
   persist(
-    (set, get) => ({
-      // Theme
+    (set) => ({
       theme: 'dark',
       toggleTheme: () =>
         set((s) => {
@@ -53,28 +33,9 @@ export const useStore = create<AppState>()(
           return { theme: next }
         }),
 
-      // Sidebar
       sidebarOpen: true,
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
-      // Notifications
-      notifications: [],
-      addNotification: (n) =>
-        set((s) => ({
-          notifications: [n, ...s.notifications].slice(0, 50),
-        })),
-      markAllRead: () =>
-        set((s) => ({
-          notifications: s.notifications.map((n) => ({ ...n, read: true })),
-        })),
-      clearNotifications: () => set({ notifications: [] }),
-      unreadCount: () => get().notifications.filter((n) => !n.read).length,
-
-      // Help modal
-      helpModalOpen: false,
-      setHelpModalOpen: (open) => set({ helpModalOpen: open }),
-
-      // Toasts
       toasts: [],
       addToast: (message, type = 'info') => {
         const id = Date.now().toString()
@@ -89,6 +50,6 @@ export const useStore = create<AppState>()(
     {
       name: 'tillr-store',
       partialize: (state) => ({ theme: state.theme }),
-    }
-  )
+    },
+  ),
 )

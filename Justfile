@@ -27,8 +27,10 @@ lint:
 
 # Lint without auto-fix (CI mode)
 lint-ci:
-    # Scope to tracked files; .yolo/ etc. contain malformed Go testdata
-    git ls-files '*.go' | xargs gofmt -l | xargs -r false
+    # Scope to tracked files that still exist on disk; .yolo/ etc.
+    # contain malformed Go testdata, and git ls-files reports
+    # tracked-but-deleted paths until the deletion is committed.
+    git ls-files '*.go' | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | xargs -r gofmt -l | xargs -r false
     golangci-lint run ./...
 
 # Run all tests

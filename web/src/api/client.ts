@@ -1,44 +1,6 @@
-import type {
-  Feature,
-  FeatureDetailResponse,
-  Milestone,
-  RoadmapItem,
-  Event,
-  CycleInstance,
-  CycleType,
-  CycleDetail,
-  Discussion,
-  StatusResponse,
-  StatsResponse,
-  BurndownData,
-  HeatmapDay,
-  ActivityDayCount,
-  Idea,
-  AgentSession,
-  AgentStatusDashboard,
-  StatusUpdate,
-  ContextEntry,
-  CoordinationStatus,
-  QAResult,
-  Decision,
-  GroupedSearchResults,
-  QueueResponse,
-  ImplementationQueueResponse,
-  DependencyGraph,
-  SpecDocument,
-  FeaturePR,
-  TagCount,
-  HeatmapGrid,
-  AuditEvent,
-  AuditStatsResponse,
-  Workstream,
-  WorkstreamNote,
-  WorkstreamLink,
-  WorkstreamDetail,
-  WorkstreamFeature,
-  Attachment,
-  AppConfig,
-} from './types'
+// Post-reset minimal API client. Mirrors the surface in
+// internal/server/server.go.
+import type { Comment, Feature, Project } from './types'
 import { rewriteApiUrl } from './projects'
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -62,183 +24,17 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
   return res.json()
 }
 
-async function patchJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(rewriteApiUrl(url), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`)
-  }
-  return res.json()
-}
-
-// Status
-export const getStatus = () => fetchJson<StatusResponse>('/api/status')
-
-// Features
+export const getProject = () => fetchJson<Project>('/api/project')
 export const getFeatures = () => fetchJson<Feature[]>('/api/features')
-export const getFeature = (id: string) => fetchJson<FeatureDetailResponse>(`/api/features/${id}`)
-export const getFeatureDeps = (id: string) => fetchJson<{
-  depends_on: Array<{ id: string; name: string; status: string }>
-  depended_by: Array<{ id: string; name: string; status: string }>
-  blocking_chain: string[]
-}>(`/api/features/${id}/deps`)
-export const patchFeature = (id: string, data: Partial<Feature>) => patchJson<Feature>(`/api/features/${id}`, data)
+export const getFeature = (id: number) => fetchJson<Feature>(`/api/features/${id}`)
+export const createFeature = (data: { title: string; description?: string }) =>
+  postJson<Feature>('/api/features', data)
 
-// Milestones
-export const getMilestones = () => fetchJson<Milestone[]>('/api/milestones')
-export const getMilestone = (id: string) => fetchJson<Milestone>(`/api/milestones/${id}`)
-export const patchMilestone = (id: string, data: Partial<Milestone>) => patchJson<Milestone>(`/api/milestones/${id}`, data)
+export const getComments = (featureId: number) =>
+  fetchJson<Comment[]>(`/api/features/${featureId}/comments`)
+export const addComment = (
+  featureId: number,
+  data: { body: string; author_type?: string; author_role?: string },
+) => postJson<Comment>(`/api/features/${featureId}/comments`, data)
 
-// Roadmap
-export const getRoadmap = () => fetchJson<RoadmapItem[]>('/api/roadmap')
-export const getRoadmapItem = (id: string) => fetchJson<RoadmapItem>(`/api/roadmap/${id}`)
-
-// Cycles
-export const getCycles = () => fetchJson<CycleInstance[]>('/api/cycles')
-export const getCycleTypes = () => fetchJson<CycleType[]>('/api/cycles/types')
-export const getCycleDetail = (id: number) => fetchJson<CycleDetail>(`/api/cycles/${id}`)
-export const advanceCycle = (id: number, action: 'approve' | 'reject', notes?: string) =>
-  postJson<{ feature: string; step: string; action: string; result?: string; next_step?: string }>(
-    `/api/cycles/${id}/advance`, { action, notes }
-  )
-
-// Discussions
-export const getDiscussions = () => fetchJson<Discussion[]>('/api/discussions')
-export const getDiscussion = (id: number) => fetchJson<Discussion>(`/api/discussions/${id}`)
-
-// History
-export const getHistory = (params?: { limit?: number; feature?: string; type?: string }) => {
-  const query = new URLSearchParams()
-  if (params?.limit) query.set('limit', String(params.limit))
-  if (params?.feature) query.set('feature', params.feature)
-  if (params?.type) query.set('type', params.type)
-  const qs = query.toString()
-  return fetchJson<Event[]>(`/api/history${qs ? `?${qs}` : ''}`)
-}
-
-// QA
-export const getQAPending = () => fetchJson<Feature[]>('/api/qa/pending')
-export const getQAResults = (featureId: string) => fetchJson<QAResult[]>(`/api/qa/${featureId}`)
-export const approveFeature = (featureId: string, notes?: string) =>
-  postJson('/api/qa/' + featureId + '/approve', { notes })
-export const rejectFeature = (featureId: string, notes?: string) =>
-  postJson('/api/qa/' + featureId + '/reject', { notes })
-
-// Stats
-export const getStats = () => fetchJson<StatsResponse>('/api/stats')
-export const getBurndown = () => fetchJson<BurndownData>('/api/stats/burndown')
-export const getHeatmap = (days = 365) => fetchJson<{ days: HeatmapDay[] }>(`/api/stats/heatmap?days=${days}`)
-export const getActivityHeatmap = (days = 365) => fetchJson<ActivityDayCount[]>(`/api/stats/activity-heatmap?days=${days}`)
-
-// Ideas
-export const getIdeas = () => fetchJson<Idea[]>('/api/ideas')
-export const getIdeasHistory = () => fetchJson<Idea[]>('/api/ideas?view=history')
-export const getIdea = (id: number) => fetchJson<Idea>(`/api/ideas/${id}`)
-export const approveIdea = (id: number) => postJson<Idea>(`/api/ideas/${id}/approve`, {})
-export const rejectIdea = (id: number) => postJson<Idea>(`/api/ideas/${id}/reject`, {})
-
-// Agents
-export const getAgents = () => fetchJson<AgentSession[]>('/api/agents')
-export const getAgentDashboard = () => fetchJson<AgentStatusDashboard>('/api/agents/status')
-export const getAgentCoordination = () => fetchJson<CoordinationStatus>('/api/agents/coordination')
-export const getAgentDetail = (id: string) =>
-  fetchJson<{ session: AgentSession; updates: StatusUpdate[]; worktree: unknown }>(`/api/agents/${id}`)
-
-// Context
-export const getContextEntries = () => fetchJson<ContextEntry[]>('/api/context')
-
-// Decisions (ADRs)
-export const getDecisions = () => fetchJson<Decision[]>('/api/decisions')
-export const getDecision = (id: string) => fetchJson<Decision>(`/api/decisions/${id}`)
-
-// Git
-export const getGitLog = () => fetchJson<unknown[]>('/api/git/log')
-
-// Search
-export const search = (query: string) => fetchJson<GroupedSearchResults>(`/api/search?q=${encodeURIComponent(query)}`)
-
-// Dependencies graph
-export const getDependencies = () => fetchJson<DependencyGraph>('/api/dependencies')
-
-// Queue
-export const getQueue = () => fetchJson<QueueResponse>('/api/queue')
-export const reclaimStaleItems = () => postJson<{ reclaimed: number }>('/api/queue')
-export const getImplementationQueue = (params?: { workstream?: string; min_priority?: string; days?: number }) => {
-  const query = new URLSearchParams()
-  if (params?.workstream) query.set('workstream', params.workstream)
-  if (params?.min_priority) query.set('min_priority', params.min_priority)
-  if (params?.days !== undefined && params.days > 0) query.set('days', String(params.days))
-  const qs = query.toString()
-  return fetchJson<ImplementationQueueResponse>(`/api/queue/features${qs ? `?${qs}` : ''}`)
-}
-
-// Spec document
-export const getSpecDocument = () => fetchJson<SpecDocument>('/api/spec-document')
-
-// Feature PRs
-export const getFeaturePRs = (featureId: string) => fetchJson<FeaturePR[]>(`/api/features/${featureId}/prs`)
-
-// Tags
-export const getTags = () => fetchJson<TagCount[]>('/api/tags')
-
-// Audit
-export const getAuditEvents = (params?: { since?: string; until?: string; type?: string; feature?: string; limit?: number; offset?: number }) => {
-  const query = new URLSearchParams()
-  if (params?.since) query.set('since', params.since)
-  if (params?.until) query.set('until', params.until)
-  if (params?.type) query.set('type', params.type)
-  if (params?.feature) query.set('feature', params.feature)
-  if (params?.limit) query.set('limit', String(params.limit))
-  if (params?.offset) query.set('offset', String(params.offset))
-  const qs = query.toString()
-  return fetchJson<{ events: AuditEvent[]; total: number }>(`/api/audit${qs ? `?${qs}` : ''}`)
-}
-export const getAuditStats = () => fetchJson<AuditStatsResponse>('/api/audit/stats')
-
-// Analytics heatmap (hour-of-day x day-of-week grid)
-export const getAnalyticsHeatmap = () => fetchJson<HeatmapGrid>('/api/analytics/heatmap')
-
-// Workstreams
-export const getWorkstreams = (status = 'active') => fetchJson<Workstream[]>(`/api/workstreams?status=${status}`)
-export const getWorkstream = (id: string) => fetchJson<WorkstreamDetail>(`/api/workstreams/${id}`)
-export const createWorkstream = (data: { name: string; description?: string; parent_id?: string; tags?: string; project_id?: string }) =>
-  postJson<Workstream>('/api/workstreams', data)
-export const patchWorkstream = (id: string, data: Partial<Workstream>) => patchJson<Workstream>(`/api/workstreams/${id}`, data)
-export const archiveWorkstream = (id: string) => fetchJson<{ archived: string }>(`/api/workstreams/${id}`) // DELETE handled via fetch
-export const addWorkstreamNote = (wsId: string, data: { content: string; note_type?: string; source?: string }) =>
-  postJson<WorkstreamNote>(`/api/workstreams/${wsId}/notes`, data)
-export const resolveWorkstreamNote = (wsId: string, noteId: number) =>
-  patchJson<void>(`/api/workstreams/${wsId}/notes/${noteId}`, { resolved: 1 })
-export const addWorkstreamLink = (wsId: string, data: { link_type: string; target_id?: string; target_url?: string; label?: string }) =>
-  postJson<WorkstreamLink>(`/api/workstreams/${wsId}/links`, data)
-export const getWorkstreamFeatures = (wsId: string) => fetchJson<WorkstreamFeature[]>(`/api/workstreams/${wsId}/features`)
-
-// Attachments
-export const getAttachments = (entityType: string, entityId: string) =>
-  fetchJson<Attachment[]>(`/api/attachments?entity_type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}`)
-export const uploadAttachment = async (entityType: string, entityId: string, file: File, label?: string): Promise<Attachment> => {
-  const form = new FormData()
-  form.append('file', file)
-  form.append('entity_type', entityType)
-  form.append('entity_id', entityId)
-  if (label) form.append('label', label)
-  const res = await fetch(rewriteApiUrl('/api/attachments'), { method: 'POST', body: form })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Upload failed: ${res.status} ${text}`)
-  }
-  return res.json()
-}
-export const deleteAttachment = async (filename: string): Promise<void> => {
-  const res = await fetch(rewriteApiUrl(`/api/attachments/${filename}`), { method: 'DELETE' })
-  if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
-}
-export const attachmentUrl = (filename: string) => rewriteApiUrl(`/api/attachments/${filename}`)
-
-// Config
-export const getConfig = () => fetchJson<AppConfig>('/api/config')
-
-export { postJson, patchJson, fetchJson }
+export { fetchJson, postJson }

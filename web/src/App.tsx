@@ -1,36 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { Layout } from './components/Layout'
-import { Dashboard } from './pages/Dashboard'
 import { Features } from './pages/Features'
 import { FeatureDetail } from './pages/FeatureDetail'
-import { QA } from './pages/QA'
-import { Roadmap } from './pages/Roadmap'
-import { MilestoneDetail } from './pages/MilestoneDetail'
-import { RoadmapDetail } from './pages/RoadmapDetail'
-import { Agents } from './pages/Agents'
-import { AgentDetail } from './pages/AgentDetail'
-import { Cycles } from './pages/Cycles'
-import { CycleDetail } from './pages/CycleDetail'
-import { Ideas } from './pages/Ideas'
-import { IdeaDetail } from './pages/IdeaDetail'
-import { Discussions } from './pages/Discussions'
-import { DiscussionDetail } from './pages/DiscussionDetail'
-import { Decisions } from './pages/Decisions'
-import { DecisionDetail } from './pages/DecisionDetail'
-import { Context } from './pages/Context'
-import { History } from './pages/History'
-import { Workflow } from './pages/Workflow'
-import { Stats } from './pages/Stats'
-import { Spec } from './pages/Spec'
-import { Timeline } from './pages/Timeline'
-import { Queue } from './pages/Queue'
-import Workstreams from './pages/Workstreams'
-import WorkstreamDetail from './pages/WorkstreamDetail'
-import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { KeyboardShortcuts } from './components/KeyboardShortcuts'
-import { HelpModal } from './components/HelpModal'
 import { initProjects } from './api/projects'
 
 const queryClient = new QueryClient({
@@ -70,40 +44,12 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeInit />
       <BrowserRouter>
-        <KeyboardShortcuts />
-        <HelpModal />
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/" element={<Navigate to="/features" replace />} />
             <Route path="/features" element={<Features />} />
             <Route path="/features/:id" element={<FeatureDetail />} />
-            <Route path="/qa" element={<QA />} />
-            <Route path="/qa/:workstreamId" element={<QA />} />
-            <Route path="/roadmap" element={<Roadmap />} />
-            <Route path="/roadmap/:id" element={<RoadmapDetail />} />
-            <Route path="/milestones/:id" element={<MilestoneDetail />} />
-            {/* Agents & Cycles */}
-            <Route path="/agents" element={<Agents />} />
-            <Route path="/agents/:id" element={<AgentDetail />} />
-            <Route path="/cycles" element={<Cycles />} />
-            <Route path="/cycles/:id" element={<CycleDetail />} />
-            <Route path="/ideas" element={<Ideas />} />
-            <Route path="/ideas/:id" element={<IdeaDetail />} />
-            <Route path="/discussions" element={<Discussions />} />
-            <Route path="/discussions/:id" element={<DiscussionDetail />} />
-            <Route path="/decisions" element={<Decisions />} />
-            <Route path="/decisions/:id" element={<DecisionDetail />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/stats" element={<Stats />} />
-            <Route path="/timeline" element={<Timeline />} />
-            <Route path="/spec" element={<Spec />} />
-            <Route path="/context" element={<Context />} />
-            <Route path="/workstreams" element={<Workstreams />} />
-            <Route path="/workstreams/:id" element={<WorkstreamDetail />} />
-            <Route path="/queue" element={<Queue />} />
-            <Route path="/workflow" element={<Workflow />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/features" replace />} />
           </Route>
         </Routes>
       </BrowserRouter>

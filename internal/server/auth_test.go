@@ -93,18 +93,18 @@ func TestAuthMiddleware_SkipsStaticFiles(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_SkipsAPIDocs(t *testing.T) {
+func TestAuthMiddleware_AllowsHealth(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	handler := AuthMiddleware("test-secret-key", next)
 
-	req := httptest.NewRequest("GET", "/api/docs", nil)
+	req := httptest.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200 for /api/docs, got %d", rr.Code)
+		t.Errorf("expected 200 for /api/health, got %d", rr.Code)
 	}
 }
 

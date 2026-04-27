@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // ProjectEntry represents a single project in the daemon config.
@@ -20,14 +21,9 @@ type ProjectEntry struct {
 
 // DaemonConfig holds the daemon's multi-project configuration.
 type DaemonConfig struct {
-	// Projects is the list of project directories to serve.
 	Projects []ProjectEntry `json:"projects"`
-
-	// Port is the HTTP server port (default 3847).
-	Port int `json:"port,omitempty"`
-
-	// LogFile is an optional log file path.
-	LogFile string `json:"log_file,omitempty"`
+	Port     int            `json:"port,omitempty"`
+	LogFile  string         `json:"log_file,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.config/tillr/daemon.json.
@@ -39,7 +35,9 @@ func DefaultConfigPath() string {
 	return filepath.Join(home, ".config", "tillr", "daemon.json")
 }
 
-// LoadConfig reads the daemon config from the given path.
+// LoadConfig reads the daemon config from the given path. WK_PORT (if
+// set) overrides config Port — set by agent harnesses for per-session
+// port assignment.
 func LoadConfig(path string) (*DaemonConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -55,8 +53,12 @@ func LoadConfig(path string) (*DaemonConfig, error) {
 	if cfg.Port == 0 {
 		cfg.Port = 3847
 	}
+	if v := os.Getenv("WK_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			cfg.Port = p
+		}
+	}
 
-	// Normalize: resolve paths, derive slugs
 	for i := range cfg.Projects {
 		p := &cfg.Projects[i]
 		abs, err := filepath.Abs(p.Path)
@@ -69,7 +71,6 @@ func LoadConfig(path string) (*DaemonConfig, error) {
 		}
 	}
 
-	// Check for duplicate slugs
 	seen := make(map[string]string)
 	for _, p := range cfg.Projects {
 		if prev, ok := seen[p.Slug]; ok {
@@ -83,9 +84,7 @@ func LoadConfig(path string) (*DaemonConfig, error) {
 
 // InitConfig creates a default daemon config at the given path with the listed project dirs.
 func InitConfig(path string, projectDirs []string) error {
-	cfg := DaemonConfig{
-		Port: 3847,
-	}
+	cfg := DaemonConfig{Port: 3847}
 	for _, dir := range projectDirs {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
@@ -100,8 +99,8 @@ func InitConfig(path string, projectDirs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0o644)
 }
