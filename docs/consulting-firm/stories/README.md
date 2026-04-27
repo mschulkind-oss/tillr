@@ -1,10 +1,11 @@
 # Consulting Firm — User Stories
 
-29 narrative stories exploring how tillr behaves when it's modelled as
-a consulting firm (client = user, firm = tillr, agents = engineering
-team — with a director layer added in story 26). Each story follows a
-named persona through a concrete workflow and calls out the gaps we'd
-need to close.
+31 narrative stories exploring how tillr behaves as a consulting firm
+(client = user, firm = tillr, agents = engineering team) with a
+director layer (story 26) and the post-reset conductor + persona
+foundation (stories 30, 31). Each story follows a named persona
+through a concrete workflow and calls out the gaps we'd need to
+close.
 
 Use these as design input: the persona's **Gap:** and
 **What would trip them up** callouts are where the next round of
@@ -40,7 +41,9 @@ multiple times across stages as their needs evolve.
 
 | Stage | # | File | Persona | Theme | Layers needed |
 |-------|---|------|---------|-------|---------------|
-| 0 (Foundational) | 29 | [29-anders-platform-adapter](./29-anders-platform-adapter.md) | Anders (platform engineer) | Claude + Copilot adapter; protocol vs invocation | adapter |
+| 0 (MVP / Foundational) | 30 | [30-rui-conductor-pattern](./30-rui-conductor-pattern.md) | Rui (solo dev) | Conductor + persona lifecycle; swarf context files; retro | conductor pattern |
+| 0 (MVP / Foundational) | 31 | [31-yael-tui-primary-interface](./31-yael-tui-primary-interface.md) | Yael (terminal-native) | TUI as primary interface for inspection | TUI |
+| (deferred — post-MVP) | 29 | [29-anders-platform-adapter](./29-anders-platform-adapter.md) | Anders (platform engineer) | Claude + Copilot multi-platform — *MVP is Claude-only* | adapter |
 | 1 (Make agents legible) | 22 | [22-derek-progressive-disclosure](./22-derek-progressive-disclosure.md) | Derek (minimalist) | Layer 1 alone (just comments) is valuable | 1 |
 | 1 | 1 | [01-priya-solo-pm](./01-priya-solo-pm.md) | Priya (solo PM) | Decisions summary in inbox | 1, 2 |
 | 1 | 3 | [03-sana-interdependent-features](./03-sana-interdependent-features.md) | Sana (design lead) | Cross-feature comments — works but has timing race; resolved in Stage 2 (story 27) | 1, 2 |
@@ -71,7 +74,8 @@ multiple times across stages as their needs evolve.
 | 8 (Hierarchy — far future) | 26 | [26-olivia-director-hierarchy](./26-olivia-director-hierarchy.md) | Olivia (director) | Director / nested PM tree; cross-project coord | 11 (new) |
 
 See also:
-- [Roadmap](../roadmap.md) — staged shipping order with risk and validation per stage
-- [Implementation layers](../implementation-layers.md) — architectural decomposition (10 layers + sub-layers + adapter + Layer 11)
-- [Open questions](../open-questions.md) — 39 unresolved design questions
+- [MVP](../mvp.md) — the post-reset shipping plan (1-2 weeks of focused build)
+- [Roadmap](../roadmap.md) — staged long-term ordering with risk and validation per stage
+- [Implementation layers](../implementation-layers.md) — architectural decomposition
+- [Open questions](../open-questions.md) — 51 unresolved design questions
 - [Overview](../README.md) — the thesis and reading order

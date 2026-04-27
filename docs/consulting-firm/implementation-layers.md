@@ -4,29 +4,50 @@ Build this incrementally. Each layer delivers value independently.
 This doc decomposes by ARCHITECTURE; for the
 **shipping order** (which layers ship together as stages, with risk
 and validation criteria per stage), see [roadmap.md](./roadmap.md).
+For the concrete MVP, see [mvp.md](./mvp.md).
 
-## Foundations (parallel concern, not a numbered layer)
+## Foundations (the post-reset MVP substrate)
 
-### Platform Adapter
+### Conductor + Persona Infrastructure
 
-Tillr defines a universal protocol — cycle steps, context envelopes,
-comment artifacts, status transitions, role files. The platform-
-specific code is a thin invocation **adapter** per agent platform
-(Claude SDK, Copilot cloud, etc.). The adapter:
+Per [story 30 (Rui)](./stories/30-rui-conductor-pattern.md), the
+post-reset architecture is:
 
-- Receives a cycle-step dispatch `(role, envelope, model_class)`
-- Translates to the platform's invocation
-- Captures output as canonical tillr comments via the comments API
-- Reports status / cost / errors back to the cycle engine
+- **Conductor** — foreground Claude session in the user's coding
+  harness; project manager role; orchestrates only, doesn't do work.
+  Writes its own state to `swarf/conductor.md` continuously; can be
+  re-hydrated after a chat clear via a `conductor` skill.
+- **Personas** — specialized sub-agents (implementer, researcher,
+  reviewer, …) defined in `.claude/agents/<name>.md`. Each owns a
+  context file at `swarf/agents/<name>/context.md` (append-style
+  markdown). Per invocation: load context → work → append → die.
+  Dispatched via Claude's Task tool.
+- **swarf** — gitignored directory tracked by an external sync
+  service (mschulkind's swarf tool). All persona context files,
+  conductor file, and retros live under `swarf/`.
+- **Auto-compaction** — when a persona's context file exceeds ~20k
+  words, tillr triggers a compact task (summarize older entries,
+  preserve recent verbatim).
+- **Retro** — `tillr retro` analyzes the recent Claude session
+  transcript, emits a markdown retrospective into `swarf/retros/`,
+  optionally appends targeted lessons to persona contexts.
+- **Max parallelism** — `tillr config max-parallelism N` caps
+  concurrent sub-agent dispatches; conductor respects.
+- **TUI** — `tillr tui` (Bubble Tea) is a first-class inspection
+  surface alongside CLI and web. See
+  [story 31 (Yael)](./stories/31-yael-tui-primary-interface.md).
 
-Adapters are platform-specific; the protocol is not. See
-[story 29 (Anders)](./stories/29-anders-platform-adapter.md) for the
-worked example, including the
-[Claude vs Copilot capabilities matrix](./stories/29-anders-platform-adapter.md#platform-agnosticism-confirmed-by-research).
+This entire substrate is Stage 0 (the MVP) — see
+[mvp.md](./mvp.md) for the concrete shipping plan.
 
-The adapter is needed from Stage 1 in its minimal form (~200 lines:
-"call SDK, capture output as a single comment"). Sophistication grows
-alongside subsequent stages.
+### Platform Adapter (deferred)
+
+The original Stage 0 framing was a generic platform adapter (Claude
++ Copilot + …). Per the conductor pivot, the post-reset MVP is
+**Claude-only** — dispatch is via Claude's Task tool, not via CLI-
+spawned external agents. Multi-platform abstraction is deferred until
+real demand surfaces. See [story 29 (Anders)](./stories/29-anders-platform-adapter.md)
+for the future design.
 
 ## Layer 1: Comments (foundation)
 

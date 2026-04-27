@@ -297,17 +297,28 @@ Future-us shouldn't be confused that these stayed:
 
 ## Forward plan
 
-Next steps, after the reset commits land:
+**Updated 2026-04-27** to reflect the conductor + persona architectural
+pivot. The revised forward plan is the **MVP** documented in
+[`docs/consulting-firm/mvp.md`](./consulting-firm/mvp.md):
 
-1. **Stage 0 — Foundational adapter** (~200 lines of Go).
-   See [story 29 (Anders)](./consulting-firm/stories/29-anders-platform-adapter.md).
-2. **Stage 1 — Comments + cycle hooks** (1-2 weeks).
-   See [story 22 (Derek)](./consulting-firm/stories/22-derek-progressive-disclosure.md)
-   and [story 1 (Priya)](./consulting-firm/stories/01-priya-solo-pm.md).
-3. **Validate** for 4-6 weeks against Stage 1 criteria in
-   [roadmap.md](./consulting-firm/roadmap.md).
-4. **Stage 2** (Layer 4 + 4b — async dialogue), and onward per the
-   roadmap.
+1. **Phase 1 — Core mechanics (3–5 days):** swarf layout, persona CLI
+   surface (`tillr persona ...`), `.claude/agents/` files for
+   implementer/researcher/reviewer, conductor skill.
+2. **Phase 2 — Lifecycle + retro (2–3 days):** auto-compaction at
+   ~20k words, `tillr retro` command.
+3. **Phase 3 — Inspection surfaces (3–5 days):** TUI (Bubble Tea),
+   minimal web additions for personas + retros.
+
+Total MVP: 1–2 weeks of focused build. After MVP is dogfooded, the
+rest of the roadmap (stages 1+) follows per
+[roadmap.md](./consulting-firm/roadmap.md).
+
+Comments + cycle hooks (the original "Stage 1") are mostly shipped by
+the reset itself. Stage 1 in the new ordering is "cycle hooks emit
+comments when a persona dispatches" — a few-day extension of MVP.
+
+Multi-platform adapter (story 29) is **deferred** for MVP. Claude
+only via Task tool.
 
 ---
 

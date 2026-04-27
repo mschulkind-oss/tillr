@@ -576,15 +576,183 @@ favor of cycle-step-as-abstraction. But the pattern might be useful
 for short, mechanical reviews where invocation overhead matters more
 than abstraction purity.
 
-_Leaning:_ No, for now. Keep cycle-step abstraction universal.
-Re-evaluate if we observe significant cost / latency overhead from
-separate invocations for short reviews. If we ever do support it, it
-becomes a Claude-specific optimization in the adapter, not a
-protocol-level concept.
+**Answered (2026-04-27):** YES, this becomes the *primary* dispatch
+mechanism. Per [story 30 (Rui — conductor pattern)](./stories/30-rui-conductor-pattern.md),
+the conductor uses Claude's Task tool to spawn personas as sub-
+agents. Tillr never spawns separate Claude instances. This is the
+MVP architecture.
+
+---
+
+## Questions raised by the conductor + persona pattern (story 30 / story 31)
+
+Architectural questions that emerged during the post-reset pivot.
+
+## 40. swarf path layout
+
+`swarf/agents/<persona>/context.md` (one dir per persona) vs.
+`swarf/agents/<persona>.md` (flat files) vs. something else.
+
+_Leaning:_ One dir per persona (`swarf/agents/<name>/context.md`).
+Allows per-persona auxiliary files later (history, compact-backups,
+config). Cost: marginal extra path depth. Symmetric with how `swarf/`
+already organizes other categories.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 41. Compaction strategy: self-compact, dedicated compactor, or external?
+
+Three options:
+- Persona compacts its own file when it sees the threshold marker
+- A dedicated `compactor` persona runs compactions for all personas
+- Compaction runs as an external process (cron, hook, etc.)
+
+_Leaning:_ Dedicated `compactor` persona. Reasons: keeps domain
+personas focused on their primary work; lets the compactor specialize
+on summarization heuristics; one place to tune compaction quality;
+audit trail per compaction.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 42. Compaction threshold: fixed 20k words or per-persona configurable?
+
+Some personas (researcher) might need more raw context than others
+(implementer).
+
+_Leaning:_ Default 20k words globally; per-persona override via
+`tillr config persona <name> compact-threshold N`. MVP uses the
+default; revisit after real usage shows whether per-persona tuning
+matters.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 43. Persona naming: must match `.claude/agents/<name>` exactly?
+
+If tillr knows persona `implementer` and Claude has
+`.claude/agents/implementer.md`, are they 1:1?
+
+_Leaning:_ Yes, exact 1:1 match by filename (sans extension).
+Simplifies dispatch (the conductor uses `subagent_type='implementer'`
+which looks up `.claude/agents/implementer.md`). Tillr's persona name
+must match the Claude agent file basename.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 44. Conductor reload: what does the skill load?
+
+The `conductor` skill rehydrates after a chat clear. What goes into
+its prompt?
+
+_Leaning:_ Read `swarf/conductor.md` (the conductor's own running
+state), summarize for the new chat: "I'm back. Last action at <time>:
+<thing>. Currently <N> features queued, <M> active. Recent decisions:
+<list>. Ready." Plus a brief refresher on persona names, max-
+parallelism, and the dispatch pattern. Total reload prompt: ~500-1000
+tokens. Lighter than reading every persona's full context.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 45. Retro depth: single session or multiple?
+
+`tillr retro` — does it analyze just the most recent Claude session
+transcript, or aggregate across multiple?
+
+_Leaning:_ Single session by default; multi-session opt-in via
+`--last N`. Default behavior is "what just happened" (small,
+actionable). Aggregated retros are useful but produce vaguer
+recommendations; offer them when explicitly requested.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 46. Multi-developer swarf sharing
+
+Two devs on the same project: each has their own `swarf/` synced
+across their own machines. Their conductor + persona context files
+diverge. How does the team converge?
+
+_Leaning:_ Defer for MVP (single-user assumption). Post-MVP, options
+include: a shared "team-context" file overlay; mergeable retros; or
+tillr-managed pull requests against shared persona context files.
+Each has tradeoffs (centralization, merge conflicts, cognitive load).
+Revisit when 2+ users actually need it.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 47. TUI library
+
+Bubble Tea (charmbracelet) vs. tcell vs. roll-our-own?
+
+_Leaning:_ Bubble Tea. Mature, idiomatic Go, MVU pattern, plenty of
+reference TUIs (gh dash, k9s, lazygit). Trade-off: Bubble Tea brings
+a fair bit of opinionated structure; we accept it for the velocity
+gain.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 48. Concurrent CLI / TUI / web mutations
+
+Three surfaces, single-user MVP. Concurrent edits unlikely but
+possible.
+
+_Leaning:_ Last write wins. Don't build locking yet. Add per-feature
+optimistic concurrency (version field) only when we observe real
+conflicts. Multi-user (multi-developer) gets a real concurrency
+story when we get there.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 49. Persona append timing: per-tool-use or end-of-task?
+
+Does the persona append to its context file after every tool use, or
+only at the end of its run?
+
+_Leaning:_ End of run, single append, structured as one `## YYYY-MM-DD
+HH:MM — <task>` block summarizing what was done. Per-tool-use is
+chatty and would dominate context file size with low-signal entries.
+Critical mid-task discoveries can be flagged for the next iteration
+without polluting context.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 50. Persona tool restrictions
+
+Should each persona have a defined tool allowlist? (e.g., researcher
+gets web fetch + read; implementer gets edit + write + bash; reviewer
+gets read-only)
+
+_Leaning:_ Yes, encoded in `.claude/agents/<name>.md` per Claude's
+agent definition format. Restrictions enforce role discipline (the
+researcher can't accidentally write code) and reduce blast radius
+when a persona malfunctions. Default starter restrictions in mvp.md.
+
+**Answer:**
+> _(empty — fill in when decided)_
+
+## 51. Web UI scope post-MVP
+
+Per [story 31](./stories/31-yael-tui-primary-interface.md), the TUI
+becomes a first-class surface and the web UI's role narrows.
+Eventually, does the web UI go away?
+
+_Leaning:_ Keep web UI for now (it exists post-reset; minimal cost to
+maintain). Decide post-MVP based on usage. If TUI + CLI cover all
+inspection, web becomes optional or removed. If web is genuinely
+useful (mobile inspection, sharing with non-technical PMs, project
+dashboards), it stays and may grow.
 
 **Answer:**
 > _(empty — fill in when decided)_
 
 ---
 
-« [Consulting-firm overview](./README.md) · [Roadmap](./roadmap.md) · [Implementation layers](./implementation-layers.md) · [All stories](./stories/README.md)
+« [Consulting-firm overview](./README.md) · [Roadmap](./roadmap.md) · [Implementation layers](./implementation-layers.md) · [MVP](./mvp.md) · [All stories](./stories/README.md)

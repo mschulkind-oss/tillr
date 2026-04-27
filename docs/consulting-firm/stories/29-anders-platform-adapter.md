@@ -1,5 +1,15 @@
 # 29. Anders — Platform Adapter for Claude and Copilot
 
+> **Status: deferred for MVP.** Per [story 30 (Rui — conductor pattern)](./30-rui-conductor-pattern.md)
+> and [mvp.md](../mvp.md), the post-reset MVP is **Claude-only**. The
+> conductor dispatches via Claude's Task tool; there is no separate
+> CLI invocation, no Copilot/Cursor wiring, no multi-platform adapter
+> layer. This story remains as the *future* design for when
+> multi-platform parity becomes necessary. Multi-platform adapter
+> work resumes after MVP is dogfooded and one of: (a) we hit a
+> Claude-only limitation, or (b) a teammate/customer needs
+> Copilot/Cursor support.
+
 **Context:** Anders is a platform engineer at a 50-person company. Two
 engineering tribes:
 

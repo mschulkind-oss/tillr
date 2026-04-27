@@ -12,6 +12,16 @@ For the narrative version of this roadmap from a tech lead's
 perspective, see
 [story 28 (Sasha)](./stories/28-sasha-building-the-mvp.md).
 
+> **2026-04-27 update:** Stage 0 has expanded significantly. The
+> post-reset architecture (see [story 30 — Rui — conductor pattern](./stories/30-rui-conductor-pattern.md))
+> brings a conductor + persona model with context files in swarf, a
+> retro command, max-parallelism config, and a TUI. The original
+> "Stage 0: Platform Adapter" was minimal (one adapter, ~200 lines).
+> The new Stage 0 is "Foundational Conductor + Persona Infrastructure"
+> and is the entire MVP — see **[mvp.md](./mvp.md)** for the
+> shipping plan. Subsequent stages (1+) follow as before, building
+> on the conductor substrate.
+
 ## How to read this
 
 For each stage:
@@ -31,47 +41,56 @@ high, dependencies respected.
 
 ---
 
-## Stage 0 — Foundational (parallel concern)
+## Stage 0 — Foundational Conductor + Persona Infrastructure
 
-**Layers:** Platform adapter (cross-cutting; not numbered as a
-consulting-firm layer).
+**Layers:** Conductor pattern, persona context files, swarf storage
+layout, retro command, max-parallelism, TUI (and the existing comments
++ cycle hooks from the reset, which are already in place).
 
-**Stories unlocked:** [29 (Anders)](./stories/29-anders-platform-adapter.md)
+**Stories unlocked:**
+[22 (Derek)](./stories/22-derek-progressive-disclosure.md) — comments
+already work post-reset;
+[30 (Rui — conductor pattern)](./stories/30-rui-conductor-pattern.md) —
+the architecture this stage is built around;
+[31 (Yael — TUI)](./stories/31-yael-tui-primary-interface.md) — TUI
+ships in this stage.
 
-**Risk:** Low (mechanical, well-understood). Both Claude and Copilot
-support the same capabilities (custom agents in repo, model picker,
-async, follow-up messages); the protocol is universal.
+**Risk:** Medium. The mechanics are straightforward (file CRUD, CLI,
+Task tool dispatch); the calibration is the unknown — context file
+sizes, compaction strategy, retro signal-to-noise, persona prompt
+quality.
 
-**Effort:** 1-2 weeks for minimal adapter; ongoing maintenance as
-adapter sophistication grows.
+**Effort:** 1-2 weeks (8-13 days), per [mvp.md](./mvp.md).
 
-**Depends on:** Nothing. Starts day 1.
+**Depends on:** Post-reset skeleton (commit 98f4140 or later). Nothing
+external.
 
-**Validation:** Dispatch a basic agent invocation through tillr,
-capture the output as a comment via the canonical API. End-to-end
-round-trip works.
+**Validation:** see the "How to know we shipped" section in
+[mvp.md](./mvp.md). High-level: Rui can run a real session through the
+conductor pattern end-to-end, with persona context files growing
+usefully and retros producing actionable recommendations.
 
-**Notes:** The minimal adapter is small (~200 lines). Don't try to
-build full sophistication day 1. Extend the adapter alongside each
-subsequent stage's needs.
+**Notes:** This is the entire MVP. Subsequent stages (1–8) are *post-
+MVP* — they extend the dogfoodable system rather than build the
+foundation. Story 29 (Anders — multi-platform adapter) is **deferred**
+for MVP; Claude-only.
 
 ---
 
-## Stage 1 — Make agents legible
+## Stage 1 — Cycle hooks emit comments (extend MVP)
 
-**Layers:** [1 (comments)](./implementation-layers.md#layer-1-comments-foundation),
-[2 (cycle hooks emit comments)](./implementation-layers.md#layer-2-agent-comments-in-cycles)
+**Layers:** [2 (cycle hooks emit comments)](./implementation-layers.md#layer-2-agent-comments-in-cycles)
 
 **Stories unlocked:**
-[22 (Derek)](./stories/22-derek-progressive-disclosure.md),
 [1 (Priya)](./stories/01-priya-solo-pm.md),
 [3 (Sana — partial, with timing-race gap)](./stories/03-sana-interdependent-features.md)
 
-**Risk:** Low. Simple data model + cycle integration.
+**Risk:** Low. Simple integration: persona invocations emit comments
+on the feature they were dispatched for.
 
-**Effort:** 1-2 weeks.
+**Effort:** 3-5 days.
 
-**Depends on:** Stage 0 (need an adapter to invoke agents).
+**Depends on:** Stage 0 / MVP (personas + comments substrate).
 
 **Validation:**
 - PMs report being faster to QA (target: 30%+ time reduction)

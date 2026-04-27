@@ -18,52 +18,55 @@ alone; each subsequent layer compounds on the ones below.
 
 ## Contents
 
-- **[Stories](./stories/README.md)** — 29 narrative scenarios with
+- **[MVP](./mvp.md)** — *the post-reset shipping plan*. 1-2 weeks of
+  focused build to a dogfoodable conductor + persona system. Read
+  this first if you're going to build.
+- **[Stories](./stories/README.md)** — 31 narrative scenarios with
   named personas. The index is sorted by **stage** (the roadmap
   ordering), not file number, so reading top-to-bottom shows the
   evolution. Each story surfaces load-bearing mechanics and explicit
   gaps.
-- **[Roadmap](./roadmap.md)** — 8 shipping stages (plus Stage 0
-  foundational), each with stories unlocked, risk, effort, and
-  validation criteria. The "build this in this order" doc.
+- **[Roadmap](./roadmap.md)** — long-term staged ordering. Stage 0 =
+  the MVP. Subsequent stages build on MVP infrastructure.
 - **[Implementation layers](./implementation-layers.md)** — the
-  architectural decomposition. 10 numbered layers + sub-layers (2b,
-  4b, 9b) + foundational adapter + Layer 11 (hierarchy).
-- **[Open questions](./open-questions.md)** — 39 unresolved design
+  architectural decomposition. Conductor + persona foundation,
+  numbered layers 1-10 + sub-layers (2b, 4b, 9b) + Layer 11
+  (hierarchy).
+- **[Open questions](./open-questions.md)** — 51 unresolved design
   questions with tentative leans.
 
 ## Suggested reading order
 
 For someone new to the doc:
 
-1. [Story 22 (Derek)](./stories/22-derek-progressive-disclosure.md) —
+1. [Story 30 (Rui)](./stories/30-rui-conductor-pattern.md) — the
+   post-reset foundation: conductor + persona pattern with swarf-
+   stored context files. **Start here.**
+2. [Story 22 (Derek)](./stories/22-derek-progressive-disclosure.md) —
    why Layer 1 (just comments) is already valuable.
-2. [Story 1 (Priya)](./stories/01-priya-solo-pm.md) — the decisions
+3. [Story 1 (Priya)](./stories/01-priya-solo-pm.md) — the decisions
    summary in the inbox. Most compressed demonstration of value.
-3. [Story 24 (Meera)](./stories/24-questionnaires-as-checkpoints.md) —
+4. [Story 31 (Yael)](./stories/31-yael-tui-primary-interface.md) —
+   the TUI as primary inspection surface.
+5. [Story 24 (Meera)](./stories/24-questionnaires-as-checkpoints.md) —
    tunable oversight via cycle questionnaires.
-4. [Story 25 (Henry)](./stories/25-style-enforcer-async-dialogue.md) —
+6. [Story 25 (Henry)](./stories/25-style-enforcer-async-dialogue.md) —
    style guide + enforcer agent + async reviewer↔implementer dialogue
    (the substrate for multi-agent coordination).
-5. [Story 7 (Kai)](./stories/07-kai-context-packet.md) — the context
+7. [Story 7 (Kai)](./stories/07-kai-context-packet.md) — the context
    packet in full. The highest-leverage mechanic.
-6. [Story 8 (Ava)](./stories/08-ava-knowledge-synthesis.md) — project
-   knowledge synthesized from review history.
-7. [Story 26 (Olivia)](./stories/26-olivia-director-hierarchy.md) —
-   far-future: director / nested PM hierarchy. Redeems the original
-   "consulting firm" framing.
-8. [Story 23 (failure)](./stories/23-context-graph-failure.md) — the
-   confessed blind spot. Read this before trusting the model.
-9. [Story 28 (Sasha)](./stories/28-sasha-building-the-mvp.md) — how a
-   real team adopts this stage by stage.
-10. [Roadmap](./roadmap.md) — the build order with risk and
-    validation per stage.
-11. [Implementation layers](./implementation-layers.md) — the
+8. [Story 26 (Olivia)](./stories/26-olivia-director-hierarchy.md) —
+   far-future: director / nested PM hierarchy.
+9. [Story 23 (failure)](./stories/23-context-graph-failure.md) — the
+   confessed blind spot.
+10. [MVP](./mvp.md) — the concrete shipping plan.
+11. [Roadmap](./roadmap.md) — long-term ordering after MVP.
+12. [Implementation layers](./implementation-layers.md) — the
     architecture.
-12. [Open questions](./open-questions.md) — what's still unresolved.
+13. [Open questions](./open-questions.md) — what's still unresolved.
 
-For someone READY to build, jump straight to
-[roadmap.md](./roadmap.md) → start with Stage 0 + Stage 1.
+For someone READY to build, jump straight to **[mvp.md](./mvp.md)** —
+that's where the post-reset shipping plan lives.
 
 ## Where this fits in tillr docs
 
@@ -107,25 +110,30 @@ once foundations are stable.
 
 Confidence gradient (highest to lowest):
 
-1. Comments as foundation (story 22 makes this airtight)
-2. Context packet shape (stories 7 and 21 show structure concretely)
-3. Cycle questionnaires as oversight dial (story 24 — concrete
-   mechanism that resolves the mid-flight race condition from stories
-   2 and 21)
+1. Comments as foundation (story 22 makes this airtight; already
+   shipped in the post-reset skeleton)
+2. **Conductor + persona pattern (story 30)** — proven on a previous
+   project; high confidence in the shape, calibration uncertain
+3. Persona context files in swarf (story 30) — load/append/die
+   lifecycle is well-trodden
 4. Async reviewer↔implementer dialogue via cycle-state + comments
    (story 25 — same loop as a real engineering org's PR review)
 5. Cross-feature async coordination via the same substrate
-   (story 27 — derivative of #4)
-6. Universal PR pipeline for heterogeneous change types
-7. Style guide enforcement as a cycle role with focused context
-   envelope (story 25)
-8. Platform adapter / agent-platform agnosticism (story 29 —
-   confirmed via Copilot research)
-9. Staged delivery / first-slice MVP (story 28 — project mgmt, not
-   novel)
-10. Estimation-by-analogy (story 17)
-11. Knowledge synthesis (known brittle — acknowledged in story 8)
-12. Cross-feature coordination at the level of code-level
+   (story 27 — derivative)
+6. Cycle questionnaires as oversight dial (story 24)
+7. Universal PR pipeline for heterogeneous change types
+8. TUI as primary inspection surface (story 31 — Bubble Tea is
+   well-trodden, calibration of "is the web UI even needed" is open)
+9. Style guide enforcement as a cycle role (story 25)
+10. Auto-compaction at 20k words (mechanic clear; quality calibration
+    only proves out in real usage)
+11. Retro from session transcripts (story 30 — depends on transcript
+    parsing quality)
+12. Estimation-by-analogy (story 17)
+13. Knowledge synthesis (brittle — story 8; partly subsumed by
+    persona contexts post-reset)
+14. Cross-feature coordination at the level of code-level
     dependencies (story 23 blind spot remains)
-13. Hierarchical org structure (story 26 — far future, complex,
+15. Multi-platform adapter (story 29 — *deferred* for MVP; Claude only)
+16. Hierarchical org structure (story 26 — far future, complex,
     untested)
