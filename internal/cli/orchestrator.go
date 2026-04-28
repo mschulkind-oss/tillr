@@ -51,8 +51,8 @@ which fakes a successful run).`,
   # Smoke test — does not invoke claude
   tillr orchestrator start --dry-run --max-parallelism 2 --poll-interval-sec 2
 
-  # Tighter cost cap per task
-  tillr orchestrator start --max-budget-usd 0.50 --max-turns 20`,
+  # Slow poll cadence for low-frequency queues
+  tillr orchestrator start --max-parallelism 1 --poll-interval-sec 30`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, cfg, err := openDB()
 		if err != nil {
