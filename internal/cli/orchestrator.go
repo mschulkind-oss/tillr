@@ -16,23 +16,43 @@ import (
 )
 
 var orchestratorCmd = &cobra.Command{
-	Use:   "orchestrator",
-	Short: "Run the persona orchestrator daemon (Stage 0 / MVP)",
+	Use:     "orchestrator",
+	Aliases: []string{"orch"},
+	Short:   "Run the persona orchestrator daemon (Stage 0 / MVP)",
+	Long: `The orchestrator is the structural enforcement of the persona
+lifecycle (Principle Zero). It polls the queue, claims pending
+features by persona, spawns 'claude -p' per (persona, feature) up to
+max-parallelism, and on completion automatically:
+
+  1. Appends context_entry to swarf/agents/<persona>/context.md
+  2. Comments the run summary on the feature
+  3. Files any follow_up_features the agent emitted
+  4. Transitions feature status (done / blocked / human-qa / error)
+  5. Records cost / tokens / duration in orchestrator_runs
+
+Persona prompts don't have to "remember" any of this — the
+orchestrator owns the lifecycle. See docs/principle-zero.md.`,
 }
 
 var orchestratorStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the orchestrator daemon (foreground)",
 	Long: `Run the orchestrator daemon. Polls the queue and dispatches up to
-max-parallelism concurrent claude -p invocations per persona, capturing
-each invocation's structured output and persisting side effects:
+max-parallelism concurrent claude -p invocations per persona, captures
+each invocation's structured output, and persists side effects.
 
-  - Append context_entry to swarf/agents/<persona>/context.md
-  - Comment summary on the feature
-  - File any follow_up_features
-  - Transition feature status (done | blocked | needs_review)
+Stop with Ctrl+C (graceful — waits for in-flight workers).
 
-Stop with Ctrl+C (graceful — waits for in-flight workers).`,
+Use --dry-run to smoke-test without invoking claude (uses NoopSpawn
+which fakes a successful run).`,
+	Example: `  # Real run, max 2 in flight
+  tillr orchestrator start --max-parallelism 2
+
+  # Smoke test — does not invoke claude
+  tillr orchestrator start --dry-run --max-parallelism 2 --poll-interval-sec 2
+
+  # Tighter cost cap per task
+  tillr orchestrator start --max-budget-usd 0.50 --max-turns 20`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, cfg, err := openDB()
 		if err != nil {
@@ -107,8 +127,9 @@ Stop with Ctrl+C (graceful — waits for in-flight workers).`,
 }
 
 var orchestratorStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the orchestrator daemon (sends SIGTERM via pid file)",
+	Use:     "stop",
+	Short:   "Stop the orchestrator daemon (sends SIGTERM via pid file)",
+	Example: `  tillr orchestrator stop`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		_, cfg, err := openDB()
 		if err != nil {
@@ -138,6 +159,8 @@ var orchestratorStopCmd = &cobra.Command{
 var orchestratorStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show orchestrator status (running? active runs? recent runs?)",
+	Example: `  tillr orchestrator status
+  tillr --json orchestrator status   # for monitoring / dashboards`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		database, cfg, err := openDB()
 		if err != nil {
@@ -175,21 +198,30 @@ var orchestratorStatusCmd = &cobra.Command{
 			return printJSON(status)
 		}
 		if status.Running {
-			fmt.Printf("Orchestrator running (PID %d)\n", status.PID)
+			fmt.Printf("%s %s\n", Success("●"), Bold(fmt.Sprintf("Orchestrator running (PID %d)", status.PID)))
 		} else {
-			fmt.Println("Orchestrator NOT running.")
+			fmt.Printf("%s %s\n", Dim("○"), Dim("Orchestrator NOT running."))
 		}
-		fmt.Printf("Config: max-parallelism=%d  poll=%s  max-budget=$%.2f  max-turns=%d  dry-run=%v\n\n",
-			oc.MaxParallelism, oc.PollInterval, oc.MaxBudgetUSD, oc.MaxTurns, oc.DryRun)
+		fmt.Printf("%s max-parallelism=%d  poll=%s  max-budget=%s  max-turns=%d  dry-run=%v\n\n",
+			Header("Config:"),
+			oc.MaxParallelism, oc.PollInterval, Money(oc.MaxBudgetUSD), oc.MaxTurns, oc.DryRun)
 
-		fmt.Printf("Active runs (%d):\n", len(active))
+		fmt.Printf("%s %s\n",
+			Header(fmt.Sprintf("Active runs (%d):", len(active))),
+			Dim("(in flight right now)"))
 		for _, r := range active {
-			fmt.Printf("  #%d  feat #%d  %s  started %s\n",
-				r.ID, r.FeatureID, r.Persona, r.StartedAt.Format(time.RFC3339))
+			fmt.Printf("  %s  feat %s  %s  started %s\n",
+				Code(fmt.Sprintf("#%d", r.ID)),
+				Code(fmt.Sprintf("#%d", r.FeatureID)),
+				Persona(r.Persona),
+				Dim(r.StartedAt.Format(time.RFC3339)))
+		}
+		if len(active) == 0 {
+			fmt.Println("  " + Dim("(none)"))
 		}
 		fmt.Println()
 
-		fmt.Printf("Recent runs (%d):\n", len(recent))
+		fmt.Printf("%s\n", Header(fmt.Sprintf("Recent runs (%d):", len(recent))))
 		for _, r := range recent {
 			cost := 0.0
 			if r.CostUSD != nil {
@@ -199,8 +231,14 @@ var orchestratorStatusCmd = &cobra.Command{
 			if r.DurationMS != nil {
 				dur = *r.DurationMS
 			}
-			fmt.Printf("  #%-4d feat #%-4d %-12s %-13s $%.4f %dms %s\n",
-				r.ID, r.FeatureID, r.Persona, r.Result, cost, dur, r.Summary)
+			fmt.Printf("  %s feat %s %-12s %s %s %s %s\n",
+				Code(fmt.Sprintf("#%-4d", r.ID)),
+				Code(fmt.Sprintf("#%-4d", r.FeatureID)),
+				Persona(r.Persona),
+				Status(fmt.Sprintf("%-13s", r.Result)),
+				Money(cost),
+				Duration(dur),
+				Dim(r.Summary))
 		}
 		return nil
 	},
@@ -208,7 +246,13 @@ var orchestratorStatusCmd = &cobra.Command{
 
 var orchestratorRunsCmd = &cobra.Command{
 	Use:   "runs",
-	Short: "List orchestrator runs",
+	Short: "List orchestrator runs (newest first)",
+	Long: `Each run row records one (persona, feature) dispatch with its cost,
+tokens, duration, exit code, session ID, and result.`,
+	Example: `  tillr orchestrator runs
+  tillr orchestrator runs --feature 4
+  tillr orchestrator runs --limit 5
+  tillr --json orchestrator runs`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -226,7 +270,21 @@ var orchestratorRunsCmd = &cobra.Command{
 			return printJSON(runs)
 		}
 		for _, r := range runs {
-			fmt.Printf("#%-4d feat #%-4d %-12s %-13s\n", r.ID, r.FeatureID, r.Persona, r.Result)
+			cost := 0.0
+			if r.CostUSD != nil {
+				cost = *r.CostUSD
+			}
+			dur := int64(0)
+			if r.DurationMS != nil {
+				dur = *r.DurationMS
+			}
+			fmt.Printf("%s feat %s %-12s %s %s %s\n",
+				Code(fmt.Sprintf("#%-4d", r.ID)),
+				Code(fmt.Sprintf("#%-4d", r.FeatureID)),
+				Persona(r.Persona),
+				Status(fmt.Sprintf("%-13s", r.Result)),
+				Money(cost),
+				Duration(dur))
 		}
 		return nil
 	},

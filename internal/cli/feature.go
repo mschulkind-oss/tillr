@@ -11,13 +11,27 @@ import (
 var featureCmd = &cobra.Command{
 	Use:     "feature",
 	Aliases: []string{"f"},
-	Short:   "Manage features",
+	Short:   "Manage features (the unit of work)",
+	Long: `Features are tillr's unit of trackable work. Each has a title,
+optional description, status, and optional target_persona. Features
+flow through statuses: draft → claimed → done | blocked | human-qa.
+
+The orchestrator daemon claims pending features by persona and
+dispatches them to claude -p — see 'tillr orchestrator --help'.`,
 }
 
 var featureAddCmd = &cobra.Command{
 	Use:   "add <title>",
 	Short: "Create a new feature",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create a new feature. By default it lands in 'draft' status with
+no target persona. Use --persona to type the work for a specific
+persona (so the orchestrator routes it correctly), --description for
+a longer spec, --status to set an initial state.`,
+	Example: `  tillr feature add "User authentication"
+  tillr feature add "Implement OAuth" --persona implementer --description "Use coreos/go-oidc"
+  tillr feature add "Investigate caching strategies" --persona researcher
+  tillr --json feature add "Quick task"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -47,7 +61,13 @@ var featureAddCmd = &cobra.Command{
 		if jsonOutput {
 			return printJSON(feature)
 		}
-		fmt.Printf("#%d  %s  [%s]\n", feature.ID, feature.Title, feature.Status)
+		ref := Code(fmt.Sprintf("#%d", feature.ID))
+		st := "[" + Status(feature.Status) + "]"
+		var personaPart string
+		if feature.TargetPersona != "" {
+			personaPart = "  " + Dim("→") + Persona(feature.TargetPersona)
+		}
+		fmt.Printf("%s %s  %s%s\n", ref, st, feature.Title, personaPart)
 		return nil
 	},
 }
@@ -55,6 +75,12 @@ var featureAddCmd = &cobra.Command{
 var featureListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List features",
+	Long: `List features in the current project, newest first. Filter by
+target persona or status.`,
+	Example: `  tillr feature list
+  tillr feature list --persona implementer
+  tillr feature list --status draft
+  tillr --json feature list`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {
@@ -80,15 +106,19 @@ var featureListCmd = &cobra.Command{
 			return printJSON(features)
 		}
 		if len(features) == 0 {
-			fmt.Println("No features match. Add one with 'tillr feature add \"Title\"'.")
+			fmt.Println(Dim("No features match. Add one with 'tillr feature add \"Title\"'."))
 			return nil
 		}
 		for _, f := range features {
-			persona := ""
+			ref := Code(fmt.Sprintf("#%-4d", f.ID))
+			// Pad status before colorizing so widths line up.
+			padded := fmt.Sprintf("%-12s", f.Status)
+			st := Status(padded)
+			var personaPart string
 			if f.TargetPersona != "" {
-				persona = "→" + f.TargetPersona + "  "
+				personaPart = Dim("→") + Persona(f.TargetPersona) + "  "
 			}
-			fmt.Printf("#%-4d  %-10s  %s%s\n", f.ID, f.Status, persona, f.Title)
+			fmt.Printf("%s  %s  %s%s\n", ref, st, personaPart, f.Title)
 		}
 		return nil
 	},
@@ -97,7 +127,11 @@ var featureListCmd = &cobra.Command{
 var featureShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show a feature and its comment thread",
-	Args:  cobra.ExactArgs(1),
+	Long: `Display a feature with its full description and comment thread.
+Comments are sorted oldest first; agents and humans appear inline.`,
+	Example: `  tillr feature show 4
+  tillr --json feature show 4`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		id, err := strconv.ParseInt(args[0], 10, 64)
 		if err != nil {
@@ -125,21 +159,33 @@ var featureShowCmd = &cobra.Command{
 				"comments": comments,
 			})
 		}
-		fmt.Printf("#%d  %s  [%s]\n", feature.ID, feature.Title, feature.Status)
+
+		ref := Code(fmt.Sprintf("#%d", feature.ID))
+		st := "[" + Status(feature.Status) + "]"
+		var personaPart string
+		if feature.TargetPersona != "" {
+			personaPart = "  " + Dim("→") + Persona(feature.TargetPersona)
+		}
+		fmt.Printf("%s %s %s%s\n", ref, Bold(feature.Title), st, personaPart)
+		fmt.Println(Dim(fmt.Sprintf("Created: %s   Updated: %s",
+			feature.CreatedAt.Format("2006-01-02 15:04"),
+			feature.UpdatedAt.Format("2006-01-02 15:04"))))
 		if feature.Description != "" {
 			fmt.Printf("\n%s\n", feature.Description)
 		}
 		if len(comments) == 0 {
-			fmt.Println("\n(no comments yet)")
+			fmt.Println("\n" + Dim("(no comments yet)"))
 			return nil
 		}
-		fmt.Printf("\n%d comment(s):\n", len(comments))
+		fmt.Printf("\n%s\n", Header(fmt.Sprintf("Comments (%d)", len(comments))))
 		for _, c := range comments {
-			author := c.AuthorType
+			authorLabel := c.AuthorType
 			if c.AuthorRole != "" {
-				author = author + "/" + c.AuthorRole
+				authorLabel = c.AuthorType + "/" + Persona(c.AuthorRole)
 			}
-			fmt.Printf("\n[%s — %s]\n%s\n", author, c.CreatedAt.Format("2006-01-02 15:04"), c.Body)
+			ts := c.CreatedAt.Format("2006-01-02 15:04")
+			fmt.Printf("\n%s %s\n%s\n",
+				Dim("["+ts+"]"), authorLabel, c.Body)
 		}
 		return nil
 	},
