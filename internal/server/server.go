@@ -35,6 +35,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mschulkind-oss/tillr/internal/db"
 	"github.com/mschulkind-oss/tillr/internal/models"
+	"github.com/mschulkind-oss/tillr/internal/persona"
 )
 
 //go:embed all:assets
@@ -42,8 +43,9 @@ var embeddedAssets embed.FS
 
 // Config holds runtime parameters for Start.
 type Config struct {
-	Port   int
-	ApiKey string
+	Port        int
+	ApiKey      string
+	ProjectRoot string // absolute path; needed for persona/retro endpoints
 }
 
 // Start runs the HTTP server until the process receives SIGINT/SIGTERM.
@@ -55,6 +57,12 @@ func Start(database *sql.DB, cfg Config) error {
 	mux.HandleFunc("/api/project", withDB(database, handleProject))
 	mux.HandleFunc("/api/features", withDB(database, handleFeatures))
 	mux.HandleFunc("/api/features/", withDB(database, handleFeatureSubtree))
+	mux.HandleFunc("/api/personas", handlePersonas(cfg.ProjectRoot))
+	mux.HandleFunc("/api/personas/", handlePersonaSubtree(cfg.ProjectRoot))
+	mux.HandleFunc("/api/retros", handleRetros(cfg.ProjectRoot))
+	mux.HandleFunc("/api/retros/", handleRetroByName(cfg.ProjectRoot))
+	mux.HandleFunc("/api/conductor", handleConductor(cfg.ProjectRoot))
+	mux.HandleFunc("/api/config", withDB(database, handleConfig))
 	mux.HandleFunc("/ws", hub.handleWS)
 	mux.Handle("/", spaHandler())
 
@@ -114,7 +122,11 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "no project found")
 			return
 		}
-		features, err := db.ListFeatures(database, project.ID)
+		filter := db.ListFeaturesFilter{
+			Persona: r.URL.Query().Get("persona"),
+			Status:  r.URL.Query().Get("status"),
+		}
+		features, err := db.ListFeatures(database, project.ID, filter)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -125,8 +137,9 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, features)
 	case http.MethodPost:
 		var body struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
+			Title         string `json:"title"`
+			Description   string `json:"description"`
+			TargetPersona string `json:"target_persona"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -141,7 +154,7 @@ func handleFeatures(database *sql.DB, w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "no project found")
 			return
 		}
-		feature, err := db.AddFeature(database, project.ID, body.Title, body.Description)
+		feature, err := db.AddFeature(database, project.ID, body.Title, body.Description, body.TargetPersona)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -239,6 +252,173 @@ func handleFeatureComments(database *sql.DB, featureID int64, w http.ResponseWri
 			return
 		}
 		writeJSON(w, http.StatusCreated, comment)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func handlePersonas(root string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		personas, err := persona.List(root)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if personas == nil {
+			personas = []persona.Persona{}
+		}
+		writeJSON(w, http.StatusOK, personas)
+	}
+}
+
+// handlePersonaSubtree dispatches:
+//
+//	GET  /api/personas/{name}          → metadata
+//	GET  /api/personas/{name}/context  → context body
+//	POST /api/personas/{name}/append   → append entry
+func handlePersonaSubtree(root string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/api/personas/")
+		if rest == "" {
+			writeError(w, http.StatusBadRequest, "persona name required")
+			return
+		}
+		parts := strings.SplitN(rest, "/", 2)
+		name := parts[0]
+
+		if len(parts) == 1 {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			p, err := persona.Get(root, name)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+
+		switch parts[1] {
+		case "context":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			body, err := persona.ContextRead(root, name)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"name": name, "body": body})
+		case "append":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			var body struct {
+				Summary string `json:"summary"`
+				Body    string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid JSON")
+				return
+			}
+			if strings.TrimSpace(body.Body) == "" && strings.TrimSpace(body.Summary) == "" {
+				writeError(w, http.StatusBadRequest, "summary or body is required")
+				return
+			}
+			if err := persona.Append(root, name, body.Summary, body.Body); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]string{"persona": name, "status": "appended"})
+		default:
+			writeError(w, http.StatusNotFound, "not found")
+		}
+	}
+}
+
+func handleRetros(root string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		retros, err := persona.ListRetros(root)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if retros == nil {
+			retros = []persona.Retro{}
+		}
+		writeJSON(w, http.StatusOK, retros)
+	}
+}
+
+func handleRetroByName(root string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/api/retros/")
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "retro name required")
+			return
+		}
+		body, err := persona.ReadRetro(root, name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "body": body})
+	}
+}
+
+func handleConductor(root string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		body, err := persona.ConductorRead(root)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"body": body})
+	}
+}
+
+func handleConfig(database *sql.DB, w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		all, err := db.ConfigList(database)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, all)
+	case http.MethodPost:
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		for k, v := range body {
+			if err := db.ConfigSet(database, k, v); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, body)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

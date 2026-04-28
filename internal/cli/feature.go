@@ -31,9 +31,17 @@ var featureAddCmd = &cobra.Command{
 		}
 
 		desc, _ := cmd.Flags().GetString("description")
-		feature, err := db.AddFeature(database, project.ID, args[0], desc)
+		persona, _ := cmd.Flags().GetString("persona")
+		status, _ := cmd.Flags().GetString("status")
+		feature, err := db.AddFeature(database, project.ID, args[0], desc, persona)
 		if err != nil {
 			return err
+		}
+		if status != "" && status != feature.Status {
+			feature, err = db.SetFeatureStatus(database, feature.ID, status)
+			if err != nil {
+				return err
+			}
 		}
 
 		if jsonOutput {
@@ -47,7 +55,7 @@ var featureAddCmd = &cobra.Command{
 var featureListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List features",
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		database, _, err := openDB()
 		if err != nil {
 			return err
@@ -59,7 +67,11 @@ var featureListCmd = &cobra.Command{
 			return fmt.Errorf("loading project: %w", err)
 		}
 
-		features, err := db.ListFeatures(database, project.ID)
+		filter := db.ListFeaturesFilter{}
+		filter.Persona, _ = cmd.Flags().GetString("persona")
+		filter.Status, _ = cmd.Flags().GetString("status")
+
+		features, err := db.ListFeatures(database, project.ID, filter)
 		if err != nil {
 			return err
 		}
@@ -68,11 +80,15 @@ var featureListCmd = &cobra.Command{
 			return printJSON(features)
 		}
 		if len(features) == 0 {
-			fmt.Println("No features yet. Add one with 'tillr feature add \"Title\"'.")
+			fmt.Println("No features match. Add one with 'tillr feature add \"Title\"'.")
 			return nil
 		}
 		for _, f := range features {
-			fmt.Printf("#%-4d  %-12s  %s\n", f.ID, f.Status, f.Title)
+			persona := ""
+			if f.TargetPersona != "" {
+				persona = "→" + f.TargetPersona + "  "
+			}
+			fmt.Printf("#%-4d  %-10s  %s%s\n", f.ID, f.Status, persona, f.Title)
 		}
 		return nil
 	},
@@ -131,6 +147,13 @@ var featureShowCmd = &cobra.Command{
 
 func init() {
 	featureAddCmd.Flags().StringP("description", "d", "", "Feature description")
+	featureAddCmd.Flags().StringP("persona", "p", "",
+		"Target persona (e.g. implementer, researcher, reviewer)")
+	featureAddCmd.Flags().StringP("status", "s", "",
+		"Initial status (default: draft)")
+
+	featureListCmd.Flags().StringP("persona", "p", "", "Filter by target persona")
+	featureListCmd.Flags().StringP("status", "s", "", "Filter by status")
 
 	featureCmd.AddCommand(featureAddCmd)
 	featureCmd.AddCommand(featureListCmd)

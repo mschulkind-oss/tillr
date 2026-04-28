@@ -20,16 +20,22 @@ type Project struct {
 }
 
 // Feature is a unit of work tracked by tillr.
-// Status is intentionally minimal post-reset; cycle states will be
-// re-introduced as the roadmap demands.
+//
+// Status flows minimally: draft → queued → claimed → done. Cycle
+// states will return as the roadmap demands.
+//
+// TargetPersona names the persona expected to handle this feature
+// (e.g., "implementer", "researcher", "reviewer"). Empty string means
+// untargeted; the conductor or human assigns later.
 type Feature struct {
-	ID          int64     `json:"id"`
-	ProjectID   string    `json:"project_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	ProjectID     string    `json:"project_id"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description,omitempty"`
+	Status        string    `json:"status"`
+	TargetPersona string    `json:"target_persona,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Comment is the conversation substrate from

@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react'
 import { Layout } from './components/Layout'
 import { Features } from './pages/Features'
 import { FeatureDetail } from './pages/FeatureDetail'
+import { Personas } from './pages/Personas'
+import { PersonaDetail } from './pages/PersonaDetail'
+import { Retros } from './pages/Retros'
+import { RetroDetail } from './pages/RetroDetail'
 import { useStore } from './store'
 import { initProjects } from './api/projects'
 
@@ -49,6 +53,10 @@ export default function App() {
             <Route path="/" element={<Navigate to="/features" replace />} />
             <Route path="/features" element={<Features />} />
             <Route path="/features/:id" element={<FeatureDetail />} />
+            <Route path="/personas" element={<Personas />} />
+            <Route path="/personas/:name" element={<PersonaDetail />} />
+            <Route path="/retros" element={<Retros />} />
+            <Route path="/retros/:name" element={<RetroDetail />} />
             <Route path="*" element={<Navigate to="/features" replace />} />
           </Route>
         </Routes>

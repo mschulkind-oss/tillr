@@ -90,6 +90,91 @@ func TestFullWorkflow(t *testing.T) {
 	}
 }
 
+// TestPersonaWorkflow exercises the Stage 0 / MVP persona surface:
+// definition discovery → feature with --persona → claim → append.
+func TestPersonaWorkflow(t *testing.T) {
+	tmp := t.TempDir()
+	// Seed a .claude/agents/implementer.md so persona list discovers it
+	agentsDir := filepath.Join(tmp, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(agentsDir, "implementer.md"),
+		[]byte("---\nname: implementer\n---\nplaceholder\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+
+	run := func(args ...string) string {
+		cmd := exec.Command(tillrBinary, args...)
+		cmd.Dir = tmp
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("tillr %s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return string(out)
+	}
+
+	run("init", "persona-test")
+
+	listOut := run("persona", "list")
+	if !strings.Contains(listOut, "implementer") {
+		t.Fatalf("persona list missing implementer: %s", listOut)
+	}
+
+	run("feature", "add", "--persona", "implementer", "do the thing")
+
+	claimOut := run("--json", "persona", "claim", "implementer")
+	var claimed struct {
+		ID            int64  `json:"id"`
+		Status        string `json:"status"`
+		TargetPersona string `json:"target_persona"`
+	}
+	if err := json.Unmarshal([]byte(claimOut), &claimed); err != nil {
+		t.Fatalf("parse claim: %v\n%s", err, claimOut)
+	}
+	if claimed.Status != "claimed" {
+		t.Fatalf("expected claimed status, got %q", claimed.Status)
+	}
+	if claimed.TargetPersona != "implementer" {
+		t.Fatalf("target_persona mismatch: %q", claimed.TargetPersona)
+	}
+
+	run("persona", "append", "--summary", "Did the work", "implementer", "Body line")
+
+	contextOut := run("persona", "context", "implementer")
+	if !strings.Contains(contextOut, "Did the work") || !strings.Contains(contextOut, "Body line") {
+		t.Fatalf("context missing entry: %s", contextOut)
+	}
+}
+
+// TestConfigSurface ensures the config CLI roundtrips.
+func TestConfigSurface(t *testing.T) {
+	tmp := t.TempDir()
+	run := func(args ...string) string {
+		cmd := exec.Command(tillrBinary, args...)
+		cmd.Dir = tmp
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("tillr %s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return string(out)
+	}
+	run("init", "config-test")
+
+	run("config", "set", "max-parallelism", "4")
+	got := strings.TrimSpace(run("config", "get", "max-parallelism"))
+	if got != "4" {
+		t.Fatalf("config get returned %q, want 4", got)
+	}
+	showOut := run("config", "show")
+	if !strings.Contains(showOut, "max-parallelism") || !strings.Contains(showOut, "4") {
+		t.Fatalf("config show missing entry: %s", showOut)
+	}
+}
+
 // TestServerStartsAndResponds verifies tillr serve binds and answers
 // /api/health and /api/features.
 func TestServerStartsAndResponds(t *testing.T) {

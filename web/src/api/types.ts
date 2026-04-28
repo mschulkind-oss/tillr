@@ -28,3 +28,19 @@ export interface Comment {
   metadata?: string
   created_at: string
 }
+
+export interface Persona {
+  name: string
+  definition_path: string
+  context_path: string
+  context_words: number
+  context_bytes: number
+  updated_at?: string
+}
+
+export interface Retro {
+  name: string
+  path: string
+  bytes: number
+  updated_at: string
+}

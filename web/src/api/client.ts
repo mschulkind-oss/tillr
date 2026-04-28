@@ -1,6 +1,6 @@
 // Post-reset minimal API client. Mirrors the surface in
 // internal/server/server.go.
-import type { Comment, Feature, Project } from './types'
+import type { Comment, Feature, Persona, Project, Retro } from './types'
 import { rewriteApiUrl } from './projects'
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -36,5 +36,22 @@ export const addComment = (
   featureId: number,
   data: { body: string; author_type?: string; author_role?: string },
 ) => postJson<Comment>(`/api/features/${featureId}/comments`, data)
+
+// Personas
+export const getPersonas = () => fetchJson<Persona[]>('/api/personas')
+export const getPersona = (name: string) =>
+  fetchJson<Persona>(`/api/personas/${encodeURIComponent(name)}`)
+export const getPersonaContext = (name: string) =>
+  fetchJson<{ name: string; body: string }>(
+    `/api/personas/${encodeURIComponent(name)}/context`,
+  )
+
+// Retros
+export const getRetros = () => fetchJson<Retro[]>('/api/retros')
+export const getRetro = (name: string) =>
+  fetchJson<{ name: string; body: string }>(`/api/retros/${encodeURIComponent(name)}`)
+
+// Conductor
+export const getConductor = () => fetchJson<{ body: string }>('/api/conductor')
 
 export { fetchJson, postJson }

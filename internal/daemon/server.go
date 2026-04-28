@@ -200,7 +200,7 @@ func projectHandler(database *sql.DB) http.Handler {
 			writeJSONErr(w, http.StatusNotFound, "no project found")
 			return
 		}
-		features, err := db.ListFeatures(database, project.ID)
+		features, err := db.ListFeatures(database, project.ID, db.ListFeaturesFilter{})
 		if err != nil {
 			writeJSONErr(w, http.StatusInternalServerError, err.Error())
 			return

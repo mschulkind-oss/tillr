@@ -8,10 +8,12 @@ interface NavItem {
   icon: string
 }
 
-// Post-reset: just Features. New items get added per the
-// consulting-firm roadmap (see docs/consulting-firm/roadmap.md).
+// Post-reset MVP: Features, Personas, Retros. More items get added
+// per the consulting-firm roadmap (see docs/consulting-firm/roadmap.md).
 const items: NavItem[] = [
   { path: '/features', label: 'Features', icon: '✨' },
+  { path: '/personas', label: 'Personas', icon: '🎭' },
+  { path: '/retros', label: 'Retros', icon: '🔁' },
 ]
 
 export function Sidebar() {

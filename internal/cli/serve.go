@@ -26,8 +26,9 @@ var serveCmd = &cobra.Command{
 		fmt.Println("Press Ctrl+C to stop.")
 
 		return server.Start(database, server.Config{
-			Port:   cfg.ServerPort,
-			ApiKey: cfg.ApiKey,
+			Port:        cfg.ServerPort,
+			ApiKey:      cfg.ApiKey,
+			ProjectRoot: cfg.ProjectDir,
 		})
 	},
 }

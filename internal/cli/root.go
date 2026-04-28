@@ -54,6 +54,8 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(featureCmd)
 	rootCmd.AddCommand(commentCmd)
+	rootCmd.AddCommand(personaCmd)
+	rootCmd.AddCommand(configCmd)
 }
 
 // openDB opens the project database from the discovered .tillr.json.
