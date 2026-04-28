@@ -19,12 +19,18 @@ func ClaudeSpawn(ctx context.Context, opts SpawnOpts) Spawned {
 		return *opts.DryRunResult
 	}
 
+	// NOTE: --bare was tempting (faster startup) but it skips OAuth /
+	// keychain auth lookup, which means a Claude MAX subscription user
+	// will either fail to authenticate or fall through to
+	// ANTHROPIC_API_KEY (silently billing API instead of subscription).
+	// One MAX user reportedly burned $1,800 to this exact bug. We pay
+	// the ~1-2s startup cost in exchange for auth that Just Works.
+	// See researcher feature #8 findings for full sources.
 	args := []string{
 		"-p",
 		"--output-format", "json",
 		"--json-schema", opts.JSONSchema,
 		"--no-session-persistence",
-		"--bare",
 	}
 
 	if opts.Persona != "" {
@@ -99,8 +105,32 @@ func parseClaudeEnvelope(data []byte, out *Spawned) {
 	if v, ok := env["model"].(string); ok {
 		out.Model = v
 	}
-	if v, ok := env["cost_usd"].(float64); ok {
-		out.CostUSD = v
+	// Cost field name was renamed to total_cost_usd in newer claude
+	// versions; fall back to the older cost_usd if present. For MAX
+	// subscription users this is a local *estimate* (not Anthropic-
+	// billed dollars) — useful for sanity bounds, not authoritative.
+	switch {
+	case env["total_cost_usd"] != nil:
+		if v, ok := env["total_cost_usd"].(float64); ok {
+			out.CostUSD = v
+		}
+	case env["cost_usd"] != nil:
+		if v, ok := env["cost_usd"].(float64); ok {
+			out.CostUSD = v
+		}
+	default:
+		// Sum modelUsage.<model>.costUSD if present.
+		if mu, ok := env["modelUsage"].(map[string]any); ok {
+			var total float64
+			for _, v := range mu {
+				if m, ok := v.(map[string]any); ok {
+					if c, ok := m["costUSD"].(float64); ok {
+						total += c
+					}
+				}
+			}
+			out.CostUSD = total
+		}
 	}
 	if usage, ok := env["usage"].(map[string]any); ok {
 		if t, ok := usage["input_tokens"].(float64); ok {

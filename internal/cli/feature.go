@@ -191,6 +191,75 @@ Comments are sorted oldest first; agents and humans appear inline.`,
 	},
 }
 
+var featureStatusCmd = &cobra.Command{
+	Use:   "status <id> <new-status>",
+	Short: "Set a feature's status (e.g. draft, claimed, done, blocked)",
+	Long: `Transition a feature to a new status. The orchestrator handles
+status transitions automatically per run; this command is for manual
+correction (e.g. closing out a feature whose work landed before the
+orchestrator picked it up).`,
+	Example: `  tillr feature status 4 done
+  tillr feature status 4 blocked
+  tillr --json feature status 4 done`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(_ *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid feature ID %q", args[0])
+		}
+		newStatus := args[1]
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+		feature, err := db.SetFeatureStatus(database, id, newStatus)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(feature)
+		}
+		fmt.Printf("%s %s  %s  [%s]\n",
+			Success("✓"),
+			Code(fmt.Sprintf("#%d", feature.ID)),
+			feature.Title,
+			Status(feature.Status))
+		return nil
+	},
+}
+
+var featureDoneCmd = &cobra.Command{
+	Use:     "done <id>",
+	Short:   "Mark a feature done (alias for 'feature status <id> done')",
+	Example: `  tillr feature done 4`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid feature ID %q", args[0])
+		}
+		database, _, err := openDB()
+		if err != nil {
+			return err
+		}
+		defer database.Close() //nolint:errcheck
+		feature, err := db.SetFeatureStatus(database, id, "done")
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(feature)
+		}
+		fmt.Printf("%s %s  %s  [%s]\n",
+			Success("✓"),
+			Code(fmt.Sprintf("#%d", feature.ID)),
+			feature.Title,
+			Status(feature.Status))
+		return nil
+	},
+}
+
 func init() {
 	featureAddCmd.Flags().StringP("description", "d", "", "Feature description")
 	featureAddCmd.Flags().StringP("persona", "p", "",
@@ -202,6 +271,8 @@ func init() {
 	featureListCmd.Flags().StringP("status", "s", "", "Filter by status")
 
 	featureCmd.AddCommand(featureAddCmd)
+	featureCmd.AddCommand(featureStatusCmd)
+	featureCmd.AddCommand(featureDoneCmd)
 	featureCmd.AddCommand(featureListCmd)
 	featureCmd.AddCommand(featureShowCmd)
 }
