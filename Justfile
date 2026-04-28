@@ -45,6 +45,7 @@ test-cov:
 # Install all dependencies (Go modules, frontend packages, dev tools)
 setup:
     mise install
+    @command -v pnpm >/dev/null 2>&1 || corepack enable pnpm
     go install golang.org/x/tools/cmd/goimports@latest
     go mod download
     cd web && pnpm install
@@ -119,10 +120,13 @@ dev-frontend port="3847":
 serve port="3847":
     TILLR_PORT={{port}} go run ./cmd/tillr serve --port {{port}}
 
-# Build frontend + install binary to $GOPATH/bin
+# Build frontend + install binary to $GOPATH/bin (on PATH via mise's go).
+# Self-bootstraps pnpm via corepack (ships with node) if missing.
 install:
+    @command -v pnpm >/dev/null 2>&1 || corepack enable pnpm
     cd web && pnpm build
     go install ./cmd/tillr
+    @echo "Installed: $(go env GOPATH)/bin/tillr"
 
 # Install systemd user service (one-time setup for self-hosting)
 install-service:

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useStore } from '../store'
 
 interface WebSocketMessage {
   type: string
   data?: unknown
 }
 
+// Subscribes to /ws and refetches active queries on 'refresh' events.
+// Notification dispatch removed in the post-reset slim — bring it back
+// alongside any future toast/notification surface.
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const queryClient = useQueryClient()
-  const addNotification = useStore((s) => s.addNotification)
 
   const connect = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -27,26 +28,8 @@ export function useWebSocket() {
     ws.onmessage = (event) => {
       try {
         const msg: WebSocketMessage = JSON.parse(event.data)
-
         if (msg.type === 'refresh') {
-          // Refetch active queries in the background (don't invalidate cache —
-          // invalidating removes data and causes loading flashes).
           queryClient.refetchQueries({ type: 'active' })
-
-          // Create notification from event data if available
-          if (msg.data && typeof msg.data === 'object') {
-            const eventData = msg.data as Record<string, unknown>
-            const eventType = eventData.event_type as string | undefined
-            if (eventType) {
-              addNotification({
-                id: Date.now().toString(),
-                type: eventType.includes('error') ? 'error' : 'info',
-                message: formatEventMessage(eventType, eventData),
-                timestamp: new Date().toISOString(),
-                read: false,
-              })
-            }
-          }
         }
       } catch {
         // Non-JSON message, ignore
@@ -61,7 +44,7 @@ export function useWebSocket() {
     ws.onerror = () => {
       ws.close()
     }
-  }, [queryClient, addNotification])
+  }, [queryClient])
 
   useEffect(() => {
     connect()
@@ -70,22 +53,4 @@ export function useWebSocket() {
       wsRef.current?.close()
     }
   }, [connect])
-}
-
-function formatEventMessage(type: string, data: Record<string, unknown>): string {
-  const featureId = data.feature_id as string | undefined
-  switch (type) {
-    case 'feature.status_changed': {
-      const parsed = typeof data.data === 'string' ? JSON.parse(data.data) : data.data
-      return `Feature "${featureId}" moved to ${(parsed as Record<string, string>)?.to || 'unknown'}`
-    }
-    case 'cycle.advanced':
-      return `Cycle advanced for "${featureId}"`
-    case 'idea.approved':
-      return `Idea approved: ${featureId}`
-    case 'idea.rejected':
-      return `Idea rejected: ${featureId}`
-    default:
-      return `Event: ${type}`
-  }
 }

@@ -1,5 +1,6 @@
-import type { FeatureStatus } from '../api/types'
-
+// Status is a free-form string post-reset. We keep label/color hints
+// for the values the system uses today and fall back gracefully for
+// unknowns.
 const statusConfig: Record<string, { label: string; classes: string }> = {
   draft: { label: 'Draft', classes: 'bg-bg-tertiary text-text-secondary' },
   planning: { label: 'Planning', classes: 'bg-purple/20 text-purple' },
@@ -33,7 +34,7 @@ const statusConfig: Record<string, { label: string; classes: string }> = {
   implemented: { label: 'Implemented', classes: 'bg-accent/20 text-accent' },
 }
 
-export function StatusBadge({ status }: { status: FeatureStatus | string }) {
+export function StatusBadge({ status }: { status: string }) {
   const config = statusConfig[status] || {
     label: status,
     classes: 'bg-bg-tertiary text-text-secondary',
