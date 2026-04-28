@@ -5,6 +5,31 @@ The smallest set of capabilities that lets a real user (Rui — see
 for actual project management work. Target build time: 1–2 weeks of
 focused work, after which the workflow is dogfoodable.
 
+## Milestones
+
+- **2026-04-27** — Reset complete, minimal skeleton (commit
+  `98f4140`).
+- **2026-04-27** — MVP Phase 1 shipped: persona CLI, retro, TUI,
+  web pages, .claude/agents seeds, conductor skill template
+  (commit `d1404a3`).
+- **2026-04-28** — Principle Zero established and committed to repo
+  (`docs/principle-zero.md`, `AGENTS.md` lead block-quote).
+- **2026-04-28** — Orchestrator daemon shipped: `tillr orchestrator
+  start` polls the queue, spawns `claude -p` per (persona, feature)
+  up to max-parallelism, parses structured JSON output, automatically
+  appends to persona context, comments on features, files
+  follow-ups, transitions feature status. Lifecycle enforcement is
+  now structural (Principle Zero) — persona prompts no longer need
+  to instruct agents to "remember to call append" (commit `1c6b053`).
+- **2026-04-28 — SELF-HOSTING.** Tillr now tracks its own remaining
+  development as features in its own database. `tillr feature list`
+  in the workspace returns tillr's open work. The next round of
+  improvements (slim persona prompts, web orchestrator UI, TUI tab,
+  SQLite contention fix, auto-compaction, auto-retro, fresh-clone
+  bootstrap) is queued for the implementer/researcher/reviewer
+  personas to claim once the human kicks off `tillr orchestrator
+  start`.
+
 **This MVP supersedes the original Stage 0/1 plan in
 [roadmap.md](./roadmap.md).** The conductor + persona architecture
 (established 2026-04-27 from prior project learnings) reshapes what
