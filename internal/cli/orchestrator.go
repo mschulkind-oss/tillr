@@ -83,12 +83,6 @@ which fakes a successful run).`,
 		if v, _ := cmd.Flags().GetInt("poll-interval-sec"); v > 0 {
 			base.PollInterval = time.Duration(v) * time.Second
 		}
-		if v, _ := cmd.Flags().GetFloat64("max-budget-usd"); v > 0 {
-			base.MaxBudgetUSD = v
-		}
-		if v, _ := cmd.Flags().GetInt("max-turns"); v > 0 {
-			base.MaxTurns = v
-		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		base.DryRun = dryRun
 
@@ -202,9 +196,9 @@ var orchestratorStatusCmd = &cobra.Command{
 		} else {
 			fmt.Printf("%s %s\n", Dim("○"), Dim("Orchestrator NOT running."))
 		}
-		fmt.Printf("%s max-parallelism=%d  poll=%s  max-budget=%s  max-turns=%d  dry-run=%v\n\n",
+		fmt.Printf("%s max-parallelism=%d  poll=%s  dry-run=%v\n\n",
 			Header("Config:"),
-			oc.MaxParallelism, oc.PollInterval, Money(oc.MaxBudgetUSD), oc.MaxTurns, oc.DryRun)
+			oc.MaxParallelism, oc.PollInterval, oc.DryRun)
 
 		fmt.Printf("%s %s\n",
 			Header(fmt.Sprintf("Active runs (%d):", len(active))),
@@ -293,8 +287,6 @@ tokens, duration, exit code, session ID, and result.`,
 func init() {
 	orchestratorStartCmd.Flags().IntP("max-parallelism", "n", 0, "Max concurrent workers (default from config or 1)")
 	orchestratorStartCmd.Flags().Int("poll-interval-sec", 0, "Poll interval in seconds")
-	orchestratorStartCmd.Flags().Float64("max-budget-usd", 0, "Max budget per worker in USD")
-	orchestratorStartCmd.Flags().Int("max-turns", 0, "Max agentic turns per worker")
 	orchestratorStartCmd.Flags().Bool("dry-run", false,
 		"Use the no-op spawner (does not invoke claude) — for smoke testing")
 

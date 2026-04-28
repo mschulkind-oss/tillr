@@ -26,16 +26,19 @@ import (
 )
 
 // Config bundles tunables. Defaults applied if zero values.
+//
+// MVP scope (2026-04-28): no metering. claude -p runs unmetered.
+// We rely on the user's Claude MAX subscription quota and on the
+// dispatcher being slow enough (PollInterval) to be observable.
+// Re-add caps as features when there's evidence they're needed.
 type Config struct {
 	ProjectRoot     string
 	MaxParallelism  int           // default 1
 	PollInterval    time.Duration // default 5s
-	MaxBudgetUSD    float64       // per-task; default 1.00
-	MaxTurns        int           // per-task; default 30
 	StaleRunMinutes int           // running > this → marked errored on startup; default 60
 	ClaudeBinary    string        // default "claude"
 	DryRun          bool          // if true, use stub spawner that doesn't actually invoke claude
-	WorkerTimeout   time.Duration // hard kill after this; default 30 min
+	WorkerTimeout   time.Duration // hard kill after this (safety net, not metering); default 60 min
 }
 
 func (c *Config) applyDefaults() {
@@ -45,12 +48,6 @@ func (c *Config) applyDefaults() {
 	if c.PollInterval <= 0 {
 		c.PollInterval = 5 * time.Second
 	}
-	if c.MaxBudgetUSD <= 0 {
-		c.MaxBudgetUSD = 1.00
-	}
-	if c.MaxTurns <= 0 {
-		c.MaxTurns = 30
-	}
 	if c.StaleRunMinutes <= 0 {
 		c.StaleRunMinutes = 60
 	}
@@ -58,7 +55,7 @@ func (c *Config) applyDefaults() {
 		c.ClaudeBinary = "claude"
 	}
 	if c.WorkerTimeout <= 0 {
-		c.WorkerTimeout = 30 * time.Minute
+		c.WorkerTimeout = 60 * time.Minute
 	}
 }
 
@@ -77,16 +74,6 @@ func LoadConfigFromDB(database *sql.DB, base Config) (Config, error) {
 	if v, ok := all["orchestrator.poll-interval-sec"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			base.PollInterval = time.Duration(n) * time.Second
-		}
-	}
-	if v, ok := all["orchestrator.max-budget-usd"]; ok {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			base.MaxBudgetUSD = f
-		}
-	}
-	if v, ok := all["orchestrator.max-turns"]; ok {
-		if n, err := strconv.Atoi(v); err == nil {
-			base.MaxTurns = n
 		}
 	}
 	if v, ok := all["orchestrator.claude-binary"]; ok {
@@ -143,8 +130,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.logger.Printf("marked %d stale runs as errored", n)
 	}
 
-	d.logger.Printf("starting (max-parallelism=%d, poll=%s, budget=$%.2f, turns=%d, dry-run=%v)",
-		d.cfg.MaxParallelism, d.cfg.PollInterval, d.cfg.MaxBudgetUSD, d.cfg.MaxTurns, d.cfg.DryRun)
+	d.logger.Printf("starting (max-parallelism=%d, poll=%s, dry-run=%v)",
+		d.cfg.MaxParallelism, d.cfg.PollInterval, d.cfg.DryRun)
 
 	tick := time.NewTicker(d.cfg.PollInterval)
 	defer tick.Stop()
@@ -330,8 +317,6 @@ type SpawnOpts struct {
 	FeatureID          int64
 	FeatureTitle       string
 	FeatureDescription string
-	MaxTurns           int
-	MaxBudgetUSD       float64
 	WorkerTimeout      time.Duration
 	ClaudeBinary       string
 	JSONSchema         string
@@ -365,8 +350,6 @@ func (w *Worker) Execute(ctx context.Context) {
 		FeatureID:          w.Feature.ID,
 		FeatureTitle:       w.Feature.Title,
 		FeatureDescription: w.Feature.Description,
-		MaxTurns:           w.Cfg.MaxTurns,
-		MaxBudgetUSD:       w.Cfg.MaxBudgetUSD,
 		WorkerTimeout:      w.Cfg.WorkerTimeout,
 		ClaudeBinary:       w.Cfg.ClaudeBinary,
 		JSONSchema:         PersonaJSONSchema,

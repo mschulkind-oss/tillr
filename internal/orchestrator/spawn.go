@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"time"
 )
 
@@ -24,8 +23,6 @@ func ClaudeSpawn(ctx context.Context, opts SpawnOpts) Spawned {
 		"-p",
 		"--output-format", "json",
 		"--json-schema", opts.JSONSchema,
-		"--max-turns", strconv.Itoa(opts.MaxTurns),
-		"--max-budget-usd", fmt.Sprintf("%.2f", opts.MaxBudgetUSD),
 		"--no-session-persistence",
 		"--bare",
 	}
