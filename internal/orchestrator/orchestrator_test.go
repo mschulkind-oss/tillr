@@ -246,6 +246,132 @@ func TestDaemon_RespectsMaxParallelism(t *testing.T) {
 	}
 }
 
+// TestDaemon_NoSQLiteContentionUnderLoad guards the structural fix
+// for SQLITE_BUSY under concurrent dispatch (feature #4). With four
+// personas dispatching simultaneously, every per-run write must land
+// — no comments lost, no features stuck in 'claimed', no runs stuck
+// in 'running'. The single-writer side-effect drainer makes this true
+// by construction; if someone reverts that, this test catches the
+// silent data loss.
+func TestDaemon_NoSQLiteContentionUnderLoad(t *testing.T) {
+	personas := []string{"alpha", "beta", "gamma", "delta"}
+	root, database := setupProject(t, personas...)
+	project, _ := db.GetProject(database)
+
+	const perPersona = 8
+	type key struct{ persona string }
+	wantFeatures := map[key][]int64{}
+	for _, p := range personas {
+		for i := 0; i < perPersona; i++ {
+			f, err := db.AddFeature(database, project.ID, "feat-"+p, "", p)
+			if err != nil {
+				t.Fatalf("add: %v", err)
+			}
+			wantFeatures[key{p}] = append(wantFeatures[key{p}], f.ID)
+		}
+	}
+
+	// Spawn returns immediately with a populated Result so every
+	// post-spawn write path executes (comment, status, finish). The
+	// brief sleep ensures multiple workers are concurrently in
+	// applySideEffects, which is exactly the contention scenario.
+	spawn := SpawnFunc(func(_ context.Context, opts SpawnOpts) Spawned {
+		time.Sleep(5 * time.Millisecond)
+		return Spawned{
+			ExitCode: 0,
+			Result: Result{
+				Summary: "done by " + opts.Persona,
+				Result:  "completed",
+			},
+		}
+	})
+
+	d := NewDaemon(database, Config{
+		ProjectRoot:    root,
+		MaxParallelism: 4,
+		PollInterval:   10 * time.Millisecond,
+	}, spawn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Run until the queue is drained, then cancel so Run returns.
+	doneCh := make(chan error, 1)
+	go func() { doneCh <- d.Run(ctx) }()
+
+	// Wait until every feature has left 'draft'/'claimed' (i.e. has
+	// a final status set by applySideEffects).
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		feats, err := db.ListFeatures(database, project.ID, db.ListFeaturesFilter{})
+		if err != nil {
+			t.Fatalf("list features: %v", err)
+		}
+		allDone := true
+		for _, f := range feats {
+			if f.Status == "draft" || f.Status == "claimed" || f.Status == "queued" {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cancel()
+	if err := <-doneCh; err != nil {
+		t.Fatalf("daemon exit: %v", err)
+	}
+
+	// (a) Every feature transitioned to 'done'.
+	for _, p := range personas {
+		for _, fid := range wantFeatures[key{p}] {
+			f, err := db.GetFeature(database, fid)
+			if err != nil {
+				t.Fatalf("get feature %d: %v", fid, err)
+			}
+			if f.Status != "done" {
+				t.Errorf("feature %d (%s): status=%q, want done", fid, p, f.Status)
+			}
+		}
+	}
+
+	// (b) Every feature has exactly one comment from its persona.
+	for _, p := range personas {
+		for _, fid := range wantFeatures[key{p}] {
+			cs, err := db.ListComments(database, "feature", strconv.FormatInt(fid, 10))
+			if err != nil {
+				t.Fatalf("list comments %d: %v", fid, err)
+			}
+			if len(cs) != 1 {
+				t.Errorf("feature %d (%s): want 1 comment, got %d", fid, p, len(cs))
+				continue
+			}
+			if cs[0].AuthorRole != p {
+				t.Errorf("feature %d (%s): comment author=%q, want %q", fid, p, cs[0].AuthorRole, p)
+			}
+		}
+	}
+
+	// (c) Every orchestrator_runs row reached 'completed' — none
+	// stranded in 'running' (the silent-loss signature).
+	allRuns, err := db.ListOrchestratorRuns(database, 0, 0)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if got, want := len(allRuns), len(personas)*perPersona; got != want {
+		t.Errorf("run count: got %d, want %d", got, want)
+	}
+	for _, r := range allRuns {
+		if r.Result != "completed" {
+			t.Errorf("run %d (feature %d, %s): result=%q, want completed",
+				r.ID, r.FeatureID, r.Persona, r.Result)
+		}
+	}
+}
+
 func TestDaemon_BlockedResultStaysBlocked(t *testing.T) {
 	root, database := setupProject(t, "implementer")
 	project, _ := db.GetProject(database)

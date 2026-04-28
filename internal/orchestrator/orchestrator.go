@@ -102,7 +102,26 @@ type Daemon struct {
 	// spawn is indirected so tests can inject a fake.
 	spawn SpawnFunc
 
+	// sideEffects funnels every per-run write block through one
+	// goroutine so SQLite never sees concurrent writers from this
+	// process. See applySideEffects / sideEffectLoop. Workers post a
+	// closure plus a done-channel they block on, so no run completes
+	// until its writes have landed.
+	//
+	// Buffer is generous: we only need to absorb the small burst that
+	// happens when N parallel workers all finish near-simultaneously.
+	sideEffects chan sideEffectJob
+	drainerDone chan struct{}
+
 	logger *log.Logger
+}
+
+// sideEffectJob is one run's worth of post-spawn writes, composed by
+// the worker and applied by the daemon's single drainer goroutine.
+// Done is closed after apply returns, regardless of per-step errors.
+type sideEffectJob struct {
+	apply func()
+	done  chan struct{}
 }
 
 // NewDaemon constructs a Daemon with the given config. If spawn is
@@ -113,11 +132,23 @@ func NewDaemon(database *sql.DB, cfg Config, spawn SpawnFunc) *Daemon {
 		spawn = ClaudeSpawn
 	}
 	return &Daemon{
-		db:      database,
-		cfg:     cfg,
-		running: make(map[int64]*Worker),
-		spawn:   spawn,
-		logger:  log.New(log.Writer(), "[orchestrator] ", log.LstdFlags),
+		db:          database,
+		cfg:         cfg,
+		running:     make(map[int64]*Worker),
+		spawn:       spawn,
+		sideEffects: make(chan sideEffectJob, 64),
+		drainerDone: make(chan struct{}),
+		logger:      log.New(log.Writer(), "[orchestrator] ", log.LstdFlags),
+	}
+}
+
+// sideEffectLoop drains the side-effects queue serially. It exits
+// when the queue is closed, signaling drainerDone so Run can return.
+func (d *Daemon) sideEffectLoop() {
+	defer close(d.drainerDone)
+	for job := range d.sideEffects {
+		job.apply()
+		close(job.done)
 	}
 }
 
@@ -133,6 +164,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.logger.Printf("starting (max-parallelism=%d, poll=%s, dry-run=%v)",
 		d.cfg.MaxParallelism, d.cfg.PollInterval, d.cfg.DryRun)
 
+	go d.sideEffectLoop()
+
 	tick := time.NewTicker(d.cfg.PollInterval)
 	defer tick.Stop()
 
@@ -143,6 +176,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			d.logger.Printf("shutting down; waiting for %d workers", d.activeCount())
 			d.waitWorkers()
+			// All workers have submitted (and waited on) their
+			// side-effect jobs, so closing the queue is safe — no
+			// further sends will happen.
+			close(d.sideEffects)
+			<-d.drainerDone
 			d.logger.Print("stopped")
 			return nil
 		case <-tick.C:
@@ -196,14 +234,15 @@ func (d *Daemon) startWorker(ctx context.Context, p persona.Persona, feat *model
 	}
 
 	w := &Worker{
-		RunID:     runID,
-		Persona:   p,
-		Feature:   feat,
-		Cfg:       d.cfg,
-		DB:        d.db,
-		Spawn:     d.spawn,
-		startedAt: time.Now(),
-		logger:    d.logger,
+		RunID:       runID,
+		Persona:     p,
+		Feature:     feat,
+		Cfg:         d.cfg,
+		DB:          d.db,
+		Spawn:       d.spawn,
+		sideEffects: d.sideEffects,
+		startedAt:   time.Now(),
+		logger:      d.logger,
 	}
 
 	d.mu.Lock()
@@ -335,6 +374,12 @@ type Worker struct {
 	DB      *sql.DB
 	Spawn   SpawnFunc
 
+	// sideEffects is the daemon-owned queue this worker submits its
+	// post-spawn writes to. May be nil in tests that drive Worker
+	// directly; in that case applySideEffects falls back to applying
+	// inline (single-threaded by construction).
+	sideEffects chan<- sideEffectJob
+
 	startedAt time.Time
 	logger    *log.Logger
 }
@@ -365,7 +410,33 @@ func (w *Worker) Execute(ctx context.Context) {
 // orchestrator persists the structured output as comments, context
 // appends, follow-up features, and final feature status. Tools,
 // not instructions.
+//
+// Concurrency: the actual writes are funneled through the daemon's
+// single drainer goroutine (see Daemon.sideEffectLoop). This worker
+// builds a closure capturing the writes for *this* run and blocks
+// until the drainer has applied them. That eliminates SQLITE_BUSY
+// from competing writers without forcing workers to "be careful" or
+// retry — the contention is gone by construction (Principle Zero).
+//
+// If sideEffects is nil (Worker driven directly by a test that
+// doesn't run the daemon loop), we apply inline: the test is single-
+// threaded by construction so no contention is possible.
 func (w *Worker) applySideEffects(s Spawned) {
+	apply := w.buildSideEffects(s)
+	if w.sideEffects == nil {
+		apply()
+		return
+	}
+	done := make(chan struct{})
+	w.sideEffects <- sideEffectJob{apply: apply, done: done}
+	<-done
+}
+
+// buildSideEffects composes the closure that performs every per-run
+// post-spawn write (context append, comment, follow-ups, feature
+// status transition, run-row finish). All work captured here will be
+// executed serially by the daemon's drainer goroutine.
+func (w *Worker) buildSideEffects(s Spawned) func() {
 	durationMS := time.Since(w.startedAt).Milliseconds()
 	resultStatus := "completed"
 	errMsg := s.SpawnError
@@ -387,46 +458,6 @@ func (w *Worker) applySideEffects(s Spawned) {
 		resultStatus = "completed"
 	}
 
-	// 1. Append context entry to the persona's context file
-	//    (orchestrator owns this — Principle Zero).
-	if s.Result.ContextEntry != "" {
-		entrySummary := summary
-		if entrySummary == "" {
-			entrySummary = fmt.Sprintf("Feature #%d: %s", w.Feature.ID, w.Feature.Title)
-		}
-		if err := persona.Append(w.Cfg.ProjectRoot, w.Persona.Name, entrySummary, s.Result.ContextEntry); err != nil {
-			w.logger.Printf("run %d: append context error: %v", w.RunID, err)
-		}
-	}
-
-	// 2. Add a comment on the feature with the run's summary.
-	if summary != "" {
-		_, err := db.AddComment(w.DB, &models.Comment{
-			EntityType: "feature",
-			EntityID:   strconv.FormatInt(w.Feature.ID, 10),
-			AuthorType: "agent",
-			AuthorRole: w.Persona.Name,
-			Body:       summary,
-		})
-		if err != nil {
-			w.logger.Printf("run %d: comment error: %v", w.RunID, err)
-		}
-	}
-
-	// 3. File follow-up features.
-	project, err := db.GetProject(w.DB)
-	if err == nil {
-		for _, fu := range s.Result.FollowUpFeatures {
-			if fu.Title == "" {
-				continue
-			}
-			if _, err := db.AddFeature(w.DB, project.ID, fu.Title, fu.Description, fu.Persona); err != nil {
-				w.logger.Printf("run %d: follow-up file error: %v", w.RunID, err)
-			}
-		}
-	}
-
-	// 4. Transition feature status.
 	finalStatus := "done"
 	switch resultStatus {
 	case "blocked":
@@ -436,19 +467,64 @@ func (w *Worker) applySideEffects(s Spawned) {
 	case "error":
 		finalStatus = "error"
 	}
-	if _, err := db.SetFeatureStatus(w.DB, w.Feature.ID, finalStatus); err != nil {
-		w.logger.Printf("run %d: set status error: %v", w.RunID, err)
-	}
 
-	// 5. Finish the orchestrator_runs row.
-	if err := db.FinishOrchestratorRun(
-		w.DB, w.RunID, s.ExitCode, durationMS, s.CostUSD,
-		s.InputTokens, s.OutputTokens, s.SessionID,
-		resultStatus, errMsg, summary,
-	); err != nil {
-		w.logger.Printf("run %d: finish error: %v", w.RunID, err)
-	}
+	return func() {
+		// 1. Append context entry to the persona's context file
+		//    (orchestrator owns this — Principle Zero). Sequenced
+		//    here too so the entire per-run write block lands as a
+		//    single serial unit.
+		if s.Result.ContextEntry != "" {
+			entrySummary := summary
+			if entrySummary == "" {
+				entrySummary = fmt.Sprintf("Feature #%d: %s", w.Feature.ID, w.Feature.Title)
+			}
+			if err := persona.Append(w.Cfg.ProjectRoot, w.Persona.Name, entrySummary, s.Result.ContextEntry); err != nil {
+				w.logger.Printf("run %d: append context error: %v", w.RunID, err)
+			}
+		}
 
-	w.logger.Printf("← run %d  feature #%d  persona %s  result=%s  cost=$%.4f  duration=%dms",
-		w.RunID, w.Feature.ID, w.Persona.Name, resultStatus, s.CostUSD, durationMS)
+		// 2. Add a comment on the feature with the run's summary.
+		if summary != "" {
+			_, err := db.AddComment(w.DB, &models.Comment{
+				EntityType: "feature",
+				EntityID:   strconv.FormatInt(w.Feature.ID, 10),
+				AuthorType: "agent",
+				AuthorRole: w.Persona.Name,
+				Body:       summary,
+			})
+			if err != nil {
+				w.logger.Printf("run %d: comment error: %v", w.RunID, err)
+			}
+		}
+
+		// 3. File follow-up features.
+		project, err := db.GetProject(w.DB)
+		if err == nil {
+			for _, fu := range s.Result.FollowUpFeatures {
+				if fu.Title == "" {
+					continue
+				}
+				if _, err := db.AddFeature(w.DB, project.ID, fu.Title, fu.Description, fu.Persona); err != nil {
+					w.logger.Printf("run %d: follow-up file error: %v", w.RunID, err)
+				}
+			}
+		}
+
+		// 4. Transition feature status.
+		if _, err := db.SetFeatureStatus(w.DB, w.Feature.ID, finalStatus); err != nil {
+			w.logger.Printf("run %d: set status error: %v", w.RunID, err)
+		}
+
+		// 5. Finish the orchestrator_runs row.
+		if err := db.FinishOrchestratorRun(
+			w.DB, w.RunID, s.ExitCode, durationMS, s.CostUSD,
+			s.InputTokens, s.OutputTokens, s.SessionID,
+			resultStatus, errMsg, summary,
+		); err != nil {
+			w.logger.Printf("run %d: finish error: %v", w.RunID, err)
+		}
+
+		w.logger.Printf("← run %d  feature #%d  persona %s  result=%s  cost=$%.4f  duration=%dms",
+			w.RunID, w.Feature.ID, w.Persona.Name, resultStatus, s.CostUSD, durationMS)
+	}
 }
