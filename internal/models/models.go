@@ -38,6 +38,28 @@ type Feature struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// OrchestratorRun records a single dispatch of a persona via
+// `claude -p` against a feature. The orchestrator process inserts a
+// row when it spawns the worker, updates it on completion, and uses
+// it for metrics + retros + the inspector UI.
+type OrchestratorRun struct {
+	ID           int64      `json:"id"`
+	FeatureID    int64      `json:"feature_id"`
+	Persona      string     `json:"persona"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	DurationMS   *int64     `json:"duration_ms,omitempty"`
+	ExitCode     *int       `json:"exit_code,omitempty"`
+	CostUSD      *float64   `json:"cost_usd,omitempty"`
+	InputTokens  *int64     `json:"input_tokens,omitempty"`
+	OutputTokens *int64     `json:"output_tokens,omitempty"`
+	SessionID    string     `json:"session_id,omitempty"`
+	Model        string     `json:"model,omitempty"`
+	Result       string     `json:"result"` // running | completed | blocked | needs_review | error
+	Error        string     `json:"error,omitempty"`
+	Summary      string     `json:"summary,omitempty"`
+}
+
 // Comment is the conversation substrate from
 // docs/consulting-firm/implementation-layers.md Layer 1.
 //

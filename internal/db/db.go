@@ -59,6 +59,28 @@ CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS orchestrator_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id    INTEGER NOT NULL REFERENCES features(id),
+    persona       TEXT    NOT NULL,
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at  DATETIME,
+    duration_ms   INTEGER,
+    exit_code     INTEGER,
+    cost_usd      REAL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    session_id    TEXT,
+    model         TEXT,
+    result        TEXT NOT NULL DEFAULT 'running',
+    error         TEXT NOT NULL DEFAULT '',
+    summary       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_orch_feature ON orchestrator_runs(feature_id);
+CREATE INDEX IF NOT EXISTS idx_orch_started ON orchestrator_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_orch_result  ON orchestrator_runs(result);
 `
 
 // Open returns a *sql.DB pointed at the given path, with the minimal
@@ -302,6 +324,163 @@ func ListComments(database *sql.DB, entityType, entityID string) ([]models.Comme
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// --- Orchestrator runs ---
+
+// StartOrchestratorRun inserts a 'running' row for a freshly-spawned
+// worker. Returns the run ID.
+func StartOrchestratorRun(database *sql.DB, featureID int64, persona, model string) (int64, error) {
+	res, err := database.Exec(
+		`INSERT INTO orchestrator_runs (feature_id, persona, model, result)
+		 VALUES (?, ?, ?, 'running')`,
+		featureID, persona, model,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// FinishOrchestratorRun updates the row with completion details.
+// Pass result = "completed" / "blocked" / "needs_review" / "error".
+func FinishOrchestratorRun(
+	database *sql.DB,
+	runID int64,
+	exitCode int,
+	durationMS int64,
+	costUSD float64,
+	inputTokens, outputTokens int64,
+	sessionID, result, errMsg, summary string,
+) error {
+	_, err := database.Exec(
+		`UPDATE orchestrator_runs
+		 SET completed_at  = CURRENT_TIMESTAMP,
+		     duration_ms   = ?,
+		     exit_code     = ?,
+		     cost_usd      = ?,
+		     input_tokens  = ?,
+		     output_tokens = ?,
+		     session_id    = ?,
+		     result        = ?,
+		     error         = ?,
+		     summary       = ?
+		 WHERE id = ?`,
+		durationMS, exitCode, costUSD, inputTokens, outputTokens,
+		sessionID, result, errMsg, summary, runID,
+	)
+	return err
+}
+
+// ListOrchestratorRuns returns runs newest first, optionally filtered
+// by feature ID and/or limit (0 = no limit).
+func ListOrchestratorRuns(database *sql.DB, featureID int64, limit int) ([]models.OrchestratorRun, error) {
+	q := `SELECT id, feature_id, persona, started_at, completed_at,
+	             duration_ms, exit_code, cost_usd, input_tokens, output_tokens,
+	             session_id, model, result, error, summary
+	      FROM orchestrator_runs`
+	var args []any
+	if featureID > 0 {
+		q += " WHERE feature_id = ?"
+		args = append(args, featureID)
+	}
+	q += " ORDER BY started_at DESC"
+	if limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := database.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.OrchestratorRun
+	for rows.Next() {
+		var r models.OrchestratorRun
+		var (
+			completedAt               sql.NullTime
+			durationMS                sql.NullInt64
+			exitCode                  sql.NullInt64
+			costUSD                   sql.NullFloat64
+			inputTokens, outputTokens sql.NullInt64
+		)
+		if err := rows.Scan(
+			&r.ID, &r.FeatureID, &r.Persona, &r.StartedAt, &completedAt,
+			&durationMS, &exitCode, &costUSD, &inputTokens, &outputTokens,
+			&r.SessionID, &r.Model, &r.Result, &r.Error, &r.Summary,
+		); err != nil {
+			return nil, err
+		}
+		if completedAt.Valid {
+			t := completedAt.Time
+			r.CompletedAt = &t
+		}
+		if durationMS.Valid {
+			d := durationMS.Int64
+			r.DurationMS = &d
+		}
+		if exitCode.Valid {
+			c := int(exitCode.Int64)
+			r.ExitCode = &c
+		}
+		if costUSD.Valid {
+			c := costUSD.Float64
+			r.CostUSD = &c
+		}
+		if inputTokens.Valid {
+			t := inputTokens.Int64
+			r.InputTokens = &t
+		}
+		if outputTokens.Valid {
+			t := outputTokens.Int64
+			r.OutputTokens = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ActiveOrchestratorRuns returns runs still in 'running' state.
+func ActiveOrchestratorRuns(database *sql.DB) ([]models.OrchestratorRun, error) {
+	rows, err := database.Query(
+		`SELECT id, feature_id, persona, started_at, model
+		 FROM orchestrator_runs WHERE result = 'running' ORDER BY started_at ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []models.OrchestratorRun
+	for rows.Next() {
+		var r models.OrchestratorRun
+		r.Result = "running"
+		if err := rows.Scan(&r.ID, &r.FeatureID, &r.Persona, &r.StartedAt, &r.Model); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// MarkStaleRunsErrored transitions any 'running' runs older than
+// the given cutoff to 'error' (the worker presumably died without
+// reporting). Returns count.
+func MarkStaleRunsErrored(database *sql.DB, cutoffMinutes int) (int64, error) {
+	res, err := database.Exec(
+		`UPDATE orchestrator_runs
+		 SET result = 'error',
+		     completed_at = CURRENT_TIMESTAMP,
+		     error = 'stale: orchestrator restarted before run completed'
+		 WHERE result = 'running'
+		   AND started_at < datetime('now', '-' || ? || ' minutes')`,
+		cutoffMinutes,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ConfigGet returns the value for a key, or "" if not set.
