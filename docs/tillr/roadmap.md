@@ -616,14 +616,18 @@ pastes it into a session. The owner wants comments left in Vantage to go straigh
 session that last worked on that document's item, and wants that session kept ready for a few
 minutes and then compacted, so it can still be resumed later.
 
+[A comment on a design goes to the session that last worked on it](../design/tillr-designer-sessions.md)
+is the design. It measured the turn on 2026-11-16: a session resumed inside its cache's lifetime
+answers a comment for $0.42 where a new session costs $0.84, and one resumed after it costs more
+than a new session. So a session is kept as a file and never as a process, is warm for the cache
+lifetime the machine uses (an hour here, not five minutes), and is compacted only when a comment
+next needs it. The six items that build it are in that document's
+[build order](../design/tillr-designer-sessions.md#build-order); the first delivers one comment to
+one resumed session end to end.
+
 ### Send review comments on a design to the session that last worked on it
 
-<!-- tillr: item id="item-design-comments-reach-the-designer" seat="design" paths="docs/design/tillr-designer-sessions.md,docs/tillr/roadmap.md" -->
 
-- **c1:** `docs/design/tillr-designer-sessions.md` exists in the house design form and passes `uvx vantage-check`. It settles how a Vantage comment on a design document becomes work: which item it belongs to, which session receives it, and what the session must do with it (reply in the thread and revise the document, as the design-doc skill's two-channel rule states).
-- **c2:** It settles which session is "the last designer": the session that wrote the document, or the one that last handled comments on it, and what happens when that session's harness cannot resume.
-- **c3:** It settles the keep-warm rule with numbers and their reasons: how long a designer session is kept ready after its last message (the owner suggested five minutes, the prompt cache's lifetime), when it is compacted instead of ended, how many compacted sessions are kept, and what each choice costs in tokens. It measures the cost of one resumed turn against one cold turn on this machine.
-- **c4:** It ends with a build order of item blocks, the first of which delivers one comment to one resumed session end to end.
 
 ## Filed 2026-11-15: the loop says why every item is where it is, and what it has spent
 
