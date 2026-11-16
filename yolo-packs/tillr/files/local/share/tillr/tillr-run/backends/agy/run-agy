@@ -1,0 +1,98 @@
+#!/bin/sh
+# The Agy Flash proof adapter: the same contract, the third harness, the third dialect.
+#
+# Design §7 ships this beside the muse and Pi adapters because Agy differs where it
+# matters most to a policy schema: THE EFFORT IS INSIDE THE MODEL ID
+# (the tier is a suffix of the id), never a separate flag. So this adapter takes no `--effort`
+# at all and refuses one, which is the shape difference the proof exists to find — a
+# policy that had grown an `effort` field for every backend would be wrong here.
+#
+# What is mechanically confining: NOTHING beyond the boundary snapshot. The harness has
+# a `--sandbox` flag ("terminal restrictions"), but nothing in this tree has measured
+# whether a writing seat still builds under it, so this adapter does not claim it and
+# README.md says so. The canary of design §1 is what measures it, on an attended run.
+#
+# Two measured traps are handled here rather than left to the operator, both from
+# yolo-packs/matt-agentwork/skills/paired-design/SKILL.md:
+#
+#   * `YOLO_NO_LAUNCH_FLAGS=1` — in a jail `agy` is a launcher that injects its own
+#     `--model`, and two `--model` flags fail the parse before anything runs, so a model
+#     chosen without this variable is a model that was not chosen.
+#   * `--dangerously-skip-permissions` — headless cannot prompt, so without it every
+#     tool call is auto-denied while the envelope still says SUCCESS, `response` comes
+#     back empty and `denied_actions` names the write that never happened.
+#
+# Writes: stdout is the single JSON envelope; the harness's stderr goes to `stream.err`
+# beside the brief. Exit: the harness's own code, or 124 from the wall, or 2 from a
+# refusal that ran nothing.
+set -eu
+
+PROG=run-agy
+SELF_DIR=$(dirname -- "$0")
+. "$SELF_DIR/../preflight.sh"
+
+backend=
+model=
+brief=../brief.md
+target=
+# No wall unless staging passes one: a total-run bound is a budget, not a fault detector,
+# and the 1800s default killed runs that had already committed (design D-RW1,
+# run-wall-ruling.md). `--timeout N` still bounds this run, and N == 0 is the same as no
+# wall.
+wall=
+
+usage() {
+    cat <<'USAGE'
+usage: run-agy --backend agy --model ID
+                     [--brief PATH] [--target PATH] [--timeout SECONDS]
+
+  --model     the model id, WITH the effort tier inside it (<model>-<tier>);
+              this harness has no effort flag and this adapter refuses --effort
+  --brief     the staged brief; default ../brief.md, fed to the harness on stdin
+  --target    the named target; default the cwd, and it must BE the cwd
+  --timeout   the wall in seconds; omitted or 0 runs unbounded
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
+        --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
+        --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
+        --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
+        --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
+        --effort) refuse "this harness carries the effort tier inside the model id, so --effort is not a value this adapter can honour: name the tier in the model id in the backend policy" ;;
+        -h|--help) usage; exit 0 ;;
+        *) refuse "unknown argument '$1'" ;;
+    esac
+done
+
+require_backend "$backend" agy
+check_wall "$wall"
+require_opt --model "$model" "the model id comes from the backend policy at staging, and its suffix IS the effort tier; an adapter default would be a model id in a tree that names no vendor"
+preflight_brief "$brief"
+require_harness agy
+target=$(resolve_target "$target")
+
+err=$(lane_path "$brief" stream.err)
+
+YOLO_NO_LAUNCH_FLAGS=1
+export YOLO_NO_LAUNCH_FLAGS
+
+# The brief is handed over as the harness's prompt, on stdin — a path passed to `-p`
+# would be read as prompt text. When there is a wall it is passed twice on purpose:
+# `timeout` bounds the process, and `--print-timeout` bounds the harness's own turn, which
+# returns a partial answer and exits 0 when it fires. With no wall neither is passed, so
+# nothing in this adapter turns an unbounded brief into a bounded run.
+bounded=
+if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then bounded=1; fi
+set -- agy --print --output-format json --model "$model"
+if [ -n "$bounded" ]; then
+    set -- "$@" --print-timeout "${wall}s"
+fi
+set -- "$@" --dangerously-skip-permissions
+if [ -n "$bounded" ]; then
+    set -- timeout "$wall" "$@"
+fi
+
+exec "$@" <"$brief" 2>"$err"

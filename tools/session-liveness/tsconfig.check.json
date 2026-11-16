@@ -1,0 +1,4 @@
+{
+	"extends": "../../.forks/pi/tsconfig.json",
+	"include": ["./*.ts"]
+}

@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+"""tillr-loop: the gate, land and verdict programs `tillr drain loop` requires.
+
+`tillr drain loop` refuses to start until the caller names three programs, because the
+loop owns the order and the stopping conditions and never a step's judgment. This front
+end supplies them: three thin adapters that turn the loop's candidate argv into the real
+`tillr-gate`, `tillr-land` and `tillr item` invocations, and translate those programs'
+exit codes onto the three contracts the loop reads.
+
+  tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] <candidate flags>
+  tools/tillr-loop/tillr-loop land    <candidate flags>
+  tools/tillr-loop/tillr-loop verdict --verdict pass|fail <candidate flags>
+  tools/tillr-loop/tillr-loop self-check <candidate flags>   # prints, runs nothing
+
+The loop appends the candidate to whatever program string it is given (one flag per
+field: --item --lane --run --worktree --base --head, plus --verdict for the verdict
+step), so the loop's argv carries no judgment: every value that decides *what* is judged
+comes from a flag of this adapter's own, and every value that can be derived from the
+candidate is derived here rather than defaulted to something convenient.
+
+Exit codes: the loop reads gate as 0 pass / 1 fail / anything else could-not-judge, land
+as 0 landed / 1 not-landed, and verdict as 0 recorded / non-zero refused. Each adapter
+translates the underlying program's code onto that contract; see README.md for the table.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+# The contract every adapter answers in. 2 is this front end's own refusal (bad argv, a
+# value it cannot derive); 4 is "no judgment was made", which is the only honest answer
+# for a judge that could not run. Neither is ever 0 or 1, because the loop would read
+# those as a verdict about the candidate.
+EXIT_PASS = 0
+EXIT_FAIL = 1
+EXIT_USAGE = 2
+EXIT_EXTERNAL = 4
+
+CANDIDATE_FIELDS = ("item", "lane", "run", "worktree", "base", "head")
+
+# The judge `tillr-gate run --gate` executes when the caller names none: this tree's own
+# gate, scoped to the candidate's exact range. `tools/fork-check.py` is spelled relative on
+# purpose — `tillr-gate run` sets the program's working directory to the candidate worktree,
+# so a relative path resolves inside the tree being judged, while an absolute one would
+# resolve `parents[1]` to the checkout the loop runs from and judge `main` instead. `--since`
+# scopes the run to `<base>..HEAD` (no baseline advance in the shared fork-check state).
+# `--tier landing` keeps the pre-publish checks and records each rolling kind the diff
+# selects as owed to the rolling tier, which is what makes the per-item gate ~20-30s
+# instead of its full sum; `--lock-timeout 30` waits for the record lock, which is now held
+# only for the save, rather than failing the drain on the first concurrent gate.
+DEFAULT_GATE_PROGRAM = ("python3 tools/fork-check.py --since {base} --tier landing "
+                        "--lock-timeout 30")
+
+# The registry file a gate run generates for itself when the caller names none, under the
+# run's own scratch directory so the digest `plan` verifies and the checks the verdict names
+# sit beside the change and plan records they belong to.
+REGISTRY_FILE = "registry.json"
+
+# The registry is a property of the tree, not of the change: `--registry-json` builds a
+# plan over every tracked path and exports each check's declaration, which costs ~1.3s and
+# is identical for every lane gated on the same tree. The key is the gate file's blob plus
+# the tracked path list, because the declarations name the paths that select them; the
+# cached file is read back rather than regenerated. `YOLO_DURABLE_DIR` is the durable
+# scratch the loop already has, never `/tmp`.
+REGISTRY_CACHE_SCRIPT = r'''
+set -eu
+command -v python3 >/dev/null 2>&1 || { echo "tillr-loop: python3 is missing" >&2; exit 4; }
+base="${YOLO_DURABLE_DIR:-$HOME/.cache}/registry-cache"
+mkdir -p "$base"
+key=$( { git rev-parse HEAD:tools/fork-check.py 2>/dev/null || echo untracked; \
+         git ls-files -z | sha256sum; } | sha256sum | cut -c1-16 )
+cache="$base/$key.json"
+if [ -f "$cache" ]; then cat "$cache"; exit 0; fi
+python3 tools/fork-check.py --registry-json > "$cache.$$" \
+  && mv "$cache.$$" "$cache" \
+  && cat "$cache"
+'''
+
+# Where an operator who already exported a registry names it, so the drain's gate program
+# string does not have to carry a path that changes with the checkout.
+REGISTRY_ENV = "TILLR_LOOP_REGISTRY"
+
+# The gate's own logs, under the run's scratch: `tillr-gate run` writes one whole log and one
+# bounded triage per program it runs, and a verdict's evidence must be findable from the run.
+GATE_LOGS_DIR = "logs"
+
+
+class Refusal(Exception):
+    """A refusal that already knows the exit code it answers with."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass
+class Step:
+    """One real program invocation the adapter will make, with its working directory."""
+
+    argv: list[str]
+    cwd: str
+    # The file the step's stdout is written to. A step that exports a document (the check
+    # registry) writes it there instead of to the caller's stdout, so the self-check can
+    # name the file the plan will read rather than a stream a log would have to be parsed
+    # for.
+    stdout: str | None = None
+    # The environment variables this step needs on top of the adapter's own. A step that
+    # reads a second checkout (the gate program reading `.forks/` under PI_FORKS_ROOT)
+    # is told where it is explicitly; nothing else is overridden.
+    env: dict[str, str] | None = None
+
+
+@dataclass
+class Ctx:
+    """Every value the three composers derive, resolved once from the candidate argv."""
+
+    item: str
+    lane: str
+    run: str
+    worktree: str
+    base: str
+    head: str
+    root: str
+    store: str
+    work_dir: str
+    now: str
+    registry: str | None
+    gate_program: str | None
+    base_ref: str | None
+    verdict: str | None
+    gate_bin: str | None
+    land_bin: str | None
+    item_bin: str | None
+
+    @property
+    def run_dir(self) -> str:
+        return str(Path(self.work_dir) / self.run)
+
+    @property
+    def change_record(self) -> str:
+        return str(Path(self.run_dir) / "gate.change.json")
+
+    @property
+    def plan_record(self) -> str:
+        return str(Path(self.run_dir) / "gate.plan.json")
+
+    @property
+    def verdict_record(self) -> str:
+        return str(Path(self.run_dir) / "gate.verdict.json")
+
+
+# --- git, and the derivations that read it -----------------------------------------
+
+
+def git(directory: str, *args: str) -> str:
+    """One git read, refusing rather than guessing when it cannot answer."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", directory, *args], capture_output=True, text=True
+        )
+    except OSError as err:
+        raise Refusal(EXIT_EXTERNAL, f"git is not runnable: {err}")
+    if result.returncode != 0:
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"git -C {directory} {' '.join(args)} answered exit {result.returncode}: "
+            f"{result.stderr.strip()}",
+        )
+    return result.stdout.strip()
+
+
+def resolve_root(explicit: str | None, worktree: str | None = None) -> str:
+    """The repository, from --root, from the candidate's own checkout, or from the cwd.
+
+    The three faces must agree on one root, because the gate writes its plan and verdict
+    under `<root>/.tillr/loop/<run>/` and the lander reads them there. The loop runs the
+    gate in the candidate's worktree and the lander in the root, so deriving the root from
+    the *cwd* makes the two disagree by construction — measured: a passing gate whose
+    verdict the lander could not find, refused as "a candidate nobody judged". The root is
+    therefore derived from the candidate worktree when one is named: a linked worktree's
+    git common directory is the main checkout's `.git`, whose parent is the root all three
+    faces mean.
+    """
+    if explicit:
+        return str(Path(explicit).resolve())
+    if worktree:
+        try:
+            common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+            return str(Path(common).resolve().parent)
+        except Refusal:
+            pass
+    # The loop runs land and verdict in the root ("./"), so the working directory is the
+    # repository it means. A directory that is not a checkout is refused rather than
+    # treated as a repository with nothing in it.
+    try:
+        return git(".", "rev-parse", "--show-toplevel")
+    except Refusal:
+        raise Refusal(
+            EXIT_USAGE,
+            "no root: name --root <repository>, or run this adapter from the repository "
+            "(the working directory is not a git checkout)",
+        )
+
+
+def resolve_base_ref(explicit: str | None, root: str) -> str:
+    """The ref the candidate lands onto: the branch the repository is checked out on.
+
+    The loop does not pass a branch, and the base sha is not a ref: it is the trunk at the
+    moment the lane was staged, which a sibling lane may already have moved. The ref that
+    the lander advances is the root's checked-out branch, so that is what is derived, and a
+    detached root is refused rather than landed onto HEAD.
+    """
+    if explicit:
+        return explicit
+    name = git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    if name == "HEAD":
+        raise Refusal(
+            EXIT_USAGE,
+            f"cannot derive the branch to land onto: {root} is on a detached HEAD. Name "
+            "--base-ref <branch>: a landing onto no branch is a landing in the wrong place",
+        )
+    return name
+
+
+# --- records ----------------------------------------------------------------------
+
+
+def envelope(kind: str, ident: str, payload: dict, created_at: str) -> dict:
+    return {
+        "record_version": 1,
+        "kind": kind,
+        "id": ident,
+        "producer": {"system": "tillr", "utility": "tillr-loop", "version": VERSION},
+        "created_at": created_at,
+        "payload": payload,
+    }
+
+
+def write_record(path: str, body: dict) -> str:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(body, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def criterion_hash(text: str) -> str:
+    """The hash item's store freezes a criterion under, spelled the way it spells it."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+# --- the three composers ----------------------------------------------------------
+
+
+def compose_gate(ctx: Ctx, dry: bool) -> list[Step]:
+    """Derive the change, plan it, then judge it with `tillr-gate run`.
+
+    The judge is `tools/fork-check.py`, run through `tillr-gate run --gate`. The real
+    registry owes three in-process checks (file-size, scratch, design-citations) on every
+    change, and `tillr-gate run` refuses to answer for a check it cannot run — so a plan
+    judged by that face alone is `error` for every candidate. The two faces are not
+    interchangeable, though: `tillr-land pass` refuses a verdict whose plan and tree it
+    cannot bind, and only `tillr-gate` writes that envelope. So `tillr-gate` stays the plan
+    and the verdict, and the named program is the judgment.
+
+    The change record is `tillr-gate change`'s own, not this adapter's: it is the record
+    `plan` reads, so the binary that reads it derives it, and a driver that is not this
+    loop gets one spelling of it rather than a second (D-AQA4). The adapter spells the
+    candidate flags and nothing else about the record.
+    """
+    gate_bin = require_binary(ctx.gate_bin, "tillr-gate", dry)
+    registry = ctx.registry
+    # The change is the first preparation: the plan reads it, and a change that could not
+    # be derived is no judgment at all rather than a plan of nothing.
+    preparations = [
+        Step(
+            [
+                gate_bin,
+                "change",
+                "--item",
+                ctx.item,
+                "--lane",
+                ctx.lane,
+                "--run",
+                ctx.run,
+                "--worktree",
+                ctx.worktree,
+                "--base",
+                ctx.base,
+                "--head",
+                ctx.head,
+                "--now",
+                ctx.now,
+                "--output",
+                ctx.change_record,
+            ],
+            ctx.worktree,
+        )
+    ]
+    if not registry:
+        # The registry is the tree's own export of its check declarations, so generating it
+        # is reading the gate's plan, not inventing one. It is written beside the run's
+        # records: one digest, one plan, one verdict, one directory. The tree's own copy is
+        # cached by the declarations it holds, so the second lane gated on this tree reads
+        # it back instead of rebuilding the same 65 declarations.
+        registry = str(Path(ctx.run_dir) / REGISTRY_FILE)
+        preparations.append(
+            Step(
+                [
+                    require_binary(None, "sh", dry),
+                    "-c",
+                    REGISTRY_CACHE_SCRIPT,
+                ],
+                ctx.root,
+                stdout=registry,
+            )
+        )
+    steps = preparations + [
+        Step(
+            [
+                gate_bin,
+                "plan",
+                "--registry",
+                registry,
+                "--input",
+                ctx.change_record,
+                "--output",
+                ctx.plan_record,
+                "--root",
+                ctx.worktree,
+            ],
+            ctx.worktree,
+        ),
+        Step(
+            [
+                gate_bin,
+                "run",
+                "--input",
+                ctx.plan_record,
+                "--worktree",
+                ctx.worktree,
+                "--output",
+                ctx.verdict_record,
+                "--logs",
+                str(Path(ctx.run_dir) / GATE_LOGS_DIR),
+            ]
+            + gate_program_args(ctx.gate_program),
+            ctx.worktree,
+            # The gate program reads the candidate's packs from the worktree and any
+            # `.forks/` checkout from the repository it was told about: `.forks/` is
+            # gitignored and never present inside a linked worktree.
+            env={"PI_FORKS_ROOT": ctx.root},
+        ),
+    ]
+    if not dry:
+        # The run's scratch is this adapter's to create and the record is the face's to
+        # write: a face that invented the directory it was told to write into would be
+        # guessing at the caller's layout, so the directory exists before it is named.
+        Path(ctx.run_dir).mkdir(parents=True, exist_ok=True)
+    return steps
+
+
+def gate_program_args(program: str | None) -> list[str]:
+    """`--gate <program>` and one `--gate-arg` per remaining word of it."""
+    if not program:
+        return []
+    words = shlex.split(program)
+    args = ["--gate", words[0]]
+    for word in words[1:]:
+        args += ["--gate-arg", word]
+    return args
+
+
+def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
+    """Land the judged head with one `tillr-land pass`.
+
+    There is no queue step: the gate's verdict is the only preparation, and the lander
+    carries the item, the run, the base and the head rather than reading a candidate row
+    back out of a store. `--base-ref` is the root's checked-out branch, which is the ref
+    the landing advances; a fork-series item names its patch branch instead.
+    """
+    if not Path(ctx.verdict_record).exists():
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"the land step needs the gate's verdict at {ctx.verdict_record}: a landing "
+            "against no verdict would be a candidate nobody judged",
+        )
+    base_ref = resolve_base_ref(ctx.base_ref, ctx.root)
+    land_bin = require_binary(ctx.land_bin, "tillr-land", dry)
+    return [
+        Step(
+            [
+                land_bin,
+                "pass",
+                "--store",
+                ctx.store,
+                "--repo",
+                ctx.root,
+                "--item",
+                ctx.item,
+                "--run",
+                ctx.run,
+                "--base",
+                ctx.base,
+                "--head",
+                ctx.head,
+                "--verdict",
+                ctx.verdict_record,
+                "--base-ref",
+                base_ref,
+                "--now",
+                ctx.now,
+            ],
+            ctx.root,
+        )
+    ]
+
+
+def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
+    """Record one mechanical item.verdict per frozen criterion of the item."""
+    if ctx.verdict not in ("pass", "fail"):
+        raise Refusal(
+            EXIT_USAGE,
+            f"--verdict {ctx.verdict!r} is not a verdict: the loop passes pass or fail",
+        )
+    item_bin = require_binary(ctx.item_bin, "tillr-item", dry)
+    show = Step(
+        [item_bin, "show", "--store", ctx.store, "--item", ctx.item, "--root", ctx.root],
+        ctx.root,
+    )
+    record_argv = [
+        item_bin,
+        "verdict",
+        "record",
+        "--store",
+        ctx.store,
+        "--input",
+        "<criterion record>",
+        "--now",
+        ctx.now,
+    ]
+    if dry:
+        return [show, Step(record_argv, ctx.root)]
+    shown = subprocess.run(show.argv, cwd=show.cwd, capture_output=True, text=True)
+    if shown.returncode != 0:
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"cannot name the item's criteria: {show.argv[0]} show answered exit "
+            f"{shown.returncode}: {shown.stderr.strip()}",
+        )
+    try:
+        payload = json.loads(shown.stdout)["payload"]
+    except (json.JSONDecodeError, KeyError) as err:
+        raise Refusal(
+            EXIT_EXTERNAL, f"reading the item.record {item_bin} show printed: {err}"
+        )
+    criteria = payload.get("criteria") or []
+    if not criteria:
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"item {ctx.item} carries no criterion: a verdict retires criteria, and an "
+            "item with none records no judgment",
+        )
+    steps = []
+    for criterion in criteria:
+        record = envelope(
+            "item.verdict",
+            f"verdict-{ctx.item}-{criterion['criterion_id']}",
+            {
+                "item_id": ctx.item,
+                "criterion_id": criterion["criterion_id"],
+                "criterion_hash": criterion_hash(criterion["text"]),
+                "verdict": "done" if ctx.verdict == "pass" else "not-done",
+                "claim_class": "verification-only",
+                # The evidence a mechanical verdict is carried by: the records the
+                # composed pipeline read, not an actor's opinion.
+                "evidence": [ctx.verdict_record, f"run:{ctx.run}", f"head:{ctx.head}"],
+                "evaluated_head": ctx.head,
+                "actor_kind": "mechanical",
+            },
+            ctx.now,
+        )
+        path = write_record(
+            str(Path(ctx.run_dir) / f"item.verdict.{criterion['criterion_id']}.json"),
+            record,
+        )
+        # The placeholder is the record's own path: `--input` keeps its flag.
+        steps.append(Step([*record_argv[:6], path, *record_argv[7:]], ctx.root))
+    return steps
+
+
+COMPOSERS = {"gate": compose_gate, "land": compose_land, "verdict": compose_verdict}
+
+
+def require_binary(name: str | None, default: str, dry: bool) -> str:
+    """The real program, refused when it is not installed.
+
+    A missing judge is exit 4 in the run and a MISSING line in the self-check: a gate
+    that is not there judged nothing, which is not the same answer as "the candidate
+    failed", and the loop must be able to tell those apart.
+    """
+    if not name:
+        name = default
+    if "/" in name:
+        return name
+    found = shutil.which(name)
+    if found is None:
+        if dry:
+            return f"{name} (MISSING)"
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"{name} is not on PATH: the step cannot judge, and a judge that could not "
+            "run is not a candidate that failed",
+        )
+    return found
+
+
+# --- executing a composed tick -----------------------------------------------------
+
+
+def invoke(step: Step) -> subprocess.CompletedProcess:
+    """Run one composed step with its own working directory, environment and stdout."""
+    env = dict(os.environ, **step.env) if step.env else None
+    if not step.stdout:
+        return subprocess.run(step.argv, cwd=step.cwd, env=env)
+    Path(step.stdout).parent.mkdir(parents=True, exist_ok=True)
+    with open(step.stdout, "w") as out:
+        return subprocess.run(step.argv, cwd=step.cwd, env=env, stdout=out)
+
+
+def execute(kind: str, steps: list[Step]) -> int:
+    """Run the steps in order and answer the adapter's contract code.
+
+    The gate's plan and the land's enqueue are preparations: a failure there means no
+    judgment exists, so it leaves as exit 4. Everything after them is a judgment, and its
+    code is translated onto the contract. The verdict's steps are all judgments — one
+    record per criterion, and a criterion whose record was refused stops the rest, because
+    a half-retired item is not a retired one.
+    """
+    judged_from = 0 if kind == "verdict" else len(steps) - 1
+    for step in steps[:judged_from]:
+        result = invoke(step)
+        if result.returncode != 0:
+            print(
+                f"tillr-loop {kind}: {Path(step.argv[0]).name} {step.argv[1]} could not "
+                f"prepare the judgment: exit {result.returncode}",
+                file=sys.stderr,
+            )
+            return EXIT_EXTERNAL
+    code = EXIT_PASS
+    for step in steps[judged_from:]:
+        code = invoke(step).returncode
+        if code != EXIT_PASS:
+            break
+    if kind == "verdict":
+        # item's verdict face answers 0 recorded / non-zero refused, which is already the
+        # loop's contract: a non-zero code is a step failure, never a recorded verdict.
+        return code
+    # The gate and land faces agree with the loop on 0 and 1, and nothing else is a
+    # verdict: `tillr-gate run` answers 2/3/4/5 for a plan it refused or could not run,
+    # and `tillr land pass` answers 3 for a store it cannot read. Both mean "this step
+    # did not judge", so both leave as 4 rather than as a pass or a failure.
+    if code in (EXIT_PASS, EXIT_FAIL):
+        return code
+    print(
+        f"tillr-loop {kind}: {Path(steps[-1].argv[0]).name} {steps[-1].argv[1]} answered "
+        f"exit {code}: no judgment was made",
+        file=sys.stderr,
+    )
+    return EXIT_EXTERNAL
+
+
+# --- argv -------------------------------------------------------------------------
+
+PROGRAM_STRING = {
+    "gate": "tools/tillr-loop/tillr-loop gate",
+    "land": "tools/tillr-loop/tillr-loop land",
+    "verdict": "tools/tillr-loop/tillr-loop verdict",
+}
+
+
+def add_candidate_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--item", required=True, help="the item the candidate is for")
+    parser.add_argument("--lane", default="", help="the lane the candidate was made in")
+    parser.add_argument("--run", required=True, help="the run that produced the candidate")
+    parser.add_argument("--worktree", required=True, help="the candidate worktree")
+    parser.add_argument("--base", required=True, help="the base sha the candidate is on")
+    parser.add_argument("--head", required=True, help="the candidate's head sha")
+
+
+def add_common_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--root", default=None, help="the repository (default: this checkout)")
+    parser.add_argument("--store", default=None, help="the store (default: <root>/.tillr/state.db)")
+    parser.add_argument("--work-dir", default=None, help="the loop's scratch (default: <root>/.tillr/loop)")
+    parser.add_argument("--now", default=None, help="the clock, RFC 3339 (default: now)")
+
+
+def add_binary_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--tillr-gate", default="tillr-gate", help="the tillr-gate program")
+    parser.add_argument("--tillr-land", default="tillr-land", help="the tillr-land program")
+    parser.add_argument("--tillr-item", default="tillr-item", help="the tillr-item program")
+
+
+def parser_for(kind: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=f"tillr-loop {kind}", allow_abbrev=False)
+    add_candidate_flags(parser)
+    add_common_flags(parser)
+    add_binary_flags(parser)
+    if kind in ("gate", "self-check"):
+        parser.add_argument("--registry", default=None,
+                            help="the check registry tillr-gate plan reads (default: "
+                                 f"${REGISTRY_ENV}, else a registry exported into the run's scratch)")
+        parser.add_argument("--gate-program", default=None,
+                            help="the program `tillr-gate run --gate` runs (default: "
+                                 f"{DEFAULT_GATE_PROGRAM})")
+    if kind in ("land", "self-check"):
+        parser.add_argument("--base-ref", default=None, help="the branch the base sha is on")
+    if kind == "verdict":
+        # Required: the verdict is the loop's judgment, so a missing one is refused rather
+        # than defaulted to a pass.
+        parser.add_argument("--verdict", required=True, choices=("pass", "fail"),
+                            help="the verdict to record")
+    elif kind == "self-check":
+        parser.add_argument("--verdict", default="pass", choices=("pass", "fail"),
+                            help="the verdict to show (default: pass)")
+    return parser
+
+
+def gate_program(args: argparse.Namespace) -> str | None:
+    """The program `tillr-gate run --gate` executes: the caller's, or this tree's gate.
+
+    Only the gate face has one. The default is built from the candidate's base sha, which
+    is the range the change record states, so the plan and the judgment cover one diff.
+    """
+    if not hasattr(args, "gate_program"):
+        return None
+    return args.gate_program or DEFAULT_GATE_PROGRAM.format(base=args.base)
+
+
+def context(args: argparse.Namespace) -> Ctx:
+    root = resolve_root(args.root, args.worktree)
+    work_dir = args.work_dir or str(Path(root) / ".tillr" / "loop")
+    now = args.now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return Ctx(
+        item=args.item,
+        lane=args.lane,
+        run=args.run,
+        worktree=str(Path(args.worktree).resolve()),
+        base=args.base,
+        head=args.head,
+        root=root,
+        store=args.store or str(Path(root) / ".tillr" / "state.db"),
+        work_dir=work_dir,
+        now=now,
+        registry=getattr(args, "registry", None) or os.environ.get(REGISTRY_ENV) or None,
+        gate_program=gate_program(args),
+        base_ref=getattr(args, "base_ref", None),
+        verdict=getattr(args, "verdict", None),
+        gate_bin=args.tillr_gate,
+        land_bin=args.tillr_land,
+        item_bin=args.tillr_item,
+    )
+
+
+def print_self_check(ctx: Ctx) -> int:
+    """Name the three programs and the argv each would pass, running nothing."""
+    print("tillr-loop self-check: one tick's three judgments, and the argv behind them")
+    print(
+        f"tick    item={ctx.item} lane={ctx.lane or '-'} run={ctx.run} "
+        f"base={ctx.base} head={ctx.head} worktree={ctx.worktree}"
+    )
+    missing = False
+    for kind in ("gate", "land", "verdict"):
+        print(f"\n{kind:7} {PROGRAM_STRING[kind]}")
+        try:
+            steps = COMPOSERS[kind](ctx, dry=True)
+        except Refusal as refusal:
+            # The refusal is the answer: a step that cannot compose cannot judge, and an
+            # operator wants to see that before a night of ticks, not after one.
+            print(f"        REFUSED (exit {refusal.code}): {refusal.message}")
+            missing = True
+            continue
+        for step in steps:
+            shown = " ".join(shlex.quote(word) for word in step.argv)
+            if step.stdout:
+                shown += " > " + shlex.quote(step.stdout)
+            if step.env:
+                shown += "  (" + " ".join(f"{k}={v}" for k, v in step.env.items()) + ")"
+            if "MISSING" in shown:
+                missing = True
+            print(f"        {shown}    (in {step.cwd})")
+    print("\nloop    tillr drain loop --root " + shlex.quote(ctx.root)
+          + " --gate " + shlex.quote(PROGRAM_STRING["gate"])
+          + " --land " + shlex.quote(PROGRAM_STRING["land"])
+          + " --verdict " + shlex.quote(PROGRAM_STRING["verdict"]))
+    if missing:
+        print("\ntillr-loop self-check: a judge is missing or a step refused: the loop "
+              "would stop rather than pass a candidate nobody judged", file=sys.stderr)
+        return EXIT_EXTERNAL
+    return EXIT_PASS
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return EXIT_PASS if argv else EXIT_USAGE
+    kind, rest = argv[0], argv[1:]
+    if kind not in COMPOSERS and kind != "self-check":
+        print(f"tillr-loop: {kind!r} is not a step: want gate, land, verdict or self-check",
+              file=sys.stderr)
+        return EXIT_USAGE
+    args = parser_for(kind).parse_args(rest)
+    try:
+        ctx = context(args)
+        if kind == "self-check":
+            return print_self_check(ctx)
+        return execute(kind, COMPOSERS[kind](ctx, dry=False))
+    except Refusal as refusal:
+        print(f"tillr-loop {kind}: {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

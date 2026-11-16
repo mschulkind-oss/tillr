@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""The Pi dialect: the harness's own event stream, one JSON event per line.
+
+Pi streams agent events (`message_start`, `message_update`, `message_end`,
+`tool_execution_*`, `agent_end`) and, in `--mode json`, serializes each as one line. The
+assistant's text reaches the stream three ways, and the dialect reads them in this
+order so a truncated stream still yields what it can:
+
+  1. `message_update` carries `assistantMessageEvent`, and a `text_delta` there carries
+     `delta` — the streaming form, and the only one a mid-run truncation leaves intact;
+  2. `agent_end` carries `messages`, the turn's whole message list — the settled form;
+  3. a message snapshot on any event, `message.content` blocks of `type: "text"` —
+     the session-file form, which the same extractor reads when handed a session log.
+
+`message_start` and `message_update` carry a *snapshot* of the message so far, not a
+delta, so snapshots are keyed and replaced rather than appended: appending them would
+repeat every token once per update.
+
+`--mode json` writes the session file's own header as the stream's first line, so the
+session id is there: `{"type": "session", "version": 3, "id": "…"}`. That is the event
+this dialect reads; the `sessionId`/`session_id`/`session.id` spellings are kept because
+a session *file* handed in as a stream carries the same header plus the rest.
+
+Pi has no `--output-schema`, so the `RESULT:` footer arrives as the last line of the
+assistant's text, exactly as the brief asks for.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import report  # noqa: E402  (the shared report shape lives one directory up)
+
+# The counters a `turn_end` usage block can carry, and the one total pi sometimes adds
+# alongside them. A cache read is billed, so it counts toward the total.
+USAGE_COUNTERS = ("input", "output", "cacheRead", "cacheWrite", "reasoning")
+
+
+def _blocks_text(message):
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        block.get("text") or ""
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def dialect(stream_text):
+    records, unparseable = report.records(stream_text)
+    deltas, snapshots, settled = [], {}, []
+    tokens, cost, saw_tokens, saw_cost = 0, 0.0, False, False
+    session, first_at, last_at = None, None, None
+    for record in records:
+        for key in ("sessionId", "session_id"):
+            if not session and isinstance(record.get(key), str):
+                session = record[key]
+        if not session and record.get("type") == "session":
+            if isinstance(record.get("id"), str):
+                session = record["id"]
+        if not session and isinstance(record.get("session"), dict):
+            if isinstance(record["session"].get("id"), str):
+                session = record["session"]["id"]
+        timestamp = record.get("timestamp")
+        if isinstance(timestamp, (int, float)):
+            micros = timestamp * 1000  # pi stamps milliseconds
+            first_at = micros if first_at is None else first_at
+            last_at = micros
+
+        # Only `turn_end` is complete: `message_start`/`message_update` carry partial
+        # usage, so summing them too would count one turn several times (the same rule
+        # tools/tillr-trace's parser states).
+        if record.get("type") == "turn_end":
+            usage = (record.get("message") or {}).get("usage")
+            if isinstance(usage, dict):
+                total = usage.get("totalTokens")
+                if not isinstance(total, (int, float)):
+                    counted = [usage.get(key) for key in USAGE_COUNTERS]
+                    counted = [value for value in counted if isinstance(value, (int, float))]
+                    total = sum(counted) if counted else None
+                if isinstance(total, (int, float)):
+                    tokens += int(total)
+                    saw_tokens = True
+                billed = (usage.get("cost") or {}).get("total")
+                if isinstance(billed, (int, float)):
+                    cost += float(billed)
+                    saw_cost = True
+
+        update = record.get("assistantMessageEvent")
+        if isinstance(update, dict) and update.get("type") == "text_delta":
+            if isinstance(update.get("delta"), str):
+                deltas.append(update["delta"])
+        if record.get("type") == "agent_end":
+            for message in record.get("messages") or []:
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    settled.append(_blocks_text(message))
+        message = record.get("message")
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            key = message.get("id") or f"snapshot-{len(snapshots)}"
+            snapshots[key] = _blocks_text(message)
+    if deltas:
+        text = "".join(deltas)
+    elif settled:
+        text = "".join(settled)
+    else:
+        text = "".join(snapshots.values())
+    return {
+        "text": text,
+        "session": session,
+        "started": report.micros_to_rfc3339(first_at),
+        "finished": report.micros_to_rfc3339(last_at),
+        "events": len(records),
+        "unparseable": unparseable,
+        "tokens": tokens if saw_tokens else None,
+        "cost": cost if saw_cost else None,
+        "lines": len(stream_text.splitlines()),
+    }
+
+
+if __name__ == "__main__":
+    sys.exit(report.run(dialect))

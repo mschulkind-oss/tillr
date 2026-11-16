@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+"""tillr-hook: pre-push -- refuse a manifest push whose patch branch origin lacks.
+
+WHAT THIS GUARDS. A pack manifest may name a `patch_branch` locator instead of a
+`patches` series (docs/pi/patch-branches/design.md). When that locator points back
+into this repository -- `"../..?ref=patch/<name>"`, the spelling every pack here
+uses -- the branch it names is what yolo clones and builds on another machine. So a
+manifest commit that reaches origin while the branch it names does not is a manifest
+that promises something origin cannot deliver: the next launch on another machine
+fails to resolve it, or silently builds an older tip.
+
+WHAT IT DOES, in this order. First it publishes -- `bin/patch-branches-publish` pushes
+every patch branch a manifest in the tree names, so an ordinary push is what keeps the
+remote current; a branch only the remote holds is a note, not a failure, and only a
+branch neither side has refuses. Then, for each commit a push would add:
+
+  1. Read every `yolo-packs/*/pack.json` that commit changes, and every
+     `patch_branch` locator in it that points into this repository.
+  2. Resolve the locator's `?ref=` to the OID this repository has for that branch.
+     A clone that never fetched the branch is not a defect -- what the manifest
+     promises is that the REMOTE holds it -- so a branch missing here but present on
+     the remote passes, and one missing on both sides is refused.
+  3. Ask origin (`git ls-remote`) whether it has that branch at that OID.
+  4. If it does not, PUSH THE BRANCH ITSELF -- `git push <remote> <oid>:refs/heads/
+     <branch>` -- because the branch is the part that is missing, and the pusher's
+     own repository is the one that has it. NOT when this clone is behind: an OID
+     origin's tip descends from means origin already has every commit here, so there
+     is nothing to deliver -- and refusing that, with `--force-with-lease` offered as
+     the remedy, would have proposed rewinding origin over published commits.
+  5. Only if that push fails does the hook refuse the push it was asked about, and
+     print the exact command that fixes it.
+
+"Refuses only that manifest push" is the reach of the refusal: a push whose commits
+name no patch branch, or name one origin already has, is untouched; the refusal is
+about the one manifest and the one locator, and it names both. A locator a HISTORICAL
+commit named, which a later commit in the same push retired, is untouched too: a fresh
+remote makes the range the whole history, and the 2026-10-23 rename left commits naming
+`carry/<name>`, so demanding those refused every such push. A pre-push hook cannot
+abort one ref of a multi-ref push, so the refusal stops the push that carried the
+manifest -- after the branch push above has already done its part.
+
+INSTALL. `just hooks-install` copies `hooks/*` into the repository's shared hooks
+directory. A copy already installed there that carries this repository's
+`tillr-hook:` marker is replaced when its bytes differ from the copy in the tree,
+and the run reports that as drift -- a link into a lane worktree, or a copy left by an
+older revision, is exactly how the hook that ran stopped being the hook here. A hook
+without the marker belongs to somebody else: it is not overwritten, but moved to
+`pre-push.local`, which this hook runs first, with the same arguments and stdin, so a
+host's own attribution gate keeps running (see hooks/README.md). The internal branch push
+sets PI_FORKS_PUSH_GUARD_ACTIVE, so this hook does not recurse into itself.
+
+WHAT IT SAYS ABOUT ITSELF. Every push this guard inspects starts with one line naming
+the hook file git ran and whether that file is this repository's own `hooks/pre-push`.
+The 2026-10-24 failure was not a wrong answer but a missing one: a push carrying a
+manifest that named `patch/pi-manage-todo-list` reached origin with this guard never
+invoked, and nothing on the push said so. So the report is the evidence: no report
+means the guard did not run (a `--no-verify` alias, a `core.hooksPath` that replaced
+the repository's hooks directory, or a hook that was never installed), and a report
+that says "NOT this repository's hook" means an older copy ran instead. A hook that
+differs from what this repository ships is refused, because its checks -- including
+the patch-branch publish -- are not the ones in the tree.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ACTIVE_ENV = "PI_FORKS_PUSH_GUARD_ACTIVE"
+ZERO = re.compile(r"^0+$")
+
+
+def git(*args, cwd=None, env=None, check=False):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=check
+    )
+
+
+def shipped_hooks(repo: Path):
+    """The `hooks/pre-push` copies this repository ships, to compare the invoked hook with.
+
+    The main worktree's, because `just hooks-install` runs there and copies from it, and
+    this checkout's, because a lane's worktree may sit at a different commit and still
+    push through the same shared hook. A checkout that ships no hook at all returns an
+    empty list, which is reported rather than treated as a mismatch.
+    """
+    roots = []
+    listed = git("worktree", "list", "--porcelain", cwd=repo)
+    if listed.returncode == 0:
+        for line in listed.stdout.splitlines():
+            if line.startswith("worktree "):
+                roots.append(Path(line[len("worktree "):].strip()))
+                break  # the first entry is the main worktree
+    roots.append(repo)
+    found = []
+    for root in roots:
+        hook = root / "hooks" / "pre-push"
+        if hook.is_file() and not any(hook.samefile(other) for other in found):
+            found.append(hook)
+    return found
+
+
+def same_bytes(a: Path, b: Path) -> bool:
+    try:
+        return a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
+
+
+def report_identity(repo: Path) -> bool:
+    """Say which hook git ran and whether it is this repository's own. False = refuse.
+
+    `git rev-parse --git-path hooks/pre-push` is what makes a replacing `core.hooksPath`
+    visible instead of guessed at: git resolves it through that setting, so the line
+    naming it is the difference between the hooks directory the repository installs into
+    and the one git actually reads. The refusal fires only on a positive mismatch -- a
+    shipped copy that is not this file -- never on a checkout that ships none.
+    """
+    # git's own spelling of the path, NOT resolved: with a linked install the link is the
+    # part that says where git looked, and resolving it would hide `.git/hooks` behind the
+    # file it points at.
+    given = os.path.abspath(sys.argv[0])
+    target = Path(given).resolve()
+    where = given if given == str(target) else f"{given} -> {target}"
+    configured = git("config", "--get", "core.hooksPath", cwd=repo).stdout.strip()
+    if configured:
+        hooks_path = git("rev-parse", "--git-path", "hooks/pre-push", cwd=repo).stdout.strip()
+        print(f"pre-push: hooks path: {hooks_path} (core.hooksPath={configured})",
+              file=sys.stderr)
+
+    shipped = shipped_hooks(repo)
+    if not shipped:
+        print(f"pre-push: guard: {where} (this checkout ships no hooks/pre-push to "
+              f"compare it with)", file=sys.stderr)
+        return True
+    own = next((copy for copy in shipped
+                if copy.samefile(target) or same_bytes(copy, target)), None)
+    if own:
+        print(f"pre-push: guard: {where} (this repository's own hook)", file=sys.stderr)
+        return True
+
+    print(f"pre-push: guard: {where} (NOT this repository's own hook)", file=sys.stderr)
+    print(f"pre-push: refusing this push: the hook git ran is not {shipped[0]}, so its\n"
+          f"          checks -- and the patch-branch publish -- are not the ones this\n"
+          f"          repository ships.\n\n"
+          f"  remedy: run `just hooks-install` in {repo}, then push again. If a global\n"
+          f"          core.hooksPath replaced the repository's hooks directory, remove it\n"
+          f"          or point it at the hooks directory `just hooks-install` writes to.",
+          file=sys.stderr)
+    return False
+
+
+def strip_json_comments(text: str) -> str:
+    """pack.json may hold `//` and `/* */` comments; yolo strips them before decoding."""
+    out = []
+    i, n = 0, len(text)
+    in_string = escaped = line_comment = block_comment = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if line_comment:
+            if ch in "\r\n":
+                line_comment = False
+                out.append(ch)
+            else:
+                out.append(" ")
+            i += 1
+            continue
+        if block_comment:
+            if ch == "*" and nxt == "/":
+                out.append("  ")
+                i += 2
+                block_comment = False
+                continue
+            out.append(ch if ch in "\r\n" else " ")
+            i += 1
+            continue
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            out.append("  ")
+            i += 2
+            line_comment = True
+            continue
+        if ch == "/" and nxt == "*":
+            out.append("  ")
+            i += 2
+            block_comment = True
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def repo_identity(url: str) -> str:
+    """`owner/repo` for a git address, so `git@github.com:o/r.git` matches an https URL."""
+    url = url.strip()
+    if url.startswith("git+"):
+        url = url[4:]
+    url = url.split("?", 1)[0].split("#", 1)[0]
+    url = re.sub(r"\.git$", "", url)
+    url = re.sub(r"^[a-z+]+://", "", url)
+    url = re.sub(r"^[^@/]+@", "", url)
+    url = url.replace(":", "/", 1) if "@" not in url and "://" not in url else url
+    parts = [p for p in url.split("/") if p]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else url
+
+
+def locator_target(locator: str, pack_dir: Path, repo: Path, remote_url: str):
+    """The branch a locator names, when the locator points at THIS repository.
+
+    Returns None for a locator that names another repository (a fork's own remote),
+    which this hook cannot and must not check against origin.
+    """
+    target, _, query = locator.partition("?")
+    ref = ""
+    for pair in query.split("&"):
+        key, _, value = pair.partition("=")
+        if key == "ref":
+            ref = value
+    if not ref:
+        return None
+    if re.match(r"^(git\+|https?://|ssh://|[^/]+@[^/]+:)", target):
+        if repo_identity(target) != repo_identity(remote_url):
+            return None
+    else:
+        resolved = (pack_dir / target).resolve()
+        if resolved != repo.resolve():
+            return None
+    return ref
+
+
+def commits_to_check(remote: str, local_sha: str, remote_sha: str):
+    if not ZERO.match(remote_sha):
+        # A branch that exists on the remote: the commits this push adds over its tip.
+        result = git("rev-list", local_sha, "--not", remote_sha)
+        if result.returncode == 0:
+            return result.stdout.split()
+        # The remote's advertised tip is not an object here -- a force-push whose old
+        # tip this clone never fetched. Falling back to the remote-tracking refs still
+        # reads the commits the push adds, which is exactly the case a force-push is.
+    # A new branch, or an unfetched tip: every commit over what this remote already has.
+    result = git("rev-list", local_sha, "--not", f"--remotes={remote}")
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.split()
+    return [local_sha]
+
+
+def changed_manifests(sha: str):
+    result = git("diff-tree", "--no-commit-id", "--name-only", "-r", "--diff-filter=AM", sha)
+    if result.returncode != 0:
+        return []
+    return [p for p in result.stdout.splitlines() if re.match(r"^yolo-packs/[^/]+/pack\.json$", p)]
+
+
+def manifest_locators(sha: str, path: str):
+    blob = git("show", f"{sha}:{path}")
+    if blob.returncode != 0:
+        return []
+    try:
+        data = json.loads(strip_json_comments(blob.stdout))
+    except json.JSONDecodeError:
+        return []
+    found = []
+    for contribution in data.get("contributes") or []:
+        locator = contribution.get("patch_branch")
+        if isinstance(locator, str) and locator:
+            found.append(locator)
+    return found
+
+
+def remote_branch_oid(remote: str, branch: str):
+    result = git("ls-remote", "--exit-code", remote, f"refs/heads/{branch}")
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        oid, _, ref = line.partition("\t")
+        if ref == f"refs/heads/{branch}":
+            return oid
+    return None
+
+
+def refusal(remote: str, manifest: str, sha: str, locator: str, branch: str,
+            oid: str, origin_oid, push_reason: str):
+    short = oid[:12]
+    lines = [
+        f"pre-push: refusing this push: {manifest} (commit {sha[:12]}) names "
+        f"patch_branch {locator},",
+        f"          and {remote} does not have {branch} at {short}.",
+        "",
+        f"  tried : git push {remote} {oid}:refs/heads/{branch}",
+        f"  failed: {push_reason}",
+        "",
+    ]
+    if origin_oid:
+        lines += [
+            f"  {remote} has {branch} at {origin_oid[:12]} instead, so the branch was moved",
+            "  or rewritten elsewhere. Reconcile it, then push again:",
+            "",
+            f"    git fetch {remote} && git rebase {remote}/{branch} {oid}   # or merge it",
+            f"    git push {remote} {oid}:refs/heads/{branch}",
+            "",
+            "  If the branch was rewritten on purpose, the one-command form is:",
+            "",
+            f"    git push --force-with-lease={branch}:{origin_oid} {remote} "
+            f"{oid}:refs/heads/{branch}",
+        ]
+    else:
+        lines += [
+            f"  remedy: git push {remote} {oid}:refs/heads/{branch}",
+            "          then run this push again.",
+        ]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    if os.environ.get(ACTIVE_ENV):
+        return 0
+
+    stdin_lines = [line.split() for line in sys.stdin if line.strip()]
+    if not stdin_lines:
+        return 0
+
+    # The refs THIS push is delivering. Two things below would otherwise write to one of
+    # them, and both would be writing into the middle of git's own update: git read the
+    # remote's OIDs before it ran this hook, and its update carries those OIDs, so a ref
+    # moved here is refused as a stale old-value claim (`cannot lock ref ... but
+    # expected ...`) even though it ends up holding the right commit. Measured
+    # 2026-11-08: a push naming two patch branches was rejected for one of them, and the
+    # branch was there anyway. The push is the writer for a ref it carries.
+    pushed_refs = {fields[2] for fields in stdin_lines if len(fields) >= 3}
+
+    repo = Path(git("rev-parse", "--show-toplevel").stdout.strip() or ".").resolve()
+    # WHICH HOOK RAN, said on every push this guard inspects. The 2026-10-24 failure was
+    # not a wrong answer but a missing one: a push reached origin with the guard never
+    # invoked, and nothing on the push said so. An absent report is now the signal, and
+    # `core.hooksPath` -- which replaces the repository's hooks directory wholesale -- is
+    # named rather than guessed at.
+    if not report_identity(repo):
+        return 1
+
+    # The hooks directory git is running this from -- the repository's shared one, so a
+    # lane's linked worktree and the main checkout see the same `pre-push.local`.
+    common = git("rev-parse", "--git-common-dir").stdout.strip()
+    hooks_dir = Path(common).resolve() / "hooks" if common else Path(__file__).resolve().parent
+    chained = hooks_dir / "pre-push.local"
+    if chained.is_file():
+        # The chained hook gets the same arguments and stdin git gave this one, so a
+        # host gate that reads the remote name or URL sees what it would see alone.
+        buffered = "\n".join(" ".join(fields) for fields in stdin_lines) + "\n"
+        result = subprocess.run([str(chained), *sys.argv[1:]], input=buffered, text=True)
+        if result.returncode != 0:
+            return result.returncode
+
+    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
+    remote_url = sys.argv[2] if len(sys.argv) > 2 else remote
+
+    # PUBLISH FIRST, on every push, not only on one carrying a manifest change. A patch
+    # branch is the delivery only once the remote has it, and the check below fires on an
+    # event -- a pushed manifest -- while publishing is an operation. A branch created or
+    # moved with no manifest change used to be invisible here: patch/pi-manage-todo-list
+    # lived in one clone only, and the first thing to notice was a launch on another
+    # machine. A push is the one moment credentials and the network are certainly present,
+    # so this is where the operation belongs.
+    publisher = repo / "bin" / "patch-branches-publish"
+    publish_failed = False
+    if publisher.is_file():
+        published = subprocess.run(
+            [sys.executable, str(publisher), "--remote", remote,
+             *[arg for ref in sorted(pushed_refs) for arg in ("--skip-ref", ref)]],
+            cwd=repo, capture_output=True, text=True,
+            env=dict(os.environ, **{ACTIVE_ENV: "1"}),
+        )
+        # Say what happened either way. A publish that succeeds silently is
+        # indistinguishable from one that never ran, which is precisely how a
+        # local-only patch branch went unnoticed on 2026-10-24: the guard ran, did
+        # nothing it reported, and the first symptom was a launch on another machine.
+        for line in published.stdout.splitlines():
+            print(f"pre-push: {line}", file=sys.stderr)
+        if published.returncode != 0:
+            # NOT a refusal yet: fall through to the per-commit check below, which is
+            # what prints the exact remedy -- the manifest, the locator, both OIDs and
+            # the `--force-with-lease` command. Refusing here would shadow that with a
+            # bare git error. The publish step is the operation; the check is the one
+            # that explains it, and the check refuses when the branch push fails again.
+            publish_failed = True
+            detail = "\n".join(
+                line for line in published.stderr.splitlines() if line.strip()
+            )
+            if detail:
+                print("pre-push: a patch branch a manifest names is not published, and "
+                      "publishing it failed:", file=sys.stderr)
+                print(detail, file=sys.stderr)
+
+    failures = []
+    for local_ref, local_sha, remote_ref, remote_sha in stdin_lines:
+        if ZERO.match(local_sha):
+            continue  # a deletion names no manifest
+        for sha in commits_to_check(remote, local_sha, remote_sha):
+            for path in changed_manifests(sha):
+                pack_dir = repo / Path(path).parent
+                for locator in manifest_locators(sha, path):
+                    branch = locator_target(locator, pack_dir, repo, remote_url)
+                    if not branch:
+                        continue
+                    local = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+                    if local.returncode != 0:
+                        # This clone need not hold the branch: what the manifest promises is
+                        # that the REMOTE does. Refuse only when neither side has it.
+                        if remote_branch_oid(remote, branch):
+                            continue
+                        # AND only when the ref being pushed still names it. A branch a
+                        # historical commit named and a LATER commit in the same push
+                        # retired is not a promise this push makes -- the retired name of
+                        # 2026-10-23 left commits naming `carry/<name>`, and a fresh remote
+                        # or a clone that never fetched makes the range the whole history,
+                        # so every such push was refused over a rename already recorded.
+                        if locator not in manifest_locators(local_sha, path):
+                            continue
+                        failures.append(
+                            f"pre-push: refusing this push: {path} (commit {sha[:12]}) names "
+                            f"patch_branch {locator},\n"
+                            f"          and neither this repository nor {remote} has branch "
+                            f"{branch}.\n\n"
+                            f"  remedy: push it from the repository that holds it, then push this "
+                            f"manifest again:\n"
+                            f"    git push {remote} <commit>:refs/heads/{branch}\n"
+                        )
+                        continue
+                    oid = local.stdout.strip()
+                    if f"refs/heads/{branch}" in pushed_refs:
+                        # This push is delivering the branch, so the promise below is kept
+                        # by the push itself: it lands with the manifest or not at all.
+                        # Pushing it here would move it out from under that update.
+                        continue
+                    origin_oid = remote_branch_oid(remote, branch)
+                    if origin_oid == oid:
+                        continue
+                    if origin_oid and git("merge-base", "--is-ancestor", oid, origin_oid).returncode == 0:
+                        # This clone is BEHIND: the remote holds every commit here, so there
+                        # is nothing for this push to deliver. Pushing it would fail as a
+                        # non-fast-forward and the refusal would offer `--force-with-lease`,
+                        # whose effect is to rewind the remote over commits already
+                        # published -- refusing a push that has nothing wrong with it and
+                        # proposing the destructive remedy is the wrong direction to be
+                        # wrong in (2026-10-30).
+                        continue
+                    env = dict(os.environ, **{ACTIVE_ENV: "1"})
+                    pushed = git("push", "--quiet", remote, f"{oid}:refs/heads/{branch}", env=env)
+                    if pushed.returncode == 0 and remote_branch_oid(remote, branch) == oid:
+                        continue
+                    reason = ""
+                    for line in reversed((pushed.stderr or pushed.stdout).splitlines()):
+                        if line.strip() and not line.startswith(("To ", "hint:")):
+                            reason = line.strip()
+                            break
+                    failures.append(
+                        refusal(remote, path, sha, locator, branch, oid, origin_oid,
+                                reason or f"git push exited {pushed.returncode}")
+                    )
+
+    if failures:
+        for block in failures:
+            print(block, file=sys.stderr)
+        return 1
+    if publish_failed:
+        # The publish step failed for a branch none of this push's commits names, so the
+        # check above had nothing to explain. Refuse on the failure itself: a branch a
+        # manifest in the tree names is still unpublished.
+        print("pre-push: refusing this push: a patch branch a manifest names is not\n"
+              "          published, and none of the commits this push adds names it.\n\n"
+              f"  remedy: {repo / 'bin' / 'patch-branches-publish'} --remote {remote}\n"
+              "          from the repository that holds the branch, then push again.",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

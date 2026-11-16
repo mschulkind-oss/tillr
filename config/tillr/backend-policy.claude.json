@@ -1,0 +1,37 @@
+{
+  "about": "The work machine's tillr backend policy for spending the owner's Claude subscription first, with Amazon Bedrock as the fall-back. A drain names this file with --policy when it should run on the subscription; backend-policy.bedrock.json beside it is the same machine's Bedrock-only policy, and backend-policy.json is the personal machines' policy. Every seat first runs on the Claude Code command line (the claude adapter), and each seat names its own fall-back: the design seat falls back to pi-designer and the build, review and scout seats fall back to pi, both of which run on Bedrock through the pi adapter. A run the subscription refuses writes no report, so the drain fails it over to the seat's next backend in the same pass. Why and how: docs/design/tillr-claude-backend.md. Several policy files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
+  "default_backend": "claude",
+  "preference": [
+    "claude",
+    "pi"
+  ],
+  "max_failovers": 1,
+  "seats": {
+    "design": ["claude-designer", "pi-designer"],
+    "build": ["claude", "pi"],
+    "review": ["claude", "pi"],
+    "scout": ["claude", "pi"]
+  },
+  "backends": {
+    "claude": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "opus",
+      "effort": "medium"
+    },
+    "claude-designer": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "fable",
+      "effort": "medium"
+    },
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.openai.gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.anthropic.claude-fable-5-2",
+      "effort": "medium"
+    }
+  }
+}

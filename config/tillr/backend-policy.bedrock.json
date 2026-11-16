@@ -1,0 +1,26 @@
+{
+  "about": "The tillr backend policy for a machine whose only provider is Amazon Bedrock (the work profile). Same shape and same rules as backend-policy.json beside it, which is the personal machines' policy; a drain on a Bedrock machine names this file with --policy. The build, review and scout seats run the profile's workhorse row and the design seat runs the frontier row, both through the pi adapter. Two files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
+  "default_backend": "pi",
+  "preference": [
+    "pi"
+  ],
+  "max_failovers": 1,
+  "seats": {
+    "design": "pi-designer",
+    "build": "pi",
+    "review": "pi",
+    "scout": "pi"
+  },
+  "backends": {
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.openai.gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.anthropic.claude-fable-5-2",
+      "effort": "medium"
+    }
+  }
+}

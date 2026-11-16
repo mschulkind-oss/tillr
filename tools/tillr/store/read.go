@@ -1,0 +1,305 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/event"
+)
+
+// queryer is the read surface a store query needs: *sql.DB for one query on its own,
+// *sql.Tx for a set of them that must describe one moment.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Snapshot is one consistent read of a store: the events after a cursor, and the
+// description of the store at the same moment. A report assembled from separate reads
+// describes no moment at all -- a writer appending between the events read and the
+// head read yields a head greater than the file's last seq, and a table count that
+// disagrees with the events beside it.
+type Snapshot struct {
+	Events        []event.Event
+	SchemaVersion int
+	EventHeadSeq  int64
+	TableCounts   map[string]int
+	Integrity     string
+	Fixture       bool
+}
+
+// ReadSnapshot reads the events after since and the store's description inside one
+// read transaction, so the report describes the same moment as the events.
+func (s *Store) ReadSnapshot(ctx context.Context, since int64) (Snapshot, error) {
+	return s.snapshot(ctx, &since)
+}
+
+// Describe reads the store's description inside one read transaction, without the
+// events. It is the report for a face whose record is the description alone.
+func (s *Store) Describe(ctx context.Context) (Snapshot, error) {
+	return s.snapshot(ctx, nil)
+}
+
+// Reader is one read transaction: every read it makes describes the same moment, so a
+// report assembled from several of them is a snapshot rather than a set of unrelated
+// answers.
+type Reader struct {
+	ctx context.Context
+	q   queryer
+}
+
+// ReadTx runs fn inside one read transaction. A deferred transaction takes its read
+// lock at the first read and holds it to the end, so every read fn makes sees the same
+// state however a writer is scheduled.
+//
+// The read-only option is what keeps the begin deferred. A writable handle's connection
+// carries _txlock=immediate (dsn), and the driver applies that mode to every transaction
+// that is not read-only, so a read on a writable handle without the option would take the
+// store's write lock and turn every reader into a writer's competitor. Every read path
+// goes through here, directly or through snapshot.
+func (s *Store) ReadTx(ctx context.Context, fn func(*Reader) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("store: beginning the read transaction: %w", err)
+	}
+	defer tx.Rollback()
+	return fn(&Reader{ctx: ctx, q: tx})
+}
+
+// Query runs one query inside the read transaction. It is the domain-row half of the
+// read surface: a utility reads its own tables through it, so the utility depends on
+// the substrate's transaction and not on the database handle.
+func (r *Reader) Query(query string, args ...any) (*sql.Rows, error) {
+	return r.q.QueryContext(r.ctx, query, args...)
+}
+
+// QueryRow runs one query inside the read transaction, answering at most one row.
+func (r *Reader) QueryRow(query string, args ...any) *sql.Row {
+	return r.q.QueryRowContext(r.ctx, query, args...)
+}
+
+// Events answers the events with seq greater than since, in seq order.
+func (r *Reader) Events(since int64) ([]event.Event, error) { return events(r.ctx, r.q, since) }
+
+// SchemaVersion answers the highest migration the store has applied.
+func (r *Reader) SchemaVersion() (int, error) { return schemaVersion(r.ctx, r.q) }
+
+// EventHeadSeq answers the highest event seq in the store.
+func (r *Reader) EventHeadSeq() (int64, error) { return eventHeadSeq(r.ctx, r.q) }
+
+// TableCounts answers the row count of every logical table in the store.
+func (r *Reader) TableCounts() (map[string]int, error) { return tableCounts(r.ctx, r.q) }
+
+// Integrity answers sqlite's integrity check.
+func (r *Reader) Integrity() (string, error) { return integrity(r.ctx, r.q) }
+
+// Fixture answers whether the store carries the fixture mark.
+func (r *Reader) Fixture() (bool, error) { return fixture(r.ctx, r.q) }
+
+// snapshot is the one read transaction both faces share.
+func (s *Store) snapshot(ctx context.Context, since *int64) (Snapshot, error) {
+	var snap Snapshot
+	err := s.ReadTx(ctx, func(r *Reader) error {
+		var err error
+		if since != nil {
+			if snap.Events, err = r.Events(*since); err != nil {
+				return err
+			}
+		}
+		if snap.SchemaVersion, err = r.SchemaVersion(); err != nil {
+			return err
+		}
+		if snap.EventHeadSeq, err = r.EventHeadSeq(); err != nil {
+			return err
+		}
+		if snap.TableCounts, err = r.TableCounts(); err != nil {
+			return err
+		}
+		if snap.Integrity, err = r.Integrity(); err != nil {
+			return err
+		}
+		if snap.Fixture, err = r.Fixture(); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
+}
+
+// TableCounts answers the row count of every table in the store, keyed by table name.
+func (s *Store) TableCounts() (map[string]int, error) {
+	return tableCounts(context.Background(), s.db)
+}
+
+// tableCounts answers the row count of every logical table in the store. sqlite's own
+// bookkeeping tables are excluded: they are not store state, and a caller comparing
+// two reports would see sqlite_sequence move for reasons the store did not choose. The
+// monolith's rename-temp is excluded for the same reason -- it is a rebuild's scratch
+// table, not a logical one, and a forensic check against a store that died mid-rebuild
+// would otherwise report it as store state.
+func tableCounts(ctx context.Context, q queryer) (map[string]int, error) {
+	// `_` is a LIKE wildcard, so the prefix test escapes it: sqlite reserves the
+	// "sqlite_" prefix, not the word, and a table named sqliteXtra is store state.
+	rows, err := q.QueryContext(ctx,
+		`SELECT name FROM sqlite_master
+		  WHERE type = 'table'
+		    AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
+		    AND name <> 'items_v4'
+		  ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing the tables: %w", err)
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: listing the tables: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("store: listing the tables: %w", err)
+	}
+	rows.Close()
+
+	counts := make(map[string]int, len(names))
+	for _, name := range names {
+		var count int
+		// The name comes from sqlite_master, not from a caller, and it is quoted
+		// because a table name is an identifier and cannot be a bound parameter.
+		query := `SELECT COUNT(*) FROM "` + strings.ReplaceAll(name, `"`, `""`) + `"`
+		if err := q.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return nil, fmt.Errorf("store: counting %q: %w", name, err)
+		}
+		counts[name] = count
+	}
+	return counts, nil
+}
+
+// EventHeadSeq answers the highest event seq in the store, and 0 when it holds no
+// events.
+func (s *Store) EventHeadSeq() (int64, error) {
+	return eventHeadSeq(context.Background(), s.db)
+}
+
+// eventHeadSeq answers the highest event seq in the store. "No events yet" is an
+// answer rather than an error: a caller compares two snapshots by it, and a caller
+// that cannot tell it from a failure cannot decide whether a report is current.
+func eventHeadSeq(ctx context.Context, q queryer) (int64, error) {
+	var head int64
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) FROM events`).Scan(&head); err != nil {
+		return 0, fmt.Errorf("store: reading the event head: %w", err)
+	}
+	return head, nil
+}
+
+// Integrity runs sqlite's integrity check and answers "ok" when the store is clean,
+// otherwise the first row it reports -- which is the first failure, because sqlite
+// emits "ok" alone on a clean store and one row per problem otherwise. A store that
+// cannot be read at all is reported as an error rather than as a failure string,
+// because the two need different handling: one is a damaged store, the other is a
+// store this process could not open.
+func (s *Store) Integrity() (string, error) {
+	return integrity(context.Background(), s.db)
+}
+
+func integrity(ctx context.Context, q queryer) (string, error) {
+	rows, err := q.QueryContext(ctx, `PRAGMA integrity_check`)
+	if err != nil {
+		return "", fmt.Errorf("store: checking integrity: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("store: checking integrity: %w", err)
+		}
+		return "", fmt.Errorf("store: integrity check returned no result")
+	}
+	var first string
+	if err := rows.Scan(&first); err != nil {
+		return "", fmt.Errorf("store: checking integrity: %w", err)
+	}
+	return first, nil
+}
+
+// Events answers the events with seq greater than since, in seq order.
+func (s *Store) Events(ctx context.Context, since int64) ([]event.Event, error) {
+	return events(ctx, s.db, since)
+}
+
+// events answers the events with seq greater than since, in seq order. since is
+// exclusive, so a caller that passes the head it last saw reads only what is new.
+func events(ctx context.Context, q queryer, since int64) ([]event.Event, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT seq, ts, kind, object_type, object_id, revision, payload
+		   FROM events WHERE seq > ? ORDER BY seq`,
+		since,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []event.Event
+	for rows.Next() {
+		var (
+			seq        int64
+			ts         int64
+			kind       string
+			objectType sql.NullString
+			objectID   sql.NullString
+			revision   sql.NullInt64
+			payload    string
+		)
+		if err := rows.Scan(&seq, &ts, &kind, &objectType, &objectID, &revision, &payload); err != nil {
+			return nil, fmt.Errorf("store: reading the events: %w", err)
+		}
+		e := event.Event{
+			Seq:     seq,
+			Kind:    kind,
+			Payload: json.RawMessage(payload),
+			At:      time.UnixMilli(ts).UTC(),
+		}
+		if objectType.Valid {
+			e.ObjectType = objectType.String
+		}
+		if objectID.Valid {
+			id := objectID.String
+			e.ObjectID = &id
+		}
+		if revision.Valid {
+			rev := revision.Int64
+			e.Revision = &rev
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: reading the events: %w", err)
+	}
+	return events, nil
+}
+
+// fixture answers whether the store carries the fixture mark. It is separate from
+// IsFixture because a report must not answer "not a fixture" for a store it could not
+// read: a corrupted fixture would then report false beside its integrity failure.
+func fixture(ctx context.Context, q queryer) (bool, error) {
+	var value string
+	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, fixtureKey).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: reading the fixture mark: %w", err)
+	}
+	return value == "1", nil
+}

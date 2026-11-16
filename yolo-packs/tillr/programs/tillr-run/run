@@ -1,0 +1,118 @@
+#!/bin/sh
+# tillr-run -- the launcher the tillr pack puts on PATH at ~/.local/bin/tillr-run.
+#
+# The toolset itself is a `files` contribution of this pack, delivered whole to
+# ~/.local/share/tillr: Go source, never a compiled artifact. This launcher builds one
+# binary from that tree, once per source digest, into
+# ${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/<name>-<digest>, and execs that copy; a warm
+# cache runs no Go command at all.
+#
+# The eight launchers are one body: `tillr` is the umbrella dispatcher and is built from
+# module `tillr-cli`; every other name is built from the module of the same name. Only
+# the two assignments below differ between them, and tests/pack-sync.test.py refuses a
+# copy that has drifted.
+#
+# It must not change directory. A store is named relative to the caller's directory
+# (`--store .tillr` and the like), so `exec` is the whole contract: same cwd, same
+# arguments, no wrapper behavior. A `cd` here would resolve every caller's store against
+# the wrong repository.
+set -eu
+
+bin=tillr-run
+mod=tillr-run
+
+root=${HOME:?$bin: HOME is unset}/.local/share/tillr
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin
+
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256() { sha256sum | cut -d' ' -f1; }
+else
+	sha256() { shasum -a 256 | cut -d' ' -f1; }
+fi
+
+# Keyed by the tree's own path, so a checkout's build and the delivered pack's build
+# never exec each other's binary.
+current=$cache/current-$bin-$(printf %s "$root" | sha256 | cut -c1-16)
+
+# THE FAST PATH. `current` names the binary the last build produced, and any source newer
+# than it means the tree moved on. A warm cache therefore costs one `stat` per source file
+# and no Go command at all; the digest below is only computed when that check says the
+# tree changed, or when there is no binary to run.
+#
+# The walk covers the WHOLE tree, not just this binary's module: `tillr-drain` replaces
+# ../tillr-item and ../tillr-run as well as ../tillr, so a per-module walk would leave its
+# cached binary stale after an edit to a module it links.
+newer() {
+	for entry in "$1"/*; do
+		[ -e "$entry" ] || continue
+		if [ -d "$entry" ]; then
+			newer "$entry" && return 0
+		else
+			case ${entry##*/} in
+			*_test.go) ;;
+			*.go | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
+			esac
+		fi
+	done
+	return 1
+}
+
+if [ -x "$current" ] && ! newer "$root"; then
+	exec "$current" "$@"
+fi
+
+# Glob recursion rather than `find`: a jail shims `find` to a refusal, and this launcher
+# is what every caller in that jail runs. Test files are excluded because they never
+# contribute to the built binary.
+sources() {
+	for dir in "$@"; do
+		for entry in "$dir"/*; do
+			[ -e "$entry" ] || continue
+			if [ -d "$entry" ]; then
+				sources "$entry"
+			else
+				case ${entry##*/} in
+				*_test.go) ;;
+				*.go | go.mod | go.sum) echo "$entry" ;;
+				esac
+			fi
+		done
+	done
+}
+
+digest=$(
+	cd "$root" &&
+		sources . |
+		LC_ALL=C sort |
+		xargs cat |
+		sha256
+)
+
+built=$cache/$bin-$digest
+
+if [ ! -x "$built" ]; then
+	command -v go >/dev/null 2>&1 || {
+		echo "$bin: no cached binary for $digest and no go toolchain to build it" >&2
+		exit 1
+	}
+	mkdir -p "$cache"
+	tmp=$built.$$
+	trap 'rm -f "$tmp"' EXIT HUP INT TERM
+	(
+		cd "$root/$mod"
+		CGO_ENABLED=0 go build -o "$tmp" .
+	) || exit 1
+	# Two callers racing a cold cache build the same source: whoever moves second finds
+	# the winner's binary already in place and keeps it.
+	if [ -x "$built" ]; then
+		rm -f "$tmp"
+	else
+		mv "$tmp" "$built"
+	fi
+	trap - EXIT HUP INT TERM
+fi
+
+# The symlink is what the next invocation's fast path reads. It is written after the
+# binary exists, so a reader never follows it to a half-built file.
+ln -sfn "$built" "$current"
+exec "$built" "$@"

@@ -1,0 +1,482 @@
+package item
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+// writableStates is the closed state vocabulary of the item state model §7, in its
+// store spelling. A value outside it is malformed input; a value in frozenStates is a
+// known state no transition may write.
+//
+// `in-progress` is deliberately absent. A run that produces no judged candidate — a fence
+// refusal, a run with no commit, a wall that cut it short — leaves its item in `in-queue`,
+// where the planner's own named hold is what keeps it from being dispatched again. The
+// state was the loop's to write; the item's disposition is the owner's.
+var writableStates = map[string]bool{
+	"not-started": true, "blocked": true, "in-queue": true,
+	"landed": true, "resolved-elsewhere": true, "closed": true,
+}
+
+// frozenStates are the legacy values that stay readable and are never written again.
+// `in-progress` joined them because no transition writes it now; a legacy row stays
+// readable, and it moves out through SetState like any other state.
+var frozenStates = map[string]bool{"abandoned": true, "deleted": true, "in-progress": true}
+
+// itemPayload is the item.record payload: design §5.3's field list, plus the two
+// fields the store sets and the input never carries.
+type itemPayload struct {
+	ItemID    string      `json:"item_id"`
+	Title     string      `json:"title"`
+	BodyRef   string      `json:"body_ref"`
+	State     string      `json:"state"`
+	Criteria  []criterion `json:"criteria"`
+	BlockedBy []string    `json:"blocked_by"`
+	DesignDoc string      `json:"design_doc,omitempty"`
+	// AllowedPaths is the item's fence: the repo-relative path prefixes a run's change
+	// may include (design §3's Fence section). An item that names none has no fence, which
+	// is legal to store — an item outlives any one run — and refused by staging, where a
+	// brief needs one. A wildcard is refused here: `*` or `/` would make the fence admit
+	// every path, which is the same as admitting none while reading as a guarantee.
+	AllowedPaths []string `json:"allowed_paths"`
+	// Rank is the item's place in the queue's order: a sparse lexical string over
+	// RankAlphabet (rank.go), compared as a plain string. Empty is unranked — an item the
+	// queue sorts after every ranked one — and an edit replaces the value like every other
+	// field, so a record that states no rank stores the item unranked.
+	Rank string `json:"rank"`
+	// Seat is the role of the work the item asks for — one of the seats in seat.go — and
+	// never a model id. The backend policy maps the seat to a backend, and that backend
+	// names its model, so changing which model fills a seat is a policy edit and touches no
+	// item. Empty means the item asks for no seat; the planner then uses the tick's default
+	// backend.
+	Seat string `json:"seat,omitempty"`
+	// Prose is the version of the prose guide recorded by the document author.
+	Prose     string `json:"prose,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+	EventSeq  int64  `json:"event_seq,omitempty"`
+	// Questions and QuestionsSource are show's read-through of the design document
+	// the item points at. They are never stored: the document is the only copy.
+	Questions       []Question `json:"questions,omitempty"`
+	QuestionsSource string     `json:"questions_source,omitempty"`
+}
+
+// criterion is one acceptance criterion of an item.
+type criterion struct {
+	CriterionID string `json:"criterion_id"`
+	Text        string `json:"text"`
+	State       string `json:"state"`
+}
+
+// Apply is item's one record→row mapping: it validates the record, writes the rows
+// it describes, appends the transition's event in the same transaction, and answers
+// the record as stored. The write face and the seed materializer both call it, so a
+// fixture cannot construct a state the write face would reject (lanes §1, OQ-L2).
+func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envelope, error) {
+	// A replayed request answers the original result and writes nothing: the key is
+	// the caller's statement that this is the same request, and a second write would
+	// make the log say the transition happened twice.
+	if env.IdempotencyKey != "" {
+		stored, found, err := replay(ctx, tx, env.IdempotencyKey)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if found {
+			return stored, nil
+		}
+	}
+
+	var payload itemPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return record.Envelope{}, Usagef("reading the item payload: %v", err)
+	}
+	if payload.ItemID == "" {
+		return record.Envelope{}, Usagef("an item.record needs an item_id")
+	}
+	if err := checkState(payload.ItemID, payload.State); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkCriteria(payload.ItemID, payload.Criteria); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkAllowedPaths(payload.ItemID, payload.AllowedPaths); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkRank(payload.ItemID, payload.Rank); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkSeat(payload.ItemID, payload.Seat); err != nil {
+		return record.Envelope{}, err
+	}
+	criteria, err := carryCriteria(tx.Reader(), payload.ItemID, payload.Criteria)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	payload.Criteria = criteria
+
+	existing, err := itemExists(ctx, tx.Reader(), payload.ItemID)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	allowedPaths, err := encodeAllowedPaths(payload.AllowedPaths)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(item_id) DO UPDATE SET
+		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
+		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
+		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose`,
+		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
+		allowedPaths, payload.Rank, payload.Seat, payload.Prose,
+	); err != nil {
+		return record.Envelope{}, Internalf("writing the item: %v", err)
+	}
+	if err := replaceCriteria(ctx, tx, payload); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := replaceEdges(ctx, tx, payload); err != nil {
+		return record.Envelope{}, err
+	}
+
+	payload.UpdatedAt = env.CreatedAt.UTC().Format(time.RFC3339)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return record.Envelope{}, Internalf("encoding the stored record: %v", err)
+	}
+	kind := AddKind
+	if existing {
+		kind = UpdateKind
+	}
+	seq, err := tx.Append(event.Event{
+		Kind:       kind,
+		ObjectType: "item",
+		ObjectID:   &payload.ItemID,
+		Payload:    body,
+		At:         env.CreatedAt,
+	})
+	if err != nil {
+		return record.Envelope{}, Internalf("appending the %s event: %v", kind, err)
+	}
+	// The row records the sequence of the event that last wrote it, so show answers the
+	// echo's event_seq from the row rather than by reading the log.
+	payload.EventSeq = seq
+	if _, err := tx.Exec(`UPDATE items SET event_seq = ? WHERE item_id = ?`, seq, payload.ItemID); err != nil {
+		return record.Envelope{}, Internalf("recording the event sequence: %v", err)
+	}
+	stored, err := json.Marshal(payload)
+	if err != nil {
+		return record.Envelope{}, Internalf("encoding the stored record: %v", err)
+	}
+	env.Payload = stored
+	if env.IdempotencyKey != "" {
+		// The ledger holds the whole echo, not just its payload: a replay answers the
+		// record the first request produced, envelope included.
+		recorded, err := json.Marshal(env)
+		if err != nil {
+			return record.Envelope{}, Internalf("encoding the replayed record: %v", err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO item_requests (idempotency_key, record) VALUES (?, ?)`,
+			env.IdempotencyKey, string(recorded),
+		); err != nil {
+			return record.Envelope{}, Internalf("recording the idempotency key: %v", err)
+		}
+	}
+	return env, nil
+}
+
+// replay answers the record a request with this key already produced, and false when
+// the key is new.
+func replay(ctx context.Context, tx *store.Tx, key string) (record.Envelope, bool, error) {
+	var stored string
+	err := tx.Reader().QueryRow(`SELECT record FROM item_requests WHERE idempotency_key = ?`, key).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return record.Envelope{}, false, nil
+	}
+	if err != nil {
+		return record.Envelope{}, false, Internalf("reading the idempotency key: %v", err)
+	}
+	var env record.Envelope
+	if err := json.Unmarshal([]byte(stored), &env); err != nil {
+		return record.Envelope{}, false, Internalf("reading the stored record: %v", err)
+	}
+	return env, true, nil
+}
+
+// checkState refuses a state no transition may write. An unknown value is malformed
+// input (exit 2) and a frozen legacy value is a state-rule violation (exit 1): the two
+// are different answers and a caller can tell them apart.
+func checkState(itemID, state string) error {
+	if writableStates[state] {
+		return nil
+	}
+	if frozenStates[state] {
+		return Rejectionf("state-frozen", itemID, "%q is a frozen legacy state no transition may write", state)
+	}
+	return Usagef("%q is not a state: want one of not-started, blocked, in-queue, landed, resolved-elsewhere, closed", state)
+}
+
+// carryCriteria answers the criteria as this record will store them. An edit replaces
+// an item's criteria wholesale (replaceCriteria), so the rows the store already holds
+// are the only record of what was presented before; this is where an edit is compared
+// with them, before any row is written.
+//
+// Two freezes ride that one comparison, and both answer "may this edit move something a
+// judge has already been shown":
+//
+//   - state: criterion state moves only on an item.verdict (board-utilities.md §5.3;
+//     work-control-judge-in-tillr.md "Retirement in the end state", D-UT16), so an edit
+//     that presents a different state is refused by name rather than overwriting it. A
+//     record that states no state is asking for the text alone, and the stored state
+//     stands.
+//   - text: a criterion that has been presented is frozen as to its text and may not be
+//     dropped. It may be kept as it stands, or appended after; rewriting it would make a
+//     verdict that names its text stop meaning what it said (D-UT16: frozen criterion
+//     text "cannot be rewritten through `item apply` (append only)").
+//
+// "Presented" is read from the state column, because that is the only per-criterion fact
+// this store holds besides the text: the row has no presented-at column, and no event
+// marks a criterion's first store. The event log's item.verdict understates presentation
+// — a criterion written already carrying a state (the seed materializer and the test
+// fixtures do exactly that) has no verdict event while its text is the text a judge will
+// read. A non-empty state says the criterion arrived carrying a judgement or can acquire
+// one, and it cannot lie as a freeze signal, because nothing in this utility writes a
+// stored state back to empty: this function only ever carries a non-empty stored state
+// forward, and RecordVerdict only writes one of the four verdicts. The freeze is
+// therefore monotone — no edit can clear a state in order to unfreeze the text. A
+// criterion stored with an empty state was never presented with one, so there is nothing
+// to free and its text stays editable.
+func carryCriteria(r *store.Reader, itemID string, criteria []criterion) ([]criterion, error) {
+	stored, err := readCriteria(r, itemID)
+	if err != nil {
+		return nil, err
+	}
+	presented := make(map[string]criterion, len(stored))
+	for _, c := range stored {
+		presented[c.CriterionID] = c
+	}
+	kept := make(map[string]bool, len(criteria))
+	for _, c := range criteria {
+		kept[c.CriterionID] = true
+	}
+	// A criterion the store holds and this record omits is not an edit of it at all:
+	// replaceCriteria would delete the row a verdict was recorded against.
+	for _, c := range stored {
+		if c.State == "" || kept[c.CriterionID] {
+			continue
+		}
+		return nil, Rejectionf("criterion-frozen", itemID,
+			"criterion %q of item %q is frozen and this edit omits it: a presented criterion stays on the item, so keep it as the store holds it and record the change as a new criterion appended after it",
+			c.CriterionID, itemID)
+	}
+	carried := make([]criterion, len(criteria))
+	for i, c := range criteria {
+		held, known := presented[c.CriterionID]
+		if !known {
+			carried[i] = c
+			continue
+		}
+		// A record that states no criterion state is asking for the text alone, so the
+		// stored state stands; a record that states a different one is asking for a
+		// state change this writer does not make.
+		if c.State != "" && c.State != held.State {
+			return nil, Rejectionf("criterion-state", itemID,
+				"criterion %q is %q in the store and this edit presents %q: a criterion's state moves only on an item.verdict",
+				c.CriterionID, held.State, c.State)
+		}
+		if held.State != "" && c.Text != held.Text {
+			return nil, Rejectionf("criterion-frozen", itemID,
+				"criterion %q of item %q is frozen as %q and this edit presents %q: a presented criterion's text does not move, so keep it as the store holds it and record the change as a new criterion appended after it",
+				c.CriterionID, itemID, held.Text, c.Text)
+		}
+		c.State = held.State
+		carried[i] = c
+	}
+	return carried, nil
+}
+
+// checkSeat refuses a seat outside the item model's vocabulary (seat.go). An empty seat is
+// legal: it is the item asking for no seat, and the planner then uses the tick's default
+// backend. A name the model does not define is refused here rather than stored to be
+// refused by every later plan, because a seat that means nothing is a typo, not a dispatch.
+func checkSeat(itemID, seat string) error {
+	if seat == "" || KnownSeat(seat) {
+		return nil
+	}
+	return Usagef("item %q asks for seat %q, which is not one of the item model's seats: %s", itemID, seat, SeatList())
+}
+
+// checkCriteria refuses a criterion id that appears twice: the table's primary key
+// would refuse it too, but as a write failure rather than as the rule it breaks.
+func checkCriteria(itemID string, criteria []criterion) error {
+	seen := make(map[string]bool, len(criteria))
+	for _, c := range criteria {
+		if c.CriterionID == "" {
+			return Usagef("a criterion needs a criterion_id")
+		}
+		if seen[c.CriterionID] {
+			return Rejectionf("criterion-duplicate", itemID, "criterion %q appears twice", c.CriterionID)
+		}
+		seen[c.CriterionID] = true
+	}
+	return nil
+}
+
+// checkAllowedPaths refuses a fence that fences nothing. An item naming no paths has no
+// fence and is stored as such: staging is where a run needs one, so the absence is staged
+// against rather than forbidden here. A wildcard, an absolute path or a path leaving the
+// repository is refused in the store instead of at staging, because a stored `*` reads
+// like a fence every later reader would trust.
+func checkAllowedPaths(itemID string, paths []string) error {
+	for _, path := range paths {
+		switch {
+		case path == "":
+			return Rejectionf("fence-wildcard", itemID, "allowed_paths carries an empty entry: a fence is a list of repo-relative path prefixes, and an empty one is not a path")
+		case strings.Contains(path, "*") || strings.Contains(path, "?"):
+			return Rejectionf("fence-wildcard", itemID, "allowed_paths carries %q: a wildcard makes the fence admit paths it does not name, so a fence is spelled as path prefixes and never as a pattern", path)
+		case path == "/" || path == "." || path == "..":
+			return Rejectionf("fence-wildcard", itemID, "allowed_paths carries %q: it names the whole tree (or its parent) instead of a fence", path)
+		case strings.HasPrefix(path, "/"):
+			return Rejectionf("fence-wildcard", itemID, "allowed_paths carries the absolute path %q: a fence is repo-relative, so it means the same thing in every worktree", path)
+		case strings.HasPrefix(path, "../") || strings.HasPrefix(path, "./"):
+			return Rejectionf("fence-wildcard", itemID, "allowed_paths carries %q: a fence path is a plain repo-relative prefix, not a traversal", path)
+		}
+	}
+	return nil
+}
+
+// encodeAllowedPaths is the column's value: the list as JSON text, so a path containing a
+// space or a comma survives the round trip that a delimiter-separated string would not.
+// The empty list and the absent list are the same value, which is what makes them the same
+// refusal at staging.
+func encodeAllowedPaths(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "", nil
+	}
+	body, err := json.Marshal(paths)
+	if err != nil {
+		return "", Internalf("encoding allowed_paths: %v", err)
+	}
+	return string(body), nil
+}
+
+// decodeAllowedPaths reads the column back. An empty value is no fence, not a malformed
+// one: that is every item stored before the column existed.
+func decodeAllowedPaths(stored string) ([]string, error) {
+	if stored == "" {
+		return nil, nil
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(stored), &paths); err != nil {
+		return nil, Internalf("reading allowed_paths: %v", err)
+	}
+	return paths, nil
+}
+
+// itemExists reports whether the store holds this item.
+func itemExists(ctx context.Context, r *store.Reader, id string) (bool, error) {
+	var found int
+	if err := r.QueryRow(`SELECT COUNT(*) FROM items WHERE item_id = ?`, id).Scan(&found); err != nil {
+		return false, Internalf("reading item %q: %v", id, err)
+	}
+	return found > 0, nil
+}
+
+// replaceCriteria writes the item's criteria as the record states them.
+func replaceCriteria(ctx context.Context, tx *store.Tx, payload itemPayload) error {
+	if _, err := tx.Exec(`DELETE FROM item_criteria WHERE item_id = ?`, payload.ItemID); err != nil {
+		return Internalf("clearing the criteria: %v", err)
+	}
+	for _, c := range payload.Criteria {
+		if _, err := tx.Exec(
+			`INSERT INTO item_criteria (item_id, criterion_id, text, state) VALUES (?, ?, ?, ?)`,
+			payload.ItemID, c.CriterionID, c.Text, c.State,
+		); err != nil {
+			return Internalf("writing a criterion: %v", err)
+		}
+	}
+	return nil
+}
+
+// replaceEdges writes the item's edges, refusing the three edge rules. The item's old
+// edges are cleared first, so the cycle walk sees the graph as it will be rather than
+// as it was: an item that drops an edge and adds the reverse of it is not a cycle.
+func replaceEdges(ctx context.Context, tx *store.Tx, payload itemPayload) error {
+	if _, err := tx.Exec(`DELETE FROM item_edges WHERE item_id = ?`, payload.ItemID); err != nil {
+		return Internalf("clearing the edges: %v", err)
+	}
+	for _, blockedBy := range payload.BlockedBy {
+		if blockedBy == payload.ItemID {
+			return Rejectionf("edge-self", payload.ItemID, "item %q cannot be blocked by itself", payload.ItemID)
+		}
+		exists, err := itemExists(ctx, tx.Reader(), blockedBy)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return Rejectionf("edge-target-missing", payload.ItemID,
+				"item %q is blocked by %q, which does not exist", payload.ItemID, blockedBy)
+		}
+		reaches, err := reachesItem(ctx, tx.Reader(), blockedBy, payload.ItemID)
+		if err != nil {
+			return err
+		}
+		if reaches {
+			return Rejectionf("edge-cycle", payload.ItemID,
+				"item %q blocked by %q closes a cycle", payload.ItemID, blockedBy)
+		}
+		// The edge is written as it is validated, so a later edge in the same record is
+		// checked against the graph this record is building and not only the stored one.
+		if _, err := tx.Exec(`INSERT INTO item_edges (item_id, blocked_by) VALUES (?, ?)`, payload.ItemID, blockedBy); err != nil {
+			return Internalf("writing an edge: %v", err)
+		}
+	}
+	return nil
+}
+
+// reachesItem reports whether target is reachable from start by following blocked_by
+// edges, which is what makes a new edge a cycle. The walk is breadth-first over the
+// item's own table, so it terminates on a graph that is already acyclic and does not
+// recurse on a deep chain.
+func reachesItem(ctx context.Context, r *store.Reader, start, target string) (bool, error) {
+	seen := map[string]bool{start: true}
+	queue := []string{start}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == target {
+			return true, nil
+		}
+		rows, err := r.Query(`SELECT blocked_by FROM item_edges WHERE item_id = ?`, current)
+		if err != nil {
+			return false, Internalf("reading the edges of %q: %v", current, err)
+		}
+		for rows.Next() {
+			var next string
+			if err := rows.Scan(&next); err != nil {
+				rows.Close()
+				return false, Internalf("reading an edge of %q: %v", current, err)
+			}
+			if !seen[next] {
+				seen[next] = true
+				queue = append(queue, next)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return false, Internalf("reading the edges of %q: %v", current, err)
+		}
+		rows.Close()
+	}
+	return false, nil
+}

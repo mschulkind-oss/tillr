@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# hooks-install — put this repository's git hooks in the shared hooks directory, and say
+# what happened to every one of them.
+#
+# WHY. git runs hooks from ONE directory, shared by the main checkout and every linked
+# worktree (`git rev-parse --git-common-dir`/hooks). Nothing in the tree writes there, so
+# the hook git runs drifts from `hooks/` silently: on 2026-10-23 `.git/hooks/pre-push` was
+# the revision from one lane while the landed `hooks/pre-push` was another, so the guard
+# that ran on a push was not the guard in the tree — and the installer refused to correct
+# it, because the file existed. It corrects it now.
+#
+# WHAT IT DOES, per executable file in `hooks/`:
+#
+#   * nothing installed there -> installs a COPY and reports `installed`. A copy, not a
+#     link: a link into a checkout follows whatever revision that checkout holds, and a
+#     link into a lane's worktree dangles once the lane is removed.
+#   * the installed copy carries this repository's marker (`tillr-hook: <name>`)
+#     -> it is ours to replace. Identical bytes: `left alone`. Different bytes (or a link
+#     left by an older install): `drifted`, then replaced with `hooks/<name>`. The bytes
+#     are compared on EVERY run, so drift is reported whenever it exists rather than only
+#     on the run that first wrote the file.
+#   * no marker -> somebody else's hook. It is neither overwritten nor discarded: it is
+#     moved to `<name>.local`, which this repository's hook of that name runs first, and
+#     reported as `left alone ... chained`. An existing `<name>.local` with different
+#     content is a conflict, refused rather than clobbered.
+#
+# Every executable in `hooks/` must carry its marker, and a source hook without one is
+# refused before anything is written — the marker is what makes a copy replaceable.
+#
+# One line per hook on stdout, naming it `installed`, `replaced`, `left alone` or
+# `drifted`. Warnings go to stderr: a `core.hooksPath` that replaces the hooks directory
+# git reads, and an install from a linked worktree rather than the main checkout (the
+# main checkout's `hooks/` is the copy the guard compares itself with).
+#
+# Usage: hooks-install [--root DIR] [--hooks-dir DIR]
+#
+#   --root DIR       the checkout whose hooks/ is installed (default: this one)
+#   --hooks-dir DIR  where to install (default: the repository's shared hooks directory)
+
+set -euo pipefail
+
+usage() {
+  sed -n '/^# Usage:/,/^#   --hooks-dir/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+root=""
+hooks_dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)
+      [ $# -ge 2 ] || { echo "hooks-install: --root needs a directory" >&2; exit 2; }
+      root="$2"; shift 2 ;;
+    --hooks-dir)
+      [ $# -ge 2 ] || { echo "hooks-install: --hooks-dir needs a directory" >&2; exit 2; }
+      hooks_dir="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "hooks-install: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$root" ]; then
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$root" ] || { echo "hooks-install: not in a git checkout; pass --root DIR" >&2; exit 2; }
+fi
+root="$(cd -- "$root" && pwd -P)"
+source_dir="$root/hooks"
+[ -d "$source_dir" ] || { echo "hooks-install: $source_dir is not a directory" >&2; exit 1; }
+
+if [ -z "$hooks_dir" ]; then
+  common="$(git -C "$root" rev-parse --git-common-dir)"
+  case "$common" in /*) ;; *) common="$root/$common" ;; esac
+  hooks_dir="$common/hooks"
+fi
+mkdir -p "$hooks_dir"
+hooks_dir="$(cd -- "$hooks_dir" && pwd -P)"
+
+report() { printf 'hooks-install: %s\n' "$*"; }
+warn() { printf 'hooks-install: %s\n' "$*" >&2; }
+
+# A copy installed from a linked worktree is that lane's revision, and the guard compares
+# itself with the MAIN checkout's hooks/, so say so where the install happens rather than
+# leaving the push to refuse later.
+#
+# The first worktree of the list, and NO PIPE. `git worktree list --porcelain | sed -n
+# 's/^worktree //p' | head -n 1` is the same answer and a trap: `head` closes the pipe as
+# soon as it has the line, the writer keeps writing the rest of a list that outgrows the 64
+# KiB pipe buffer, and SIGPIPE ends it with 141 -- which `pipefail` turns into this
+# assignment's status, so the installer died before writing a hook and printed nothing.
+# Making the reader quit after one line only moves the victim: the PRODUCER then dies of
+# SIGPIPE instead. So the list is captured whole and the first line taken from the variable,
+# which cannot fail however long the list is. Every clone with a lane worktree has a list
+# long enough to block, which is why `just hooks-install` -- the remedy every refusal
+# message names -- was a silent no-op on this host.
+worktree_list="$(git -C "$root" worktree list --porcelain 2>/dev/null || true)"
+case "$worktree_list" in
+  'worktree '*) main_worktree="${worktree_list#worktree }"; main_worktree="${main_worktree%%$'\n'*}" ;;
+  *) main_worktree="" ;;
+esac
+if [ -n "$main_worktree" ] && [ -d "$main_worktree" ]; then
+  main_worktree="$(cd -- "$main_worktree" && pwd -P)"
+  if [ "$main_worktree" != "$root" ]; then
+    warn "warning: installing from a linked worktree ($root)."
+    warn "  the main checkout's hooks/ is $main_worktree/hooks, which is what a push"
+    warn "  compares the installed copy with; run this from there to install that copy."
+  fi
+fi
+
+# The marker is `<name>`, matched literally: a hook named `pre-push` must not be claimed
+# by a `pre-push-extra` line.
+marked() { grep -qF -- "tillr-hook: $2" "$1" 2>/dev/null; }
+
+sources=()
+for src in "$source_dir"/*; do
+  [ -f "$src" ] || continue
+  [ -x "$src" ] || continue
+  name="${src##*/}"
+  if ! marked "$src" "$name"; then
+    warn "refusing: $src carries no 'tillr-hook: $name' line."
+    warn "  That line is what lets this installer replace its own copy and leave"
+    warn "  somebody else's alone; add it to the hook, then re-run."
+    exit 1
+  fi
+  sources+=("$src")
+done
+# A run that installs NOTHING must not look like a run that installed everything. An empty
+# hooks/ is not a state git leaves useful: whatever is already in the shared hooks directory
+# keeps running -- a stale copy, or nobody's. Refuse, and name the directory searched.
+# The destination being unusable is already fatal at `mkdir -p` above, which failed loudly.
+if [ "${#sources[@]}" -eq 0 ]; then
+  warn "refusing: nothing executable in $source_dir, so this run would install nothing."
+  warn "  every executable hook in that directory is installed; add one, or run this"
+  warn "  from the checkout whose hooks/ holds them."
+  exit 1
+fi
+
+tmp=""
+cleanup() { if [ -n "$tmp" ]; then rm -f "$tmp"; fi; }
+trap cleanup EXIT
+
+# Copy through a temporary file in the same directory, then rename: the rename replaces a
+# symlink itself (never the file it points at), and a reader never sees a half-written hook.
+install_copy() {
+  tmp="$(mktemp "$hooks_dir/.hooks-install.XXXXXX")"
+  cp -p "$1" "$tmp"
+  mv -f "$tmp" "$2"
+  tmp=""
+}
+
+# The `+` guard: expanding an empty array under `set -u` is an error before bash 4.4, and a
+# host's bash need not be as new as the one in a jail.
+for src in "${sources[@]+"${sources[@]}"}"; do
+  name="${src##*/}"
+  dst="$hooks_dir/$name"
+  chained="$dst.local"
+
+  if [ -L "$dst" ] && [ ! -e "$dst" ]; then
+    install_copy "$src" "$dst"
+    report "installed $name -> $dst (replaced a dangling link)"
+  elif [ ! -e "$dst" ]; then
+    install_copy "$src" "$dst"
+    report "installed $name -> $dst"
+  elif marked "$dst" "$name"; then
+    if [ -L "$dst" ]; then
+      link_target="$(readlink "$dst")"
+      if cmp -s "$src" "$dst"; then
+        install_copy "$src" "$dst"
+        report "replaced $name (was a link to $link_target; now a copy) -> $dst"
+      else
+        install_copy "$src" "$dst"
+        report "drifted $name (the link to $link_target differed from $src; replaced) -> $dst"
+      fi
+    elif cmp -s "$src" "$dst"; then
+      report "left alone $name (identical to $src)"
+    else
+      install_copy "$src" "$dst"
+      report "drifted $name (installed copy differed from $src; replaced) -> $dst"
+    fi
+  else
+    if [ -e "$chained" ] && ! cmp -s "$dst" "$chained"; then
+      warn "refusing: $dst is not this repository's hook, and $chained already exists"
+      warn "  with different content. Move one of them aside, then re-run."
+      exit 1
+    fi
+    mv -f "$dst" "$chained"
+    install_copy "$src" "$dst"
+    report "left alone $name (no tillr-hook marker; kept as $chained and chained) -> $dst"
+  fi
+done
+
+# git reads core.hooksPath INSTEAD of the repository's hooks directory, so a global setting
+# makes this install invisible: the copies above are written where git never looks, and
+# every hook here is off. Say it here, where the install happens, rather than leaving it to
+# be guessed at from a missing report.
+hooks_path="$(git -C "$root" config --get core.hooksPath || true)"
+if [ -n "$hooks_path" ]; then
+  case "$hooks_path" in
+    /*) configured="$hooks_path" ;;
+    *) configured="$root/$hooks_path" ;;
+  esac
+  if [ "$(cd -- "$configured" 2>/dev/null && pwd -P)" != "$hooks_dir" ]; then
+    warn "warning: core.hooksPath=$hooks_path replaces the repository's hooks directory"
+    warn "  git reads $configured/pre-push, not $hooks_dir/pre-push"
+    warn "  unset it, or copy these hooks there, or the guard never runs"
+  fi
+fi

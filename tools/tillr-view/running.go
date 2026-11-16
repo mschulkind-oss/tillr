@@ -1,0 +1,630 @@
+// running is the one-screen answer to "what is running right now": the loop's own stop
+// record and lane leases, the runs a lane is working, and the last five runs that
+// finished. It is a read of three sources because no two of them suffice:
+//
+//   - the lane rows and their `run.allocate` events, because `run.Exec` writes no `runs`
+//     row until its terminal write and `run.Apply` clears `lanes.run_id` on release, so
+//     a run that is going is a lease plus an allocation and nothing else;
+//   - the terminal `runs` rows, because a lease is cleared the moment a run ends;
+//   - the loop's `drain.loop` result files, because the store records no loop stop.
+//
+// The view writes nothing: it opens the store through store.OpenRead, so pointing it at
+// the live store while a drain writes is the intended use.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+// runningFinishedLimit is how many finished runs the face shows. Five is the design's
+// number: enough to see the shape of the last few outcomes, small enough to read without
+// paging.
+const runningFinishedLimit = 5
+
+// runningPayload is the view.running record: the loop and lane header, the live runs, and
+// the last few finished runs. Every field is named for the block it belongs to, so a
+// reader can tell a live run from a finished one without reading a state word.
+type runningPayload struct {
+	GeneratedAt time.Time     `json:"generated_at"`
+	Snapshot    snapshot      `json:"snapshot"`
+	Lanes       runningLanes  `json:"lanes"`
+	Loop        runningLoop   `json:"loop"`
+	Active      []runningRun  `json:"active"`
+	Finished    []finishedRun `json:"finished"`
+}
+
+// runningLanes is the header's lane arithmetic: how many lanes hold a lease, out of how
+// many the store knows, and which ones are idle. The idle list is what makes "0 live
+// runs" an answer rather than a blank.
+type runningLanes struct {
+	Leased int      `json:"leased"`
+	Total  int      `json:"total"`
+	Idle   []string `json:"idle"`
+}
+
+// runningLoop is the loop's own stop record as the view found it. Stale is the second
+// fact the header exists to say: when an event was appended after the newest loop result
+// was written, the stop record describes a loop that is no longer the latest thing to
+// have run.
+type runningLoop struct {
+	StopReason string     `json:"stop_reason"`
+	StopNote   string     `json:"stop_note"`
+	RecordPath string     `json:"record_path,omitempty"`
+	RecordedAt *time.Time `json:"recorded_at,omitempty"`
+	Stale      bool       `json:"stale"`
+	StaleSeq   int64      `json:"stale_seq,omitempty"`
+	StaleNote  string     `json:"stale_note,omitempty"`
+}
+
+// runningRun is one live run: the lane's lease, the run, the item it is for, and the two
+// clocks (elapsed from the run's start, and the lease's own expiry). ElapsedMS and
+// LeaseLeftMS are pointers because "the store recorded no start" and "the store recorded
+// no lease" are different answers from an elapsed or a lease of zero.
+type runningRun struct {
+	LaneID        string `json:"lane_id"`
+	RunID         string `json:"run_id"`
+	ItemID        string `json:"item_id"`
+	Rank          string `json:"rank"`
+	Title         string `json:"title"`
+	StartedAtMS   int64  `json:"started_at_ms"`
+	ElapsedMS     *int64 `json:"elapsed_ms"`
+	LeasedUntilMS *int64 `json:"leased_until_ms"`
+	LeaseLeftMS   *int64 `json:"lease_left_ms"`
+	LogPath       string `json:"log_path"`
+}
+
+// finishedRun is one terminal run with the outcome a person acts on: landed at a sha, a
+// gate failure, an exit, or a wall. LandedSHA is filled only when the outcome is a
+// landing, so a client never has to parse the outcome string to find the commit.
+type finishedRun struct {
+	RunID        string   `json:"run_id"`
+	ItemID       string   `json:"item_id"`
+	LaneID       string   `json:"lane_id"`
+	Title        string   `json:"title"`
+	State        string   `json:"state"`
+	ExitCode     *int     `json:"exit_code"`
+	Outcome      string   `json:"outcome"`
+	LandedSHA    string   `json:"landed_sha,omitempty"`
+	StartedAtMS  int64    `json:"started_at_ms"`
+	FinishedAtMS int64    `json:"finished_at_ms"`
+	DurationMS   int64    `json:"duration_ms"`
+	CostUSD      *float64 `json:"cost_usd"`
+	UsageTokens  *int64   `json:"usage_tokens"`
+}
+
+// gateVerdict is the gate's own answer for one run, joined to the landing attempt by the
+// verdict id: the attempt names the verdict it evaluated, and the verdict event names the
+// run it judged. That pair is what makes "landed" a fact about this run rather than about
+// its item.
+type gateVerdict struct {
+	RunID     string
+	VerdictID string
+	Result    string
+}
+
+// runningFace is the view.running face.
+func runningFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("running")
+	storePath := fs.String("store", "", "the store to read (required)")
+	loopDir := fs.String("loop-dir", "", "the loop's record directory (default: <store dir>/loop)")
+	laneRoot := fs.String("lane-root", "", "where the lane directories live (default: <store dir>/lanes)")
+	watch := fs.Bool("watch", false, "re-render once a second in a terminal")
+	asJSON := fs.Bool("json", false, "emit the record envelope instead of the table")
+	nowFlag := fs.String("now", "", "the clock elapsed and lease-left are measured against, RFC 3339 (default: now)")
+	if code := parseFlags(fs, args); code != record.ExitOK {
+		return record.Envelope{}, code
+	}
+	if *storePath == "" {
+		return record.Envelope{}, usagef("running needs --store <path>")
+	}
+	now := time.Now().UTC()
+	if *nowFlag != "" {
+		parsed, err := time.Parse(time.RFC3339, *nowFlag)
+		if err != nil {
+			return record.Envelope{}, usagef("--now %q is not an RFC 3339 timestamp: %v", *nowFlag, err)
+		}
+		now = parsed.UTC()
+	}
+	if *loopDir == "" {
+		*loopDir = filepath.Join(filepath.Dir(*storePath), "loop")
+	}
+	if *laneRoot == "" {
+		*laneRoot = filepath.Join(filepath.Dir(*storePath), "lanes")
+	}
+
+	render := func(at time.Time) (record.Envelope, int) {
+		payload, err := readRunning(context.Background(), *storePath, *loopDir, *laneRoot, at)
+		if err != nil {
+			var mismatch schemaMismatch
+			if errors.As(err, &mismatch) {
+				fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
+				return envelope("view.running", refusal{
+					GeneratedAt: at,
+					Snapshot:    snapshot{SchemaVersion: mismatch.version, Source: sourceStore},
+				}), record.ExitIncompatible
+			}
+			return record.Envelope{}, exitFor(err)
+		}
+		return envelope("view.running", payload), record.ExitOK
+	}
+
+	if *watch {
+		return record.Envelope{}, watchRunning(time.Second, func() int {
+			at := time.Now().UTC()
+			if *nowFlag != "" {
+				at = now
+			}
+			env, code := render(at)
+			if code != record.ExitOK {
+				return code
+			}
+			if *asJSON {
+				raw, err := record.Encode(env)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
+					return record.ExitInternal
+				}
+				fmt.Println(string(raw))
+				return record.ExitOK
+			}
+			var payload runningPayload
+			if err := json.Unmarshal(env.Payload, &payload); err != nil {
+				fmt.Fprintf(os.Stderr, "tillr-view: reading the running payload: %v\n", err)
+				return record.ExitInternal
+			}
+			renderRunning(os.Stdout, payload)
+			return record.ExitOK
+		})
+	}
+
+	env, code := render(now)
+	if code != record.ExitOK || *asJSON {
+		return env, code
+	}
+	var payload runningPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return record.Envelope{}, usagef("reading the running payload: %v", err)
+	}
+	renderRunning(os.Stdout, payload)
+	return record.Envelope{}, record.ExitOK
+}
+
+// readRunning reads the store and the loop's records into one payload. The store read is
+// one transaction, so the lanes, the runs and the allocations describe the same moment;
+// the loop result is a file beside the store, and the stale test joins it to that same
+// transaction's event head.
+func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now time.Time) (runningPayload, error) {
+	stop := (&observations{loopDir: loopDir}).newestLoopResult()
+	s, err := store.OpenRead(ctx, storePath)
+	if err != nil {
+		return runningPayload{}, err
+	}
+	defer s.Close()
+
+	var out runningPayload
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		version, err := r.SchemaVersion()
+		if err != nil {
+			return err
+		}
+		if !schemaSupported(version) {
+			return schemaMismatch{version: version}
+		}
+		head, err := r.EventHeadSeq()
+		if err != nil {
+			return err
+		}
+		domain, err := readStoreDomain(r)
+		if err != nil {
+			return err
+		}
+		verdicts, err := readGateVerdicts(r)
+		if err != nil {
+			return err
+		}
+		// The stop record is stale when the newest event is newer than the file. The
+		// first event after the file is the newer run's first record, and naming that
+		// seq is what lets an operator go and read it.
+		staleSeq := int64(0)
+		if !stop.Env.CreatedAt.IsZero() {
+			_ = r.QueryRow(`SELECT seq FROM events WHERE ts > ? ORDER BY seq LIMIT 1`,
+				stop.Env.CreatedAt.UnixMilli()).Scan(&staleSeq)
+		}
+		out = buildRunningPayload(now, snapshot{
+			SchemaVersion: version,
+			EventHeadSeq:  head,
+			Source:        sourceStore,
+		}, domain, verdicts, stop, staleSeq, laneRoot)
+		return nil
+	})
+	if err != nil {
+		return runningPayload{}, err
+	}
+	return out, nil
+}
+
+// buildRunningPayload projects the store's rows and the loop's record into the view's
+// three blocks. It is a pure function of its arguments so the projection can be tested
+// without a database.
+func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verdicts map[string]gateVerdict, stop loopResult, staleSeq int64, laneRoot string) runningPayload {
+	out := runningPayload{
+		GeneratedAt: now,
+		Snapshot:    snap,
+		Active:      []runningRun{},
+		Finished:    []finishedRun{},
+		Lanes:       runningLanes{Idle: []string{}},
+	}
+	if domain == nil {
+		return out
+	}
+	items := map[string]storeItem{}
+	for _, it := range domain.items {
+		items[it.ItemID] = it
+	}
+	for _, lane := range domain.lanes {
+		out.Lanes.Total++
+		if lane.State == laneStateLeased {
+			out.Lanes.Leased++
+			continue
+		}
+		out.Lanes.Idle = append(out.Lanes.Idle, lane.LaneID)
+	}
+
+	for _, live := range liveRuns(domain.lanes, domain.runs, domain.allocations) {
+		item := items[live.ItemID]
+		row := runningRun{
+			LaneID:      live.LaneID,
+			RunID:       live.RunID,
+			ItemID:      live.ItemID,
+			Rank:        item.Rank,
+			Title:       item.Title,
+			StartedAtMS: live.StartedAtMS,
+			LogPath:     filepath.Join(laneRoot, live.LaneID, live.RunID+".log"),
+		}
+		if live.StartedAtMS > 0 {
+			elapsed := now.UnixMilli() - live.StartedAtMS
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			row.ElapsedMS = &elapsed
+		}
+		for _, lane := range domain.lanes {
+			if lane.LaneID != live.LaneID {
+				continue
+			}
+			row.LeasedUntilMS = lane.LeasedUntilMS
+			if lane.LeasedUntilMS != nil {
+				left := *lane.LeasedUntilMS - now.UnixMilli()
+				row.LeaseLeftMS = &left
+			}
+		}
+		out.Active = append(out.Active, row)
+	}
+
+	candidates := map[string]storeCandidate{}
+	for _, c := range domain.candidates {
+		candidates[c.CandidateID] = c
+	}
+	landed := map[string]storeAttempt{}
+	for _, attempts := range domain.attempts {
+		for _, a := range attempts {
+			if a.Result == "landed" {
+				landed[a.VerdictID] = a
+			}
+		}
+	}
+
+	finished := make([]storeRun, 0, len(domain.runs))
+	for _, run := range domain.runs {
+		if run.State == liveRunState || run.FinishedAtMS == 0 {
+			continue
+		}
+		finished = append(finished, run)
+	}
+	sort.SliceStable(finished, func(i, j int) bool {
+		if finished[i].FinishedAtMS != finished[j].FinishedAtMS {
+			return finished[i].FinishedAtMS > finished[j].FinishedAtMS
+		}
+		return finished[i].RunID > finished[j].RunID
+	})
+	for _, run := range finished {
+		if len(out.Finished) >= runningFinishedLimit {
+			break
+		}
+		item := items[run.ItemID]
+		outcome, sha := runOutcome(run, verdicts, landed, candidates)
+		duration := run.FinishedAtMS - run.StartedAtMS
+		if duration < 0 {
+			duration = 0
+		}
+		out.Finished = append(out.Finished, finishedRun{
+			RunID:        run.RunID,
+			ItemID:       run.ItemID,
+			LaneID:       run.LaneID,
+			Title:        item.Title,
+			State:        run.State,
+			ExitCode:     run.ExitCode,
+			Outcome:      outcome,
+			LandedSHA:    sha,
+			StartedAtMS:  run.StartedAtMS,
+			FinishedAtMS: run.FinishedAtMS,
+			DurationMS:   duration,
+			CostUSD:      run.CostUSD,
+			UsageTokens:  run.UsageTokens,
+		})
+	}
+
+	out.Loop = runningLoop{
+		StopReason: stop.Stop,
+		StopNote:   stop.Note,
+		RecordPath: stop.Path,
+	}
+	if !stop.Env.CreatedAt.IsZero() {
+		at := stop.Env.CreatedAt
+		out.Loop.RecordedAt = &at
+	}
+	if staleSeq > 0 {
+		out.Loop.Stale = true
+		out.Loop.StaleSeq = staleSeq
+		out.Loop.StaleNote = fmt.Sprintf("stale stop record — newer run exists at seq %d", staleSeq)
+	}
+	return out
+}
+
+// runOutcome answers what a person needs to know about a finished run: whether the tree
+// it produced landed and where, whether the gate judged it and said no, or how it ended.
+// The gate event is keyed by run and the landing attempt by verdict, so the join is the
+// verdict id and never the item: a run whose item landed later does not borrow that
+// landing.
+func runOutcome(run storeRun, verdicts map[string]gateVerdict, landed map[string]storeAttempt, candidates map[string]storeCandidate) (string, string) {
+	switch run.State {
+	case "timed-out":
+		return "timed-out", ""
+	case "failed-to-start":
+		return "failed-to-start", ""
+	}
+	if verdict, ok := verdicts[run.RunID]; ok {
+		switch verdict.Result {
+		case "fail":
+			return "gate-failed", ""
+		case "pass":
+			if attempt, ok := landed[verdict.VerdictID]; ok {
+				sha := attempt.TrunkAfter
+				if sha == "" {
+					sha = candidates[attempt.CandidateID].HeadSHA
+				}
+				if sha == "" {
+					return "landed", ""
+				}
+				return "landed " + sha, sha
+			}
+		}
+	}
+	if run.ExitCode != nil {
+		return fmt.Sprintf("exited %d", *run.ExitCode), ""
+	}
+	if run.State != "" {
+		return run.State, ""
+	}
+	return "exited", ""
+}
+
+// readGateVerdicts answers the gate's own answer per run from the event log. A store with
+// no events table answers none rather than failing: the gate's judgment is the join's
+// evidence, and its absence is an outcome the view names.
+func readGateVerdicts(r *store.Reader) (map[string]gateVerdict, error) {
+	rows, err := r.Query(`SELECT COALESCE(object_id, ''), payload FROM events WHERE kind = ? AND object_type = 'run' ORDER BY seq`, "gate.verdict")
+	if err != nil {
+		if isMissingTable(err) {
+			return map[string]gateVerdict{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]gateVerdict{}
+	for rows.Next() {
+		var runID, payload string
+		if err := rows.Scan(&runID, &payload); err != nil {
+			return nil, err
+		}
+		var body struct {
+			RunID     string `json:"run_id"`
+			VerdictID string `json:"verdict_id"`
+			Result    string `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(payload), &body); err != nil {
+			continue
+		}
+		if runID == "" {
+			runID = body.RunID
+		}
+		if runID == "" {
+			continue
+		}
+		out[runID] = gateVerdict{RunID: runID, VerdictID: body.VerdictID, Result: body.Result}
+	}
+	return out, rows.Err()
+}
+
+// renderRunning writes the three blocks. The header is one line because it is the line an
+// operator reads first; the stale sentence is beside it because a stop record that is no
+// longer the newest record is the failure this view exists to make visible.
+func renderRunning(w io.Writer, p runningPayload) {
+	fmt.Fprintf(w, "lanes leased: %d/%d · %s\n", p.Lanes.Leased, p.Lanes.Total, loopLine(p))
+	if p.Loop.Stale {
+		fmt.Fprintf(w, "%s\n", p.Loop.StaleNote)
+	}
+	fmt.Fprintln(w)
+
+	if len(p.Active) == 0 {
+		fmt.Fprintf(w, "0 live runs; %s\n", idleLine(p.Lanes.Idle))
+	} else {
+		fmt.Fprintf(w, "LIVE RUNS (%d)\n", len(p.Active))
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "LANE\tITEM\tRANK\tTITLE\tELAPSED\tLEASE LEFT\tLOG")
+		for _, run := range p.Active {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				orDash(run.LaneID), orDash(run.ItemID), orDash(run.Rank), orDash(run.Title),
+				elapsedText(run.ElapsedMS), leaseLeftText(run.LeaseLeftMS), orDash(run.LogPath))
+		}
+		tw.Flush()
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "FINISHED (last %d)\n", runningFinishedLimit)
+	if len(p.Finished) == 0 {
+		fmt.Fprintln(w, "no finished runs in the store")
+		return
+	}
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "RUN\tITEM\tOUTCOME\tDURATION\tCOST")
+	for _, run := range p.Finished {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			orDash(run.RunID), orDash(run.ItemID), run.Outcome,
+			spanText(run.DurationMS), costText(run.CostUSD))
+	}
+	tw.Flush()
+}
+
+// loopLine is the header's stop half: the loop's own reason and when it wrote it, or the
+// absence the loop result reader named.
+func loopLine(p runningPayload) string {
+	if p.Loop.StopReason != "" {
+		if p.Loop.RecordedAt != nil {
+			return fmt.Sprintf("loop: %s (at %s)", p.Loop.StopReason, p.Loop.RecordedAt.UTC().Format(time.RFC3339))
+		}
+		return "loop: " + p.Loop.StopReason
+	}
+	if p.Loop.StopNote != "" {
+		return "loop: " + p.Loop.StopNote
+	}
+	return "loop: no stop record"
+}
+
+// idleLine names the lanes a stopped board is not using. The lane list is the answer to
+// "then what is idle", and an empty one says no lane is.
+func idleLine(idle []string) string {
+	if len(idle) == 0 {
+		return "no lane is idle"
+	}
+	return "lanes idle: " + joinComma(idle)
+}
+
+func joinComma(values []string) string {
+	out := ""
+	for i, value := range values {
+		if i > 0 {
+			out += ", "
+		}
+		out += value
+	}
+	return out
+}
+
+func orDash(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return value
+}
+
+// elapsedText is the viewer's clock reading for a run that has not finished, or the
+// absence when the store recorded no start.
+func elapsedText(ms *int64) string {
+	if ms == nil {
+		return "no start recorded"
+	}
+	return spanText(*ms)
+}
+
+// leaseLeftText is the lease's own clock: left, expired, or not recorded.
+func leaseLeftText(ms *int64) string {
+	if ms == nil {
+		return "lease not recorded"
+	}
+	if *ms < 0 {
+		return "expired " + spanText(-*ms) + " ago"
+	}
+	return spanText(*ms) + " left"
+}
+
+// spanText is the design's duration format: `12s`, `4m07s`, `1h12m`.
+func spanText(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	total := ms / 1000
+	if total < 60 {
+		return strconv.FormatInt(total, 10) + "s"
+	}
+	minutes := total / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm%02ds", minutes, total%60)
+	}
+	hours := minutes / 60
+	return fmt.Sprintf("%dh%02dm", hours, minutes%60)
+}
+
+// costText is a run's reported cost, or the absence: a backend that reports no price is
+// not a run that was free.
+func costText(cost *float64) string {
+	if cost == nil {
+		return "—"
+	}
+	return fmt.Sprintf("$%.2f", *cost)
+}
+
+// watchRunning re-renders until render answers a non-OK code or the process is signalled.
+// It clears a terminal between renders and never clears a pipe: a watch written to a file
+// is a sequence of renders, not a screen.
+func watchRunning(interval time.Duration, render func() int) int {
+	if code := render(); code != record.ExitOK {
+		return code
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	terminal := isCharDevice(os.Stdout)
+	for {
+		select {
+		case <-signals:
+			return record.ExitOK
+		case <-ticker.C:
+			if terminal {
+				// Cursor home plus clear: the same two escapes a pager uses, so a
+				// redirected run keeps every render instead of overwriting its own log.
+				fmt.Fprint(os.Stdout, "\033[H\033[2J")
+			}
+			if code := render(); code != record.ExitOK {
+				return code
+			}
+		}
+	}
+}
+
+// isCharDevice answers whether f is a terminal. The watch loop's clear is a screen
+// operation, and a pipe is not a screen.
+func isCharDevice(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}

@@ -1,0 +1,225 @@
+{
+  "root": "/workspace/.yolo/durable/worktrees/pi-subagents/gate-5/pi-worktree-7515b226-18a5-492a-ab87-a401d99e0285-s0-0",
+  "registry": "/workspace/.yolo/durable/gate-5/registry.json",
+  "registry_digest": "2da14bbf49195e44bc85921272dad58e477f4bbed7622eecf09d282482c1cb69",
+  "python": "/workspace/.yolo/durable/worktrees/pi-subagents/gate-5/pi-worktree-7515b226-18a5-492a-ab87-a401d99e0285-s0-0/tools/fork-check.py",
+  "candidates": [
+    {
+      "candidate": {
+        "name": "empty",
+        "base": "353832593cbd01e2d546d2ddfe77a7815eb4cedb",
+        "head": "353832593cbd01e2d546d2ddfe77a7815eb4cedb",
+        "changed_paths": []
+      },
+      "in_process": [
+        "file-size"
+      ],
+      "go": {
+        "gate": "tillr-gate",
+        "plan_order": [
+          "structural/every-series-shape-and-the-packs-that-declare-them",
+          "commit-identity/every-commit-this-range-adds-is-authored-and-committed-by-the-configured-git-identity-an-unconfigured-identity-refuses-rather-than-invents-and-a-repo-local-override-refuses"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "error",
+        "verdict_exit": 4
+      },
+      "python": {
+        "gate": "fork-check",
+        "plan_order": [
+          "commit-identity",
+          "file-size",
+          "structural"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "file-size",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "pass",
+        "verdict_exit": 0
+      },
+      "agreement": "disagree",
+      "disagreements": [
+        {
+          "kind": "plan/only-in-python",
+          "check": "file-size",
+          "go": "not planned",
+          "python": "planned"
+        },
+        {
+          "kind": "in-process",
+          "check": "file-size",
+          "go": "in-process: `run` refuses the plan (exit 4)",
+          "python": "runs it as its own code"
+        },
+        {
+          "kind": "verdict",
+          "go": "error (exit 4)",
+          "python": "pass (exit 0)"
+        }
+      ]
+    },
+    {
+      "candidate": {
+        "name": "harness",
+        "base": "16a8430f6aa4d860952fdd1fa8b7eb21474d63ef",
+        "head": "353832593cbd01e2d546d2ddfe77a7815eb4cedb",
+        "changed_paths": [
+          "tools/tillr-gate/dualrun.go",
+          "tools/tillr-gate/dualrun_test.go",
+          "tools/tillr-gate/main.go"
+        ]
+      },
+      "in_process": [
+        "file-size"
+      ],
+      "go": {
+        "gate": "tillr-gate",
+        "plan_order": [
+          "structural/every-series-shape-and-the-packs-that-declare-them",
+          "commit-identity/every-commit-this-range-adds-is-authored-and-committed-by-the-configured-git-identity-an-unconfigured-identity-refuses-rather-than-invents-and-a-repo-local-override-refuses",
+          "go-build/tools-tillr-gate-builds-and-its-test-files-compile",
+          "go-tool/tools-tillr-gate-s-whole-suite-passes"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "go-build",
+          "go-tool",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "error",
+        "verdict_exit": 4
+      },
+      "python": {
+        "gate": "fork-check",
+        "plan_order": [
+          "commit-identity",
+          "file-size",
+          "go-build",
+          "go-tool",
+          "structural"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "file-size",
+          "go-build",
+          "go-tool",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "pass",
+        "verdict_exit": 0
+      },
+      "agreement": "disagree",
+      "disagreements": [
+        {
+          "kind": "plan/only-in-python",
+          "check": "file-size",
+          "go": "not planned",
+          "python": "planned"
+        },
+        {
+          "kind": "in-process",
+          "check": "file-size",
+          "go": "in-process: `run` refuses the plan (exit 4)",
+          "python": "runs it as its own code"
+        },
+        {
+          "kind": "verdict",
+          "go": "error (exit 4)",
+          "python": "pass (exit 0)"
+        }
+      ]
+    },
+    {
+      "candidate": {
+        "name": "gate-own-change",
+        "base": "2569c8a6250712f48ae764b12a4c922eca9341a9",
+        "head": "353832593cbd01e2d546d2ddfe77a7815eb4cedb",
+        "changed_paths": [
+          "tests/fork-check.test.py",
+          "tools/fork-check.py",
+          "tools/tillr-gate/dualrun.go",
+          "tools/tillr-gate/dualrun_test.go",
+          "tools/tillr-gate/main.go"
+        ]
+      },
+      "in_process": [
+        "file-size"
+      ],
+      "go": {
+        "gate": "tillr-gate",
+        "plan_order": [
+          "structural/every-series-shape-and-the-packs-that-declare-them",
+          "commit-identity/every-commit-this-range-adds-is-authored-and-committed-by-the-configured-git-identity-an-unconfigured-identity-refuses-rather-than-invents-and-a-repo-local-override-refuses",
+          "go-build/tools-tillr-gate-builds-and-its-test-files-compile",
+          "go-tool/tools-tillr-gate-s-whole-suite-passes",
+          "pipeline-evidence/one-record-from-each-producer-validates-against-the-shared-schema",
+          "self-suite/the-gate-s-own-audit-suite-still-passes"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "go-build",
+          "go-tool",
+          "pipeline-evidence",
+          "self-suite",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "error",
+        "verdict_exit": 4
+      },
+      "python": {
+        "gate": "fork-check",
+        "plan_order": [
+          "commit-identity",
+          "file-size",
+          "go-build",
+          "go-tool",
+          "pipeline-evidence",
+          "self-suite",
+          "structural"
+        ],
+        "plan_kinds": [
+          "commit-identity",
+          "file-size",
+          "go-build",
+          "go-tool",
+          "pipeline-evidence",
+          "self-suite",
+          "structural"
+        ],
+        "plan_exit": 0,
+        "verdict": "pass",
+        "verdict_exit": 0
+      },
+      "agreement": "disagree",
+      "disagreements": [
+        {
+          "kind": "plan/only-in-python",
+          "check": "file-size",
+          "go": "not planned",
+          "python": "planned"
+        },
+        {
+          "kind": "in-process",
+          "check": "file-size",
+          "go": "in-process: `run` refuses the plan (exit 4)",
+          "python": "runs it as its own code"
+        },
+        {
+          "kind": "verdict",
+          "go": "error (exit 4)",
+          "python": "pass (exit 0)"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"22222222-2222-7222-8222-222222222222","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/fixture/worktree"}
+{"type":"message_start","message":{"id":"m1","role":"assistant","content":[]},"timestamp":1765000001000}
+{"type":"message_update","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"paths changed: src/example.go\n"}]},"assistantMessageEvent":{"type":"text_delta","delta":"paths changed: src/example.go\n"},"timestamp":1765000002000}
+{"type":"message_update","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"paths changed: src/example.go\nverification: go test ./... -> ok\n"}]},"assistantMessageEvent":{"type":"text_delta","delta":"verification: go test ./... -> ok\n"},"timestamp":1765000003000}
+{"type":"message_end","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"paths changed: src/example.go\nverification: go test ./... -> ok\n"}]},"timestamp":1765000004000}

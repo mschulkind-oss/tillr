@@ -1,0 +1,14 @@
+{
+  "status": "SUCCESS",
+  "conversation_id": "33333333-3333-7333-8333-333333333333",
+  "duration_seconds": 12,
+  "num_turns": 2,
+  "usage": {
+    "input_tokens": 12745,
+    "output_tokens": 275,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 8192
+  },
+  "denied_actions": [],
+  "response": "paths changed: src/example.go\nverification: go test ./... -> ok\n\nRESULT: done\n"
+}

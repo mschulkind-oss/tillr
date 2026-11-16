@@ -1,0 +1,34 @@
+{
+  "about": "The work machine's mixed policy: the design seat runs on the Claude subscription (the claude adapter, on the subscription's strongest model) and falls back to pi-designer on Amazon Bedrock when the subscription refuses or its window is spent; the build, review and scout seats run on pi through Bedrock exactly as backend-policy.bedrock.json has them. It is the owner's split of 2026-11-15: designers on the subscription, workhorses on pi, every backend in use at once. Why and how: docs/design/tillr-claude-backend.md. Like the other per-machine files it is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "default_backend": "pi",
+  "preference": [
+    "pi"
+  ],
+  "max_failovers": 1,
+  "seats": {
+    "design": [
+      "claude-designer",
+      "pi-designer"
+    ],
+    "build": "pi",
+    "review": "pi",
+    "scout": "pi"
+  },
+  "backends": {
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.openai.gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "amazon-bedrock/global.anthropic.claude-fable-5-2",
+      "effort": "medium"
+    },
+    "claude-designer": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "fable",
+      "effort": "medium"
+    }
+  }
+}

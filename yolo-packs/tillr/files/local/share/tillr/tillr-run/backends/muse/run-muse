@@ -1,0 +1,127 @@
+#!/bin/sh
+# The muse adapter: one `muse exec` run, from the staged brief to the stream.
+#
+# Design §9 of docs/design/tillr-muse-backend.md specifies this file. It is what a
+# `run.request`'s Command[0] names, and its whole contract is two halves: this argv
+# construction (launch) and `extract-report` beside it (read). Nothing here decides
+# anything about the item — the model id, the effort and the wall come from staging,
+# which takes them from the matt-files backend policy.
+#
+# The model id and effort are ARGV, never a default: design §1's hole 2 records that a
+# request has no environment channel yet (SUB-2), and an id this adapter invented would
+# be a model id in a tree that ships publicly and never names a vendor. An unset model
+# refuses; it never falls through to a floor.
+#
+# The sandbox posture is part of the spec, not an afterthought: the adapter never passes
+# --disable-sandbox or --yolo, and it always roots --workspace at the named target. The
+# confinement is the CLI's own (its help: "approval and the sandbox are ON by default"),
+# so the one thing that can break it is this file switching it off.
+#
+# Writes: stdout is the JSONL stream (run exec's log, or the driver's redirect); the
+# harness's stderr goes to `stream.err` beside the brief. Exit: the harness's own code,
+# or 124 from the wall, or 2 from a refusal that ran nothing.
+set -eu
+
+PROG=run-muse
+SELF_DIR=$(dirname -- "$0")
+. "$SELF_DIR/../preflight.sh"
+
+backend=
+model=
+effort=
+brief=../brief.md
+target=
+# No wall unless staging passes one: a total-run bound is a budget, not a fault detector,
+# and the 1800s default killed runs that had already committed (design D-RW1,
+# run-wall-ruling.md). `--timeout N` still bounds this run, and N == 0 is the same as no
+# wall.
+wall=
+profile=
+provider=
+
+usage() {
+    cat <<'USAGE'
+usage: run-muse --backend muse --model ID --effort TIER
+                     [--brief PATH] [--target PATH] [--timeout SECONDS]
+                     [--permission-profile ID] [--provider echo|meta]
+
+  --brief              the staged brief; default ../brief.md, a sibling of the lane
+                       directory's worktree, which is this adapter's cwd
+  --target             the named target; default the cwd, and it must BE the cwd
+  --timeout            the wall in seconds; omitted or 0 runs unbounded
+  --permission-profile the harness profile; passed through verbatim when staging
+                       supplies one, and never --disable-sandbox or --yolo
+  --provider           the harness's provider knob: `echo` is the no-token rehearsal
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
+        --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
+        --effort) [ $# -ge 2 ] || refuse "--effort needs a value"; effort=$2; shift 2 ;;
+        --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
+        --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
+        --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
+        --permission-profile) [ $# -ge 2 ] || refuse "--permission-profile needs a value"; profile=$2; shift 2 ;;
+        --provider) [ $# -ge 2 ] || refuse "--provider needs a value"; provider=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) refuse "unknown argument '$1'" ;;
+    esac
+done
+
+require_backend "$backend" muse
+check_wall "$wall"
+require_opt --model "$model" "the model id comes from the backend policy at staging, and an adapter that supplied its own would put a model id in a tree that names no vendor"
+require_opt --effort "$effort" "the effort tier comes from the backend policy at staging, with no default of its own"
+preflight_brief "$brief"
+require_harness muse
+target=$(resolve_target "$target")
+
+err=$(lane_path "$brief" stream.err)
+session=
+if [ -r "$(lane_path "$brief" session-id)" ]; then
+    session=$(cat "$(lane_path "$brief" session-id)")
+fi
+
+# The id must resolve before a run is spent on it (design §6): the wrong spelling of a
+# real model reports success and answers nothing, so the refusal is cheap and early. It
+# runs under the echo provider too: the rehearsal exists to exercise this preflight, and
+# the lookup is local, so it spends nothing.
+if ! muse model-profile show "$model" --effort "$effort" >/dev/null 2>&1; then
+    refuse "the model id '$model' at effort '$effort' does not resolve: fix it in the backend policy, one line, and re-dispatch — never fall back to another model"
+fi
+
+# One argv construction, so what runs is what the design specifies. `set --` is POSIX
+# shell's array; every element is quoted, because a path with a space is not a reason for
+# the harness to receive two arguments.
+#
+# The echo provider is the one case where the model half of the argv is not passed: the
+# CLI refuses it there — "--model requires --provider meta or local" and
+# "--reasoning-effort is not supported with --provider echo" (Muse Code 1.4.18, measured
+# 2026-11-12) — because the echo provider answers with the prompt and opens no provider
+# connection, so there is no model to select. Turning the operator's knob into the
+# harness's argv is this file's job (design §7), so the driver's argv is unchanged: it
+# still supplies the model and the effort, and only this construction decides whether the
+# harness is told about them.
+set -- muse exec --json --prompt-file "$brief" --workspace "$target"
+if [ -n "$session" ]; then
+    set -- "$@" --session-id "$session"
+fi
+if [ -n "$provider" ]; then
+    set -- "$@" --provider "$provider"
+fi
+if [ -n "$profile" ]; then
+    set -- "$@" --permission-profile "$profile"
+fi
+if [ "$provider" != echo ]; then
+    set -- "$@" --model "$model" --reasoning-effort "$effort"
+fi
+
+# The wall wraps the whole argv, so the bound is one process group and not the harness's
+# own turn: omitted (or 0) prepends nothing at all.
+if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
+    set -- timeout "$wall" "$@"
+fi
+
+exec "$@" 2>"$err"

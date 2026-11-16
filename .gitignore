@@ -1,0 +1,87 @@
+/nvim-config.tar.bz2
+/.nvim-config-public/
+
+# Running state, not config: xr18-quantum regenerates this per-host with the
+# last latency profile picked. The script is the source of truth; the conf is
+# a host-local artifact. (See docs/xr18-pipewire.md.)
+/config/wireplumber/wireplumber.conf.d/50-xr18-low-latency.conf
+
+# YOLO Jail workspace state
+.yolo/
+
+# @pify/memory's per-repo store: agent memory stays local, like Claude Code's.
+# (docs/pi/memory.md, OQ-MEM1)
+**/.pi/memory/
+
+# Orca's generated local subagent views; keep .pi config, agents and skills trackable.
+/.pi/subagents/views/orca/*.json
+
+# The automode brief /automode-brief records (yolo-packs/matt/files/extensions/automode-brief.ts).
+# pi-automode documents this project layer as trusted and never committed, and the command
+# writes it on the owner's keystroke, so it must not turn into an untracked diff.
+/.pi/automode.local.json
+
+# pi coding agent: runtime artifacts, not config. auth.json holds credentials;
+# sessions/ and *.lock are per-run state.
+#
+# settings.json and extensions/ are YOLO-DERIVED under host_management "own": the
+# matt pack's pi/settings overlay and its files contribution own them, and the
+# same render reaches host and jail. They must not be tracked -- a leftover rcm
+# symlink lets yolo write *through* it into this repo, so the generated content
+# would show up here as a diff. What goes in this repo is the pack, not the file.
+#
+# NOTE: .gitignore keeps these out of git, but rcm walks the physical
+# filesystem and ignores it -- derived and runtime state under a deployed dir
+# must ALSO be excluded in rcrc (see EXCLUDES there), or rcup tries to sync it.
+/pi/agent/settings.json
+/pi/agent/extensions/
+/pi/agent/auth.json
+/pi/agent/sessions/
+/pi/agent/*.lock
+# mantle/ token minter is now zero-dependency (Node built-in crypto only), so
+# no node_modules is ever created. These stay as belt-and-suspenders in case a
+# stray install reappears.
+/pi/agent/mantle/node_modules/
+# Locally built native Bedrock spend CLI (explicitly built, never deployed).
+/tools/bedrock-spend/bedrock-spend-go
+
+# tools/roster-storybook installs tuistory locally to screenshot Fleet frames; never content.
+/tools/roster-storybook/node_modules
+# tools/tillr-view/web is the drain observatory's front end (Vite 7 + React 19). Its
+# dependencies are local artifacts, and `dist/` is what `just observatory` embeds into the
+# tillr-view binary with `-tags observatory`. Both are rebuilt from the tracked source, so
+# neither is content -- and both would otherwise be picked up by the tillr pack mirror,
+# which copies untracked-but-not-ignored files.
+/tools/tillr-view/web/node_modules
+/tools/tillr-view/web/dist/
+# A stray empty one appears if a test harness installs at the repo root. No trailing
+# slash on purpose: the subagent worktree harness links node_modules to the parent
+# checkout, and a pattern ending in / matches directories only, so it left the
+# symlink untracked and made `just done` refuse in every worker worktree.
+/node_modules
+# pnpm's store lands at the repo root when a workspace under .forks/ is installed
+# (227M and thousands of files, none of it content). Same reason as node_modules:
+# it must be excluded in rcrc too, because rcm walks the physical filesystem and
+# ignores this file.
+/.pnpm-store/
+/pi/agent/mantle/package-lock.json
+# pi installs its extension packages under npm/ (~450M) and caches discovered
+# models in models-store.json -- both runtime state, never committed.
+/pi/agent/npm/
+/pi/agent/models-store.json
+
+# Pi forks. Git checkouts of the upstreams we patch (pi, pi-subagents, ...): working
+# copies that bin/pi-forks materializes from the patch series under yolo-packs/ and
+# exports back to them. The series are tracked and deploy; these checkouts never do.
+# They live UNDER this repo only because /workspace is the single filesystem shared
+# with a jail, so an agent can edit and export in either place. Never track them: an
+# embedded repo is not content this repo owns, and their node_modules is large.
+/.forks/
+
+# Claude Code writes the mods API's TypeScript declarations for its own version
+# into each mod it loads from a directory (--plugin-dir, CLAUDE_CODE_PLUGIN_DIRS).
+# Generated per version, never source. (yolo-packs/matt-mods/README.md)
+/yolo-packs/matt-mods/mods/*/.claude-plugin/types/
+
+# a tillr store lives in the tree; it is state, not content
+.tillr/

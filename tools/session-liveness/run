@@ -1,0 +1,25 @@
+#!/bin/sh
+# Run the queued-message state harness against the pi fork checkout.
+#
+# The harness compiles nothing: vitest transforms the fork's TypeScript sources
+# directly. What it needs is the checkout itself (bin/pi-forks setup --fork pi)
+# and that checkout's installed dependencies.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$HERE/../.." && pwd)
+FORK=${PI_FORK:-"$ROOT/.forks/pi"}
+VITEST="$FORK/node_modules/.bin/vitest"
+
+if [ ! -d "$FORK/packages/coding-agent/src" ]; then
+	printf '%s\n' "session-liveness: no pi checkout at $FORK" >&2
+	printf '%s\n' "Materialize it from the patch series: (cd '$ROOT' && bin/pi-forks setup --fork pi)" >&2
+	exit 127
+fi
+if [ ! -x "$VITEST" ]; then
+	printf '%s\n' "session-liveness: vitest is missing in $FORK" >&2
+	printf '%s\n' "Install the checkout's dependencies: (cd '$FORK' && npm ci)" >&2
+	exit 127
+fi
+
+cd "$ROOT"
+exec "$VITEST" run --config "$HERE/vitest.config.ts" "$@"

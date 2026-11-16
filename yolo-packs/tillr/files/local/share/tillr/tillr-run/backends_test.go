@@ -1,0 +1,237 @@
+package main_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The template's placeholders, filled here rather than read from the template's specimen so
+// a case can state every value the brief's nine sections require. The values are inert: this
+// case is about the adapter's backend check and the extractor's report, not about the brief.
+var briefValues = map[string]string{
+	"ITEM_ID":            "item_042",
+	"TITLE":              "a seated run reaches its adapter",
+	"RUN_ID":             "run-item_042-20261115T000000Z",
+	"BACKEND":            "pi-designer",
+	"BASE_SHA":           strings.Repeat("0", 40),
+	"TARGET":             "worktree",
+	"TARGET_KIND":        "lane worktree",
+	"DATE":               "2026-11-15",
+	"TIMEOUT_SECONDS":    "1800",
+	"DRIVER_REASON":      "unused in the worktree form",
+	"MAIN_STATUS_BEFORE": "unused in the worktree form",
+	"TASK":               "Say the one line the item asks for.",
+	"CRITERION_1":        "the extractor reads a RESULT footer",
+	"FENCE_PATHS":        "- tools/tillr-run/backends/**",
+	"OUT_OF_FENCE_PATHS": "- everything else",
+	"SETTLED":            "- a backend is the adapter's name or a `<adapter>-<role>` alias.",
+	"FACTS":              "- backends/ holds one directory per adapter.",
+	"METHOD":             "Run the adapter, then the extractor.",
+	"VERIFICATION":       "```\ntrue\n```",
+}
+
+// filledBrief answers the template with every placeholder filled, which is the only form the
+// adapter's preflight accepts.
+func filledBrief(t *testing.T, target string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("backends", "brief-template.md"))
+	if err != nil {
+		t.Fatalf("reading the brief template failed: %v", err)
+	}
+	text := string(raw)
+	for name, value := range briefValues {
+		if name == "TARGET" {
+			value = target
+		}
+		text = strings.ReplaceAll(text, "{{"+name+"}}", value)
+	}
+	return text
+}
+
+// writeExecutable writes one executable shell script.
+func writeExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("creating %s failed: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("writing %s failed: %v", path, err)
+	}
+}
+
+// TestThePiAdapterAcceptsASeatAliasAndItsExtractorReadsTheReport is criterion 1 end to end.
+// The design seat's backend is `pi-designer`, the same adapter on the design seat's model,
+// so the adapter's preflight must accept a backend name that is an alias of its own
+// (`<adapter>-<role>`) and the `extract-report` beside that adapter must read the report the
+// run produced. The 2026-11-15 incident was this exact run exiting 2 in 0s — the preflight
+// compared the backend name to the adapter's name and refused `pi-designer` — which the loop
+// then read as an infrastructure failure and answered on the floor model.
+func TestThePiAdapterDeliversLargeBriefsWithoutArgvLimits(t *testing.T) {
+	adapter, err := filepath.Abs(filepath.Join("backends", "pi", "run-pi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := scratch(t, "large-pi-brief")
+	bin := filepath.Join(base, "bin")
+	input := filepath.Join(base, "input.txt")
+	writeExecutable(t, filepath.Join(bin, "pi"), "#!/bin/sh\ncat > \"$STUB_INPUT\"\n")
+	worktree := filepath.Join(base, "lane", "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brief := filledBrief(t, worktree) + "\n" + strings.Repeat("conflict evidence\n", 20000)
+	if err := os.WriteFile(filepath.Join(base, "lane", "brief.md"), []byte(brief), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(adapter, "--backend", "pi", "--model", "fixture-model", "--effort", "medium")
+	cmd.Dir = worktree
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_INPUT="+input)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		stderr, _ := os.ReadFile(filepath.Join(base, "lane", "stream.err"))
+		t.Fatalf("large brief failed to launch: %v: %s %s", err, out, stderr)
+	}
+	got, err := os.ReadFile(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != brief {
+		t.Fatalf("stdin brief changed: got %d bytes, want %d", len(got), len(brief))
+	}
+}
+
+func TestThePiAdapterAcceptsASeatAliasAndItsExtractorReadsTheReport(t *testing.T) {
+	adapter, err := filepath.Abs(filepath.Join("backends", "pi", "run-pi"))
+	if err != nil {
+		t.Fatalf("resolving the adapter failed: %v", err)
+	}
+	extractor, err := filepath.Abs(filepath.Join("backends", "pi", "extract-report"))
+	if err != nil {
+		t.Fatalf("resolving the extractor failed: %v", err)
+	}
+	stream, err := filepath.Abs(filepath.Join("backends", "pi", "testdata", "complete.jsonl"))
+	if err != nil {
+		t.Fatalf("resolving the fixture stream failed: %v", err)
+	}
+
+	// The harness stub: `pi` prints the fixture stream and exits 0. The adapter's job is to
+	// run it and let the stream reach stdout, so the stub is the whole model here.
+	bin := filepath.Join(scratch(t, "stub"), "bin")
+	stub := filepath.Join(bin, "pi")
+	writeExecutable(t, stub, "#!/bin/sh\ncat \"$STUB_STREAM\"\n")
+
+	lane := filepath.Join(scratch(t, "lane"), "lane")
+	worktree := filepath.Join(lane, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("creating the worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lane, "brief.md"), []byte(filledBrief(t, worktree)), 0o644); err != nil {
+		t.Fatalf("writing the brief failed: %v", err)
+	}
+
+	run := exec.Command(adapter, "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium")
+	run.Dir = worktree
+	run.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_STREAM="+stream,
+	)
+	out, err := run.Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("the adapter refused backend pi-designer with exit %d: %s", exit.ExitCode(), exit.Stderr)
+		}
+		t.Fatalf("running the adapter failed: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("the adapter produced no stream, so the run log would be empty")
+	}
+
+	// The stream the adapter produced is the run's log; the extractor beside the adapter must
+	// read it and its report must carry the RESULT footer the brief asks for.
+	extract := exec.Command(extractor, "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--exit-code", "0", stream)
+	report, err := extract.Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("the extractor answered exit %d: %s", exit.ExitCode(), exit.Stderr)
+		}
+		t.Fatalf("running the extractor failed: %v", err)
+	}
+	body := string(report)
+	for _, want := range []string{"backend: pi-designer", "complete: yes", "result: done", "RESULT: done"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the report does not carry %q:\n%s", want, body)
+		}
+	}
+}
+
+// The claude adapter takes the same seat alias form (`claude-designer` is the design seat's
+// backend on the work machine), passes the policy row's harness arguments through after its
+// own fixed flags, and its extractor reads the report and the usage the stream's `result`
+// line carries (docs/design/tillr-claude-backend.md §2–§3).
+func TestTheClaudeAdapterAcceptsASeatAliasAndPassesItsHarnessArgs(t *testing.T) {
+	adapter, err := filepath.Abs(filepath.Join("backends", "claude", "run-claude"))
+	if err != nil {
+		t.Fatalf("resolving the adapter failed: %v", err)
+	}
+	extractor, err := filepath.Abs(filepath.Join("backends", "claude", "extract-report"))
+	if err != nil {
+		t.Fatalf("resolving the extractor failed: %v", err)
+	}
+	stream, err := filepath.Abs(filepath.Join("backends", "claude", "testdata", "complete.jsonl"))
+	if err != nil {
+		t.Fatalf("resolving the fixture stream failed: %v", err)
+	}
+
+	// The harness stub records its argv one argument per line and replays the fixture.
+	bin := filepath.Join(scratch(t, "stub"), "bin")
+	argvLog := filepath.Join(filepath.Dir(bin), "argv.log")
+	writeExecutable(t, filepath.Join(bin, "claude"),
+		"#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$STUB_ARGV\"\ncat \"$STUB_STREAM\"\n")
+
+	lane := filepath.Join(scratch(t, "lane"), "lane")
+	worktree := filepath.Join(lane, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("creating the worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lane, "brief.md"), []byte(filledBrief(t, worktree)), 0o644); err != nil {
+		t.Fatalf("writing the brief failed: %v", err)
+	}
+
+	run := exec.Command(adapter, "--backend", "claude-designer", "--model", "model-x", "--effort", "medium",
+		"--", "--disallowed-tools", "WebSearch", "Bash(git push *)")
+	run.Dir = worktree
+	run.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_STREAM="+stream,
+		"STUB_ARGV="+argvLog,
+	)
+	if out, err := run.Output(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("the adapter refused backend claude-designer with exit %d: %s", exit.ExitCode(), exit.Stderr)
+		}
+		t.Fatalf("running the adapter failed: %v", err)
+	} else if len(out) == 0 {
+		t.Fatalf("the adapter produced no stream, so the run log would be empty")
+	}
+	recorded, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatalf("the stub recorded no argv: %v", err)
+	}
+	argv := strings.Split(strings.TrimSuffix(string(recorded), "\n"), "\n")
+	want := []string{"--strict-mcp-config", "--dangerously-skip-permissions", "--disallowed-tools", "WebSearch", "Bash(git push *)"}
+	if len(argv) < len(want) || strings.Join(argv[len(argv)-len(want):], "|") != strings.Join(want, "|") {
+		t.Fatalf("the harness argv %q does not end with the fixed flags and then the harness arguments %q", argv, want)
+	}
+
+	report, err := exec.Command(extractor, "--backend", "claude-designer", "--model", "model-x", "--effort", "medium", "--exit-code", "0", stream).Output()
+	if err != nil {
+		t.Fatalf("the extractor failed on the complete stream: %v", err)
+	}
+	for _, want := range []string{"backend: claude-designer", "complete: yes", "result: done", "tokens: 58831", "cost usd: 0.004100"} {
+		if !strings.Contains(string(report), want) {
+			t.Fatalf("the report does not carry %q:\n%s", want, report)
+		}
+	}
+}

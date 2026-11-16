@@ -1,0 +1,147 @@
+#!/bin/sh
+# The Pi proof adapter: the same contract, a maximally different harness.
+#
+# Design §7 ships this beside the muse adapter because Pi differs at BOTH seams the
+# contract leaves adapter-private: the brief arrives on stdin rather than as a
+# prompt-file flag, and effort is Pi's own `--thinking` level rather than the muse's
+# `--reasoning-effort`. If one brief template, one backend field and one report shape
+# serve both, the shape is proved rather than one harness's habits wearing a general name.
+#
+# What is mechanically confining: NOTHING beyond the boundary snapshot. Pi offers no OS
+# sandbox for its shell tool, so this adapter makes no claim the muse adapter's
+# sandbox claim would borrow. That is stated in README.md, and it is why the driver's
+# boundary.before/boundary.after pair, not this file, is Pi's boundary.
+#
+# Writes: stdout is Pi's event stream in `--mode json`; the harness's stderr goes to
+# `stream.err` beside the brief. Exit: the harness's own code, or 124 from the wall, or 2
+# from a refusal that ran nothing.
+set -eu
+
+PROG=run-pi
+SELF_DIR=$(dirname -- "$0")
+. "$SELF_DIR/../preflight.sh"
+
+backend=
+model=
+effort=
+brief=../brief.md
+target=
+# No wall unless staging passes one: a total-run bound is a budget, not a fault detector,
+# and the 1800s default killed runs that had already committed (design D-RW1,
+# run-wall-ruling.md). `--timeout N` still bounds this run, and N == 0 is the same as no
+# wall.
+wall=
+session_override=
+
+usage() {
+    cat <<'USAGE'
+usage: run-pi --backend pi --model PATTERN --effort LEVEL
+              [--brief PATH] [--target PATH] [--timeout SECONDS] [--session-id UUID]
+
+  --model     a Pi model pattern (`provider/id`, optionally `:thinking`)
+  --effort    a Pi thinking level: off|minimal|low|medium|high|xhigh|max
+  --brief     the staged brief; default ../brief.md
+  --target    the named target; default the cwd, and it must BE the cwd
+  --session-id  the stager-minted UUID; default the lane's session-id file
+  --timeout   the wall in seconds; omitted or 0 runs unbounded
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
+        --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
+        --effort) [ $# -ge 2 ] || refuse "--effort needs a value"; effort=$2; shift 2 ;;
+        --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
+        --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
+        --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
+        --session-id) [ $# -ge 2 ] || refuse "--session-id needs a value"; session_override=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) refuse "unknown argument '$1'" ;;
+    esac
+done
+
+require_backend "$backend" pi
+check_wall "$wall"
+require_opt --model "$model" "the model comes from the backend policy at staging; an adapter default would be a model id in a tree that names no vendor"
+require_opt --effort "$effort" "the thinking level comes from the backend policy at staging, with no default of its own"
+preflight_brief "$brief"
+require_harness pi
+target=$(resolve_target "$target")
+
+err=$(lane_path "$brief" stream.err)
+session=$session_override
+if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
+    session=$(cat "$(lane_path "$brief" session-id)")
+fi
+
+# Keep the brief path in BOARD_DRAIN_BRIEF for extensions, but deliver its contents on
+# stdin. Pi prepends piped input to its first prompt. A conflict brief can exceed the
+# operating system's per-argument limit, so neither argv nor an environment value may
+# carry the contents.
+# --- the recording seam -------------------------------------------------------------
+#
+# docs/design/session-recording.md §2.2 puts the two missing observation seams here,
+# in the parent of everything a run spawns: `BASH_ENV` records every shell command a
+# run's `bash` tool starts, and `GIT_TRACE2_EVENT` records every git call. Both append
+# to the run's own record directory — `<root>/.tillr/loop/<run-id>/`, the directory
+# staging keeps this run's brief, fence and base sha in and `tillr-trace` indexes.
+#
+# Every guard below is fail-open (§7.1): a run with no run id, no shim, or a record
+# directory that cannot be created proceeds with the emitter silently absent — never a
+# failed run, never an exit code recording caused.
+trace_dir=${TILLR_TRACE_DIR:-}
+repo_root=
+# A linked worktree's git common directory is the main checkout's `.git`, whose parent
+# is the repository root: the derivation `tillr-loop` already uses so the gate, the
+# lander and this adapter agree on one `.tillr/loop`.
+#
+# It is derived whether or not the trace directory is preset: `TILLR_REPO_ROOT` is what
+# makes each row's `repo_rel_cwd` repo-relative, the field the §8.3 owed-suite join keys
+# on, and a preset `TILLR_TRACE_DIR` must not cost the rows that field.
+if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    repo_root=$(dirname -- "$common")
+fi
+if [ -n "${TILLR_RUN_ID:-}" ] && [ -z "$trace_dir" ] && [ -n "$repo_root" ]; then
+    trace_dir=$repo_root/.tillr/loop/$TILLR_RUN_ID
+fi
+shim=
+if trace_parent=$(cd -- "$SELF_DIR/../../../tillr-trace" 2>/dev/null && pwd -P); then
+    shim=$trace_parent/bash-shim.sh
+fi
+if [ -n "$trace_dir" ] && [ -r "$shim" ] && mkdir -p -- "$trace_dir" 2>/dev/null && [ -w "$trace_dir" ]; then
+    TILLR_TRACE_DIR=$trace_dir
+    GIT_TRACE2_EVENT=$trace_dir/git-trace2.jsonl
+    GIT_TRACE2_PARENT_SID=${TILLR_RUN_ID:-$$}
+    BASH_ENV=$shim
+    export TILLR_TRACE_DIR GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID BASH_ENV
+    if [ -n "$repo_root" ]; then
+        TILLR_REPO_ROOT=$repo_root
+        export TILLR_REPO_ROOT
+    fi
+fi
+
+BOARD_DRAIN_BRIEF=$(cd "$(dirname -- "$brief")" && pwd -P)/$(basename -- "$brief")
+# The three seam names every agent extension may use to tell a lane's worker from an
+# interactive session. `BOARD_DRAIN_RUN` was never set and `BOARD_DRAIN_SESSION` was set to
+# the session id, which is EMPTY when the driver does not mint one — so both halves of the
+# check read "" and `steering-timer.ts`'s isChildSession said "not a child". Measured
+# 2026-11-14: a lane worker ran the whale's check-in, wrote shadow rulings, ran
+# `git update-ref refs/tillr/stranded/*` four times inside the drain's own boundary bracket,
+# and crashed the loop with StopHostBoundaryViolation. Never leave these empty.
+BOARD_DRAIN_RUN=${TILLR_RUN_ID:-tillr-lane}
+BOARD_DRAIN_SESSION=${session:-${TILLR_RUN_ID:-tillr-lane}}
+export BOARD_DRAIN_BRIEF BOARD_DRAIN_RUN BOARD_DRAIN_SESSION
+
+set -- pi --print --mode json --model "$model" --thinking "$effort"
+if [ -n "$session" ]; then
+    set -- "$@" --session-id "$session"
+fi
+
+# The wall wraps the whole argv, so the bound is one process group and not the harness's
+# own turn: omitted (or 0) prepends nothing at all.
+if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
+    set -- timeout "$wall" "$@"
+fi
+
+exec "$@" <"$brief" 2>"$err"

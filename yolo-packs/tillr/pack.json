@@ -1,0 +1,98 @@
+{
+  "name": "tillr",
+  "description": "The tillr toolset: eight `tillr*` binaries on PATH built lazily from the Go source this pack ships, the seven-step loop skill, and the AutoQA design-review handoff.",
+  "contributes": [
+    // The toolset's Go tree, delivered whole to ~/.local/share/tillr/<module>. It is a
+    // GENERATED copy of tools/tillr* in this repository, produced by
+    // `just pack-sync` and guarded against divergence by tests/pack-sync.test.py. The
+    // pack ships source and never a compiled artifact: each launcher below builds one
+    // binary from this tree, once per source digest.
+    //
+    // The shared library module `tillr` is part of the tree because the eight binaries
+    // resolve it through relative `replace` paths in their go.mod files.
+    {
+      "kind": "files",
+      "from": "files/local/share/tillr",
+      "into": ".local/share/tillr"
+    },
+    // The eight names on PATH. yolo owns a name on PATH by declaration and refuses a
+    // `files` entry into ~/.local/bin, so each is a program whose run file is the
+    // launcher. Eight declarations rather than one `tillr` dispatcher, because the
+    // dispatcher refuses to run unless all seven `tillr-<noun>` binaries are on PATH,
+    // and because an external agent composes individual tools (`tillr-gate`,
+    // `tillr-view`) without routing through the drain loop.
+    //
+    // The launchers exec the tree in the caller's working directory: a tillr store is
+    // discovered from the repository the caller is in, so a launcher that changed
+    // directory would collapse every repository onto one store.
+    {
+      "kind": "program",
+      "bin": "tillr",
+      "via": "pack",
+      "from": "programs/tillr",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-drain",
+      "via": "pack",
+      "from": "programs/tillr-drain",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-gate",
+      "via": "pack",
+      "from": "programs/tillr-gate",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-item",
+      "via": "pack",
+      "from": "programs/tillr-item",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-land",
+      "via": "pack",
+      "from": "programs/tillr-land",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-run",
+      "via": "pack",
+      "from": "programs/tillr-run",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-store",
+      "via": "pack",
+      "from": "programs/tillr-store",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-view",
+      "via": "pack",
+      "from": "programs/tillr-view",
+      "run": "run"
+    },
+    // The loop's composition skill: how the eight binaries compose across the seven
+    // steps, which exit code means what, and where a reader learns a face's flags. The
+    // binary on PATH wins on surface syntax, so the skill never restates a flag.
+    {
+      "kind": "skills"
+    }
+    // NO BRIEFING. This pack shipped one — an AutoQA review handoff — and it was wrong on
+    // both counts: a briefing reaches every agent in every workspace that selects the pack,
+    // and that file is a task for one arriving reviewer ("design comments only, do not edit
+    // source"), not a house rule. An agent dispatched to build something was being told to
+    // review instead. The file now lives at tasks/autoqa-handoff.md, outside briefing/, so a
+    // later `{"kind": "briefing"}` directory contribution cannot pick it up by accident, and
+    // it is handed to a review lane by whoever dispatches that lane.
+  ]
+}
