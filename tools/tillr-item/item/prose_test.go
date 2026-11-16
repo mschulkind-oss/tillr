@@ -158,7 +158,7 @@ func TestStoreBeforeProseMarkGainsColumn(t *testing.T) {
 		t.Fatalf("legacy update: %+v", report)
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := item.SetState(ctx, tx, "item-read-api", "blocked", syncAt)
+		_, err := item.SetState(ctx, tx, "item-read-api", "blocked", syncAt, item.WaitingOn{Waiter: "owner", Reason: "needs a decision"})
 		return err
 	})
 	if err != nil {

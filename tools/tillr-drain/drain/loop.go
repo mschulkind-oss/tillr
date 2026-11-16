@@ -266,7 +266,7 @@ type Steps interface {
 	// about a candidate. The run is named because the move is recorded against it: a step
 	// span belongs to one run's record directory, and this call is the one step the loop
 	// makes that has no candidate to read a run id from.
-	ItemState(ctx context.Context, itemID, runID, state string) error
+	ItemState(ctx context.Context, itemID, runID, state string, waiting ...item.WaitingOn) error
 	// Sync materializes the item blocks of the repository's tracked documents into the
 	// store, through item's sync face. The loop calls it before planning at each new trunk
 	// commit, so the queue it drains is the one the documents declare (docs/design/tillr-convergence.md

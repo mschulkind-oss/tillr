@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS items (
   allowed_paths TEXT NOT NULL DEFAULT '',
   rank       TEXT NOT NULL DEFAULT '',
   seat       TEXT NOT NULL DEFAULT '',
-  prose      TEXT NOT NULL DEFAULT ''
+  prose      TEXT NOT NULL DEFAULT '',
+  waiting_on TEXT NOT NULL DEFAULT '',
+  underlying_state TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS item_criteria (
@@ -186,6 +188,12 @@ func init() {
 	// Older stores have no guide mark; preserve that as an empty value.
 	if err := store.RegisterColumn("item", "items", "prose", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		panic(err)
+	}
+	// Blocked metadata is additive; older rows retain their unrecorded waiter.
+	for _, column := range []string{"waiting_on", "underlying_state"} {
+		if err := store.RegisterColumn("item", "items", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			panic(err)
+		}
 	}
 	for _, kind := range []string{
 		AddKind, UpdateKind, DecisionRecordKind, DecisionRevokeKind, MailSendKind, MailAckKind,

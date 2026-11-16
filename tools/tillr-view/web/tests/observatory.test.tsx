@@ -434,8 +434,8 @@ addCase("an item with no run shows its state, what blocks it and what a run woul
   const { container } = render(<ItemWithoutRun item={blockedItemData} hasRun={false} />);
   expect(container.textContent).toContain("No run for item-seed-06");
   expect(container.querySelector(".state-badge")?.textContent).toBe("blocked");
-  expect(container.textContent).toContain("the store marks it blocked");
-  expect(container.textContent).toContain("waiting on item-seed-02");
+  expect(container.textContent).toContain("item:item-seed-02: finish the prerequisite");
+  expect(container.textContent).toContain("waiting on item:item-seed-02");
   expect(container.textContent).toContain("raw: blocked");
   // A run that does not exist yet is explained, never drawn as a pipeline that is still
   // loading: the item says when a run will exist rather than leaving an empty box.

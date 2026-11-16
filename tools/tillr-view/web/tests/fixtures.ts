@@ -323,8 +323,8 @@ export const blockedItemData: ItemData = {
     projected_state: {
       state: "blocked",
       raw_state: "blocked",
-      underlying: "the store marks it blocked",
-      waiting_on: ["item-seed-02"],
+      underlying: "item:item-seed-02: finish the prerequisite",
+      waiting_on: ["item:item-seed-02"],
     },
   },
   criteria: [{ criterion_id: "ac-1", text: "it is checked", state: "pending" }],
@@ -415,8 +415,8 @@ export const twoItemSnapshotData: SnapshotData = {
       projected_state: {
         state: "blocked",
         raw_state: "blocked",
-        underlying: "the store marks it blocked",
-        waiting_on: ["item-seed-02"],
+        underlying: "item:item-seed-02: finish the prerequisite",
+        waiting_on: ["item:item-seed-02"],
       },
       updated_at_ms: 1762979460000,
       cost_usd: null,

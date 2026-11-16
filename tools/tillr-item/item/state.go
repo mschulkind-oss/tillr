@@ -27,7 +27,7 @@ import (
 // The write is idempotent: an item already in the state asked for is answered as it stands
 // and appends no event, so a step retried after a half-completed tick does not record a
 // transition that did not happen.
-func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time) (record.Envelope, error) {
+func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time, waiting ...WaitingOn) (record.Envelope, error) {
 	if itemID == "" {
 		return record.Envelope{}, Usagef("an item state write needs an item_id")
 	}
@@ -38,12 +38,44 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	if payload.State == state {
+	previousWaiting, previousUnderlying := payload.WaitingOn, payload.UnderlyingState
+	if state == "blocked" {
+		var next WaitingOn
+		if len(waiting) > 0 {
+			next = waiting[0]
+		}
+		if err := checkWaitingOn(tx.Reader(), itemID, next); err != nil {
+			return record.Envelope{}, err
+		}
+		switch payload.State {
+		case "not-started", "in-queue", "blocked":
+		default:
+			return record.Envelope{}, Rejectionf("blocked-state-invalid", itemID,
+				"item %q cannot move from %q to blocked", itemID, payload.State)
+		}
+		if payload.State != "blocked" || payload.UnderlyingState == "" {
+			payload.UnderlyingState = payload.State
+		}
+		payload.WaitingOn = &next
+	} else if state == "not-started" || state == "in-queue" {
+		payload.WaitingOn, payload.UnderlyingState = nil, ""
+	}
+	unchangedWaiting := previousWaiting == nil && payload.WaitingOn == nil ||
+		previousWaiting != nil && payload.WaitingOn != nil && *previousWaiting == *payload.WaitingOn
+	if payload.State == state && unchangedWaiting && previousUnderlying == payload.UnderlyingState {
 		return envelopeOf(RecordKind, "item-"+itemID, storedAt, payload)
 	}
+	waitingJSON := ""
+	if payload.WaitingOn != nil {
+		body, err := json.Marshal(payload.WaitingOn)
+		if err != nil {
+			return record.Envelope{}, Internalf("encoding blocked metadata: %v", err)
+		}
+		waitingJSON = string(body)
+	}
 	if _, err := tx.Exec(
-		`UPDATE items SET state = ?, updated_at = ? WHERE item_id = ?`,
-		state, at.UnixMilli(), itemID,
+		`UPDATE items SET state = ?, waiting_on = ?, underlying_state = ?, updated_at = ? WHERE item_id = ?`,
+		state, waitingJSON, payload.UnderlyingState, at.UnixMilli(), itemID,
 	); err != nil {
 		return record.Envelope{}, Internalf("moving item %q to %q: %v", itemID, state, err)
 	}

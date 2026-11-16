@@ -285,6 +285,16 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource) ([]waiti
 				row.Class = "needs you"
 			}
 		}
+		if item.State == "blocked" && item.Waiter != "" {
+			row.Class, row.Mover, row.Why = "waits on work", item.Waiter, item.WaitingReason
+			row.ClassSource = "store"
+			row.Since = time.UnixMilli(item.UpdatedAtMS).UTC().Format(time.RFC3339Nano)
+			if item.Waiter == "owner" {
+				row.Class = "needs you"
+			}
+		} else if item.State == "blocked" && row.Mover == "—" {
+			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
+		}
 		if found && last.Action == "hold" && latestRun != nil && active == nil {
 			cause, err := waitingEndCause(r, latestRun.RunID)
 			if err != nil {

@@ -112,7 +112,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 	}
 	for id, fields := range map[string]map[string]any{
 		"item-seed-02": {"class": "needs a cause", "where": "gate", "why": "gate-failed", "mover": "cause not recorded; end cause not recorded", "since": "1970-01-01T00:00:05Z"},
-		"item-seed-06": {"since": "no pass yet", "why": "no pass yet"},
+		"item-seed-06": {"since": "no pass yet", "why": "waiter not recorded", "mover": "waiter not recorded"},
 		"item-unknown": {"class": "unclassified", "where": "gate", "why": "future-reason", "mover": "—; end cause not recorded"},
 		"item-land":    {"where": "land", "why": "retry-stale"},
 		"item-fence":   {"where": "fence", "why": "not-ready"},
