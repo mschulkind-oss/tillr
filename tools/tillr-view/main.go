@@ -18,6 +18,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // utility is the producer name every record this binary emits carries.
@@ -27,7 +28,15 @@ const utility = "view"
 // (design §11), so this moves with the set rather than on its own.
 const version = "0.1.0"
 
-func main() { os.Exit(run(os.Args[1:])) }
+// main flushes the SQLite trace on every route out of the process: before os.Exit,
+// which skips defers, and through the deferred call when a panic unwinds this
+// goroutine. Tracing off, each flush is one atomic load.
+func main() {
+	defer store.FlushSQLiteTraceAtExit()
+	code := run(os.Args[1:])
+	store.FlushSQLiteTraceAtExit()
+	os.Exit(code)
+}
 
 // run dispatches one face and prints the record it produced. A face returns its record
 // and its exit code together, so the exit is fixed where the outcome is known rather

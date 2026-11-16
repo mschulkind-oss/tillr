@@ -107,8 +107,17 @@ func TestFailedRunReportsFileOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	diagnostic := strings.TrimSpace(string(output))
-	if diagnostic == "" || !strings.Contains(report.String(), diagnostic) {
-		t.Fatalf("file diagnostic %q missing from loop report:\n%s", diagnostic, report)
+	for _, marker := range []string{"tillr-run: starting", f.policy.Backends["fixture"].Adapter, "no such file or directory"} {
+		if !strings.Contains(diagnostic, marker) || !strings.Contains(report.String(), marker) {
+			t.Fatalf("meaningful diagnostic %q missing from file/report:\n%s\n%s", marker, diagnostic, report)
+		}
+	}
+	expected := diagnostic
+	if len(output) > drain.StderrTailBytes {
+		expected = "…" + strings.TrimSpace(string(output[len(output)-drain.StderrTailBytes:]))
+	}
+	if diagnostic == "" || !strings.Contains(report.String(), expected) {
+		t.Fatalf("bounded file diagnostic %q missing from loop report:\n%s", expected, report)
 	}
 }
 

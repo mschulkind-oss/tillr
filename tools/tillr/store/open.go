@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // Store is one open store.
@@ -24,7 +23,7 @@ type Store struct {
 // With create, a missing store is created and the schema is migrated; without it
 // the store must already exist and is not migrated. Mode conversion needs SQLite's
 // exclusive lock and fails explicitly if it cannot acquire it.
-func Open(ctx context.Context, path string, create bool) (*Store, error) {
+func Open(ctx context.Context, path string, create bool) (result *Store, resultErr error) {
 	if path == "" {
 		return nil, errors.New("store: a store path is required")
 	}
@@ -35,6 +34,8 @@ func Open(ctx context.Context, path string, create bool) (*Store, error) {
 	} else if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
+	trace := startSQLiteTrace(path, "open")
+	defer func() { trace.finish(resultErr) }()
 	db, err := sql.Open("sqlite", dsn(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
@@ -42,12 +43,18 @@ func Open(ctx context.Context, path string, create bool) (*Store, error) {
 	// One connection: the append-only triggers and the migration transaction are
 	// serialized by the store, not by the caller.
 	db.SetMaxOpenConns(1)
-	if err := db.PingContext(ctx); err != nil {
+	trace.record("ping.begin", nil)
+	pingErr := db.PingContext(ctx)
+	trace.record("ping.end", pingErr)
+	if err := pingErr; err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 	var mode string
-	if err := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode); err != nil {
+	trace.record("wal.begin", nil)
+	walErr := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode)
+	trace.record("wal.end", walErr)
+	if err := walErr; err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: selecting WAL for %s: %w", path, err)
 	}
@@ -149,13 +156,8 @@ func (s *Store) WriteMeta(key, value string) error {
 // is read, so the second migrator waits (busy_timeout, dsn) and then finds the work
 // already done.
 func (s *Store) migrate(ctx context.Context) (result error) {
-	var id uint64
-	var started time.Time
-	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
-		id, started = writerSequence.Add(1), time.Now()
-		traceWriter(id, s.path, "migrate", "begin", started, nil)
-		defer func() { traceWriter(id, s.path, "migrate", "end", started, result) }()
-	}
+	trace := startSQLiteTrace(s.path, "migrate")
+	defer func() { trace.finish(result) }()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: opening the connection to migrate on: %w", err)
@@ -164,14 +166,18 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("store: beginning the migration: %w", err)
 	}
-	if id != 0 {
-		traceWriter(id, s.path, "migrate", "acquired", started, nil)
-	}
-	if err := migrate(ctx, conn); err != nil {
+	trace.record("acquired", nil)
+	trace.record("schema.begin", nil)
+	schemaErr := migrate(ctx, conn)
+	trace.record("schema.end", schemaErr)
+	if err := schemaErr; err != nil {
 		conn.ExecContext(ctx, `ROLLBACK`)
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+	trace.record("commit.begin", nil)
+	_, commitErr := conn.ExecContext(ctx, `COMMIT`)
+	trace.record("commit.end", commitErr)
+	if err := commitErr; err != nil {
 		conn.ExecContext(ctx, `ROLLBACK`)
 		return fmt.Errorf("store: committing the migration: %w", err)
 	}

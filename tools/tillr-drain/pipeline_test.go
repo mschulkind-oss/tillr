@@ -289,8 +289,11 @@ func TestTheComposedPipelineRunsEndToEndOnAFixture(t *testing.T) {
 	requestPath := filepath.Join(scratch(t, "records"), "run-request.json")
 	writeFile(t, requestPath, string(sinkElement(t, sink, 0)))
 	laneRoot := filepath.Join(scratch(t, "lanes"), "lanes")
-	runOut := driveOK(t, sibling(t, "run"), "exec", "--store", storePath,
+	runCode, runOut := driveRecord(t, sibling(t, "run"), "exec", "--store", storePath,
 		"--lane-root", laneRoot, "--input", requestPath, "--now", now)
+	if runCode != 0 {
+		t.Fatalf("run exec exited %d: %s", runCode, runOut)
+	}
 	var runRecord struct {
 		Kind    string     `json:"kind"`
 		Payload run.Record `json:"payload"`
@@ -432,10 +435,13 @@ func TestTheComposedPipelineRunsEndToEndOnAFixture(t *testing.T) {
 	// Step 7: land pass, which squashes the judged head onto the trunk because the verdict
 	// binds the tree. There is no queue step: the landing takes the item, the run, the base
 	// and the head directly.
-	attemptOut := driveOK(t, sibling(t, "land"), "pass", "--store", storePath, "--repo", repo.dir,
+	attemptCode, attemptOut := driveRecord(t, sibling(t, "land"), "pass", "--store", storePath, "--repo", repo.dir,
 		"--item", "item_042", "--run", requests[0].Payload.RunID,
 		"--base", repo.baseSHA, "--head", repo.headSHA,
 		"--verdict", verdictPath, "--now", now)
+	if attemptCode != 0 {
+		t.Fatalf("land pass exited %d: %s", attemptCode, attemptOut)
+	}
 	var attempt struct {
 		Payload struct {
 			Result string `json:"result"`

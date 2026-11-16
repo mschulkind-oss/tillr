@@ -1715,8 +1715,8 @@ func TestRetryFaceRecordsTheAuthorizationAndRequeuesTheItem(t *testing.T) {
 		runRecord(failedRun, "item_042", "lane-9", "fixture", run.StateExited, exitCode(2), ""),
 	)
 	legacyItemState(t, storePath, "item_042", "in-progress")
-	code, output := authorizeRetry(t, storePath, "item_042", failedRun,
-		"the owner", "the harness refused before the work started", "2026-11-10T00:00:00Z")
+	code, output := driveRecord(t, bin, "retry", "--store", storePath, "--item", "item_042", "--run", failedRun,
+		"--by", "the owner", "--why", "the harness refused before the work started", "--now", "2026-11-10T00:00:00Z")
 	if code != 0 {
 		t.Fatalf("retry exited %d: %s", code, output)
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
 )
@@ -29,24 +28,20 @@ type Tx struct {
 // instead of being answered SQLITE_BUSY at its first write, and a second writer waits
 // here rather than failing.
 func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) (result error) {
-	var id uint64
-	var started time.Time
-	var operation string
+	var trace *sqliteTraceSpan
 	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
-		id, started = writerSequence.Add(1), time.Now()
+		operation := ""
 		if pc, _, _, ok := runtime.Caller(1); ok {
 			operation = runtime.FuncForPC(pc).Name()
 		}
-		traceWriter(id, s.path, operation, "begin", started, nil)
-		defer func() { traceWriter(id, s.path, operation, "end", started, result) }()
+		trace = startSQLiteTrace(s.path, operation)
 	}
+	defer func() { trace.finish(result) }()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: beginning the write transaction: %w", err)
 	}
-	if id != 0 {
-		traceWriter(id, s.path, operation, "acquired", started, nil)
-	}
+	trace.record("acquired", nil)
 	// Rollback after a successful commit answers ErrTxDone, which is the state the
 	// transaction is already in; the commit's own error is the one reported.
 	defer tx.Rollback()

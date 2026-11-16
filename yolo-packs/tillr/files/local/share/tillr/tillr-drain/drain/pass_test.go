@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -190,7 +191,7 @@ func drainOwned(t *testing.T, l *Loop, result *LoopResult) {
 				t.Fatalf("completion %s / %v", stop, err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("owned transition did not finish")
+			t.Fatalf("owned transition did not finish%s", ownedTransitionTimeoutDiagnostic())
 		}
 	}
 }
@@ -328,4 +329,19 @@ func TestAReplacementLoopSettlesTheStoredOutcomeWithoutRedispatch(t *testing.T) 
 	if plans[0].decision.Action == ActionDispatch {
 		t.Fatal("replacement dispatched the item twice")
 	}
+}
+
+// Called only at the existing timeout, before its assertion. This is diagnostic
+// evidence of the actual blocked stage, not a longer completion deadline.
+func ownedTransitionTimeoutDiagnostic() string {
+	if os.Getenv("TILLR_SQLITE_TRACE") != "1" {
+		return ""
+	}
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	diagnostic := "\nblocked-stage goroutine snapshot:\n" + string(buf[:n])
+	if n == len(buf) {
+		diagnostic += "\nstack snapshot truncated"
+	}
+	return diagnostic
 }

@@ -25,7 +25,15 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func main() { os.Exit(dispatch(os.Args[1:])) }
+// main flushes the SQLite trace on every route out of the process: before os.Exit,
+// which skips defers, and through the deferred call when a panic unwinds this
+// goroutine. Tracing off, each flush is one atomic load.
+func main() {
+	defer store.FlushSQLiteTraceAtExit()
+	code := dispatch(os.Args[1:])
+	store.FlushSQLiteTraceAtExit()
+	os.Exit(code)
+}
 
 // dispatch runs one face and answers its exit code. It is not named run because the
 // run package is, and one spelling per concept leaves the package the name.
