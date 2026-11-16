@@ -82,6 +82,31 @@ func (s Squash) Conflicted() bool { return len(s.Conflicts) > 0 }
 // Nothing here writes a ref, an index or a working tree, so check and pass compute the same
 // commit. `--merge-base` needs git 2.38 or newer.
 func (t *Trunk) Squash(base, trunk, head string, at time.Time) (Squash, error) {
+	return t.SquashWithMessage(base, trunk, head, head, at)
+}
+
+// MessageSource resolves an explicit commit and checks membership in base..head,
+// including head and excluding base and all commits reachable from base.
+func (t *Trunk) MessageSource(base, head, source string) (string, error) {
+	resolved, err := t.git("rev-parse", "--verify", source+"^{commit}")
+	if err != nil {
+		return "", Usagef("--message-from %s names no commit", source)
+	}
+	resolved = strings.TrimSpace(resolved)
+	commits, err := t.git("rev-list", base+".."+head)
+	if err != nil {
+		return "", Externalf("reading candidate range: %v", err)
+	}
+	for _, sha := range strings.Fields(commits) {
+		if sha == resolved {
+			return resolved, nil
+		}
+	}
+	return "", Usagef("--message-from %s is not a commit in %s..%s", source, base, head)
+}
+
+// SquashWithMessage merges head's tree but takes the message and author date from source.
+func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time) (Squash, error) {
 	identity, err := t.LandingIdentity()
 	if err != nil {
 		return Squash{}, err
@@ -99,15 +124,18 @@ func (t *Trunk) Squash(base, trunk, head string, at time.Time) (Squash, error) {
 	if tree == "" {
 		return Squash{}, Externalf("squashing %s onto %s in %s answered no tree", head, trunk, t.repo)
 	}
-	message, err := t.git("log", "-1", "--format=%B", head)
+	raw, err := t.git("cat-file", "commit", source)
 	if err != nil {
-		return Squash{}, Externalf("reading the message of %s in %s: %v", head, t.repo, err)
+		return Squash{}, Externalf("reading the message of %s in %s: %v", source, t.repo, err)
 	}
-	authorDate, err := t.git("log", "-1", "--format=%aI", head)
+	_, message, ok := strings.Cut(raw, "\n\n")
+	if !ok {
+		return Squash{}, Externalf("commit %s has no message boundary", source)
+	}
+	authorDate, err := t.git("log", "-1", "--format=%aI", source)
 	if err != nil {
-		return Squash{}, Externalf("reading the author date of %s in %s: %v", head, t.repo, err)
+		return Squash{}, Externalf("reading the author date of %s in %s: %v", source, t.repo, err)
 	}
-	body := strings.TrimSpace(message)
 	commit, stderr, err := t.runGit([]string{
 		"GIT_AUTHOR_NAME=" + identity.Name,
 		"GIT_AUTHOR_EMAIL=" + identity.Email,
@@ -115,7 +143,7 @@ func (t *Trunk) Squash(base, trunk, head string, at time.Time) (Squash, error) {
 		"GIT_COMMITTER_NAME=" + identity.Name,
 		"GIT_COMMITTER_EMAIL=" + identity.Email,
 		"GIT_COMMITTER_DATE=" + at.Local().Format(time.RFC3339),
-	}, "commit-tree", tree, "-p", trunk, "-m", body)
+	}, "commit-tree", tree, "-p", trunk, "-m", message)
 	if err != nil {
 		return Squash{}, Externalf("writing the squash of %s onto %s in %s: %s",
 			head, trunk, t.repo, failureText(stderr, err))
@@ -123,10 +151,35 @@ func (t *Trunk) Squash(base, trunk, head string, at time.Time) (Squash, error) {
 	return Squash{Commit: strings.TrimSpace(commit), Tree: tree}, nil
 }
 
-// Pin answers refs/tillr/runs/<run_id> at sha. It is the landing's receipt for a
-// non-landing: a head the gate saw and the landing refused is otherwise reachable only from
-// the lane's branch, and a garbage collection between the refusal and the conflict-fixer or
-// the person reading the row takes it. The ref is a pin, not a promotion: it lives under
+// PreserveRange pins the squashed head and lists its commits in the run's directory.
+// It happens before the trunk move: an unwritable receipt must not silently lose history.
+func (t *Trunk) PreserveRange(runID, base, head, dir string) error {
+	list, err := t.git("log", "--reverse", "--format=%H %s", base+".."+head)
+	if err != nil {
+		return Externalf("listing the commits of %s: %v", runID, err)
+	}
+	if err := t.Pin(runID, head); err != nil {
+		return err
+	}
+	if dir == "" {
+		common, err := t.git("rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return Externalf("reading the run artifact root: %v", err)
+		}
+		dir = filepath.Join(strings.TrimSpace(common), "tillr", "runs", runID)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Externalf("creating run directory %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commits.txt"), []byte(list), 0o644); err != nil {
+		return Externalf("writing commit list for %s: %v", runID, err)
+	}
+	return nil
+}
+
+// Pin answers refs/tillr/runs/<run_id> at sha. Both landed and refused heads are pinned:
+// otherwise resetting the lane could make the original range unreachable, allowing git
+// garbage collection to remove it. The ref is a pin, not a promotion: it lives under
 // refs/tillr/ and is retired with the epoch.
 func (t *Trunk) Pin(runID, sha string) error {
 	if runID == "" {

@@ -306,6 +306,9 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	if candidate.BaseRef != "" {
 		extra = append(extra, "--base-ref", candidate.BaseRef)
 	}
+	if candidate.WorkerHeadSHA != "" {
+		extra = append(extra, "--message-from", candidate.WorkerHeadSHA)
+	}
 	code, out, _, err := s.program(ctx, "land", ".", s.LandProgram, candidate, extra...)
 	if err != nil {
 		return LandOutcome{}, err

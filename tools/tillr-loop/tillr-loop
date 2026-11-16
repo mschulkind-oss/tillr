@@ -132,6 +132,7 @@ class Ctx:
     registry: str | None
     gate_program: str | None
     base_ref: str | None
+    message_from: str | None
     verdict: str | None
     gate_bin: str | None
     land_bin: str | None
@@ -413,6 +414,9 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
                 base_ref,
                 "--now",
                 ctx.now,
+                "--run-dir",
+                ctx.run_dir,
+                *(["--message-from", ctx.message_from] if ctx.message_from else []),
             ],
             ctx.root,
         )
@@ -618,6 +622,8 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
                                  f"{DEFAULT_GATE_PROGRAM})")
     if kind in ("land", "self-check"):
         parser.add_argument("--base-ref", default=None, help="the branch the base sha is on")
+        parser.add_argument("--message-from", default=None,
+                            help="the commit in base..head whose message and author date to land")
     if kind == "verdict":
         # Required: the verdict is the loop's judgment, so a missing one is refused rather
         # than defaulted to a pass.
@@ -662,6 +668,7 @@ def context(args: argparse.Namespace) -> Ctx:
         registry=getattr(args, "registry", None) or os.environ.get(REGISTRY_ENV) or None,
         gate_program=gate_program(args),
         base_ref=getattr(args, "base_ref", None),
+        message_from=getattr(args, "message_from", None),
         verdict=getattr(args, "verdict", None),
         gate_bin=args.tillr_gate,
         land_bin=args.tillr_land,

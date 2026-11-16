@@ -392,9 +392,23 @@ def test_land_exit_mapping(tmp):
         + " --verdict " + str(fixture.run_dir / "gate.verdict.json")
         + " --base-ref main"
         + " --now 2026-01-01T00:00:00Z"
+        + " --run-dir " + str(fixture.run_dir)
     )
     assert passes[-1] == want, (passes[-1], want)
     assert "--candidate" not in passes[-1], passes[-1]
+
+
+def test_land_forwards_message_source(tmp):
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    result = fixture.run_adapter("land", extra=["--message-from", "worker-sha"])
+    assert result.returncode == 0, result.stderr
+    passes = [call for call in fixture.calls() if call.startswith("pass ")]
+    assert "--message-from worker-sha" in passes[-1], passes
+    result = fixture.run_adapter("land")
+    assert result.returncode == 0, result.stderr
+    passes = [call for call in fixture.calls() if call.startswith("pass ")]
+    assert "--message-from" not in passes[-1], passes
 
 
 def test_land_without_a_gate_verdict_refuses(tmp):
@@ -587,6 +601,7 @@ def main():
             test_gate_exports_the_registry_when_none_is_named,
             test_gate_derives_the_change_with_the_gate_binary,
             test_land_exit_mapping,
+            test_land_forwards_message_source,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,
             test_missing_judge_is_not_a_failure,

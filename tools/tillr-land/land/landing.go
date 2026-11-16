@@ -155,6 +155,11 @@ type LandingRequest struct {
 	BaseRef string
 	BaseSHA string
 	HeadSHA string
+	// MessageFrom selects the message and author date, never the gated tree.
+	// Empty keeps the head's message; an explicit source must belong to base..head.
+	MessageFrom string
+	// RunDir is the commit-list directory; empty uses <git-common-dir>/tillr/runs/<run-id>.
+	RunDir  string
 	Verdict Verdict
 	// At is the clock the landing records and the squash dates its commit with.
 	At time.Time
@@ -180,7 +185,7 @@ type LandingRequest struct {
 //
 // The squash is the landing: `git merge-tree --write-tree --merge-base=<base>` re-applies
 // the change onto the tip, `git commit-tree` writes one commit with the repository's
-// scope-checked identity and the head's own message, naming no item, and `Trunk.Move`
+// scope-checked identity and the selected source commit's message, naming no item, and `Trunk.Move`
 // fast-forwards the trunk onto it. A squash that conflicts is its own outcome, not a repair: the verdict
 // stands, the head is pinned, and a repair lane reads the conflict paths from the row.
 func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (Landing, error) {
@@ -192,6 +197,15 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	}
 	if err := t.HasCommit(req.HeadSHA); err != nil {
 		return Landing{}, err
+	}
+	if req.MessageFrom != "" {
+		source, err := t.MessageSource(req.BaseSHA, req.HeadSHA, req.MessageFrom)
+		if err != nil {
+			return Landing{}, err
+		}
+		req.MessageFrom = source
+	} else {
+		req.MessageFrom = req.HeadSHA
 	}
 	tree, err := t.TreeOf(req.HeadSHA)
 	if err != nil {
@@ -275,7 +289,7 @@ func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, re
 		return pinAndRecord(ctx, tx, t, landing, req)
 	}
 
-	squash, err := t.Squash(req.BaseSHA, trunkBefore, req.HeadSHA, req.At)
+	squash, err := t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
 	if err != nil {
 		return Landing{}, err
 	}
@@ -294,6 +308,9 @@ func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, re
 		landing.Reason = ReasonTrunkUncommitted
 		landing.ConflictPaths = clashing
 		return pinAndRecord(ctx, tx, t, landing, req)
+	}
+	if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
+		return Landing{}, err
 	}
 	if err := t.Move(req.BaseRef, squash.Commit, trunkBefore); err != nil {
 		return Landing{}, err
