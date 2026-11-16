@@ -108,6 +108,9 @@ const (
 	// failed, so the code is wrong and a person picks it up with a task. The verdict was
 	// recorded; the item stays in the queue.
 	ReasonGateFailed = "gate-failed"
+	// ReasonLandRefused holds an item whose latest candidate passed the gate but
+	// was refused by the landing step. Its criteria remain unjudged.
+	ReasonLandRefused = "land-refused"
 	// ReasonNoPolicy is a hold's reason: the tick names no policy, so no complete
 	// run.request can be built. A policy that *is* named but cannot build one is refused
 	// before planning rather than held per item (Policy.Check).

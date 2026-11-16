@@ -149,12 +149,9 @@ const (
 	ConflictFixSuffix = "-cfix"
 )
 
-// The item verdict values the loop records. `pass` retires the item's criteria; `fail` is
-// the candidate's own judgment, which the loop records and moves on from.
-const (
-	VerdictPassed = "pass"
-	VerdictFailed = "fail"
-)
+// VerdictPassed retires the item's criteria only after the candidate lands.
+// An attempt that did not land records a run-level refusal, never an item verdict.
+const VerdictPassed = "pass"
 
 // ScopeEscape names the refusal the loop makes when a candidate's change is outside its
 // lane's fence, or its worktree carries work the commit does not. It is a verdict about the
@@ -250,11 +247,9 @@ type Steps interface {
 	// The outcome is the lander's own record, so a squash conflict and a refusal are told
 	// apart by the record rather than by a shared exit code.
 	Land(ctx context.Context, candidate Candidate) (LandOutcome, error)
-	// Verdict records the item's verdict for the candidate: VerdictPassed or
-	// VerdictFailed. It is called only for a candidate the gate judged — a gate failure, a
-	// land that did not take, or a landing — because a verdict retires the criteria a judge
-	// was shown. A candidate the fence refused, or one whose run committed nothing, is
-	// judged by nobody and gets a `drain.refusal` event instead.
+	// Verdict records VerdictPassed only after the candidate lands. A gate failure,
+	// refused landing, fence refusal or run with no commit records a `drain.refusal`
+	// event instead and leaves the item's criteria unchanged.
 	Verdict(ctx context.Context, candidate Candidate, verdict string) error
 	// ItemState moves the item's own state — not a criterion's — through item's state
 	// face. It is how a candidate's terminal outcome reaches the board: a landed
@@ -362,9 +357,8 @@ type LoopResult struct {
 	// the item with ReasonConflictExhausted instead of spending another run.
 	ConflictFixes     int `json:"conflict_fixes,omitempty"`
 	ConflictExhausted int `json:"conflict_exhausted,omitempty"`
-	// Rejected is the number of candidates the loop refused. A gate-judged candidate's
-	// refusal records a failing verdict; a fence or no-op refusal records a
-	// `drain.refusal` event instead, because no judge saw it.
+	// Rejected is the number of candidates the loop refused. Refusals record a
+	// `drain.refusal` event, never an item verdict.
 	Rejected int `json:"rejected"`
 	// Candidates is the number of runs that committed a candidate. Every one of them is
 	// a run the fence, the gate or the land judged; a run that produced no commit is not
@@ -1724,14 +1718,6 @@ func insideFence(path string, fence []string) bool {
 		}
 	}
 	return false
-}
-
-// failCandidate records a failing verdict for one candidate the gate judged. The item's own
-// state is not moved: a non-landing run leaves it where it was, in the queue, and the
-// planner's named hold keeps it from being dispatched again. The verdict is what retires the
-// criteria it judged, and that is the whole of this face's judgment.
-func (l *Loop) failCandidate(ctx context.Context, candidate Candidate) error {
-	return l.cfg.Steps.Verdict(ctx, candidate, VerdictFailed)
 }
 
 // abandon resets a lane after a dispatch that did not land. The lane goes back to the trunk

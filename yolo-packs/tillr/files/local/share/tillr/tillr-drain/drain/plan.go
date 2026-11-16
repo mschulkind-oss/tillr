@@ -734,6 +734,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return ReasonBoundaryScopeEscape
 	case RefusalNoOp:
 		return ReasonCandidateNoOp
+	case RefusalLand:
+		return ReasonLandRefused
 	case RefusalConflict:
 		// The latest run hit a squash conflict and no further fix run is staged, either
 		// because the one fix run already spent its turn or because the trunk did not
