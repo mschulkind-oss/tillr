@@ -2,7 +2,7 @@
 title: "The Item Judge and Lifecycle in Tillr"
 status: accepted
 stage: DECIDED
-updated: 2026-11-14
+updated: 2026-11-16
 tags:
   - tillr
   - judge
@@ -13,7 +13,7 @@ tags:
   - drain
   - design
 summary: "How pre-approved item graphs with evaluator nodes and opt-in generic judging issue grant-backed item.verdict records, block mechanical retirement of owner-only criteria, enforce an owner-disposition state machine alongside derived execution state, and sunset -v2 failure-cloning scaffolding."
-next: "Cut the design into build items (item-design-judge-lifecycle-slices): criterion claim classes first, then the derived working position and the rework command."
+next: "Build the first block of the build order: a gate pass no longer retires a criterion only the owner can settle."
 depends-on:
   - tillr-item-graphs.md
   - board-item-state-model.md
@@ -23,7 +23,7 @@ depends-on:
 
 # The Item Judge and Lifecycle in Tillr
 
-**Status:** 2026-11-14. Design in review, verified against `tools/tillr-item/`, `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `tools/tillr-loop/tillr-loop`, and `config/tillr/seed-items.json` at `HEAD`.
+**Status:** 2026-11-16. Decided, and cut into the [build order](#8-build-order) that ends this page. Sections 1 to 5 were verified on 2026-11-14 against `tools/tillr-item/`, `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `tools/tillr-loop/tillr-loop`, and `config/tillr/seed-items.json` as the tree stood that day. The tree has moved since: [Section 7](#7-what-the-tree-already-holds) measures what is built at `bdd6b3c82`, and where it and an earlier section disagree about a name or a mechanism, Section 7 and the build order are what a builder follows.
 
 > **In short.** Put independent judgment inside pre-approved item graphs ([tillr-item-graphs.md](./tillr-item-graphs.md)) as a read-only `evaluator_slot` leaf **before** `tillr-land pass` so bad candidates never move `main`, trust `tillr-gate` + `tillr-land` without a second judge pass when the graph already judged, and keep standalone generic judging over the exact same intake contract for non-pipeline completions and opted-in single-node items. Store `claim_class` on `item_criteria` so `actor_kind: "mechanical"` can never retire `owner-only` or `direction` criteria, restrict `items.state` to owner disposition while deriving `working` from live runs beside `mayBeARetry` holds, stop writing `not-done` criterion freezes on candidate failures, and retire `ActorAutoQA` / `qa-verification` / `DecidedByAutoQA` so external AutoQA uses standard `mechanical` and grant-backed `agent` verdicts.
 
@@ -38,6 +38,8 @@ depends-on:
 **Cost.** Additive columns on `items` (`waiting_on`, `underlying_state`, `resolves_via`, `close_reason`, `closed_at`, `closed_by`, `closed_from`) and `item_criteria` (`claim_class`), a settlement intake pass in `tillr-drain`, `close`/`reopen`/`rework` CLI faces, and backfilling `claim_class: "owner-only"` + SM-3 metadata in `config/tillr/seed-items.json`. Zero new utilities.
 
 **Needs your ruling:** None.
+
+**Next:** build [the first block](#prevent-a-gate-pass-from-retiring-an-owners-criterion) of the build order. It waits on nothing.
 
 **Reads with:** [tillr-item-graphs.md](./tillr-item-graphs.md) ([§3.3](./tillr-item-graphs.md#33-producer-bound-artifacts-exit-conditions-and-the-evaluator-slot) and [§6](./tillr-item-graphs.md#6-boundary-with-judge-policy-and-item-lifecycle), fixed upstream graph and `evaluator_slot` contract), [board-item-state-model.md](./board-item-state-model.md) ([§2](./board-item-state-model.md#2-classification-of-every-status-the-board-can-show)–[§8](./board-item-state-model.md#8-implementation-sequence), closed seven-state projector and SM-3 records), [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) ([Ruling: MIGRATE](./work-control-judge-in-tillr.md#ruling-migrate) and [Retirement in the end state](./work-control-judge-in-tillr.md#retirement-in-the-end-state)), [agent-runtime.md](./agent-runtime.md) ([§12](./agent-runtime.md#12-the-three-owner-rulings)–[§14](./agent-runtime.md#14-adopting-guilds-graph-algebra), [§28](./agent-runtime.md#28-authority-not-approval), [§30](./agent-runtime.md#30-a-cut-off-is-evidence-about-fit-never-about-priority)), [escalation-ladder.md](./escalation-ladder.md) ([§3](./escalation-ladder.md#3-the-ladder)–[§5.2](./escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit)), [criterion-repair.md](./criterion-repair.md), and companion design `` `docs/design/tillr-autoqa.md` ``.
 
@@ -180,7 +182,13 @@ Tillr splits **harness retry** from **inspected rework** on the same `item_id`:
 - **`tillr drain retry`** keeps its strict guard: valid only for `AttemptInfrastructure` (`run-infra-exhausted`) and pre-gate harness casualties where the item's spec and fence did not change.
 - **`tillr drain rework --item <id> --run <supersedes_run_id> --basis <basis> --by <actor> --why <reason>`** re-queues a held `gate-failed`, `eval-failed`, `land-isolated`, `scope-escape`, `candidate-no-op`, or `retry-unjudged` item on the **same `item_id`** ([OQ-JL3](#61-decision-ledger)), refusing unless the store shows the matching basis: an updated `allowed_paths`, appended criterion, [criterion-repair.md](./criterion-repair.md) criterion supersession (for already-frozen text), updated `graph_ref`, advanced `main` tip (for `carry-rebased`), recorded red-gate triage packet ([agent-runtime.md](./agent-runtime.md) [§13.1](./agent-runtime.md#131-a-red-candidate-is-triaged-not-retried)), or explicit timeout inspection (`timeout-inspected`).
 
-**Explicit sunset condition for `-v2` + `decision.record` + `resolved-elsewhere` recovery.** Cloning a failed item to `<id>-v2` is prohibited once three slices pass `just done`: (1) `failCandidate` stops writing `VerdictFailed` and `StateInProgress`; (2) SM-3's `items.resolves_via` column and refusal land in `tillr-item`; and (3) `tillr drain rework` lands in `tillr-drain`. One migration backfills `items.resolves_via = "item:<id>-v2"` on the six 2026-11-14 predecessor rows from their active `decision.record` entries, restoring `resolved-elsewhere` exclusively to [board-item-state-model.md](./board-item-state-model.md) [§4.1](./board-item-state-model.md#41-semantics) (*intent satisfied by another path*).
+**Explicit sunset condition for `-v2` + `decision.record` + `resolved-elsewhere` recovery.** Cloning a failed item to `<id>-v2` is prohibited once three things hold:
+
+- no failed attempt writes a failing verdict or the `in-progress` state;
+- SM-3's `items.resolves_via` column and its refusal are in `tillr-item`;
+- a failed item can be sent again under its own id, by one command.
+
+`resolved-elsewhere` then goes back to meaning only what [board-item-state-model.md](./board-item-state-model.md) [§4.1](./board-item-state-model.md#41-semantics) says: *intent satisfied by another path*. [Section 7](#7-what-the-tree-already-holds) records which of the three already hold, and the [last block](#prevent-cloning-a-held-item-under-a-new-id) of the build order is the refusal that enforces the prohibition.
 
 ---
 
@@ -215,14 +223,223 @@ Answering [autoqa-tillr-seams.md](./autoqa-tillr-seams.md) [OQ-AQA1](./autoqa-ti
 | OQ-JL2 | The store refuses a judge that shares a run or a session with the writer. Whether the judge also uses a different model is set in the backend policy, never refused by the store. **Rejected:** refusing a verdict when the judge and the writer used the same model route. | The owner changes providers often and requires the tooling to work whatever models a machine has; a hard refusal would stop every judged item on a machine with one route. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 | OQ-JL3 | The loop may authorize one rework of an item by itself when a recorded basis exists: a triage of the red gate, a changed input, or a carry repair. A second failure is not retried; it goes up [the escalation ladder](./escalation-ladder.md), to the design seat before the owner. **Rejected:** every rework waiting for a person. | The owner ruled on 2026-11-15 that the loop does not wait for approvals and that a refusal by a worker goes to a seat that can answer it; one bounded rework keeps spend bounded. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 
+| `D-JL8` | The build order is cut against the tree as it stood on 2026-11-16, and four spellings change to fit it. A criterion's claim class is declared in its item block by the directive attribute `claims`, and an item asks for an agent judge with the attribute `judge="agent"`. The owner-ruling rows already in a store are typed by one migration when the column is added, in place of an edit to the frozen seed file. No `tillr drain rework` command is added: `tillr drain retry --acknowledge` and the one automatic re-admission on a changed input are that command. The judge-before-gate step is built in the loop for an item that opts in, and the item graphs build order connects a workflow's evaluator leaf to that same step. **Rejected:** building a second re-queue command beside the one that exists; waiting for item graphs before any judge runs. | Items are defined in documents since [tillr-convergence.md](./tillr-convergence.md), so a class nobody can write in a document would never be set. The seed file is frozen. A second command for one act is two places to be wrong. A judge that runs before the gate needs nothing the graph runtime adds, and [tillr-item-graphs.md](./tillr-item-graphs.md) [§6](./tillr-item-graphs.md#6-boundary-with-judge-policy-and-item-lifecycle) already puts the verdict contract on this side of the boundary. Settled on 2026-11-16 by the design seat while cutting the build order; the owner may overturn it. |
+
 ### 6.2 Open Questions
 
 None. Every question this design carried is a row of the ledger above.
 
 ### 6.3 Amendments Owed
 
-Once this document reaches `stage: DECIDED`, three tracked documents owe targeted updates:
+Three tracked documents owe targeted updates. Each is made by the build block named beside it, in the same change as the code it describes, so no document claims a rule the tree does not yet enforce:
 
-1. **[autoqa-tillr-seams.md](./autoqa-tillr-seams.md) ([Decision Ledger](./autoqa-tillr-seams.md#decision-ledger) and [OQ-AQA1](./autoqa-tillr-seams.md#OQ-AQA1)):** Record `D-AQA1` superseded by `D-JL7` (`ActorAutoQA`, `qa-verification`, and `DecidedByAutoQA` retired in favor of `verdict.actor` identity on `mechanical` and grant-backed `agent` verdicts); keep `D-AQA2`–`D-AQA4` in force.
-2. **[board-utilities.md](./board-utilities.md) ([§5.3](./board-utilities.md#53-item-alone) and [§14](./board-utilities.md#14-decision-ledger) `D-UT16`):** Add `item_criteria.claim_class`, the `RecordVerdict` actor-to-claim-class refusal table (`D-JL2`), and the SM-3 transition/receipt preconditions on `Apply` and `SetState` (`D-JL3`, `D-JL4`).
-3. **[work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) ([Retirement in the end state](./work-control-judge-in-tillr.md#retirement-in-the-end-state)):** Cross-reference `D-JL1` and `D-JL2` for how pre-approved graphs carry the `evaluator` role pre-land via `evaluator_slot` while standalone generic judging shares the same `eval.output` intake.
+1. **[autoqa-tillr-seams.md](./autoqa-tillr-seams.md) ([Decision Ledger](./autoqa-tillr-seams.md#decision-ledger) and [OQ-AQA1](./autoqa-tillr-seams.md#OQ-AQA1)):** Record `D-AQA1` superseded by `D-JL7` (`ActorAutoQA`, `qa-verification`, and `DecidedByAutoQA` retired in favor of `verdict.actor` identity on `mechanical` and grant-backed `agent` verdicts); keep `D-AQA2`–`D-AQA4` in force. Owed by [the AutoQA block](#move-autoqa-onto-the-ordinary-verdict-kinds).
+2. **[board-utilities.md](./board-utilities.md) ([§5.3](./board-utilities.md#53-item-alone) and [§14](./board-utilities.md#14-decision-ledger) `D-UT16`):** Add `item_criteria.claim_class`, the `RecordVerdict` actor-to-claim-class refusal table (`D-JL2`), and the SM-3 transition/receipt preconditions on `Apply` and `SetState` (`D-JL3`, `D-JL4`). The claim class is owed by [the first block](#prevent-a-gate-pass-from-retiring-an-owners-criterion), the preconditions by [the terminal-state block](#prevent-landed-and-resolved-states-without-their-evidence).
+3. **[work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) ([Retirement in the end state](./work-control-judge-in-tillr.md#retirement-in-the-end-state)):** Cross-reference `D-JL1` and `D-JL2` for how pre-approved graphs carry the `evaluator` role pre-land via `evaluator_slot` while standalone generic judging shares the same `eval.output` intake. Owed by [the block that routes a judge's blocked and defective findings](#route-a-judges-blocked-and-defective-findings-to-their-states).
+
+---
+
+## 7. What the Tree Already Holds
+
+Sections 1 to 5 were written against the tree of 2026-11-14. Two days of landings built part of this design under other items, some of it with different names. This section is the measurement the build order is cut from, read on 2026-11-16 at `bdd6b3c82`. Each row names the file a reader can open to check it.
+
+| Decision | Built at `bdd6b3c82` | Still to build |
+| :--- | :--- | :--- |
+| `D-JL1` judge before the gate | Nothing. `rg -n 'eval\.output\|evaluator' tools/tillr-drain tools/tillr-item -g '*.go'` returns nothing. | The intake, the judge run before the gate, and its three failing outcomes: blocks 9 to 11. |
+| `D-JL2` claim class on the criterion | Nothing. `item_criteria` has four columns and no `claim_class` (`tools/tillr-item/item/schema.go`), and `compose_verdict` in `tools/tillr-loop/tillr-loop` still writes `"claim_class": "verification-only"` for every criterion. | Blocks 1 and 2. |
+| `D-JL3` stored disposition, derived `working` | Built. `in-progress` is in `frozenStates` (`tools/tillr-item/item/apply.go`), and the refusal's rule is `state-frozen`, not the `state-derived` that [Section 3.2](#32-transition-preconditions-and-attempt-holds-d-jl4) names. `ProjectItemState` (`tools/tillr-view/serveread.go`) reads a stored `in-progress` as queued and answers `working` only for a running run. The header's dispatchable count is the planner's own rule (`tools/tillr-view/counts.go`). | Nothing. The name `state-frozen` stands. |
+| `D-JL4` transition preconditions | Nothing. `SetState` (`tools/tillr-item/item/state.go`) writes any writable state from any state, `items` has none of the seven columns, there is no `close` or `reopen` command (`tools/tillr-item/main.go`), and `rg -n 'closed\|item-not-landable' tools/tillr-land/land -g '*.go'` finds only a comment about file descriptors. | Blocks 4 to 6. |
+| `D-JL5` an attempt is not a verdict | Mostly built. A gate failure, a fence refusal and a run with no commit each record a `drain.refusal` event and no verdict (`refuse` in `tools/tillr-drain/drain/refusal.go`). A run cut off by its wall is held as `run-unjudged`. A run that reports `blocked` blocks the item and is routed to the design seat with its conflict as the brief (commit `ed5cb51a2e`). | One case: a landing that did not take still calls `failCandidate`, which records `not-done` against every criterion. Block 3. |
+| `D-JL6` send a failed item again under its own id | Built under other names. `tillr drain retry --acknowledge gate-failed` and `--acknowledge unjudged` authorize a second run of a judged or cut-off run (`tools/tillr-drain/drain/retries.go`). The planner re-admits an item once by itself when its item block, fence, backend policy or tillr build changed since the failed run, and holds it as `readmission-exhausted` after that (`tools/tillr-drain/drain/readmit.go`). | The second failure reaches nobody: block 12. The prohibition on clones has no check: block 13. No `rework` command is added (`D-JL8`). |
+| `D-JL7` AutoQA uses the ordinary kinds | Nothing. `ActorAutoQA`, `ClaimQAVerification` and `DecidedByAutoQA` are still writable in `tools/tillr-item/item/`. `rg -n 'actor_kind\|ActorKind' tools/tillr-view -g '*.go' -g '!*_test.go'` returns nothing, so no page shows who recorded a verdict. | Blocks 7 and 8. |
+
+Three facts about the tree change how a block is written, and each is ruled in `D-JL8`:
+
+- **Items are defined in documents.** `tillr item sync` reads item blocks from tracked Markdown, and its directive takes five attributes: `id`, `paths`, `blocked_by`, `seat` and `prose` (`syncAttributes` in `tools/tillr-item/item/sync.go`). A claim class that can only be set in the store would never be set, so the class is declared in the block.
+- **The seed file is frozen.** `config/tillr/seed-items.json` was frozen by commit `0b774f677`. It still holds eleven criteria that begin "Owner decision recorded" (`rg -c 'Owner decision recorded' config/tillr/seed-items.json` answers 11). Rows like them that a store already holds are typed by a migration, not by editing that file.
+- **A new hold must be named in the view.** The waiting face shows a hold it has no rule for as `unclassified` (`waitingRuleFor` in `tools/tillr-view/`), so every block that adds a hold to the planner also names the view in its fence and adds the rule.
+
+---
+
+## 8. Build Order
+
+Thirteen blocks. Each is one run inside one fence, and each names what it waits on. A block's fence includes the pack mirror under `yolo-packs/tillr/` because every change under `tools/tillr*` is delivered there too.
+
+The first block is the smallest slice that runs from end to end: an author marks a criterion as the owner's in a document, the store keeps the mark, and the loop's own verdict step then leaves that criterion alone when the gate passes. It closes the defect this design opened with and waits on nothing.
+
+The order after it follows what each block needs:
+
+| # | Block | Waits on |
+| :--- | :--- | :--- |
+| 1 | A gate pass does not retire an owner's criterion | nothing |
+| 2 | An item that owes an owner's ruling is held | 1 |
+| 3 | A failed landing freezes no criterion | nothing |
+| 4 | A blocked item names its waiter and reason | nothing |
+| 5 | `landed` and `resolved-elsewhere` need their evidence | 2 |
+| 6 | Close and reopen commands | 4 |
+| 7 | AutoQA uses the ordinary verdict kinds | nothing |
+| 8 | The item page shows who recorded a verdict | nothing |
+| 9 | One intake for a judge's written verdicts | 1 |
+| 10 | An opted-in item is judged before the gate | 3, 9 |
+| 11 | A judge's blocked and defective findings | 4, 6, 10 |
+| 12 | A second failed attempt goes to the design seat | nothing |
+| 13 | A held item is not cloned under a new id | 12 |
+
+One piece of `D-JL1` is not a block here. A workflow's evaluator leaf is a node of the graph runtime, which [tillr-item-graphs.md](./tillr-item-graphs.md) owns and has not yet cut into items. Blocks 9 to 11 build everything on this side of that boundary: the file a judge writes, the check of it, the step before the gate, and what each outcome does. The item graphs build order connects its leaf to that step, and adds no second intake.
+
+### Prevent a gate pass from retiring an owner's criterion
+
+Some criteria are not checks of the code. "The owner has recorded a decision" is true only when the owner says so, and no test can stand in for that. Today the loop cannot tell the two kinds apart: when the gate passes, it marks every criterion of the item done. That is how a five-second Markdown check once retired an owner's decision. This block gives each criterion a class, lets an author state it in the item's own block, and makes both the store and the loop's verdict step respect it. After it, a criterion marked as the owner's can be retired by a person and by nothing else.
+
+<!-- tillr: item id="item-jl-criterion-claim-class" paths="tools/tillr-item/,tools/tillr-loop/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** `item_criteria` has a `claim_class` column whose default is `verification-only`, and `tillr item show` prints each criterion's class. An item block declares classes in its directive as `claims="c1:owner-only,c3:direction"`; a criterion the attribute does not name is `verification-only`. `tillr item sync` stores the classes. An unknown class, or a criterion id the block does not carry, is a finding that names the block, and that file writes nothing.
+- **c2:** A class can become stricter and never looser, through `apply` or `sync`: `verification-only` may become any other class, `red-gate-triage` and `direction` may become `owner-only`, and every other change is refused as `claim-class-weakened`. A test covers each allowed and each refused move.
+- **c3:** `tillr item verdict record` refuses a verdict whose `claim_class` differs from the stored one (`claim-class-mismatch`), and refuses an actor kind the table in [Section 2.2](#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2) does not allow for the stored class (`claim-class-actor`). A test asserts all twelve cells of that table.
+- **c4:** `tillr item grant issue` refuses a grant that names `owner-only` (`grant-owner-only`).
+- **c5:** A criterion stored as `verification-only` whose text matches `(?i)^owner decision recorded\b` is refused by `apply` and `sync` as `owner-criterion-untyped`. Rows a store already holds with such text are set to `owner-only` once, when the column is added. A test opens a store written before the column existed and asserts the class.
+- **c6:** The loop's verdict program reads each criterion's stored class, records its mechanical verdict only for `verification-only` criteria, prints one line for each criterion it left, and exits 0. A test passes an item with an `owner-only` c1 and a `verification-only` c2 and asserts c2 is `done` and c1 has no verdict.
+- **c7:** [board-utilities.md](./board-utilities.md) states the column and the actor table in its section 5.3 and its ledger row `D-UT16`, and `uvx vantage-check` on that file reports nothing it did not report before.
+
+### Hold an item that still owes an owner's ruling
+
+Once the store knows which criteria are the owner's, the planner can stop spending on items that cannot finish. An item whose only unmet criterion is an owner's ruling gains nothing from a worker: the run would end, the gate would pass, and the item would still be waiting for the owner. On 2026-11-14 an item like that was unblocked early and dispatched. This block makes the planner hold such an item before any lane is used, and makes the waiting face say plainly that the owner is the one it waits on.
+
+<!-- tillr: item id="item-jl-owner-criterion-hold" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-criterion-claim-class" prose="2" -->
+
+- **c1:** The planner holds an `in-queue` item that has an `owner-only` criterion not yet `done`, with the reason `owner-only-owed`. It leases no lane and starts no run for it. A test with two free lanes asserts zero dispatches and the reason.
+- **c2:** The hold lifts on the first pass after a human verdict marks that criterion `done`. A test records the verdict and asserts the item is dispatched.
+- **c3:** The waiting face shows the item as waiting on the owner, with the criterion's id and the first line of its text, and the header's dispatchable count leaves it out. A test asserts the hold's class on the waiting face is not `unclassified`.
+
+### Prevent a failed landing from freezing the item's criteria
+
+A criterion's text is frozen once a judge has ruled on it, so that nobody lowers a bar after the fact. A landing that did not take is not such a ruling. The gate passed the work, and then the trunk could not accept it, usually because another landing got there first. Today that outcome still marks every criterion of the item as not done, which freezes text nobody judged and is the last way a failed attempt can make an item unrepairable. This block makes a failed landing behave like a failed gate already does: it is recorded against the run, and the item's criteria are left alone.
+
+<!-- tillr: item id="item-jl-land-refusal-no-verdict" paths="tools/tillr-drain/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** A landing that is refused, or that stops on a conflict, records a `drain.refusal` event naming the landing step and records no `item.verdict`. A test asserts every criterion's state is what it was before the run, and that `tillr item sync` can still change the text of those criteria afterward.
+- **c2:** The planner holds the item with a reason that names the landing and not the gate, and the waiting face has a rule for it that is not `unclassified`. The existing repair of a squash conflict still runs: a test asserts the conflict fixer is filed exactly as it was before this change.
+- **c3:** Nothing in the loop records a failing verdict any more. `rg -n 'VerdictFailed' tools/tillr-drain` returns nothing, and the verdict program refuses `--verdict fail` as a usage error that names this section.
+- **c4:** Criteria that an earlier failed landing already marked `not-done` stay as the store holds them. A test opens a store with such a row and asserts it is unchanged.
+
+### Add the waiter and reason to every blocked item
+
+"Blocked" is only useful when it says who has to act. Today an item can be moved to blocked with no record of who it waits on or why, and the board fills the gap with the words "the store marks it blocked". The loop already knows the answer when it blocks an item itself, because the run's report named the conflict and the seat that can settle it. This block stores the waiter and the reason beside the state, requires them on every new move to blocked, and remembers which state the item was in so that unblocking puts it back.
+
+<!-- tillr: item id="item-jl-blocked-names-its-waiter" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** `tillr item state --state blocked` requires `--waiter` and `--reason` and is refused without both as `blocked-waiter-missing`. A waiter is `owner`, `design`, `plan` or `item:<id>` for an item the store holds. Both are stored on the item, and `tillr item show` prints them.
+- **c2:** An item may be moved to blocked from `not-started`, `in-queue` or `blocked`, and from no other state. The state it came from is stored. Moving it back to `not-started` or `in-queue` clears the waiter, the reason and the stored state. A test covers each move.
+- **c3:** When a run reports `blocked`, the loop's move passes the waiter its conflict record names and the first line of the conflict as the reason. A test asserts both are in the store after the pass.
+- **c4:** The board's row for a blocked item shows the stored waiter and reason in place of "the store marks it blocked".
+- **c5:** A blocked item stored before this change, with no waiter, stays readable and shows `waiter not recorded`. Only new moves are refused. A test opens such a store.
+
+### Prevent landed and resolved states without their evidence
+
+The board's two "finished" states are claims about the world. `landed` claims this item's work is on the trunk, and `resolved-elsewhere` claims something else satisfied it. Today either can be written by one command with nothing to back it, and either can be undone the same way. This block makes the store ask for the evidence: a landing record and finished criteria for the first, a pointer to the other path for the second. It also makes both final, so a finished item is never quietly put back in the queue.
+
+<!-- tillr: item id="item-jl-terminal-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-jl-owner-criterion-hold" prose="2" -->
+
+- **c1:** A move to `landed` is refused as `landed-criteria-unmet`, naming the criteria, unless the item has at least one criterion and every one is `done`. It is refused as `landed-receipt-missing` unless the store holds a landing record for the item. A test covers each refusal and the accepted move.
+- **c2:** A move to `resolved-elsewhere` requires `--resolves-via`, which is `item:<id>` for another item the store holds, `commit:<sha>` or `doc:<path>`. Without it the move is refused as `resolved-pointer-missing`, and when the item already has a landing record it is refused as `already-landed`. The pointer is stored and `tillr item show` prints it.
+- **c3:** A move out of `landed` or `resolved-elsewhere` to any other state is refused as `state-terminal`. Writing the state the item already has still answers the item and appends no event.
+- **c4:** A test runs the loop's own sequence for a landed candidate, verdicts first and the state move second, against a store that holds the landing record, and asserts the item ends `landed`.
+- **c5:** Items that were `landed` or `resolved-elsewhere` before this change stay readable as they are, with or without evidence. A test opens such a store.
+- **c6:** [board-utilities.md](./board-utilities.md) states these preconditions in its section 5.3.
+
+### Add commands to close an item and reopen it
+
+Sometimes the right answer to an item is "not doing this". The store has a `closed` state for that, but no command that records why an item was closed, who closed it, or what state it was in, so a closed item cannot be reopened to where it was. Nothing stops a candidate for a closed item from landing either. This block adds the two commands, keeps what a reopen needs, and makes the lander refuse work for an item that is no longer wanted. An item that has already landed cannot be closed: the landing wins.
+
+<!-- tillr: item id="item-jl-close-and-reopen" paths="tools/tillr-item/,tools/tillr-land/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="item-jl-blocked-names-its-waiter" prose="2" -->
+
+- **c1:** `tillr item close --item <id> --reason <text> --by <who>` closes an item that is `not-started`, `in-queue` or `blocked`, and stores the reason, the time, who closed it and the state it was in. With no reason it is refused as `close-reason-missing`. An item that has a landing record is refused as `already-landed`.
+- **c2:** `tillr item state` refuses a move into `closed` and a move out of it, and each refusal names the command to use.
+- **c3:** `tillr item reopen --item <id> --reason <text> --by <who>` puts a closed item back in the state it was closed from. An item closed while blocked comes back blocked, with its waiter and reason. A test covers all three starting states.
+- **c4:** `tillr-land pass` refuses a candidate whose item is `closed` or `resolved-elsewhere` as `item-not-landable` and does not move the trunk. A test closes an item between its gate and its landing.
+- **c5:** `tillr item sync` does not reopen a closed item whose block is still in a document. A test syncs twice around a close and asserts the state.
+
+### Move AutoQA onto the ordinary verdict kinds
+
+AutoQA is a client of tillr, not a part of it. When its seams were added, the store was given an `autoqa` actor kind that skips the check every other agent must pass: a recorded grant from someone with the authority to delegate. That is a sign-off path with no grantor and no expiry. The store already has what AutoQA needs. A test runner's result is a mechanical verdict, and a reviewing agent's judgment is an agent verdict under a grant; the actor's name says it was AutoQA. This block retires the special kinds for new writes and leaves old records readable.
+
+<!-- tillr: item id="item-jl-retire-autoqa-vocabulary" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** A new verdict with `actor_kind: "autoqa"`, a new grant naming `qa-verification`, and a new decision with `decided_by: "autoqa"` are each refused as `actor-retired`, with a message that names what to write instead. A test covers the three.
+- **c2:** Records of those three kinds that a store already holds are still printed by `tillr item show` and the list commands. A test opens a store that holds one of each.
+- **c3:** A mechanical verdict whose actor is `autoqa/<runner>` is accepted. An agent verdict whose actor is `autoqa/<reviewer>` is accepted under an unexpired grant and refused without one.
+- **c4:** [autoqa-tillr-seams.md](./autoqa-tillr-seams.md) records in its ledger that `D-AQA1` is superseded by `D-JL7` and that `D-AQA2` to `D-AQA4` stand.
+
+The queue row `item-decided-by-autoqa` asks for the opposite of this block. Closing it is an operator's act on the store, done with the close command once [that block](#add-commands-to-close-an-item-and-reopen-it) lands; no run writes the store.
+
+### Add the verdict's author to the item page
+
+A verdict is only as good as whoever recorded it, and the observatory does not say who that was. A reader cannot tell a criterion the gate retired from one a judge ruled on or one the owner signed. Once AutoQA records under the ordinary kinds, its name in the actor field is the only thing that marks its verdicts, so the page has to show that field. This block puts the author on the page and adds the one alarm the state model asks for: an item waiting on something that has been closed.
+
+<!-- tillr: item id="item-jl-view-verdict-actor" paths="tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** The item page lists each verdict with its criterion, verdict, actor, actor kind, claim class and time, and the view's API returns the same fields. A test renders an item holding a mechanical, an agent and a human verdict.
+- **c2:** A verdict that has no actor recorded shows `not recorded`, never an empty cell.
+- **c3:** An item that is blocked by an item in the `closed` state shows one alarm line that names the closed item. A test asserts the line appears, and that it does not appear when the blocker is `landed`.
+
+### Add one intake for a judge's written verdicts
+
+A judge is an agent, and an agent's output is text that may be wrong, incomplete or about the wrong commit. Before any of it becomes a record, something has to check it: that it covers every criterion, that it read the text the store holds, that it looked at the candidate it claims to, and that it cites evidence. That check must be one piece of code, used by the loop, by a person judging a commit by hand and later by a workflow's evaluator, or the three will drift. This block builds that one intake as a command. It never trusts the file to say who the judge was; the caller states that.
+
+<!-- tillr: item id="item-jl-judge-intake" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-jl-criterion-claim-class" prose="2" -->
+
+- **c1:** `tillr item judge --item <id> --input <file> --head <sha> --actor <who> --judged-actor <who> --grant <id>` reads a file in the shape of the table in [Section 2.1](#21-topology-relative-to-gate-and-land-d-jl1) and records one `item.verdict` for each criterion in one transaction. Any refusal records none.
+- **c2:** The file is refused, each case under its own rule name, when its head or tree differs from `--head`, when a criterion of the item is missing or an unknown one is present, when a criterion hash differs from the stored text's, when a reason or the evidence list is empty, when a claim class differs from the stored one, and when it claims `pass` while an entry is not `done`. A test covers each.
+- **c3:** The actor and the judged actor come only from the flags. A file that carries either field is refused as `actor-in-output`, and the two flags naming the same run or the same session are refused by the independence check.
+- **c4:** `--dry-run` checks the file, writes nothing, and prints the outcome: `pass`, or the first that applies of `defective`, `blocked` and `not-done`. Each outcome has its own exit code, and the command's help lists them.
+- **c5:** `--landed <sha>` adds the landed commit to the evidence of each `done` verdict.
+- **c6:** An item block may set `judge="agent"` in its directive. `tillr item sync` stores it and `tillr item show` prints it; any other value is a finding that names the block.
+
+### Route an opted-in item through a judge before the gate
+
+The gate proves the tree is healthy. It does not prove the change is what the item asked for, and for some items that is the question that matters. Such an item asks for a judge in its own block. The judge runs after the worker has committed and before the gate, so that work which misses the point costs neither the gate's time nor a landing. It reads and never writes. If it passes the work, the gate and the landing run as they do today, and only after the landing are the judge's rulings recorded, so the board never shows an item as judged done while its change is not on the trunk.
+
+<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-intake,item-jl-land-refusal-no-verdict" prose="2" -->
+
+- **c1:** For an item whose block sets `judge="agent"`, the loop starts one run on the review seat in the same lane after the worker's candidate passes the fence check and before the gate. Its brief carries the criteria and the candidate's diff and names the path where it must write its verdict file. A test with stub harnesses asserts the order: worker, judge, gate, landing.
+- **c2:** A judge run that commits or leaves the worktree changed is refused, and the worker's candidate is what it was. A test asserts the candidate's commit is unchanged.
+- **c3:** When the judge's outcome is `pass`, the gate and the landing run as for any item. After the landing the verdicts are recorded through the intake with the landed commit, the item becomes `landed`, and the mechanical verdict program is not run for this item.
+- **c4:** When the gate fails or the landing does not take after a judge's `pass`, no verdict is recorded and the item is held under the gate's or the landing's own reason.
+- **c5:** When the outcome is `not-done`, neither the gate nor the landing runs and no verdict is recorded. The item is held as `eval-failed`, the verdict file is kept with the judge run's records, and the waiting face shows the hold with the judge's first reason.
+- **c6:** An item that asks for a judge and has no unexpired grant covering it is held as `judge-grant-absent` before its worker is dispatched. A test asserts no run starts.
+- **c7:** A judge run that writes no verdict file, or one the intake refuses, holds the item as `judge-unreadable`, records no verdict, and counts as the judge's failed attempt and not the worker's.
+- **c8:** An item whose block does not ask for a judge gets no judge run. A test asserts one run for the item.
+
+### Route a judge's blocked and defective findings to their states
+
+A judge can find more than "not yet done". It can find that a criterion cannot be judged until someone answers a question, or that the item's premise is false and no amount of work will satisfy it. Both are worth more than a failed attempt, because they say who must act. A blocked finding sends the item to the seat that can answer. A defective finding is a ruling: it is recorded, and the item is closed with the judge's reason, so the queue stops spending on work that was wrong from the start. This block finishes the judge step with those two outcomes.
+
+<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-before-gate,item-jl-blocked-names-its-waiter,item-jl-close-and-reopen" prose="2" -->
+
+- **c1:** When the judge's outcome is `blocked`, the item is moved to blocked with the waiter and the reason from the judge's entry. No verdict is recorded and the gate does not run.
+- **c2:** When the outcome is `defective`, the judge's verdicts are recorded through the intake and the item is closed with the reason `defective: <criterion>: <reason>`. The gate does not run and the lane is freed. A test asserts the trunk did not move.
+- **c3:** A verdict file that holds more than one kind of failing entry is settled by the first that applies of defective, blocked and not-done. A test covers the three pairs.
+- **c4:** The waiting face has a rule for each of the two outcomes. A test asserts neither shows as `unclassified`.
+- **c5:** [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) points from "Retirement in the end state" to `D-JL1` and `D-JL2` for where the judge runs and what its file must hold.
+
+### Route a second failed attempt to the design seat
+
+The loop may try a failed item once more by itself when something it recorded has changed, and an operator may authorize one more run by name. What happens after that second failure is, today, nothing: the item sits in a hold until someone notices. The owner's ruling is that a failure the loop cannot resolve goes to a seat that can, and to the design seat before the owner. Two failures of the same item are evidence that the item is wrong, not the worker. This block sends the item, with what both runs reported, to the design seat in the way a run that reports blocked is already sent.
+
+<!-- tillr: item id="item-jl-second-failure-to-design" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
+
+- **c1:** When the run that follows an automatic re-admission or an authorized retry also ends without a landing, the loop raises a conflict for the design seat that carries both runs' reports and the gate's failing checks, and holds the item on that conflict. A test fails one fixture item twice and asserts the conflict and its contents.
+- **c2:** The loop starts no third run of that item by itself. A test runs ten further passes and asserts no dispatch.
+- **c3:** A run that ended because the loop stopped or crashed is not counted as a failure here. A test stops the loop under the item twice and asserts no conflict is raised.
+- **c4:** When the design seat's run changes the item's block, the item is dispatched once more, by the path that already re-admits an answered conflict. A test asserts one dispatch.
+- **c5:** The waiting face shows the item as waiting on the design seat, with the two runs named.
+
+### Prevent cloning a held item under a new id
+
+When an item could not be repaired in place, the workaround was to file a copy with `-v2` on its id and mark the original as resolved elsewhere. Six items went that way on 2026-11-14. Each copy lost the original's run history and its place in other items' dependencies, and each "resolved elsewhere" was untrue. With a failed attempt no longer freezing criteria, and with retry, re-admission and the design seat all working on the original id, the workaround has no remaining use. This block makes the sync refuse it, so the rule does not depend on anyone remembering.
+
+<!-- tillr: item id="item-jl-refuse-clone-ids" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-jl-second-failure-to-design" prose="2" -->
+
+- **c1:** `tillr item sync` reports the finding `clone-of-held-item` for a block whose id is another item's id followed by `-v` and a number, when the store holds that other item in a state that is not final. The finding names both ids and the retry command, and that file writes nothing.
+- **c2:** The same block is accepted when the other item is `landed`, `resolved-elsewhere` or `closed`, or is not in the store. Items already in a store under such ids are untouched. A test covers each.
+- **c3:** The operating skill's recovery section tells an operator to retry a failed item under its own id and does not describe cloning one. A test fails when that section names a `-v2` id.
