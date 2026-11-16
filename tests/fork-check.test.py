@@ -12,14 +12,11 @@ of the command:
   * a series that changes pulls in the working-copy check and the build; a series whose
     working copy is absent refuses the run -- naming the missing checkout and its setup --
     instead of recording a verdict over steps that never ran;
-  * a document the change touches is checked, and a tool that cannot run -- or reaches
-    no verdict -- is a named skip that leaves the change unverified, never a pass;
+  * changed Markdown selects the repository-wide scratch and frontmatter citation guards;
+    rendering changed documents is owned by the declaration runner's fixture suite;
   * a document that cites a scratch path as evidence fails the scratch-citation guard
     and does not advance the baseline, while a citation inside a fenced block -- a
     specimen -- passes;
-  * the legacy seed is intake-frozen under D-QP1: a removal passes, a net-new item_id
-    fails, and an edit to a surviving entry's title or state fails, each refusal naming
-    the ruling and the remedy;
   * a change that can change what the roster storybook renders regenerates it, and a
     change that cannot leaves it alone;
   * a change to the meta-muse pack, the personal layer that selects it, or either of the
@@ -975,60 +972,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "no tracked Markdown changed in the selected range" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
-    # 10. A change that touches documents invokes the check, on the changed paths.
-    (repo / "README.md").write_text("# Synthetic fork-check repository\n\nEdited.\n")
-    (repo / "docs" / "guide.md").write_text("# Guide\n\nEdited.\n")
-    commit(repo, "edit two documents")
-    clear(base, "uvx-calls")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert calls(base, "uvx-calls") == ["vantage-check README.md docs/guide.md"], calls(base, "uvx-calls")
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    doc_baseline = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-
-    # 11. A document finding fails the gate, and the baseline does not advance. The checker
-    #     is invoked exactly ONCE: a failure is triaged from its own output, never re-run.
-    (repo / "docs" / "guide.md").write_text("# Guide\n\nSee [missing](./gone.md).\n")
-    commit(repo, "break a document")
-    (base / "uvx-out").write_text(
-        "docs/guide.md\n"
-        "  3:5  error  link/missing-target  `./gone.md` does not exist (looked for `gone.md`).\n"
-        "\n"
-        "1 error in 1 file checked\n"
-    )
-    (base / "uvx-rc").write_text("1")
-    clear(base, "uvx-calls")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "FAILED" in result.stdout and "link/missing-target" in result.stdout, result.stdout
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
-    assert record(repo)["baseline"]["commit"] == doc_baseline, record(repo)["baseline"]
-    assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
-    clear(base, "uvx-rc", "uvx-out")
-
-    # 12. A tool that cannot run is a named skip, not a pass: the change is left
-    #     unverified and the baseline does not advance. The checker may reach no verdict,
-    #     `uvx` may itself fail (its own error on stderr -- a first fetch with no
-    #     network), or `uvx` may be absent.
-    for rc, err, needle in (
-        ("3", "", "exited 3, which is not a document finding"),
-        ("1", "error: No solution found when resolving tool dependencies\n",
-         "exited 1, which is not a document finding"),
-        ("127", "uvx: not found on PATH\n", "uvx is not on PATH"),
-    ):
-        clear(base, "uvx-calls", "uvx-rc", "uvx-out", "uvx-err")
-        (base / "uvx-rc").write_text(rc)
-        if err:
-            (base / "uvx-err").write_text(err)
-        result = run(repo, env)
-        assert result.returncode == 2, (rc, result.stdout + result.stderr)
-        assert needle in result.stdout, (rc, result.stdout)
-        assert "skip" in result.stdout and "run  documents" not in result.stdout, result.stdout
-        # A check the report names as a skip streams as a skip too, not as an error.
-        assert "fork-check: skip documents --" in result.stderr, (rc, result.stderr)
-        assert "fork-check: VERIFIED" not in result.stdout, result.stdout
-        assert record(repo)["baseline"]["commit"] == doc_baseline, (rc, record(repo)["baseline"])
-
     # 13. A change that can change what the roster storybook renders regenerates it
     #     into the durable directory, not the checkout; an unrelated change does not.
     clear(base, "storybook-calls", "yolo-calls", "pi-forks-calls", "uvx-calls", "uvx-rc", "uvx-out", "uvx-err")
@@ -1191,98 +1134,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "run  design-citations" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # 15b. The legacy-seed intake freeze (D-QP1): config/tillr/seed-items.json may only
-    #      shrink. A removal passes; a net-new item_id fails; an edit to a surviving
-    #      entry's title or state fails. The refusal names the freeze and the remedy, and
-    #      every case is printed so a green transcript says which direction it proved.
-    seed = repo / "config" / "tillr" / "seed-items.json"
-    seed_doc = json.loads(seed.read_text())
-    seed_doc["items"] = [item for item in seed_doc["items"]
-                         if item["item_id"] != "item-seed-c"]
-    seed.write_text(json.dumps(seed_doc, indent=1) + "\n")
-    commit(repo, "prune the terminal seed row")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "run  seed-freeze" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    seed_baseline = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    assert record(repo)["baseline"]["commit"] == seed_baseline, record(repo)["baseline"]
-    print("seed-freeze case 1: a removal from the legacy seed passes")
-
-    # The one thing the freeze exists to refuse: a row that was not there before.
-    seed_doc = json.loads(seed.read_text())
-    seed_doc["items"].append({"item_id": "item-seed-d", "title": "D", "state": "in-queue",
-                              "rank": "3", "blocked_by": [], "criteria": [],
-                              "allowed_paths": ["docs/"]})
-    seed.write_text(json.dumps(seed_doc, indent=1) + "\n")
-    commit(repo, "add a net-new seed row")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  seed-freeze" in result.stdout and "FAILED" in result.stdout, result.stdout
-    assert "item-seed-d" in result.stdout, result.stdout
-    assert "intake-frozen" in result.stdout and "D-QP1" in result.stdout, result.stdout
-    assert "file the item through the store and the owning document" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == seed_baseline, record(repo)["baseline"]
-    print("seed-freeze case 2: a net-new item_id fails and names D-QP1")
-
-    # An edit to a surviving entry's title is refused, and the field is named. The
-    # net-new row is withdrawn in the same commit so this case fails for one reason.
-    seed_doc = json.loads(seed.read_text())
-    seed_doc["items"] = [item for item in seed_doc["items"]
-                         if item["item_id"] != "item-seed-d"]
-    for item in seed_doc["items"]:
-        if item["item_id"] == "item-seed-a":
-            item["title"] = "A, edited"
-    seed.write_text(json.dumps(seed_doc, indent=1) + "\n")
-    commit(repo, "edit a surviving seed row's title")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  seed-freeze" in result.stdout and "FAILED" in result.stdout, result.stdout
-    assert "item-seed-a" in result.stdout and "title" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == seed_baseline, record(repo)["baseline"]
-    print("seed-freeze case 3: an edit to a surviving title fails")
-
-    # The same for state, the other field the criterion names.
-    seed_doc = json.loads(seed.read_text())
-    for item in seed_doc["items"]:
-        if item["item_id"] == "item-seed-a":
-            item["title"] = "A"
-        if item["item_id"] == "item-seed-b":
-            item["state"] = "blocked"
-    seed.write_text(json.dumps(seed_doc, indent=1) + "\n")
-    commit(repo, "edit a surviving seed row's state")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  seed-freeze" in result.stdout and "FAILED" in result.stdout, result.stdout
-    assert "item-seed-b" in result.stdout and "state" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == seed_baseline, record(repo)["baseline"]
-    print("seed-freeze case 4: an edit to a surviving state fails")
-
-    # The limit of the rule: deleting the file is every entry removed, so the freeze
-    # permits it. The four cases above run the gate; this one asks the guard's own
-    # function for the file that is gone, because the gate's next run would refuse a
-    # dirty deletion before it planned anything.
-    seed_spec = importlib.util.spec_from_file_location("fork_check_seed", SCRIPT)
-    seed_module = importlib.util.module_from_spec(seed_spec)
-    seed_spec.loader.exec_module(seed_module)
-    seed.unlink()
-    assert seed_module.legacy_seed_findings(repo, seed_baseline) == [], \
-        seed_module.legacy_seed_findings(repo, seed_baseline)
-    print("seed-freeze case 5: deleting the drained seed is every entry removed")
-
-    # The freeze is a verdict on the tree, not a latch: restoring the surviving row
-    # verifies and advances the baseline, so the next case starts from a clean tree.
-    for item in seed_doc["items"]:
-        if item["item_id"] == "item-seed-b":
-            item["state"] = "in-queue"
-    seed.write_text(json.dumps(seed_doc, indent=1) + "\n")
-    commit(repo, "restore the surviving seed row")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    seed_baseline = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    assert record(repo)["baseline"]["commit"] == seed_baseline, record(repo)["baseline"]
 
     # 16. A pack that declares `patch_branch` and no `patches` still deploys a
     #     generated series, and fork-check plans it: the series directory is the one
@@ -1734,7 +1585,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert run(repo, env).returncode == 0
     baseline = record(repo)["baseline"]
     targets = record(repo)["targets"]
-    (repo / "docs/guide.md").write_text("# Broken doc\n")
+    (repo / "docs/guide.md").write_text("# Broken doc\n\nEvidence .yolo/durable/unretained.txt\n")
     commit(repo, "break documentation")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -1760,7 +1611,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["last_audit"]["outcome"] == "failed", record(repo)
     result = run(repo, env, "--since", "HEAD~2")
     assert result.returncode == 1, result.stdout + result.stderr
-    assert calls(base, "uvx-calls"), "Multi-commit scope must include the broken document"
+    assert "run  scratch" in result.stdout, result.stdout
 
 # The real recipe must inherit the approved point, not silently narrow to HEAD^.
 # Run its actual default arguments in a fixture with failure from an earlier task.
@@ -1776,7 +1627,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert run(repo, env).returncode == 0
     approved = record(repo)["baseline"]
-    (repo / "docs/guide.md").write_text("# Earlier broken document\n")
+    (repo / "docs/guide.md").write_text("# Earlier broken document\n\nEvidence .yolo/durable/unretained.txt\n")
     commit(repo, "earlier task leaves a failed document check")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -1786,7 +1637,7 @@ with tempfile.TemporaryDirectory() as tmp:
     clear(base, "uvx-calls")
     result = run(repo, env, *default_args)
     assert result.returncode == 1, "A later commit must not hide the earlier failure:\n" + result.stdout
-    assert calls(base, "uvx-calls"), "Default completion must check earlier unapproved documents"
+    assert "run  scratch" in result.stdout, "Default completion must check earlier unapproved documents"
     assert record(repo)["baseline"] == approved, record(repo)
 
     # Once all pending checks pass, the approved point rolls forward to HEAD.
@@ -2112,9 +1963,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.stderr.splitlines()[0].startswith("fork-check: planning"), result.stderr
     assert "fork-check: plan ready" in result.stderr, result.stderr
     assert "fork-check: ok structural" in result.stderr, result.stderr
-    assert "fork-check: ok documents" in result.stderr, result.stderr
+    assert "fork-check: ok scratch" in result.stderr, result.stderr
     assert result.stderr.index("fork-check: ok structural") \
-        < result.stderr.index("fork-check: ok documents"), result.stderr
+        < result.stderr.index("fork-check: ok scratch"), result.stderr
     # One line per check, and no second one announcing a start: a start line would be in
     # start order while the results are in plan order, so the two would disagree.
     assert "fork-check: running" not in result.stderr, result.stderr
@@ -2147,7 +1998,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     headline = [line for line in result.stdout.splitlines()
                 if line.startswith("fork-check: VERIFIED")][0]
-    # 9 checks ran (structural, the `.ts` file-size budget, the identity guard, the series
+    # 8 checks ran (structural, the `.ts` file-size budget, the series
     # check, the two
     # patch-branch merge-checks -- both working copies are in the fixture, the way a main
     # checkout that ran every setup looks -- pi-subagents' one prepare step and its two
@@ -2201,7 +2052,7 @@ with tempfile.TemporaryDirectory() as tmp:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     go_tool_steps = 2 * len(module.GO_TOOL_DIRS)
-    assert "9 check(s) passed" in headline, headline
+    assert "8 check(s) passed" in headline, headline
     # The count is DERIVED from the report, not from a constant: the headline's number must
     # equal the number of steps the report names as not run. A constant here was a hand
     # sweep waiting to happen -- it went stale twice in one day, once when the pack-sync
@@ -2527,7 +2378,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "recorded on refs/heads/main" in result.stdout, result.stdout
     assert "1 path(s) changed since it" in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
     # 26c. Two worktrees, both runs started together, both reach a verdict. Each lane is its
@@ -2605,7 +2456,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # commit or the fork point with one -- never a first run and never a refusal.
     assert "so this run plans from " in result.stdout, result.stdout
     assert "history was rewritten under it" in result.stdout, result.stdout
-    assert "would run  documents" in result.stdout, result.stdout
+    assert "would run  scratch" in result.stdout, result.stdout
     assert "REFUSED" not in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
     assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
@@ -2623,7 +2474,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "the baseline recorded on refs/heads/feat/lane-b" in result.stdout, result.stdout
     assert "1 path(s) changed since it" in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
     assert record(repo)["baselines"]["refs/heads/feat/lane-b"]["commit"] == \
         sh(lanes["lane-b"], "git", "rev-parse", "HEAD").stdout.strip(), record(repo)["baselines"]
 
@@ -2643,7 +2494,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "recorded on the record's shared entry" in result.stdout, result.stdout
     assert "1 path(s) changed since it" in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
     assert record(repo)["baselines"]["refs/heads/feat/lane-b"]["commit"] == \
         sh(lanes["lane-b"], "git", "rev-parse", "HEAD").stdout.strip(), record(repo)["baselines"]
 
@@ -2674,7 +2525,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [PACK_CHECK], calls(base, "yolo-calls")
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
 
     # 26i. An entry this branch is BEHIND -- the integration branch advanced past the commit
     #      this branch was cut from -- is neither a refusal nor a first run: the run plans
@@ -2694,7 +2545,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "the fork point with refs/heads/main" in result.stdout, result.stdout
     assert "1 path(s) changed since it" in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
-    assert calls(base, "uvx-calls") == ["vantage-check docs/guide.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
     assert record(repo)["baselines"]["refs/heads/feat/lane-c"]["commit"] == \
         sh(lane_c, "git", "rev-parse", "HEAD").stdout.strip(), record(repo)["baselines"]
 
@@ -2726,7 +2577,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "the fork point with refs/heads/main" in result.stdout, result.stdout
     assert "recorded on refs/heads/feat/lane-d" not in result.stdout, result.stdout
     assert "1 path(s) changed since it" in result.stdout, result.stdout
-    assert calls(base, "uvx-calls") == ["vantage-check docs/other.md"], calls(base, "uvx-calls")
+    assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
 
 # 26k. THE REWRITTEN-BRANCH BOUNDARY, BOTH SIDES. A branch whose own recorded entry is
 #      orphaned plans from the fork point with that entry, so a line added BEFORE the fork
@@ -2781,28 +2632,10 @@ with tempfile.TemporaryDirectory() as tmp:
     }
     write_state(state)
 
-    # The first side: the citation is in the base tree, so it is not an added line and the
-    # guard does not judge it. The plan names the fork point as its base.
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"baseline {fork_point[:12]}" in result.stdout, result.stdout
     assert "the fork point with refs/heads/main" in result.stdout, result.stdout
-    assert "run  citations" in result.stdout, result.stdout
-    assert "REFUSED" not in result.stdout, result.stdout
-
-    # The second side: the same citation added AFTER the fork point is an added line, and
-    # it refuses. It goes in a document that did not exist at the base, because a sha the
-    # same document already cited at the base is not a new claim -- the reflow rule -- and
-    # re-citing it in guide.md would pass for that reason rather than this one.
-    (repo / "docs" / "second.md").write_text(
-        f"# Second\n\nThe suite counts are in `{lane[:12]}`.\n"
-    )
-    commit(repo, "cite the lane commit after the fork point")
-    result = run(repo, env)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "run  citations" in result.stdout and "REFUSED" in result.stdout, result.stdout
-    assert (f"docs/second.md:3: {lane[:12]}: resolves to a commit that is not an ancestor "
-            f"of HEAD and is not reachable from an upstream ref") in result.stdout, result.stdout
 
 # The gate's own audit suite is part of the gate. `tests/fork-check.test.py` is the
 # only thing that exercises the checker's routing, so a change to `tools/fork-check.py`
@@ -2819,8 +2652,7 @@ with tempfile.TemporaryDirectory() as tmp:
     spec = importlib.util.spec_from_file_location("fork_check_self_suite", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    for path in ("tools/fork-check.py", "tests/fork-check.test.py",
-                 "tests/git-identity.test.py"):
+    for path in ("tools/fork-check.py", "tests/fork-check.test.py"):
         planned = module.build_plan(
             repo, [], module.Record(base / "plan-state.json"), [path], None, True,
         )
@@ -2828,8 +2660,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert len(steps) == 1, [(c.kind, c.label) for c in planned.checks]
         assert steps[0].argv == [sys.executable, "tests/fork-check.test.py"], steps[0].argv
         assert steps[0].watches == ("tools/fork-check.py", "tests/fork-check.test.py",
-                                    ".justfile", "tests/git-identity.test.py",
-                                    "tools/preflight-declarations.json"), steps[0].watches
+                                    ".justfile", "tools/preflight-declarations.json"), steps[0].watches
         # The step runs with nothing else of the gate beside it. It spawns real gates, and
         # on 2026-10-29 it errored with exit 2 inside a landing pass while other gate work
         # was in flight while passing standalone on the same tip -- which stranded item
@@ -3211,7 +3042,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "go-build" in planned, planned
     assert "go-tool" in planned, planned
     assert set(required) <= set(planned), (planned, required)
-    assert {"structural", "file-size", "commit-identity"} <= set(required), required
+    assert {"structural", "file-size"} <= set(required), required
     line_buffer = io.StringIO()
     with contextlib.redirect_stdout(line_buffer):
         module.print_plan(module.Record(base / "names-state.json"), plan, "0" * 40, "1" * 40)
@@ -4536,194 +4367,6 @@ with tempfile.TemporaryDirectory() as tmp:
     if tool.in_jail():
         assert "checks with `yolo --version --full` on the host" in result.stdout, result.stdout
 
-# 39. The unreachable-citation guard, in both directions: an added line that cites a
-#     commit HEAD contains passes, and one that cites a lane-only commit REFUSES (exit 2)
-#     naming the file, the sha and the reading that failed. The marker makes the same
-#     citation deliberate, a fenced line is a specimen, and a token that resolves to no
-#     commit in this clone is not judged -- the case exists because the failure it pins
-#     ("the suite counts are in <sha>", where the sha lived only on a lane branch) was
-#     produced four times in one session with nothing in the gate noticing. The other
-#     direction is the upstream PIN: the fork patch branches put upstream's commits in
-#     this clone's object database, so a pin's sha resolves and is not an ancestor of
-#     HEAD, and it must pass -- while a lane branch pushed to origin is still a lane
-#     branch and must still refuse.
-with tempfile.TemporaryDirectory() as tmp:
-    base = Path(tmp)
-    repo, _, _ = build_repo(base)
-    env = build_stubs(base)
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    landed = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    # A commit reachable only from a branch: the shape a lane branch leaves behind.
-    sh(repo, "git", "checkout", "--quiet", "-b", "lane")
-    (repo / "lane.txt").write_text("lane work\n")
-    commit(repo, "lane-only commit")
-    lane = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    sh(repo, "git", "checkout", "--quiet", "main")
-
-    # The passing direction: a commit HEAD contains, cited with no marker.
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe tree was read at `{landed[:12]}`.\n"
-    )
-    commit(repo, "cite a landed commit")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "run  citations" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # The refusing direction: a lane-only commit, unmarked. The gate exits 2 and names
-    # the file, the sha and the reading.
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe suite counts are in `{lane[:12]}`.\n"
-    )
-    commit(repo, "cite a lane-only commit")
-    result = run(repo, env)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "run  citations" in result.stdout and "REFUSED" in result.stdout, result.stdout
-    assert (f"docs/guide.md:3: {lane[:12]}: resolves to a commit that is not an ancestor "
-            f"of HEAD and is not reachable from an upstream ref") in result.stdout, result.stdout
-    assert record(repo)["runs"][-1]["outcome"] == "refused", record(repo)["runs"][-1]
-
-    # The marker makes the same citation a deliberate one.
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe suite counts are in `{lane[:12]}` [unlanded].\n"
-    )
-    commit(repo, "mark the lane-only citation")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # A citation the document already carried at the base is not a NEW claim: reflowing
-    # the line does not re-refuse the backlog it carries. The line is rewritten without
-    # the marker, and the sha is still the one the document cited at the base.
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe suite counts are in `{lane[:12]}` (see the note above).\n"
-    )
-    commit(repo, "reflow a citation the document already carried")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # A fence is a specimen, not a citation.
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\n```bash\ngit show {lane[:12]}\n```\n"
-    )
-    commit(repo, "keep the lane sha in a fence")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # A hex token that resolves to no commit in this clone is not judged: an upstream
-    # project's sha and a hex-looking session id look exactly like this.
-    (repo / "docs" / "guide.md").write_text(
-        "# Guide\n\nThe upstream base was `deadbeef`.\n"
-    )
-    commit(repo, "cite a sha this clone does not have")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # An upstream PIN: a commit the patch branch carries. The patch branch's ancestry is
-    # upstream's, so the sha resolves in this clone and is not an ancestor of HEAD -- the
-    # shape item 397's pin table cites -- and it is a citation of upstream's history, not
-    # a claim about this repository's. It passes with no marker.
-    sh(repo, "git", "checkout", "--quiet", "-b", "patch/upstream", "main")
-    (repo / "upstream.txt").write_text("upstream work\n")
-    commit(repo, "upstream commit")
-    pinned = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    sh(repo, "git", "checkout", "--quiet", "main")
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe fork is pinned at `{pinned[:12]}`.\n"
-    )
-    commit(repo, "cite an upstream pin on the patch branch")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # The same claim through the upstream remote's tracking ref, which is how a clone
-    # that has no local patch branch still holds upstream's history.
-    sh(repo, "git", "checkout", "--quiet", "--detach", "main")
-    (repo / "release.txt").write_text("upstream release\n")
-    commit(repo, "upstream release commit")
-    release = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    sh(repo, "git", "update-ref", "refs/remotes/upstream/main", release)
-    sh(repo, "git", "checkout", "--quiet", "main")
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe release is `{release[:12]}`.\n"
-    )
-    commit(repo, "cite an upstream pin on the upstream remote")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # A lane branch pushed to origin is still a lane branch: a remote-tracking ref of
-    # this repository's own work is not upstream's history, so the narrowing that lets a
-    # pin through does not let an unlanded lane commit through with it.
-    sh(repo, "git", "update-ref", "refs/remotes/origin/lane", lane)
-    (repo / "docs" / "guide.md").write_text(
-        f"# Guide\n\nThe suite counts are in `{lane[:12]}`.\n"
-    )
-    commit(repo, "cite a lane commit pushed to origin")
-    result = run(repo, env)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "run  citations" in result.stdout and "REFUSED" in result.stdout, result.stdout
-    assert (f"docs/guide.md:3: {lane[:12]}: resolves to a commit that is not an ancestor "
-            f"of HEAD and is not reachable from an upstream ref") in result.stdout, result.stdout
-
-# 41. The `.ts` file-size budget. A size is not something a diff shows: a shipped extension
-#     was discovered at 19,839 lines, and every other shipped extension is under 2,400. The budget
-#     warns above 2,000 lines so a file that large is visible in the report, and refuses a file
-#     the change ADDS above 3,000 -- because a warning on the tree's existing debt would fail
-#     every lane for something its change did not do, while a file a change introduces at that
-#     size is what the budget exists to stop at the gate rather than at discovery. Both
-#     directions are exercised here, with the boundary below each threshold passing silently.
-with tempfile.TemporaryDirectory() as tmp:
-    base = Path(tmp)
-    repo, _, _ = build_repo(base)
-    env = build_stubs(base)
-
-    def sized(path, lines):
-        (repo / path).write_text("".join(f"export const row{i} = {i};\n" for i in range(lines)))
-
-    # A verified baseline first. With none the run has no diff base, so nothing can be called
-    # added by this change -- and the report says that out loud rather than reading silence as
-    # "no file was added".
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    assert "  run  file-size " in result.stdout, result.stdout
-    assert "warn: no diff base" in result.stdout, result.stdout
-
-    # A tracked file over the warn budget WARNS and the run still verifies: the tree the change
-    # inherits carries such files, and a gate that refused them would be unusable for every
-    # lane. Exactly 2,000 lines is under the budget and is not named.
-    sized("tests/long-extension.ts", 2001)
-    sized("tests/at-budget-extension.ts", 2000)
-    commit(repo, "a tracked .ts over the warn budget")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    assert "tests/long-extension.ts: 2,001 lines, over the 2,000-line budget for a .ts file" \
-        in result.stdout, result.stdout
-    assert "at-budget-extension.ts" not in result.stdout, result.stdout
-    assert "no diff base" not in result.stdout, result.stdout
-    verified = record(repo)["baseline"]["commit"]
-
-    # A file this change ADDS over the refuse budget is a verdict about the change: the run
-    # fails, names the file and its size, and does not advance the baseline.
-    sized("tests/added-huge.ts", 3001)
-    commit(repo, "a newly added .ts over the refuse budget")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "fork-check: FAILED" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" not in result.stdout, result.stdout
-    assert "tests/added-huge.ts: 3,001 lines added by this change, over the 3,000-line " \
-        "budget for a new .ts file" in result.stdout, result.stdout
-    # The inherited debt still reads as a warning, not as the reason for the refusal.
-    assert "tests/long-extension.ts: 2,001 lines, over the 2,000-line budget" in result.stdout, \
-        result.stdout
-    assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
-
 # 42. A failing check's own output is written beside the record. The run entry keeps per
 #     check only kind, label, rc and seconds, so a host run that failed could be
 #     diagnosed only from the terminal it ran in -- a reader on another machine had to
@@ -4745,7 +4388,10 @@ with tempfile.TemporaryDirectory() as tmp:
     # A document finding is the case that needed this: the entry said "documents ... exited
     # 1", and the checker's own report -- the line that names the missing target -- existed
     # only on the terminal.
-    (repo / "docs" / "guide.md").write_text("# Guide\n\nSee [missing](./gone.md).\n")
+    (repo / "tests/pi-patch-series.test.sh").write_text(
+        '#!/bin/sh\n'
+        f'if [ -f "{base}/uvx-rc" ]; then cat "{base}/uvx-out"; exit 1; fi\n'
+        'exit 0\n')
     commit(repo, "break a document")
     (base / "uvx-out").write_text(
         "docs/guide.md\n"
@@ -4756,7 +4402,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 1, result.stdout + result.stderr
     assert excerpt.exists(), "a failing run writes the excerpt beside the record"
     text = excerpt.read_text()
-    assert "command: uvx vantage-check docs/guide.md" in text, text
+    assert "command: sh tests/pi-patch-series.test.sh" in text, text
     assert "exit code: 1" in text, text
     assert "link/missing-target" in text, text
     # The report names the file, so the terminal says where to look without a paste.
@@ -4788,7 +4434,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "earlier line(s) dropped" in text, text
     # Rewritten, not appended: the file describes the most recent failing run, and its
     # header names that run because older entries carry the same path.
-    assert text.count("=== documents") == 1, text
+    assert text.count("=== structural") == 1, text
     assert "link/missing-target" not in text, text
 
     # A green run afterwards leaves the last failure's excerpt alone: fixing the document
@@ -5874,14 +5520,13 @@ with tempfile.TemporaryDirectory() as tmp:
     # Nothing changed, so the names are the integrity set alone -- and every kind the plan
     # requires is one it ran: that is the pair a landing reads rather than guessing which
     # steps a diff selected.
-    assert plan_fields["checks"] == "commit-identity,file-size,structural", plan_fields
+    assert plan_fields["checks"] == "file-size,structural", plan_fields
     assert plan_fields["required"] == plan_fields["checks"], plan_fields
     assert plan_fields["head"] == sh(repo, "git", "rev-parse", "HEAD").stdout.strip(), plan_fields
     # A run with nothing to do still carries the integrity set: that is the floor under the
-    # selection, and it is the same three checks on every run.
-    assert plan_fields["integrity"] == "3", plan_fields
+    # selection, and it is the same two checks on every run.
+    assert plan_fields["integrity"] == "2", plan_fields
     assert "  run  structural " in result.stdout and "  run  file-size " in result.stdout, result.stdout
-    assert "  run  commit-identity " in result.stdout, result.stdout
 
     # A change no step but the documents and the integrity set reaches: the plan is a
     # fraction of the gate, and the line says so against the record's own full-gate price.
@@ -5896,7 +5541,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert plan_fields["base"] == verified_before, (plan_fields, verified_before)
     # The doc change reaches the documents step, and the plan names it: a landing reads
     # this pair rather than reconstructing the selection from the tree.
-    assert "documents" in plan_fields["checks"].split(","), plan_fields
+    assert "scratch" in plan_fields["checks"].split(","), plan_fields
     assert set(plan_fields["required"].split(",")) <= set(plan_fields["checks"].split(",")), plan_fields
     ran, notrun, priced = int(plan_fields["ran"]), int(plan_fields["notrun"]), int(plan_fields["priced"])
     seconds, full, saved = (float(plan_fields[key]) for key in ("seconds", "full", "saved"))
@@ -5930,7 +5575,7 @@ with tempfile.TemporaryDirectory() as tmp:
                              {"label": "another fast recorded step", "seconds": 0.02}]}],
     }))
     floor_plan = module.Plan()
-    slow = module.Check("documents", "a document was checked", [], "a document changed", 0)
+    slow = module.Check("scratch", "a document was checked", [], "a document changed", 0)
     slow.seconds = 0.1
     floor_plan.checks = [slow]
     printed = io.StringIO()
@@ -5949,7 +5594,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # skip, because nothing about it was unanswerable.
     reuse_plan = module.Plan()
     reuse_plan.checks = [
-        module.Check("documents", "a document was checked", [], "a document changed", 0,
+        module.Check("scratch", "a document was checked", [], "a document changed", 0,
                      watches=("docs/",)),
         module.Check("go-tool", "tools/tillr-land builds", [], "a path under tools/tillr-land/ changed", 0,
                      watches=("tools/tillr-land/",)),
@@ -5957,8 +5602,8 @@ with tempfile.TemporaryDirectory() as tmp:
         module.Check("series", "pack matt: 1 series", [], "the series changed", 0,
                      watches=("yolo-packs/matt/",), reusable=False),
     ]
-    module.apply_reuse(reuse_plan, ["documents", "structural", "series"])
-    assert [check.kind for check in reuse_plan.reused] == ["documents"], reuse_plan.reused
+    module.apply_reuse(reuse_plan, ["scratch", "structural", "series"])
+    assert [check.kind for check in reuse_plan.reused] == ["scratch"], reuse_plan.reused
     assert [check.kind for check in reuse_plan.checks] == ["go-tool", "structural", "series"], \
         reuse_plan.checks
     # The integrity set is never reused: it is a property of the tree, and the tree is what
@@ -5982,22 +5627,22 @@ with tempfile.TemporaryDirectory() as tmp:
     with contextlib.redirect_stdout(printed):
         module.print_plan(module.Record(floor_state), reuse_plan, "base", "head")
     reuse_fields = dict(field.split("=", 1) for field in printed.getvalue().split()[2:])
-    assert reuse_fields["reused"] == "documents", printed.getvalue()
-    assert "documents" not in reuse_fields["checks"].split(","), printed.getvalue()
+    assert reuse_fields["reused"] == "scratch", printed.getvalue()
+    assert "scratch" not in reuse_fields["checks"].split(","), printed.getvalue()
     # The selection line carries the reused check with the watches that licensed it, so a
     # reader of the record can see what the run did not buy and why.
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
         module.print_selection(reuse_plan, ["docs/reuse.md"])
     reuse_selection = json.loads(printed.getvalue()[len(module.SELECTION_PREFIX):])
-    assert [one["kind"] for one in reuse_selection["reused"]] == ["documents"], \
+    assert [one["kind"] for one in reuse_selection["reused"]] == ["scratch"], \
         reuse_selection["reused"]
     assert reuse_selection["reused"][0]["watches"] == ["docs/"], reuse_selection["reused"]
     # A reuse list belongs to the gate invocation that was handed it, never to a check: a
     # check that spawns another gate (the self-suite does) must not hand its own reuse down,
     # or the inner gate would skip checks the outer one was told to skip.
-    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "documents"}), \
-        module.environ({"FORK_CHECK_REUSE": "documents"})
+    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "scratch"}), \
+        module.environ({"FORK_CHECK_REUSE": "scratch"})
 
     # The landing path names the base it is gating (board item 299), so the plan's diff is
     # the batch's own rather than whatever verified baseline this history offers. The
@@ -6012,7 +5657,7 @@ with tempfile.TemporaryDirectory() as tmp:
                          [line for line in forced.stdout.splitlines() if line.strip()][-1].split()[2:])
     assert forced_fields["base"] == forced_base, forced_fields
     assert forced_fields["head"] == forced_head, forced_fields
-    assert "documents" in forced_fields["checks"].split(","), forced_fields
+    assert "scratch" in forced_fields["checks"].split(","), forced_fields
     # A base this history does not contain is refused rather than planned from, because a
     # plan about a tree this history lacks cannot be this batch's answer.
     unresolved = run(repo, {**env, "FORK_CHECK_PLAN_BASE": "0" * 40})
@@ -6036,7 +5681,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert lines[-2].startswith(module.SELECTION_PREFIX), lines[-3:]
     selection = json.loads(lines[-2][len(module.SELECTION_PREFIX):])
     by_kind = {one["kind"]: one for one in selection["checks"]}
-    documents = by_kind["documents"]
+    documents = by_kind["scratch"]
     assert "docs/selection.md" in documents["selected_by"], documents
     assert documents["unconditional"] is False, documents
     assert documents["why"], documents
@@ -6051,8 +5696,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # to read the gate's source and guess.
     entry = record(repo)["runs"][-1]
     recorded = {one["kind"]: one for one in entry["checks"]}
-    assert "docs/selection.md" in recorded["documents"]["selected_by"], recorded["documents"]
-    assert recorded["documents"]["why"], recorded["documents"]
+    assert "docs/selection.md" in recorded["scratch"]["selected_by"], recorded["scratch"]
+    assert recorded["scratch"]["why"], recorded["scratch"]
     assert recorded["structural"]["unconditional"] is True, recorded["structural"]
     assert recorded["structural"]["selected_by"] == [], recorded["structural"]
     assert entry["skips"], entry
@@ -6070,7 +5715,7 @@ with tempfile.TemporaryDirectory() as tmp:
     explained_selection = json.loads(explain_lines[-1][len(module.SELECTION_PREFIX):])
     assert {one["kind"] for one in explained_selection["checks"]} == set(by_kind), \
         explained_selection["checks"]
-    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["documents"]
+    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["scratch"]
     assert explained_documents["selected_by"] == documents["selected_by"], explained_documents
 
     # ── the hostile-matrix preflight ────────────────────────────────────────────
@@ -7356,11 +7001,11 @@ with tempfile.TemporaryDirectory() as tmp:
     measured = [
         ("structural", "every series' shape, and the packs that declare them", 0.85, ()),
         ("file-size", "no tracked .ts file over 2,000 lines", 0.10, ()),
-        ("commit-identity", "every commit this range adds is authored and committed by the configured identity", 0.22, ()),
-        ("documents", "3 changed Markdown file(s)", 5.07, ()),
+        ("scratch", "a fixed convention guard", 0.22, ()),
+        ("scratch", "3 changed Markdown file(s)", 5.07, ()),
         ("scratch", "no tracked Markdown cites a scratch path as evidence", 0.58, ()),
         ("design-citations", "every frontmatter document citation resolves to a document and a section", 0.45, ()),
-        ("citations", "no added Markdown line cites a commit that is neither in HEAD nor an upstream pin", 0.18, ()),
+        ("scratch", "a second convention guard", 0.18, ()),
         ("pi-forks", "bin/pi-forks: the driver's own cases", 174.19, ()),
         ("hooks-install", "bin/hooks-install: a marked copy is replaced and drift reported", 3.16, ()),
         ("series", "pack matt: 7 series", 0.02, ()),
@@ -7690,78 +7335,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "fork-check: efficiency -- class=docs-only" in text, text
     assert "ratio=" in text and "target=15.0s" in text, text
 
-# A LANE'S `git config` WRITES THE SHARED REPO CONFIG, SO THE IDENTITY GUARD MUST READ THE
-# DEPLOYED IDENTITY (board item 414). A worktree shares `.git/config` with every other
-# worktree, so `git config user.name t` in a lane rewrites the identity the trunk gate
-# reads. On 2026-11-02 a lane's fixture identity reached the shared config, the guard
-# flagged 33 correctly authored commits, and the red was cached for the trunk's tree. The
-# guard now refuses that override by name -- naming the deployed identity it reads instead
-# -- and judges commits against the deployed identity, so the lane's write can neither
-# change what the gate reads nor launder a commit.
-with tempfile.TemporaryDirectory() as tmp:
-    base = Path(tmp)
-    deployed = base / "deployed-gitconfig"
-    deployed.write_text("[user]\n\tname = Deployed Person\n\temail = deployed@example.invalid\n")
-    # The guard's environment names no identity in the command scope, so the only identity
-    # it can read is the deployed file -- and the lane's repository-local write, which it
-    # must refuse. Every GIT_CONFIG_* is stripped first because this suite's own ENV
-    # declares an identity that way, and inheriting it would hide the question asked here.
-    guard_env = {key: value for key, value in os.environ.items()
-                 if not key.startswith("GIT_CONFIG_")
-                 and not key.startswith("GIT_AUTHOR_")
-                 and not key.startswith("GIT_COMMITTER_")}
-    guard_env.update({"GIT_CONFIG_GLOBAL": str(deployed), "GIT_CONFIG_SYSTEM": "/dev/null",
-                      "GIT_CONFIG_NOSYSTEM": "1"})
-    identity_repo = base / "identity-repo"
-    identity_repo.mkdir()
-    sh(identity_repo, "git", "init", "--quiet", "--initial-branch=main")
-    (identity_repo / "README.md").write_text("# identity fixture\n")
-    commit(identity_repo, "chore: base")
-    sh(identity_repo, "git", "update-ref", "refs/remotes/origin/main", "HEAD")
-    lane = base / "identity-lane"
-    sh(identity_repo, "git", "worktree", "add", "--quiet", "-b", "lane", str(lane))
-    # The lane writes a fixture identity with plain `git config`, which lands in the
-    # SHARED `.git/config` -- the defect, reproduced before the guard is asked about it.
-    sh(lane, "git", "config", "user.name", "t")
-    sh(lane, "git", "config", "user.email", "t@e.invalid")
-    assert sh(identity_repo, "git", "config", "--local", "user.name").stdout.strip() == "t", \
-        "the lane's write did not reach the shared config, so this case proves nothing"
-    # A commit the lane makes now carries the fixture identity, which is what the incident's
-    # 33 commits were wrongly measured against.
-    (lane / "lane.txt").write_text("lane\n")
-    sh(lane, "git", "add", "-A", env=guard_env)
-    sh(lane, "git", "commit", "--quiet", "-m", "lane commit", env=guard_env)
-    (identity_repo / "tests").mkdir()
-    shutil.copy(ROOT / "tests" / "git-identity.test.py", identity_repo / "tests")
-    guard = str(identity_repo / "tests" / "git-identity.test.py")
-    # The trunk gate's check, run in the main checkout: the lane's write is refused by name,
-    # and the refusal names the deployed identity the check reads instead. It does not judge
-    # the commits against the fixture, which is the 132-field false finding of the incident.
-    result = subprocess.run([sys.executable, guard], cwd=str(identity_repo),
-                            capture_output=True, text=True, env=guard_env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "user.name = 't'" in result.stdout, result.stdout
-    assert "user.email = 't@e.invalid'" in result.stdout, result.stdout
-    assert "deployed: Deployed Person <deployed@example.invalid>" in result.stdout, result.stdout
-    assert "want 't'" not in result.stdout, result.stdout
-    # Unset, the same checkout reads the deployed identity and passes: the refusal was the
-    # override, not the fixture.
-    sh(identity_repo, "git", "config", "--local", "--unset-all", "user.name")
-    sh(identity_repo, "git", "config", "--local", "--unset-all", "user.email")
-    result = subprocess.run([sys.executable, guard], cwd=str(identity_repo),
-                            capture_output=True, text=True, env=guard_env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "Deployed Person <deployed@example.invalid>" in result.stdout, result.stdout
-    # The commit the lane made under the corrupt config is judged against the deployed
-    # identity, so the lane's write cannot launder a commit either.
-    result = subprocess.run([sys.executable, guard], cwd=str(lane),
-                            capture_output=True, text=True, env=guard_env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "want 'Deployed Person'" in result.stdout, result.stdout
-    assert "want 'deployed@example.invalid'" in result.stdout, result.stdout
-    assert "is 't'" in result.stdout, result.stdout
-    assert "is 't@e.invalid'" in result.stdout, result.stdout
-
 # ── 57. WEIGHTED HEAVY ADMISSION: separate cheap and heavy budgets ──────────────
 # Board item 404, the gate-latency design's D7 and F-9. `jobs` bounds the whole pool;
 # `heavy_jobs` bounds only the checks declared above CHEAP_CHECK_SECONDS, so cheap checks
@@ -7937,17 +7510,17 @@ with tempfile.TemporaryDirectory() as tmp:
     representative = {
         "driver-test-only": (
             ["tests/pi-forks.test.sh"],
-            ["commit-identity", "file-size", "pi-forks", "structural"],
+            ["file-size", "pi-forks", "structural"],
         ),
         "driver-behavior": (
             ["bin/pi-forks"],
-            ["commit-identity", "file-size", "fork-quality", "fork-quality",
+            ["file-size", "fork-quality", "fork-quality",
              "fork-quality", "patch-branch-inv2", "patch-branch-inv2", "pi-forks",
              "series", "structural"],
         ),
         "one-fork-series": (
             ["yolo-packs/matt/patches/pi-subagents/0001-x.patch"],
-            ["build", "commit-identity", "file-size", "fork-quality", "fork-quality",
+            ["build", "file-size", "fork-quality", "fork-quality",
              "fork-quality", "forks-check", "patch-branch-inv2", "patch-branch-inv3",
              "pi-forks", "rank-order", "series", "storybook", "structural"],
         ),
@@ -7972,7 +7545,7 @@ with tempfile.TemporaryDirectory() as tmp:
     plan = module.build_plan(repo, module.read_series(repo), state,
                              ["yolo-packs/matt/pack.json"], None, True)
     assert executed(plan) == [
-        "commit-identity", "extension-residue", "file-size",
+        "extension-residue", "file-size",
         "fork-quality", "fork-quality", "fork-quality", "matt-render",
         "patch-branch-inv2", "patch-branch-inv2", "pi-forks", "series", "structural",
         "yolo-config",

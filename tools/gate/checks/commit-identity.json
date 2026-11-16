@@ -1,0 +1,19 @@
+{
+  "id": "commit-identity",
+  "label": "commit-identity against the caller's base and head",
+  "command": [
+    "python3",
+    "tools/gate/checks/commit-identity.py"
+  ],
+  "scope": "change",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "python3",
+    "git"
+  ],
+  "remember": false
+}

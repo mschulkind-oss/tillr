@@ -1,0 +1,11 @@
+{
+  "id": "change-checks-test",
+  "label": "caller-owned range and change-check regression fixtures",
+  "command": ["python3", "tools/gate/checks/change_checks_test.py"],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": ["tools/gate/", "tools/tillr-gate/", "tools/tillr-loop/", "tools/fork-check.py"],
+  "tools": ["python3", "go", "git"],
+  "remember": false
+}

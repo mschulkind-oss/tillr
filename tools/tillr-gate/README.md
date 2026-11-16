@@ -78,6 +78,26 @@ directory. These declarations carry fast/heavy policy into the plan; per-fast-ch
 budget deadlines and remembered tree results are separate work, not implemented by this
 loader.
 
+## Caller-owned change checks
+
+`checks` runs only the change declarations in a directory. A change check judges the
+caller’s commit range, not the tree alone; the
+[design defines that distinction](../../docs/design/gate-rework.md#61-the-caller-names-the-base).
+The base and head are required, and the base must be an ancestor of the head. Missing or
+unreadable revisions answer “could not judge” (exit 4) before any check runs. Each program
+receives both commits and reads no remembered baseline. Its exit 4 is also no judgment,
+not a rejection; an unavailable judgment outranks a rejection elsewhere in the same run.
+
+```sh
+tillr-gate checks --base <lane-base> --head <candidate-head> --logs <run>/change-logs
+```
+
+The repository’s change declarations cover commit identity, the frozen seed, commit
+citations, rendering changed Markdown, and refusing newly added TypeScript files over
+3,000 lines. Existing TypeScript size warnings remain in the older tree program. The
+[loop’s default judge](../gate/change-gate.py) runs these declarations first, then the
+remaining tree program; it stops if any change check fails or cannot judge.
+
 ## What it refuses
 
 - **A plan with no registry** — a gate with no registry would pass everything.

@@ -273,10 +273,11 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     assert runs, fixture.calls()
     want = (
         "--logs " + str(fixture.run_dir / "logs")
-        + " --gate python3 --gate-arg tools/fork-check.py --gate-arg --since"
+        + " --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base"
         + " --gate-arg " + fixture.base
-        + " --gate-arg --tier --gate-arg landing"
-        + " --gate-arg --lock-timeout --gate-arg 30"
+        + " --gate-arg --head --gate-arg " + fixture.head
+        + " --gate-arg --runner --gate-arg tillr-gate"
+        + " --gate-arg --logs --gate-arg " + str(fixture.run_dir / "change-logs")
     )
     assert want in runs[-1], runs[-1]
     assert "env PI_FORKS_ROOT=" + str(fixture.repo) in fixture.calls(), fixture.calls()
@@ -286,8 +287,9 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     # waits for the record lock rather than failing the drain on a concurrent gate.
     programs = [c for c in fixture.calls() if c.startswith("python3-argv: ")]
     assert programs == [
-        "python3-argv: tools/fork-check.py --since " + fixture.base
-        + " --tier landing --lock-timeout 30"
+        "python3-argv: tools/gate/change-gate.py --base " + fixture.base
+        + " --head " + fixture.head + " --runner tillr-gate --logs "
+        + str(fixture.run_dir / "change-logs")
     ], fixture.calls()
     assert "python3-cwd: " + str(fixture.repo) in fixture.calls(), fixture.calls()
 
@@ -466,8 +468,9 @@ def test_self_check_names_argv_without_running_it(tmp):
     assert "tillr-gate run" in out, out
     # The gate's judgment and the logs its verdict will name are visible before a night of
     # ticks, not discovered from a directory afterwards.
-    assert "--gate python3 --gate-arg tools/fork-check.py" in out, out
-    assert "--gate-arg --since --gate-arg " + fixture.base in out, out
+    assert "--gate python3 --gate-arg tools/gate/change-gate.py" in out, out
+    assert "--gate-arg --base --gate-arg " + fixture.base in out, out
+    assert "--gate-arg --head --gate-arg " + fixture.head in out, out
     assert "--logs " + str(fixture.run_dir / "logs") in out, out
     assert "PI_FORKS_ROOT=" + str(fixture.repo) in out, out
     assert "tillr-land pass" in out, out

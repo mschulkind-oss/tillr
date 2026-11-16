@@ -718,11 +718,6 @@ returns nothing).
 
 ### A change check takes its base from the caller
 
-<!-- tillr: item
-     id="item-gate-change-checks"
-     paths="tools/tillr-gate/,tools/gate/,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-loop/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
 **The loop's adapter is repository-only, and this slice's pack mirror is `tillr-gate` alone.**
 `just pack-sync` mirrors the ten Go modules its recipe names, and `tools/tillr-loop/` is not one
@@ -746,10 +741,6 @@ should ship in the pack is a separate question this slice does not open. Settled
 design's seat on 2026-11-16, on "the mirror is derived by the recipe, and the recipe names
 what ships"; the owner may overturn it.
 
-- **c1:** A test reproduces the fault of 2026-11-15 on the tree before the fix: with a record whose only baseline predates `config/tillr/seed-items.json`, `python3 tools/fork-check.py --explain` in a fixture repository plans `seed-freeze`, and running it reports every entry as net-new.
-- **c2:** `commit-identity`, `seed-freeze`, `citations`, `documents` and the added-file refusal of `file-size` are declaration files under `tools/gate/checks/` with `scope` set to `change`, each a program that takes a base and a head. Run with no base, the runner exits "could not judge" and names the missing argument. Run with a base that is not an ancestor of the head, it does the same.
-- **c3:** Those five are deleted from `tools/fork-check.py` and their cases from `tests/fork-check.test.py`. A test asserts the union of the check ids the runner plans and the kinds the remaining program plans equals the set of kinds before the change.
-- **c4:** The loop's default gate program runs the runner with the lane's base and then the remaining program. On a fixture change that edits one Markdown file, the five change checks run against that base and report nothing.
 
 ### A machine without the forks is told what it lacks
 
@@ -769,7 +760,7 @@ what ships"; the owner may overturn it.
 <!-- tillr: item
      id="item-gate-fast-tier"
      paths="tools/tillr-gate/,tools/gate/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-change-checks"
+     blocked_by=""
 -->
 
 - **c1:** `scratch`, `design-citations`, `structural`, `pack-sync` and one `go-build` check that builds every module under the Go tool directories in parallel are declaration files with `tier` set to `fast`, deleted from `tools/fork-check.py` with their suite cases.
