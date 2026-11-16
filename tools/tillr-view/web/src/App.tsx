@@ -8,7 +8,7 @@ import { TrunkView, useTrunkRoute } from "./components/TrunkView";
 import { QuestionsView } from "./components/QuestionsView";
 import { EntityLink, ENTITY_KINDS, type EntityKind } from "./components/EntityLink";
 import { RefusalState, refusalCode } from "./components/RefusalState";
-import { usePassesQuery, usePassHistoryQuery, useQuestionsQuery, useRefreshAll, useSnapshotQuery, useWaitingQuery } from "./models/queries";
+import { useLanesQuery, usePassesQuery, usePassHistoryQuery, useQuestionsQuery, useRefreshAll, useSnapshotQuery, useWaitingQuery } from "./models/queries";
 import { useObservatorySocket } from "./models/socket";
 import { URL_CHANGE_EVENT } from "./models/url";
 
@@ -49,12 +49,13 @@ export function App() {
   useEffect(() => setHistoryPages(1), [range]);
   const passHistory = usePassHistoryQuery(range, historyPages, passesOpen, paused);
   const waiting = useWaitingQuery(home || items, paused), questions = useQuestionsQuery(questionsOpen, paused);
+  const lanes = useLanesQuery(home, paused);
   const trunk = useTrunkRoute();
   const { refresh } = useRefreshAll();
   const onPause = () => { setPaused(!paused); if (paused) refresh(); };
   let screen;
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
-  else if (home) screen = <Home snapshot={snapshot.data?.data} waiting={waiting.data?.data} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
+  else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} />;
   else if (passesOpen) screen = <PassesView passes={passHistory.data?.data.rows} error={passHistory.error} more={passHistory.data?.data.more} loadingOlder={passHistory.isFetching} onOlder={() => setHistoryPages(value => value + 1)} />;
   else if (itemOpen && id) screen = <ItemPage key={id} id={id} live={live} paused={paused} row={snapshot.data?.data.items.find(item => item.item_id === id)} baseURL={snapshot.data?.snapshot.vantage_base_url ?? ""} />;

@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { FALLBACK_POLL_MS, useRunQuery, useSnapshotQuery } from "../src/models/queries";
+import { FALLBACK_POLL_MS, useLanesQuery, useRunQuery, useSnapshotQuery } from "../src/models/queries";
 import { envelope, runData, snapshotData } from "./fixtures";
 
 /** The requests the screen made, in order. */
@@ -17,7 +17,7 @@ let requested: string[] = [];
 function stubFetch() {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     requested.push(String(input));
-    const body = String(input).includes("/runs/") ? envelope(runData) : envelope(snapshotData);
+    const body = String(input).endsWith("/lanes") ? envelope([]) : String(input).includes("/runs/") ? envelope(runData) : envelope(snapshotData);
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -60,6 +60,23 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   globalThis.fetch = originalFetch;
+});
+
+function LaneProbe({ paused }: { paused: boolean }) {
+  useLanesQuery(true, paused);
+  return null;
+}
+
+test("lane rows poll step files and quiet ages, but Pause stops their timer", async () => {
+  const client = new QueryClient();
+  const view = render(<QueryClientProvider client={client}><LaneProbe paused={false} /></QueryClientProvider>);
+  await elapse(0);
+  expect(requested).toEqual(["/api/v1/lanes"]);
+  await elapse(FALLBACK_POLL_MS);
+  expect(requested).toHaveLength(2);
+  view.rerender(<QueryClientProvider client={client}><LaneProbe paused /></QueryClientProvider>);
+  await elapse(FALLBACK_POLL_MS * 3);
+  expect(requested).toHaveLength(2);
 });
 
 describe("a screen with no live channel re-reads on a slow timer", () => {

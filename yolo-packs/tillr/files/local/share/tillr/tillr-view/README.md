@@ -44,13 +44,46 @@ tillr-view status
 tillr-view events
 tillr-view waiting --store /path/to/.tillr/state.db
 tillr-view passes --store /path/to/.tillr/state.db --last 2
+tillr-view lanes --store /path/to/.tillr/state.db [--json]
 tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
 ```
 
 An external caller points these at a store snapshot and reads the same JSON the loop reads;
 `status` answers where the board stands now, `events` answers what happened in order,
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
-round decided, and `running` answers what is in flight.
+round decided, `lanes` lists every configured lane and its current or last run, and
+`running` answers what is in flight.
+
+## Every lane's current work
+
+`tillr-view lanes` and `GET /api/v1/lanes` read the same rows. Home's lane strip
+uses this answer, links every lane, and computes its counts from those rows. The
+[Home lane-strip design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-redesign.md#show-every-lane-and-its-current-work-on-home)
+defines its three states: idle, running, and settling. A terminal run still held
+by a lease is settling, not evidence that a gate or landing is in progress.
+
+Rows carry the item, seat, backend, attempt number, run id, state-start clock,
+and latest action with its clock. An idle row retains its last run and recorded
+outcome. Attempt numbers count distinct runs for that item, including allocations
+that have no terminal row yet. Missing clocks are null, never zero elapsed time.
+
+A settling row carries only the last finished step and its finish clock. Home
+draws `after gate ~40s`; `~` marks elapsed time calculated from a recorded clock,
+not a recorded step in progress. No finished step means `step —`.
+
+The live action reader recognizes pi and claude stream records, independent of
+policy backend aliases. It reads at most the newest 256 KiB on each refresh and
+ignores incomplete lines. Actions show a tool name and its first recorded argument,
+or the first 80 characters of assistant text. A missing action clock uses the
+log's modification time and is explicitly marked as derived. If no readable
+action exists, log growth is labeled a liveness signal, not an action; an
+unreadable or missing log carries an explicit note. Home marks only running
+lanes quiet after five minutes without log growth. Settling lanes never receive
+that mark. The strip refreshes on store/log notifications and polls every five
+seconds for step files and quiet ages; Pause stops automatic refreshes.
+
+`--loop-dir` and `--lane-root` default to the loop and lanes directories beside
+the store. The JSON command prints the same array served as the API's `data`.
 
 ## Trace downloads
 

@@ -12,6 +12,7 @@ function mount(refused = false) {
   vi.stubGlobal("WebSocket", SilentSocket);
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     switch (String(input)) {
+      case "/api/v1/lanes": return new Response(JSON.stringify(envelope([])));
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/questions": return new Response(JSON.stringify(envelope({ items: [], unknown: [], missing: [], counts: { items: 0, questions: 0, holds: 0 }, state: "questions-ok" })));
       case "/api/v1/passes": return new Response(JSON.stringify(envelope([{ dispatched_at_ms: 1794840000000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }], stop: "queue-drained", detail: "all held: item-held waits on OQ-1" }])));
@@ -28,7 +29,7 @@ function mount(refused = false) {
 test("Home shell reads snapshot, passes and the planner's why rows; nav and pause are real controls", async () => {
   const { container, fetch } = mount();
   await screen.findAllByRole("link", { name: "item-held" });
-  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why"]));
+  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why", "/api/v1/lanes"]));
   expect(container.textContent).toContain("all held");
   for (const id of ["item-held", "OQ-1"]) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);

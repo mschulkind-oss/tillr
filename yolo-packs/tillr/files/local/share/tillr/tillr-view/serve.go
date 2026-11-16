@@ -267,6 +267,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/waiting", s.get(s.waitingPayload))
 	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))
+	mux.HandleFunc("GET /api/v1/lanes", s.get(s.lanesPayload))
 	mux.HandleFunc("GET /api/v1/landings/{id}", s.get(s.landingsPayload))
 	mux.HandleFunc("GET /api/v1/perf/checks", s.get(s.performanceChecksPayload))
 	mux.HandleFunc("GET /api/v1/perf/items", s.get(s.performanceItemsPayload))
@@ -302,7 +303,7 @@ func (s *server) routes() http.Handler {
 	// the index page: a client that receives HTML where it expected JSON would read a
 	// routing bug as a data bug.
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, req *http.Request) {
-		f := failure(codeUnknownRoute, "%q is not a route this face serves: the routes are /api/v1/why, /api/v1/snapshot, /api/v1/waiting, /api/v1/passes, /api/v1/questions, /api/v1/perf/checks, /api/v1/perf/items, /api/v1/checks/{id}, /api/v1/items/{id}, /api/v1/runs/{id} and its children, /api/v1/landings and /api/v1/landings/{id}, and /api/v1/ws", req.URL.Path)
+		f := failure(codeUnknownRoute, "%q is not a route this face serves: the routes are /api/v1/lanes, /api/v1/why, /api/v1/snapshot, /api/v1/waiting, /api/v1/passes, /api/v1/questions, /api/v1/perf/checks, /api/v1/perf/items, /api/v1/checks/{id}, /api/v1/items/{id}, /api/v1/runs/{id} and its children, /api/v1/landings and /api/v1/landings/{id}, and /api/v1/ws", req.URL.Path)
 		f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase}
 		writeJSON(w, f.status, *f)
 	})

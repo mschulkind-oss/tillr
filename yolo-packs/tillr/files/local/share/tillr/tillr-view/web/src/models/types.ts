@@ -167,6 +167,16 @@ export interface ItemView {
   open_criteria?: number | null;
 }
 
+export interface LaneRow {
+  lane_id: string;
+  state: "idle" | "running" | "settling";
+  state_since_ms: number | null;
+  run_id: string; item_id: string; seat: string; backend: string; attempt: number; outcome: string;
+  last_step: string; last_step_at_ms: number | null; log_grew_at_ms: number | null;
+  latest_action: { kind: "action" | "liveness" | "unrecorded"; text: string; at_ms: number | null; clock: string };
+  note?: string;
+}
+
 export interface LaneView {
   lane_id: string;
   state: string;

@@ -1,4 +1,5 @@
-import type { DrainSummary, PassRow, SnapshotData, WaitingRow } from "../models/types";
+import { LaneStrip } from "./LaneStrip";
+import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
 
 export function passStamp(ms: number): string {
@@ -75,7 +76,8 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
 }
 
 const CLASSES = ["needs you", "needs a cause", "waits on work", "unclassified", "ready", "moving"];
-export function Home({ snapshot, waiting, waitingError, passes, passesError }: {
+export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now }: {
+  lanes?: LaneRow[]; lanesError?: Error | null; now?: number;
   snapshot?: SnapshotData; waiting?: WaitingRow[]; waitingError?: Error | null;
   passes?: PassRow[]; passesError?: Error | null;
 }) {
@@ -108,10 +110,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError }: {
         })}
       </div>
       <aside>
-        <h2>Lanes</h2>
-        {snapshot ? snapshot.lanes.length ? <ul>{snapshot.lanes.map(lane => <li key={lane.lane_id}>
-          <EntityLink kind="lane" id={lane.lane_id} /> · {lane.state} {lane.run_id ? <EntityLink kind="run" id={lane.run_id} state="moving" /> : null}
-        </li>)}</ul> : <p>No lanes recorded.</p> : <p>Reading lanes…</p>}
+        <LaneStrip lanes={lanes} error={lanesError} now={now} />
         <h2>Last passes</h2>
         {passesError ? <p role="alert">Passes refused: {passesError.message}</p> : passes ? passes.length ? <ul>{newestPasses(passes).slice(0, 3).map(pass => <li key={pass.dispatched_at_ms}>
           <EntityLink kind="pass" id={passStamp(pass.dispatched_at_ms)} /> · {passCounts(pass)}

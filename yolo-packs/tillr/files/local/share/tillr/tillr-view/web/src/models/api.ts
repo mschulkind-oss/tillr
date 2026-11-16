@@ -10,6 +10,7 @@ import type {
   ExchangesData,
   GateData,
   ItemData,
+  LaneRow,
   LandingRow,
   LandingsData,
   PassRow,
@@ -50,6 +51,8 @@ async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<
   }
   return body as ApiEnvelope<T>;
 }
+
+export const fetchLanes = (signal?: AbortSignal) => read<LaneRow[]>("/api/v1/lanes", signal);
 
 export const fetchLandings = (signal?: AbortSignal) => read<LandingsData>("/api/v1/landings", signal);
 export const fetchLanding = (id: string, signal?: AbortSignal) => read<LandingRow>(`/api/v1/landings/${encodeURIComponent(id)}`, signal);
