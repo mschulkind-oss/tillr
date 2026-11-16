@@ -1,0 +1,23 @@
+{
+  "id": "patch-ref-pi-manage-todo-list",
+  "label": "Local delivery branch patch/pi-manage-todo-list",
+  "command": [
+    "python3",
+    "tools/gate/checks/patch-ref.py",
+    "patch/pi-manage-todo-list"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 10000,
+  "reads": [
+    "tools/gate/checks/patch-ref.py",
+    "bin/pi-forks.list",
+    "yolo-packs/matt/pack.json"
+  ],
+  "tools": [
+    "git"
+  ],
+  "needs": [
+    "ref:refs/heads/patch/pi-manage-todo-list"
+  ]
+}

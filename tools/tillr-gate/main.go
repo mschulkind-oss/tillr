@@ -341,7 +341,21 @@ func runFace(args []string) int {
 	if envelope.Kind != "" {
 		var verdict VerdictPayload
 		if err := json.Unmarshal(envelope.Payload, &verdict); err == nil {
+			passed, remembered, unavailable, failed := 0, 0, 0, 0
 			for _, check := range verdict.Checks {
+				switch {
+				case check.Result == ResultUnavailable:
+					unavailable++
+					for _, need := range check.MissingNeeds {
+						fmt.Fprintf(os.Stderr, "%s: unavailable; needs %s; provide with: %s\n", check.CheckID, need.Need, need.Command)
+					}
+				case check.Result == ResultPass && check.Memory == "remembered":
+					remembered++
+				case check.Result == ResultPass:
+					passed++
+				default:
+					failed++
+				}
 				switch check.Memory {
 				case "remembered":
 					fmt.Fprintf(os.Stderr, "%s: remembered pass at %s\n", check.CheckID, check.PassTime)
@@ -351,6 +365,7 @@ func runFace(args []string) int {
 					fmt.Fprintf(os.Stderr, "%s: not remembered; %s differs from judged tree\n", check.CheckID, check.UnboundPath)
 				}
 			}
+			fmt.Fprintf(os.Stderr, "checks: %d passed, %d remembered, %d unavailable, %d failed\n", passed, remembered, unavailable, failed)
 		}
 	}
 	if runErr != nil && envelope.Kind == "" {

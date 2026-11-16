@@ -95,12 +95,20 @@ func treeFingerprint(check PlanCheck, inputs []treeInput, root string) (string, 
 		}
 		versions = append(versions, tool, string(raw))
 	}
+	refs, missing, err := resolveRefNeeds(check, root)
+	if err != nil {
+		return "", err
+	}
+	if len(missing) != 0 {
+		return "", fmt.Errorf("ref needs became unavailable while fingerprinting: %v", missing)
+	}
 	raw, err := json.Marshal(struct {
 		Format   int
 		Check    PlanCheck
 		Inputs   []treeInput
 		Versions []string
-	}{1, check, selected, versions})
+		Refs     []refInput
+	}{2, check, selected, versions, refs})
 	if err != nil {
 		return "", err
 	}
@@ -293,6 +301,13 @@ func annotateMemory(outcome *VerdictCheck, pass, fail *storedResult, remembered 
 	}
 }
 func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (VerdictCheck, error) {
+	_, missing, err := resolveRefNeeds(check, root)
+	if err != nil {
+		return VerdictCheck{CheckID: check.CheckID, Result: ResultError}, err
+	}
+	if len(missing) > 0 {
+		return VerdictCheck{CheckID: check.CheckID, Result: ResultUnavailable, MissingNeeds: missing}, nil
+	}
 	if check.Scope != "tree" || check.Remember != nil && !*check.Remember {
 		outcome := runCheck(check, root, logs, index)
 		if memory != nil {
@@ -344,6 +359,17 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 		return outcome, nil
 	}
 	if outcome.Result != ResultPass && outcome.Result != ResultFail {
+		return outcome, nil
+	}
+	// A ref moving during execution means the command's inputs are no longer
+	// bound to its initial key. Do not publish that result under either tip.
+	currentKey, err := treeFingerprint(check, memory.inputs, root)
+	if err != nil {
+		return outcome, err
+	}
+	if currentKey != key {
+		outcome.Memory = "not remembered"
+		outcome.UnboundPath = "needed ref or tool identity"
 		return outcome, nil
 	}
 	result := storedResult{CheckID: check.CheckID, Result: outcome.Result, DurationMS: outcome.DurationMS, Time: time.Now().UTC().Format(time.RFC3339Nano), Tree: memory.tree}
