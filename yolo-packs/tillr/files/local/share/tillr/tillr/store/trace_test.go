@@ -1,0 +1,77 @@
+package store_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *testing.T) {
+	s := writeStore(t)
+	logPath := filepath.Join(t.TempDir(), "writer.log")
+	capture, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stderr
+	os.Stderr = capture
+	defer func() { os.Stderr = original; capture.Close() }()
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
+	migrated, err := store.Open(context.Background(), s.Path(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated.Close()
+	failure := errors.New("trace rollback fixture")
+	err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO meta VALUES('trace-probe','uncommitted')`)
+		if err != nil {
+			return err
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("trace changed error: %v", err)
+	}
+	if value, err := s.Meta("trace-probe"); err != nil || value != nil {
+		t.Fatalf("trace changed rollback: %v %v", value, err)
+	}
+	if err := capture.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("want two complete writer spans, got %d: %s", len(lines), raw)
+	}
+	for i, phase := range []string{"begin", "acquired", "end", "begin", "acquired", "end"} {
+		if !strings.Contains(lines[i], "phase="+phase) || !strings.Contains(lines[i], "pid=") || !strings.Contains(lines[i], "tx=") || !strings.Contains(lines[i], "store=") {
+			t.Errorf("missing correlation fields: %s", lines[i])
+		}
+	}
+	if !strings.Contains(lines[0], `operation="migrate"`) || !strings.Contains(lines[5], failure.Error()) {
+		t.Fatalf("missing operation/outcome: %s", raw)
+	}
+	t.Setenv("TILLR_SQLITE_TRACE", "")
+	if err := s.WriteTx(context.Background(), func(*store.Tx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := capture.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(raw) {
+		t.Fatal("disabled trace wrote diagnostics")
+	}
+}

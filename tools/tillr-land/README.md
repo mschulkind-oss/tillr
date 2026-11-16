@@ -43,9 +43,15 @@ The design that splits this surface into `--help`, this README and the compositi
   [`queue-persistence-ruling.md`](../../docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict
   judged unless the trunk moved, and the row records both so a reader can tell.
-- **The lease on the trunk is short.** `land.lock` is held only for the landing window —
-  reading the tip, writing the squash commit, moving the ref and recording the row — and
-  never across the gate. The gate runs in another process before `pass` is called.
+- **Preparation does not hold SQLite's writer.** Under `land.lock`, ancestry, squash,
+  clash checks and range preservation happen outside SQLite transactions. The final
+  write transaction rechecks disposition, history inputs and trunk expectations before
+  Move and receipt. A changed preparation input is an explicit error, not automatic
+  replay. The final Move and history-retention refs can still be slow; see the
+  [contention recovery boundary](../../docs/recovery/sqlite-contention/README.md#exact-residual-limitation).
+- **The lease on the trunk excludes other landers, never the gate.** `land.lock` spans
+  preparation and the final Move/receipt window. The gate runs in another process before
+  `pass` is called.
 - **A non-landing pins its head.** A squash conflict or a refusal answers
   `refs/tillr/runs/<run_id>` at the head before the lock is released, so a head the gate saw
   cannot be garbage-collected before a conflict-fixer or a person reads it.
@@ -68,8 +74,9 @@ by hand produces the same row as an unattended one.
 
 - **A trunk that no longer contains the loop's observed tip** — `pass --observed-trunk`
   checks ancestry under the landing lock and records `trunk-rewritten`. For a drain
-  store it also reconciles the latest durable observation and lost tip in that same
-  transaction, so a stale request cannot bypass a newly recorded hold. Successful
+  store it also reconciles the durable observation and lost tip, then revalidates that
+  snapshot in the final write transaction, so a stale request cannot bypass a newly
+  recorded hold. Successful
   landings advance the stored observation and its Git object-retention ref. This is not a
   comparison with the candidate's base: a reset to that base can still remove history
   the loop observed later. The drain retains the candidate and its verdict until history
