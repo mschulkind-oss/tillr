@@ -146,6 +146,9 @@ export function useObservatorySocket(
         // The pause outranks the frame: the store may have moved, and the operator asked
         // to keep reading what they were reading.
         if (paused.current) return;
+        if (frame.changed.some(name => name === "snapshot" || name.startsWith("runlog:") || name.startsWith("runs:"))) {
+          void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+        }
         for (const name of frame.changed) {
           const key = invalidationKey(name);
           if (key !== null) void client.invalidateQueries({ queryKey: key });

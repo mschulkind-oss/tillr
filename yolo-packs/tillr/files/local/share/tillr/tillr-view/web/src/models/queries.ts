@@ -15,6 +15,7 @@ import {
   fetchRunTimeline,
   fetchRunTranscript,
   fetchSnapshot,
+  fetchLanes,
   fetchPasses,
   fetchPassHistory,
   fetchWaiting,
@@ -45,6 +46,7 @@ export const FALLBACK_POLL_MS = 5_000;
  * what `runSubtree` names on its own. The split is what lets a log that grew
  * (`runlog:<id>`, the payload only) cost one read instead of four. */
 export const queryKeys = {
+  lanes: (): readonly unknown[] => ["lanes"],
   snapshot: (): readonly unknown[] => ["snapshot"],
   passes: (): readonly unknown[] => ["passes"],
   waiting: (): readonly unknown[] => ["waiting"],
@@ -104,6 +106,10 @@ function useRead<T>(
     refetchInterval: paused || live ? false : FALLBACK_POLL_MS,
   });
 }
+
+// Poll even with a live socket: finished step files and quiet ages are not store events.
+export const useLanesQuery = (enabled: boolean, paused = false) =>
+  useRead(queryKeys.lanes(), fetchLanes, enabled, false, paused);
 
 export const usePassesQuery = (enabled: boolean, paused = false) =>
   useRead(queryKeys.passes(), fetchPasses, enabled, false, paused);

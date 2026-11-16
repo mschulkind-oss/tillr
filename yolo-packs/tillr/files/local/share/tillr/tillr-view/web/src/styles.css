@@ -2712,3 +2712,9 @@ kbd {
 .span-panels { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
 .span-panels dd { overflow-wrap: anywhere; }
 @media (max-width: 900px) { .span-panels { grid-template-columns: 1fr; } .span-axis time { font-size: 8px; } }
+
+.lane-strip { font: var(--t-data); font-variant-numeric: tabular-nums; }
+.lane-strip li { overflow-wrap: anywhere; }
+.lane-strip__action, .lane-strip__derived { color: var(--ink-2); margin-top: var(--s1); }
+.lane-strip__quiet { color: var(--state-cause); }
+.lane-strip small { display: block; color: var(--ink-3); }

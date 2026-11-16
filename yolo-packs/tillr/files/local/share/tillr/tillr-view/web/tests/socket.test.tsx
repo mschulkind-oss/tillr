@@ -114,10 +114,21 @@ describe("the live channel invalidates the cache the panels already read", () =>
       event_head_seq: 49,
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
-    expect(invalidate).toHaveBeenCalledTimes(4);
-    expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["items", "item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["runs", "run-item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["items", "item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["runs", "run-item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["snapshot"] });
+  });
+
+  test("log growth also refreshes the Home lane strip", () => {
+    const { invalidate } = renderProbe();
+    const socket = FakeSocket.opened[0];
+    socket.accept();
+    invalidate.mockClear();
+    socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["runlog:run-1"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.lanes() });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.run("run-1") });
   });
 
   test("a resource this client does not cache invalidates nothing", () => {
