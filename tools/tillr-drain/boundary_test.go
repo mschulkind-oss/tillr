@@ -136,21 +136,20 @@ func TestTheBoundaryCatchesAMovedRef(t *testing.T) {
 	f := newBoundaryFixture(t)
 	before := f.snapshot(t, "before")
 
-	git(t, f.repo, "update-ref", "refs/heads/planted", "main")
+	git(t, f.repo, "update-ref", "refs/tillr/unauthorized", "main")
 
 	after := f.snapshot(t, "after")
 	code, output := check(t, before, after)
 	if code != 1 {
 		t.Fatalf("a planted ref answered exit %d, want 1: %s", code, output)
 	}
-	if !strings.Contains(output, "refs/heads/planted appeared") {
+	if !strings.Contains(output, "refs/tillr/unauthorized appeared") {
 		t.Fatalf("the violation does not name the ref and what happened to it:\n%s", output)
 	}
 }
 
-// A commit in the main checkout moves the trunk under the loop, which is the row the design
-// answers "stop and surface": it has to be named, not inferred from a dirty status.
-func TestTheBoundaryCatchesACommitInTheMainCheckout(t *testing.T) {
+// An ordinary trunk commit belongs to the owner, not to the run.
+func TestTheBoundaryIgnoresACommitInTheMainCheckout(t *testing.T) {
 	f := newBoundaryFixture(t)
 	before := f.snapshot(t, "before")
 
@@ -160,13 +159,8 @@ func TestTheBoundaryCatchesACommitInTheMainCheckout(t *testing.T) {
 
 	after := f.snapshot(t, "after")
 	code, output := check(t, before, after)
-	if code != 1 {
-		t.Fatalf("a commit in the main checkout answered exit %d, want 1: %s", code, output)
-	}
-	for _, want := range []string{"refs/heads/main moved", "HEAD moved"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("the violation does not name %q:\n%s", want, output)
-		}
+	if code != 0 {
+		t.Fatalf("an owner commit convicted a run: exit %d: %s", code, output)
 	}
 }
 

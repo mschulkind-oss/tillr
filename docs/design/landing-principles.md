@@ -58,11 +58,13 @@ verdict — every one was a patch-id mismatch, a git error, or a regeneration fa
 
 *Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/) for the landing transaction. The board
 pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are retired; in
-[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed seven-value set
-(`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `patch-rewind`,
+[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed eight-value set
+(`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `trunk-rewritten`, `patch-rewind`,
 `patch-at-head`, `item-not-landable`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tools/tillr-land/land/conformance_test.go), and `squash-conflict`
-(`ResultSquashConflict`) is its own outcome rather than a refusal.
+(`ResultSquashConflict`) is its own outcome rather than a refusal. `trunk-rewritten` is
+an infrastructure hold: the drain retains the already-gated candidate, records both tips,
+and waits for restored history without a failing candidate verdict or another gate.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a trunk
 move between the gate and `pass` is squashed onto the moved tip by `Trunk.Squash`

@@ -17,10 +17,10 @@ import (
 // the caller holds.
 //
 // Targets is a set of *worktrees*, never a set of paths: naming a worktree here excuses
-// that worktree's own working tree and the branch it has checked out, and nothing else. A
-// write in the main checkout, in a lane not named here, or in any other worktree is still a
-// violation, and no ref outside a target's own checked-out branch is excused by it — so a
-// reader looking for "paths this bracket may write" is looking for the wrong thing.
+// that worktree's own working tree and the branch it has checked out. Writes in a watched
+// sibling worktree remain violations. Ordinary external refs and main-checkout content
+// are outside the snapshot pair's attribution scope, whether or not a target names them.
+// A reader looking for "paths this bracket may write" is looking for the wrong thing.
 //
 // Lanes are named by the caller and are not discovered, because discovery is what makes
 // this check too expensive to run per tick: a checkout of this repository carries
@@ -200,10 +200,10 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The main checkout is the worktree git lists first. Its HEAD and branch are compared
+	// The main checkout is the worktree git lists first. Its HEAD and branch are recorded
 	// whatever the caller names, because `git worktree list` reports them for every
-	// worktree; its *content* is read unless a caller names it as a target, which is the
-	// design's weaker form and is the only way a write there could go unseen.
+	// worktree; its content is read unless a caller names it as a target. Main content and
+	// HEAD movement are not run convictions; a checked-out branch change still is.
 	main := worktrees[0].Path
 	for _, path := range append([]string{main}, lanes...) {
 		if isTarget(targets, path) {
@@ -242,20 +242,12 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 // Compare answers the differences between a before and an after snapshot: state outside the
 // targets that the bracket's runs changed. An empty answer is a clean boundary.
 //
-// A target worktree contributes no path deltas — its working tree is what its run is for —
-// and no HEAD or branch delta. Together with those, exactly one class of ref move is
-// excused, per target: the ref that worktree's checkout names in *both* snapshots. The
-// reason is what a run delivers: the loop reads its candidate as the lane worktree's HEAD
-// and a run that leaves HEAD at the trunk is `candidate-no-op`, so a commit on the lane's own
-// branch is the deliverable and not boundary movement. Everything else that moves — the
-// trunk, another lane's branch, a tag, a remote-tracking ref, a ref a run invents inside its
-// own worktree — is reported, which is why this excuses a worktree's own branch rather than
-// the worktree.
-//
-// A target whose checkout ref differs between the snapshots excuses nothing, because that is
-// a run that changed branches mid-run, and a run that switches to the trunk and commits there
-// must be reported rather than excused — that report costs an operator one look at a run that
-// committed and then left its branch, which is a brief's business and not this check's.
+// A target worktree contributes no path deltas and no HEAD or branch delta.
+// Its checked-out branch and explicitly assigned patch refs are deliveries, not
+// escapes. Ordinary refs outside tillr's namespaces are ignored: a snapshot pair
+// cannot attribute another Git user's fetch, tag, branch or trunk commit to a run.
+// Unassigned refs inside tillr's namespaces remain convictions. The loop observes
+// trunk ancestry separately and holds landings, never runs, on a rewrite.
 func Compare(before, after *Boundary) ([]Violation, error) {
 	if err := sameSpan(before, after); err != nil {
 		return nil, err
@@ -321,11 +313,25 @@ func CompareRun(before, after *Boundary) ([]Violation, error) {
 	return violations, nil
 }
 
-// runRefExcused answers whether a ref is one a lane's run may move: the trunk, a lane
-// branch, a tillr pin, and the target's own patch refs. Everything else is a rogue ref.
+// tillrRef names the namespaces the loop owns. Ordinary Git activity outside
+// them cannot be attributed to a run from two snapshots.
+func tillrRef(ref string) bool {
+	return strings.HasPrefix(ref, "refs/heads/tillr/") || strings.HasPrefix(ref, "refs/heads/patch/") || strings.HasPrefix(ref, "refs/tillr/")
+}
+
+func trunkHistoryRef(ref string) bool { return ref == observedTrunkRef || ref == lostTrunkRef }
+
+// runRefExcused answers whether a ref may move without convicting this run.
+// Ordinary refs belong to other Git users; registered sibling branches and run
+// pins are moved by the loop. An unassigned ref inside tillr's namespaces is not.
 func runRefExcused(ref string, before *Boundary) bool {
-	if ref == "refs/heads/main" || strings.HasPrefix(ref, "refs/heads/tillr/") || strings.HasPrefix(ref, "refs/tillr/") {
+	if trunkHistoryRef(ref) || !tillrRef(ref) || strings.HasPrefix(ref, "refs/tillr/runs/") {
 		return true
+	}
+	for _, wt := range before.Worktrees {
+		if !isTarget(before.Targets, wt.Path) && wt.Branch == ref {
+			return true
+		}
 	}
 	for _, patch := range before.PatchRefs {
 		if ref == patch {
@@ -335,8 +341,8 @@ func runRefExcused(ref string, before *Boundary) bool {
 	return false
 }
 
-// compareRunRefs answers every ref a run's bracket convicts: anything that moved outside the
-// trunk, the lane branches, the tillr pins and the target's own patch refs.
+// Ordinary refs are outside the comparison's attribution scope.
+// Only a delta in an unassigned tillr ref is a ref conviction.
 func compareRunRefs(before, after *Boundary) []Violation {
 	excused := excusedRefs(before, after)
 	return refViolations(before, after, func(name string) bool {
@@ -453,7 +459,7 @@ func compareRefs(before, after *Boundary) []Violation {
 	for _, ref := range before.PatchRefs {
 		excused[ref] = true
 	}
-	return refViolations(before, after, func(name string) bool { return excused[name] })
+	return refViolations(before, after, func(name string) bool { return !tillrRef(name) || trunkHistoryRef(name) || excused[name] })
 }
 
 // refViolations answers every ref that moved, appeared or went away, except the ones the
@@ -517,9 +523,9 @@ func isTarget(targets []string, path string) bool {
 	return false
 }
 
-// compareWorktrees answers a worktree that appeared or went away — a stray worktree, or
-// one removed under a run — and, for every worktree but a target, a HEAD or branch that
-// moved: a commit anywhere but a target is a ref move by another name.
+// compareWorktrees answers lifecycle changes and non-target branch changes. Only
+// HEAD movement on a tillr-owned branch can convict; ordinary commits elsewhere
+// belong to other Git users.
 func compareWorktrees(before, after *Boundary) []Violation {
 	violations := make([]Violation, 0)
 	for _, wt := range after.Worktrees {
@@ -534,7 +540,7 @@ func compareWorktrees(before, after *Boundary) []Violation {
 		switch {
 		case was.Branch != wt.Branch:
 			violations = append(violations, Violation{Kind: "worktree", Where: wt.Path, Detail: fmt.Sprintf("branch %s -> %s", spelledRef(was.Branch), spelledRef(wt.Branch))})
-		case was.Head != wt.Head:
+		case was.Head != wt.Head && tillrRef(wt.Branch):
 			violations = append(violations, headMoveViolation(wt.Path, was.Head, wt.Head))
 		}
 	}

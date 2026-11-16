@@ -55,6 +55,7 @@ func passFace(args []string) int {
 	head := fs.String("head", "", "the head sha to land")
 	messageFrom := fs.String("message-from", "", "the commit in base..head whose message and author date to use (default: head)")
 	runDir := fs.String("run-dir", "", "the run's commit-list directory (default: <git-common-dir>/tillr/runs/<run>)")
+	observed := fs.String("observed-trunk", "", "the loop's last observed trunk tip; a rewrite refuses the landing under the lock")
 	baseRef := fs.String("base-ref", "", "the branch to land onto (default: the checkout's branch)")
 	verdictPath := fs.String("verdict", "", "the gate.verdict record that judged the head")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
@@ -98,7 +99,7 @@ func passFace(args []string) int {
 	req := land.LandingRequest{
 		ItemID: *item, RunID: *run, BaseRef: ref, BaseSHA: *base, HeadSHA: *head,
 		Verdict: verdict, At: at, LockPath: *lockPath, LockWait: *lockWait,
-		MessageFrom: *messageFrom, RunDir: *runDir,
+		MessageFrom: *messageFrom, RunDir: *runDir, ObservedTrunk: *observed,
 	}
 	landed, err := land.Land(ctx, s, trunk, req)
 	if err != nil {

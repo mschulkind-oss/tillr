@@ -54,6 +54,8 @@ const (
 	ReasonPatchAtHead = "patch-at-head"
 	// ReasonItemNotLandable means the owner closed or resolved the item before landing.
 	ReasonItemNotLandable = "item-not-landable"
+	// ReasonTrunkRewritten means the locked trunk no longer contains the observed tip.
+	ReasonTrunkRewritten = "trunk-rewritten"
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -66,6 +68,7 @@ func Reasons() []string {
 		ReasonPatchRewind,
 		ReasonPatchAtHead,
 		ReasonItemNotLandable,
+		ReasonTrunkRewritten,
 	}
 }
 
@@ -154,7 +157,10 @@ type LandingRequest struct {
 	RunID   string
 	BaseRef string
 	BaseSHA string
-	HeadSHA string
+	// ObservedTrunk is the loop's last observed trunk tip, not the candidate's base.
+	// Empty is a manual landing with no loop observation to compare.
+	ObservedTrunk string
+	HeadSHA       string
 	// MessageFrom selects the message and author date, never the gated tree.
 	// Empty keeps the head's message; an explicit source must belong to base..head.
 	MessageFrom string
@@ -197,6 +203,11 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	}
 	if err := t.HasCommit(req.HeadSHA); err != nil {
 		return Landing{}, err
+	}
+	if req.ObservedTrunk != "" {
+		if err := t.HasCommit(req.ObservedTrunk); err != nil {
+			return Landing{}, err
+		}
 	}
 	if req.MessageFrom != "" {
 		source, err := t.MessageSource(req.BaseSHA, req.HeadSHA, req.MessageFrom)
@@ -284,6 +295,30 @@ func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, re
 	}
 	landing.TrunkBefore = trunkBefore
 	landing.TrunkAfter = trunkBefore
+	var history *trunkHistory
+	if landing.Landed() && req.ObservedTrunk != "" {
+		observedTarget := trunkBefore
+		if PatchRef(req.BaseRef) != "" {
+			// Patch delivery is not the trunk observation. Compare the repository's
+			// checkout branch, not an unrelated fork's patch history.
+			ref, err := t.Branch()
+			if err != nil {
+				return Landing{}, err
+			}
+			observedTarget, err = t.Head(ref)
+			if err != nil {
+				return Landing{}, err
+			}
+		}
+		var rewritten bool
+		history, rewritten, err = t.reconcileHistory(tx, req.ObservedTrunk, observedTarget)
+		if err != nil {
+			return Landing{}, err
+		}
+		if rewritten {
+			landing.Result, landing.Reason = ResultRefused, ReasonTrunkRewritten
+		}
+	}
 
 	if !landing.Landed() {
 		return pinAndRecord(ctx, tx, t, landing, req)
@@ -316,6 +351,12 @@ func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, re
 		return Landing{}, err
 	}
 	landing.TrunkAfter = squash.Commit
+	if history != nil && PatchRef(req.BaseRef) == "" {
+		history.observed = squash.Commit
+		if err := t.saveHistory(tx, history); err != nil {
+			return Landing{}, err
+		}
+	}
 	return recordLanding(ctx, tx, landing, req.At)
 }
 

@@ -999,15 +999,10 @@ printf 'RESULT: done\n'
 	}
 }
 
-// A ref a target's run moves that is not its own checked-out branch is a violation, even
-// though the ref was created inside the worktree that bracket owns.
-//
-// This is the ruling's negative control: the bracket excuses a target's own branch because
-// that branch is the run's deliverable, and it excuses nothing else. The adapter commits
-// (excused) and tags (not), so a comparison that excused the whole worktree passes this case
-// wrongly.
+// An unassigned ref in tillr's namespace remains a boundary violation even when
+// it is created inside the target worktree. Ordinary tags are not attributable.
 func TestARefMovedInsideATargetsWorktreeIsCaught(t *testing.T) {
-	tagging := stub(t, "tagging-adapter", counting+committingAdapterBody+`git tag stray
+	tagging := stub(t, "tagging-adapter", counting+committingAdapterBody+`git update-ref refs/tillr/unauthorized HEAD
 printf 'RESULT: done\n'
 `)
 	f := newLoopFixture(t, tagging)
@@ -1022,7 +1017,7 @@ printf 'RESULT: done\n'
 	if result.Stop != drain.StopQueueDrained || fault.Reason != drain.StopHostBoundaryViolation {
 		t.Fatalf("the boundary fault stopped siblings: %+v", result)
 	}
-	if !strings.Contains(fault.Detail, "refs/tags/stray") {
+	if !strings.Contains(fault.Detail, "refs/tillr/unauthorized") {
 		t.Fatalf("the hold does not name the ref: %+v", fault)
 	}
 	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {

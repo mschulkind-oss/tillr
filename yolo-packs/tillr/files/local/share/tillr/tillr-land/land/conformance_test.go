@@ -15,6 +15,7 @@ func TestTheRefusalReasonsAreTheRegisteredSet(t *testing.T) {
 		"item-not-landable",
 		"patch-at-head",
 		"patch-rewind",
+		"trunk-rewritten",
 		"trunk-worktree-uncommitted",
 		"verdict-error",
 		"verdict-failed",

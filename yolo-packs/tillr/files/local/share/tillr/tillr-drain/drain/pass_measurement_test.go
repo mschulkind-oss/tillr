@@ -111,6 +111,32 @@ func TestAggregatePassGateTimeFilesTheBudgetRegression(t *testing.T) {
 	}
 }
 
+// next_pass_at is a scheduled deadline, not hard expiry. Match the view's
+// five-second read/scheduling allowance (tillr-view/heartbeat.go SessionGraceMS)
+// while still requiring proof that startup refreshed its initial session.
+func startupHeartbeatCurrent(started, refreshed, next, now int64) bool {
+	return refreshed > started && (now <= next || now-next <= 5000)
+}
+
+func TestStartupHeartbeatUsesTheViewsExpiryContract(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		refreshed, next int64
+		current         bool
+	}{
+		{"refreshed-within-grace", 2000, 3000, true},
+		{"exact-grace-edge", 2000, 1000, true},
+		{"expired", 2000, 999, false},
+		{"never-refreshed", 500, 10000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := startupHeartbeatCurrent(500, tc.refreshed, tc.next, 6000); got != tc.current {
+				t.Fatalf("heartbeat current = %v, want %v", got, tc.current)
+			}
+		})
+	}
+}
+
 type slowHeartbeatSyncSteps struct {
 	recordingSteps
 	store string
@@ -130,7 +156,7 @@ func (s *slowHeartbeatSyncSteps) Sync(ctx context.Context) (SyncOutcome, error) 
 		if err := r.QueryRow(`SELECT started_at, refreshed_at, next_pass_at FROM drain_sessions`).Scan(&started, &refreshed, &next); err != nil {
 			return err
 		}
-		if refreshed <= started || next < time.Now().UnixMilli() {
+		if !startupHeartbeatCurrent(started, refreshed, next, time.Now().UnixMilli()) {
 			s.t.Errorf("startup heartbeat expired: %d %d %d", started, refreshed, next)
 		}
 		return nil
