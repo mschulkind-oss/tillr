@@ -469,6 +469,8 @@ type Loop struct {
 	sessionNextPass int64
 	passSequence    uint64
 	previousAnswers string
+
+	sessionInitialized bool
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail string

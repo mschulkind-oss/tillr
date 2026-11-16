@@ -46,18 +46,25 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		}
 		l.sessionID, l.sessionStarted = id, at.UnixMilli()
 	}
-	s, err := store.Open(ctx, l.cfg.Store, true)
+	// Only a successful first refresh proves this Loop initialized all registered
+	// owners and legacy data. Later heartbeats open that existing store, not a
+	// globally version-skipped migration path.
+	s, err := store.Open(ctx, l.cfg.Store, !l.sessionInitialized)
 	if err != nil {
 		return Incompatiblef("%v", err)
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at)
    VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
    refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at`,
 			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli())
 		return err
 	})
+	if err == nil {
+		l.sessionInitialized = true
+	}
+	return err
 }
 
 // keepSessionAlive refreshes the same session while synchronous startup, staging,
@@ -98,7 +105,7 @@ func (l *Loop) endSession() {
 		return
 	}
 	ctx := context.Background()
-	s, err := store.Open(ctx, l.cfg.Store, true)
+	s, err := store.Open(ctx, l.cfg.Store, !l.sessionInitialized)
 	if err == nil {
 		defer s.Close()
 		err = s.WriteTx(ctx, func(tx *store.Tx) error {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Store is one open store.
@@ -147,7 +148,14 @@ func (s *Store) WriteMeta(key, value string) error {
 // fail rather than wait. An immediate begin takes the store's write lock before anything
 // is read, so the second migrator waits (busy_timeout, dsn) and then finds the work
 // already done.
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context) (result error) {
+	var id uint64
+	var started time.Time
+	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
+		id, started = writerSequence.Add(1), time.Now()
+		traceWriter(id, s.path, "migrate", "begin", started, nil)
+		defer func() { traceWriter(id, s.path, "migrate", "end", started, result) }()
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: opening the connection to migrate on: %w", err)
@@ -155,6 +163,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	defer conn.Close()
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("store: beginning the migration: %w", err)
+	}
+	if id != 0 {
+		traceWriter(id, s.path, "migrate", "acquired", started, nil)
 	}
 	if err := migrate(ctx, conn); err != nil {
 		conn.ExecContext(ctx, `ROLLBACK`)

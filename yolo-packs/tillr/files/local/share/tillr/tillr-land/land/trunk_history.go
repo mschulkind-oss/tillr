@@ -2,6 +2,8 @@ package land
 
 import (
 	"database/sql"
+	"errors"
+	"os/exec"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -11,18 +13,30 @@ import (
 // Manual stores without the row still check the observation supplied on argv.
 type trunkHistory struct{ observed, lost string }
 
-func (t *Trunk) reconcileHistory(tx *store.Tx, expected, tip string) (*trunkHistory, bool, error) {
-	var exists bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='trunk_history')`).Scan(&exists); err != nil {
-		return nil, false, Internalf("checking trunk history schema: %v", err)
+// historySnapshot distinguishes a missing table or row from an initialized empty
+// observation, so initialization racing preparation cannot bypass validation.
+type historySnapshot struct {
+	table, row bool
+	history    trunkHistory
+}
+
+func readHistory(r rowQueryer) (historySnapshot, error) {
+	snapshot := historySnapshot{}
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='trunk_history')`).Scan(&snapshot.table); err != nil {
+		return snapshot, Internalf("checking trunk history schema: %v", err)
 	}
-	h := &trunkHistory{}
-	if exists {
-		err := tx.QueryRow(`SELECT observed_tip,lost_tip FROM trunk_history WHERE id=1`).Scan(&h.observed, &h.lost)
+	if snapshot.table {
+		err := r.QueryRow(`SELECT observed_tip,lost_tip FROM trunk_history WHERE id=1`).Scan(&snapshot.history.observed, &snapshot.history.lost)
 		if err != nil && err != sql.ErrNoRows {
-			return nil, false, Internalf("reading trunk history: %v", err)
+			return snapshot, Internalf("reading trunk history: %v", err)
 		}
+		snapshot.row = err == nil
 	}
+	return snapshot, nil
+}
+
+func (t *Trunk) prepareHistory(snapshot historySnapshot, expected, tip string) (*trunkHistory, bool, error) {
+	h := snapshot.history
 	if h.lost == "" {
 		for _, old := range []string{h.observed, expected} {
 			if old == "" {
@@ -31,7 +45,11 @@ func (t *Trunk) reconcileHistory(tx *store.Tx, expected, tip string) (*trunkHist
 			if err := t.HasCommit(old); err != nil {
 				return nil, false, err
 			}
-			if !t.IsAncestor(old, tip) {
+			ancestor, err := t.historyAncestor(old, tip)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ancestor {
 				h.lost = old
 				break
 			}
@@ -41,24 +59,48 @@ func (t *Trunk) reconcileHistory(tx *store.Tx, expected, tip string) (*trunkHist
 		if err := t.HasCommit(h.lost); err != nil {
 			return nil, false, err
 		}
-		if t.IsAncestor(h.lost, tip) {
+		ancestor, err := t.historyAncestor(h.lost, tip)
+		if err != nil {
+			return nil, false, err
+		}
+		if ancestor {
 			h.lost = ""
 		}
 	}
 	// Restoring an older durable hold does not waive this request's later
 	// observation. A waiter may have seen more history than the held row.
-	if h.lost == "" && expected != "" && !t.IsAncestor(expected, tip) {
-		h.lost = expected
+	if h.lost == "" && expected != "" {
+		ancestor, err := t.historyAncestor(expected, tip)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ancestor {
+			h.lost = expected
+		}
 	}
 	h.observed = tip
 	rewritten := h.lost != ""
-	if !exists {
+	if !snapshot.table {
 		return nil, rewritten, nil
 	}
-	if err := t.saveHistory(tx, h); err != nil {
-		return nil, false, err
+	return &h, rewritten, nil
+}
+
+// Exit 1 is a negative ancestry answer; cancellation and Git failures are errors,
+// never evidence that history was rewritten.
+func (t *Trunk) historyAncestor(old, tip string) (bool, error) {
+	_, stderr, err := t.runGit(nil, "merge-base", "--is-ancestor", old, tip)
+	if t.ctx != nil && t.ctx.Err() != nil {
+		return false, t.ctx.Err()
 	}
-	return h, rewritten, nil
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, Externalf("checking trunk ancestry: %s", failureText(stderr, err))
 }
 
 func (t *Trunk) saveHistory(tx *store.Tx, h *trunkHistory) error {

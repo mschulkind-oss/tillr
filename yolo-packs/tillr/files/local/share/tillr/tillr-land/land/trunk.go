@@ -2,7 +2,9 @@ package land
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 // moved only by a landed attempt.
 type Trunk struct {
 	repo string
+	ctx  context.Context
 }
 
 // OpenTrunk answers the trunk of the repository at repo. A path that is not a git work
@@ -562,12 +565,44 @@ func (t *Trunk) runGit(extraEnv []string, args ...string) (string, string, error
 // fast-forward happens in the worktree that has the trunk checked out, which is not
 // necessarily the directory the face was pointed at.
 func (t *Trunk) runGitIn(dir string, extraEnv []string, args ...string) (string, string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	ctx := t.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = gitEnvWith(extraEnv)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	started := time.Now()
+	trace := os.Getenv("TILLR_SQLITE_TRACE") == "1"
+	if trace {
+		t.traceGit(dir, args, "begin", started, nil)
+	}
 	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if trace {
+		t.traceGit(dir, args, "end", started, err)
+	}
 	return string(out), stderr.String(), err
+}
+
+func (t *Trunk) traceGit(dir string, args []string, phase string, started time.Time, err error) {
+	// Keep commit messages and environment out of diagnostics; the subcommand is
+	// enough to correlate the remaining Move/history spans with SQLite's writer.
+	command := ""
+	if len(args) > 0 {
+		command = args[0]
+	}
+	if command == "-c" && len(args) > 2 {
+		command = args[2]
+	}
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+	fmt.Fprintf(os.Stderr, "tillr-git at=%s pid=%d repo=%q command=%q phase=%s elapsed=%s error=%q\n", time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), dir, command, phase, time.Since(started), errorText)
 }
 
 // IsAncestor answers whether ancestor is reachable from descendant in this repository. It

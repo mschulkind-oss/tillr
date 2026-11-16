@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -194,7 +195,20 @@ type LandingRequest struct {
 // scope-checked identity and the selected source commit's message, naming no item, and `Trunk.Move`
 // fast-forwards the trunk onto it. A squash that conflicts is its own outcome, not a repair: the verdict
 // stands, the head is pinned, and a repair lane reads the conflict paths from the row.
-func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (Landing, error) {
+func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (answer Landing, err error) {
+	// Preserve cancellation identity even when a Git helper adds its exit-code diagnostic.
+	defer func() {
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = errors.Join(err, ctx.Err())
+		}
+	}()
+	// Scope cancellation to this request without mutating a trunk shared by callers.
+	requestTrunk := *t
+	requestTrunk.ctx = ctx
+	t = &requestTrunk
+	if err := ctx.Err(); err != nil {
+		return Landing{}, err
+	}
 	if err := checkLandingRequest(req); err != nil {
 		return Landing{}, err
 	}
@@ -264,110 +278,167 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	}
 	defer lock.Release()
 
-	// Hold the store write lock from the disposition check through the trunk move
-	// and receipt. Close uses the same lock: either close wins, or it sees the receipt.
+	prepared, err := prepareLanding(ctx, s, t, landing, req)
+	if err != nil {
+		return Landing{}, err
+	}
+	// Only the final check, Move and receipt need SQLite's single writer. Close
+	// either wins during preparation or waits here and sees the committed receipt.
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		var err error
-		landing, err = landLocked(ctx, tx, t, landing, req)
+		landing, err = finishLanding(ctx, tx, t, prepared, req)
 		return err
 	})
 	return landing, err
 }
 
-func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, req LandingRequest) (Landing, error) {
+type preparedLanding struct {
+	landing                        Landing
+	squash                         Squash
+	historyBefore                  historySnapshot
+	history                        *trunkHistory
+	observationRef, observationTip string
+}
+
+func itemNotLandable(r rowQueryer, id string) (bool, error) {
 	var hasItems bool
-	if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')`).Scan(&hasItems); err != nil {
-		return Landing{}, Internalf("checking item schema: %v", err)
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')`).Scan(&hasItems); err != nil {
+		return false, Internalf("checking item schema: %v", err)
 	}
+	var notLandable bool
 	if hasItems {
-		var notLandable bool
-		if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM items WHERE item_id = ? AND state IN ('closed', 'resolved-elsewhere'))`, req.ItemID).Scan(&notLandable); err != nil {
-			return Landing{}, Internalf("reading item disposition: %v", err)
+		if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM items WHERE item_id = ? AND state IN ('closed', 'resolved-elsewhere'))`, id).Scan(&notLandable); err != nil {
+			return false, Internalf("reading item disposition: %v", err)
+		}
+	}
+	return notLandable, nil
+}
+
+// prepareLanding holds land.lock but no SQLite transaction across Git or disk work.
+func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landing, req LandingRequest) (preparedLanding, error) {
+	p := preparedLanding{landing: landing}
+	err := s.ReadTx(ctx, func(r *store.Reader) error {
+		notLandable, err := itemNotLandable(r, req.ItemID)
+		if err != nil {
+			return err
 		}
 		if notLandable {
-			landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
+			p.landing.Result, p.landing.Reason = ResultRefused, ReasonItemNotLandable
 		}
+		if p.landing.Landed() && req.ObservedTrunk != "" {
+			p.historyBefore, err = readHistory(r)
+		}
+		return err
+	})
+	if err != nil {
+		return p, err
 	}
-
 	trunkBefore, err := t.Head(req.BaseRef)
 	if err != nil {
-		return Landing{}, err
+		return p, err
 	}
-	landing.TrunkBefore = trunkBefore
-	landing.TrunkAfter = trunkBefore
-	var history *trunkHistory
-	if landing.Landed() && req.ObservedTrunk != "" {
-		observedTarget := trunkBefore
+	p.landing.TrunkBefore, p.landing.TrunkAfter = trunkBefore, trunkBefore
+	if p.landing.Landed() && req.ObservedTrunk != "" {
+		p.observationRef, p.observationTip = req.BaseRef, trunkBefore
 		if PatchRef(req.BaseRef) != "" {
-			// Patch delivery is not the trunk observation. Compare the repository's
-			// checkout branch, not an unrelated fork's patch history.
-			ref, err := t.Branch()
+			p.observationRef, err = t.Branch()
 			if err != nil {
-				return Landing{}, err
+				return p, err
 			}
-			observedTarget, err = t.Head(ref)
+			p.observationTip, err = t.Head(p.observationRef)
 			if err != nil {
-				return Landing{}, err
+				return p, err
 			}
 		}
 		var rewritten bool
-		history, rewritten, err = t.reconcileHistory(tx, req.ObservedTrunk, observedTarget)
+		p.history, rewritten, err = t.prepareHistory(p.historyBefore, req.ObservedTrunk, p.observationTip)
+		if err != nil {
+			return p, err
+		}
+		if rewritten {
+			p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkRewritten
+		}
+	}
+	if p.landing.Landed() {
+		p.squash, err = t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
+		if err != nil {
+			return p, err
+		}
+		if p.squash.Conflicted() {
+			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, p.squash.Conflicts
+		} else {
+			p.landing.LandedTree = p.squash.Tree
+			clashing, err := t.ClashingPaths(req.BaseRef, trunkBefore, p.squash.Commit)
+			if err != nil {
+				return p, err
+			}
+			if len(clashing) > 0 {
+				p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkUncommitted
+				p.landing.ConflictPaths = clashing
+			} else if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
+				return p, err
+			}
+		}
+	}
+	// Pin before acquiring the writer, including successful preparations that a
+	// concurrent Close may turn into a refusal at the final check.
+	if err := t.Pin(req.RunID, req.HeadSHA); err != nil {
+		return p, err
+	}
+	return p, ctx.Err()
+}
+
+func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLanding, req LandingRequest) (Landing, error) {
+	landing := p.landing
+	notLandable, err := itemNotLandable(tx, req.ItemID)
+	if err != nil {
+		return Landing{}, err
+	}
+	if notLandable {
+		landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
+		landing.LandedTree, landing.ConflictPaths = "", nil
+	}
+	tip, err := t.Head(req.BaseRef)
+	if err != nil {
+		return Landing{}, err
+	}
+	if tip != landing.TrunkBefore {
+		return Landing{}, Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, landing.TrunkBefore, tip)
+	}
+	if !notLandable && p.observationRef != "" {
+		current, err := readHistory(tx)
 		if err != nil {
 			return Landing{}, err
 		}
-		if rewritten {
-			landing.Result, landing.Reason = ResultRefused, ReasonTrunkRewritten
+		if current != p.historyBefore {
+			return Landing{}, Externalf("trunk history changed during landing preparation; no move made")
+		}
+		if p.observationRef != req.BaseRef {
+			tip, err = t.Head(p.observationRef)
+			if err != nil {
+				return Landing{}, err
+			}
+			if tip != p.observationTip {
+				return Landing{}, Externalf("observed trunk changed during landing preparation; no move made")
+			}
 		}
 	}
-
-	if !landing.Landed() {
-		return pinAndRecord(ctx, tx, t, landing, req)
-	}
-
-	squash, err := t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return Landing{}, err
 	}
-	if squash.Conflicted() {
-		landing.Result = ResultSquashConflict
-		landing.ConflictPaths = squash.Conflicts
-		return pinAndRecord(ctx, tx, t, landing, req)
-	}
-	landing.LandedTree = squash.Tree
-	clashing, err := t.ClashingPaths(req.BaseRef, trunkBefore, squash.Commit)
-	if err != nil {
-		return Landing{}, err
-	}
-	if len(clashing) > 0 {
-		landing.Result = ResultRefused
-		landing.Reason = ReasonTrunkUncommitted
-		landing.ConflictPaths = clashing
-		return pinAndRecord(ctx, tx, t, landing, req)
-	}
-	if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
-		return Landing{}, err
-	}
-	if err := t.Move(req.BaseRef, squash.Commit, trunkBefore); err != nil {
-		return Landing{}, err
-	}
-	landing.TrunkAfter = squash.Commit
-	if history != nil && PatchRef(req.BaseRef) == "" {
-		history.observed = squash.Commit
-		if err := t.saveHistory(tx, history); err != nil {
+	if landing.Landed() {
+		if err := t.Move(req.BaseRef, p.squash.Commit, landing.TrunkBefore); err != nil {
 			return Landing{}, err
 		}
+		landing.TrunkAfter = p.squash.Commit
+		if p.history != nil && PatchRef(req.BaseRef) == "" {
+			p.history.observed = p.squash.Commit
+		}
 	}
-	return recordLanding(ctx, tx, landing, req.At)
-}
-
-// pinAndRecord pins the run's head and records a non-landing row. The pin is what makes a
-// refusal and a squash conflict survive: without it the head is reachable only from the
-// lane's branch, and a garbage collection between this process and the conflict-fixer or
-// the person reading the row takes it. The caller holds the land lock, so the pin happens
-// before the release that lets another writer in.
-func pinAndRecord(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, req LandingRequest) (Landing, error) {
-	if err := t.Pin(req.RunID, req.HeadSHA); err != nil {
-		return Landing{}, err
+	if !notLandable && p.history != nil {
+		if err := t.saveHistory(tx, p.history); err != nil {
+			return Landing{}, err
+		}
 	}
 	return recordLanding(ctx, tx, landing, req.At)
 }

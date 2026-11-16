@@ -510,6 +510,18 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			return nil
 		}
 		d := p.decision
+		if d.Action == ActionDispatch || d.Action == ActionRetry {
+			// A concurrent landing can publish an answered conflict after the pass
+			// refreshed documents. Item versions alone do not bind that new decision
+			// to the refreshed trunk; defer before claiming a run at the old base.
+			head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			if err != nil {
+				return err
+			}
+			if head != mainSHA {
+				return nil
+			}
+		}
 		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) {
 			rows, err := readItems(tx.Reader())
 			if err != nil {
