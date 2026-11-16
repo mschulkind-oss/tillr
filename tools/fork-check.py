@@ -70,12 +70,9 @@ WHAT IT RUNS, and when. Only what the change can reach:
      from the passing checks, and only when EVERY case the run failed is one of them, so
      any other red in the same suite stays a verdict. An expired or ticketless declaration
      blocks its case again.
-  7. WHEN the change touches tracked Markdown in this repository (`*.md`, never under
-     `.forks/`, `node_modules/` or `.yolo/`): `uvx vantage-check <paths>` -- the
-     repository's own document check, over the changed files. A finding fails the
-     gate. When there is no document to check the report says so; when `uvx` cannot
-     run the tool (no `uvx`, no network for the first fetch, or an exit that is not
-     a finding) the report names it as a skip and the run is not a verdict.
+  7. RETIRED here: rendering changed Markdown is a change declaration under
+     tools/gate/checks/. It takes the caller's base and head, not the remembered baseline.
+
   8. WHEN the change touches tracked Markdown: the SCRATCH-CITATION guard -- a
      tracked document may not cite a path under the durable scratch directory
      (`$YOLO_DURABLE_DIR`, `.yolo/durable`) as evidence, because that scratch is
@@ -217,24 +214,7 @@ WHAT IT RUNS, and when. Only what the change can reach:
      has not been re-exported into `.forks/pi`, or a checkout left on another branch, can be
      green here and still be wrong -- read the green as evidence about `.forks/pi`, never as
      verification of the series itself.
- 22. WHEN the change adds a line to tracked Markdown: the UNREACHABLE-CITATION guard --
-     an added line may not cite a commit sha that HEAD's history does not contain, because
-     "the suite counts are in `abc1234`" claims evidence a reader can go and read, and a
-     sha that lived only on a lane branch (or was orphaned by a rewrite) cannot be told
-     apart from a claim that was never true. This is step 8's rule applied to a sha. The
-     reading is named in the refusal (`resolves to a commit that is not an ancestor of
-     HEAD`); a token that resolves to nothing in this clone -- an upstream project's sha,
-     a hex-looking session id -- is not judged. A commit reachable from a ref that carries
-     upstream's history -- a patch branch, its published or remote-tracking copy, the
-     upstream remote, a release tag -- is an upstream PIN, not a claim about this
-     repository's history, and passes (UPSTREAM_REF). A lane branch is not such a ref,
-     even when it is pushed to origin. A line that cites an unlanded commit on
-     purpose carries `[unlanded]` and passes. The guard is DIFF-SCOPED, unlike step 8: the
-     tree already holds 844 such citations (measured 2026-10-21: 639 orphaned by the
-     2026-10-20 history rewrite, 74 reachable only from another branch, 131 from no ref,
-     across 90 documents), and a repository-wide refusal would fail every Markdown change
-     for reasons nobody asked this item to fix. The finding is a REFUSAL (exit 2), not a
-     verdict about the change.
+ 22. RETIRED here: commit citations are a change declaration under tools/gate/checks/.
  23. WHEN `bin/land`, anything under `tools/mq/`, or `tests/land-queue.test.sh`
      changed: `bash tests/land-queue.test.sh`. THIS STEP IS RETIRED. The merge queue and its
      shim are deleted (docs/design/mq-retirement.md), so there is no step here and nothing to
@@ -272,17 +252,8 @@ WHAT IT RUNS, and when. Only what the change can reach:
      refused, naming the remote commit, when the remote moved away from it. The suite
      builds its own bare origin, work repository, second clone and diverged branch, so it
      reaches no network.
- 25. ALWAYS: the `.ts` FILE-SIZE BUDGET -- a tracked `.ts` file above
-     `TS_SIZE_WARN_LINES` (2,000) is named in the report and the run still passes; a
-     `.ts` file this change ADDS above `TS_SIZE_REFUSE_LINES` (3,000) refuses. The
-     budget exists because a size is not something a diff shows: a shipped extension
-     was discovered at 19,839 lines, and every other shipped extension is under 2,400. The
-     warning does not fail the run because the tree already carries files over it, and a
-     gate that refused them would fail every lane for debt its change did not take on;
-     the refusal is for the file a change introduces. It reads the line counts from
-     HEAD's blobs (one `git grep -c`), never the working tree, so it watches no path and
-     refuses no dirty one; with no diff base nothing can be called added, and the report
-     says so rather than reading silence as "no file was added".
+ 25. ALWAYS: warn about tracked .ts files above 2,000 lines. Added-file refusals are
+     change declarations under tools/gate/checks/ and require the caller's base and head.
  28. WHEN `bin/pi-forks`, `bin/pi-forks.list`, `tests/pi-forks.test.sh`, anything under
      `tests/pi-forks/`, a series directory, or a pack's declaration changes:
      `bash tests/pi-forks.test.sh` -- the driver's own 332 cases in 26 scenarios, which
@@ -1015,24 +986,8 @@ UNANSWERABLE_FORK_QUALITY = (
 )
 DOCUMENTS_TIMEOUT = 300
 STORYBOOK_TIMEOUT = 900
-# The `.ts` file-size budget, in lines. A file this repository ships is meant to stay
-# small enough to read: every shipped extension is under 2,400 lines, and the one that
-# was not (a since-removed extension) -- was discovered at 19,839. A tracked file above
-# TS_SIZE_WARN_LINES is named in the report and does not fail the run, because the tree
-# already holds such files and a refusal would fail every lane for debt its change did
-# not take on; a file the change ADDS above TS_SIZE_REFUSE_LINES refuses, because that
-# is the shape the budget exists to stop at the gate rather than at discovery.
+# The tree-wide warning threshold; change-only refusals live in tools/gate/checks.
 TS_SIZE_WARN_LINES = 2000
-TS_SIZE_REFUSE_LINES = 3000
-# A generated pack copy of an existing large file is not a new AUTHORED file: the
-# delivery is a byte-for-byte copy of a canonical source, and the budget exists to stop
-# a new large file being written, not to forbid delivering one that already exists. Each
-# entry is (generated prefix, canonical source prefix); a file under the generated prefix
-# is exempt from the refusal only when its blob is identical to the same relative path
-# under the canonical prefix. A large file that does not match its source is authored,
-# and is judged exactly as before -- so the exemption cannot be used to smuggle one in.
-GENERATED_COPIES = (
-)
 META_MUSE_TIMEOUT = 600
 YOLO_CONFIG_TIMEOUT = 600
 
@@ -1068,7 +1023,6 @@ WAYBAR_WATCHES = (
 # Directories that never hold a document this gate checks: a fork checkout, a
 # dependency tree, and this repo's durable scratch.
 DOCUMENT_EXCLUDED = frozenset({".forks", "node_modules", ".yolo"})
-DOCUMENT_CHECK = ("uvx", "vantage-check")
 
 # The scratch-citation guard. `$YOLO_DURABLE_DIR` (`.yolo/durable/...`) is
 # retention-managed scratch outside the project, so a document that cites it as
@@ -1193,39 +1147,6 @@ DESIGN_CITATION_ROOTS = ("", "docs", "docs/design")
 MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(.*)$")
 MARKDOWN_HTML_ANCHOR = re.compile(r'<a\s+[^>]*(?:id|name)="([^"]+)"')
 MARKDOWN_VANTAGE_QUESTION = re.compile(r"<!--\s*vantage:\s*question\s+id=([^\s]+)")
-
-# The unreachable-citation guard. A document that cites a commit sha as evidence -- "the
-# suite counts are in `abc1234`", "the tree read at `def5678`" -- claims a reader can go
-# and read that commit. When the sha is not in HEAD's history the claim cannot be checked:
-# it may have lived only on a lane branch, or a rewrite orphaned it, and a reader cannot
-# tell that from a claim that was never true. That is the scratch-citation rule (step 8)
-# applied to a sha; AGENTS.md states it under "Documents: state the evidence, never cite
-# scratch". The backlog measured on 2026-10-21 was 844 citations across 90 tracked
-# documents -- 639 orphaned by the 2026-10-20 history rewrite, 74 reachable only from
-# another branch, 131 reachable from no ref -- so the guard judges the lines a change
-# ADDS, not the whole tree: a repository-wide refusal would fail every Markdown change for
-# reasons nobody asked this item to fix. A line that cites an unlanded commit deliberately
-# carries UNLANDED_MARKER; a line without it is refused.
-UNLANDED_MARKER = "[unlanded]"
-# A ref that carries UPSTREAM's history rather than this repository's own work. The patch
-# branch's ancestry is upstream's plus our merges (docs/pi/patch-branches/design.md), so a
-# commit reachable from it is an upstream commit -- the shape a pin cites -- even though it
-# is not an ancestor of HEAD. The published copy and a remote-tracking copy of a patch
-# branch are the same history, the upstream remote is upstream by definition, and a release
-# tag is a pin by another name. A LANE branch is deliberately absent: `feat/*` and `lane/*`
-# are this repository's own work, and a lane branch pushed to origin
-# (`refs/remotes/origin/feat/*`) is still a lane branch, so the remote-tracking form is
-# narrowed to the upstream remote and to patch branches. A commit reachable only from a
-# lane branch is the unlanded case UNLANDED_MARKER exists for.
-UPSTREAM_REF = re.compile(
-    r"^refs/(?:heads/patch/|published/patch/|remotes/[^/]+/patch/|remotes/upstream/|tags/)"
-)
-# A cited sha: 7-40 lowercase hex characters, bounded so `feedbac` in "feedback" and a
-# decimal like `2147483647` are not tokens. A token is judged only when it resolves to a
-# commit in this clone: an upstream project's sha, a session id that looks like hex and a
-# version fragment are not this repository's commits, and the guard cannot tell them apart
-# from one that is, so it names only what it can read.
-SHA_CITATION = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
 
 HEX = re.compile(r"^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -1683,15 +1604,6 @@ TILLR_DOCS_INPUT = (
 )
 TILLR_DOCS_TIMEOUT = 600
 
-# config/tillr/seed-items.json is intake-frozen under `D-QP1`
-# (docs/design/tillr-queue-persistence.md Section 3.1): the file may only shrink, so a
-# change that adds a net-new `item_id` or edits a surviving entry is refused. The freeze
-# is the attrition path that retires the file; the alternative D-QP1 rejected was a
-# second, drifting definition of the queue in git. A removal is the one permitted edit,
-# because terminal rows leave as they land or resolve.
-LEGACY_SEED = "config/tillr/seed-items.json"
-LEGACY_SEED_WATCHES = (LEGACY_SEED,)
-
 # tools/session-liveness is the headless liveness harness: from a state a session can reach,
 # does it return to idle within a bound, and does a later send-now start work? It judges the
 # tree's pi series, and a verdict is a function of the tree rather than of ambient state: the
@@ -1889,7 +1801,6 @@ SELF_SUITE = (
     # its scope rule is pinned: a lane's `git config` write must not change the identity
     # the trunk gate reads (board item 414). A change to the guard therefore plans the
     # suite that proves the rule, not only the guard itself.
-    "tests/git-identity.test.py",
     # The preflight's declarations are read by this checker and their shape is pinned by
     # this suite, so an edit to them is judged here rather than by the matrix they steer.
     PREFLIGHT_DECLARATIONS,
@@ -4902,7 +4813,7 @@ EXCLUSIVE_CHECKS = {
 # here so a reader (and a consumer of the report's `plan` line) can count it, and adding
 # a member is a deliberate edit rather than a side effect of some check's watches.
 # `plan_integrity` is the one place they are planned.
-INTEGRITY_CHECKS = ("structural", "file-size", "commit-identity")
+INTEGRITY_CHECKS = ("structural", "file-size")
 
 # The line a run ends with, immediately before the plan line, naming why every check ran
 # and every step did not. The payload is one JSON object on one line; `print_selection`
@@ -4947,9 +4858,7 @@ KIND_VERDICT = "verdict"      # a non-zero exit judges the change
 # too, and the group is kept so the declaration still reads as a decision about the kind.
 KIND_UNABLE = "unable"
 KIND_INVARIANT = "invariant"  # the driver names the invariant it refused
-KIND_FINDING = "finding"      # only a finding the checker named is a verdict
 KIND_NAMED = "named"          # only a failing case the output names is a verdict
-KIND_NEVER = "never"          # never a verdict, whatever the exit status
 
 CHECK_KIND_GROUP = {
     # A config, render, build or suite assertion that fails is a verdict about the change:
@@ -4958,9 +4867,6 @@ CHECK_KIND_GROUP = {
     # longer builds, or a guard whose finding is real no longer holds.
     "structural": KIND_VERDICT,
     "file-size": KIND_VERDICT,
-    # A commit carrying an identity nobody configured is this change's own red: the act is
-    # exactly what the guard exists to refuse.
-    "commit-identity": KIND_VERDICT,
     "waybar": KIND_VERDICT,
     "scratch": KIND_VERDICT,
     "design-citations": KIND_VERDICT,
@@ -4974,9 +4880,6 @@ CHECK_KIND_GROUP = {
     # table, is this change's own red: the document is the claim and the binary is the
     # authority, so a disagreement is exactly what the step exists to refuse.
     "tillr-docs": KIND_VERDICT,
-    # The intake-frozen legacy seed: a net-new item_id or an edited surviving entry is
-    # this change's own red, exactly like every other assertion above.
-    "seed-freeze": KIND_VERDICT,
     # The loop adapter's own suite: a case that no longer describes the front end is this
     # change's own red, exactly like every other assertion above.
     "tillr-loop": KIND_VERDICT,
@@ -5036,8 +4939,6 @@ CHECK_KIND_GROUP = {
     "build": KIND_INVARIANT,
     "patch-branch-inv2": KIND_INVARIANT,
     "patch-branch-inv3": KIND_INVARIANT,
-    # A `documents` check only earns a verdict when the checker named a finding.
-    "documents": KIND_FINDING,
     # The gate's own audit suite is a flat script, so a failing assertion is named by the
     # interpreter's traceback rather than by a test framework. A suite that ran to
     # completion and named the assertion that failed is a verdict about the tree it ran
@@ -5046,9 +4947,6 @@ CHECK_KIND_GROUP = {
     # kind is not KIND_INVARIANT: the suite's transcript quotes the synthetic gates it
     # spawns, and a series-conflict phrase in one of those is not the bridge's refusal.
     "self-suite": KIND_NAMED,
-    # The citation guard REFUSES to certify the change (exit 2), the same shape as a dirty
-    # tree or a missing checkout, rather than reporting a verdict about its content.
-    "citations": KIND_NEVER,
 }
 
 # ── which tier a check belongs to ───────────────────────────────────────────────
@@ -5076,7 +4974,6 @@ CHECK_TIER = {
     # today. Rule 1 and rule 3.
     "structural": TIER_LANDING,
     "file-size": TIER_LANDING,
-    "commit-identity": TIER_LANDING,
     # The trunk must always compile. A non-compiling trunk breaks every lane's next rebase
     # and the next gate itself, so the build and the test-compile are pre-publish, always
     # (invariant I2). The substrate suite also lands: its store, migration, and event-kind
@@ -5118,7 +5015,6 @@ CHECK_TIER = {
     "session-budget": TIER_LANDING,
     "tillr-backends": TIER_LANDING,
     "tillr-docs": TIER_LANDING,
-    "seed-freeze": TIER_LANDING,
     # Twelve shell-stub cases that finish in a couple of seconds, so deferral buys nothing.
     "tillr-loop": TIER_LANDING,
     # The pack's copy of the modules is a property of the tree, and the front end's build is
@@ -5136,8 +5032,6 @@ CHECK_TIER = {
     "pre-push-guard": TIER_LANDING,
     "hooks-install": TIER_LANDING,
     "observatory-dev": TIER_LANDING,
-    "documents": TIER_LANDING,
-    "citations": TIER_LANDING,
 }
 
 
@@ -5184,12 +5078,9 @@ HEAVY_JOBS_DEFAULT = 6
 CHECK_COST_ESTIMATE = {
     "structural": 5.0,
     "file-size": 0.0,
-    "commit-identity": 3.0,
     "waybar": 4.0,
-    "documents": 4.0,
     "scratch": 0.0,
     "design-citations": 0.0,
-    "citations": 1.0,
     "storybook": 20.0,
     "rank-order": 20.0,
     "session-forensics": 15.0,
@@ -5200,7 +5091,6 @@ CHECK_COST_ESTIMATE = {
     # 5s warm, and the gate's `go-build` steps keep that cache warm), plus one `--help` per
     # documented face.
     "tillr-docs": 60.0,
-    "seed-freeze": 0.0,
     # Twelve shell-stub cases: measured under 4s cold on 2026-11-15, and each is a shim on
     # PATH answering a chosen exit code, so the price is Python startup plus a few dozen
     # subprocesses rather than any real work.
@@ -5434,9 +5324,6 @@ class Check:
         # tuned cap from saturation.
         self.waited = {"pool": 0.0, "cheap": 0.0, "exclusive": 0.0, "heavy": 0.0,
                        "writes": 0.0, "after": 0.0}
-        # A `documents` check only earns a verdict when uvx ran the checker and it
-        # reported on stdout; anything else is "could not run", handled as a skip.
-        self.document_finding = False
         # The inputs this check's own transcript declared elsewhere (a series whose
         # patch-branch stamp is the host's). A check may both pass and declare: the
         # series it could answer for were applied, and the ones it could not are named
@@ -5550,12 +5437,8 @@ class Check:
         if self.rc in COULD_NOT_ANSWER_CODES:
             return False
         group = CHECK_KIND_GROUP.get(self.kind, KIND_VERDICT)
-        if group == KIND_FINDING:
-            return self.document_finding
         if group == KIND_NAMED:
             return self.named_case
-        if group == KIND_NEVER:
-            return False
         if group == KIND_UNABLE:
             # A fork-quality step whose candidate is not the series' tree refused to
             # judge: it never ran its command, so its exit is not a verdict about the
@@ -6359,119 +6242,6 @@ def design_citation_findings(root: Path) -> list[str]:
     return findings
 
 
-def added_markdown_lines(root: Path, base: str, paths: list[str]) -> dict[str, list[int]]:
-    """The line numbers a `base..HEAD` diff adds to each of `paths`.
-
-    `--unified=0` keeps the diff to changed lines, so no context line can be read as an
-    added one; a hunk header's new-file start is the number of its first `+` line, and
-    each added line increments it while a deleted line does not.
-    """
-    diff = git(root, "diff", "--unified=0", "--no-renames", "--no-color", base, "HEAD",
-               "--", *paths)
-    added: dict[str, list[int]] = {}
-    path: str | None = None
-    number = 0
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[len("+++ b/"):]
-            added.setdefault(path, [])
-        elif line.startswith("@@"):
-            match = re.search(r"\+(\d+)", line)
-            number = int(match.group(1)) if match else 0
-        elif path is not None and line.startswith("+"):
-            added[path].append(number)
-            number += 1
-    return added
-
-
-def unreachable_citations(root: Path, base: str | None, paths: list[str]) -> list[str]:
-    """Every line this change adds to a tracked document that cites a commit not on HEAD.
-
-    One `path:line: sha: reading -- text` per finding. The reading that failed is named:
-    the token resolves to a commit in this clone, that commit is not an ancestor of HEAD,
-    and it is not reachable from a ref that carries upstream's history (UPSTREAM_REF) --
-    an upstream pin is a legitimate citation, not a claim about this repository. A token
-    that resolves to nothing is not judged -- an upstream project's sha and a hex-looking
-    session id both look like that, and refusing them would refuse a legitimate citation
-    the guard cannot read. A fenced line is a specimen, not a citation, and is not read; a
-    line carrying `UNLANDED_MARKER` is a deliberate unlanded citation and passes. `base`
-    is the commit the change is diffed against, so
-    only lines this change introduced are judged (see UNLANDED_MARKER for the backlog
-    that keeps the guard off the whole tree), and a sha the same document already cited
-    at `base` is not a new claim: a reflowed paragraph re-adds its lines, and the backlog
-    those lines carry is filed rather than refused again on every edit.
-    """
-    if base is None or not paths:
-        return []
-    added = added_markdown_lines(root, base, paths)
-    resolved: dict[str, str | None] = {}
-    prior: dict[str, str] = {}
-    findings: list[str] = []
-    for path in sorted(added):
-        if not (root / path).is_file():
-            continue
-        lines = (root / path).read_text(encoding="utf-8", errors="replace").splitlines()
-        if path not in prior:
-            shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{path}"],
-                                   capture_output=True, text=True)
-            prior[path] = shown.stdout if shown.returncode == 0 else ""
-        # Which lines sit inside a fence, read from the whole file: an added line's number
-        # only says where it landed, not whether a specimen encloses it.
-        inside: list[bool] = []
-        fenced = False
-        for line in lines:
-            inside.append(fenced)
-            if line.lstrip().startswith(("```", "~~~")):
-                fenced = not fenced
-        for number in added[path]:
-            if not 1 <= number <= len(lines):
-                continue
-            line = lines[number - 1]
-            if inside[number - 1] or UNLANDED_MARKER in line:
-                continue
-            for token in SHA_CITATION.findall(line):
-                if token in prior[path]:
-                    continue
-                if token not in resolved:
-                    found = subprocess.run(
-                        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet",
-                         f"{token}^{{commit}}"],
-                        capture_output=True, text=True,
-                    )
-                    resolved[token] = found.stdout.strip() if found.returncode == 0 else None
-                commit = resolved[token]
-                if commit is None:
-                    continue
-                ancestor = subprocess.run(
-                    ["git", "-C", str(root), "merge-base", "--is-ancestor", commit, "HEAD"],
-                    capture_output=True, text=True,
-                )
-                if ancestor.returncode == 0:
-                    continue
-                if reachable_from_upstream(root, commit):
-                    continue
-                findings.append(
-                    f"{path}:{number}: {token}: resolves to a commit that is not an ancestor "
-                    f"of HEAD and is not reachable from an upstream ref; mark the line "
-                    f"{UNLANDED_MARKER} if that is intended -- {line.strip()}"
-                )
-    return findings
-
-
-def reachable_from_upstream(root: Path, commit: str) -> bool:
-    """Whether `commit` is reachable from a ref that carries upstream's history.
-
-    One `git for-each-ref --contains` answers every ref at once, and the names are then
-    matched against UPSTREAM_REF. A commit reachable only from a lane branch answers no,
-    which is the unlanded case the marker exists for; a commit reachable from a patch
-    branch, its published or remote-tracking copy, the upstream remote, or a release tag
-    answers yes, which is an upstream pin.
-    """
-    refs = git(root, "for-each-ref", "--contains", commit, "--format=%(refname)",
-               check=False)
-    return any(UPSTREAM_REF.match(name) for name in refs.splitlines())
-
-
 def tracked_typescript_lines(root: Path) -> list[tuple[str, int]]:
     """Every tracked `.ts` file with its line count at HEAD, largest first.
 
@@ -6496,138 +6266,11 @@ def tracked_typescript_lines(root: Path) -> list[tuple[str, int]]:
     return sorted(sizes, key=lambda pair: (-pair[1], pair[0]))
 
 
-def added_typescript(root: Path, base: str) -> list[str]:
-    """The `.ts` files the `base..HEAD` diff ADDS, repo-relative.
 
-    `--no-renames` is the diff's own reading everywhere else here, so a rename shows as
-    an addition and a deletion: a file that appears at this size is judged, whatever it
-    was called before.
-    """
-    diff = git(root, "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z",
-               base, "HEAD", "--", "*.ts")
-    return [path for path in diff.split("\0") if path]
-
-
-def generated_copy_of(root: Path, path: str) -> bool:
-    """Whether `path` is a byte-identical generated copy of a canonical source.
-
-    Read from the commit, like the size itself: the claim is about what the change
-    lands, not about a working tree that may hold an uncommitted edit.
-    """
-    for generated, canonical in GENERATED_COPIES:
-        if not path.startswith(generated):
-            continue
-        source = canonical + path[len(generated):]
-        blob = git(root, "rev-parse", f"HEAD:{path}", check=False).strip()
-        origin = git(root, "rev-parse", f"HEAD:{source}", check=False).strip()
-        return bool(blob) and blob == origin
-    return False
-
-
-def typescript_size_findings(root: Path, base: str | None) -> tuple[list[str], list[str]]:
-    """The size budget's warnings and refusals, in the terms the report prints.
-
-    A tracked file above `TS_SIZE_WARN_LINES` warns; a file this change ADDS above
-    `TS_SIZE_REFUSE_LINES` refuses. The two are separate lists because the run is
-    different: a warning is reported beside a VERIFIED headline (the tree's existing
-    large files are debt, not this change's fault), while a refusal is a verdict about
-    the change and does not advance the baseline. `base` is the commit the change is
-    diffed against, and with none nothing can be called added -- that is said out loud
-    rather than read as "no file was added".
-    """
-    sizes = tracked_typescript_lines(root)
-    added = set(added_typescript(root, base)) if base is not None else set()
-    warnings: list[str] = []
-    refusals: list[str] = []
-    for path, lines in sizes:
-        if lines > TS_SIZE_REFUSE_LINES and path in added and not generated_copy_of(root, path):
-            refusals.append(
-                f"{path}: {lines:,} lines added by this change, over the "
-                f"{TS_SIZE_REFUSE_LINES:,}-line budget for a new .ts file -- split it"
-            )
-        elif lines > TS_SIZE_WARN_LINES:
-            warnings.append(
-                f"{path}: {lines:,} lines, over the {TS_SIZE_WARN_LINES:,}-line budget "
-                f"for a .ts file"
-            )
-    if base is None:
-        warnings.append(
-            "no diff base, so no .ts file can be called added by this change and the "
-            f"{TS_SIZE_REFUSE_LINES:,}-line refusal was not judged"
-        )
-    return warnings, refusals
-
-
-def legacy_seed_findings(root: Path, base: str | None) -> list[str]:
-    """What the intake freeze refuses about a change to the legacy seed.
-
-    `config/tillr/seed-items.json` is intake-frozen under `D-QP1`
-    (docs/design/tillr-queue-persistence.md Section 3.1): it may only shrink. A surviving
-    entry may not change a field, and a net-new `item_id` may not appear. Removal is the
-    one permitted edit, because the freeze exists so terminal rows leave as they land or
-    resolve. `base` is the commit the change is diffed against; with none nothing can be
-    called added, and the plan says so rather than reading silence as a pass.
-    """
-    if base is None:
-        return []
-    path = root / LEGACY_SEED
-    if not path.exists():
-        # The file is gone: every entry was removed, which is the one permitted edit.
-        return []
-    try:
-        current = json.loads(path.read_text())
-    except OSError as error:
-        return [f"{LEGACY_SEED}: cannot read the intake-frozen seed: {error}"]
-    except json.JSONDecodeError as error:
-        return [f"{LEGACY_SEED}: the intake-frozen seed is not JSON: {error}"]
-    before_raw = git(root, "show", f"{base}:{LEGACY_SEED}", check=False)
-    if not before_raw.strip():
-        # The file did not exist at the base, so every entry it holds now is net-new.
-        before: dict = {"items": []}
-    else:
-        try:
-            before = json.loads(before_raw)
-        except json.JSONDecodeError as error:
-            return [f"{LEGACY_SEED}: the seed at {base[:12]} is not JSON: {error}"]
-
-    def entries(document: dict) -> dict[str, dict]:
-        items = document.get("items")
-        if not isinstance(items, list):
-            return {}
-        return {item["item_id"]: item for item in items
-                if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
-
-    old = entries(before)
-    new = entries(current)
-    remedy = ("file the item through the store and the owning document, not the legacy "
-              "seed")
-    findings: list[str] = []
-    for item_id in sorted(set(new) - set(old)):
-        findings.append(
-            f"{LEGACY_SEED}: {item_id} is a net-new item_id, and the file is "
-            f"intake-frozen under D-QP1 -- {remedy}")
-    for item_id in sorted(set(old) & set(new)):
-        if old[item_id] == new[item_id]:
-            continue
-        fields = sorted(
-            key for key in set(old[item_id]) | set(new[item_id])
-            if old[item_id].get(key) != new[item_id].get(key))
-        changed = ", ".join(fields) if fields else "fields"
-        findings.append(
-            f"{LEGACY_SEED}: {item_id} is a surviving entry and its {changed} changed; "
-            f"the file is intake-frozen under D-QP1 -- {remedy}")
-    return findings
-
-
-def document_skip_reason(check: Check) -> str:
-    """Why a `documents` check named no finding, in the terms the report prints."""
-    if check.rc == 127:
-        return "uvx is not on PATH, so no document could be checked"
-    if check.rc == 124:
-        return f"uvx vantage-check timed out after {check.timeout}s, so no document could be checked"
-    first = check.output.strip().splitlines()
-    detail = f" ({first[0]})" if first else ""
-    return f"uvx vantage-check exited {check.rc}, which is not a document finding{detail}"
+def typescript_size_findings(root: Path) -> list[str]:
+    """Tree-wide warnings only; added-file refusals belong to the change runner."""
+    return [f"{path}: {lines:,} lines, over the {TS_SIZE_WARN_LINES:,}-line budget for a .ts file"
+            for path, lines in tracked_typescript_lines(root) if lines > TS_SIZE_WARN_LINES]
 
 
 def waybar_skip_reason(check: Check) -> str:
@@ -6791,45 +6434,6 @@ def structural_integrity() -> Check:
                  ["sh", STRUCTURAL_TEST], "always", STRUCTURAL_TIMEOUT, watches=STRUCTURAL_INPUTS)
 
 
-# The identity guard. A commit's author and committer are a property of the commits a
-# change ADDS, not of a path, so this is planned every run like the size budget: gated on
-# changed paths it would say nothing on the change that matters -- a commit made with a
-# hand-typed identity touches whatever file it touches. On 2026-10-28 an agent typed
-# `-c user.email="matt@mschulkind.com"` on every hand-landing of one session, following an
-# AGENTS.md sentence that said to re-author "to the landing identity" without saying where
-# that identity comes from; 21 commits carried it, 14 published, and the repair was a full
-# history rewrite. The instruction was the prose, so the act is what gets checked. The
-# suite reads commits and no working-tree byte, so a dirty path does not refuse it.
-#
-# The identity it judges must be the DEPLOYED one, so the suite also refuses a repo-local
-# `user.name`/`user.email`. `.git/config` is shared by every worktree of this repository
-# and writable by any lane, so a value there silently replaces the deployed identity for
-# every commit and every landing in every worktree. On 2026-11-02 a lane fixture wrote
-# `t <t@e.invalid>` there and the trunk gate refused 33 correctly authored commits
-# (breakage 3); the same value would have made the lander re-author landed commits to it.
-# The identity the commits are judged against is read from the scopes a lane cannot write
-# -- the deployed global config, the system config and the caller's command scope -- so a
-# per-worktree write cannot steer it either (board item 414).
-IDENTITY_TEST = "tests/git-identity.test.py"
-IDENTITY_TIMEOUT = 120
-
-
-def commit_identity() -> Check:
-    """Every commit in the gated range carries the deployed identity, and only the
-    deployed one may answer: a repo-local override refuses before the range is judged.
-
-    The range is the lander's batch base when it names one, so a landing is judged on the
-    commits it adds and not on the work-identity commits this history already holds. The
-    identity is the one the deployed config states, not the merged config a lane can
-    rewrite through the shared `.git/config`.
-    """
-    return Check("commit-identity",
-                 "every commit this range adds is authored and committed by the configured "
-                 "git identity, an unconfigured identity refuses rather than invents, and a "
-                 "repo-local override refuses",
-                 [sys.executable, IDENTITY_TEST], "always", IDENTITY_TIMEOUT)
-
-
 def file_size_integrity() -> Check:
     """The size budget: a property of the tree rather than of the diff.
 
@@ -6838,8 +6442,7 @@ def file_size_integrity() -> Check:
     path, so it neither reads a working-tree byte nor refuses a dirty one.
     """
     return Check("file-size",
-                 f"no tracked .ts file over {TS_SIZE_WARN_LINES:,} lines "
-                 f"(a file this change adds over {TS_SIZE_REFUSE_LINES:,} refuses)",
+                 f"warn when a tracked .ts file exceeds {TS_SIZE_WARN_LINES:,} lines",
                  [], "always", 0)
 
 
@@ -6849,7 +6452,6 @@ def file_size_integrity() -> Check:
 INTEGRITY_BUILDERS = {
     "structural": structural_integrity,
     "file-size": file_size_integrity,
-    "commit-identity": commit_identity,
 }
 
 
@@ -7023,12 +6625,6 @@ def build_plan(
 
     documents = sorted(path for path in changed if is_document(root, path))
     if documents:
-        plan.checks.append(
-            Check("documents", f"{len(documents)} changed Markdown file(s)",
-                  [*DOCUMENT_CHECK, *documents],
-                  "the change touches Markdown, so it must render", DOCUMENTS_TIMEOUT,
-                  watches=tuple(documents))
-        )
         # Repo-wide, because the guard is a convention rather than a diff: it reads
         # every tracked document, so every one of them is a path it must judge in the
         # commit rather than the working tree.
@@ -7046,54 +6642,9 @@ def build_plan(
                   [], "the change touches Markdown, so the repository's documents are read",
                   0, watches=tuple(tracked_markdown(root)))
         )
-        # Diff-scoped, unlike the scratch guard: the tree's backlog of unreachable
-        # citations is measured and filed (UNLANDED_MARKER), so a repository-wide refusal
-        # would fail every Markdown change for reasons this guard was not asked to fix.
-        if base is not None:
-            plan.checks.append(
-                Check("citations",
-                      "no added Markdown line cites a commit that is neither in HEAD nor an "
-                      "upstream pin",
-                      [], "the change adds a line to a tracked document", 0,
-                      watches=tuple(documents))
-            )
-        else:
-            plan.not_planned(
-                "citations (commit-citation guard)",
-                "the run has no diff base, so no line can be called added"
-            )
     else:
-        plan.not_planned(
-            "documents (uvx vantage-check)", "no tracked Markdown changed in the selected range"
-        )
-        plan.not_planned(
-            "scratch (scratch-citation guard)", "no tracked Markdown changed in the selected range"
-        )
-        plan.not_planned(
-            "citations (commit-citation guard)",
-            "no tracked Markdown changed in the selected range"
-        )
-
-    # The legacy seed is intake-frozen (D-QP1): it may only shrink. The check is
-    # diff-scoped, so it needs the base the diff came from; without one nothing can be
-    # called added, and the plan says so rather than reading silence as a pass.
-    if LEGACY_SEED in changed:
-        if base is None:
-            plan.not_planned(
-                "seed-freeze (the legacy seed only shrinks)",
-                "the run has no diff base, so no seed entry can be called added"
-            )
-        else:
-            plan.checks.append(
-                Check("seed-freeze", "the legacy seed only shrinks (D-QP1)",
-                      [], "the intake-frozen seed file changed", 0,
-                      watches=LEGACY_SEED_WATCHES)
-            )
-    else:
-        plan.not_planned(
-            "seed-freeze (the legacy seed only shrinks)",
-            "the intake-frozen seed file did not change"
-        )
+        plan.not_planned("scratch (scratch-citation guard)",
+                         "no tracked Markdown changed in the selected range")
 
     for name, inputs, artifact, why, skip in STORYBOOKS:
         matched = [path for path in changed if any(pattern.match(path) for pattern in inputs)]
@@ -8192,8 +7743,6 @@ def sentinel_skip(check: Check) -> tuple[str, str] | None:
     """
     if check.kind == "fork-quality":
         return fork_quality_skip(check)
-    if check.kind == "documents" and check.rc != 0 and not check.document_finding:
-        return ("documents (uvx vantage-check)", document_skip_reason(check))
     if check.kind == "waybar" and check.rc == WAYBAR_SKIP_RC:
         return (f"waybar ({' '.join(check.argv)})", waybar_skip_reason(check))
     return None
@@ -8269,8 +7818,6 @@ def check_status(check: Check) -> str:
         return "QUARANTINED"
     if sentinel_skip(check) is not None:
         return "skip"
-    if check.kind == "citations" and check.rc == 2:
-        return "REFUSED"
     if candidate_stale(check):
         return "STALE"
     return "ok" if check.rc == 0 else ("FAIL" if check.conflict else "ERR")
@@ -8485,14 +8032,6 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
         if unanswered:
             print(f"fork-check: {len(unanswered)} further check(s) could not answer here "
                   f"and are not counted as red; each is named above as ERR or skip.")
-        if not_run:
-            print(f"fork-check: {len(not_run)} check(s) did not run because the verdict was "
-                  f"already red; each is named above with the check that stopped the run.")
-    elif outcome == "refused":
-        refused = [check for check in verdicts if check.kind == "citations"]
-        print(f"fork-check: REFUSED -- {len(refused)} added document line(s) cite a commit that "
-              f"is neither in HEAD nor an upstream pin; mark each {UNLANDED_MARKER} if it is "
-              f"intended ({clock(seconds)})")
         if not_run:
             print(f"fork-check: {len(not_run)} check(s) did not run because the verdict was "
                   f"already red; each is named above with the check that stopped the run.")
@@ -8906,7 +8445,6 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
     # and to a preflight cell alike.
     drop = tuple(drop) + check.drop
     check.warnings = []
-    check.document_finding = False
     # Prove the candidate is the series' tree BEFORE anything else touches it: before the
     # verdict cache, whose key is the HEAD tree (so a dirty candidate would otherwise
     # inherit a clean tree's verdict), and before the step's own command. The driver
@@ -8932,12 +8470,7 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         if cached_verdict(root, check, cache, runtime, env, drop, cancel):
             check.seconds = round(check.seconds + preflight_seconds, 2)
             return
-    if check.kind == "documents":
-        rc, out, err, seconds = run_split(root, check.argv, check.timeout, env, drop, cancel)
-        check.rc = rc
-        check.document_finding = rc == 1 and bool(out.strip())
-        check.output = out + err
-    elif check.kind == "scratch":
+    if check.kind == "scratch":
         pass_started = time.monotonic()
         findings = scratch_citations(root)
         check.rc = 1 if findings else 0
@@ -8951,24 +8484,11 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         seconds = time.monotonic() - pass_started
     elif check.kind == "file-size":
         pass_started = time.monotonic()
-        warnings, refusals = typescript_size_findings(root, diff_base)
+        warnings = typescript_size_findings(root)
+        refusals = []
         check.warnings = warnings
         check.rc = 1 if refusals else 0
         check.output = "\n".join(refusals)
-        seconds = time.monotonic() - pass_started
-    elif check.kind == "citations":
-        pass_started = time.monotonic()
-        findings = unreachable_citations(root, diff_base, list(check.watches))
-        # 2, the gate's refusal code: the change cannot be certified while a
-        # document claims evidence HEAD does not contain.
-        check.rc = 2 if findings else 0
-        check.output = "\n".join(findings)
-        seconds = time.monotonic() - pass_started
-    elif check.kind == "seed-freeze":
-        pass_started = time.monotonic()
-        findings = legacy_seed_findings(root, diff_base)
-        check.rc = 1 if findings else 0
-        check.output = "\n".join(findings)
         seconds = time.monotonic() - pass_started
     else:
         check.rc, check.output, seconds = run_command(
@@ -8989,31 +8509,12 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
 # ── main ────────────────────────────────────────────────────────────────────────
 
 
-def verdict_of(checks: list[Check], documents_unknown: bool = False) -> tuple[str, int]:
-    """The run's outcome and its exit status, from the checks that ran.
-
-    The two are one decision, so they are answered in one place: 0 VERIFIED, 1 a VERDICT
-    (a check that ran failed, or a document conflicts with the tree), 2 NOT A VERDICT
-    (the run refused to judge, or a check reached no verdict at all). Which of those a
-    failed check is depends on its kind, and `Check.conflict` is where that is decided.
-
-    A refusal outranks a verdict: the citation guard refusing to certify the change says
-    nothing about its content, so a run that also has a citation finding reports the
-    refusal rather than claiming a judgment it could not make.
-    """
+def verdict_of(checks: list[Check]) -> tuple[str, int]:
+    """Classify tree checks: content conflict, unavailable judgment, or verified."""
     failed = [check for check in checks if check.failed]
-    # A refusal, not a verdict: an added line claims evidence HEAD does not contain, so
-    # nothing about the change can be certified until it is fixed or marked.
-    refused = [check for check in failed if check.kind == "citations"]
-    conflicts = [check for check in failed if check.conflict and check.kind != "citations"]
-    unproven = [check for check in failed if not check.conflict and check.kind != "citations"]
-    if not failed and not documents_unknown:
-        return "verified", 0
-    if refused:
-        return "refused", 2
-    if conflicts:
+    if any(check.conflict for check in failed):
         return "failed", 1
-    if unproven or documents_unknown:
+    if failed:
         return "unproven", 2
     return "verified", 0
 
@@ -9252,20 +8753,6 @@ def plan_gate(root: Path, options) -> GatePlan:
 DOCUMENT_SELECTS = [{"regex": r".*\.md$", "exclude_dirs": sorted(DOCUMENT_EXCLUDED),
                      "must_exist": True}]
 CHANGE_DEPENDENT_DECLARATIONS = {
-    ("documents", 0): {
-        "id": "documents",
-        "label": "{count} changed Markdown file(s)",
-        "selects": DOCUMENT_SELECTS,
-        "command": [*DOCUMENT_CHECK, "{paths}"],
-        "watches": [{"paths": True}],
-    },
-    ("citations", 0): {
-        "id": "citations",
-        "label": "no added Markdown line cites a commit that is neither in HEAD nor an "
-                 "upstream pin",
-        "selects": DOCUMENT_SELECTS,
-        "watches": [{"paths": True}],
-    },
     ("scratch", 0): {
         "id": "scratch",
         "label": "no tracked Markdown cites a scratch path as evidence",
@@ -9891,17 +9378,6 @@ def run_gate(argv: list[str]) -> int:
         # a concurrent save is a cache miss, not a lost run entry, so it takes no lock.
         cache.save()
 
-    # A document check that named no finding did not run: `uvx` could not be reached, or
-    # the checker reached no verdict. It is reported as a skip with the reason, and the
-    # run then proves nothing about the change -- the model of a missing `yolo`.
-    documents_unknown = False
-    for check in [one for one in plan.checks if one.kind == "documents"]:
-        skip = sentinel_skip(check)
-        if skip is not None:
-            plan.unavailable(*skip, kind=check.kind)
-            documents_unknown = True
-            plan.checks.remove(check)
-
     # A Waybar case that needs the installed `ai-usagebar` to answer cannot run on a
     # machine without that binary. The script says so (exit 77) and the check's other
     # cases ran and passed, so the case is named as a skip rather than failing a case no
@@ -9935,7 +9411,7 @@ def run_gate(argv: list[str]) -> int:
     # differed; what the run does instead is read the failure's own output into a triage
     # packet below, which the repair path hands to a debugger. A step that could not answer
     # at all was named a skip above, not triaged: nothing about it reached a verdict.
-    outcome, status = verdict_of(plan.checks, documents_unknown)
+    outcome, status = verdict_of(plan.checks)
 
     if outcome == "verified" and since is None:
         # A landing-tier run proves only the landing tier, so it must NOT advance the

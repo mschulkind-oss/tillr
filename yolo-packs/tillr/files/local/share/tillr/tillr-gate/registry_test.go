@@ -136,36 +136,25 @@ func TestPlanSelectsTheGoToolSteps(t *testing.T) {
 	}
 }
 
-// The `documents` check is the reason the registry is declarations: its command is the
-// changed Markdown paths, so a planner must compute it for its own change rather than
-// replay the exporter's all-tracked-paths instance. The negative control is a change with
-// no Markdown, which must select no document check at all.
-func TestPlanComputesTheDocumentsCommandForItsOwnChange(t *testing.T) {
-	reg := load(t)
-	root := filepath.Join("..", "..")
-	changed := []string{"docs/design/board-utilities.md", "AGENTS.md"}
-	checks := reg.Plan(changed, root)
-	var documents *Check
-	for index := range checks {
-		if checks[index].ID == "documents" {
-			documents = &checks[index]
+// Changed Markdown is now selected and rendered by the change program, not by
+// a generated command over the exporter's remembered range.
+func TestDocumentsDeclarationDelegatesTheCallerRange(t *testing.T) {
+	reg, err := LoadRegistry(filepath.Join("..", "gate", "checks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := reg.Plan([]string{"AGENTS.md"}, filepath.Join("..", ".."))
+	for _, check := range checks {
+		if check.ID != "documents" {
+			continue
 		}
-	}
-	if documents == nil {
-		t.Fatalf("a Markdown change selected no documents check: %v", ids(checks))
-	}
-	want := []string{"uvx", "vantage-check", "AGENTS.md", "docs/design/board-utilities.md"}
-	if strings.Join(documents.Command, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("the documents command is %v, want %v", documents.Command, want)
-	}
-	if strings.Join(documents.Reads, "\x00") != strings.Join(want[2:], "\x00") {
-		t.Fatalf("the documents reads are %v, want %v", documents.Reads, want[2:])
-	}
-	for _, check := range reg.Plan([]string{"tools/tillr-land/main.go"}, root) {
-		if check.ID == "documents" {
-			t.Fatalf("a change with no Markdown selected the documents check")
+		want := []string{"python3", "tools/gate/checks/documents.py"}
+		if strings.Join(check.Command, "\x00") != strings.Join(want, "\x00") || check.Scope != "change" {
+			t.Fatalf("documents is not a change program: %+v", check)
 		}
+		return
 	}
+	t.Fatalf("no documents declaration in %v", ids(checks))
 }
 
 // A plan instance carries fields a command list cannot: the environment a suite needs, the

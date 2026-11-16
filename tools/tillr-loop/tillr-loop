@@ -50,18 +50,10 @@ EXIT_EXTERNAL = 4
 
 CANDIDATE_FIELDS = ("item", "lane", "run", "worktree", "base", "head")
 
-# The judge `tillr-gate run --gate` executes when the caller names none: this tree's own
-# gate, scoped to the candidate's exact range. `tools/fork-check.py` is spelled relative on
-# purpose — `tillr-gate run` sets the program's working directory to the candidate worktree,
-# so a relative path resolves inside the tree being judged, while an absolute one would
-# resolve `parents[1]` to the checkout the loop runs from and judge `main` instead. `--since`
-# scopes the run to `<base>..HEAD` (no baseline advance in the shared fork-check state).
-# `--tier landing` keeps the pre-publish checks and records each rolling kind the diff
-# selects as owed to the rolling tier, which is what makes the per-item gate ~20-30s
-# instead of its full sum; `--lock-timeout 30` waits for the record lock, which is now held
-# only for the save, rather than failing the drain on the first concurrent gate.
-DEFAULT_GATE_PROGRAM = ("python3 tools/fork-check.py --since {base} --tier landing "
-                        "--lock-timeout 30")
+# Judge change declarations with the caller's base and head, then run the remaining
+# repository checks. Relative program paths resolve inside the candidate worktree.
+DEFAULT_GATE_PROGRAM = ("python3 tools/gate/change-gate.py --base {base} --head {head} "
+                        "--runner {runner} --logs {logs}")
 
 # The registry file a gate run generates for itself when the caller names none, under the
 # run's own scratch directory so the digest `plan` verifies and the checks the verdict names
@@ -266,7 +258,7 @@ def criterion_hash(text: str) -> str:
 def compose_gate(ctx: Ctx, dry: bool) -> list[Step]:
     """Derive the change, plan it, then judge it with `tillr-gate run`.
 
-    The judge is `tools/fork-check.py`, run through `tillr-gate run --gate`. The real
+    The judge is `tools/gate/change-gate.py`, run through `tillr-gate run --gate`. The real
     registry owes three in-process checks (file-size, scratch, design-citations) on every
     change, and `tillr-gate run` refuses to answer for a check it cannot run — so a plan
     judged by that face alone is `error` for every candidate. The two faces are not
@@ -645,7 +637,11 @@ def gate_program(args: argparse.Namespace) -> str | None:
     """
     if not hasattr(args, "gate_program"):
         return None
-    return args.gate_program or DEFAULT_GATE_PROGRAM.format(base=args.base)
+    root = resolve_root(args.root, args.worktree)
+    logs = Path(args.work_dir or str(Path(root) / ".tillr" / "loop")) / args.run / "change-logs"
+    return args.gate_program or DEFAULT_GATE_PROGRAM.format(
+        base=shlex.quote(args.base), head=shlex.quote(args.head),
+        runner=shlex.quote(args.tillr_gate), logs=shlex.quote(str(logs)))
 
 
 def context(args: argparse.Namespace) -> Ctx:

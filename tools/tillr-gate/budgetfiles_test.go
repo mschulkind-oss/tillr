@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ func TestBudgetDeclarationsPlanAndRunTheirOwnDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "gate-budget") {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(source, entry.Name()))

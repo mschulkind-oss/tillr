@@ -63,7 +63,7 @@ arrives after it.
 
 | Face | Real invocation | What it derives |
 |---|---|---|
-| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/fork-check.py --gate-arg --since --gate-arg <base> --gate-arg --tier --gate-arg landing --gate-arg --lock-timeout --gate-arg 30` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs `python3 tools/fork-check.py --registry-json` with the root as its working directory, so its path is relative for the same reason the gate program's is. |
+| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs `python3 tools/fork-check.py --registry-json` with the root as its working directory, so its path is relative for the same reason the gate program's is. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T` | `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
 | `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` / `not-done` on `fail`, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
 
@@ -77,22 +77,19 @@ gives a closed queue entry. It is bookkeeping rather than judgment, which is why
 sibling of `run exec` and not a fourth adapter face: the verdict retires criteria, and this
 says where the item's work stands.
 
-The gate's judgment is `tools/fork-check.py`, run by `tillr-gate run --gate`: the real
-registry owes three in-process checks (`file-size`, `scratch`, `design-citations`) on every
-change, and `tillr-gate run` refuses to answer for a check it cannot run, so a plan judged by
-that face alone is `error` for every candidate. `tillr-gate` stays the plan and the verdict
-envelope, because `tillr-land pass` refuses a verdict whose plan and tree it cannot bind. The
-program is spelled **relative** on purpose: `tillr-gate run` sets its working directory to the
-candidate worktree, so `tools/fork-check.py` resolves inside the tree being judged, while an
-absolute path would resolve `parents[1]` to the checkout the loop runs from and judge `main`.
-`--since <base>` scopes the run to the candidate's own range (no baseline advance in the
-shared fork-check state), `--tier landing` keeps the pre-publish checks and records each
-rolling kind the diff selects as owed to the rolling tier, and `--lock-timeout 30` waits for
-the record lock -- held only for the save -- rather than failing the drain on the first
-concurrent gate. `--root` is the repository the registry is exported from and the one
-`PI_FORKS_ROOT` names; the drain runs the gate with its working directory at the lane
-worktree, so pass `--root <main checkout>` in the gate program string when a check needs
-`.forks/` (a linked worktree does not carry it).
+The default judgment is the [two-program judge](../gate/change-gate.py), run by
+`tillr-gate run --gate`. It runs `tillr-gate checks` with the candidate’s base and head,
+then the remaining repository checks. The change declarations never read a remembered
+baseline; the base must be an ancestor of the head. A rejection stops the judge, and an
+unavailable check answers “could not judge,” not “candidate rejected.”
+
+`tillr-gate` keeps the outer plan and verdict record because `tillr-land pass` binds that
+record to the candidate tree. The programs are spelled **relative** so they resolve inside
+the candidate worktree. The remaining repository checks still use the candidate’s range,
+run the landing tier, and wait for the record-save lock rather than failing on the first
+concurrent gate. Change-check logs live beside the run’s other records.
+`--root` names the repository the registry is exported from and the one `PI_FORKS_ROOT`
+names; pass the main checkout there when a check needs the shared fork checkouts.
 
 `--root` defaults to the checkout the adapter runs in (`git rev-parse --show-toplevel`),
 `--store` to `<root>/.tillr/state.db`, `--work-dir` to `<root>/.tillr/loop`, `--now` to the

@@ -138,7 +138,7 @@ func Run(planRecord record.Envelope, worktree, logDir string) (record.Envelope, 
 		switch outcome.Result {
 		case ResultError:
 			verdict.Result = ResultError
-			if failure == nil {
+			if failure == nil || exitCode(failure) != record.ExitExternal {
 				failure = externalf("the check %q could not be run; its log is %s", check.CheckID, outcome.LogRef)
 			}
 		case ResultFail:
@@ -264,7 +264,11 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 		if !errors.As(waitErr, &exitErr) {
 			return outcome
 		}
-		outcome.Result = ResultFail
+		if check.Scope == "change" && exitErr.ExitCode() == record.ExitExternal {
+			outcome.Result = ResultError
+		} else {
+			outcome.Result = ResultFail
+		}
 	default:
 		outcome.Result = ResultPass
 	}
