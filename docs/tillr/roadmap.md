@@ -123,11 +123,7 @@ invocation mistake does not hide the real reasons items are held.
   reads must invoke `uvx vantage-check index --format json`. Keep override, command-failure,
   malformed-index and open-question tests. Sync and lint the delivery.
 
-<!-- tillr: item id="item-vantage-uvx-default" paths="tools/tillr-drain/,tools/tillr-view/,tests/,yolo-packs/tillr/,docs/tillr/roadmap.md" prose="2" -->
 
-- **c1:** With no explicit override, planner and view index reads use the package runner; a regression uses a recording stub and no standalone checker and asserts the full argument list.
-- **c2:** Explicit overrides still run exactly the chosen command, and missing or failing commands and malformed index output hold affected items rather than treating them as question-free; regression tests cover these cases.
-- **c3:** Help text names the actual default, the committed delivery matches its sources, and the applicable tests and pack lint pass.
 
 ## 3. Roll onto new code without ending runs
 
@@ -300,7 +296,7 @@ named answer; this item removes the dependence.
 
 ### Fork checks resolve a commit the tree pins, through a cache that is filled on a miss
 
-<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="item-gate-needs-unavailable" -->
+<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="" -->
 
 - **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change.
 - **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
@@ -475,7 +471,7 @@ goes to the cheap seat with the guide in its brief, and the original waits until
 
 ### File a rewrite for an item that fails the prose check, ahead of the item itself
 
-<!-- tillr: item id="item-prose-rewrite-before-build" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,.tillr.toml,docs/" blocked_by="item-settings-file" -->
+<!-- tillr: item id="item-prose-rewrite-before-build" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,.tillr.toml,docs/" blocked_by="" -->
 
 - **c1:** When sync records a `prose-unmarked` or `prose-shape` finding for an item that is not landed, it creates one rewrite item for it, `rewrite-<item id>`, on the cheap seat, fenced to the document that holds the block, ranked ahead of every item that is not itself a rewrite or a trunk fixer. A second sync creates no second rewrite.
 - **c2:** The original item is held with the reason `awaits-rewrite` and its mover is the rewrite item, until the rewrite lands or the block passes the check on its own. The waiting face shows both.
@@ -724,7 +720,7 @@ one resumed session end to end.
 
 ### Stop dispatching when the spend ceiling is reached
 
-<!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-settings-file" -->
+<!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** The settings file takes `spend.ceiling_usd` and `spend.window_hours`, both off by default. With them set, the loop dispatches nothing new once the recorded cost of runs started in the window reaches the ceiling, holds every ready item with the reason `spend-ceiling`, and resumes by itself when the window has moved on.
 - **c2:** Runs in flight are not ended by the ceiling, and a run that reported no cost is counted in a separate line and never as zero.
@@ -844,7 +840,7 @@ arrives, such as review comments on a design, it starts at once.
 
 ### Run owner-facing work on lanes outside the cap
 
-<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-settings-file" -->
+<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
