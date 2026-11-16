@@ -153,6 +153,14 @@ unchanged. The reader selects only the newest decision and the sequence's exact 
 for each displayed item; neither a page size nor a time window truncates the sequence.
 An item with no decision reads `no pass yet` in both fields.
 
+A landing held by owner content reads `waits on work` at `land`, with
+`trunk-path-dirty: ` and the dirty paths in **Why**, and `commit or restore the path`
+as **Mover**. Its JSON row adds **waited**, a duration rounded to the nearest
+second from **Since** to the read time. Other rows carry an empty **waited** value.
+The terminal prints the duration after the paths in **Why**; Home shows it beside
+**Since**. A different dirty path set starts a different reason sequence and a
+new clock. A landed item no longer appears in this view.
+
 A retained conflict repair that cannot be staged uses its recorded failure event
 instead: **Why** includes `conflict-repair-staging-failed` and the exact staging
 cause, **Mover** names the input correction that enables the next repair pass, and

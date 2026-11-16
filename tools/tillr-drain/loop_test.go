@@ -454,22 +454,20 @@ func countMatching(lines []string, needle string) int {
 	return n
 }
 
-// A boundary violation stops the loop and names the path: the adapter writes into the main
-// checkout, which is outside the worktree it was given, and the loop stops without gating or
-// landing anything.
+// A sibling-worktree violation stops the loop before gating or landing.
 func TestABoundaryViolationStopsTheLoopAndNamesThePath(t *testing.T) {
 	escape := stub(t, "escaping-adapter", counting+`echo escaped > "$STUB_ESCAPE/escaped.txt"
 printf 'RESULT: done\n'
 `)
 	f := newLoopFixture(t, escape)
-	t.Setenv("STUB_ESCAPE", f.root)
+	t.Setenv("STUB_ESCAPE", filepath.Join(f.laneRoot, "lane-2", "worktree"))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 
 	gate := always(t, "gate", 0)
 	land := always(t, "land", 0)
 	verdict := always(t, "verdict", 0)
 
-	loop := f.newLoop(t, 1, f.steps(t, gate, land, verdict))
+	loop := f.newLoop(t, 2, f.steps(t, gate, land, verdict))
 	result, err := loop.Run(context.Background())
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
@@ -949,9 +947,8 @@ printf 'RESULT: done\n'
 	}
 }
 
-// A run's bracket still covers the main checkout: one run of two writes into it, and the
-// loop stops naming the path. A run's bracket wraps one run, so the detail names it.
-func TestAWriteToTheMainCheckoutIsCaught(t *testing.T) {
+// Main-checkout edits during one of two runs convict neither run.
+func TestMainCheckoutEditsDoNotStopConcurrentRuns(t *testing.T) {
 	escape := stub(t, "escaping-adapter", counting+`here=$(git rev-parse --show-toplevel)
 lane=$(basename "$(dirname "$here")")
 echo candidate > candidate.txt
@@ -972,19 +969,14 @@ printf 'RESULT: done\n'
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopHostBoundaryViolation {
-		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopHostBoundaryViolation)
+	if result.Stop != drain.StopQueueDrained || result.Landed != 2 {
+		t.Fatalf("owner edits stopped concurrent runs: %+v", result)
 	}
 	if result.Dispatched != 2 {
-		t.Fatalf("the loop dispatched %d run(s), want both of the tick's: %s", result.Dispatched, result.Detail)
+		t.Fatalf("the loop dispatched %d run(s), want both: %s", result.Dispatched, result.Detail)
 	}
-	if !strings.Contains(result.Detail, "escaped.txt") || !strings.Contains(result.Detail, f.root) {
-		t.Fatalf("the stop does not name the write: %s", result.Detail)
-	}
-	// Each lane runs its own pipeline, so the escaping lane is refused before its gate while
-	// its sibling — a different lane, a different worktree — carries on.
-	if gates := lines(t, f.count); countMatching(gates, "gate --item item_041") != 0 {
-		t.Fatalf("the loop gated the escaping lane's candidate: %v", gates)
+	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 2 {
+		t.Fatalf("owner edits prevented judgment: %v", gates)
 	}
 }
 

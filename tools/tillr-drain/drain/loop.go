@@ -763,6 +763,12 @@ func (l *Loop) index(ctx context.Context) {
 // then told the operator the opposite of the truth.
 func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
 	held := heldDetail(holds)
+	for _, d := range holds {
+		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
+			result.Detail = held
+			return l.waitForTrigger(ctx, leases, at, result)
+		}
+	}
 	if len(leases) == 0 {
 		detail := fmt.Sprintf("a full tick planned nothing dispatchable: %s", held)
 		if !l.cfg.ExitWhenDrained {
@@ -1437,6 +1443,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		l.mu.Unlock()
 		return StopGateHarnessError, false, nil
 	}
+	return l.landCandidate(ctx, candidate, result, timing)
+}
+
+// landCandidate retries a retained, already-gated tree without another run or gate.
+// Land still validates the verdict's tree binding and recomputes the squash.
+func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	landStart := time.Now()
 	landed, err := l.cfg.Steps.Land(ctx, candidate)
 	if timing != nil {
@@ -1446,6 +1458,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if landed.Result == LandRefused && landed.Reason == "trunk-worktree-uncommitted" {
+		return "", false, l.holdDirty(ctx, candidate, landed.ConflictPaths)
 	}
 	if landed.Result == LandSquashConflict {
 		// A conflict is not a refusal: the trunk moved and the candidate no longer squashes

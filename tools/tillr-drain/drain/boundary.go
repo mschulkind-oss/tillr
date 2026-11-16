@@ -307,8 +307,9 @@ func sameSpan(before, after *Boundary) error {
 // the trunk moves when a coordinator lands, a lane branch is reset by the next stage, and a
 // tillr pin is written by a non-landing. A bracket that convicted those would stop the loop
 // on its own deliverable, so it excuses them and convicts only what a run may not do: a
-// rogue ref, a write into a sibling worktree, new uncommitted dirt in the workspace, and —
-// checked before this function by fenceViolation — a change outside the item's fence.
+// rogue ref, a write into a sibling worktree, and — checked before this function
+// by fenceViolation — a change outside the item's fence. Main-checkout content
+// belongs to the owner; snapshots cannot attribute those edits to a run.
 func CompareRun(before, after *Boundary) ([]Violation, error) {
 	if err := sameSpan(before, after); err != nil {
 		return nil, err
@@ -343,10 +344,9 @@ func compareRunRefs(before, after *Boundary) []Violation {
 	})
 }
 
-// compareRunWorktrees answers a worktree that appeared or went away, a sibling lane's HEAD
-// or branch that moved, and the main checkout's HEAD move unless the move cleaned it. A
-// host commit that cleans the workspace is the one main-checkout move a run may share: the
-// tree it leaves behind is clean, so nothing of the run's is hidden in it.
+// compareRunWorktrees answers a worktree that appeared or went away and a main
+// checkout branch switch. Main HEAD movement can be a coordinator's landing even
+// while owner content remains dirty; dirt cannot turn that movement into guilt.
 func compareRunWorktrees(before, after *Boundary) []Violation {
 	violations := make([]Violation, 0)
 	main := mainWorktreePath(after)
@@ -375,13 +375,6 @@ func compareRunWorktrees(before, after *Boundary) []Violation {
 			violations = append(violations, Violation{Kind: "worktree", Where: wt.Path, Detail: fmt.Sprintf("branch %s -> %s", spelledRef(was.Branch), spelledRef(wt.Branch))})
 			continue
 		}
-		if was.Head == wt.Head {
-			continue
-		}
-		if mainIsClean(after) {
-			continue
-		}
-		violations = append(violations, headMoveViolation(wt.Path, was.Head, wt.Head))
 	}
 	for _, was := range before.Worktrees {
 		if worktreeFor(after.Worktrees, was.Path) == nil {
@@ -406,15 +399,14 @@ func insideSiblingDir(dirs []string, path string) bool {
 	return false
 }
 
-// compareRunStatus answers new uncommitted dirt in the workspace and any write into a
-// sibling lane's worktree. A path in the main checkout that became clean is a host commit
-// that cleaned the workspace, not a run's write, so it is not convicted.
+// compareRunStatus answers writes into sibling lane worktrees. Uncommitted
+// main-checkout content is the owner's, regardless of when it appeared.
 func compareRunStatus(before, after *Boundary) []Violation {
 	violations := make([]Violation, 0)
 	main := mainWorktreePath(after)
 	for _, now := range after.Worktrees {
 		was := worktreeFor(before.Worktrees, now.Path)
-		if was == nil || isTarget(before.Targets, now.Path) {
+		if was == nil || isTarget(before.Targets, now.Path) || now.Path == main {
 			continue
 		}
 		wasByPath := make(map[string]StatusEntry, len(was.Status))
@@ -432,9 +424,6 @@ func compareRunStatus(before, after *Boundary) []Violation {
 				continue
 			}
 			violations = append(violations, Violation{Kind: "path", Where: now.Path, Detail: fmt.Sprintf("%s appeared with status %q", entry.Path, entry.Code)})
-		}
-		if now.Path == main {
-			continue
 		}
 		left := make([]string, 0, len(wasByPath))
 		for path := range wasByPath {
@@ -455,15 +444,6 @@ func mainWorktreePath(b *Boundary) string {
 		return ""
 	}
 	return b.Worktrees[0].Path
-}
-
-// mainIsClean answers whether the main checkout holds no uncommitted content: the fact that
-// makes a HEAD move a host commit that cleaned the workspace rather than a run's write.
-func mainIsClean(b *Boundary) bool {
-	if b == nil || len(b.Worktrees) == 0 {
-		return false
-	}
-	return len(b.Worktrees[0].Status) == 0
 }
 
 // compareRefs answers every ref that moved, appeared or went away, except the refs the
@@ -574,7 +554,7 @@ func compareStatus(before, after *Boundary) []Violation {
 	violations := make([]Violation, 0)
 	for _, now := range after.Worktrees {
 		was := worktreeFor(before.Worktrees, now.Path)
-		if was == nil || len(was.Status) == 0 && len(now.Status) == 0 {
+		if was == nil || now.Path == mainWorktreePath(after) || len(was.Status) == 0 && len(now.Status) == 0 {
 			continue
 		}
 		wasByPath := make(map[string]StatusEntry, len(was.Status))

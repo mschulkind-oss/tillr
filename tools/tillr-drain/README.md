@@ -133,6 +133,27 @@ run was orphaned by a loop stop. A worker signal without evidence of a loop stop
 limit, or a run that left a commit does not qualify on this basis. The same one-attempt
 allowance applies.
 
+## Owner edits and waiting landings
+
+Uncommitted content in the main checkout belongs to the owner, including edits
+made while runs are in flight. Boundary snapshots do not attribute that content
+to any run. Writes into another lane's worktree still convict the writing run.
+
+When the lander reports uncommitted content on a path its change touches, the
+drain retains the already-gated candidate and its lane without a live worker
+lease. It records `trunk-path-dirty: ` followed by the sorted dirty paths as an
+ordinary item decision. Unrelated dirty paths do not delay a landing.
+
+Commit or restore the named paths. The next pass retries only the landing with
+the original candidate and verdict, including after a supervisor restart; it
+neither dispatches a replacement run nor reruns the gate. Each wait check uses the
+change reapplied onto the current trunk, so an already-applied path does not keep
+blocking the remainder; a merge conflict reaches the lander's conflict handling.
+An unchanged wait is not a candidate refusal or a failing verdict. Even
+`--exit-when-drained` keeps
+waiting while this retained landing can reopen. If the dirty path set changes,
+the decision changes with it and the waiting clock restarts.
+
 ## Conflict repair that cannot be staged
 
 A conflict-repair staging failure holds only its affected item as

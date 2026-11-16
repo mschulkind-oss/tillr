@@ -38,6 +38,12 @@ test("Home groups by mover, ranks within groups and keeps every entity id in Ent
   }
 });
 
+test("Home shows dirty landing paths and elapsed waiting time beside since", () => {
+  const { container } = render(<Home waiting={[{ ...waiting[2], where: "land", why: "trunk-path-dirty: a.txt, b.txt", mover: "commit or restore the path", since: "2026-11-16T12:00:00Z", waited: "2m0s" }]} />);
+  expect(container.textContent).toContain("trunk-path-dirty: a.txt, b.txt");
+  expect(container.textContent).toContain("2026-11-16T12:00:00Z · waited 2m0s");
+});
+
 test("Home caps each group at eight and names remaining rows", () => {
   const rows = Array.from({ length: 11 }, (_, i) => ({ ...waiting[0], item_id: `item-${i}`, rank: String(i).padStart(2, "0") }));
   const { container } = render(<Home snapshot={snapshotData} waiting={rows} />);

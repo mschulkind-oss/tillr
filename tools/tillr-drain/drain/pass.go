@@ -38,6 +38,7 @@ func init() {
 
 type pendingWork struct {
 	ParentRunID    string      `json:"parent_run_id,omitempty"`
+	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
 	RepairHold     *repairHold `json:"repair_hold,omitempty"`
 	Decision       Decision    `json:"decision"`
 	Owner          *LoopOwner  `json:"loop_owner,omitempty"`
@@ -94,6 +95,15 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 		case loopOrphanedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Orphaned = true
+			}
+		case dirtyHeldKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var hold dirtyHold
+				if err := json.Unmarshal(e.Payload, &hold); err != nil {
+					return nil, err
+				}
+				work.DirtyHold = &hold
+				work.Candidate = &hold.Candidate
 			}
 		case repairHeldKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -155,6 +165,17 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 		if unchanged {
 			d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, ReasonRepairStagingFailed
+			identifyDecision(&d)
+			return d, nil
+		}
+	}
+	if work.DirtyHold != nil {
+		paths, err := work.DirtyHold.paths(context.Background())
+		if err != nil {
+			return Decision{}, err
+		}
+		if len(paths) > 0 {
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, dirtyReason(paths)
 			identifyDecision(&d)
 			return d, nil
 		}
@@ -338,7 +359,22 @@ func (l *Loop) applyPlan(ctx context.Context, p plannedApplication, mainSHA stri
 
 func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	if p.decision.Action == ActionHold {
-		return false, nil, nil
+		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") {
+			return false, nil, nil
+		}
+		s, err := store.Open(ctx, l.cfg.Store, true)
+		if err != nil {
+			return false, nil, err
+		}
+		defer s.Close()
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			version, err := inputVersion(tx.Reader(), p.decision)
+			if err != nil || version != p.version {
+				return err
+			}
+			return recordDirtyDecision(tx, p.decision, at)
+		})
+		return false, nil, err
 	}
 	nextGeneration := *generation
 	correlate := func(tx *store.Tx, d *Decision) error {
@@ -762,10 +798,12 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				// Retry the retained repair, not another gate and land of the same
 				// original candidate. The original conflict remains the evidence.
 				stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, &timing)
+			} else if work.DirtyHold != nil {
+				stop, landed, err = l.landCandidate(ctx, c, local, &timing)
 			} else {
 				stop, landed, err = l.verify(ctx, &c, local, &timing)
 			}
-			retainLane := errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending)
+			retainLane := errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld)
 			if retainLane {
 				err = nil
 			}

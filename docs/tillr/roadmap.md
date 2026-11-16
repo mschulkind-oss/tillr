@@ -492,7 +492,6 @@ dangerous: it touched documents no run was changing.
 
 ### Treat uncommitted changes in the main checkout as the owner's, never as a run's
 
-<!-- tillr: item id="item-boundary-owner-edits-are-not-escapes" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-view/,yolo-packs/tillr/,docs/" -->
 
 **Ruling, 2026-11-16 (answers the first run's fence conflict):** the first run stopped before
 editing because c4 changes the waiting face, whose source is `tools/tillr-view/waiting.go`, and
@@ -519,14 +518,10 @@ choose:
 - A test in `tools/tillr-view/` covers a store whose latest decision is the wait on one path,
   one on two paths, and one where the wait was followed by a landing, which shows no such row.
 
-- **c1:** New or changed uncommitted content in the main checkout during a run convicts no run and does not stop the loop. A test edits a tracked file and adds an untracked one in the main checkout while a fixture run is in flight and asserts the run settles, is judged and lands.
-- **c2:** A landing whose change touches a path that is uncommitted in the main checkout waits, with the reason `trunk-path-dirty` naming the path, and lands by itself once that path is committed or restored. A landing that touches no such path is not delayed. A test covers both.
-- **c3:** A write into another lane's worktree still convicts the run that made it, as today. A test asserts the conviction names that run and no other.
-- **c4:** The waiting face shows a landing that is waiting on a dirty path, with the path and how long it has waited.
 
 ### Ignore fetches, pulls and other people's commits while runs are in flight
 
-<!-- tillr: item id="item-boundary-outside-movement-is-routine" paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/" blocked_by="item-boundary-owner-edits-are-not-escapes" -->
+<!-- tillr: item id="item-boundary-outside-movement-is-routine" paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** A remote-tracking ref, a tag or a branch outside tillr's own namespaces that moves or appears during a run convicts no run. A test runs `git fetch` against a fixture remote that gained commits, mid-run, and asserts nothing is convicted.
 - **c2:** A commit made on the trunk by someone other than the loop, by hand or by `git pull`, is picked up as the new tip: candidates gated against the older tip are re-applied onto it and landed without a second gate, as [the landing principles](../design/landing-principles.md) state. A test pulls two commits into the trunk between a candidate's gate and its landing.
