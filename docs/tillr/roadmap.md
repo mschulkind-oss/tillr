@@ -551,7 +551,6 @@ store, because no command exists for it, and two of those hand recoveries caused
 
 ### Hold the one item and keep the loop running when a step cannot answer
 
-<!-- tillr: item id="item-drain-fault-holds-one-item" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" -->
 
 **Ruling, 2026-11-16 (answers the third run's conflict):** the third run stopped, with its work
 partial and uncommitted, because the waiting face's suite was already red: nine tests fail with
@@ -592,15 +591,10 @@ run was right not to guess. It is ruled here so the next run does not stop on it
     `TestAStepThatNeverStartedRecordsNoExitCode`. Each is updated to the item-local hold that c1
     states. Neither is deleted, and neither is loosened to pass.
 
-- **c1:** A gate that could not judge a candidate, a stored conviction against a run, a lane whose candidate is not what the record says, and an item whose definition cannot be synced each hold that one item with a reason naming the fault. The loop keeps running every other item. A test covers each of the four with a second item that lands meanwhile.
-- **c2:** The loop stops whole only for a fault that is not about one item: the store cannot be opened or written, the trunk cannot be read, or the settings are invalid. The drain's README lists those stops.
-- **c3:** A dispatch whose staging failed leaves no record that a later plan can collide with. A test fails one staging, then plans the same item onto a different lane, and asserts the loop does not exit.
-- **c4:** A held item shows on the waiting face with its fault, the run or lane involved, and the one command that clears it.
-- **c5:** The passes face reads the loop's timing measurements from `drain_passes`, and its tests seed that table. `rg -n drain_ticks -g '*.go' tools/tillr-view` returns nothing, and `go test ./...` passes in both `tools/tillr-view` and `tools/tillr-drain`.
 
 ### Leave runs alone when the loop stops, and pick them up when it starts
 
-<!-- tillr: item id="item-drain-stop-keeps-runs" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-drain-fault-holds-one-item" -->
+<!-- tillr: item id="item-drain-stop-keeps-runs" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** When the loop exits for any reason other than an operator's explicit "stop and end the runs", the runs in flight are not signaled. A test stops the loop on a fault with two fixture runs in flight and asserts both finish.
 - **c2:** The next loop settles and judges those runs once each, including a run that finished while no loop was running. A test asserts one attempt and one landing per run.
@@ -609,7 +603,7 @@ run was right not to guess. It is ruled here so the next run does not stop on it
 
 ### Add commands for the recoveries that were done by hand
 
-<!-- tillr: item id="item-drain-recover-commands" paths="tools/tillr-drain/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="item-drain-fault-holds-one-item" -->
+<!-- tillr: item id="item-drain-recover-commands" paths="tools/tillr-drain/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** `tillr drain acquit --run <id> --why <text>` closes a conviction against a run that an operator says was not the run's doing, keeps the conviction's record, and makes the run's candidate eligible to be judged. It refuses a run that has no conviction.
 - **c2:** `tillr drain examine --run <id>` gates, lands and records one candidate that is sitting in its lane, exactly as the loop would, and refuses when a loop holds the lane. A test lands a fixture candidate with it and asserts the records equal the loop's.

@@ -2,7 +2,6 @@ package drain
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -401,16 +400,9 @@ func appendJudgment(ctx context.Context, storePath, kind, objectType, objectID s
 	defer s.Close()
 	id := objectID
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		var seen int
-		if err := tx.QueryRow(
-			`SELECT count(*) FROM events WHERE kind = ? AND object_type = ? AND object_id = ?`,
-			kind, objectType, id,
-		).Scan(&seen); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				seen = 0
-			} else {
-				return readFailure(err)
-			}
+		seen, err := judgmentSeen(tx, kind, objectType, id)
+		if err != nil {
+			return err
 		}
 		if seen > 0 {
 			return nil
@@ -452,16 +444,9 @@ func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, o
 	defer s.Close()
 	id := objectID
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		var seen int
-		if err := tx.QueryRow(
-			`SELECT count(*) FROM events WHERE kind = ? AND object_type = ? AND object_id = ?`,
-			kind, objectType, id,
-		).Scan(&seen); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				seen = 0
-			} else {
-				return readFailure(err)
-			}
+		seen, err := judgmentSeen(tx, kind, objectType, id)
+		if err != nil {
+			return err
 		}
 		if seen == 0 {
 			if _, err := tx.Append(event.Event{
@@ -493,6 +478,20 @@ func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, o
 		}
 		return nil
 	})
+}
+
+// Gate judgments may be attempted again only after explicit fault clearance.
+// Other judgments remain idempotent by object; the old gate evidence survives.
+func judgmentSeen(tx *store.Tx, kind, objectType, id string) (int, error) {
+	var after int64
+	if kind == GatePlanKind || kind == GateVerdictKind {
+		if err := tx.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE kind=? AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason')=?`, itemFaultClearedKind, id, StopGateHarnessError).Scan(&after); err != nil {
+			return 0, readFailure(err)
+		}
+	}
+	var seen int
+	err := tx.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_type=? AND object_id=? AND seq>?`, kind, objectType, id, after).Scan(&seen)
+	return seen, err
 }
 
 // runRefs answers the decisions' runs in decision order, which is the order the loop's own

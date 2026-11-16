@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -22,9 +23,9 @@ import (
 // before a run.
 const TrunkRef = "main"
 
-// The stop reasons, as the closed set the loop reports. Every one is a line an operator
-// reads, and the classes are the design's: a clean stop (§4.3, exit 0) and a hard stop that
-// means a person has to look (non-zero).
+// Loop stop and historical fault reason spellings. Boundary and gate faults now
+// hold only their attributed item; the Stop-prefixed constants remain readable
+// in historical reports and standalone exit-code mappings.
 //
 // The set has no count in it, by ruling (docs/design/momentum-principle.md): the pile is the
 // only throttle, so nothing here is reached by a tick budget, a spend total or a token total.
@@ -39,11 +40,11 @@ const (
 	// StopOperatorStop is a clean stop: the caller asked the loop to stop. That is the only
 	// authority the ruling recognizes for ending the loop while work remains.
 	StopOperatorStop = "operator-stop"
-	// StopHostBoundaryViolation is a hard stop: a run wrote outside the worktree it was
-	// given, or the repository moved under it. It is never retried.
+	// StopHostBoundaryViolation holds the item whose run wrote outside its boundary.
+	// Only explicit fault clearance permits examination again.
 	StopHostBoundaryViolation = "host-boundary-violation"
-	// StopGateHarnessError is a hard stop: the gate could not judge (its exit 4), so no
-	// verdict about the code can be read from it.
+	// StopGateHarnessError holds an item whose gate could not judge; it is not
+	// a verdict against the candidate's code.
 	StopGateHarnessError = "gate-harness-error"
 	// StopLanesLeased is a hard stop: a full tick planned nothing dispatchable because a
 	// lane it may dispatch onto is held with no expiry. No clock will free that lane, so
@@ -470,8 +471,9 @@ type Loop struct {
 	hasAnswers    bool
 	pollOnly      bool // test seam: suppress accelerators, retain store polling
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
-	syncedSHA string
-	questions *VantageQuestions
+	syncedSHA    string
+	syncClearSeq int64
+	questions    *VantageQuestions
 }
 
 // heldItem is one item the loop holds, and the clock reading the hold was taken at. The
@@ -662,7 +664,17 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		if err != nil {
 			return "", err
 		}
-		if sha == l.syncedSHA {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return "", err
+		}
+		var clearSeq int64
+		err = s.ReadTx(ctx, func(r *store.Reader) error { var err error; clearSeq, err = syncClearVersion(r); return err })
+		s.Close()
+		if err != nil {
+			return "", err
+		}
+		if sha == l.syncedSHA && clearSeq == l.syncClearSeq {
 			return sha, nil
 		}
 		if err := l.syncDocuments(ctx, result); err != nil {
@@ -676,6 +688,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 			continue
 		}
 		l.syncedSHA = sha
+		l.syncClearSeq = clearSeq
 		l.waitingDetail = ""
 		l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
 		result.SyncedSHA = sha
@@ -698,6 +711,11 @@ func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
 	}
 	for _, n := range outcome.Findings {
 		l.reportf("loop: sync finding: %s\n", n)
+	}
+	for itemID, detail := range outcome.ItemFaults {
+		if err := l.holdItemFault(ctx, Candidate{ItemID: itemID}, ReasonDefinitionSyncFailed, detail); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -877,7 +895,7 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 //   - Anything else (a template that will not render, a git that will not answer) is the
 //     machinery's fault. Nothing about the item was learned, so it is infrastructure-class:
 //     it feeds the backoff and leaves the item in the plan for the next tick.
-func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSHA string, result *LoopResult) []Decision {
+func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSHA string, result *LoopResult) ([]Decision, error) {
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
 		request := decision.RunRequest
@@ -909,12 +927,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		l.reportf("loop: holding %s on %s: its own record cannot be staged (%s): %v\n",
 			request.ItemID, decision.LaneID, ReasonItemUnstagleable, err)
 		if err := l.recordItemRefusal(ctx, request.ItemID, ReasonItemUnstagleable, err.Error()); err != nil {
-			// The hold is the loop's answer and stands even when its record could not be
-			// written: the next tick records it again, because the item is still held.
-			l.reportf("loop: the refusal for %s was not recorded: %v\n", request.ItemID, err)
+			return nil, err
 		}
 	}
-	return staged
+	return staged, nil
 }
 
 // runLane executes the already durably handed-off conflict repair inside its
@@ -998,7 +1014,9 @@ func (l *Loop) finishRunBracket(ctx context.Context, worktree string, request ru
 		return "", err
 	}
 	if len(violations) > 0 {
-		return l.stopForViolations(violations, []string{request.ItemID}, []string{laneOfWorktree(worktree)}, result), nil
+		l.stopForViolations(violations, []string{request.ItemID}, []string{laneOfWorktree(worktree)}, result)
+		// The stored check holds this run's item on the next plan. It is not
+		// a verdict about sibling runs and must not cancel them.
 	}
 	return "", nil
 }
@@ -1324,7 +1342,17 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	var err error
 	candidate, err = l.recoverRetirement(ctx, candidate)
 	if err != nil {
+		if ExitCode(err) == record.ExitExternal {
+			return "", false, l.candidateFault(ctx, candidate, err.Error())
+		}
 		return "", false, err
+	}
+	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
+	if err != nil {
+		return "", false, l.candidateFault(ctx, candidate, err.Error())
+	}
+	if head != candidate.HeadSHA {
+		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("lane HEAD %s differs from recorded candidate %s", head, candidate.HeadSHA))
 	}
 	// A prepared retirement tree is already bound; do not rebase it on rejudgment.
 	if candidate.WorkerHeadSHA == "" {
@@ -1406,6 +1434,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
 	if err != nil {
+		if ExitCode(err) == record.ExitExternal {
+			return "", false, l.gateFault(ctx, candidate, err.Error())
+		}
 		return "", false, err
 	}
 	if timing != nil {
@@ -1436,12 +1467,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, nil
 	default:
-		// The gate could not judge: not a verdict about the candidate, and not something
-		// an unattended loop may read as one.
-		l.mu.Lock()
-		result.Detail = fmt.Sprintf("the gate answered %q for %s", gate.Outcome, candidate.ItemID)
-		l.mu.Unlock()
-		return StopGateHarnessError, false, nil
+		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
 	}
 	return l.landCandidate(ctx, candidate, result, timing)
 }

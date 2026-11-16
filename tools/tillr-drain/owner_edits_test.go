@@ -47,7 +47,7 @@ printf 'RESULT: done\n'
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	loop := f.newLoop(t, 2, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)))
 	result, err := loop.Run(context.Background())
-	if err != nil || result.Stop != drain.StopHostBoundaryViolation {
+	if err != nil || result.Stop != drain.StopQueueDrained || faultOf(t, f.store, "item_041").Reason != drain.StopHostBoundaryViolation {
 		t.Fatalf("sibling escape: %+v / %v", result, err)
 	}
 	convicted := 0

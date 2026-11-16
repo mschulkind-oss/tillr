@@ -454,8 +454,8 @@ func countMatching(lines []string, needle string) int {
 	return n
 }
 
-// A sibling-worktree violation stops the loop before gating or landing.
-func TestABoundaryViolationStopsTheLoopAndNamesThePath(t *testing.T) {
+// A sibling-worktree violation holds the responsible item before gating or landing.
+func TestABoundaryViolationHoldsTheItemAndNamesThePath(t *testing.T) {
 	escape := stub(t, "escaping-adapter", counting+`echo escaped > "$STUB_ESCAPE/escaped.txt"
 printf 'RESULT: done\n'
 `)
@@ -472,11 +472,23 @@ printf 'RESULT: done\n'
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopHostBoundaryViolation {
-		t.Fatalf("the loop stopped %q, want %q", result.Stop, drain.StopHostBoundaryViolation)
+	if result.Stop != drain.StopQueueDrained {
+		t.Fatalf("the boundary hold stopped the loop %q", result.Stop)
 	}
-	if code := drain.StopExitCode(result.Stop); code != 1 {
-		t.Fatalf("a boundary violation answers exit %d, want 1", code)
+	s, err := store.OpenRead(context.Background(), f.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		faults, err := drain.ReadItemFaults(r)
+		fault := faults["item_041"]
+		if err == nil && (fault.Reason != drain.StopHostBoundaryViolation || !strings.Contains(fault.Detail, "escaped.txt") || fault.RunID == "" || fault.LaneID != "lane-1") {
+			t.Errorf("boundary hold lost attribution: %+v", fault)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if again := lines(t, f.count); countMatching(again, "gate --item") != 0 {
 		t.Fatalf("the loop gated a candidate after a boundary violation: %v", again)
@@ -936,11 +948,12 @@ printf 'RESULT: done\n'
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopHostBoundaryViolation {
-		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopHostBoundaryViolation)
+	fault := faultOf(t, f.store, "item_041")
+	if result.Stop != drain.StopQueueDrained || fault.Reason != drain.StopHostBoundaryViolation {
+		t.Fatalf("the boundary fault stopped siblings: %+v", result)
 	}
-	if !strings.Contains(result.Detail, filepath.Join(f.laneRoot, "lane-2", "worktree")) || !strings.Contains(result.Detail, "escaped.txt") {
-		t.Fatalf("the stop does not name the write: %s", result.Detail)
+	if !strings.Contains(fault.Detail, filepath.Join(f.laneRoot, "lane-2", "worktree")) || !strings.Contains(fault.Detail, "escaped.txt") {
+		t.Fatalf("the hold does not name the write: %+v", fault)
 	}
 	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {
 		t.Fatalf("the loop gated a candidate after a boundary violation: %v", gates)
@@ -999,11 +1012,12 @@ printf 'RESULT: done\n'
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopHostBoundaryViolation {
-		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopHostBoundaryViolation)
+	fault := faultOf(t, f.store, "item_041")
+	if result.Stop != drain.StopQueueDrained || fault.Reason != drain.StopHostBoundaryViolation {
+		t.Fatalf("the boundary fault stopped siblings: %+v", result)
 	}
-	if !strings.Contains(result.Detail, "refs/tags/stray") {
-		t.Fatalf("the stop does not name the ref: %s", result.Detail)
+	if !strings.Contains(fault.Detail, "refs/tags/stray") {
+		t.Fatalf("the hold does not name the ref: %+v", fault)
 	}
 	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {
 		t.Fatalf("the loop gated a candidate after a boundary violation: %v", gates)

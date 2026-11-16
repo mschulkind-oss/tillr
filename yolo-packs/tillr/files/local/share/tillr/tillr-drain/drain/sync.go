@@ -6,24 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // SyncOutcome is what the loop's startup sync did, read from the item.sync record the item
 // binary prints. Notes are pre-rendered as `file:line (heading) item: rule: message`, the
 // form the item face prints them in, because the loop only reports them.
 type SyncOutcome struct {
-	Created        int      `json:"created"`
-	Updated        int      `json:"updated"`
-	Unchanged      int      `json:"unchanged"`
-	Frozen         []string `json:"frozen,omitempty"`
-	Findings       []string `json:"findings,omitempty"`
-	Warnings       int      `json:"warnings"`
-	UnsharedOpen   int      `json:"unshared_open"`
-	StaleDocBlocks int      `json:"stale_doc_blocks"`
+	// ItemFaults retains attribution instead of making readers parse display text.
+	SkippedFiles   []string          `json:"skipped_files,omitempty"`
+	ItemFaults     map[string]string `json:"item_faults,omitempty"`
+	Created        int               `json:"created"`
+	Updated        int               `json:"updated"`
+	Unchanged      int               `json:"unchanged"`
+	Frozen         []string          `json:"frozen,omitempty"`
+	Findings       []string          `json:"findings,omitempty"`
+	Warnings       int               `json:"warnings"`
+	UnsharedOpen   int               `json:"unshared_open"`
+	StaleDocBlocks int               `json:"stale_doc_blocks"`
 	// Skipped names why no sync ran, for a step set that drives no repository.
 	Skipped string `json:"skipped,omitempty"`
 }
@@ -60,6 +65,7 @@ func (n syncNote) String() string {
 
 // syncPayload is the part of the item.sync payload the loop reads.
 type syncPayload struct {
+	SkippedFiles   []string   `json:"skipped_files"`
 	CreatedCount   int        `json:"created_count"`
 	UpdatedCount   int        `json:"updated_count"`
 	UnchangedCount int        `json:"unchanged_count"`
@@ -114,7 +120,8 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	p := env.Payload
 	outcome := SyncOutcome{
 		Created: p.CreatedCount, Updated: p.UpdatedCount, Unchanged: p.UnchangedCount,
-		Warnings: len(p.Warnings), UnsharedOpen: p.UnsharedOpen, StaleDocBlocks: p.StaleDocBlocks,
+		SkippedFiles: p.SkippedFiles,
+		Warnings:     len(p.Warnings), UnsharedOpen: p.UnsharedOpen, StaleDocBlocks: p.StaleDocBlocks,
 	}
 	for _, n := range p.Frozen {
 		outcome.Frozen = append(outcome.Frozen, n.String())
@@ -122,5 +129,68 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	for _, n := range p.Findings {
 		outcome.Findings = append(outcome.Findings, n.String())
 	}
+	for _, n := range append(p.Frozen, p.Findings...) {
+		if n.ItemID != "" {
+			if outcome.ItemFaults == nil {
+				outcome.ItemFaults = map[string]string{}
+			}
+			if outcome.ItemFaults[n.ItemID] != "" {
+				outcome.ItemFaults[n.ItemID] += "; "
+			}
+			outcome.ItemFaults[n.ItemID] += n.String()
+		}
+	}
+	if len(p.SkippedFiles) > 0 {
+		if err := s.attributeSkippedDefinitions(ctx, p, &outcome); err != nil {
+			return SyncOutcome{}, err
+		}
+	}
 	return outcome, nil
+}
+
+// Item sync writes whole files atomically. A finding against A therefore leaves
+// B stale too when both definitions live in the same skipped document.
+func (s *ProcessSteps) attributeSkippedDefinitions(ctx context.Context, p syncPayload, outcome *SyncOutcome) error {
+	canonical := func(file string) string {
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(s.Root, file)
+		}
+		return filepath.Clean(file)
+	}
+	skipped := map[string]string{}
+	for _, file := range p.SkippedFiles {
+		detail := "definition sync skipped " + file
+		for _, n := range p.Findings {
+			if canonical(n.File) == canonical(file) {
+				detail += "; " + n.String()
+			}
+		}
+		skipped[canonical(file)] = detail
+	}
+	st, err := store.OpenRead(ctx, s.Store)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT item_id, body_ref FROM items`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, ref string
+			if err := rows.Scan(&id, &ref); err != nil {
+				return err
+			}
+			file, _, _ := strings.Cut(ref, "#")
+			if detail, held := skipped[canonical(file)]; held {
+				if outcome.ItemFaults == nil {
+					outcome.ItemFaults = map[string]string{}
+				}
+				outcome.ItemFaults[id] = detail
+			}
+		}
+		return rows.Err()
+	})
 }

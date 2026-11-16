@@ -152,9 +152,10 @@ git -C "$root" merge --ff-only "$head" >/dev/null
 	steps := f.steps(t, gate, land, always(t, "verdict", 0))
 	report := &strings.Builder{}
 	first, err := retirementLoop(t, f, steps, []string{"candidate.txt"}, report).Run(context.Background())
-	if err != nil || first.Stop != drain.StopGateHarnessError {
+	if err != nil || first.Stop != drain.StopQueueDrained || first.Landed != 0 {
 		t.Fatalf("first=%+v, err %v; %s", first, err, report)
 	}
+	clearFault(t, f.store, "item-target")
 	second, err := retirementLoop(t, f, steps, []string{"candidate.txt"}, report).Run(context.Background())
 	if err != nil || second.Landed != 1 {
 		t.Fatalf("second=%+v, err %v; %s", second, err, report)
