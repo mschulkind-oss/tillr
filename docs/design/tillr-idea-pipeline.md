@@ -1,7 +1,7 @@
 ---
 title: "The Idea Pipeline: From Owner Sentence to Landed Commit"
-status: in-review
-stage: DESIGN
+status: accepted
+stage: DECIDED
 updated: 2026-11-13
 tags:
   - tillr
@@ -10,7 +10,7 @@ tags:
   - design
   - queue
 summary: "How a sentence the owner dumps in chat becomes a priority item, flows through scouting, paired design, Vantage question rulings, and fenced implementation to a landed commit, and renders as an evolving tree in the observatory from item and edge data alone."
-next: "Land Slice 1 (schema-6 kind and derivation edges plus clean intake) and Slice 2 (numbered question holds) alongside the self-hosted observatory items so ideas dumped in chat immediately render as trees, then rule OQ-IP1 through OQ-IP4 to turn on answer harvesting and autonomous idea/design drain lanes."
+next: "Cut the idea flow into build items once the observatory-actions design settles intake; every question here is settled."
 ---
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
@@ -27,7 +27,7 @@ next: "Land Slice 1 (schema-6 kind and derivation edges plus clean intake) and S
 
 **Start at [§5](#5-the-fastest-path-from-the-49-item-store)** for the five-slice rollout that puts live trees in the observatory before automating the drain; read [§1](#1-item-kinds-states-and-edges) and [§2](#2-the-pipeline-and-one-writer-rules) for the store invariants.
 
-**Needs your ruling:** [OQ-IP2](#OQ-IP2).
+**Needs your ruling:** None.
 
 **Reads with:** [observatory-design.md](./observatory-design.md) (the accepted four-region board and Vantage link contract), [board-item-state-model.md](./board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) (source launchers and board truth fixes this sequence builds on), and [tillr-day2.md](./tillr-day2.md) (loop failure classes).
 
@@ -60,13 +60,13 @@ Per [board-item-state-model.md](./board-item-state-model.md) ([§7](./board-item
 | :--- | :--- | :--- |
 | `/workspace/.tillr/state.db` (`items`, `item_edges`, `mail`) | `/workspace` coordinator & `tillr-drain` via `tillr-item` | Lanes never open the live store; child items are declared in `.tillr/loop/<run_id>/derived-items.json` and committed to SQLite only after `tillr-land pass` succeeds. |
 | `.tillr/intake/<item_id>.md` | `tillr item intake` (write-once) | Preserves the owner's exact words outside tracked git paths so intake never trips `tillr-drain boundary` or `just done`. |
-| `docs/design/<slug>.md` & code fences | Owning item's lane via `tillr-land pass` | Keeps `refs/heads/main` gated by `just done` (`vantage-check`, `citations`, `pack-sync`, tests) on every revision ([OQ-IP2](#OQ-IP2)). |
+| `docs/design/<slug>.md` & code fences | Owning item's lane via `tillr-land pass` | Keeps `refs/heads/main` gated by `just done` (`vantage-check`, `citations`, `pack-sync`, tests) on every revision ([OQ-IP2](#61-settled-decisions)). |
 
 ## 3. The Questions Path
 
 1. **Canonical source, zero duplication.** Per [OQ-OBD2](./observatory-design.md#11-decision-ledger) and [OQ-OBD6](./observatory-design.md#11-decision-ledger), questions and rulings live in `docs/design/<slug>.md`, never in a SQLite `questions` table. Extending `tools/tillr`'s question parser (`item-drain-question-hold`) to read numbered Vantage directives (`1. 💬 **[OQ-...]` + `<!-- vantage: question id=... -->`) and inspect each `**Answer:**` blockquote lets `tillr-drain` compute `open_questions` accurately.
 2. **How the board shows `"blocked on you · 7 questions"` and links to Vantage.** When Pass 1 of a `design` item lands `docs/design/<slug>.md` with 7 unanswered questions, `tillr-drain` transitions the item to `blocked` with `waiting_on = "owner: 7 open questions"` and records a `hold` decision (`reason: "question-open"`). `QueueRow` renders `blocked · owner: 7 open questions` directly from `waiting_on` with zero per-row disk reads; selecting the row opens `DocumentPane` (`item-obs-doc-link`), showing `open_questions: 7` and linking straight to `<vantage_base>/#/docs/design/<slug>.md#open-questions`.
-3. **How answers return without stalling `tillr-drain boundary` ([OQ-IP2](#OQ-IP2)).** `tillr item mail` (`send`, `list`, `ack`) already exists in `tillr-item` and has no reader; `tillr item answer <id>` wraps it. When the owner drops answers in chat, the whale runs `tillr item answer <id> --body "<verbatim>"`, which writes a `mail` row, clears the `question-open` block, and sets `state = 'in-queue'` at interactive rank `00..` in `<1 s`. When the owner types answers directly into Vantage on disk, preflight harvesting captures answer-only diffs on `docs/design/<slug>.md` into `tillr item answer` and restores `/workspace` git-clean so `boundary` passes.
+3. **How answers return without stalling `tillr-drain boundary` ([OQ-IP2](#61-settled-decisions)).** `tillr item mail` (`send`, `list`, `ack`) already exists in `tillr-item` and has no reader; `tillr item answer <id>` wraps it. When the owner drops answers in chat, the whale runs `tillr item answer <id> --body "<verbatim>"`, which writes a `mail` row, clears the `question-open` block, and sets `state = 'in-queue'` at interactive rank `00..` in `<1 s`. When the owner types answers directly into Vantage on disk, preflight harvesting captures answer-only diffs on `docs/design/<slug>.md` into `tillr item answer` and restores `/workspace` git-clean so `boundary` passes.
 4. **Same-minute turnaround to implementation.** On the next tick (within seconds on a reserved interactive lane, [OQ-IP4](#61-settled-decisions)), `tillr-run` injects unacked `mail` answers into the `designer` revision brief. The designer writes the owner's rulings into `**Answer:**` blockquotes and the Decision Ledger (`open_questions == 0`, `status: accepted`, `stage: DECIDED`), emits `derived-items.json` for the fenced `build` items at `00..` rank, passes `just done`, lands on `main`, `ack`s the mail rows, marks the `design` item `landed`, and the next tick immediately dispatches the new `build` items.
 
 ## 4. The Tree View in the Observatory
@@ -89,7 +89,7 @@ Per the owner's staged preference — **capture and browse in the observatory fi
 | **1. Schema-6 Lineage & Clean Intake** (`tools/tillr`, `tools/tillr-item`) | **Item today** (settled in [§1](#1-item-kinds-states-and-edges)) | `tillr item intake "probe"` leaves `git status --porcelain` empty; `go test ./...` verifies `derived_from` cycle/multi-parent refusal and schema-5->6 migration. | Dumped chat ideas appear within seconds at rank `00..` as `idea` rows; whale-run paired designs record real `idea -> design -> build` edges. |
 | **2. Numbered Question Hold** (`tools/tillr`, `tools/tillr-drain`, `tools/tillr-view`) | **Existing item** (`item-drain-question-hold`, rank `1`) | `tillr drain plan` holds the 6 un-ruled `in-queue` items as `question-open`; parser count equals `GET /api/v1/items/{id}/doc` `open_questions`. | Question-blocked rows show `blocked · owner: N open questions` on the row and click straight into Vantage via `DocumentPane`. |
 | **3. Observatory `LineageTree` & `--tree` Parity** (`tools/tillr-view`) | **Item today** (default rank + `LineageTree`; [OQ-IP3](#61-settled-decisions) rules rail lens) | `diff` between `tillr view status --tree` and `/api/v1/snapshot` tree counts exits `0`; frontend tests pin dangling-parent refusal and archive graduation. | **Browsable milestone live:** clicking any item shows its full `idea -> design -> build` tree and progress from dump to landed. |
-| **4. Instant Answer Return** (`tools/tillr-item`, `tools/tillr-drain` preflight) | Needs [OQ-IP2](#OQ-IP2) | `tillr item answer <id>` (and Vantage blockquote edit test) leaves `/workspace` clean, unblocks `<id>` to `00..`, and injects answers into staged `brief.md`. | Answering 7 questions moves the `design` item from `blocked` to top `in-queue` (`pending_answers: 1`) within one poll with zero manual re-ranking. |
+| **4. Instant Answer Return** (`tools/tillr-item`, `tools/tillr-drain` preflight) | Needs [OQ-IP2](#61-settled-decisions) | `tillr item answer <id>` (and Vantage blockquote edit test) leaves `/workspace` clean, unblocks `<id>` to `00..`, and injects answers into staged `brief.md`. | Answering 7 questions moves the `design` item from `blocked` to top `in-queue` (`pending_answers: 1`) within one poll with zero manual re-ranking. |
 | **5. Autonomous `idea` & `design` Drain Lanes** (`tools/tillr-run`, `tools/tillr-drain`) | Needs [OQ-IP1](#61-settled-decisions), [OQ-IP4](#61-settled-decisions) | Integration test seeds one `idea` under `tillr drain loop --lanes 2`, autonomously lands a design doc, applies `derived-items.json`, and lands a `build` child. | Unattended momentum from sentence to landed commit, with live scouting/designing runs in `NowBand` and `scout-dossier` in `EvidencePane`. |
 
 **Accounting for today's 48 store items:**
@@ -112,23 +112,11 @@ Per the owner's staged preference — **capture and browse in the observatory fi
 | OQ-IP1 | An idea that needs one design document is designed inside the same item: the designer may first replace itself with scouts and a designer that joins their findings, as [item graphs](./tillr-item-graphs.md) allow, and a separate design item is created only when the idea splits into several documents. **Rejected:** a second dispatch for every idea. | The owner described this flow on 2026-11-15 (a rambling ticket becomes an item whose first node is a designer that may fan out to scouts), and the item graphs design already resolves the choice as a template inside one item. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 | OQ-IP3 | Withdrawn: the queue rail it asked about is removed by [the observatory redesign](./observatory-redesign.md). Items are listed in rank order on the Items page, and lineage and dependencies are drawn on the dependency graph page. | The screen the question concerned no longer exists in the accepted design. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 | OQ-IP4 | Work the owner is waiting on, a new idea or answers to a design, runs on lanes that do not count against the lane cap. Nothing running is stopped to make room. **Rejected:** a shared pool, and stopping a build run. | The owner ruled this on 2026-11-15; it is recorded as `D-IG10` in [item graphs](./tillr-item-graphs.md#71-decision-ledger). Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
+| OQ-IP2 | Withdrawn: its premise was false. Vantage never writes to the repository; the only thing it changes is deleting the response files an agent leaves in its inbox, which git ignores. An owner's answer or comment reaches the tree only when an agent records it in the document, so nothing saved in Vantage can dirty the checkout or stop the loop, and no harvest or watcher is needed. | Owner's statement, 2026-11-16: "Vantage never writes the repository at all in any way. The only thing it does is delete the responses you sent it." |
 
 ### 6.2 Open Questions
 
-2. 💬 **[OQ-IP2](#OQ-IP2): How should answers saved directly by Vantage into `/workspace/docs/design/<slug>.md` enter the pipeline without dirtying `/workspace` and halting `tillr-drain boundary`?**
-
-   `just done` and `tillr-drain boundary` refuse a dirty `/workspace`, whereas Vantage edits tracked design files in place unless answers are pasted through chat.
-
-   - **Option A — Clean-tree harvest into item mail plus chat `tillr item answer`:** Both chat pastes (`tillr item answer <id>`) and in-place Vantage edits on a question-held `design_doc` (verified to touch only `**Answer:**` blockquotes or Vantage comments) are captured into `tillr item mail`, `/workspace/docs/design/<slug>.md` is restored git-clean before `boundary`, and the `design` item unblocks to rank `00..` so the designer lane folds answers, updates the ledger, and passes `just done` in one gated commit.
-   - **Option B — Watcher auto-commits Vantage answer edits to `main`:** A watcher runs `vantage-check` on answer-only edits, commits them onto `main` under the landing lock, and unblocks the `design` item for designer revision. Records raw owner edits as their own git commit, but adds a second writer to `main` outside `tillr-land`.
-   - **Option C — Chat handoff only:** The owner drops Vantage answers into chat (`tillr item answer <id>`) and `tillr-drain` refuses dirty `docs/design/` edits until reverted. Zero file-harvesting logic, but saving in Vantage stalls the drain.
-
-   <!-- vantage: question id=OQ-IP2 leaning="Option A — clean-tree harvest into tillr item mail alongside chat tillr item answer, preserving tillr-land as the sole writer of main while making both Vantage saves and chat pastes work in the same minute." -->
-
-   _Leaning:_ Option A — clean-tree harvest into `tillr item mail` plus `tillr item answer`, so neither saving in Vantage nor pasting into chat ever dirties `/workspace` or adds a second `main` writer.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None. Every question this design carried is a row of the ledger above.
 
 ## 7. What This Design Does Not Cover
 
