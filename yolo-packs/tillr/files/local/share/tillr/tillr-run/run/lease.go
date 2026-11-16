@@ -109,6 +109,25 @@ func ClaimLease(ctx context.Context, tx *store.Tx, req Request, laneID string, s
 	); err != nil {
 		return 0, Internalf("leasing lane %q to %q: %v", laneID, req.RunID, err)
 	}
+	// A drain claims before dispatching exec. Refreshing that same claim must
+	// not record a second attempt; continuations likewise only refresh the lease.
+	var prior []byte
+	priorErr := tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_type = 'lane' AND object_id = ? ORDER BY seq DESC LIMIT 1`, AllocateKind, laneID).Scan(&prior)
+	if priorErr != nil && priorErr != sql.ErrNoRows {
+		return 0, Internalf("reading prior allocation: %v", priorErr)
+	}
+	var allocated claim
+	if len(prior) > 0 {
+		if err := json.Unmarshal(prior, &allocated); err != nil {
+			return 0, Internalf("reading allocation payload: %v", err)
+		}
+	}
+	if req.Resume || allocated.RunID == req.RunID {
+		if leasedUntil == nil {
+			return 0, nil
+		}
+		return *leasedUntil, nil
+	}
 	// The start is recorded in the log as well as on the lane: a run that dies without a
 	// terminal record still has to be answerable — its item and the moment it started are
 	// what the reaper writes its record from, and neither is on the runs row, which the

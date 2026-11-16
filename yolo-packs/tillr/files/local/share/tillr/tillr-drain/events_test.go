@@ -102,9 +102,9 @@ func TestTheLoopRecordsItsJudgmentsAsEvents(t *testing.T) {
 			got = append(got, e.Kind)
 		}
 	}
-	// Drain reserves the lane atomically with dispatch; run exec then records its
-	// process start. Neither claim is a terminal record or a gate judgment.
-	want := []string{"run.allocate", "run.allocate", "run.finish", drain.BoundaryCheckKind, drain.GatePlanKind, drain.GateVerdictKind}
+	// Drain reserves the lane atomically with dispatch; run exec refreshes that
+	// same claim without recording a second allocation for the same attempt.
+	want := []string{"run.allocate", "run.finish", drain.BoundaryCheckKind, drain.GatePlanKind, drain.GateVerdictKind}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("the log orders the run's judgment as %v, want %v (all kinds: %v)", got, want, kinds(log))
 	}

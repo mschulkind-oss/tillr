@@ -79,11 +79,34 @@ Paths are relative to the lane's worktree, a checkout of the repository, so a fi
 names is versioned with the row. The pi, muse and agy adapters take no harness arguments
 and refuse the `--`, as they refuse any argument they do not know.
 
+## Pausing and continuing
+
+Pause kind: `stops-where-it-stands`, declared in [`pause-kind`](./pause-kind).
+The runner sends SIGTERM, waits ten seconds, then kills any surviving process group.
+The continuation uses `--resume`, not a second `--session-id` creation, and its first
+message says the session was interrupted by a restart.
+
+**Owner-recorded measurement, 2026-11-16:** a Claude session was sent SIGTERM during
+`sleep 60`, exited 143, and the resumed session answered with the marker given
+before the signal. The accepted evidence is the owner's ruling in the
+[restart criteria](../../../../docs/design/tillr-restart.md#pause-a-worker-between-tool-calls-and-resume-it-where-it-stopped).
+This lane did not re-run Claude or recover the original exact argv; the command
+shape below describes how to reproduce the ruling, not an invented raw transcript.
+
+```sh
+claude -p --output-format stream-json --verbose --session-id "$UUID" \
+    --strict-mcp-config --dangerously-skip-permissions < "$MARKER_AND_SLEEP_PROMPT"
+# Once the harness enters sleep 60:
+kill -TERM "$HARNESS_PID"
+claude -p --output-format stream-json --verbose --resume "$UUID" \
+    --strict-mcp-config --dangerously-skip-permissions < "$ASK_FOR_PRIOR_MARKER_PROMPT"
+```
+
 ## Declared capabilities
 
 - **writes-tree:** yes.
-- **resumable:** no. Re-brief in the same worktree, as
-  [the muse design's section 5](../../../../docs/design/tillr-muse-backend.md#5-steering) rules.
+- **resumable:** yes. A continuation uses `--resume` with the lane's session id;
+  `--session-id` is used only to create the first session.
 - **write confinement: NOTHING beyond the boundary snapshot**, the same statement the pi
   adapter makes. The harness has a restricted mode, but it removes the shell tool a builder
   needs, so this adapter does not use it.

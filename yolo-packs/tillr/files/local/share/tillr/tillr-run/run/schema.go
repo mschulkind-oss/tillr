@@ -132,7 +132,7 @@ func init() {
 	if err := store.RegisterColumn(Utility, "runs", "end_cause", "TEXT"); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, ReleaseKind, ResumeKind} {
+	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, ReleaseKind, ResumeKind, PauseRequestKind} {
 		if err := event.Register(kind, "run"); err != nil {
 			panic(err)
 		}

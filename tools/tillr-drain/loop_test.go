@@ -28,6 +28,7 @@ import (
 func stub(t *testing.T, name, body string) string {
 	t.Helper()
 	path := filepath.Join(scratch(t, "stub"), name)
+	writeFile(t, filepath.Join(filepath.Dir(path), "pause-kind"), "stops-where-it-stands\n")
 	writeFile(t, path, "#!/bin/sh\n"+body+"\n")
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatalf("making %s executable failed: %v", path, err)

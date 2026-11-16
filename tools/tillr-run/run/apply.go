@@ -15,6 +15,7 @@ const (
 	StateExited        = "exited"
 	StateFailedToStart = "failed-to-start"
 	StateTimedOut      = "timed-out"
+	StatePaused        = "paused"
 )
 
 // End causes describe the observed termination, separately from the existing state.
@@ -22,6 +23,7 @@ const (
 // left no terminal record, not that the runner observed its time limit.
 const (
 	EndNormalExit     = "normal-exit"
+	EndRestart        = "restart"
 	EndTimeLimit      = "time-limit"
 	EndLeaseReclaimed = "lease-reclaimed"
 	EndSignal         = "signal"
@@ -218,7 +220,7 @@ func checkRecord(payload Record) error {
 		return Usagef("a run.record needs a backend: the adapter program that produced the run")
 	}
 	switch payload.EndCause {
-	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart:
+	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart:
 	default:
 		return Usagef("%q is not a run end cause", payload.EndCause)
 	}
@@ -227,7 +229,7 @@ func checkRecord(payload Record) error {
 		if payload.ExitCode == nil {
 			return Usagef("a run.record in state %q needs an exit_code: the process ran", StateExited)
 		}
-	case StateFailedToStart, StateTimedOut:
+	case StateFailedToStart, StateTimedOut, StatePaused:
 		if payload.ExitCode != nil {
 			return Usagef("a run.record in state %q carries no exit_code: there was no exit to record", payload.State)
 		}

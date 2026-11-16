@@ -70,6 +70,8 @@ require_harness pi
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)
+# A continuation replaces only the first prompt, never the staged brief.
+prompt=${TILLR_RESUME_PROMPT_FILE:-$brief}
 session=$session_override
 if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
     session=$(cat "$(lane_path "$brief" session-id)")
@@ -144,4 +146,4 @@ if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
     set -- timeout "$wall" "$@"
 fi
 
-exec "$@" <"$brief" 2>"$err"
+exec "$@" <"$prompt" 2>"$err"

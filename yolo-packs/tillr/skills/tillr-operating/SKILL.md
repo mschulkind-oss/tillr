@@ -94,6 +94,12 @@ runs anything.
 ## 3. Run — execute a candidate in an isolated lane
 `tillr run exec`
 
+`run pause --run <id>` requests a pause without judging or retrying the attempt.
+`run exec --resume` continues that run in the same lane; the adapter declaration
+determines whether it reopens the session or starts a fresh one with the prior
+transcript and worktree named in its first prompt. The drain continues a paused
+run on its next settlement pass and judges only its completed candidate.
+
 One candidate, one lane, one record of what the run cost. `tillr run lanes`, `status` and
 `release` inspect and clean up the lanes a pass left behind; a lane released is not a
 candidate retried.

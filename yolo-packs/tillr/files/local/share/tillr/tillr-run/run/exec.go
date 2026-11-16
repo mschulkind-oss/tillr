@@ -162,6 +162,16 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := checkRequest(req); err != nil {
 		return record.Envelope{}, err
 	}
+	// With no backend directory this package can execute a raw fixture command.
+	// The CLI always supplies a directory and requires an adapter declaration.
+	pauseKind := ""
+	if opts.BackendsDir != "" {
+		var err error
+		pauseKind, err = ReadPauseKind(opts.BackendsDir, req.Command[0])
+		if err != nil {
+			return record.Envelope{}, err
+		}
+	}
 	now := opts.Now
 	laneID := req.LaneID
 	if laneID == "" {
@@ -195,6 +205,21 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		}
 		if sessionID == "" {
 			return record.Envelope{}, Usagef("run %q cannot be resumed: %s carries no session id, so there is no session to continue and a resume would start cold", req.RunID, filepath.Join(laneDir, SessionIDFile))
+		}
+	}
+	mode, prompt, err := prepareContinuation(req, pauseKind, laneDir, workDir, durableDir)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	pausePath := filepath.Join(durableDir, "pause-request")
+	if err := os.Remove(pausePath); err != nil && !os.IsNotExist(err) {
+		return record.Envelope{}, Internalf("clearing prior pause request: %v", err)
+	}
+	// A fresh continuation minted a new session id; the resume event names it.
+	if req.Resume {
+		sessionID, err = ReadSessionID(laneDir)
+		if err != nil {
+			return record.Envelope{}, err
 		}
 	}
 	logPath := filepath.Join(laneDir, req.RunID+".log")
@@ -257,8 +282,15 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// child, so every inherited assignment has to be removed. Two lanes handed one scratch
 	// tree write it concurrently, and the durable directory is gitignored and outside every
 	// fence, so no boundary check could see the collision.
-	cmd.Env = append(withoutEnv(os.Environ(), "YOLO_DURABLE_DIR"),
+	cmd.Env = os.Environ()
+	for _, key := range []string{"YOLO_DURABLE_DIR", "TILLR_RUN_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST"} {
+		cmd.Env = withoutEnv(cmd.Env, key)
+	}
+	cmd.Env = append(cmd.Env,
 		"YOLO_DURABLE_DIR="+durableDir,
+		"TILLR_SESSION_MODE="+mode,
+		"TILLR_RESUME_PROMPT_FILE="+prompt,
+		"TILLR_PAUSE_REQUEST="+pausePath,
 		"TILLR_RUN_ID="+req.RunID,
 		"TILLR_LANE_ID="+laneID,
 	)
@@ -286,11 +318,28 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	var note string
 	startedAt := time.Now().UTC()
-	waitErr := cmd.Wait()
+	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath)
+	if pauseErr != nil {
+		logFile.Close()
+		return record.Envelope{}, pauseErr
+	}
 	finishedAt := time.Now().UTC()
 	logFile.Close()
 
 	switch {
+	case paused:
+		payload.State = StatePaused
+		payload.EndCause = EndRestart
+		notice := "Continue the same attempt after the restart, from where you stopped.\n"
+		if interrupted {
+			notice = "The session was interrupted by a restart. Preserve existing work and continue the same attempt.\n"
+			if pauseKind == PauseAtGap {
+				notice += "The command was interrupted by a restart and may be run again.\n"
+			}
+		}
+		if err := os.WriteFile(filepath.Join(durableDir, "pause-notice"), []byte(notice), 0600); err != nil {
+			return record.Envelope{}, Internalf("writing restart notice: %v", err)
+		}
 	case runCtx.Err() == context.DeadlineExceeded:
 		// A timed-out run is a completed run: the utility ran and observed the bound.
 		payload.State = StateTimedOut

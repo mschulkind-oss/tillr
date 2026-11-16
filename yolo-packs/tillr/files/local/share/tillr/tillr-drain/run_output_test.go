@@ -92,7 +92,9 @@ exit "$status"`)
 }
 
 func TestFailedRunReportsFileOutput(t *testing.T) {
-	f := newLoopFixture(t, filepath.Join(scratch(t, "missing-adapter"), "absent"))
+	dir := scratch(t, "missing-adapter")
+	writeFile(t, filepath.Join(dir, "pause-kind"), "stops-where-it-stands\n")
+	f := newLoopFixture(t, filepath.Join(dir, "absent"))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	report := &strings.Builder{}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
