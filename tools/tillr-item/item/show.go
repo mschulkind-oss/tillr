@@ -63,6 +63,17 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 	if err != nil {
 		return itemPayload{}, time.Time{}, Internalf("reading item %q: %v", id, err)
 	}
+	// A read-only open cannot add the workflow column to a pre-workflow store.
+	// Such items named no workflow; return the empty value without mutating them.
+	var hasWorkflow bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'workflow')`).Scan(&hasWorkflow); err != nil {
+		return itemPayload{}, time.Time{}, Internalf("checking workflow metadata: %v", err)
+	}
+	if hasWorkflow {
+		if err := r.QueryRow(`SELECT workflow FROM items WHERE item_id=?`, id).Scan(&payload.Workflow); err != nil {
+			return itemPayload{}, time.Time{}, Internalf("reading workflow metadata: %v", err)
+		}
+	}
 	// Read-only opens do not migrate old stores. Absence means no close metadata
 	// was recorded; all other query failures remain explicit errors.
 	var hasClose bool

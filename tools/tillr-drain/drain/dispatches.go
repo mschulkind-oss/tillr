@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS dispatches (
   seat          TEXT,
   pass_id       TEXT
 );
+CREATE TABLE IF NOT EXISTS node_runs (
+ item_id TEXT NOT NULL,
+ attempt INTEGER NOT NULL,
+ node_id TEXT NOT NULL,
+ run_id TEXT NOT NULL UNIQUE,
+ outcome TEXT NOT NULL,
+ PRIMARY KEY(item_id,attempt,node_id)
+);
 `
 
 // recordPassDecision inserts an immutable decision in the tick's transaction. A replay

@@ -904,6 +904,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 		}
+		if decision.Workflow != nil {
+			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
+			spec.Continue = decision.NodeIndex > 0
+			spec.PreviousReport = decision.PreviousReport
+		}
 		err := l.cfg.Stage.Stage(ctx, spec)
 		if err == nil {
 			staged = append(staged, decision)
@@ -1089,6 +1094,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}
 	class := ClassifyAttempt(record, log)
+	if decision.Workflow != nil {
+		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result)
+		if handled {
+			prepared = nodeErr == nil
+			return laneOutcome{err: nodeErr}
+		}
+	}
 	// A stopped loop did not learn that the harness was broken. Inspect its tree
 	// before classification can fail over or resume it: no commit records a no-op,
 	// while a commit goes through the ordinary gate.
