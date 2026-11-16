@@ -68,6 +68,16 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 			examined[*e.ObjectID] = true
 		}
 	}
+	// Historical markers still describe standalone runs. For loop attempts,
+	// use the reader's effective state: a matching continuation supersedes the
+	// old orphan/examination, while judged segments and replay cannot reopen it.
+	_, history, err := readPendingHistory(tx.Reader())
+	if err != nil {
+		return err
+	}
+	for id, work := range history {
+		orphaned[id], examined[id] = work.Orphaned, work.Done
+	}
 	current := d.RunRequest.RunID
 	if orphaned[current] || orphaned[outcomeRun] {
 		return nil

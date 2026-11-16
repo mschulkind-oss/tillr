@@ -135,7 +135,7 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return run.Record{}, "", Externalf("writing %s: %v", input, err)
 	}
 	args := []string{"exec",
-		"--store", s.Store, "--lane-root", s.LaneRoot, "--input", input, "--now", s.Now().UTC().Format(time.RFC3339)}
+		"--store", s.Store, "--lane-root", s.LaneRoot, "--input", input, "--now", s.Now().UTC().Format(time.RFC3339Nano)}
 	// A resume is told to the face as well as carried in the request: the face's flag is the
 	// hand-driven spelling of the same execution, and `run exec` ORs the two rather than
 	// letting one silently win.

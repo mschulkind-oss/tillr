@@ -403,6 +403,16 @@ re-derives the fence from the item's `allowed_paths`, because the killed segment
 committed before it died. It refuses a run the gate judged: continuing judged work is a
 retry, which a person authorizes.
 
+A real runner continuation reopens an unjudged examination even when the loop already
+examined an interrupted or no-op segment. It supersedes that segment's orphan marker and
+candidate while retaining the original request, base and attempt. Replaying the same
+continuation does not reopen it again; a verdict or landing prevents later reopening.
+Boundary faults still require explicit clearance.
+[`drain/resume_settlement_test.go`](./drain/resume_settlement_test.go) drives
+signal/no-op examination through `Resume`, real `run.Exec` events and one eventual
+fixture gate/landing, including repeated interruptions and replay. Live harness recovery
+and lane restoration are separate operator actions, not performed by this test.
+
 ## What it refuses
 
 - **A loop with no gate, land or verdict program** — it judges nothing itself, so it cannot
