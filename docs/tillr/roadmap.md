@@ -652,11 +652,7 @@ one resumed session end to end.
 
 ### Turn the after-merge check back on
 
-<!-- tillr: item id="item-drain-after-merge-check-on" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" -->
 
-- **c1:** No tracked file starts the loop with its after-merge check off. The check is the loop's rolling tier, and `tillr-drain loop` already runs it by default: `--rolling` defaults to `drain.DefaultRollingProgram`, and only an empty `--rolling` value disables it. A test reads every tracked recipe, script, skill and document that invokes `tillr-drain loop` and fails, naming the file, on one that passes an empty `--rolling`. The one exception is a record of a run that already happened: the test holds a list of such files, each entry naming the file and the reason, and it also fails on an entry whose file no longer holds an empty `--rolling`, so the list cannot outlive what it excuses. The list starts with exactly one entry, `docs/design/tillr-claude-backend.md`, whose command the lane leaves byte for byte as it is. No recipe, script or skill may be on the list. The test passes on the tree as staged, and it is what holds the keeper to the same rule once the keeper is tracked.
-- **c2:** A check that this machine cannot run is answered "could not judge here" and never as red, so no fixer is filed for it. The lane runs the rolling program once over the whole trunk (`python3 tools/fork-check.py --tier rolling --all --lock-timeout 30`), and every check that run reports failing is either made to pass, declared as not runnable here with the reason, or given a fixer item; the commit lists which.
-- **c3:** A test asserts that a red check files one fixer and that a check that could not run files none.
 
 Amended 2026-11-16, answering the conflict the first run raised. Four statements in the earlier block did not match the tree at `ee5ef39a`, and each is corrected above rather than left for the builder to resolve:
 

@@ -5445,6 +5445,18 @@ class Check:
             # change (board item 194).
             if self.preflight_refused or candidate_stale(self):
                 return False
+            # pi-forks refuses linked-worktree callers before running candidate
+            # preparation. This machine-local refusal exits 1, not the driver's
+            # usual unable-to-answer code, but still judged no repository bytes.
+            # Match both the driver argv and its own diagnostic: suite output
+            # containing the same sentence must not suppress a real failure.
+            if (len(self.argv) >= 2
+                    and Path(self.argv[0]).name == "pi-forks"
+                    and self.argv[1] == "candidate"
+                    and "--deps" in self.argv and "--" not in self.argv
+                    and any(line.startswith("pi-forks: refusing to run from a linked worktree:")
+                            for line in self.output.splitlines())):
+                return False
             return self.rc != 0
         if group == KIND_INVARIANT:
             return INVARIANT_PHRASES[self.kind] in self.output

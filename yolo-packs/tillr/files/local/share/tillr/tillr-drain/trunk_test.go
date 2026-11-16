@@ -315,6 +315,43 @@ func TestARedRollingRunFilesTheFixerAndHoldsTheQueue(t *testing.T) {
 	}
 }
 
+// A single red check creates exactly one fixer; a machine-local inability to
+// judge creates none, even if a stale span still names a failing check.
+func TestRollingFilesExactlyOneFixerOnlyForAJudgedRedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		known bool
+		want  int
+	}{
+		{"red check", true, 1},
+		{"could not run here", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
+			steps := &trunkSteps{
+				ProcessSteps: f.steps(t, stub(t, "gate", failingGateBody), always(t, "land", 0), always(t, "verdict", 0)),
+				rolling:      []drain.RollingOutcome{{Known: tc.known, FailingChecks: []string{"unit"}, SuspectPaths: []string{"candidate.txt"}}},
+			}
+			result, err := runTrunkLoop(t, f, steps, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := store.OpenRead(context.Background(), f.store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var count int
+			err = s.ReadTx(context.Background(), func(r *store.Reader) error {
+				return r.QueryRow(`SELECT count(*) FROM items WHERE item_id LIKE ?`, drain.TrunkFixerPrefix+"%").Scan(&count)
+			})
+			if err != nil || count != tc.want || result.RollingRed != tc.want {
+				t.Fatalf("fixers=%d rolling red=%d, want %d; error=%v", count, result.RollingRed, tc.want, err)
+			}
+		})
+	}
+}
+
 // A green rolling run advances the watermark to the tip it judged and resets the landing
 // count. Nothing else moves it.
 func TestAGreenRollingRunAdvancesTheWatermark(t *testing.T) {
