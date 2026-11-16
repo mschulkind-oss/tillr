@@ -52,6 +52,10 @@ func LoadPolicy(ref string) (*Policy, error) {
 	if err != nil {
 		return nil, Usagef("reading the policy %s: %v", ref, err)
 	}
+	return decodePolicy(ref, raw)
+}
+
+func decodePolicy(ref string, raw []byte) (*Policy, error) {
 	var p Policy
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, Usagef("reading the policy %s: %v", ref, err)

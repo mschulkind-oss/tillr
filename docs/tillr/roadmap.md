@@ -771,12 +771,7 @@ a run cut off when the window shuts starts again from nothing on the next backen
 
 ### Re-read the backend policy when it changes, without a restart
 
-<!-- tillr: item id="item-policy-reread-on-change" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" -->
 
-- **c1:** The loop notices at the start of a pass that its policy file's content changed, checks the new content exactly as it checks a policy at start, and uses it for every dispatch from that pass on. Runs in flight keep the backend they started on. A test edits the file between two passes and asserts the next dispatch uses the new seat mapping.
-- **c2:** A changed file that fails its check is refused with the same message a start would print, the loop keeps the policy it had, and the waiting face shows one line saying the policy on disk is not the policy in force and why.
-- **c3:** Each change is recorded with the old and new content hashes, and the loop prints the seat mapping in force as one line, so "what is running where" has one answer.
-- **c4:** `tillr drain policy` prints the policy in force: each seat, its backends in order, each backend's model and effort, and any item overrides.
 
 ### Read a backend's remaining quota directly and keep a reserve
 
@@ -789,7 +784,7 @@ a run cut off when the window shuts starts again from nothing on the next backen
 
 ### Split a seat's work between backends by a simple share
 
-<!-- tillr: item id="item-policy-seat-shares" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-policy-reread-on-change" -->
+<!-- tillr: item id="item-policy-seat-shares" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** A seat's list entry may be a backend name, as today, or a backend with a `share`. With `[{"backend": "claude", "share": 1}, {"backend": "pi", "share": 1}]` the seat's dispatches alternate between the two; shares of 3 and 1 send three of every four to the first. A list with no shares behaves exactly as today: first backend that is open, in order.
 - **c2:** The split is by count of dispatches recorded in the store, so two loops on one store, or one loop restarted, keep the same proportion. A test dispatches 40 fixture items and asserts the counts.

@@ -125,6 +125,9 @@ func waitingFace(args []string) (record.Envelope, int) {
 	} else {
 		_, rows, err = plannerWhy(ctx, *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
 	}
+	if err == nil {
+		rows, err = policyWaitingRows(*root, rows)
+	}
 	if err != nil {
 		var mismatch schemaMismatch
 		if errors.As(err, &mismatch) {
@@ -168,6 +171,9 @@ func readWaiting(ctx context.Context, path string, questions vantage.QuestionSou
 func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	questions := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
 	rows, err := assembleWaiting(r, questions, s.storePath)
+	if err == nil {
+		rows, err = policyWaitingRows(s.root, rows)
+	}
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)
 	}

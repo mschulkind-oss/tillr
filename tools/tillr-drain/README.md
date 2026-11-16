@@ -64,6 +64,47 @@ drain-4-6.json  -> record id loop-4-6
 drain-0-0.json  -> no applied generation
 ```
 
+## Backend policy changes
+
+At the start of each pass, `loop` reads its `--policy` file and compares its
+SHA-256 content hash with the previous reading. The same decoding and checks
+used at startup must pass before the new policy becomes the policy in force
+(the last policy accepted by this loop). Every dispatch planned from that pass
+uses it; a request already running keeps its original backend and command.
+
+Invalid or unreadable content prints the startup refusal and leaves the
+accepted policy unchanged. `tillr view waiting --root <repository>` adds one
+policy warning row explaining why the disk policy is not in force, including
+with `--json` or `--history`. The warning clears on a valid reading. `why`
+uses the accepted policy when inspecting that repository, rather than trying
+to plan with rejected disk content; an explicit different policy file still
+means a standalone preview.
+
+Each changed reading, accepted or refused, is appended with the previous disk
+hash, new disk hash and accepted hash. A missing file has an empty disk hash.
+The loop also prints the complete seat mapping in force on one line. These
+records and the atomic accepted-policy snapshot live under the repository's
+loop directory:
+
+```text
+.tillr/loop/backend-policy-changes.jsonl
+.tillr/loop/backend-policy.json
+```
+
+Inspect the accepted snapshot, including ordered seat backends, all backend
+models and efforts, and item overrides, without activating disk edits:
+
+```sh
+tillr drain policy --root <repository>
+tillr drain policy --root <repository> --json
+```
+
+Before a loop has recorded a policy, this face refuses explicitly. After the
+loop stops, it shows the last accepted policy; it does not claim the loop is
+still running. Deploy this pack change with `yolo host apply --assert`, then
+relaunch the jail; the new loop can subsequently accept policy edits without
+another restart.
+
 ## State invariants
 
 - **`plan` writes nothing.** A preview that moved state would make "what would happen" and

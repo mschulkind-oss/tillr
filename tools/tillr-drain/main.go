@@ -51,6 +51,8 @@ func dispatch(args []string) int {
 	switch face {
 	case "why":
 		return whyFace(rest)
+	case "policy":
+		return policyFace(rest)
 	case "plan":
 		return planFace(rest)
 	case "once":
@@ -515,7 +517,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "why, plan, once, retry, clear-fault, boundary, resume or loop"
+const faceList = "why, policy, plan, once, retry, clear-fault, boundary, resume or loop"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
@@ -645,7 +647,7 @@ func loopFace(args []string) int {
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot,
 		Lanes: laneIDs(*laneCount), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
-		Policy: policy, QuestionsCmd: commandFields(*questionsCmd),
+		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 	})
 	if err != nil {

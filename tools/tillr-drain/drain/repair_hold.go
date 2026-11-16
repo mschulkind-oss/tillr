@@ -61,7 +61,7 @@ func (h *repairHold) unchanged(inputs *RunInputs, template *string) (bool, error
 	return inputs == nil || (*inputs == h.Inputs && hash == h.TemplateHash), err
 }
 
-func (l *Loop) repairBasis(ctx context.Context, c Candidate, landed LandOutcome) (*repairHold, error) {
+func (l *Loop) repairBasis(ctx context.Context, c Candidate, landed LandOutcome, policy *Policy) (*repairHold, error) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func (l *Loop) repairBasis(ctx context.Context, c Candidate, landed LandOutcome)
 		}
 		for _, row := range rows {
 			if row.ItemID == c.ItemID {
-				inputs, err := currentRunInputs(r, row, l.cfg.Policy, l.cfg.Root, l.build)
+				inputs, err := currentRunInputs(r, row, policy, l.cfg.Root, l.build)
 				if err != nil {
 					return err
 				}

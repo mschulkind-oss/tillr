@@ -310,6 +310,8 @@ type LoopConfig struct {
 	GateBudget time.Duration
 	// Policy is the backend policy a dispatch's run.request is built from.
 	Policy *Policy
+	// PolicyRef enables content-checked reloads at the start of each pass.
+	PolicyRef string
 	// QuestionsCmd is the program that answers Vantage's index, cached lazily for each
 	// trunk commit and discarded when the trunk moves. Empty is
 	// DefaultIndexCommand, and a program that is not there holds the affected items with
@@ -452,7 +454,10 @@ type Loop struct {
 	//
 	// It is written by staging and read by passPlans on the pass goroutine, so it
 	// needs no lock.
-	held map[string]heldItem
+	held           map[string]heldItem
+	policyMu       sync.RWMutex
+	policyState    PolicyState
+	policyRecorded bool
 	// active owns only completion triggers, never terminal outcomes. Outcomes are
 	// reconstructed from the store by the next pass or a replacement Loop.
 	active          map[string]bool
@@ -531,7 +536,16 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.Report == nil {
 		cfg.Report = io.Discard
 	}
-	return &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}, nil
+	l := &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
+	if cfg.PolicyRef != "" {
+		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
+		if err != nil {
+			return nil, err
+		}
+		l.cfg.Policy = p
+		l.policyState = PolicyState{Ref: cfg.PolicyRef, Hash: hash, DiskHash: hash, Content: string(raw)}
+	}
+	return l, nil
 }
 
 // Run drives ticks until a stopping condition, and answers what happened.

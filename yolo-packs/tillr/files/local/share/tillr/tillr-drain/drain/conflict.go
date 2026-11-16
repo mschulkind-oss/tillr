@@ -54,18 +54,19 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			candidate.ItemID, shortSHA(mainSHA), shortSHA(candidate.BaseSHA), ReasonConflictExhausted)
 		return "", false, nil
 	}
-	basis, err := l.repairBasis(ctx, candidate, landed)
+	policy := l.currentPolicy()
+	basis, err := l.repairBasis(ctx, candidate, landed, policy)
 	if err != nil {
 		return "", false, err
 	}
 	basis.TrunkSHA = mainSHA
 	fixRunID := candidate.RunID + ConflictFixSuffix
 	fix := *candidate.Request
-	if l.cfg.Policy != nil {
-		if _, ok := l.cfg.Policy.Backends[fix.Backend]; !ok {
+	if policy != nil {
+		if _, ok := policy.Backends[fix.Backend]; !ok {
 			return "", false, l.holdRepair(ctx, basis, fmt.Errorf("original repair backend %q is absent from the policy; restore that backend", fix.Backend))
 		}
-		fix = *l.cfg.Policy.request(candidate.ItemID, candidate.LaneID, fixRunID, fix.Backend)
+		fix = *policy.request(candidate.ItemID, candidate.LaneID, fixRunID, fix.Backend)
 	}
 	fix.RunID = fixRunID
 	fix.Resume = false
