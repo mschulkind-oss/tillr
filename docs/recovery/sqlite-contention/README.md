@@ -49,6 +49,32 @@ Line kinds, all on the process's stderr:
   `acquired` followed by a busy `end` identifies a waiter, not a proven holder. A `begin`
   with no `end` means the span was in flight when output stopped: the process was killed,
   crashed, or its `end` record was dropped.
+- `phase=autocheckpoint.off|autocheckpoint.default`, inside a write transaction (and an
+  open) and before `acquired`: the checkpoint policy the commit runs under, decided
+  without any SQLite lock. `off` means a running drain loop owns checkpoints (the
+  *checkpoint owner*, a term defined in
+  [tillr-store's Durability and checkpoints](../../../tools/tillr-store/README.md#durability-and-checkpoints)).
+  The wait for the writer is the time from this phase to `acquired`.
+- `phase=owner-lock.unavailable`, inside an open: the process could not open or create the
+  checkpoint owner's lock file, so it sees no owner and checkpoints by SQLite's default.
+- The owner's own work is four plainly named operations.
+  - `checkpoint-owner.checkpoint` is one *checkpoint cycle*, a term defined in
+    [tillr-store's Durability and checkpoints](../../../tools/tillr-store/README.md#durability-and-checkpoints).
+    Its phases are `pin.begin`, `pin.end`, `checkpoint.begin`, then
+    `checkpoint.complete`, `.partial` or `.busy`. It ends with the cycle's outcome:
+    `log.restarted`, `log.not-restarted`, or `writer.busy` when one of the owner's writes
+    waited out the busy timeout. The outcome line carries `log_frames=`, `copied_frames=`
+    and `log_bytes=` after the error field. `checkpoint.complete` alone does not mean the
+    log restarted.
+  - Its own phases hold no writer, so their flushes delay only the loop's heartbeat. The
+    span contains the owner's two write spans, `checkpoint-owner.pre-write` and
+    `checkpoint-owner.restart-write`, which are ordinary write spans. They are the only
+    writes meant to pay a log restart's header flush while holding the writer: the restart
+    write in each cycle, and the pre-write when a checkpoint from outside the policy left
+    the log fully copied.
+  - `checkpoint-owner.close` is the loop's closing checkpoint (`owner-lock.released`,
+    `checkpoint.begin`, its outcome, `close.begin`, `close.end`), traced before the exit
+    flush.
 - `tillr-sqlite-stack ...`: one all-goroutine stack sample, taken once a span has run for
   2 s, framed per line. It shows what every goroutine in that process was doing; it does
   not name the process holding a lock. A sample over 1 MiB is cut and marked

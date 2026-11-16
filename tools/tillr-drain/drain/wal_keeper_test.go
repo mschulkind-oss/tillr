@@ -197,5 +197,5 @@ func holdWALKeeper(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { keeper.Close() })
+	t.Cleanup(func() { keeper.Close(context.Background()) })
 }

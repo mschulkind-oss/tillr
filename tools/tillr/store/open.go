@@ -16,6 +16,16 @@ import (
 type Store struct {
 	db   *sql.DB
 	path string
+	// writable is whether Open made this handle; only a writable handle commits, so only
+	// it carries a checkpoint policy (checkpoint.go).
+	writable bool
+	// lock is the checkpoint owner's lock file, opened once so that deciding the policy
+	// before each write transaction is two flock calls; nil when it could not be opened,
+	// which reads as no owner. policyConn and policyPages are the driver connection the
+	// policy pragma last ran on and the value it set, so an unchanged decision runs nothing.
+	lock        *os.File
+	policyConn  any
+	policyPages int
 }
 
 // Open opens the store at path and selects SQLite's write-ahead log (WAL), so
@@ -62,10 +72,24 @@ func Open(ctx context.Context, path string, create bool) (result *Store, resultE
 		db.Close()
 		return nil, fmt.Errorf("store: selecting WAL for %s: SQLite answered %q", path, mode)
 	}
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, path: path, writable: true}
+	// A lock file this process cannot open or create means no owner can be seen: the handle
+	// checkpoints by SQLite's default, as it would with no loop running.
+	lock, lockErr := openOwnerLock(path)
+	s.lock = lock
+	if lockErr != nil {
+		trace.record("owner-lock.unavailable", lockErr)
+	}
+	// Set before the migration can commit; WriteTx decides it again before each
+	// transaction, because a handle can outlive an owner or predate one (checkpoint.go).
+	policyErr := s.decidePolicy(ctx, trace)
+	if err := policyErr; err != nil {
+		s.Close()
+		return nil, err
+	}
 	if create {
 		if err := s.migrate(ctx); err != nil {
-			db.Close()
+			s.Close()
 			return nil, err
 		}
 	}
@@ -97,7 +121,13 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 }
 
 // Close closes the store.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	if s.lock != nil {
+		s.lock.Close()
+	}
+	return err
+}
 
 // Path answers the path this store was opened at.
 func (s *Store) Path() string { return s.path }
@@ -203,8 +233,13 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 // database after it. The default, FULL, flushed inside every commit, and a commit holds
 // SQLite's writer, so one slow disk flush became a writer every other connection waited
 // behind until its busy timeout. The trade: an OS crash or power loss can roll back the
-// last committed transactions. It cannot corrupt the store, and an application crash
-// loses nothing. Dropping the synchronous pragma below restores FULL.
+// last committed transactions, typically the last 30 to 60 seconds, which the operating
+// system's writeback had not yet put on disk. It cannot corrupt the store, and a process,
+// container or jail kill loses nothing. The owner ruled on 2026-11-16 that NORMAL stays
+// (tools/tillr-store/README.md, "Durability and checkpoints").
+//
+// What NORMAL leaves inside a writer is the log restart's header flush; the checkpoint
+// owner decides which writer pays it (checkpoint.go).
 func dsn(path string, readOnly bool) string {
 	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	if readOnly {
