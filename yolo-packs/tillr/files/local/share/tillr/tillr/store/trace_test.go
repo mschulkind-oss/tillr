@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -41,6 +42,12 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 	if value, err := s.Meta("trace-probe"); err != nil || value != nil {
 		t.Fatalf("trace changed rollback: %v %v", value, err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, flushErr := store.FlushSQLiteTrace(ctx)
+	cancel()
+	if flushErr != nil {
+		t.Fatal(flushErr)
+	}
 	if err := capture.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +55,15 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.Contains(line, `operation="open"`) {
+			continue
+		}
+		if strings.Contains(line, "phase=begin ") || strings.Contains(line, "phase=acquired ") || strings.Contains(line, "phase=end ") {
+			lines = append(lines, line)
+		}
+	}
 	if len(lines) != 6 {
 		t.Fatalf("want two complete writer spans, got %d: %s", len(lines), raw)
 	}
@@ -57,7 +72,7 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 			t.Errorf("missing correlation fields: %s", lines[i])
 		}
 	}
-	if !strings.Contains(lines[0], `operation="migrate"`) || !strings.Contains(lines[5], failure.Error()) {
+	if !strings.Contains(lines[0], `operation="migrate"`) || !strings.Contains(lines[5], "error_type=") || strings.Contains(string(raw), failure.Error()) {
 		t.Fatalf("missing operation/outcome: %s", raw)
 	}
 	t.Setenv("TILLR_SQLITE_TRACE", "")

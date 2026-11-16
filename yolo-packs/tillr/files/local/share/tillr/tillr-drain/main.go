@@ -32,7 +32,15 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func main() { os.Exit(dispatch(os.Args[1:])) }
+// main flushes the SQLite trace on every route out of the process: before os.Exit,
+// which skips defers, and through the deferred call when a panic unwinds this
+// goroutine. Tracing off, each flush is one atomic load.
+func main() {
+	defer store.FlushSQLiteTraceAtExit()
+	code := dispatch(os.Args[1:])
+	store.FlushSQLiteTraceAtExit()
+	os.Exit(code)
+}
 
 // recordSinkName is the one runner this lane has, named for the caller and for the refusal
 // that answers anything else.

@@ -158,7 +158,7 @@ func TestAForkLaneBoundaryExcusesItsPatchRefAndLandMovesOnlyTheTrunk(t *testing.
 		"base_sha":        f.forkBase, "tree_sha": forkTree, "result": "pass",
 		"checks": []map[string]any{},
 	}))
-	code, output := drive(t, land, "pass", "--store", store, "--repo", f.root,
+	code, output := driveRecord(t, land, "pass", "--store", store, "--repo", f.root,
 		"--item", "item_041", "--run", "run-patch", "--base", f.forkBase, "--head", forkHead,
 		"--base-ref", "refs/heads/patch/pi", "--verdict", verdict, "--now", "2026-11-10T00:00:00Z")
 	if code != 1 {
