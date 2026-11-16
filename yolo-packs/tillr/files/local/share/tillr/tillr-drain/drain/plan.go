@@ -65,14 +65,17 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
-	Workflow       *Workflow      `json:"workflow,omitempty"`
-	NodeIndex      int            `json:"node_index,omitempty"`
-	NodeBaseSHA    string         `json:"node_base_sha,omitempty"`
-	PreviousReport string         `json:"previous_report,omitempty"`
-	ConflictID     string         `json:"conflict_id,omitempty"`
-	BlockConflict  *item.Conflict `json:"block_conflict,omitempty"`
-	Inputs         *RunInputs     `json:"inputs,omitempty"`
-	Readmitted     bool           `json:"readmitted,omitempty"`
+	NodeStartRunID  string         `json:"node_start_run_id,omitempty"`
+	WorkflowRestart bool           `json:"workflow_restart,omitempty"`
+	WorkflowRelease bool           `json:"workflow_release,omitempty"`
+	Workflow        *Workflow      `json:"workflow,omitempty"`
+	NodeIndex       int            `json:"node_index,omitempty"`
+	NodeBaseSHA     string         `json:"node_base_sha,omitempty"`
+	PreviousReport  string         `json:"previous_report,omitempty"`
+	ConflictID      string         `json:"conflict_id,omitempty"`
+	BlockConflict   *item.Conflict `json:"block_conflict,omitempty"`
+	Inputs          *RunInputs     `json:"inputs,omitempty"`
+	Readmitted      bool           `json:"readmitted,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
 	// failover runs. Positions use the design's closed set: queued, running, candidate,
@@ -303,6 +306,32 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			// An already dispatched attempt advances before readiness and retry
 			// rules: a terminal record is work to settle, not a retry to authorize.
 			decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut)
+			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
+				invalid := item.State != StateInQueue || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
+				before, now := work.Decision.Inputs, inputs[item.ItemID]
+				if before != nil && now != nil && (before.ItemBlock != now.ItemBlock || before.AllowedPaths != now.AllowedPaths) {
+					invalid = true
+				}
+				if policy != nil && !invalid {
+					w, loadErr := loadWorkflow(root, item.Workflow, policy)
+					oldHash, _ := inputHash(work.Decision.Workflow)
+					newHash, _ := inputHash(w)
+					invalid = loadErr != nil || oldHash != newHash
+				}
+				if invalid {
+					leases, leaseErr := activeLeases(r, at, []string{decision.LaneID})
+					if leaseErr != nil {
+						return nil, readFailure(leaseErr)
+					}
+					if len(leases) == 0 {
+						decision = work.Decision
+						decision.From = "running"
+						decision.Action, decision.Reason, decision.To = ActionSettle, "workflow-invalidated", "held"
+						decision.WorkflowRelease = true
+						identifyDecision(&decision)
+					}
+				}
+			}
 			if err != nil {
 				return nil, readFailure(err)
 			}
@@ -552,6 +581,9 @@ func identifyDecision(decision *Decision) {
 	decision.TransitionID = "transition-" + decision.ItemID + "-a" + strconv.Itoa(decision.Attempt)
 	if decision.Workflow != nil {
 		decision.TransitionID += "-n" + strconv.Itoa(decision.NodeIndex+1)
+	}
+	if decision.WorkflowRestart && decision.RunRequest != nil {
+		decision.TransitionID += "-" + decision.RunRequest.RunID
 	}
 	decision.TransitionID += "-" + decision.From
 	if decision.To != "" {

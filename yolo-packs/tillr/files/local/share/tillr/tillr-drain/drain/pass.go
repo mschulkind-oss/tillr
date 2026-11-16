@@ -19,6 +19,8 @@ import (
 // a runner, the candidate a terminal run produced, and the completed examination.
 // Positions are derived anew from these facts, the terminal record and the lease.
 const (
+	examinationClaimedKind  = "drain.examination-claimed"
+	examinationReleasedKind = "drain.examination-released"
 	dispatchStartedKind     = "drain.started"
 	candidateReadyKind      = "drain.candidate"
 	candidateRetirementKind = "drain.retirement"
@@ -30,7 +32,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind} {
+	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -38,6 +40,7 @@ func init() {
 }
 
 type pendingWork struct {
+	Examining      bool        `json:"examining,omitempty"`
 	Ready          bool        `json:"ready,omitempty"`
 	ParentRunID    string      `json:"parent_run_id,omitempty"`
 	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
@@ -70,6 +73,22 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
+		case examinationClaimedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
+					return nil, err
+				}
+				work.Examining = true
+			}
+		case examinationReleasedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				work.Examining = false
+			}
+			for _, work := range works {
+				if work.Ready && work.ParentRunID == *e.ObjectID {
+					work.Examining = false
+				}
+			}
 		case candidateReadyKind, candidateRetirementKind, candidatePreparedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
@@ -163,6 +182,27 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, "run-live"
+	if d.Workflow != nil && work.Orphaned && !work.BoundaryFailed {
+		rec, err := terminalRecord(r, d.RunRequest.RunID)
+		if err != nil {
+			return Decision{}, err
+		}
+		leases, err := activeLeases(r, at, []string{d.LaneID})
+		if err != nil {
+			return Decision{}, err
+		}
+		// A real successful terminal record wins over an operator-stop marker.
+		// Reaped or interrupted work has no finished node to preserve.
+		if len(leases) == 0 && (rec == nil || rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0) {
+			workCopy := *work
+			request := *d.RunRequest
+			request.RunID += "-restart"
+			d.RunRequest = &request
+			d.WorkflowRestart = true
+			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
+			return pendingDecision(r, &workCopy, at, inputs, template, policy, shut)
+		}
+	}
 	if work.Ready {
 		if policy == nil {
 			d.Action, d.Reason, d.From, d.To = ActionHold, ReasonNoPolicy, "running", ""
@@ -185,6 +225,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 				d.Reason = seatDegradedReason(degraded, name)
 			}
 		}
+		d.Inputs = inputs
 		identifyDecision(&d)
 		return d, nil
 	}
@@ -474,7 +515,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		switch d.Action {
 		case ActionDispatch, ActionRetry:
 			for _, owner := range works {
-				if !owner.Done && owner.Decision.LaneID == d.LaneID && !(owner.Ready && owner.Decision.ItemID == d.ItemID) {
+				if !owner.Done && owner.Decision.LaneID == d.LaneID && !(owner.Decision.ItemID == d.ItemID && (owner.Ready || d.WorkflowRestart)) {
 					return nil
 				}
 			}
@@ -499,12 +540,12 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				}
 				fork := forkOf(item.Allowed)
 				for _, held := range heldForks {
-					if fork != "" && held.fork == fork && !(work != nil && work.Ready && held.itemID == d.ItemID) {
+					if fork != "" && held.fork == fork && !(work != nil && (work.Ready || d.WorkflowRestart) && held.itemID == d.ItemID) {
 						return nil
 					}
 				}
 			}
-			if work != nil && !work.Done && !work.Ready {
+			if work != nil && !work.Done && !work.Ready && !d.WorkflowRestart {
 				return nil
 			}
 			if err := correlate(tx, &d); err != nil {
@@ -536,8 +577,11 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				}
 			}
 			base := mainSHA
-			if work != nil && work.Ready {
+			if work != nil && (work.Ready || d.WorkflowRestart) {
 				base = work.BaseSHA
+			}
+			if d.Workflow != nil && d.NodeBaseSHA == "" {
+				d.NodeBaseSHA = base
 			}
 			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner}
 			if _, err := run.ClaimLease(ctx, tx, *d.RunRequest, d.LaneID, at); err != nil {
@@ -562,6 +606,16 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			}
 			if err := correlate(tx, &d); err != nil {
 				return err
+			}
+			if d.Workflow != nil {
+				owner, err := currentLoopOwner()
+				if err != nil {
+					return err
+				}
+				work.Owner, work.Examining = owner, true
+				if err := appendEffect(tx, examinationClaimedKind, d.RunRequest.RunID, owner, at); err != nil {
+					return err
+				}
 			}
 			// Settlement must retain the candidate's worktree too. A terminal record
 			// released the run's lease, so reclaim it before inspecting or gating it.
@@ -589,7 +643,13 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, d.LaneID, d.RunRequest.RunID)
-		return err
+		if err != nil {
+			return err
+		}
+		if d.Workflow == nil {
+			return nil
+		}
+		return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
 	})
 }
 
@@ -778,6 +838,9 @@ planned:
 			if work != nil {
 				base = work.BaseSHA
 			}
+			if work != nil {
+				d = work.Decision
+			}
 			staged, err := l.stageDispatches(ctx, []Decision{d}, base, result)
 			if err != nil {
 				return "", err
@@ -789,7 +852,7 @@ planned:
 				}
 				continue
 			}
-			l.launchRun(ctx, d, at, watched, result)
+			l.launchRun(ctx, staged[0], at, watched, result)
 		case ActionSettle, ActionJudge:
 			l.launchExamination(ctx, d, work, at, timing, watched)
 		}
@@ -823,7 +886,30 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, result: local, timing: &timing}
-		if d.Action == ActionSettle {
+		if d.WorkflowRelease {
+			owned, err := l.stagedNodeRun(work.Decision)
+			if err == nil && (owned != "" || work.Decision.NodeIndex > 0) {
+				// The run pin is the release's retained head. A crash after
+				// reset but before markExamined must never replace it with
+				// the reset trunk head on replay.
+				pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", "refs/tillr/runs/"+d.RunRequest.RunID)
+				err = pinErr
+				if err == nil && strings.TrimSpace(pinned) == "" {
+					head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+					err = headErr
+					if err == nil {
+						err = l.pin(ctx, d.RunRequest.RunID, head)
+					}
+				}
+				if err == nil {
+					err = l.resetLane(ctx, d.LaneID)
+				}
+			}
+			if err == nil {
+				err = l.markExamined(ctx, work.Decision)
+			}
+			completion.outcome.err = err
+		} else if d.Action == ActionSettle {
 			s, err := store.OpenRead(ctx, l.cfg.Store)
 			var rec *run.Record
 			if err == nil {

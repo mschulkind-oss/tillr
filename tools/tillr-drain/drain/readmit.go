@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -62,8 +64,16 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 	if err != nil {
 		return nil, err
 	}
+	var workflowBody, workflowError string
+	if row.Workflow != "" && item.WorkflowRefValid(row.Workflow) {
+		raw, err := os.ReadFile(filepath.Join(root, "config", "tillr", "workflows", row.Workflow+".json"))
+		workflowBody = string(raw)
+		if err != nil {
+			workflowError = err.Error()
+		}
+	}
 	result := &RunInputs{}
-	if result.ItemBlock, err = inputHash([]any{title, bodyRef, row.DesignDoc, row.Seat, criteria, body}); err != nil {
+	if result.ItemBlock, err = inputHash([]any{title, bodyRef, row.DesignDoc, row.Seat, row.Workflow, workflowBody, workflowError, criteria, body}); err != nil {
 		return nil, err
 	}
 	if result.AllowedPaths, err = inputHash(row.Allowed); err != nil {
