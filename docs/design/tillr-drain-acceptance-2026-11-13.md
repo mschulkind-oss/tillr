@@ -1,7 +1,7 @@
 ---
 title: "Tillr Drain Acceptance: The Two-Item Run of 2026-11-13"
 status: active
-stage: BUILT
+stage: CURRENT
 board: "613"
 updated: 2026-11-13
 tags: [tillr, drain, acceptance, observability, evidence, qa]

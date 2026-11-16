@@ -1,7 +1,7 @@
 ---
 title: "The coverage claim: every owed sentence in the tillr design documents, and where it ends"
 status: in-review
-stage: DECIDED
+stage: CURRENT
 updated: 2026-11-13
 tags:
   - tillr

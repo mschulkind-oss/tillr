@@ -1,7 +1,7 @@
 ---
 title: "Design ruling: remove the run wall and judge committed candidates before wall status"
 status: accepted
-stage: DECIDED
+stage: CURRENT
 updated: 2026-11-15
 tags:
   - tillr
@@ -18,6 +18,8 @@ depends-on:
 ---
 
 # Design ruling: remove the run wall and judge committed candidates before wall status
+
+> **Carried out** in commit `adc9b1269`: no adapter sets a run wall by default. This document stays as the record of the ruling.
 
 **Ruling.** Remove the default per-run wall across `tillr`: delete `timeout_seconds` from [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), drop the hardcoded `wall=1800` `timeout(1)` wrapper in `run-pi`, `run-muse`, and `run-agy` unless `--timeout` is explicitly passed, and allow `timeout_seconds: 0` / `timeout_ms: 0` in `tillr-run` and `tillr-drain` as an unbounded run whose lane lease carries `leased_until = NULL` (superseding [`board-utilities.md`](./board-utilities.md) section 5.6 / `D-UT17` and [`tillr-loop-readiness.md`](./tillr-loop-readiness.md) `D-LR4`). When an explicit wall does fire (`StateTimedOut` or exit `124`), fix `settle` in both [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) and [`docs/design/tillr-drain-successor.md`](../design/tillr-drain-successor.md) (section 2.3) to check `HEAD != base` **before** `AttemptUnjudged` so any committed candidate goes to `Verify` / `judge`, and when `HEAD == base`, auto-resume **once per attempt** (`!record.Resumed`) in `settle` while the lane still holds its worktree, `brief.md`, and `session-id` before resetting the lane. Keep `AttemptUnjudged` outside `AttemptInfrastructure`, add no item state, and bump no schema version.
 
