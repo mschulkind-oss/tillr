@@ -66,6 +66,8 @@ func dispatch(args []string) int {
 		return boundaryFace(rest)
 	case "resume":
 		return resumeFace(rest)
+	case "stop":
+		return stopFace(rest)
 	case "loop":
 		return loopFace(rest)
 	default:
@@ -518,7 +520,39 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "why, policy, plan, once, retry, clear-fault, boundary, resume or loop"
+const faceList = "why, policy, plan, once, retry, clear-fault, boundary, resume, stop or loop"
+
+func stopFace(args []string) int {
+	fs := newFlagSet("stop")
+	root := fs.String("root", "", "the repository whose loop should stop")
+	path := fs.String("store", "", "the loop's store (default: <root>/.tillr/state.db)")
+	endRuns := fs.Bool("end-runs", false, "also end every in-flight run without spending an item attempt")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *root == "" {
+		return fail(drain.Usagef("stop needs --root <repository>"))
+	}
+	if *path == "" {
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	report, err := drain.Stop(context.Background(), drain.StopConfig{Store: *path, EndRuns: *endRuns})
+	for _, line := range report.Skipped {
+		fmt.Fprintf(os.Stderr, "loop: stop left alone: %s\n", line)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if *endRuns {
+		fmt.Println("loop: stopped; in-flight runs were ended without an attempt outcome")
+	} else {
+		fmt.Println("loop: stopped; in-flight runs were left alone")
+	}
+	return record.ExitOK
+}
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
@@ -689,10 +723,8 @@ func loopFace(args []string) int {
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
 		return record.ExitOK
 	}
-	// A signal is the operator's stop, and it cancels the loop's context so the in-flight
-	// tick can stop the run it started. `context.Background()` here left the loop deaf to
-	// SIGTERM: `pkill -f 'tillr drain loop'` killed the supervisor while its worker finished
-	// a minute later and committed a candidate nobody judged.
+	// Signals stop supervision only. Detached run faces retain their own lifetime;
+	// the explicit stop --end-runs request is the only drain path that ends them.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	result, err := loop.Run(ctx)

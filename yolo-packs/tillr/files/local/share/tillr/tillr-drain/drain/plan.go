@@ -437,6 +437,16 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	if inputs := p.inputs[item.ItemID]; inputs != nil {
 		changed, spent = p.readmission(item.ItemID, inputs)
 	}
+	interrupted := false
+	if priors := p.priors[item.ItemID]; len(priors) > 0 {
+		interrupted = priors[len(priors)-1].Class == AttemptInterrupted
+	}
+	if interrupted {
+		// Repeat the interrupted execution, not an authorized retry or a
+		// re-admission. Preserve its backend and do not walk the failover chain.
+		attempt = attemptForInterruption(p.priors[item.ItemID])
+		retry, changed, spent = nil, "", false
+	}
 	if changed != "" && p.policy != nil {
 		attempt.backend = p.policy.firstBackend(item)
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
@@ -499,7 +509,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonReadmissionExhausted
 	case retry == nil && changed == "" && attempt.exhausted:
 		decision.Action, decision.Reason = ActionHold, ReasonInfraExhausted
-	case retry == nil && changed == "" && !attempt.failover && p.mayBeARetry(item.ItemID) && decision.ConflictID == "":
+	case retry == nil && !interrupted && changed == "" && !attempt.failover && p.mayBeARetry(item.ItemID) && decision.ConflictID == "":
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 	case fenceAdmitsNothing(fence):
 		decision.Action, decision.Reason = ActionHold, ReasonNoFence
@@ -548,6 +558,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
 		if changed != "" {
 			decision.Reason, decision.Readmitted = changed, true
+		}
+		if interrupted {
+			decision.Reason = "earlier run orphaned by a loop stop"
 		}
 		if decision.ConflictID != "" {
 			decision.Reason = ReasonConflictAnswered
@@ -920,6 +933,10 @@ func attemptRunID(itemID string, attempt int) string {
 // the run's class: nothing in this face spends a second backend on judged work. The
 // failover chain is the machinery's automatic answer; a retry is the operator's, and it
 // starts from the first backend rather than walking a chain the budget already spent.
+func attemptForInterruption(priors []priorRun) attempt {
+	return attempt{backend: priors[len(priors)-1].Backend}
+}
+
 func (p *planner) attempt(row itemRow) attempt {
 	var a attempt
 	if p.policy == nil {

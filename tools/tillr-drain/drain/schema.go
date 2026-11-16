@@ -117,6 +117,8 @@ const (
 	ReasonNoPolicy = "no-policy"
 	// ReasonNoLane is a hold's reason: no lane the tick offered is free.
 	ReasonNoLane = "no-lane"
+	// ReasonRunLive is a hold's reason: the item's claimed run is still in flight.
+	ReasonRunLive = "run-live"
 	// ReasonNoFence is a hold's reason: the item names no fence, or names the repository
 	// root, so it would fence nothing. It is refused rather than deferred behind every other
 	// item, which is the rule that would silently serialise the whole queue behind one

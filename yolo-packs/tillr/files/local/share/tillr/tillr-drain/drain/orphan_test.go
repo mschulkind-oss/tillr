@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -73,6 +74,111 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 	d := mustPlan(t, next)[0].decision
 	if d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
 		t.Fatalf("recovered no-commit run not re-admitted: %+v", d)
+	}
+}
+
+func TestThreeDeadSupervisorsDoNotSpendAnyAttemptBudget(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	for attempt := 1; attempt <= 3; attempt++ {
+		p := mustPlan(t, l)[0]
+		if p.decision.Action != ActionDispatch || p.decision.Attempt != attempt || p.decision.Readmitted || p.decision.RetryID != "" {
+			t.Fatalf("dispatch %d: %+v", attempt, p.decision)
+		}
+		deadOwnerClaim(t, f, l, p)
+		l = f.loop(t, &recordingSteps{}, &itemContentStager{})
+		if d := mustPlan(t, l)[0].decision; d.Action != ActionSettle {
+			t.Fatalf("crash recovery: %+v", d)
+		}
+		s := openFixture(t, f.storePath)
+		err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			works, err := readPending(r)
+			if err != nil {
+				return err
+			}
+			work := works["item-a"]
+			rec, err := terminalRecord(r, p.decision.RunRequest.RunID)
+			if err != nil {
+				return err
+			}
+			outcome := l.settle(context.Background(), work.Decision, *rec, "", work.BaseSHA, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
+			return outcome.err
+		})
+		s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.releaseExamination(context.Background(), p.decision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := mustPlan(t, l)[0].decision
+	if d.Action != ActionDispatch || d.Attempt != 4 || d.Readmitted || d.RetryID != "" || d.Reason == ReasonFailover {
+		t.Fatalf("fourth crash dispatch spent a budget: %+v", d)
+	}
+}
+
+func TestDeadExaminationReleasesOnlyItsLeaseAndKeepsTheTerminalResult(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	p := mustPlan(t, l)[0]
+	deadOwnerClaim(t, f, l, p)
+	owner, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.PID = 2147483647
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		id := p.decision.RunRequest.RunID
+		rec := run.Record{RunID: id, ItemID: "item-a", LaneID: p.decision.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), FinishedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, examinationOwnerKind, id, owner, l.cfg.Now()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, id, p.decision.LaneID)
+		return err
+	})
+	next := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	if d := mustPlan(t, next)[0].decision; d.Action != ActionSettle {
+		t.Fatalf("dead examination blocked replacement: %+v", d)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		if works["item-a"].Orphaned || works["item-a"].Examiner != nil {
+			t.Fatal("examination recovery discarded the result or retained its owner")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeadOwnerDoesNotExemptAnIndependentlySignaledTerminalRun(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	p := mustPlan(t, l)[0]
+	deadOwnerClaim(t, f, l, p)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: p.decision.RunRequest.RunID, ItemID: "item-a", LaneID: p.decision.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(-1), StartedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), FinishedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndSignal})
+	})
+	_ = mustPlan(t, f.loop(t, &recordingSteps{}, &itemContentStager{}))
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		priors, err := readPriorRuns(r)
+		if err != nil {
+			return err
+		}
+		if priors["item-a"][0].Class == AttemptInterrupted {
+			t.Fatal("dead supervisor was treated as proof it signaled the run")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -44,7 +46,28 @@ func processStart(pid int) (string, error) {
 	return fields[19], nil
 }
 
+// processOwner is this process's identity, read from /proc once: the boot, PID
+// namespace, PID, start time and user never change for a running process.
+var processOwner = sync.OnceValues(readLoopOwner)
+
+// currentLoopOwner answers a copy of this process's identity. Only the first call
+// reads /proc, and NewLoop makes that call before any transaction, so no write
+// transaction pays for it.
 func currentLoopOwner() (*LoopOwner, error) {
+	owner, err := processOwner()
+	if err != nil {
+		return nil, err
+	}
+	copy := *owner
+	return &copy, nil
+}
+
+// ownerReads counts /proc identity reads, so a test can pin that claims and reaps
+// inside a write transaction never make one.
+var ownerReads atomic.Int64
+
+func readLoopOwner() (*LoopOwner, error) {
+	ownerReads.Add(1)
 	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
 		return nil, fmt.Errorf("identifying loop boot: %w", err)
@@ -122,11 +145,15 @@ func runProcessEnvironment(dir string, uid uint32) ([]byte, error) {
 	return os.ReadFile(filepath.Join(dir, "environ"))
 }
 
+// procScans counts full process-table scans, so a test can pin how many a pass makes.
+var procScans atomic.Int64
+
 func liveRunProcess(storePath, runID string) (bool, error) {
 	storePath, err := processStoreIdentity(storePath)
 	if err != nil {
 		return false, err
 	}
+	procScans.Add(1)
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return false, err
@@ -156,14 +183,114 @@ func liveRunProcess(storePath, runID string) (bool, error) {
 	return false, nil
 }
 
-// reapDeadLoopRuns closes only proven-dead loop-owned claims. Foreign/legacy
-// leases and claims whose worker is still alive keep their existing protection.
-func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time) error {
-	works, err := readPending(tx.Reader())
+// liveRunIDs answers, from one process-table scan, every run ID a live process
+// carries for this store: run faces and their adapters inherit both markers.
+func liveRunIDs(storePath string) (map[string]bool, error) {
+	storePath, err := processStoreIdentity(storePath)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	procScans.Add(1)
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		env, err := runProcessEnvironment(filepath.Join("/proc", entry.Name()), uint32(os.Geteuid()))
+		if processGone(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("checking process %d before recovering runs: %w", pid, err)
+		}
+		runID, hasStore := "", false
+		for _, v := range bytes.Split(env, []byte{0}) {
+			if id, ok := strings.CutPrefix(string(v), "TILLR_RUN_ID="); ok {
+				runID = id
+			}
+			hasStore = hasStore || string(v) == "TILLR_LOOP_STORE="+storePath
+		}
+		if hasStore && runID != "" {
+			live[runID] = true
+		}
+	}
+	return live, nil
+}
+
+// reapEvidence is the process-table evidence a pass reaps from, gathered before its
+// write transaction opens. An owner absent from dead was not judged, so it is not
+// proven dead and its claim keeps its protection.
+type reapEvidence struct {
+	dead map[LoopOwner]bool
+	live map[string]bool
+}
+
+func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
+	return owner != nil && ev.dead[*owner]
+}
+
+// gatherReapEvidence reads the pending claims, then judges their owners and scans
+// the process table once, with no transaction open. The caller holds the run-start
+// lock from here through its write, so no run face starts in between.
+func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}}
+	var owners []LoopOwner
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		for _, work := range works {
+			if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
+				continue
+			}
+			for _, owner := range []*LoopOwner{work.Owner, work.Examiner} {
+				if owner != nil {
+					owners = append(owners, *owner)
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return ev, err
 	}
 	here, err := currentLoopOwner()
+	if err != nil {
+		return ev, err
+	}
+	anyDead := false
+	for _, owner := range owners {
+		if _, seen := ev.dead[owner]; seen {
+			continue
+		}
+		o := owner
+		dead, err := ownerDead(&o, here)
+		if err != nil {
+			return ev, err
+		}
+		ev.dead[owner] = dead
+		anyDead = anyDead || dead
+	}
+	if anyDead {
+		if ev.live, err = liveRunIDs(l.cfg.Store); err != nil {
+			return ev, err
+		}
+	}
+	return ev, nil
+}
+
+// reapDeadLoopRuns closes only proven-dead loop-owned claims. Foreign/legacy
+// leases and claims whose worker is still alive keep their existing protection.
+//
+// It reads no process table: every liveness answer comes from ev, gathered before
+// the transaction, and each write is guarded by the exact claim it re-reads here.
+func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time, ev reapEvidence) error {
+	works, err := readPending(tx.Reader())
 	if err != nil {
 		return err
 	}
@@ -171,32 +298,30 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time)
 		if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 			continue
 		}
-		dead, err := ownerDead(work.Owner, here)
-		if err != nil {
-			return err
+		if work.Examiner != nil {
+			if ev.ownerDead(work.Examiner) {
+				if !ev.live[work.Decision.RunRequest.RunID] {
+					if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, work.Decision.LaneID, work.Decision.RunRequest.RunID); err != nil {
+						return err
+					}
+					if err := appendEffect(tx, examinationOwnerKind, work.Decision.RunRequest.RunID, (*LoopOwner)(nil), at); err != nil {
+						return err
+					}
+				}
+			}
 		}
-		if !dead {
+		if !ev.ownerDead(work.Owner) {
 			continue
 		}
 		id := work.Decision.RunRequest.RunID
-		live, err := liveRunProcess(l.cfg.Store, id)
-		if err != nil {
-			return err
-		}
-		if live {
+		if ev.live[id] {
 			continue
 		}
 		if work.Examining {
 			// Examination is not another execution of the node. Recover its
 			// lease without inventing a terminal node record or spending a run.
-			if work.ParentRunID != "" {
-				live, err := liveRunProcess(l.cfg.Store, work.ParentRunID)
-				if err != nil {
-					return err
-				}
-				if live {
-					continue
-				}
+			if work.ParentRunID != "" && ev.live[work.ParentRunID] {
+				continue
 			}
 			if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id IN (?,?) AND state=?`, run.LaneStateIdle, work.Decision.LaneID, id, work.ParentRunID, run.LaneStateLeased); err != nil {
 				return err
@@ -211,6 +336,8 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time)
 			return err
 		}
 		if terminal > 0 {
+			// A terminal result alone does not establish that the supervisor
+			// interrupted it. Ordinary stops intentionally leave workers alive.
 			if work.Decision.Workflow != nil && !work.Orphaned {
 				rec, err := terminalRecord(tx.Reader(), id)
 				if err != nil {

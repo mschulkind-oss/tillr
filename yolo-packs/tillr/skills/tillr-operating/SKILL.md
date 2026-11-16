@@ -29,7 +29,34 @@ does it implicitly.
 dispatchable, waiting for a new item, a changed hold, or a trunk move. Its waiting
 line names the held count and the first five items with their reasons, then stays
 quiet until something changes. SIGINT or SIGTERM stops it with exit code 0 and a
-final line saying it was stopped by the operator. A caller that needs a finite
+final line saying it was stopped by the operator. The runs are left alone on a
+signal, a fault, or any other ordinary exit. A restarted loop settles and judges
+those runs once, including ones that finished while it was absent.
+
+Use the stop face for an explicit operator request:
+
+```sh
+tillr drain stop --root <repository>
+tillr drain stop --root <repository> --end-runs
+```
+
+Without the flag, stop ends supervision only. With it, the drain records the
+interruption before sending SIGTERM to each in-flight run face. It does not ask the
+runs to pause, so those items start over on the next pass without
+spending a retry, failover, or automatic re-admission allowance. Repeated stops
+need no authorization.
+
+Stop acts on what its own process domain can see and says what it left alone on
+stderr, one `loop: stop left alone: ...` line each: a session in another process
+domain (stale heartbeat: treated as dead; current heartbeat: a live loop to stop
+there), a session whose loop process is gone, and a run owned by another domain. Its
+exit code: 0 when a loop was stopped, or with `--end-runs` when the runs were ended
+(it prints "in-flight runs were ended" only then); 4 when a live loop in another
+process domain was left running, after the local loops were stopped and, with
+`--end-runs`, the local runs ended; 2 when no live loop is registered and `--end-runs`
+was not given. With `--end-runs`, a worker whose run face has died is ended too. Stop the keeper first if supervision must stay stopped.
+
+A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
 The former stay option is removed; waiting no longer needs an option.
 

@@ -117,7 +117,12 @@ func readInputDecisions(r *store.Reader) (map[string]Decision, error) {
 // readmission compares only a recorded basis. Legacy runs without one stay held;
 // an unchanged edit timestamp or advancing trunk cannot create an allowance.
 func (p *planner) readmission(itemID string, now *RunInputs) (string, bool) {
-	priors := p.priors[itemID]
+	priors := []priorRun{}
+	for _, prior := range p.priors[itemID] {
+		if prior.Class != AttemptInterrupted {
+			priors = append(priors, prior)
+		}
+	}
 	if len(priors) == 0 {
 		return "", false
 	}
@@ -150,12 +155,6 @@ func (p *planner) readmission(itemID string, now *RunInputs) (string, bool) {
 		if before.TillrBuild != now.TillrBuild {
 			changes = append(changes, "tillr-build")
 		}
-	}
-	// Only a loop-owned run that was examined and produced no commit qualifies.
-	// A signal alone is not evidence: a standalone runner or a committed run must hold.
-	work := p.works[itemID]
-	if work != nil && work.Done && work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID == last.RunID && work.Candidate == nil && p.history.refusals[last.RunID] == RefusalNoOp && work.Orphaned {
-		changes = append(changes, "earlier run orphaned by a loop stop")
 	}
 	if len(changes) == 0 {
 		return "", false

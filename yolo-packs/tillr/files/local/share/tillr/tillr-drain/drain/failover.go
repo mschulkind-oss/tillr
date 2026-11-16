@@ -38,6 +38,8 @@ type AttemptClass string
 const (
 	// AttemptInfrastructure is a run that failed for the machinery's reasons and learned
 	// nothing about the item: the one class a failover fires on.
+	// AttemptInterrupted is a supervisor interruption, not an item outcome.
+	AttemptInterrupted    AttemptClass = "interrupted"
 	AttemptInfrastructure AttemptClass = "infrastructure"
 	// AttemptAnswered is a run that produced an answer, however disappointing: judged
 	// work, which never fails over.
@@ -145,6 +147,24 @@ type priorRun struct {
 // store and what the store points at, and a log that is gone reads as "no report" rather
 // than as an error.
 func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
+	interrupted := map[string]bool{}
+	events, err := r.Events(0)
+	if err != nil {
+		return nil, err
+	}
+	// An interruption describes the segment it ended. A later continuation of the
+	// same run (run.resume) is that run's new segment, and its outcome is judged.
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		switch e.Kind {
+		case loopOrphanedKind:
+			interrupted[*e.ObjectID] = true
+		case run.ResumeKind:
+			delete(interrupted, *e.ObjectID)
+		}
+	}
 	// Timestamp ties follow recording order, not lexical run-id order (a10 sorts
 	// before a9). event_seq is the store event's sequence; SQLite's insertion row
 	// number, rowid, breaks ties for legacy rows with no event sequence.
@@ -174,10 +194,14 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		if err := json.Unmarshal([]byte(artifactRefs), &refs); err != nil {
 			return nil, Internalf("reading the artifact refs of run %q: %v", rec.RunID, err)
 		}
+		class := ClassifyAttempt(rec, logTail(refs))
+		if interrupted[rec.RunID] {
+			class = AttemptInterrupted
+		}
 		priors[itemID] = append(priors[itemID], priorRun{
 			RunID:   rec.RunID,
 			Backend: rec.Backend,
-			Class:   ClassifyAttempt(rec, logTail(refs)),
+			Class:   class,
 		})
 	}
 	if err := rows.Err(); err != nil {

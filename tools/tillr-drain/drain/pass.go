@@ -26,13 +26,14 @@ const (
 	candidateRetirementKind = "drain.retirement"
 	candidatePreparedKind   = "drain.prepared-candidate"
 	examinationDoneKind     = "drain.examined"
+	examinationOwnerKind    = "drain.examination.owner"
 	loopOrphanedKind        = "drain.orphaned"
 	ActionSettle            = "settle"
 	ActionJudge             = "judge"
 )
 
 func init() {
-	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
+	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -47,6 +48,7 @@ type pendingWork struct {
 	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
 	RepairHold     *repairHold `json:"repair_hold,omitempty"`
 	Decision       Decision    `json:"decision"`
+	Examiner       *LoopOwner  `json:"examination_owner,omitempty"`
 	Owner          *LoopOwner  `json:"loop_owner,omitempty"`
 	BaseSHA        string      `json:"base_sha"`
 	Candidate      *Candidate  `json:"candidate,omitempty"`
@@ -204,6 +206,12 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[fault.RunID]; work != nil && fault.Reason == StopHostBoundaryViolation {
 				work.BoundaryFailed = false
 			}
+		case examinationOwnerKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				if err := json.Unmarshal(e.Payload, &work.Examiner); err != nil {
+					return nil, nil, err
+				}
+			}
 		case examinationDoneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Done = true
@@ -243,7 +251,7 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
-	d.Action, d.Reason = ActionHold, "run-live"
+	d.Action, d.Reason = ActionHold, ReasonRunLive
 	if d.Workflow != nil && work.Orphaned && !work.BoundaryFailed {
 		rec, err := terminalRecord(r, d.RunRequest.RunID)
 		if err != nil {
@@ -418,25 +426,33 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	}
 	defer s.Close()
 	nextGeneration := *generation
-	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		var before, after int64
-		if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
-			return err
-		}
-		if err := l.reapDeadLoopRuns(ctx, tx, at); err != nil {
-			return err
-		}
-		released, err := run.ReapExpiredLeases(ctx, tx, at)
+	// The process-table evidence is gathered with no transaction open. The run-start
+	// lock spans it and the write, so no run face starts between the scan and the reap.
+	if err := withRunStartLock(ctx, l.cfg.Store, func() error {
+		ev, err := l.gatherReapEvidence(ctx, s)
 		if err != nil {
 			return err
 		}
-		if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&after); err != nil {
+		return s.WriteTx(ctx, func(tx *store.Tx) error {
+			var before, after int64
+			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
+				return err
+			}
+			if err := l.reapDeadLoopRuns(ctx, tx, at, ev); err != nil {
+				return err
+			}
+			released, err := run.ReapExpiredLeases(ctx, tx, at)
+			if err != nil {
+				return err
+			}
+			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&after); err != nil {
+				return err
+			}
+			if (len(released) > 0 || after != before) && nextGeneration == "" {
+				nextGeneration, err = allocateGeneration(tx)
+			}
 			return err
-		}
-		if (len(released) > 0 || after != before) && nextGeneration == "" {
-			nextGeneration, err = allocateGeneration(tx)
-		}
-		return err
+		})
 	}); err != nil {
 		return nil, nil, err
 	}
@@ -692,15 +708,17 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if err := correlate(tx, &d); err != nil {
 				return err
 			}
+			owner, err := currentLoopOwner()
+			if err != nil {
+				return err
+			}
 			if d.Workflow != nil {
-				owner, err := currentLoopOwner()
-				if err != nil {
-					return err
-				}
 				work.Owner, work.Examining = owner, true
 				if err := appendEffect(tx, examinationClaimedKind, d.RunRequest.RunID, owner, at); err != nil {
 					return err
 				}
+			} else if err := appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, owner, at); err != nil {
+				return err
 			}
 			// Settlement must retain the candidate's worktree too. A terminal record
 			// released the run's lease, so reclaim it before inspecting or gating it.
@@ -721,6 +739,15 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 }
 
 func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
+	// A canceled examination may have handed off a live continuation. Its
+	// face, not this caller, releases that lease when it actually finishes.
+	live, err := liveRunProcess(l.cfg.Store, d.RunRequest.RunID)
+	if err != nil {
+		return err
+	}
+	if live {
+		return nil
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
@@ -754,6 +781,9 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 }
 
 func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched []string, result *LoopResult) {
+	// The run outlives this supervisor. A canceled ctx ends only this goroutine's
+	// wait: ProcessSteps.Run never signals the run face on cancellation, and the
+	// next loop settles the run from its terminal record.
 	id := d.RunRequest.RunID
 	l.active[id] = true
 	l.mu.Lock()
@@ -778,12 +808,6 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
 		if err == nil {
 			_, _, err = l.cfg.Steps.Run(ctx, *d.RunRequest)
-			if ctx.Err() != nil {
-				// Preserve why this worker ended even though the loop's context is gone.
-				if markErr := appendJudgment(context.WithoutCancel(ctx), l.cfg.Store, loopOrphanedKind, "run", id, struct{}{}, l.cfg.Now().UTC()); markErr != nil {
-					err = markErr
-				}
-			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
 			}
@@ -953,6 +977,13 @@ planned:
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
+	for _, hold := range holds {
+		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonNoLane) {
+			// A replacement has no local completion channel for surviving runs.
+			// Their durable claims are still work, not foreign leased lanes.
+			return l.waitForTrigger(ctx, leases, at, result)
+		}
+	}
 	if stale {
 		return "", nil
 	}
@@ -970,8 +1001,10 @@ planned:
 // the completion is a wake trigger and measurement, not its durable outcome.
 func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, passTiming *PassTiming, watched []string) {
 	l.active[d.RunRequest.RunID] = true
+	l.examinations.Add(1)
 	timing := PassTiming{TickID: passTiming.TickID, AtMS: passTiming.AtMS, GateBudgetMS: passTiming.GateBudgetMS}
 	go func() {
+		defer l.examinations.Done()
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, result: local, timing: &timing}
 		if d.WorkflowRelease {

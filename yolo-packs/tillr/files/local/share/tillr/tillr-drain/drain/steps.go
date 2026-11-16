@@ -3,7 +3,6 @@ package drain
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -145,26 +144,17 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if s.BackendsDir != "" {
 		args = append(args, "--backends-dir", s.BackendsDir)
 	}
-	cmd := exec.CommandContext(ctx, s.RunBin, args...)
+	// A run face owns its lifetime. Only EndRuns may signal it; a canceled
+	// supervisor context must not propagate into an already handed-off run.
+	cmd := exec.Command(s.RunBin, args...)
+	// A terminal Ctrl-C targets the foreground process group, not just the
+	// supervisor. Keep the face outside that group as well as outside its context.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	storeIdentity, err := processStoreIdentity(s.Store)
 	if err != nil {
 		return run.Record{}, "", err
 	}
-	cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity)
-	// The loop's cancellation is an operator stop, not a reason to abandon the run's
-	// bookkeeping: signal the run face so its own signal handling kills the adapter's
-	// process group, writes the terminal record and frees the lane before it answers. A
-	// SIGKILL here would orphan the worker and leave the lane leased, which is what the
-	// first night's `pkill -f 'tillr drain loop'` did.
-	cmd.Cancel = func() error {
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return err
-		}
-		return nil
-	}
-	// A run face that ignores the signal is killed after the grace, so a wedged child
-	// cannot hold a stopped loop open for the run's whole timeout.
-	cmd.WaitDelay = 30 * time.Second
+	cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE", "TILLR_RUN_RESUME"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity, fmt.Sprintf("TILLR_RUN_RESUME=%t", req.Resume))
 	// Both streams are regular files: even stdout must survive replacement of
 	// the loop. Close the parent's handles immediately after inheritance so the
 	// loop only opens files to read once the run has finished.
@@ -183,11 +173,19 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	started := time.Now().UnixMilli()
-	err = cmd.Start()
+	err = s.startRunFace(cmd, req)
 	stdout.Close()
 	stderr.Close()
 	if err == nil {
-		err = cmd.Wait()
+		finished := make(chan error, 1)
+		go func() { finished <- cmd.Wait() }()
+		select {
+		case err = <-finished:
+		case <-ctx.Done():
+			// Abandon this caller's wait, not the run. The face retains its
+			// output files and terminal bookkeeping for the replacement.
+			return run.Record{}, "", ctx.Err()
+		}
 	}
 	diagnostic, readErr := runOutputTail(dir)
 	if readErr != nil {
