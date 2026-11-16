@@ -27,8 +27,11 @@ Cases:
 Run: python3 tests/tillr-docs.test.py
 """
 
+import ast
+import copy
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -293,7 +296,281 @@ def case_faces_answer_help(directory):
        f"({checked} invocations over {len(DOCUMENTS)} documents)")
 
 
+# Only an already-executed historical record may keep a disabling invocation.
+# Scripts, recipes, and skills are instructions and can never be exempted.
+ROLLING_HISTORY = {
+    "docs/design/tillr-claude-backend.md":
+        "Records the 2026-11-16 scratch drain measurement with rolling checks off.",
+}
+
+
+def python_command_blobs(text):
+    """Read literal command values and their local append/extend operations, never execute."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    blobs = []
+
+    class Commands(ast.NodeVisitor):
+        def __init__(self):
+            self.values = {}
+
+        def value(self, node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            if isinstance(node, ast.Name):
+                return self.values.get(node.id)
+            if isinstance(node, (ast.List, ast.Tuple)):
+                variants = [[]]
+                for part in node.elts:
+                    value = self.value(part)
+                    choices = value if isinstance(value, tuple) else (value,)
+                    variants = [prefix + [choice if isinstance(choice, str) else "<dynamic>"]
+                                for prefix in variants for choice in choices]
+                return variants[0] if len(variants) == 1 else tuple(variants)
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                left, right = self.value(node.left), self.value(node.right)
+                lefts = left if isinstance(left, tuple) else (left,)
+                rights = right if isinstance(right, tuple) else (right,)
+                variants = []
+                for one in lefts:
+                    for two in rights:
+                        if isinstance(one, list):
+                            variants.append(one + (two if isinstance(two, list) else ["<dynamic>"]))
+                        elif isinstance(one, str) and isinstance(two, str):
+                            variants.append(one + two)
+                if variants:
+                    return variants[0] if len(variants) == 1 else tuple(variants)
+            return None
+
+        def emit(self, value):
+            if isinstance(value, tuple):
+                for alternative in value:
+                    self.emit(alternative)
+            elif isinstance(value, list):
+                blobs.append(shlex.join(value))
+            elif isinstance(value, str):
+                blobs.append(value)
+
+        def visit_Assign(self, node):
+            self.generic_visit(node)
+            value = self.value(node.value)
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.values[target.id] = value
+
+        def visit_AnnAssign(self, node):
+            self.generic_visit(node)
+            if isinstance(node.target, ast.Name):
+                self.values[node.target.id] = self.value(node.value)
+
+        def visit_AugAssign(self, node):
+            self.generic_visit(node)
+            if isinstance(node.target, ast.Name) and isinstance(node.op, ast.Add):
+                left, right = self.values.get(node.target.id), self.value(node.value)
+                if isinstance(left, list) and isinstance(right, list):
+                    left.extend(right)
+                elif isinstance(left, str) and isinstance(right, str):
+                    self.values[node.target.id] = left + right
+
+        def visit_If(self, node):
+            self.visit(node.test)
+            if isinstance(node.test, ast.Constant):
+                selected = node.body if node.test.value else node.orelse
+                for statement in selected:
+                    self.visit(statement)
+                return
+            # Both unknown branches are possible, but neither may overwrite the
+            # other's command value. Tuples here hold alternatives, not argv.
+            incoming = copy.deepcopy(self.values)
+            for statement in node.body:
+                self.visit(statement)
+            yes = self.values
+            self.values = incoming
+            for statement in node.orelse:
+                self.visit(statement)
+            no = self.values
+            self.values = {}
+            for name in yes.keys() | no.keys():
+                left, right = yes.get(name), no.get(name)
+                if left == right:
+                    self.values[name] = left
+                else:
+                    self.values[name] = ((left if isinstance(left, tuple) else (left,))
+                                         + (right if isinstance(right, tuple) else (right,)))
+
+        def visit_FunctionDef(self, node):
+            outer = self.values
+            self.values = copy.deepcopy(outer)
+            for argument in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
+                self.values.pop(argument.arg, None)
+            for statement in node.body:
+                self.visit(statement)
+            self.values = outer
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Return(self, node):
+            # Keepers return the composed argv to a launch helper.
+            self.generic_visit(node)
+            self.emit(self.value(node.value))
+
+        def visit_Call(self, node):
+            self.generic_visit(node)
+            if not isinstance(node.func, ast.Attribute):
+                return
+            command = (node.args[0] if node.args else
+                       next((keyword.value for keyword in node.keywords
+                             if keyword.arg == "args"), None))
+            if command is None:
+                return
+            argument = self.value(command)
+            if isinstance(node.func.value, ast.Name):
+                value = self.values.get(node.func.value.id)
+                alternatives = value if isinstance(value, tuple) else (value,)
+                for argv in alternatives:
+                    if isinstance(argv, list):
+                        if node.func.attr == "append" and isinstance(argument, str):
+                            argv.append(argument)
+                        elif node.func.attr == "extend" and isinstance(argument, list):
+                            argv.extend(argument)
+            if node.func.attr in ("run", "Popen", "call", "check_call", "check_output", "system"):
+                self.emit(argument)
+
+    Commands().visit(tree)
+    return blobs
+
+
+def rolling_disabled(text, markdown=False, python_script=False):
+    """Return disabling loop commands, not mentions of the flag or quoted fixtures."""
+    hits = []
+    blobs = [text, *code_blobs(text)] if markdown else [text]
+    if not markdown and (python_script or re.match(r"^#![^\n]*python", text)):
+        blobs.extend(python_command_blobs(text))
+    for blob in blobs:
+        # Shell continuations belong to the same command, including in recipes.
+        for line in re.sub(r"\\\r?\n", " ", blob).splitlines():
+            try:
+                lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
+                lexer.whitespace_split = True
+                words = list(lexer)
+            except ValueError:
+                # A prose/source line with unmatched quotes is not a shell command.
+                continue
+            for index, word in enumerate(words):
+                if word.rsplit("/", 1)[-1] == "tillr-drain" and words[index + 1:index + 2] == ["loop"]:
+                    start = index + 2
+                elif word == "tillr" and words[index + 1:index + 3] == ["drain", "loop"]:
+                    start = index + 3
+                else:
+                    continue
+                for position in range(start, len(words)):
+                    token = words[position]
+                    if token in (";", "&&", "||", "|", ")"):
+                        break
+                    if token == "--rolling=" or (
+                        token == "--rolling" and words[position + 1:position + 2] == [""]
+                    ):
+                        hits.append(line.strip())
+    return hits
+
+
+def rolling_policy_errors(files, history=ROLLING_HISTORY):
+    """Check tracked working bytes, including staged additions, and stale exceptions."""
+    hits = {name: rolling_disabled(body, name.endswith(".md"), name.endswith(".py"))
+            for name, body in files.items()}
+    errors = []
+    for name, commands in hits.items():
+        if commands and name not in history:
+            errors.append(f"{name}: disables the after-merge check: {commands[0]}")
+    for name, reason in history.items():
+        if not name.startswith("docs/") or not name.endswith(".md") or "/skills/" in name:
+            errors.append(f"{name}: only historical documents may be exempted")
+        if not reason.strip():
+            errors.append(f"{name}: historical exception has no reason")
+        if not hits.get(name):
+            errors.append(f"{name}: stale historical exception (no disabling loop command)")
+    return errors
+
+
+def case_rolling_guard_fixtures():
+    unrelated = ('#!/usr/bin/env python3\n'
+                 'subprocess.run(["tillr-drain", "loop"])\n'
+                 'subprocess.run(["other-tool", "--rolling", ""])\n')
+    if rolling_policy_errors({"bin/keeper": unrelated}, {}):
+        fail("rolling guard associated another tool's options with the drain")
+    scoped = ('#!/usr/bin/env python3\ncommand = ["tillr-drain", "loop"]\n'
+              'def unused():\n    command.append("--rolling=")\n'
+              'subprocess.run(command)\n')
+    if rolling_policy_errors({"bin/keeper": scoped}, {}):
+        fail("rolling guard leaked mutations from another function scope")
+    for command in (
+        "tillr-drain loop --rolling ''",
+        'exec /opt/bin/tillr-drain loop --rolling=""',
+        'tillr-drain loop \\\n  --rolling ""',
+        "tillr drain loop --rolling=",
+        '#!/usr/bin/env python3\ndef loop_command():\n    return ["tillr-drain", "loop", "--rolling", ""]',
+        '#!/usr/bin/env python3\ncommand = ["tillr-drain", "loop"]\ncommand.extend(["--rolling", ""])\nsubprocess.run(command)',
+        '#!/usr/bin/env python3\nsubprocess.run("tillr-drain loop --rolling \'\'", shell=True)',
+        '#!/usr/bin/env python3\ncommand = ["tillr-drain", "loop"]\ncommand.append("--rolling=")\nsubprocess.run(command)',
+        '#!/usr/bin/env python3\ncommand = "tillr-drain loop --rolling \'\'"\nsubprocess.run(command, shell=True)',
+        '#!/usr/bin/env python3\nsubprocess.run(args=["tillr-drain", "loop", "--rolling", ""])',
+        '#!/usr/bin/env python3\nif True:\n    command = ["tillr-drain", "loop", "--rolling", ""]\nelse:\n    command = ["tillr-drain", "loop"]\nsubprocess.run(command)',
+        '#!/usr/bin/env python3\nif unknown:\n    command = ["tillr-drain", "loop", "--rolling", ""]\nelse:\n    command = ["tillr-drain", "loop"]\nsubprocess.run(command)',
+        '#!/usr/bin/env python3\nif unknown:\n    rolling = ""\nelse:\n    rolling = "python3 gate.py"\nsubprocess.run(["tillr-drain", "loop", "--rolling", rolling])',
+    ):
+        errors = rolling_policy_errors({"bin/keeper": command}, {})
+        if not errors or "bin/keeper" not in errors[0]:
+            fail(f"rolling guard missed the disabling keeper command: {command!r}")
+    overwritten = ('#!/usr/bin/env python3\n'
+                   'command = ["tillr-drain", "loop", "--rolling", ""]\n'
+                   'command = ["tillr-drain", "loop"]\nsubprocess.run(command)\n')
+    if rolling_policy_errors({"bin/keeper": overwritten}, {}):
+        fail("rolling guard treated a superseded assignment as an invocation")
+    if not rolling_policy_errors({"docs/example.md": "tillr-drain loop --rolling ''"}, {}):
+        fail("rolling guard missed an unfenced document command")
+    if rolling_policy_errors({"bin/keeper": "tillr-drain loop"}, {}):
+        fail("rolling guard rejected the default enabled check")
+    if rolling_policy_errors({"bin/keeper": "tillr-drain loop --rolling 'python3 gate.py'"}, {}):
+        fail("rolling guard rejected an explicit nonempty check")
+    historical = "docs/design/past.md"
+    body = "```sh\ntillr-drain loop --rolling ''\n```"
+    if rolling_policy_errors({historical: body}, {historical: "An already executed run."}):
+        fail("rolling guard rejected a named historical run")
+    if not rolling_policy_errors({historical: "tillr-drain loop"}, {historical: "Past run."}):
+        fail("rolling guard accepted a stale historical exception")
+    for name in ("bin/keeper", "yolo-packs/tillr/skills/keeper/SKILL.md", ".justfile"):
+        if not rolling_policy_errors({name: body}, {name: "Not a historical record."}):
+            fail(f"rolling guard allowed an instruction exception: {name}")
+    ok("rolling guard catches disabled commands and stale or instructional exceptions")
+
+
+def case_rolling_enabled():
+    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT,
+                             check=True, capture_output=True).stdout
+    files = {}
+    for raw in tracked.split(b"\0"):
+        if not raw:
+            continue
+        name = os.fsdecode(raw)
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            files[name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+    errors = rolling_policy_errors(files)
+    if errors:
+        fail("\n".join(errors))
+    ok(f"tracked loop invocations keep the after-merge check on ({len(files)} text files; "
+       f"{len(ROLLING_HISTORY)} named historical exception)")
+
+
 def main():
+    case_rolling_guard_fixtures()
+    case_rolling_enabled()
     # The operating skill documents the repository keeper too. Keep its behavior
     # in this permanent gate suite without invoking a real loop or store.
     keeper_tests = subprocess.run(

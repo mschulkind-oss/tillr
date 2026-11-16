@@ -5830,6 +5830,42 @@ assert not undeclared, (
     f"these check kinds are planned and not classified, so their failure would fall back to "
     f"the default: {undeclared}"
 )
+# The candidate driver can refuse this machine before preparing or judging a tree.
+# Its linked-worktree refusal exits 1, but is not a failing repository check.
+refused_prepare = verdict.Check(
+    "fork-quality", "prepare the clean checkout",
+    ["/repo/bin/pi-forks", "candidate", "--fork", "pi-session-search", "--deps"],
+    "why", 60,
+)
+refused_prepare.rc = 1
+refused_prepare.output = (
+    "pi-forks: refusing to run from a linked worktree: /repo/lane\n"
+    "  That checkout shares one .forks with its main repository (/repo).\n"
+)
+assert not refused_prepare.conflict, "a machine-local driver refusal became red"
+assert verdict.check_status(refused_prepare) == "ERR"
+assert verdict.verdict_of([refused_prepare]) == ("unproven", 2)
+# The rolling consumer reads these spans, not the human report. It must receive
+# ERR rather than FAIL for a preparation this machine could not perform.
+with tempfile.TemporaryDirectory(dir=os.environ.get("YOLO_DURABLE_DIR")) as directory:
+    spans_path = Path(directory) / "gate.spans.json"
+    refused_prepare.start_ns = 1
+    prepare_plan = verdict.Plan()
+    prepare_plan.checks = [refused_prepare]
+    verdict.write_gate_spans(str(spans_path), prepare_plan, ROOT, 1,
+                             "unproven", "head", "tree", [], 1, 1, 0)
+    assert json.loads(spans_path.read_text())["check_spans"][0]["status"] == "ERR"
+# The same text from a suite, or an actual prepare failure, must stay red.
+for argv, output in (
+    (["npm", "run", "test"], refused_prepare.output),
+    (["/repo/bin/pi-forks", "candidate", "--fork", "x", "--prepared", "--", "npm", "run", "test"],
+     refused_prepare.output),
+    (refused_prepare.argv, "pi-forks: patch failed to apply\n"),
+):
+    genuine_red = verdict.Check("fork-quality", "label", argv, "why", 60)
+    genuine_red.rc, genuine_red.output = 1, output
+    assert genuine_red.conflict, "an actual quality failure was suppressed"
+
 # A verdict kind that fails is this change's own red, not an inability to answer.
 red = verdict.Check("pipeline-evidence",
                     "one record from each producer validates against the shared schema",
