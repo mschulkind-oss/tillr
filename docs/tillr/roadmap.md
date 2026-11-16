@@ -66,9 +66,16 @@ measures which part. Nothing that retires or caps the run record is among the ei
 of that record is, because the owner ruled that the record is shaped only after it can be seen.
 
 Two designs left this list on 2026-11-15. [Item graphs](../design/tillr-item-graphs.md) is
-decided: one commit per item, all of refinement built, read-only nodes in parallel, and lanes
-outside the cap for work the owner is waiting on. Its design-seat item cuts it into build items
-next. [The observatory redesign](../design/observatory-redesign.md) is decided: the pages show
+decided and waits on no ruling: one commit per item, all of refinement built, read-only nodes in
+parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
+into [fifteen build items](../design/tillr-item-graphs.md#9-build-order) that live in the design,
+in the owner's words: an item is slotted into a workflow, a node is one invocation of a harness
+or one command, and a sub-agent a node starts is a child session and never a node. The first
+block runs one item through a workflow of two nodes, a scout that only reads and then a builder,
+to one landed commit, and waits on nothing. Nothing of the design was built before the cut
+except the lander's squash, and
+[its eighth section](../design/tillr-item-graphs.md#8-what-the-tree-already-holds) measures that.
+[The observatory redesign](../design/observatory-redesign.md) is decided: the pages show
 what a run used and never a price.
 
 ## 2. Keep the loop running
@@ -788,13 +795,7 @@ are filed here instead, outside the documents they change.
 
 ### Cut the item graphs design into build items
 
-<!-- tillr: item id="item-design-item-graphs-slices" seat="design" paths="docs/design/tillr-item-graphs.md,docs/tillr/roadmap.md" -->
 
-- **c1:** Every question in [the item graphs design](../design/tillr-item-graphs.md) is answered and folded into the design's body and decision ledger, the design's frontmatter says `status: accepted` and `stage: DECIDED`, and `uvx vantage-check` on it reports nothing.
-- **c2:** That design ends with a build order of item blocks, each small enough for one run inside one path fence, each with criteria a test can check, and each naming the items it waits on in `blocked_by`.
-- **c3:** The first block proves the smallest end-to-end slice of the design and waits on nothing in that design.
-- **c4:** This roadmap no longer lists this design as waiting on a ruling.
-- **c5:** The document uses the owner's words of 2026-11-15 throughout: a *workflow* is a pre-approved template of stages (design, build, QA, judging) that an item is slotted into; a *node* is exactly one invocation of a harness or one command; a *child session* is a sub-agent a node starts inside its harness, which is recorded and shown but is never a node. It states when a stage should be several nodes (the work must be planned, fenced or judged separately) and when one node with child sessions is enough, and works the example of a designer that replaces itself with four scouts and a joining designer.
 
 ### Cut the judge and lifecycle design into build items
 
