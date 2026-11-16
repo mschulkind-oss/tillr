@@ -79,6 +79,8 @@ require_harness muse
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)
+# A continuation replaces only the first prompt, never the staged brief.
+prompt=${TILLR_RESUME_PROMPT_FILE:-$brief}
 session=
 if [ -r "$(lane_path "$brief" session-id)" ]; then
     session=$(cat "$(lane_path "$brief" session-id)")
@@ -104,7 +106,7 @@ fi
 # harness's argv is this file's job (design §7), so the driver's argv is unchanged: it
 # still supplies the model and the effort, and only this construction decides whether the
 # harness is told about them.
-set -- muse exec --json --prompt-file "$brief" --workspace "$target"
+set -- muse exec --json --prompt-file "$prompt" --workspace "$target"
 if [ -n "$session" ]; then
     set -- "$@" --session-id "$session"
 fi

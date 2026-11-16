@@ -38,6 +38,15 @@ adapter runs in; `agy` is not on `PATH`.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.
 
+## Pausing and continuing
+
+Pause kind: `cannot-resume`, declared in [`pause-kind`](./pause-kind).
+SIGTERM resume behavior is unmeasured as of 2026-11-16. The runner sends SIGTERM,
+waits ten seconds, then kills any surviving process group. Continuing starts a
+fresh session in the same lane and worktree as the same attempt. Its first prompt
+names the earlier transcript, report when present, and worktree with uncommitted
+changes, followed by the original brief. No retry is spent.
+
 ## Declared capabilities
 
 - **writes-tree:** yes.

@@ -75,6 +75,8 @@ require_harness agy
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)
+# A continuation replaces only the first prompt, never the staged brief.
+prompt=${TILLR_RESUME_PROMPT_FILE:-$brief}
 
 YOLO_NO_LAUNCH_FLAGS=1
 export YOLO_NO_LAUNCH_FLAGS
@@ -95,4 +97,4 @@ if [ -n "$bounded" ]; then
     set -- timeout "$wall" "$@"
 fi
 
-exec "$@" <"$brief" 2>"$err"
+exec "$@" <"$prompt" 2>"$err"

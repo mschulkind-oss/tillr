@@ -89,6 +89,8 @@ require_harness claude
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)
+# A continuation replaces only the first prompt, never the staged brief.
+prompt=${TILLR_RESUME_PROMPT_FILE:-$brief}
 session=$session_override
 if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
     session=$(cat "$(lane_path "$brief" session-id)")
@@ -141,9 +143,13 @@ export YOLO_NO_LAUNCH_FLAGS
 # The harness argv is built in front of the harness arguments still sitting in "$@", so
 # they keep their own words and order with no re-quoting. `${session:+...}` adds the pair
 # only when there is a session id to pass.
+session_flag=--session-id
+if [ "${TILLR_SESSION_MODE:-new}" = resume ]; then
+    session_flag=--resume
+fi
 set -- claude -p --output-format stream-json --verbose \
     --model "$model" --effort "$effort" \
-    ${session:+--session-id} ${session:+"$session"} \
+    ${session:+"$session_flag"} ${session:+"$session"} \
     --strict-mcp-config --dangerously-skip-permissions \
     "$@"
 
@@ -153,4 +159,4 @@ if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
     set -- timeout "$wall" "$@"
 fi
 
-exec "$@" <"$brief" 2>"$err"
+exec "$@" <"$prompt" 2>"$err"

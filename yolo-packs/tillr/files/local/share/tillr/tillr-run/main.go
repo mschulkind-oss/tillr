@@ -41,6 +41,8 @@ func dispatch(args []string) int {
 	switch face {
 	case "exec":
 		return execFace(rest)
+	case "pause":
+		return pauseFace(rest)
 	case "request":
 		return requestFace(rest)
 	case "lanes":
@@ -52,6 +54,31 @@ func dispatch(args []string) int {
 	default:
 		return fail(run.Usagef("unknown face %q: want %s", face, faceList))
 	}
+}
+
+// pauseFace writes a durable request; the executor observes it independently.
+func pauseFace(args []string) int {
+	fs := newFlagSet("pause")
+	path := fs.String("store", "", "the store holding the run")
+	id := fs.String("run", "", "the live run to pause")
+	bound := fs.Int("pause-timeout-seconds", 120, "the straggler bound for an adapter that stops at a gap")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" || *id == "" || *bound <= 0 {
+		return fail(run.Usagef("pause needs --store <path>, --run <id> and a positive --pause-timeout-seconds"))
+	}
+	ctx := context.Background()
+	s, err := store.Open(ctx, *path, true)
+	if err != nil {
+		return fail(openFailure(err))
+	}
+	defer s.Close()
+	if err := run.RequestPause(ctx, s, *id, time.Duration(*bound)*time.Second, time.Now()); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("pause requested for %s\n", *id)
+	return record.ExitOK
 }
 
 // execFace runs one request and prints the record it produced.
@@ -426,7 +453,7 @@ func printRecord(env record.Envelope) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "exec, request, lanes, status or release"
+const faceList = "exec, pause, request, lanes, status or release"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

@@ -94,10 +94,39 @@ no run id, no shim, or a record directory that cannot be created means the emitt
 silently absent. The run's exit code, its streams and its candidate are never a function
 of whether recording worked.
 
+## Pausing and continuing
+
+Pause kind: `stops-where-it-stands`, declared in [`pause-kind`](./pause-kind).
+The runner sends SIGTERM, waits ten seconds, then kills any surviving process group.
+The same session receives a restart notice as its first continuation message.
+
+**Measured 2026-11-16:** Pi entered a bash tool call whose command was `sleep 60`;
+SIGTERM to the harness returned 143. Opening the same session returned 0 and answered
+`cedar-pause-6149`, the marker given before the signal, without that marker appearing
+in the continuation prompt. This measures the harness, not a model guarantee.
+The configured Bedrock Haiku model reached the tool; the earlier endpoint failure
+before a tool call measured nothing. Extensions, MCP, skills and context discovery
+were disabled to isolate the harness's persistence behavior.
+
+The command sequence, with a fresh UUID and writable session directory:
+
+```sh
+pi --offline --no-extensions --no-mcp --no-skills --no-context-files \
+    --no-prompt-templates --no-themes --print --mode json \
+    --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --thinking low \
+    --tools bash --session-dir "$DIR" --session-id "$UUID" \
+    'Remember the exact marker cedar-pause-6149. First call bash with the command sleep 60. After that command ends answer only READY. Do not use any other tools.'
+# Once tool_execution_start names bash with command sleep 60:
+kill -TERM "$HARNESS_PID"
+# Re-run the same flags, directory and UUID with this prompt instead:
+# The command was interrupted by a restart. Do not run tools. What exact marker
+# did I give you before the interruption? Answer only that marker.
+```
+
 ## Declared capabilities
 
 - **writes-tree:** yes.
-- **resumable:** no. Re-brief in the same worktree, as design [§5](../../../../docs/design/tillr-muse-backend.md#5-steering) rules.
+- **resumable:** yes. `--session-id` opens the existing session in the same worktree.
 - **write confinement: NOTHING beyond the boundary snapshot.** Pi offers no OS sandbox
   for its shell tool, so this adapter claims none and does not borrow the muse
   adapter's claim. `boundary.before`/`boundary.after` is Pi's whole boundary, and the

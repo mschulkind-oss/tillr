@@ -1145,6 +1145,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
+	if record.State == run.StatePaused {
+		// Pausing is not settlement: even an already committed tree belongs to
+		// the continuing session until it answers. Keep pending work running.
+		prepared = true
+		return laneOutcome{}
+	}
 	diagnostic, outputErr := runOutputTail(RunDir(l.cfg.Root, record.RunID))
 	if outputErr != nil {
 		return laneOutcome{err: outputErr}
@@ -1341,7 +1347,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 // segment committed nothing but may still have written to the worktree, and a resumed
 // segment has to answer for what it writes from where it actually starts.
 func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
-	if record.Resumed || ctx.Err() != nil {
+	if (record.Resumed && record.State != run.StatePaused) || ctx.Err() != nil {
 		return run.Record{}, "", "", nil
 	}
 	laneDir := l.laneDirPath(lane)
@@ -1372,7 +1378,11 @@ func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Req
 	l.mu.Lock()
 	result.Dispatched++
 	l.mu.Unlock()
-	l.reportf("loop: %s hit the wall before committing; continuing its session once on %s\n", request.ItemID, lane)
+	if record.State == run.StatePaused {
+		l.reportf("loop: continuing paused run %s on %s as the same attempt\n", request.RunID, lane)
+	} else {
+		l.reportf("loop: %s hit the wall before committing; continuing its session once on %s\n", request.ItemID, lane)
+	}
 	record, log, err := l.cfg.Steps.Run(ctx, resumed)
 	if err != nil {
 		return run.Record{}, "", "", err

@@ -19,7 +19,8 @@
 
 `tillr-run` executes one run request to a terminal run record under a caller-named lane
 root, and reads the lane and run state back. `exec` is the run itself; `request` builds the
-request; `lanes`, `status` and `release` inspect and clean up what a tick left behind.
+request; `pause` requests a restart interruption; `lanes`, `status` and `release` inspect
+and clean up what a tick left behind.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
@@ -55,6 +56,33 @@ tillr-run lanes
 staging pinned in the lane (`session-id`, which every adapter passes to its harness) is
 reused, so the provider's prefix cache is warm; and the run's log is appended to rather than
 truncated, because the killed segment's transcript is the evidence the resume continues.
+
+## Pausing a live run
+
+```sh
+tillr-run pause --store STORE --run RUN_ID --pause-timeout-seconds 120
+tillr-run exec --store STORE --lane-root LANES --input REQUEST --resume
+```
+
+`pause` appends a durable request. The executor gives the adapter a request-file
+path in `TILLR_PAUSE_REQUEST`; adapters that cannot stop at a tool-call gap also
+receive SIGTERM, with ten seconds before a process-group kill. A gap adapter is
+allowed to finish until the requested straggler bound, then its process group is
+killed. The first continuation message identifies an interrupted command and says
+it may be run again. `paused` is an attempt outcome, never a verdict or a retry.
+
+The adapter declares its kind beside its program in `pause-kind`, not in a backend
+policy. A missing or invalid declaration is refused before claiming the lane.
+The CLI always requires that declaration; the Go package's empty `BackendsDir`
+option is only for tests that execute raw commands without any adapter.
+
+A resumable adapter continues its session; a non-resumable one gets a fresh UUID
+in the same lane and worktree, plus a first prompt pointing to the prior run log,
+report when present, and uncommitted work. The staged brief is kept unchanged.
+Resume appends to the log and records `run.resume`, without allocating a second
+attempt. The drain retains the item's `running` position while paused, continues
+it on the next settlement pass, and only judges the completed candidate. Multiple
+pauses are permitted on that same attempt.
 
 ## Usage attribution
 

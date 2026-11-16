@@ -28,6 +28,9 @@ func backendWithExtractor(t *testing.T, body, exit string) (backends, adapter st
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("creating the backend directory failed: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "pause-kind"), []byte("stops-where-it-stands\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	adapter = filepath.Join(dir, "run-fixture")
 	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("writing the adapter failed: %v", err)

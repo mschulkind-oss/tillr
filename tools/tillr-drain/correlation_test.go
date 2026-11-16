@@ -17,7 +17,7 @@ import (
 func TestATickStampsTheCorrelationIdTheRunAllocateEventCarries(t *testing.T) {
 	const now = "2026-11-10T00:00:00Z"
 	storePath := fixture(t, itemRecord("item_042", "in-queue"))
-	tickPath := tick(t, now, []string{"lane-1"}, 1, policy(t, "/bin/true"))
+	tickPath := tick(t, now, []string{"lane-1"}, 1, policy(t, stub(t, "adapter", "exit 0")))
 	sink := filepath.Join(scratch(t, "sink"), "requests.json")
 
 	onceOK(t, storePath, tickPath, "record-sink", sink)

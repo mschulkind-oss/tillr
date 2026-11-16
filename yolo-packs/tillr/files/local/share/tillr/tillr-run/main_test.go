@@ -120,6 +120,40 @@ func envelope(t *testing.T, kind, id string, payload any) string {
 
 func input(t *testing.T, record string) string {
 	t.Helper()
+	// Raw command fixtures still use the production adapter preflight. Put the
+	// executable behind a symlink with a declaration rather than bypassing it.
+	var env map[string]json.RawMessage
+	if json.Unmarshal([]byte(record), &env) == nil {
+		var req request
+		if json.Unmarshal(env["payload"], &req) == nil && len(req.Command) > 0 {
+			dir := scratch(t, "declared-command")
+			target := req.Command[0]
+			if !filepath.IsAbs(target) {
+				if resolved, err := exec.LookPath(target); err == nil {
+					target, _ = filepath.Abs(resolved)
+				} else {
+					target = filepath.Join(dir, "missing-command")
+				}
+			}
+			// Keep argv[0]'s basename: /bin/true may be a multicall executable.
+			adapter := filepath.Join(dir, filepath.Base(req.Command[0]))
+			if err := os.Symlink(target, adapter); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "pause-kind"), []byte("stops-where-it-stands\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			req.Command[0] = adapter
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(env["payload"], &payload); err != nil {
+				t.Fatal(err)
+			}
+			payload["command"], _ = json.Marshal(req.Command)
+			env["payload"], _ = json.Marshal(payload)
+			body, _ := json.Marshal(env)
+			record = string(body)
+		}
+	}
 	path := filepath.Join(scratch(t, "input"), "request.json")
 	if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
 		t.Fatalf("writing the request failed: %v", err)

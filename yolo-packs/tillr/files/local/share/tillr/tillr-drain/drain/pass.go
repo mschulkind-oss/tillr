@@ -1013,7 +1013,20 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			}
 			if err == nil {
 				l.countSpend(local, *rec)
-				completion.outcome = l.settle(ctx, work.Decision, *rec, logTail(rec.ArtifactRefs), work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
+				log := logTail(rec.ArtifactRefs)
+				if rec.State == run.StatePaused {
+					resumed, resumedLog, stop, resumeErr := l.resumeAfterWall(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched)
+					if resumeErr != nil || stop != "" {
+						completion.outcome = laneOutcome{stop: stop, err: resumeErr}
+					} else if resumed.RunID == "" {
+						completion.outcome.err = Externalf("paused run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
+					} else {
+						rec, log = &resumed, resumedLog
+					}
+				}
+				if completion.outcome.err == nil && completion.outcome.stop == "" {
+					completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
+				}
 			} else {
 				completion.outcome.err = err
 			}
