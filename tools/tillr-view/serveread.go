@@ -293,6 +293,26 @@ func readItem(r *store.Reader, itemID string) (storeItem, bool, error) {
 	if it.AllowedPaths, err = decodeAllowedPaths(paths); err != nil {
 		return storeItem{}, false, fmt.Errorf("item %s: %w", itemID, err)
 	}
+	if it.State == "blocked" {
+		var raw string
+		err := r.QueryRow(`SELECT COALESCE(waiting_on, '') FROM items WHERE item_id = ?`, itemID).Scan(&raw)
+		if isMissingColumn(err) {
+			return it, true, nil // Legacy stores did not record structured waiters.
+		}
+		if err != nil {
+			return storeItem{}, false, err
+		}
+		if raw != "" {
+			var waiting struct {
+				Waiter string `json:"waiter"`
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal([]byte(raw), &waiting); err != nil {
+				return storeItem{}, false, fmt.Errorf("item %s blocked metadata: %w", itemID, err)
+			}
+			it.Waiter, it.WaitingReason = waiting.Waiter, waiting.Reason
+		}
+	}
 	return it, true, nil
 }
 
@@ -311,6 +331,59 @@ func readCriteria(r *store.Reader, itemID string) ([]storeCriterion, error) {
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// readItemVerdicts reads the event log, where the verdict writer stores authorship.
+// Sequence order retains repeated judgments of the same criterion.
+func readItemVerdicts(r *store.Reader, itemID string) ([]verdictView, error) {
+	rows, err := r.Query(`SELECT payload, ts FROM events
+		WHERE kind = 'item.verdict' AND object_type = 'item' AND object_id = ? ORDER BY seq`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []verdictView{}
+	for rows.Next() {
+		var payload string
+		var ts int64
+		if err := rows.Scan(&payload, &ts); err != nil {
+			return nil, err
+		}
+		var v verdictView
+		if err := json.Unmarshal([]byte(payload), &v); err != nil {
+			return nil, err
+		}
+		if v.RecordedAt == "" {
+			v.RecordedAt = time.UnixMilli(ts).UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// readClosedBlockers names abandoned prerequisites; a landed item is not an alarm.
+func readClosedBlockers(r *store.Reader, itemID, waiter string) ([]string, error) {
+	waiterID := ""
+	if strings.HasPrefix(waiter, "item:") {
+		waiterID = strings.TrimPrefix(waiter, "item:")
+	}
+	// Reading items once also deduplicates a waiter recorded as an edge as well.
+	rows, err := r.Query(`SELECT item_id FROM items WHERE state = 'closed'
+		AND (item_id IN (SELECT blocked_by FROM item_edges WHERE item_id = ?) OR item_id = ?)
+		ORDER BY item_id`, itemID, waiterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

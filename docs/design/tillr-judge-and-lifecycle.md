@@ -363,11 +363,7 @@ The queue row `item-decided-by-autoqa` asks for the opposite of this block. Clos
 
 A verdict is only as good as whoever recorded it, and the observatory does not say who that was. A reader cannot tell a criterion the gate retired from one a judge ruled on or one the owner signed. Once AutoQA records under the ordinary kinds, its name in the actor field is the only thing that marks its verdicts, so the page has to show that field. This block puts the author on the page and adds the one alarm the state model asks for: an item waiting on something that has been closed.
 
-<!-- tillr: item id="item-jl-view-verdict-actor" paths="tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** The item page lists each verdict with its criterion, verdict, actor, actor kind, claim class and time, and the view's API returns the same fields. A test renders an item holding a mechanical, an agent and a human verdict.
-- **c2:** A verdict that has no actor recorded shows `not recorded`, never an empty cell.
-- **c3:** An item that is blocked by an item in the `closed` state shows one alarm line that names the closed item. A test asserts the line appears, and that it does not appear when the blocker is `landed`.
 
 ### Add one intake for a judge's written verdicts
 

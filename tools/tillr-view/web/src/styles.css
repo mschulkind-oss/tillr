@@ -1833,6 +1833,7 @@ kbd {
 }
 
 .exchanges__table,
+.verdicts__table,
 .waterfall__table {
   width: 100%;
   border-collapse: collapse;
@@ -1840,6 +1841,7 @@ kbd {
 }
 
 .exchanges__table th,
+.verdicts__table th,
 .waterfall__table th {
   position: sticky;
   top: 0;
@@ -1856,6 +1858,7 @@ kbd {
 }
 
 .exchanges__table td,
+.verdicts__table td,
 .waterfall__table td {
   padding: var(--s1);
   border-bottom: 1px solid var(--line);

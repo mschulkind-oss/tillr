@@ -1025,11 +1025,23 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
-	Item      itemDetail      `json:"item"`
-	Criteria  []criterionView `json:"criteria"`
-	BlockedBy []string        `json:"blocked_by"`
-	Decisions []dispatchView  `json:"decisions"`
-	Attempts  []attemptView   `json:"attempts"`
+	Item           itemDetail      `json:"item"`
+	Criteria       []criterionView `json:"criteria"`
+	BlockedBy      []string        `json:"blocked_by"`
+	Decisions      []dispatchView  `json:"decisions"`
+	Attempts       []attemptView   `json:"attempts"`
+	Verdicts       []verdictView   `json:"verdicts"`
+	ClosedBlockers []string        `json:"closed_blockers"`
+}
+
+// verdictView preserves each recorded judgment, not just the criterion's current state.
+type verdictView struct {
+	CriterionID string `json:"criterion_id"`
+	Verdict     string `json:"verdict"`
+	Actor       string `json:"actor"`
+	ActorKind   string `json:"actor_kind"`
+	ClaimClass  string `json:"claim_class"`
+	RecordedAt  string `json:"recorded_at"`
 }
 
 type itemDetail struct {
@@ -1080,10 +1092,19 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	out := itemData{
 		Item: itemDetail{ItemID: it.ItemID, Title: it.Title, BodyRef: it.BodyRef,
 			DesignDoc: it.DesignDoc, AllowedPaths: it.AllowedPaths, Rank: it.Rank},
-		Criteria:  []criterionView{},
-		BlockedBy: []string{},
-		Decisions: []dispatchView{},
-		Attempts:  []attemptView{},
+		Criteria:       []criterionView{},
+		BlockedBy:      []string{},
+		Decisions:      []dispatchView{},
+		Attempts:       []attemptView{},
+		ClosedBlockers: []string{},
+	}
+	out.Verdicts, err = readItemVerdicts(r, id)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	out.ClosedBlockers, err = readClosedBlockers(r, id, it.Waiter)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	criteria, _ := readCriteria(r, id)
 	for _, c := range criteria {

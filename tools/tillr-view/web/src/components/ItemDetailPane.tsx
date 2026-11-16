@@ -286,7 +286,14 @@ export function ItemDetailPane({
           <Facts detail={detail} latestRun={latestRun} updatedAtMs={updatedAtMs} />
 
           {state === "blocked" ? (
-            <WhyBlocked projection={detail.projected_state} blockedBy={item.blocked_by} />
+            <>
+              <WhyBlocked projection={detail.projected_state} blockedBy={item.blocked_by} />
+              {item.closed_blockers.length > 0 ? (
+                <p role="alert" className="notice notice--blocked">
+                  Blocked by closed item{item.closed_blockers.length === 1 ? "" : "s"}: {item.closed_blockers.join(", ")}.
+                </p>
+              ) : null}
+            </>
           ) : null}
 
           <Section title="Fence" note={fence.length === 0 ? "no path is allowed" : undefined}>
@@ -320,6 +327,34 @@ export function ItemDetailPane({
                   <Criterion key={criterion.criterion_id} criterion={criterion} />
                 ))}
               </ul>
+            )}
+          </Section>
+
+          <Section title="Verdicts">
+            {item.verdicts.length === 0 ? (
+              <p className="empty">the store records no verdict for this item</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table aria-label="Verdicts" className="verdicts__table">
+                  <thead>
+                    <tr>{["Criterion", "Verdict", "Actor", "Actor kind", "Claim class", "Time"].map(label => (
+                      <th scope="col" key={label}>{label}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {item.verdicts.map((verdict, index) => (
+                      <tr key={index}>
+                        <td>{verdict.criterion_id}</td>
+                        <td>{verdict.verdict}</td>
+                        <td>{verdict.actor.trim() || "not recorded"}</td>
+                        <td>{verdict.actor_kind}</td>
+                        <td>{verdict.claim_class}</td>
+                        <td><time dateTime={verdict.recorded_at}>{verdict.recorded_at}</time></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </Section>
 
