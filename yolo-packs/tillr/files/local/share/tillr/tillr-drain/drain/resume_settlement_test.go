@@ -93,7 +93,7 @@ func continuationDispatchFixture(t *testing.T, command string, orphaned bool) (r
 	writeForkFile(t, filepath.Join(dir, BriefFile), "continue this attempt\n")
 	writeForkFile(t, filepath.Join(dir, SessionIDFile), "33b5f2d2-0cd4-4a49-b293-c58f5635561f\n")
 	plan := mustPlan(t, l)[0]
-	plan.decision.RunRequest.Command = []string{"sh", "-c", command}
+	plan.decision.RunRequest.Command = []string{continuationShell(t), "-c", command}
 	ok, _, err := l.applyPlan(context.Background(), plan, base, l.cfg.Now())
 	if err != nil || !ok {
 		t.Fatalf("dispatch: %v / %v", ok, err)
@@ -129,7 +129,7 @@ func TestResumeReopensExaminedAttemptAndSettlesOnce(t *testing.T) {
 				t.Fatalf("first segment not examined without judgment: %+v", before)
 			}
 			req := *d.RunRequest
-			req.Command = []string{"sh", "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
+			req.Command = []string{continuationShell(t), "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
 			steps.at = steps.at.Add(time.Second)
 			resumed, err := Resume(context.Background(), ResumeConfig{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Steps: steps, Now: func() time.Time { return steps.at }}, ResumeSpec{RunID: req.RunID, Request: &req})
 			if err != nil || !resumed.Run.Resumed {
@@ -230,7 +230,7 @@ func TestResumeMultipleInterruptedSegmentsAndReplay(t *testing.T) {
 		}
 	}
 	req := *d.RunRequest
-	req.Command = []string{"sh", "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
+	req.Command = []string{continuationShell(t), "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
 	steps.at = steps.at.Add(time.Second)
 	if _, err := Resume(context.Background(), cfg, ResumeSpec{RunID: req.RunID, Request: &req}); err != nil {
 		t.Fatal(err)
