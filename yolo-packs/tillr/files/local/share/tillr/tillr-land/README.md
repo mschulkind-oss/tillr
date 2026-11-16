@@ -31,6 +31,11 @@ The design that splits this surface into `--help`, this README and the compositi
 - **The trunk moves only through a landing, and only for a verdict that passed.** A landing
   with no verdict behind it is refused; the record is the authority for the decision, not
   the caller's word for it.
+- **The owner's disposition is checked immediately before landing.** An item stored as
+  `closed` or `resolved-elsewhere` is refused as `item-not-landable`, even if its gate
+  already passed. The store write lock covers this check, the trunk move, and the
+  receipt, so a concurrent close either prevents the move or sees the successful
+  landing receipt and refuses. Standalone stores with no item table remain usable.
 - **One landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
   with the repository's scope-checked identity and the head's own message. The commit

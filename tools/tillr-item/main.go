@@ -55,6 +55,8 @@ func run(args []string) int {
 		env, code = showFace(rest)
 	case "state":
 		env, code = stateFace(rest)
+	case "close", "reopen":
+		env, code = lifecycleFace(face, rest)
 	case "decision":
 		env, code = decisionFace(rest)
 	case "mail":
@@ -328,6 +330,36 @@ func stateFace(args []string) (record.Envelope, int) {
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
 		return item.SetState(ctx, tx, *id, *state, at.UTC(), item.WaitingOn{Waiter: *waiter, Reason: *reason})
+	})
+}
+
+// lifecycleFace records an explicit owner disposition with its reason and actor.
+func lifecycleFace(verb string, args []string) (record.Envelope, int) {
+	fs := newFlagSet(verb)
+	path := fs.String("store", "", "the store to write")
+	id := fs.String("item", "", "the item to "+verb)
+	reason := fs.String("reason", "", "why the item is being "+verb+"d")
+	by := fs.String("by", "", "who requests the transition")
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: wall clock)")
+	if err := parseFlags(fs, args); err != nil {
+		return record.Envelope{}, fail(err)
+	}
+	if *path == "" || *id == "" {
+		return record.Envelope{}, fail(item.Usagef("%s needs --store <path> and --item <id>", verb))
+	}
+	at := time.Now().UTC()
+	if *now != "" {
+		parsed, err := time.Parse(time.RFC3339, *now)
+		if err != nil {
+			return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+		}
+		at = parsed.UTC()
+	}
+	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
+		if verb == "close" {
+			return item.Close(ctx, tx, *id, *reason, *by, at)
+		}
+		return item.Reopen(ctx, tx, *id, *reason, *by, at)
 	})
 }
 
@@ -688,7 +720,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, seed, sync, show, state, decision, mail, grant or verdict"
+const faceList = "apply, seed, sync, show, state, close, reopen, decision, mail, grant or verdict"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

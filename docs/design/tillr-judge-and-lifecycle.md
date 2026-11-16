@@ -347,13 +347,7 @@ The board's two "finished" states are claims about the world. `landed` claims th
 
 Sometimes the right answer to an item is "not doing this". The store has a `closed` state for that, but no command that records why an item was closed, who closed it, or what state it was in, so a closed item cannot be reopened to where it was. Nothing stops a candidate for a closed item from landing either. This block adds the two commands, keeps what a reopen needs, and makes the lander refuse work for an item that is no longer wanted. An item that has already landed cannot be closed: the landing wins.
 
-<!-- tillr: item id="item-jl-close-and-reopen" paths="tools/tillr-item/,tools/tillr-land/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item close --item <id> --reason <text> --by <who>` closes an item that is `not-started`, `in-queue` or `blocked`, and stores the reason, the time, who closed it and the state it was in. With no reason it is refused as `close-reason-missing`. An item that has a landing record is refused as `already-landed`.
-- **c2:** `tillr item state` refuses a move into `closed` and a move out of it, and each refusal names the command to use.
-- **c3:** `tillr item reopen --item <id> --reason <text> --by <who>` puts a closed item back in the state it was closed from. An item closed while blocked comes back blocked, with its waiter and reason. A test covers all three starting states.
-- **c4:** `tillr-land pass` refuses a candidate whose item is `closed` or `resolved-elsewhere` as `item-not-landable` and does not move the trunk. A test closes an item between its gate and its landing.
-- **c5:** `tillr item sync` does not reopen a closed item whose block is still in a document. A test syncs twice around a close and asserts the state.
 
 ### Move AutoQA onto the ordinary verdict kinds
 
@@ -410,7 +404,7 @@ The gate proves the tree is healthy. It does not prove the change is what the it
 
 A judge can find more than "not yet done". It can find that a criterion cannot be judged until someone answers a question, or that the item's premise is false and no amount of work will satisfy it. Both are worth more than a failed attempt, because they say who must act. A blocked finding sends the item to the seat that can answer. A defective finding is a ruling: it is recorded, and the item is closed with the judge's reason, so the queue stops spending on work that was wrong from the start. This block finishes the judge step with those two outcomes.
 
-<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-before-gate,item-jl-close-and-reopen" prose="2" -->
+<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-before-gate" prose="2" -->
 
 - **c1:** When the judge's outcome is `blocked`, the item is moved to blocked with the waiter and the reason from the judge's entry. No verdict is recorded and the gate does not run.
 - **c2:** When the outcome is `defective`, the judge's verdicts are recorded through the intake and the item is closed with the reason `defective: <criterion>: <reason>`. The gate does not run and the lane is freed. A test asserts the trunk did not move.
