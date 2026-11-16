@@ -44,7 +44,7 @@ func whyFace(args []string) int {
 	if *path == "" {
 		return fail(drain.Usagef("why needs --store <path>"))
 	}
-	policy, err := drain.LoadPolicy(*policyRef)
+	policy, err := drain.EffectivePolicy(*root, *policyRef)
 	if err != nil {
 		return fail(err)
 	}

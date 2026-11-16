@@ -83,7 +83,8 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 }
 
 func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, string, bool, error) {
-	next, degraded, ok := l.cfg.Policy.nextBackend(failed, seat)
+	policy := l.currentPolicy()
+	next, degraded, ok := policy.nextBackend(failed, seat)
 	if !ok {
 		return nil, "", false, nil
 	}
@@ -97,14 +98,14 @@ func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, 
 	if err != nil {
 		return nil, "", false, err
 	}
-	next, left, ok := l.cfg.Policy.availableBackend(next, seat, shut)
+	next, left, ok := policy.availableBackend(next, seat, shut)
 	if !ok {
 		return nil, "", false, nil
 	}
 	if left != "" {
 		degraded = left
 	}
-	return l.cfg.Policy.request(itemID, laneID, runID, next), degraded, true, nil
+	return policy.request(itemID, laneID, runID, next), degraded, true, nil
 }
 
 func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
