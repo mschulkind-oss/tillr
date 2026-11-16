@@ -87,6 +87,8 @@ type server struct {
 	// the index through a fresh reader per request, so an answer written while the board
 	// runs is seen on the next read rather than after a restart.
 	questionsCmd []string
+	policyRef    string
+	offeredLanes string
 	// web is the built front end, or nil when this binary carries none. It is served at
 	// `/` and never at `/api/v1/`, so the API's route set stays closed.
 	web fs.FS
@@ -154,6 +156,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	webDist := fs.String("web-dist", "", "a directory of built front-end assets to serve (default: the assets embedded under the observatory build tag, if any)")
 	uiAt := fs.String("ui-at", "", "this process serves the API only and another one has the UI; a short name for it, so the board can say where its own interface is (e.g. vite)")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
+	policyRef := fs.String("policy", "", "the loop's policy file for /why; absent means no-policy")
+	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop for /why (default: all store lanes)")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -163,6 +167,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	ctx := context.Background()
 	srv := newServer(ctx, *storePath, *loopDir, *laneRoot, *index, *root, vantageBaseURL(*vantageURL), commandFields(*questionsCmd))
 	defer srv.close()
+	srv.policyRef = *policyRef
+	srv.offeredLanes = *lanesArg
 	web, webNote, code := openWebAssets(*webDist, *uiAt)
 	if code != record.ExitOK {
 		return record.Envelope{}, code
@@ -257,6 +263,7 @@ func (s *server) close() {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/snapshot", s.get(s.snapshotPayload))
+	mux.HandleFunc("GET /api/v1/why", s.get(s.whyPayload))
 	mux.HandleFunc("GET /api/v1/waiting", s.get(s.waitingPayload))
 	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))
@@ -295,7 +302,7 @@ func (s *server) routes() http.Handler {
 	// the index page: a client that receives HTML where it expected JSON would read a
 	// routing bug as a data bug.
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, req *http.Request) {
-		f := failure(codeUnknownRoute, "%q is not a route this face serves: the routes are /api/v1/snapshot, /api/v1/waiting, /api/v1/passes, /api/v1/questions, /api/v1/perf/checks, /api/v1/perf/items, /api/v1/checks/{id}, /api/v1/items/{id}, /api/v1/runs/{id} and its children, /api/v1/landings and /api/v1/landings/{id}, and /api/v1/ws", req.URL.Path)
+		f := failure(codeUnknownRoute, "%q is not a route this face serves: the routes are /api/v1/why, /api/v1/snapshot, /api/v1/waiting, /api/v1/passes, /api/v1/questions, /api/v1/perf/checks, /api/v1/perf/items, /api/v1/checks/{id}, /api/v1/items/{id}, /api/v1/runs/{id} and its children, /api/v1/landings and /api/v1/landings/{id}, and /api/v1/ws", req.URL.Path)
 		f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase}
 		writeJSON(w, f.status, *f)
 	})
@@ -415,6 +422,12 @@ func (s *server) get(fn payloadFunc) http.HandlerFunc {
 				VantageBaseURL:   s.vantageBase,
 			}
 			data, fail = fn(r, req)
+			// /why is planned in the drain process's own pinned read transaction.
+			// Its cursor belongs to that answer, not this earlier wrapper read.
+			if planned, ok := data.(whyPayloadData); ok {
+				cursor.EventHeadSeq = planned.head
+				data = planned.raw
+			}
 			return nil
 		})
 		if err != nil {

@@ -218,6 +218,33 @@ reusing it hands one item's transcript to the next. The one caller that keeps a 
 `resume`, which names the id it continues — that is what makes a continuation a continuation
 rather than a cold start.
 
+## Ask the planner why
+
+```sh
+tillr drain why --store /path/to/.tillr/state.db --policy /path/to/policy.json --lanes lane-1,lane-2
+tillr drain why <item-id> --store /path/to/.tillr/state.db --policy /path/to/policy.json
+```
+
+`why` runs the same planner as `plan` without a pass input file, writes nothing,
+prints rank, item id, position, reason, and mover for every item not stored as
+`landed`, and ends with a summary. Naming an item prints its full explanation,
+including the planner decision. `--json` gives rows and summary as one object,
+or the selected item's record alone. The JSON answer also carries the event
+sequence at which the planner read the store.
+
+A mover is the question, blocking item, run, lane, or operator action that can
+advance the item. The summary partitions the rows into running items, items the
+next pass could advance, and holds counted by reason. Busy lanes include unfinished
+candidate examinations, not just live leases. Capacity is consumed in rank order,
+so an earlier predicted dispatch can leave a later item waiting on a lane.
+Closed and resolved-elsewhere items remain visible with no further work required.
+
+Use the loop's policy and lane offers to reproduce its next decision: those inputs
+are not retained in the store. With no policy, readiness is held as `no-policy`,
+not assigned a guessed backend. With no lane list, the planner offers every lane
+in the store. The default clock is the current time; `--now` supplies a fixed
+observation time. Document questions use the same root and index command as `plan`.
+
 ## Standalone invocation
 
 ```sh

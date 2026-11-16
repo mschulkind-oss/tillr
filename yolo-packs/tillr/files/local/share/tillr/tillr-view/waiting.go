@@ -100,6 +100,9 @@ func waitingFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("waiting")
 	path := fs.String("store", "", "the store to read (required)")
 	asJSON := fs.Bool("json", false, "print the waiting rows as JSON instead of a table")
+	history := fs.Bool("history", false, "read recorded decisions instead of the current planner (also supports older stores)")
+	policyRef := fs.String("policy", "", "the loop's policy file; absent means no-policy")
+	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop (default: all store lanes)")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	if code := parseFlags(fs, args); code != record.ExitOK {
@@ -110,7 +113,13 @@ func waitingFace(args []string) (record.Envelope, int) {
 	}
 	ctx := context.Background()
 	questions := &vantage.VantageQuestions{Root: *root, Command: commandFields(*questionsCmd), Context: ctx}
-	rows, err := readWaiting(ctx, *path, questions)
+	var rows []waitingRow
+	var err error
+	if *history {
+		rows, err = readWaiting(ctx, *path, questions)
+	} else {
+		_, rows, err = plannerWhy(ctx, *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
+	}
 	if err != nil {
 		var mismatch schemaMismatch
 		if errors.As(err, &mismatch) {

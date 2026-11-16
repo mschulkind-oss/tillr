@@ -134,11 +134,35 @@ refuse the read explicitly instead of inventing a stop.
 
 ## Why each unlanded item is not moving
 
-`waiting` prints one row per item except those stored as `landed`, `closed`, or
-`resolved-elsewhere`. The columns are rank, item id, class, where, why, mover, and since,
-ordered by queue rank with unranked items last. Its JSON output and the served
-`GET /api/v1/waiting` use the same row objects; the API places the array in its usual
-`data` field beside the read transaction's snapshot.
+`waiting` reads the current planner through `tillr-drain why`, as does
+`GET /api/v1/why`. The observatory's Home and Items screens use that route for
+class, reason, and mover, including items no loop pass has ever considered.
+The route's `data` object carries `rows`, `summary`, and the planner's event
+sequence; its response snapshot uses that same sequence. Each row includes the
+full planner decision. No readiness rules are duplicated in the view utility.
+
+The read-only drain binary must be on PATH. A missing binary, invalid policy,
+or incompatible store produces an explicit refusal, never a historical answer
+presented as current. Each request starts one planner process and reads the
+current document index; it does not migrate the store or write decisions.
+
+Configure `waiting` and `serve` with the loop's `--policy` and `--lanes` inputs.
+These inputs are not retained in the store: absent policy means `no-policy`,
+and absent lanes means all store lanes are offered. `waiting --json` prints the
+presentation rows; the API also carries the summary and full decisions.
+`since` reads `current plan`, not an invented historical start time.
+See [the drain's why guide](../tillr-drain/README.md#ask-the-planner-why) for
+summary accounting and the per-item command.
+
+### Recorded-decision history
+
+`waiting --history` retains the recorded-decision view, as does
+`GET /api/v1/waiting`. It prints one row per item except those stored as
+`landed`, `closed`, or `resolved-elsewhere`. The columns are rank, item id,
+class, where, why, mover, and since, ordered by queue rank with unranked items
+last. Its JSON output and the historical API use the same row objects; the API
+places the array in its usual `data` field beside the read transaction's snapshot.
+
 
 The classes are `needs you`, `waits on work`, `needs a cause`, `ready`, `moving`, and
 `unclassified`. The store does not record a class yet, so every row carries

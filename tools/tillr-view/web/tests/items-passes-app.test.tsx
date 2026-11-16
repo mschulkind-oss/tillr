@@ -12,13 +12,13 @@ test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than th
   let arrived = false;
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    const data: unknown = path === "/api/v1/snapshot" ? snapshotData : path === "/api/v1/waiting" ? [{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "today", class_source: "rule" }] : path === "/api/v1/passes" ? [{ dispatched_at_ms: 1000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }] }] : null;
+    const data: unknown = path === "/api/v1/snapshot" ? snapshotData : path === "/api/v1/why" ? [{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "today", class_source: "rule" }] : path === "/api/v1/passes" ? [{ dispatched_at_ms: 1000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }] }] : null;
     if (data === null) throw new Error(`Unexpected route: ${path}`);
     if (arrived && Array.isArray(data)) {
-      if (path === "/api/v1/waiting") data.unshift({ ...data[0], item_id: "item-new", rank: "0" });
+      if (path === "/api/v1/why") data.unshift({ ...data[0], item_id: "item-new", rank: "0" });
       if (path === "/api/v1/passes") data.unshift({ dispatched_at_ms: 2000, decisions: [{ item_id: "item-new", rank: "0", action: "hold", reason: "blocked" }] });
     }
-    return new Response(JSON.stringify(envelope(data)));
+    return new Response(JSON.stringify(envelope(path === "/api/v1/why" ? { rows: data, summary: {} } : data)));
   });
   vi.stubGlobal("fetch", fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -39,5 +39,5 @@ test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than th
   fireEvent.keyDown(window, { key: "j" });
   expect(window.location.hash).toBe(hash);
   expect(view.container.querySelector('[data-focused="true"]')).toBeTruthy();
-  expect(fetch.mock.calls.every(([path]) => ["/api/v1/snapshot", "/api/v1/waiting", "/api/v1/passes"].includes(String(path)))).toBe(true);
+  expect(fetch.mock.calls.every(([path]) => ["/api/v1/snapshot", "/api/v1/why", "/api/v1/passes"].includes(String(path)))).toBe(true);
 });

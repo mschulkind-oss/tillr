@@ -54,7 +54,10 @@ async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<
 export const fetchLandings = (signal?: AbortSignal) => read<LandingsData>("/api/v1/landings", signal);
 export const fetchLanding = (id: string, signal?: AbortSignal) => read<LandingRow>(`/api/v1/landings/${encodeURIComponent(id)}`, signal);
 
-export const fetchWaiting = (signal?: AbortSignal) => read<WaitingRow[]>("/api/v1/waiting", signal);
+export const fetchWaiting = async (signal?: AbortSignal) => {
+  const answer = await read<{ rows: WaitingRow[] }>("/api/v1/why", signal);
+  return { ...answer, data: answer.data.rows };
+};
 export const fetchPasses = (signal?: AbortSignal) => read<PassRow[]>("/api/v1/passes", signal);
 
 /** The API returns at most 50 rows, with an exclusive `before` cursor. Cover a bounded
