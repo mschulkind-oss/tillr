@@ -30,12 +30,15 @@ func init() {
 	}
 }
 
-// The three results a verdict and each of its checks can carry. `error` is not a shade of
-// `fail`: it means the check could not be run, so the candidate was not judged.
+// The three overall verdict results. Checks can also carry ResultOverBudget.
+// `error` is not a shade of `fail`: the check could not judge the candidate.
 const (
 	ResultPass  = "pass"
 	ResultFail  = "fail"
 	ResultError = "error"
+	// ResultOverBudget means a fast tree check must be judged by the heavy run.
+	// It is neither a pass that can be remembered nor a candidate failure.
+	ResultOverBudget = "over-budget"
 )
 
 // VerdictCheck is one check's outcome as the verdict carries it: what ran, how it came
@@ -226,9 +229,17 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.LogRef = logPath
 
 	ctx := context.Background()
-	if check.TimeoutMS > 0 {
+	deadlineMS := check.TimeoutMS
+	if check.Tier == "fast" {
+		deadlineMS = check.BudgetMS
+		if deadlineMS <= 0 {
+			fmt.Fprintln(logFile, "fast check requires a positive budget_ms; no verdict")
+			return outcome
+		}
+	}
+	if deadlineMS > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(check.TimeoutMS)*time.Millisecond)
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(deadlineMS)*time.Millisecond)
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, check.Command[0], check.Command[1:]...)
@@ -250,7 +261,14 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.DurationMS = time.Since(started).Milliseconds()
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		if check.Tier == "heavy" {
+		if check.Tier == "fast" {
+			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d; deferred judgment\n", check.CheckID, check.BudgetMS)
+			if check.Scope == "tree" {
+				outcome.Result = ResultOverBudget
+			} else {
+				outcome.Result = ResultError
+			}
+		} else if check.Tier == "heavy" {
 			// A heavy declaration's timeout is a limit on the judge, not a
 			// completed negative judgment about the candidate.
 			fmt.Fprintf(logFile, "check %q exceeded timeout_ms %d; no verdict\n", check.CheckID, check.TimeoutMS)
@@ -264,7 +282,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 		if !errors.As(waitErr, &exitErr) {
 			return outcome
 		}
-		if check.Scope == "change" && exitErr.ExitCode() == record.ExitExternal {
+		if (check.Scope == "change" || check.Scope == "tree") && exitErr.ExitCode() == record.ExitExternal {
 			outcome.Result = ResultError
 		} else {
 			outcome.Result = ResultFail

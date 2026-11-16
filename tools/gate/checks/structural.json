@@ -1,0 +1,19 @@
+{
+  "id": "structural",
+  "label": "Whole-tree structural check",
+  "command": [
+    "sh",
+    "tests/pi-patch-series.test.sh"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 850,
+  "remember": false,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "sh",
+    "git"
+  ]
+}

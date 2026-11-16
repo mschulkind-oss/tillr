@@ -346,7 +346,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### A change to the gate's own runner lands only after the runner's suite passes
 
-<!-- tillr: item id="item-gate-runner-pays-first" paths="tools/gate/,tools/tillr-loop/,tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="item-gate-fast-tier" -->
+<!-- tillr: item id="item-gate-runner-pays-first" paths="tools/gate/,tools/tillr-loop/,tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** A candidate that changes a path under the runner's own directory has the runner's suite added to its landing checks, whatever `landing_strategy` says, and does not land while that suite is red.
 - **c2:** The same holds for `tools/fork-check.py` and its suite for as long as that file exists.

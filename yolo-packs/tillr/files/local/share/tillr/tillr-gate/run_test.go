@@ -12,6 +12,9 @@ import (
 // about; the rest are the zero value, which is what a plan that carries nothing extra
 // looks like.
 type planCheck struct {
+	Scope     string            `json:"scope,omitempty"`
+	BudgetMS  int               `json:"budget_ms,omitempty"`
+	Remember  *bool             `json:"remember,omitempty"`
 	CheckID   string            `json:"check_id"`
 	Command   []string          `json:"command"`
 	TimeoutMS int               `json:"timeout_ms"`

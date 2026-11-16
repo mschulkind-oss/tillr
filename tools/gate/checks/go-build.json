@@ -1,0 +1,18 @@
+{
+  "id": "go-build",
+  "label": "Whole-tree go-build check",
+  "command": [
+    "python3",
+    "tools/gate/checks/go-build.py"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 2700,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "python3",
+    "go"
+  ]
+}

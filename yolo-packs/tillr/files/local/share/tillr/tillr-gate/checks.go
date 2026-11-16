@@ -11,7 +11,8 @@ import (
 )
 
 // checksFace judges declaration-file change checks using only the caller's range.
-// It opens no store, and tree checks remain the responsibility of the other faces.
+// The adapter can include fast tree declarations in the same verdict; heavy tree
+// checks remain the responsibility of the heavy runner.
 func checksFace(args []string) int {
 	flags := flag.NewFlagSet("checks", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -19,6 +20,7 @@ func checksFace(args []string) int {
 	head := flags.String("head", "", "head commit (required)")
 	root := flags.String("worktree", ".", "checkout containing the change")
 	directory := flags.String("checks", "tools/gate/checks", "declaration directory")
+	fastTree := flags.Bool("fast-tree", false, "include fast tree declarations alongside change checks")
 	logs := flags.String("logs", "", "check log directory (required)")
 	if code, answered := parseFlags(flags, args); answered {
 		return code
@@ -59,7 +61,7 @@ func checksFace(args []string) int {
 	}
 	changes := registry.Declarations[:0]
 	for _, check := range registry.Declarations {
-		if check.Scope == "change" {
+		if check.Scope == "change" || *fastTree && check.Scope == "tree" && check.Tier == "fast" {
 			changes = append(changes, check)
 		}
 	}

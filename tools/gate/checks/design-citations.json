@@ -1,0 +1,18 @@
+{
+  "id": "design-citations",
+  "label": "Whole-tree design-citations check",
+  "command": [
+    "python3",
+    "tools/gate/checks/design-citations.py"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 500,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "python3",
+    "git"
+  ]
+}
