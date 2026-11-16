@@ -252,8 +252,9 @@ func TestABoundaryViolationIsRecordedAsAnEvent(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", escapingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_081", "in-queue"))
 	t.Setenv("GATE_ROOT", f.root)
+	t.Setenv("ESCAPE_LANE", filepath.Join(f.laneRoot, "lane-2", "worktree"))
 	gate := stub(t, "gate", judgingGate)
-	loop := f.newLoop(t, 1, f.steps(t, gate, always(t, "land", 0), always(t, "verdict", 0)))
+	loop := f.newLoop(t, 2, f.steps(t, gate, always(t, "land", 0), always(t, "verdict", 0)))
 	result, err := loop.Run(context.Background())
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
@@ -283,7 +284,7 @@ func TestABoundaryViolationIsRecordedAsAnEvent(t *testing.T) {
 
 // escapingAdapter commits its candidate and then writes outside its worktree, which is the
 // one thing the bracket exists to catch.
-const escapingAdapter = counting + committingAdapterBody + `echo escape > "$GATE_ROOT/escape.txt"
+const escapingAdapter = counting + committingAdapterBody + `echo escape > "$ESCAPE_LANE/escape.txt"
 printf 'RESULT: done\n'
 `
 

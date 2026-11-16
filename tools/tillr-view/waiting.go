@@ -29,6 +29,7 @@ type waitingRow struct {
 	Why         string `json:"why"`
 	Mover       string `json:"mover"`
 	Since       string `json:"since"`
+	Waited      string `json:"waited"`
 	ClassSource string `json:"class_source"`
 }
 
@@ -67,6 +68,7 @@ var waitingRules = map[string]waitingRule{
 	"question-open":                  {"needs you", "queue", "question not recorded"},
 	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
+	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
 	"trunk-broken":                   {"waits on work", "trunk", "cause not recorded"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
@@ -82,6 +84,9 @@ func waitingRuleFor(reason string) waitingRule {
 	}
 	// Drain appends the seat/backend to this one reason. Preserve the full reason
 	// in Why and recognize only the declared prefix, never arbitrary new reasons.
+	if strings.HasPrefix(reason, "trunk-path-dirty: ") {
+		return waitingRules["trunk-path-dirty"]
+	}
 	if strings.HasPrefix(reason, "inputs-changed: ") {
 		return waitingRules["inputs-changed"]
 	}
@@ -318,6 +323,17 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource) ([]waiti
 		if active != nil {
 			row.Class, row.Where, row.Mover = "moving", "lane", active.RunID
 		}
+		if row.Class == "waits on work" && strings.HasPrefix(row.Why, "trunk-path-dirty: ") {
+			started, err := time.Parse(time.RFC3339Nano, row.Since)
+			if err != nil {
+				return nil, err
+			}
+			elapsed := time.Since(started).Round(time.Second)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			row.Waited = elapsed.String()
+		}
 		out = append(out, row)
 	}
 	windows, err := waitingBackendWindows(r, time.Now())
@@ -492,7 +508,11 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 			rank = "—"
 		}
 		// Quote control characters supplied by store text so one item stays one row.
-		cells := []string{rank, row.ItemID, row.Class, row.Where, row.Why, row.Mover, row.Since}
+		why := row.Why
+		if row.Waited != "" {
+			why += " (waited " + row.Waited + ")"
+		}
+		cells := []string{rank, row.ItemID, row.Class, row.Where, why, row.Mover, row.Since}
 		for i, cell := range cells {
 			cells[i] = strings.NewReplacer("\t", "\\t", "\n", "\\n", "\r", "\\r").Replace(cell)
 		}

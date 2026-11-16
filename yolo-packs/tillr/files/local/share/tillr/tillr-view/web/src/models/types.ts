@@ -86,6 +86,7 @@ export interface WaitingRow {
   why: string;
   mover: string;
   since: string;
+  waited?: string;
   class_source: string;
 }
 

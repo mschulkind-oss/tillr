@@ -95,8 +95,8 @@ func TestTheBoundaryDoesNotBlameDirtThatWasThereBeforeTheRun(t *testing.T) {
 	}
 }
 
-// The case the whole chunk exists for: a run writes one file in the main checkout.
-func TestTheBoundaryCatchesAWriteInTheMainCheckout(t *testing.T) {
+// Main-checkout content belongs to the owner, even when it appears mid-run.
+func TestTheBoundaryIgnoresOwnerContentInTheMainCheckout(t *testing.T) {
 	f := newBoundaryFixture(t)
 	before := f.snapshot(t, "before")
 
@@ -105,16 +105,8 @@ func TestTheBoundaryCatchesAWriteInTheMainCheckout(t *testing.T) {
 
 	after := f.snapshot(t, "after")
 	code, output := check(t, before, after)
-	if code != 1 {
-		t.Fatalf("a write in the main checkout answered exit %d, want 1: %s", code, output)
-	}
-	for _, want := range []string{"trespass.txt", "base.txt", f.repo} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("the violation does not name %q:\n%s", want, output)
-		}
-	}
-	if !strings.Contains(output, "outside "+f.target) {
-		t.Fatalf("the stop message does not name the target the run was given:\n%s", output)
+	if code != 0 {
+		t.Fatalf("owner content convicted a run: exit %d: %s", code, output)
 	}
 }
 

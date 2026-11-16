@@ -101,7 +101,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError }: {
                 <td>{row.rank || "unranked"}</td>
                 <td><EntityLink kind="item" id={row.item_id} state={row.class} />
                   <div className="home__mover">mover: <EntityText value={row.mover} snapshot={snapshot} rows={rows} passes={passes} /></div></td>
-                <td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td><td>{row.since}</td>
+                <td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td><td>{row.since}{row.waited ? ` · waited ${row.waited}` : ""}</td>
               </tr>)}</tbody></table>
             {group.length > 8 ? <a href={`#/items?class=${encodeURIComponent(value)}`}>{group.length - 8} more {value}</a> : null}
           </section>;
