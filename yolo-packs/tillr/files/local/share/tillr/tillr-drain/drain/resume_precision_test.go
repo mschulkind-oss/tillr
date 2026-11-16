@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,26 @@ func continuationRunBin(t *testing.T) string {
 		t.Fatalf("build tillr-run: %v: %s", err, out)
 	}
 	return bin
+}
+
+// continuationShell is a shell adapter that declares its pause kind beside it, as
+// every adapter tillr-run executes must (ReadPauseKind refuses a bare "sh"). The
+// continuation fixtures run their segments through it so the built tillr-run accepts
+// them in process mode.
+func continuationShell(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(scratchUnderDurable(t), "shell-adapter")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adapter := filepath.Join(dir, "run-shell")
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pause-kind"), []byte("stops-where-it-stands\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return adapter
 }
 
 func useContinuationProcess(steps *continuationSteps, bin string) {
@@ -80,7 +101,7 @@ func TestResumeDistinctSameSecondSegments(t *testing.T) {
 			}
 			// A third distinct segment in the same second must settle normally.
 			req := *d.RunRequest
-			req.Command = []string{"sh", "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
+			req.Command = []string{continuationShell(t), "-c", "echo candidate > candidate.txt; git add candidate.txt; git commit -qm candidate"}
 			steps.at = steps.at.Add(mode.step)
 			if _, err := Resume(context.Background(), cfg, ResumeSpec{RunID: req.RunID, Request: &req}); err != nil {
 				t.Fatal(err)
@@ -155,7 +176,7 @@ func TestResumeSecondFailureHonorsContinuedHistory(t *testing.T) {
 			if !second.decision.Readmitted || second.decision.Attempt != first.Attempt+1 {
 				t.Fatalf("not second attempt: %+v", second.decision)
 			}
-			second.decision.RunRequest.Command = []string{"sh", "-c", "kill -TERM $$"}
+			second.decision.RunRequest.Command = []string{continuationShell(t), "-c", "kill -TERM $$"}
 			steps.at = steps.at.Add(100 * time.Millisecond)
 			ok, _, err := l.applyPlan(context.Background(), second, readContinuationWork(t, f).BaseSHA, steps.at)
 			if err != nil || !ok {
@@ -176,7 +197,7 @@ func TestResumeSecondFailureHonorsContinuedHistory(t *testing.T) {
 				return err
 			})
 			req := *second.decision.RunRequest
-			req.Command = []string{"sh", "-c", "exit 0"}
+			req.Command = []string{continuationShell(t), "-c", "exit 0"}
 			steps.at = steps.at.Add(100 * time.Millisecond)
 			if _, err := Resume(context.Background(), cfg, ResumeSpec{RunID: req.RunID, Request: &req}); err != nil {
 				t.Fatal(err)
