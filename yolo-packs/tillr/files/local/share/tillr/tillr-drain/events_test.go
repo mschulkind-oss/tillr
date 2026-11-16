@@ -259,8 +259,8 @@ func TestABoundaryViolationIsRecordedAsAnEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopHostBoundaryViolation {
-		t.Fatalf("the loop stopped %q, want %q: %s", result.Stop, drain.StopHostBoundaryViolation, result.Detail)
+	if result.Stop != drain.StopQueueDrained || faultOf(t, f.store, "item_081").Reason != drain.StopHostBoundaryViolation {
+		t.Fatalf("the boundary fault was not held: %+v", result)
 	}
 	found := false
 	for _, e := range eventsOf(t, f.store) {

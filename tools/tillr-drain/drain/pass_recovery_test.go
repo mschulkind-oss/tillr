@@ -71,7 +71,7 @@ func TestAContinuationBoundaryFailureSurvivesReplacement(t *testing.T) {
 	replacement := f.loop(t, &recordingSteps{}, &itemContentStager{})
 	var result LoopResult
 	stop, err := replacement.pass(context.Background(), &result)
-	if err != nil || stop != StopHostBoundaryViolation || result.Candidates != 0 {
+	if err != nil || stop != StopQueueDrained || result.Candidates != 0 || mustPlan(t, replacement)[0].decision.Reason != StopHostBoundaryViolation {
 		t.Fatalf("continuation failure forgotten: %s / %v / %+v", stop, err, result)
 	}
 	s := openFixture(t, f.storePath)

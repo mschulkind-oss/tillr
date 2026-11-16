@@ -55,6 +55,8 @@ func dispatch(args []string) int {
 		return planFace(rest)
 	case "once":
 		return onceFace(rest)
+	case "clear-fault":
+		return clearFaultFace(rest)
 	case "retry":
 		return retryFace(rest)
 	case "boundary":
@@ -68,12 +70,36 @@ func dispatch(args []string) int {
 	}
 }
 
+// clearFaultFace acknowledges one diagnosed fault without erasing its evidence.
+func clearFaultFace(args []string) int {
+	fs := newFlagSet("clear-fault")
+	path := fs.String("store", "", "the store holding the fault")
+	itemID := fs.String("item", "", "the item whose fault was diagnosed")
+	seq := fs.Int64("fault", 0, "the fault event sequence shown by waiting")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" || *itemID == "" || *seq <= 0 {
+		return fail(drain.Usagef("clear-fault needs --store <path>, --item <id> and --fault <sequence>"))
+	}
+	ctx := context.Background()
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	s, err := store.Open(ctx, *path, true)
+	if err != nil {
+		return fail(openFailure(err))
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error { return drain.ClearItemFault(tx, *itemID, *seq, time.Now().UTC()) }); err != nil {
+		return fail(err)
+	}
+	return record.ExitOK
+}
+
 // planFace computes one tick's decisions and writes them to the file the caller named.
-//
-// The store is opened read-only and never migrated: a decision face that created a store
-// would answer a question about a store that did not exist, and one that migrated would
-// write. The only file this face creates is --output, and it is written once every
-// decision is computed, so a plan that failed half way leaves no output file.
+// The store is opened read-only and never migrated; only --output is written,
+// after every decision is computed.
 func planFace(args []string) int {
 	fs := newFlagSet("plan")
 	path := fs.String("store", "", "the store to read")
@@ -489,7 +515,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "why, plan, once, retry, boundary, resume or loop"
+const faceList = "why, plan, once, retry, clear-fault, boundary, resume or loop"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

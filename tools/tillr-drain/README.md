@@ -23,7 +23,8 @@ candidate examinations proceed independently, without waiting for a batch to fin
 `plan` computes one pass's positions and transitions and writes them to the file the caller named, and writes nothing else anywhere;
 `once` does the same planning and records the decisions in the store's own dispatch table,
 handing each dispatch's run request to a caller-named runner; `retry` records one
-operator's authorization to re-dispatch a run the harness refused; `boundary` records the
+operator's authorization to re-dispatch a run the harness refused; `clear-fault`
+acknowledges a diagnosed item-local fault so its retained work may advance; `boundary` records the
 write boundary before and after a run and compares the pair; `resume` continues a run that
 died without a verdict from its own harness session; `loop` is the unattended supervisor.
 
@@ -82,8 +83,9 @@ drain-0-0.json  -> no applied generation
   Passes at the same commit reuse both the sync and the lazily read open-question index;
   a new commit refreshes them. An item block committed during a trigger wait is therefore
   dispatchable without restarting the loop. A block with a finding is reported on the
-  loop's output and in its result record, and the loop drains what was written; a sync
-  that cannot run at all is a fault before any decision from that commit.
+  loop's output and in its result record. A finding or frozen definition attributed to
+  an item holds that item instead of running its stale stored definition; other items
+  continue. A sync that cannot run at all is a fault before any decision from that commit.
 - **A loop that cannot start leaves a record.** Four lines on a stderr nobody kept is the
   failure this exists to prevent.
 - **A held lane is never reported as a drained queue.** The two stop reasons are different
@@ -153,6 +155,57 @@ An unchanged wait is not a candidate refusal or a failing verdict. Even
 `--exit-when-drained` keeps
 waiting while this retained landing can reopen. If the dirty path set changes,
 the decision changes with it and the waiting clock restarts.
+
+## Faults that hold one item
+
+A gate that cannot judge (`gate-harness-error`), a recorded boundary conviction
+(`host-boundary-violation`), a lane whose HEAD differs from the recorded candidate
+(`candidate-record-mismatch`), or an item definition that cannot be synced
+(`definition-sync-failed`) holds only the affected item. Other items keep running
+and landing. A sync finding skips its entire document, so every stored item whose
+definition comes from that file is held, not just the item named by the finding.
+These holds survive a supervisor restart and do not record a failing
+criterion verdict or spend a new model attempt. A retained candidate keeps its lane
+reserved without a live worker lease.
+
+The waiting face shows the fault, its evidence, any run and lane involved, and one
+complete command to clear it. Diagnose and correct the cause first: fix the gate,
+inspect the boundary violation, restore the recorded candidate, or fix the item
+block. Then use the command shown by waiting, for example:
+
+```sh
+tillr view waiting --store /path/to/state.db
+tillr drain clear-fault --store /path/to/state.db --item item-example --fault 123
+```
+
+The fault number is the event sequence displayed in that command. A stale command
+is refused if newer evidence now holds the item. Clearing one fault does not clear
+another kind of fault on the same item or erase the original evidence. Gate recovery
+rejudges the retained candidate; it does not dispatch another model run. When the loop
+rebases a fixer onto a newer trunk, it records the prepared candidate before gating,
+so clearing a gate fault rejudges that bound head instead of convicting its own rebase.
+Clearing a
+sync fault forces document sync again even at the same trunk commit, so a definition
+that is still broken is held again rather than run from stale store content.
+
+A dispatch whose staging failed retracts its dispatch row and releases its claim
+in one transaction. Its aborted staging remains in the append-only event history,
+but a later plan may assign the same unstarted attempt to another lane without
+colliding with that row.
+
+## Faults that stop the whole loop
+
+Fault stops are for failures that cannot be attributed to one item:
+
+- The store cannot be opened, read, or written, including failure to persist a
+  judgment, hold, or pass measurement.
+- The trunk cannot be read, so no pass can select a trustworthy base.
+- Settings are invalid or required shared machinery cannot start, such as a missing
+  usable backend policy, an unmapped seat, or a document sync program that cannot run.
+
+An item-local fault is not one of these stops. Operator cancellation and the explicit
+`--exit-when-drained` setting remain normal ways to end the loop; an indefinite foreign
+lane lease is still reported separately as `lanes-leased`, not a drained queue.
 
 ## Conflict repair that cannot be staged
 

@@ -318,15 +318,11 @@ func TestStagingRefusalPlansADifferentIdentityWithoutRecordingAHold(t *testing.T
 	defer s.Close()
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var count int
-		var action string
 		if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches`).Scan(&count); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT action FROM dispatches WHERE decision_id = ?`, original.DecisionID).Scan(&action); err != nil {
-			return err
-		}
-		if count != 1 || action != ActionDispatch {
-			t.Errorf("rows=%d original action=%s", count, action)
+		if count != 0 {
+			t.Errorf("failed staging left %d dispatch rows", count)
 		}
 		return nil
 	}); err != nil {

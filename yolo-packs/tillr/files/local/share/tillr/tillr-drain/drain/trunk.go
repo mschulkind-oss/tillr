@@ -743,6 +743,20 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 	}
 	candidate.BaseSHA = mainSHA
 	candidate.HeadSHA = head
+	// The loop moved this branch, not the worker. Persist that binding before
+	// the gate can hold it, so restart/clearance compares against the prepared
+	// head rather than falsely convicting the loop's own rebase.
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return candidate, err
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		return appendEffect(tx, candidatePreparedKind, candidate.RunID, candidate, l.cfg.Now().UTC())
+	})
+	s.Close()
+	if err != nil {
+		return candidate, err
+	}
 	l.reportf("loop: pre-rebased %s onto %s so the gated tree is the landed tree\n",
 		candidate.ItemID, shortSHA(mainSHA))
 	return candidate, nil

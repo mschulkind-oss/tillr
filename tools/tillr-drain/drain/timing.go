@@ -173,22 +173,22 @@ func aggregatePassTiming(ctx context.Context, storePath, id string) (PassTiming,
 // recordPass adds an asynchronous examination's measurements to its originating pass,
 // reports the gate time, and files an item when the gate exceeded its budget.
 // The background context preserves measurements even after an operator stops the loop.
-func (l *Loop) recordPass(timing *PassTiming) {
+func (l *Loop) recordPass(timing *PassTiming) error {
 	if timing.TickID == "" || (timing.Gates == 0 && !strings.HasPrefix(timing.TickID, "gen-")) {
 		// Legacy once measurements omit ticks without gates; every applied loop
 		// pass records its generation, even if it did not run a gate.
-		return
+		return nil
 	}
 	timing.OverBudget = timing.IsOverBudget()
 	ctx := context.Background()
 	if err := recordAccumulatedPassTiming(ctx, l.cfg.Store, timing); err != nil {
 		l.reportf("loop: the timing of tick %s was not recorded: %v\n", timing.TickID, err)
-		return
+		return err
 	}
 	aggregate, err := aggregatePassTiming(ctx, l.cfg.Store, timing.TickID)
 	if err != nil {
 		l.reportf("loop: the aggregate timing of tick %s could not be read: %v\n", timing.TickID, err)
-		return
+		return err
 	}
 	*timing = aggregate
 	l.reportf("loop: tick %s gate %s of a %s budget (staging %s, dispatch %s, land %s)\n",
@@ -197,17 +197,18 @@ func (l *Loop) recordPass(timing *PassTiming) {
 		seconds(time.Duration(timing.DispatchMS)*time.Millisecond),
 		seconds(time.Duration(timing.LandMS)*time.Millisecond))
 	if !timing.OverBudget {
-		return
+		return nil
 	}
 	over := time.Duration(timing.GateMS-timing.GateBudgetMS) * time.Millisecond
 	l.reportf("loop: tick %s gate overran its budget: %s against %s, over by %s\n",
 		timing.TickID, seconds(time.Duration(timing.GateMS)*time.Millisecond), seconds(l.gateBudget), seconds(over))
 	if err := fileGateRegression(ctx, l.cfg.Store, *timing); err != nil {
 		l.reportf("loop: the gate's overrun item was not filed: %v\n", err)
-		return
+		return err
 	}
 	l.reportf("loop: filed the gate's regression item %s\n",
 		gateRegressionItemID(time.UnixMilli(timing.AtMS)))
+	return nil
 }
 
 // boolInt is SQLite's integer spelling of a boolean, so the column's value is the same on

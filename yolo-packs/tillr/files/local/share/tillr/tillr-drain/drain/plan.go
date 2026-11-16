@@ -267,10 +267,17 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items),
 		inputs: inputs, inputDecisions: inputDecisions, works: works,
 	}
+	faults, err := ReadItemFaults(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	decisions := make([]record.Envelope, 0, len(items))
 	for _, item := range items {
 		var decision Decision
-		if work := works[item.ItemID]; work != nil && !work.Done {
+		if fault, held := faults[item.ItemID]; held && !terminalStates[item.State] {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
+			identifyDecision(&decision)
+		} else if work := works[item.ItemID]; work != nil && !work.Done {
 			// An already dispatched attempt advances before readiness and retry
 			// rules: a terminal record is work to settle, not a retry to authorize.
 			decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate)

@@ -22,6 +22,7 @@ const (
 	dispatchStartedKind     = "drain.started"
 	candidateReadyKind      = "drain.candidate"
 	candidateRetirementKind = "drain.retirement"
+	candidatePreparedKind   = "drain.prepared-candidate"
 	examinationDoneKind     = "drain.examined"
 	loopOrphanedKind        = "drain.orphaned"
 	ActionSettle            = "settle"
@@ -29,7 +30,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{dispatchStartedKind, candidateReadyKind, candidateRetirementKind, examinationDoneKind, loopOrphanedKind} {
+	for _, kind := range []string{dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -68,7 +69,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
-		case candidateReadyKind, candidateRetirementKind:
+		case candidateReadyKind, candidateRetirementKind, candidatePreparedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
@@ -112,6 +113,14 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 					return nil, err
 				}
 				work.RepairHold = &hold
+			}
+		case itemFaultClearedKind:
+			var fault ItemFault
+			if err := json.Unmarshal(e.Payload, &fault); err != nil {
+				return nil, err
+			}
+			if work := byRun[fault.RunID]; work != nil && fault.Reason == StopHostBoundaryViolation {
+				work.BoundaryFailed = false
 			}
 		case examinationDoneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -232,8 +241,12 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	faults, err := ReadItemFaults(r)
+	if err != nil {
+		return "", err
+	}
 	work := works[d.ItemID]
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done})
+	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq})
 	return string(raw), err
 }
 
@@ -616,7 +629,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		}
 	}
 	if c.timing != nil {
-		l.recordPass(c.timing)
+		if err := l.recordPass(c.timing); err != nil {
+			return "", err
+		}
 	}
 	if c.detail != "" {
 		result.Detail = c.detail
@@ -697,10 +712,6 @@ planned:
 		if d.Action == ActionHold {
 			holds = append(holds, d)
 		}
-		if d.Reason == StopHostBoundaryViolation {
-			result.Detail = fmt.Sprintf("the stored boundary check refused %s on %s; its candidate is not eligible for examination", d.ItemID, d.LaneID)
-			return StopHostBoundaryViolation, nil
-		}
 		if l.active[p.parentRunID] || ((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID]) {
 			continue
 		}
@@ -723,13 +734,13 @@ planned:
 		switch d.Action {
 		case ActionDispatch, ActionRetry:
 			start := time.Now()
-			staged := l.stageDispatches(ctx, []Decision{d}, mainSHA, result)
+			staged, err := l.stageDispatches(ctx, []Decision{d}, mainSHA, result)
+			if err != nil {
+				return "", err
+			}
 			timing.StageMS += time.Since(start).Milliseconds()
 			if len(staged) == 0 {
-				if err := l.markExamined(ctx, d); err != nil {
-					return "", err
-				}
-				if err := l.releaseExamination(ctx, d); err != nil {
+				if err := l.cancelStaging(ctx, d); err != nil {
 					return "", err
 				}
 				continue
@@ -803,7 +814,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			} else {
 				stop, landed, err = l.verify(ctx, &c, local, &timing)
 			}
-			retainLane := errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld)
+			retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld)
 			if retainLane {
 				err = nil
 			}

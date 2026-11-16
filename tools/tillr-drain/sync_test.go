@@ -99,6 +99,52 @@ func TestASyncFindingDoesNotStopTheLoop(t *testing.T) {
 	}
 }
 
+func TestSyncFindingHoldsTheStaleDefinitionWhileAnotherItemLands(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
+	fixtureAt(t, f.store, itemRecord("item-bad", "in-queue"), itemRecord("item-good", "in-queue"))
+	commitDocument(t, f, "docs/bad.md", "### Bad\n<!-- tillr: item id=\"item-bad\" paths=\"candidate.txt\" rank=\"a\" -->\n- **c1:** x\n")
+	var report bytes.Buffer
+	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
+	result, err := syncLoop(t, f, steps, &report, "docs/bad.md").Run(context.Background())
+	if err != nil || result.Stop != drain.StopQueueDrained || result.Landed != 1 {
+		t.Fatalf("finding stopped sibling: %+v / %v; %s", result, err, &report)
+	}
+	fault := faultOf(t, f.store, "item-bad")
+	if fault.Reason != drain.ReasonDefinitionSyncFailed || !strings.Contains(fault.Detail, "unknown-attribute") || !strings.Contains(fault.Detail, "docs/bad.md") {
+		t.Fatalf("finding lost attribution: %+v", fault)
+	}
+	if countMatching(lines(t, f.count), "gate --item item-bad") != 0 || countMatching(lines(t, f.count), "gate --item item-good") != 1 {
+		t.Fatalf("stale definition reached gate: %v", lines(t, f.count))
+	}
+}
+
+func TestSkippedSyncFileHoldsEveryStoredDefinitionInIt(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
+	fixtureAt(t, f.store, itemRecord("item-independent", "in-queue"))
+	good := "### A\n<!-- tillr: item id=\"item-a\" paths=\"candidate.txt\" -->\n- **c1:** old A\n\n### B\n<!-- tillr: item id=\"item-b\" paths=\"candidate.txt\" -->\n- **c1:** old B\n"
+	commitDocument(t, f, "docs/definitions.md", good)
+	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
+	if _, err := steps.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(strings.Replace(good, "id=\"item-a\"", "id=\"item-a\" rank=\"bad\"", 1), "old B", "new B", 1)
+	commitDocument(t, f, "docs/definitions.md", bad)
+	var report bytes.Buffer
+	result, err := syncLoop(t, f, steps, &report, "docs/definitions.md").Run(context.Background())
+	if err != nil || result.Landed != 1 {
+		t.Fatalf("skipped-file definitions escaped: %+v / %v; %s", result, err, &report)
+	}
+	for _, id := range []string{"item-a", "item-b"} {
+		fault := faultOf(t, f.store, id)
+		if fault.Reason != drain.ReasonDefinitionSyncFailed || !strings.Contains(fault.Detail, "docs/definitions.md") {
+			t.Fatalf("skipped definition %s was not held: %+v", id, fault)
+		}
+		if countMatching(lines(t, f.count), "gate --item "+id) != 0 {
+			t.Fatalf("stale definition %s reached gate", id)
+		}
+	}
+}
+
 // A sync that cannot run at all is a fault before the first tick, recorded like every other
 // startup fault.
 func TestASyncThatCannotRunIsAFault(t *testing.T) {

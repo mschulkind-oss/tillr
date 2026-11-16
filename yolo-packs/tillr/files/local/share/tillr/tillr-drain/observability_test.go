@@ -15,6 +15,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 	_ "modernc.org/sqlite"
 )
 
@@ -449,8 +450,22 @@ func TestAStepThatNeverStartedRecordsNoExitCode(t *testing.T) {
 
 	// The run step's own span is written before the gate's, so the gate's failure leaves the
 	// run's row behind: the case reads the gate's line out of a file that exists.
-	if _, err := loop.Run(context.Background()); err == nil {
-		t.Fatalf("the loop reported no failure for a gate program that does not exist")
+	if result, err := loop.Run(context.Background()); err != nil || result.Stop != drain.StopQueueDrained || result.Landed != 0 {
+		t.Fatalf("the missing gate did not hold just its item: %+v / %v", result, err)
+	}
+	s, err := store.OpenRead(context.Background(), f.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		faults, err := drain.ReadItemFaults(r)
+		if err == nil && faults["item_041"].Reason != drain.StopGateHarnessError {
+			t.Errorf("missing gate not recorded: %+v", faults)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	spans := stepSpans(t, f.root, "run-item_041-a1")
 	var gate *stepSpan

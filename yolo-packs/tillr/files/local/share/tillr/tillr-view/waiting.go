@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -35,10 +36,14 @@ type waitingRow struct {
 
 type waitingRule struct{ class, where, mover string }
 
-// These are drain's exported reason spellings, without importing its writer or
-// registering its schema. TestWaitingEveryDrainReasonHasARule enumerates the
+// These are drain's exported reason spellings. Item faults use its shared reader;
+// opening this face's store remains read-only. TestWaitingEveryDrainReasonHasARule enumerates the
 // upstream constants rather than maintaining a second hand-written checklist.
 var waitingRules = map[string]waitingRule{
+	"gate-harness-error":             {"needs you", "gate", "diagnose the gate and clear the fault"},
+	"host-boundary-violation":        {"needs you", "fence", "inspect the recorded violation and clear the fault"},
+	"candidate-record-mismatch":      {"needs you", "lane", "restore the recorded candidate and clear the fault"},
+	"definition-sync-failed":         {"needs you", "queue", "correct the definition and clear the fault"},
 	"backend-window":                 {"waits on work", "backend", "the reset time"},
 	"conflict-design":                {"waits on work", "queue", "design"},
 	"conflict-owner":                 {"needs you", "queue", "owner"},
@@ -154,7 +159,7 @@ func readWaiting(ctx context.Context, path string, questions vantage.QuestionSou
 		if !schemaSupported(version) {
 			return schemaMismatch{version: version}
 		}
-		out, err = assembleWaiting(tx, questions)
+		out, err = assembleWaiting(tx, questions, path)
 		return err
 	})
 	return out, err
@@ -162,7 +167,7 @@ func readWaiting(ctx context.Context, path string, questions vantage.QuestionSou
 
 func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	questions := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
-	rows, err := assembleWaiting(r, questions)
+	rows, err := assembleWaiting(r, questions, s.storePath)
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)
 	}
@@ -171,7 +176,7 @@ func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFa
 
 // One pinned read transaction supplies both callers. Optional utility tables are
 // absent on older stores; SQL errors other than absence always refuse the read.
-func assembleWaiting(r *store.Reader, questions vantage.QuestionSource) ([]waitingRow, error) {
+func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePath string) ([]waitingRow, error) {
 	conflicts, err := waitingConflicts(r)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
@@ -217,6 +222,10 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource) ([]waiti
 		}
 		return items[i].ItemID < items[j].ItemID
 	})
+	itemFaults, err := faults.Read(r)
+	if err != nil {
+		return nil, err
+	}
 	out := []waitingRow{}
 	for _, item := range items {
 		if waitingTerminal(item.State) {
@@ -328,6 +337,19 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource) ([]waiti
 				row.Why, row.Mover = "conflict-repair-staging-failed: "+hold.Cause, hold.NextAction
 				row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
 			}
+		}
+		if fault, held := itemFaults[item.ItemID]; held {
+			rule := waitingRuleFor(fault.Reason)
+			row.Class, row.Where = "needs you", rule.where
+			row.Why = fmt.Sprintf("%s: %s", fault.Reason, fault.Detail)
+			if fault.RunID != "" {
+				row.Why += "; run " + fault.RunID
+			}
+			if fault.LaneID != "" {
+				row.Why += "; lane " + fault.LaneID
+			}
+			row.Mover = fault.ClearCommand(storePath)
+			row.Since = time.UnixMilli(fault.AtMS).UTC().Format(time.RFC3339Nano)
 		}
 		if active != nil {
 			row.Class, row.Where, row.Mover = "moving", "lane", active.RunID
