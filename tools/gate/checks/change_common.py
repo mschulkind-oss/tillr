@@ -299,11 +299,6 @@ def legacy_seed_findings(root: Path, base: str | None) -> list[str]:
 def identity_findings(root, base, head):
     expected = []
     for key in ("user.name", "user.email"):
-        local = subprocess.run(["git", "config", "--local", "--get", key], capture_output=True, text=True)
-        if local.returncode not in (0, 1):
-            raise RuntimeError(local.stderr.strip() or "cannot read local identity")
-        if local.returncode == 0 and local.stdout.strip():
-            return [f"repo-local {key} overrides the deployed identity; unset the local key"]
         configured = subprocess.run(["git", "config", "--show-scope", "--get-all", key],
                                     capture_output=True, text=True)
         if configured.returncode not in (0, 1):
@@ -312,7 +307,8 @@ def identity_findings(root, base, head):
         for line in entries.splitlines():
             scope, _, value = line.partition("\t")
             if scope in ("local", "worktree"):
-                return [f"{scope} {key} overrides the deployed identity; unset the {scope} key"]
+                label = "repo-local" if scope == "local" else scope
+                return [f"{label} {key} overrides the deployed identity; unset the {scope} key"]
         values = [line.partition("\t")[2].strip() for line in entries.splitlines()]
         if not values or not values[-1]:
             raise RuntimeError(f"landing identity is not configured ({key})")
@@ -333,13 +329,19 @@ def run(kind, args):
         base, HEAD = args
         validate(base, HEAD)
         root = Path.cwd()
+        if kind == "commit-identity":
+            # Identity depends on commit metadata, not changed paths or Markdown.
+            # Do not spend its fast-check budget discovering unrelated documents.
+            findings = identity_findings(root, base, HEAD)
+            if findings:
+                print("\n".join(findings))
+                return 1
+            return 0
         changed = git(root, "diff", "--name-only", "--no-renames", "-z", base, HEAD).split("\0")
         documents = [path for path in changed if path.endswith(".md")
                      and not any(part in (".forks", "node_modules", ".yolo") for part in Path(path).parts)
                      and git(root, "ls-tree", "--name-only", HEAD, "--", path)]
-        if kind == "commit-identity":
-            findings = identity_findings(root, base, HEAD)
-        elif kind == "seed-freeze":
+        if kind == "seed-freeze":
             findings = legacy_seed_findings(root, base) if LEGACY_SEED in changed else []
         elif kind == "citations":
             findings = unreachable_citations(root, base, documents)

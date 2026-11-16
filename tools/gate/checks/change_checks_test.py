@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
@@ -167,6 +168,17 @@ class Changes(unittest.TestCase):
         (self.repo / "README.md").write_text("# Fixture\n\nEvidence " + side + "\n")
         self.commit()
         self.assertEqual(self.check("citations").returncode, 0)
+
+    def test_identity_does_not_discover_changed_files_or_documents(self):
+        spec = importlib.util.spec_from_file_location("identity_fast_common", ROOT / "tools/gate/checks/change_common.py")
+        common = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(common)
+        with mock.patch.object(common, "validate") as validate, \
+                mock.patch.object(common, "identity_findings", return_value=[]) as identity, \
+                mock.patch.object(common, "git", side_effect=AssertionError("identity inspected unrelated changed files")):
+            self.assertEqual(common.run("commit-identity", [self.base, "HEAD"]), 0)
+        validate.assert_called_once_with(self.base, "HEAD")
+        identity.assert_called_once_with(Path.cwd(), self.base, "HEAD")
 
     def test_identity_mismatch_and_local_override(self):
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
