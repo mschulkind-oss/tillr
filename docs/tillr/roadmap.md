@@ -773,7 +773,7 @@ arrives, such as review comments on a design, it starts at once.
 
 <!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-settings-file" -->
 
-- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, and any item whose block sets `express="true"`.
+- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
 - **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express".
@@ -827,15 +827,18 @@ already describes the flow from a sentence to a landed change, and
 [item graphs](../design/tillr-item-graphs.md) describes the designer that fleshes an idea out. So
 the first step is a short design that joins them, not a build.
 
+That design is [the observatory's first two actions](../design/observatory-actions.md), and it
+leaves no question for the owner. The order becomes one list: the owner sees a place, the stored
+key is hidden, and a drag writes one item. An idea's words are saved as a text file before
+anything else happens, and the design seat's landing carries them into the tree with the titled
+items that came from them. The server runs the item tool for both and never writes the store or
+the tree itself. Its eight build blocks live in
+[the design's build order](../design/observatory-actions.md#10-build-order); the first, a
+move-to-top control that works from the Items page, waits on nothing.
+
 ### Design the observatory's first two actions: reorder by dragging, and add an idea
 
-<!-- tillr: item id="item-design-observatory-actions" seat="design" paths="docs/design/observatory-actions.md,docs/tillr/roadmap.md" -->
 
-- **c1:** `docs/design/observatory-actions.md` exists in the house design form, quotes the owner's two requests above in full, and passes `uvx vantage-check`. It is linked from this roadmap.
-- **c2:** It settles the order of the queue as one plain ranking: what an item's place is stored as, what a drag writes, what happens to the lettered and numbered ranks in use today, and how a rebuilt queue recovers the order. It builds on the owner's ruling that a sync sets a place only for a newly imported item, and says how an order the owner chose by hand survives a rebuild from the documents alone.
-- **c3:** It settles intake: what the owner types and picks (the words, a place in the order), where the words are saved verbatim so they are never lost, what item is created, and how the design seat turns it into a titled item with a description, criteria, and a design document when one is needed. It says what the owner sees while that runs and when the item is waiting on the owner.
-- **c4:** It settles how a page writes at all: which requests the observatory server accepts, how a write reaches the store and the tree without stopping the loop, and what a second browser tab or a running loop sees. It names what the server refuses.
-- **c5:** It ends with a build order of item blocks, the first of which is the smallest action that works end to end, and lists any question it could not settle as an open question with options and a leaning.
 
 ### Cut the queue persistence design into build items
 
