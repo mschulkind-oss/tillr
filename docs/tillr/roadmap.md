@@ -80,7 +80,12 @@ what a run used and never a price.
 
 ## 2. Keep the loop running
 
-Second by rule 2. On 2026-11-15 the loop stopped whole five times for the trouble of one item,
+Second by rule 2. [The overnight velocity evaluation](../research/tillr-drain-velocity.md)
+puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
+fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
+not authorization to change the drain's policy.
+
+On 2026-11-15 the loop stopped whole five times for the trouble of one item,
 and each stop ended every run in flight. The causes are found and the repairs are filed as items
 on this page, in this order:
 
