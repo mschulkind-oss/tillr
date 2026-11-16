@@ -534,7 +534,6 @@ choose:
 
 ### Ignore fetches, pulls and other people's commits while runs are in flight
 
-<!-- tillr: item id="item-boundary-outside-movement-is-routine" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 **Ruling, 2026-11-16 (answers the third run's conflict):** the third run built c1 to c4 and
 stopped without a commit on two findings from its own review. Both are ruled here so the next run
@@ -579,12 +578,6 @@ does not have to choose.
   mid-run convicts the run. It changes with c1 to assert the conviction for a ref inside tillr's
   own namespaces that the run was not given. It is not deleted, and not loosened to pass.
 
-- **c1:** A remote-tracking ref, a tag or a branch outside tillr's own namespaces that moves or appears during a run convicts no run. A test runs `git fetch` against a fixture remote that gained commits, mid-run, and asserts nothing is convicted.
-- **c2:** A commit made on the trunk by someone other than the loop, by hand or by `git pull`, is picked up as the new tip: candidates gated against the older tip are re-applied onto it and landed without a second gate, as [the landing principles](../design/landing-principles.md) state. A test pulls two commits into the trunk between a candidate's gate and its landing.
-- **c3:** A trunk whose history was rewritten under the loop (a rebase or a reset) stops landings with one reason, `trunk-rewritten`, naming the old and new tips, and stops nothing else: runs in flight continue. A test covers it.
-- **c4:** The boundary check's remaining convictions are listed in the drain's README in one table: what is convicted, what is ignored and why.
-- **c5:** A rewrite the loop has seen survives the loop. A test rewrites the trunk, lets one pass observe it with no candidate waiting to land, replaces the loop, then offers a gated candidate, and asserts the new loop holds it with `trunk-rewritten` and lands it once the history is restored.
-- **c6:** A candidate held by a rewrite shows on the waiting face with both tips and the mover `restore the trunk's history`. `go test ./...` passes in `tools/tillr-view`, `tools/tillr-drain` and `tools/tillr-land`.
 
 ## Filed 2026-11-15: one item's trouble holds that item, and recovery is a command
 

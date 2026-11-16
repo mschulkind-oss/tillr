@@ -32,7 +32,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind} {
+	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -42,6 +42,7 @@ func init() {
 type pendingWork struct {
 	Examining      bool        `json:"examining,omitempty"`
 	Ready          bool        `json:"ready,omitempty"`
+	Gated          bool        `json:"-"`
 	ParentRunID    string      `json:"parent_run_id,omitempty"`
 	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
 	RepairHold     *repairHold `json:"repair_hold,omitempty"`
@@ -98,6 +99,15 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 				c.Request = work.Decision.RunRequest
 				c.Seat = work.Decision.Seat
 				work.Candidate = &c
+			}
+		case candidateGatedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var c Candidate
+				if err := json.Unmarshal(e.Payload, &c); err != nil {
+					return nil, err
+				}
+				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
+				work.Candidate, work.Gated = &c, true
 			}
 		case BoundaryCheckKind:
 			var check boundaryCheckPayload
@@ -241,6 +251,17 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 		if unchanged {
 			d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, ReasonRepairStagingFailed
+			identifyDecision(&d)
+			return d, nil
+		}
+	}
+	if work.Candidate != nil && work.Gated {
+		h, err := readTrunkHistory(r)
+		if err != nil {
+			return Decision{}, err
+		}
+		if h.Lost != "" {
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, h.reason()
 			identifyDecision(&d)
 			return d, nil
 		}
@@ -439,7 +460,7 @@ func (l *Loop) applyPlan(ctx context.Context, p plannedApplication, mainSHA stri
 
 func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	if p.decision.Action == ActionHold {
-		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") {
+		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(p.decision.Reason, ReasonTrunkRewritten+": ") {
 			return false, nil, nil
 		}
 		s, err := store.Open(ctx, l.cfg.Store, true)
@@ -753,6 +774,9 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 		}
 	}
 planned:
+	if _, err := l.observeTrunk(ctx, ""); err != nil {
+		return "", err
+	}
 	mainSHA, err := l.refreshDocuments(ctx, result)
 	if err != nil {
 		return "", err
@@ -939,12 +963,12 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				// Retry the retained repair, not another gate and land of the same
 				// original candidate. The original conflict remains the evidence.
 				stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, &timing)
-			} else if work.DirtyHold != nil {
+			} else if work.DirtyHold != nil || work.Gated {
 				stop, landed, err = l.landCandidate(ctx, c, local, &timing)
 			} else {
 				stop, landed, err = l.verify(ctx, &c, local, &timing)
 			}
-			retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld)
+			retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
 			if retainLane {
 				err = nil
 			}

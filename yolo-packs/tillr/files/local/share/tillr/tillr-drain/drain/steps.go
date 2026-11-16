@@ -300,6 +300,9 @@ type LandOutcome struct {
 // to its exit code, which is what a stub is.
 func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutcome, error) {
 	extra := []string{}
+	if candidate.ObservedTrunk != "" {
+		extra = append(extra, "--observed-trunk", candidate.ObservedTrunk)
+	}
 	// A fork-series candidate lands a patch branch rather than the trunk: the ref is the
 	// item's delivery, and it is named explicitly because the loop's working directory is
 	// the trunk's repository, not the checkout the candidate was made in.

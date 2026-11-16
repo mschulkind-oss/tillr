@@ -197,6 +197,51 @@ An unchanged wait is not a candidate refusal or a failing verdict. Even
 waiting while this retained landing can reopen. If the dirty path set changes,
 the decision changes with it and the waiting clock restarts.
 
+## Git movement and run convictions
+
+Fetching, pulling, tagging, and committing on the trunk are ordinary activity by
+other Git users, not evidence against a run. A trunk that advances keeps accepting
+already-gated candidates: the lander reapplies each change onto the new tip without
+another gate, following the [landing principles](../../docs/design/landing-principles.md).
+
+Each pass compares the trunk with `trunk_history`, which stores the last observed
+tip and a lost tip when that observation is no longer an ancestor of the current
+trunk. After initializing object retention, an unchanged observation is read-only:
+it does not compete with runs for the store's writer lock. New tips and rewrites
+are persisted even when no candidate is waiting, so replacing the loop cannot erase an observed
+rewrite. The loop retains those commits under `refs/tillr/trunk-history/observed`
+and `refs/tillr/trunk-history/lost`, so reflog expiration and Git garbage collection
+cannot erase the ancestry evidence. A rewrite holds only landings. Runs continue, candidates can be gated,
+and already-gated candidates retain their lanes and verdicts. The hold decision is
+`trunk-rewritten: <lost-tip> -> <current-tip>`, using full commit identifiers. The
+waiting face names both tips and the mover `restore the trunk's history`.
+
+Restoring history means making the lost tip an ancestor of the trunk again. The
+next pass clears the lost tip and retries retained landings without another gate.
+The loop keeps waiting even with `--exit-when-drained`. There is no command here
+to accept a deliberate rewrite. The drain also passes its observed tip to the
+lander with `--observed-trunk`; under the landing lock the lander refuses with
+`trunk-rewritten` if the trunk no longer contains it. The lander also reconciles
+the current durable observation and lost tip inside its locked store transaction:
+a request that was already waiting for the lock cannot bypass a hold a later pass
+recorded. This covers movement between the pass's observation and the landing transaction.
+
+The run bracket compares snapshots from before and after execution. Its remaining
+convictions and attribution limits are:
+
+| Movement | Run conviction? | Why |
+| :--- | :--- | :--- |
+| Remote-tracking refs, tags, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | No | Ordinary Git users can move them while a run is active. |
+| Trunk commits or rewritten trunk history | No | Trunk ancestry is a durable landing hold, not run guilt. |
+| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, and the two trunk-history refs | No | These are deliveries or concurrent loop work. |
+| An unassigned ref inside tillr's namespaces | Yes | No run or loop delivery owns that ref. |
+| Main-checkout uncommitted content | No | Content belongs to the owner, regardless of when it appeared. |
+| Changed status of a path in a watched, idle sibling worktree | Yes | The run was not assigned that worktree. Siblings that became active are removed from the comparison. |
+| A worktree appearing or disappearing outside a sibling's own lane directory | Yes | The run does not own worktree lifecycle. |
+| Main checkout's checked-out branch changes | Yes | This changes which checkout the loop supervises, rather than advancing its history. |
+| Candidate changes outside its fence, or uncommitted work past its candidate | Yes, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
+| A named store file changing in an adapter-only bracket | Yes, in the standalone boundary check | The adapter does not own the store; run execution brackets omit it because the run face writes its own records. |
+
 ## Faults that hold one item
 
 A gate that cannot judge (`gate-harness-error`), a recorded boundary conviction

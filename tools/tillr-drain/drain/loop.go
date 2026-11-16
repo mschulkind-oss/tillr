@@ -182,8 +182,10 @@ type Candidate struct {
 	// BaseRef is the ref a fork-series candidate's delivery moves, refs/heads/patch/<fork>.
 	// It is empty for an ordinary item, whose landing moves the trunk the land step reads.
 	BaseRef string `json:"base_ref,omitempty"`
-	BaseSHA string `json:"base_sha"`
-	HeadSHA string `json:"head_sha"`
+	// ObservedTrunk is the last observed trunk tip, checked under the land lock.
+	ObservedTrunk string `json:"observed_trunk,omitempty"`
+	BaseSHA       string `json:"base_sha"`
+	HeadSHA       string `json:"head_sha"`
 	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned document maintenance to the
 	// worker commit and the exact staged tree. The intent is persisted before committing,
 	// so a restarted loop can recover HEAD without exempting any worker change from its fence.
@@ -423,6 +425,9 @@ type Loop struct {
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
 	// Each examination has its own result, transferred to the pass at completion.
 	mu sync.Mutex
+	// historyPinned records that this process has initialized object retention.
+	// mu guards it; unchanged observations then need only a read transaction.
+	historyPinned bool
 	// reportMu serializes the loop's report writes, so a caller's io.Writer need not be
 	// safe for concurrent use.
 	reportMu sync.Mutex
@@ -790,7 +795,7 @@ func (l *Loop) index(ctx context.Context) {
 func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
 	held := heldDetail(holds)
 	for _, d := range holds {
-		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
+		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") || strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") {
 			result.Detail = held
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
@@ -1539,12 +1544,31 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	default:
 		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
 	}
+	if err := appendJudgment(ctx, l.cfg.Store, candidateGatedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
+		return "", false, err
+	}
 	return l.landCandidate(ctx, candidate, result, timing)
 }
 
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	// Retrying a durable verdict skips the gate, not the recorded-head guard.
+	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
+	if err != nil {
+		return "", false, l.candidateFault(ctx, candidate, err.Error())
+	}
+	if head != candidate.HeadSHA {
+		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("lane HEAD %s differs from recorded candidate %s", head, candidate.HeadSHA))
+	}
+	h, err := l.observeTrunk(ctx, "")
+	if err != nil {
+		return "", false, err
+	}
+	if h.Lost != "" {
+		return "", false, l.holdRewrite(ctx, candidate, h)
+	}
+	candidate.ObservedTrunk = h.Observed
 	landStart := time.Now()
 	landed, err := l.cfg.Steps.Land(ctx, candidate)
 	if timing != nil {
@@ -1554,6 +1578,18 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if landed.Result == LandRefused && landed.Reason == ReasonTrunkRewritten {
+		h, err := l.observeTrunk(ctx, candidate.ObservedTrunk)
+		if err != nil {
+			return "", false, err
+		}
+		if h.Lost == "" {
+			// History was restored after the lock-time refusal. Retain the gated
+			// candidate for the next pass, not a refusal or a second gate.
+			return "", false, errTrunkRewritten
+		}
+		return "", false, l.holdRewrite(ctx, candidate, h)
 	}
 	if landed.Result == LandRefused && landed.Reason == "trunk-worktree-uncommitted" {
 		return "", false, l.holdDirty(ctx, candidate, landed.ConflictPaths)

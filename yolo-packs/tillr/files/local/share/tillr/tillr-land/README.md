@@ -66,6 +66,15 @@ by hand produces the same row as an unattended one.
 
 ## What it refuses
 
+- **A trunk that no longer contains the loop's observed tip** — `pass --observed-trunk`
+  checks ancestry under the landing lock and records `trunk-rewritten`. For a drain
+  store it also reconciles the latest durable observation and lost tip in that same
+  transaction, so a stale request cannot bypass a newly recorded hold. Successful
+  landings advance the stored observation and its Git object-retention ref. This is not a
+  comparison with the candidate's base: a reset to that base can still remove history
+  the loop observed later. The drain retains the candidate and its verdict until history
+  is restored; ordinary forward movement is reapplied without another gate. Manual
+  callers that omit the observation do not claim to detect a loop's lost history.
 - **A verdict that does not bind the head's tree and the base sha** — there is no judgment
   about this change to act on.
 - **A head that does not squash onto the trunk** — the row records `squash-conflict` and the

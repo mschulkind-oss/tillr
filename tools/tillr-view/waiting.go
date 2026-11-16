@@ -75,6 +75,7 @@ var waitingRules = map[string]waitingRule{
 	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
 	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
+	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
 	"trunk-broken":                   {"waits on work", "trunk", "cause not recorded"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
@@ -90,6 +91,9 @@ func waitingRuleFor(reason string) waitingRule {
 	}
 	// Drain appends the seat/backend to this one reason. Preserve the full reason
 	// in Why and recognize only the declared prefix, never arbitrary new reasons.
+	if strings.HasPrefix(reason, "trunk-rewritten: ") {
+		return waitingRules["trunk-rewritten"]
+	}
 	if strings.HasPrefix(reason, "trunk-path-dirty: ") {
 		return waitingRules["trunk-path-dirty"]
 	}
