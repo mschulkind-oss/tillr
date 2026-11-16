@@ -53,6 +53,36 @@ func landStub(t *testing.T, body string, code int) string {
 	return path
 }
 
+// The drain forwards its recorded worker head only when document retirement bound one.
+func TestLandForwardsOnlyAnExplicitWorkerHead(t *testing.T) {
+	for _, worker := range []string{"", "worker-sha"} {
+		t.Run("worker-"+worker, func(t *testing.T) {
+			root := t.TempDir()
+			argsPath := filepath.Join(root, "args")
+			stub := filepath.Join(root, "land")
+			if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+argsPath+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			steps := &ProcessSteps{LandProgram: stub, Root: root}
+			_, err := steps.Land(context.Background(), Candidate{ItemID: "item", RunID: "run", BaseSHA: "base", HeadSHA: "retired", WorkerHeadSHA: worker})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasFlag := strings.Contains(string(raw), "--message-from\n")
+			if hasFlag != (worker != "") {
+				t.Fatalf("wrong message-source argv: %s", raw)
+			}
+			if worker != "" && !strings.Contains(string(raw), "--message-from\n"+worker+"\n") {
+				t.Fatalf("worker head not forwarded: %s", raw)
+			}
+		})
+	}
+}
+
 // TestLandReadsTheSquashConflictRecord pins the capture: the lander exits 1 for both a
 // refusal and a conflict, so only its record can tell the drain which one happened. The
 // negative control is TestLandWithoutARecordFallsBackToTheExitCode below: the same exit 1
