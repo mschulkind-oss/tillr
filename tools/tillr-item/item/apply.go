@@ -40,6 +40,10 @@ type itemPayload struct {
 	State           string      `json:"state"`
 	WaitingOn       *WaitingOn  `json:"waiting_on,omitempty"`
 	UnderlyingState string      `json:"underlying_state,omitempty"`
+	CloseReason     string      `json:"close_reason,omitempty"`
+	ClosedAt        string      `json:"closed_at,omitempty"`
+	ClosedBy        string      `json:"closed_by,omitempty"`
+	ClosedFrom      string      `json:"closed_from,omitempty"`
 	Criteria        []criterion `json:"criteria"`
 	BlockedBy       []string    `json:"blocked_by"`
 	DesignDoc       string      `json:"design_doc,omitempty"`
@@ -127,6 +131,19 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	from := ""
+	payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = "", "", "", ""
+	if existing {
+		stored, _, err := readStoredItem(tx.Reader(), payload.ItemID)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		from = stored.State
+		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
+	}
+	if err := checkClosedTransition(payload.ItemID, from, payload.State, true); err != nil {
+		return record.Envelope{}, err
+	}
 	allowedPaths, err := encodeAllowedPaths(payload.AllowedPaths)
 	if err != nil {
 		return record.Envelope{}, err
@@ -138,8 +155,8 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
 		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose,
-		   waiting_on = CASE WHEN excluded.state = 'blocked' THEN items.waiting_on ELSE '' END,
-		   underlying_state = CASE WHEN excluded.state = 'blocked' THEN items.underlying_state ELSE '' END`,
+		   waiting_on = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.waiting_on ELSE '' END,
+		   underlying_state = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
 		allowedPaths, payload.Rank, payload.Seat, payload.Prose,
 	); err != nil {

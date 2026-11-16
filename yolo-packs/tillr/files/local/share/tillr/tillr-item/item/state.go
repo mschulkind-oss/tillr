@@ -38,6 +38,9 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	if err := checkClosedTransition(itemID, payload.State, state, false); err != nil {
+		return record.Envelope{}, err
+	}
 	previousWaiting, previousUnderlying := payload.WaitingOn, payload.UnderlyingState
 	if state == "blocked" {
 		var next WaitingOn

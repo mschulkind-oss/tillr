@@ -63,6 +63,17 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 	if err != nil {
 		return itemPayload{}, time.Time{}, Internalf("reading item %q: %v", id, err)
 	}
+	// Read-only opens do not migrate old stores. Absence means no close metadata
+	// was recorded; all other query failures remain explicit errors.
+	var hasClose bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'closed_from')`).Scan(&hasClose); err != nil {
+		return itemPayload{}, time.Time{}, Internalf("checking close metadata: %v", err)
+	}
+	if hasClose {
+		if err := r.QueryRow(`SELECT close_reason, closed_at, closed_by, closed_from FROM items WHERE item_id = ?`, id).Scan(&payload.CloseReason, &payload.ClosedAt, &payload.ClosedBy, &payload.ClosedFrom); err != nil {
+			return itemPayload{}, time.Time{}, Internalf("reading close metadata: %v", err)
+		}
+	}
 	if payload.WaitingOn, payload.UnderlyingState, err = ReadWaitingOn(r, id); err != nil {
 		return itemPayload{}, time.Time{}, err
 	}

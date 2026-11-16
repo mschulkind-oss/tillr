@@ -74,7 +74,11 @@ CREATE TABLE IF NOT EXISTS items (
   seat       TEXT NOT NULL DEFAULT '',
   prose      TEXT NOT NULL DEFAULT '',
   waiting_on TEXT NOT NULL DEFAULT '',
-  underlying_state TEXT NOT NULL DEFAULT ''
+  underlying_state TEXT NOT NULL DEFAULT '',
+  close_reason TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL DEFAULT '',
+  closed_by TEXT NOT NULL DEFAULT '',
+  closed_from TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS item_criteria (
@@ -190,7 +194,7 @@ func init() {
 		panic(err)
 	}
 	// Blocked metadata is additive; older rows retain their unrecorded waiter.
-	for _, column := range []string{"waiting_on", "underlying_state"} {
+	for _, column := range []string{"waiting_on", "underlying_state", "close_reason", "closed_at", "closed_by", "closed_from"} {
 		if err := store.RegisterColumn("item", "items", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			panic(err)
 		}

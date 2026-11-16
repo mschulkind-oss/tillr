@@ -40,6 +40,17 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   item's waiter preserves that original state. Moving to `not-started` or `in-queue`
   clears all three values. `show` prints the stored metadata; an older blocked row
   with none remains readable and says `waiter not recorded`.
+- **Closing and reopening are explicit commands.** `close` accepts only
+  `not-started`, `in-queue`, or `blocked`, records
+  `close_reason`, `closed_at`, `closed_by`, and `closed_from`, and refuses a successful
+  landing receipt as `already-landed`. Blank reasons are `close-reason-missing`.
+  `reopen` also requires a reason and actor and restores `closed_from`, preserving a blocked
+  item's waiter, reason, and underlying state. Its reason and actor are recorded in
+  the update event. Raw `state` and `apply` writes cannot close or reopen an item;
+  their refusals name the command to use. Sync may update a closed item's definition
+  but never reopens it or clears its blocked metadata. Old closed rows without a
+  saved prior state remain readable; reopening them refuses as `closed-from-missing`.
+  Both commands accept an optional `--now` clock, defaulting to the wall clock.
 - **A verdict is the only writer of a criterion's state.** No other face moves one, which
   is what makes a recorded judgment the answer to "why is this criterion where it is".
 - **A decision is superseded, never edited.** The superseded record stays and the new one
@@ -74,6 +85,8 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 tillr-item show
 tillr-item decision list
 tillr-item sync
+tillr item close --store .tillr/state.db --item item-042 --reason "not doing this" --by owner
+tillr item reopen --store .tillr/state.db --item item-042 --reason "wanted again" --by owner
 ```
 
 `show` and the read verbs are what an external reviewer needs: they answer from one store,

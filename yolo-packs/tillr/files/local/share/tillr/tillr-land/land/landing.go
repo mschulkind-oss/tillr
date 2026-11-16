@@ -52,6 +52,8 @@ const (
 	// head. The run's own export delivered it, which is the successful case; a second move
 	// would be a second delivery of one change.
 	ReasonPatchAtHead = "patch-at-head"
+	// ReasonItemNotLandable means the owner closed or resolved the item before landing.
+	ReasonItemNotLandable = "item-not-landable"
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -63,6 +65,7 @@ func Reasons() []string {
 		ReasonTrunkUncommitted,
 		ReasonPatchRewind,
 		ReasonPatchAtHead,
+		ReasonItemNotLandable,
 	}
 }
 
@@ -236,6 +239,31 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	}
 	defer lock.Release()
 
+	// Hold the store write lock from the disposition check through the trunk move
+	// and receipt. Close uses the same lock: either close wins, or it sees the receipt.
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		landing, err = landLocked(ctx, tx, t, landing, req)
+		return err
+	})
+	return landing, err
+}
+
+func landLocked(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, req LandingRequest) (Landing, error) {
+	var hasItems bool
+	if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')`).Scan(&hasItems); err != nil {
+		return Landing{}, Internalf("checking item schema: %v", err)
+	}
+	if hasItems {
+		var notLandable bool
+		if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM items WHERE item_id = ? AND state IN ('closed', 'resolved-elsewhere'))`, req.ItemID).Scan(&notLandable); err != nil {
+			return Landing{}, Internalf("reading item disposition: %v", err)
+		}
+		if notLandable {
+			landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
+		}
+	}
+
 	trunkBefore, err := t.Head(req.BaseRef)
 	if err != nil {
 		return Landing{}, err
@@ -244,7 +272,7 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	landing.TrunkAfter = trunkBefore
 
 	if !landing.Landed() {
-		return pinAndRecord(ctx, s, t, landing, req)
+		return pinAndRecord(ctx, tx, t, landing, req)
 	}
 
 	squash, err := t.Squash(req.BaseSHA, trunkBefore, req.HeadSHA, req.At)
@@ -254,7 +282,7 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 	if squash.Conflicted() {
 		landing.Result = ResultSquashConflict
 		landing.ConflictPaths = squash.Conflicts
-		return pinAndRecord(ctx, s, t, landing, req)
+		return pinAndRecord(ctx, tx, t, landing, req)
 	}
 	landing.LandedTree = squash.Tree
 	clashing, err := t.ClashingPaths(req.BaseRef, trunkBefore, squash.Commit)
@@ -265,13 +293,13 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 		landing.Result = ResultRefused
 		landing.Reason = ReasonTrunkUncommitted
 		landing.ConflictPaths = clashing
-		return pinAndRecord(ctx, s, t, landing, req)
+		return pinAndRecord(ctx, tx, t, landing, req)
 	}
 	if err := t.Move(req.BaseRef, squash.Commit, trunkBefore); err != nil {
 		return Landing{}, err
 	}
 	landing.TrunkAfter = squash.Commit
-	return recordLanding(ctx, s, landing, req.At)
+	return recordLanding(ctx, tx, landing, req.At)
 }
 
 // pinAndRecord pins the run's head and records a non-landing row. The pin is what makes a
@@ -279,17 +307,17 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (La
 // lane's branch, and a garbage collection between this process and the conflict-fixer or
 // the person reading the row takes it. The caller holds the land lock, so the pin happens
 // before the release that lets another writer in.
-func pinAndRecord(ctx context.Context, s *store.Store, t *Trunk, landing Landing, req LandingRequest) (Landing, error) {
+func pinAndRecord(ctx context.Context, tx *store.Tx, t *Trunk, landing Landing, req LandingRequest) (Landing, error) {
 	if err := t.Pin(req.RunID, req.HeadSHA); err != nil {
 		return Landing{}, err
 	}
-	return recordLanding(ctx, s, landing, req.At)
+	return recordLanding(ctx, tx, landing, req.At)
 }
 
 // recordLanding writes one landing row and appends its event in the same transaction, and
 // answers the landing as stored. It is the one place a landing becomes state, so the
 // landed and non-landed paths cannot disagree about what a recorded landing is.
-func recordLanding(ctx context.Context, s *store.Store, landing Landing, at time.Time) (Landing, error) {
+func recordLanding(ctx context.Context, tx *store.Tx, landing Landing, at time.Time) (Landing, error) {
 	conflicts, err := json.Marshal(landing.ConflictPaths)
 	if err != nil {
 		return Landing{}, Internalf("encoding the conflict paths of %q: %v", landing.HeadSHA, err)
@@ -297,7 +325,7 @@ func recordLanding(ctx context.Context, s *store.Store, landing Landing, at time
 	if landing.ConflictPaths == nil {
 		conflicts = []byte("[]")
 	}
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+	err = func() error {
 		id, err := NextLandingID(tx, landing.ItemID)
 		if err != nil {
 			return err
@@ -325,7 +353,7 @@ func recordLanding(ctx context.Context, s *store.Store, landing Landing, at time
 			return Internalf("recording the event sequence: %v", err)
 		}
 		return nil
-	})
+	}()
 	if err != nil {
 		return Landing{}, err
 	}

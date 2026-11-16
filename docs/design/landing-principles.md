@@ -58,9 +58,9 @@ verdict — every one was a patch-id mismatch, a git error, or a regeneration fa
 
 *Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/) for the landing transaction. The board
 pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are retired; in
-[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed six-value set
+[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed seven-value set
 (`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `patch-rewind`,
-`patch-at-head`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
+`patch-at-head`, `item-not-landable`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tools/tillr-land/land/conformance_test.go), and `squash-conflict`
 (`ResultSquashConflict`) is its own outcome rather than a refusal.
 
@@ -68,7 +68,8 @@ pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are re
 move between the gate and `pass` is squashed onto the moved tip by `Trunk.Squash`
 ([`trunk.go`](../../tools/tillr-land/land/trunk.go)) and recorded on `landings` with both
 `gated_tree` and `landed_tree`, never refused on patch-id or base drift. Every refusal in `Reasons()`
-names a specific fact about the verdict, the patch ref, or uncommitted worktree paths, and
+names a specific fact about the verdict, the patch ref, uncommitted worktree paths, or the
+owner's closed/resolved item disposition, and
 non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`) leave the verdict standing and
 pin `refs/tillr/runs/<run_id>` at the head.
 
