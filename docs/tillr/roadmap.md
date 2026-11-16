@@ -53,8 +53,17 @@ it carried is a row of its ledger, and on 2026-11-16 it was cut into
 design. The first stops a gate pass from retiring a criterion only the owner can settle and waits
 on nothing. Part of the design was already built under other items, and
 [its seventh section](../design/tillr-judge-and-lifecycle.md#7-what-the-tree-already-holds)
-measures which part. AutoQA and queue persistence each still carry one design-seat item that turns
-the design into build items.
+measures which part. AutoQA still carries one design-seat item that turns the design into build
+items.
+
+[Queue persistence](../design/tillr-queue-persistence.md) is decided and waits on no ruling: every
+question it carried is a row of its ledger, and on 2026-11-16 it was cut into
+[eight build items](../design/tillr-queue-persistence.md#12-build-order) that live in the design.
+The first gives each newly synced item its place in roadmap order, which is the owner's ruling of
+2026-11-16, and waits on nothing. Much of the design was already built under other items, and
+[its eleventh section](../design/tillr-queue-persistence.md#11-what-the-tree-already-holds)
+measures which part. Nothing that retires or caps the run record is among the eight; an inventory
+of that record is, because the owner ruled that the record is shaped only after it can be seen.
 
 Two designs left this list on 2026-11-15. [Item graphs](../design/tillr-item-graphs.md) is
 decided: one commit per item, all of refinement built, read-only nodes in parallel, and lanes
@@ -830,12 +839,7 @@ the first step is a short design that joins them, not a build.
 
 ### Cut the queue persistence design into build items
 
-<!-- tillr: item id="item-design-queue-persistence-slices" seat="design" paths="docs/design/tillr-queue-persistence.md,docs/tillr/roadmap.md" -->
 
-- **c1:** Every question in [the queue persistence design](../design/tillr-queue-persistence.md) is answered and folded into the design's body and decision ledger, the design's frontmatter says `status: accepted` and `stage: DECIDED`, and `uvx vantage-check` on it reports nothing.
-- **c2:** That design ends with a build order of item blocks, each small enough for one run inside one path fence, each with criteria a test can check, and each naming the items it waits on in `blocked_by`.
-- **c3:** The first block proves the smallest end-to-end slice of the design and waits on nothing in that design.
-- **c4:** This roadmap no longer lists this design as waiting on a ruling.
 
 ## Filed 2026-11-16: three built designs are owed a reference
 
