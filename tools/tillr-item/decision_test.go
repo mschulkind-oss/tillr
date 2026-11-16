@@ -108,36 +108,6 @@ func TestDecisionRecordRefusesAnUnknownScopeKind(t *testing.T) {
 	}
 }
 
-// A harness records its own ruling: `autoqa` is a decider this store accepts, so an
-// automated QA decision does not have to attribute itself to the whale (design §2.3 of
-// autoqa-tillr-seams.md). The read-back through `decision list` is the assertion that
-// matters, because a value the store accepted and spelled differently on the way out
-// would be the same false attribution a write-only case cannot see.
-func TestDecisionRecordAcceptsAutoQA(t *testing.T) {
-	db := filepath.Join(scratch(t, "decision-autoqa"), "board.sqlite3")
-	in := decision("dec-1", "the harness ruled the check green")
-	in.DecidedBy = "autoqa"
-	code, out := run(t, "decision", "record", "--store", db,
-		"--input", input(t, envelope(t, "decision.record", "rec-1", in)), "--now", "2026-11-10T00:00:00Z")
-	if code != 0 {
-		t.Fatalf("decision record exited %d: %s", code, out)
-	}
-	var got decisionOut
-	decodeAs(t, out, &got)
-	if got.Payload.DecidedBy != "autoqa" {
-		t.Fatalf("the echo carries decided_by %q, want autoqa", got.Payload.DecidedBy)
-	}
-	code, out = run(t, "decision", "list", "--store", db)
-	if code != 0 {
-		t.Fatalf("decision list exited %d: %s", code, out)
-	}
-	var list decisionList
-	decodeAs(t, out, &list)
-	if len(list.Payload.Decisions) != 1 || list.Payload.Decisions[0].DecidedBy != "autoqa" {
-		t.Fatalf("the stored decisions are %+v, want dec-1 by autoqa", list.Payload.Decisions)
-	}
-}
-
 // The set is still closed: a decider the vocabulary does not name is malformed input
 // and nothing is written. This is what keeps a near miss -- `auto-qa`, `autoQA` -- from
 // being stored as a decider no reader has a name for.

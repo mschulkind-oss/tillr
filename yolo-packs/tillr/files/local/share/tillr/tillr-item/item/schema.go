@@ -106,14 +106,10 @@ CREATE TABLE IF NOT EXISTS item_requests (
 -- closed vocabularies, carried over so a row written here is readable by the reader
 -- that already exists.
 --
--- decided_by gained 'autoqa' after the table shipped (design §2.3 of
--- autoqa-tillr-seams.md), so an automated QA harness records its own ruling instead of
--- attributing it to the whale. A CHECK is part of CREATE TABLE, so this widens the
--- shape a new store gets: the store's migration adds columns
--- (store.addMissingColumns) and rebuilds no table, so a store created before this
--- change keeps the two-member CHECK. The Go vocabulary in decision.go is the
--- enforcement every store shares; this is the second copy, which only a store created
--- from this DDL has.
+-- Keep the historical 'autoqa' member of decided_by for existing rows. Design D-JL7
+-- retires it only in decodeDecision for new records; narrowing this CHECK would
+-- require rebuilding the table and would reject those historical rows. Opening a
+-- store must neither rewrite them nor change their attribution.
 CREATE TABLE IF NOT EXISTS decisions (
   decision_id TEXT PRIMARY KEY,
   text        TEXT NOT NULL,

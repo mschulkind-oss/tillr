@@ -27,14 +27,6 @@ const (
 	DecidedByOwner = "owner"
 	// DecidedByWhale is a decision the coordinating agent made.
 	DecidedByWhale = "whale"
-	// DecidedByAutoQA is a decision an automated QA harness made. It is the one member
-	// the monolith did not have, and it is added rather than folded into the whale
-	// because the two names answer different questions: `whale` is a seat the owner
-	// delegates to, and a harness recording its own ruling under that name is a false
-	// attribution in the one table whose purpose is to record who bound what. The
-	// verdict vocabulary beside it already carries the same actor (ActorAutoQA, in
-	// verdict.go), so a decision and the verdict it rests on can name one decider.
-	DecidedByAutoQA = "autoqa"
 
 	// DecisionActive is a decision that binds.
 	DecisionActive = "active"
@@ -46,7 +38,7 @@ const (
 
 var (
 	scopeKinds       = map[string]bool{ScopeGlobal: true, ScopeSubsystem: true, ScopeItems: true}
-	decidedBys       = map[string]bool{DecidedByOwner: true, DecidedByWhale: true, DecidedByAutoQA: true}
+	decidedBys       = map[string]bool{DecidedByOwner: true, DecidedByWhale: true}
 	decisionStatuses = map[string]bool{DecisionActive: true, DecisionSuperseded: true, DecisionRevoked: true}
 )
 
@@ -157,9 +149,9 @@ func ListDecisions(ctx context.Context, r *store.Reader, status string) (record.
 	return envelopeOf(DecisionRecordKind, "decisions-"+status, time.Now().UTC(), decisionListPayload{Decisions: decisions})
 }
 
-// decodeDecision reads and validates the decision.record payload. An unknown scope
-// kind or decider is malformed input (exit 2); a scoped decision with no ref is a
-// negative decision (exit 1), because it is well-formed and governs nothing.
+// decodeDecision validates a new decision.record, not a stored decision. Unknown
+// values are malformed input (exit 2); a retired decider or a scoped decision with
+// no ref is a negative decision (exit 1). Legacy decisions remain readable targets.
 func decodeDecision(env record.Envelope) (decisionPayload, error) {
 	var payload decisionPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -175,8 +167,13 @@ func decodeDecision(env record.Envelope) (decisionPayload, error) {
 		return decisionPayload{}, Rejectionf("scope-ref-required", payload.DecisionID,
 			"a %s decision needs a scope ref: it governs nothing without one", payload.Scope.Kind)
 	}
+	if payload.DecidedBy == "autoqa" {
+		return decisionPayload{}, Rejectionf("actor-retired", payload.DecisionID,
+			"decider %q is retired: write %q or %q for the seat that made the decision instead",
+			payload.DecidedBy, DecidedByOwner, DecidedByWhale)
+	}
 	if !decidedBys[payload.DecidedBy] {
-		return decisionPayload{}, Usagef("%q is not a decider: want owner, whale or autoqa", payload.DecidedBy)
+		return decisionPayload{}, Usagef("%q is not a decider: want owner or whale", payload.DecidedBy)
 	}
 	return payload, nil
 }
