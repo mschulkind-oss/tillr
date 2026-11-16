@@ -61,6 +61,14 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli())
 		return err
 	})
+	if err == nil && l.keepWAL && l.walKeeper == nil {
+		// s is still open, so the log this write used is the one the keeper holds.
+		keeper, err := openWALKeeper(ctx, l.cfg.Store)
+		if err != nil {
+			return Incompatiblef("%v", err)
+		}
+		l.walKeeper = keeper
+	}
 	if err == nil {
 		l.sessionInitialized = true
 	}
