@@ -11,11 +11,24 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestDesignAmendmentLandsThenDispatchesOriginalSeat(t *testing.T) {
+	testDesignAmendment(t, false)
+}
+
+func TestSecondFailureDesignAmendmentDispatchesOriginalSeat(t *testing.T) {
+	testDesignAmendment(t, true)
+}
+
+func testDesignAmendment(t *testing.T, secondFailure bool) {
+	failure := "Conflict: c1 contradicts the API\nRESULT: blocked\n"
+	if secondFailure {
+		failure = "c1 impossible contract failed\nRESULT: failed\n"
+	}
 	worker := counting + `if rg -q 'impossible contract' docs/work.md; then
- printf 'Conflict: c1 contradicts the API\nRESULT: blocked\n'
+ printf '` + failure + `'
 else
  ` + committingAdapterBody + `printf 'RESULT: done\n'
 fi
@@ -48,6 +61,24 @@ fi
 `)
 	steps := f.steps(t, gate, land, always(t, "verdict", 0))
 	stage := &drain.LaneStager{Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Template: filepath.Join("..", "tillr-run", "backends", "brief-template.md"), Now: func() time.Time { return steps.Now() }}
+	if secondFailure {
+		first, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())
+		if err != nil || first.Dispatched != 1 {
+			t.Fatalf("first failure: %+v / %v", first, err)
+		}
+		s, err := store.Open(context.Background(), f.store, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			_, err := drain.AuthorizeRetry(context.Background(), tx, drain.RetryRequest{ItemID: "item-route", RunID: "run-item-route-a1", By: "owner", Why: "diagnosed", At: steps.Now()})
+			return err
+		})
+		s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	result, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +137,11 @@ fi
 		t.Fatalf("brief lost conflict: %s", brief)
 	}
 	record, err := os.ReadFile(filepath.Join(f.root, ".tillr", "loop", routed, "conflict.json"))
-	if err != nil || !strings.Contains(string(record), "c1 contradicts the API") {
+	wantEvidence := "c1 contradicts the API"
+	if secondFailure {
+		wantEvidence = "Second failed attempt: run-item-route-a1 and run-item-route-a2"
+	}
+	if err != nil || !strings.Contains(string(record), wantEvidence) {
 		t.Fatalf("conflict record %s / %v", record, err)
 	}
 }

@@ -14,8 +14,15 @@ func TestWaitingShowsConflictTextAndOwningSeatWithoutAPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, seat := range []string{"design", "owner"} {
+	for _, seat := range []string{"design", "owner", "design-second-failure"} {
+		secondFailure := seat == "design-second-failure"
+		if secondFailure {
+			seat = "design"
+		}
 		c := map[string]any{"conflict_id": "conflict-worker", "item_id": "item-seed-02", "run_id": "worker", "body_ref": "docs/work.md#work", "text": "c1 contradicts the API", "blocked_criteria": []string{"c1"}, "status": "raised", "waiting_on": seat}
+		if secondFailure {
+			c["text"] = "Second failed attempt: run-worker-a1 and run-worker-a2 require the design seat.\n\nRun run-worker-a1 report:\nfailed\n\nRun run-worker-a2 report:\nfailed"
+		}
 		if seat == "owner" {
 			c["status"] = "owner"
 			c["text"] = "c1 requires an owner ruling"

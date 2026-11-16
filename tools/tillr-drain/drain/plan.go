@@ -725,6 +725,13 @@ func (p *planner) retryFor(itemID string) *retry {
 	if !ok {
 		return nil
 	}
+	// A design answer supersedes the failed authorized attempt. Its consumed
+	// authorization must not mask the existing answered-conflict dispatch path.
+	if c, ok := p.conflicts[itemID]; ok && (c.Status == "answered" || c.Status == "closed") {
+		if d := p.inputDecisions[c.RunID]; d.Action == ActionRetry && d.RetryID == row.RetryID {
+			return nil
+		}
+	}
 	r := &retry{retryID: row.RetryID, supersedesRunID: row.SupersedesRunID}
 	if p.latest[itemID] != row.SupersedesRunID {
 		for _, prior := range p.priors[itemID] {
