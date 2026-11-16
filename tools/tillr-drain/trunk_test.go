@@ -167,12 +167,8 @@ func TestAGateFailureRedOnTheBaseAcquitsTheItem(t *testing.T) {
 		t.Fatalf("an acquitted item landed %d candidate(s)", result.Landed)
 	}
 	// The verdict program is what retires a criterion: an acquittal must never reach it.
-	if lines(t, f.count) != nil {
-		for _, line := range lines(t, f.count) {
-			if strings.Contains(line, "verdict") {
-				t.Fatalf("an acquitted candidate was given a verdict: %v", lines(t, f.count))
-			}
-		}
+	if countMatching(lines(t, f.count), "verdict") != 0 {
+		t.Fatalf("an acquitted candidate was given a verdict: %v", lines(t, f.count))
 	}
 	if got := itemStateOf(t, f.store, "item_041"); got != "blocked" {
 		t.Fatalf("the acquitted item is %q, want blocked", got)

@@ -51,13 +51,17 @@ line per run and a total at the end, and a run whose report carried no number is
 rather than counted as free. Measurement is introspection — what a night cost — and it is a
 different thing from refusing to spend it.
 
-A judgement about a candidate is still a judgement: a red gate, a refused fence, a land that
-did not take are verdicts about one item, never a reason to stop the loop or to re-run it.
+A red gate, a refused fence, or a landing that did not take records a run-level
+`drain.refusal`, not an `item.verdict`. Criteria are unchanged and unjudged text stays
+editable. An ordinary refused landing is held as `land-refused`, while a squash conflict
+keeps its existing conflict-fix run and `conflict-exhausted` hold. Earlier `not-done`
+criteria remain unchanged. See [the landing refusal contract](../../docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria).
 
 The loop appends the candidate to whatever program string it is given — one flag per
-field, `--item --lane --run --worktree --base --head`, plus `--verdict pass|fail` for the
-verdict step — so every flag in the string above is the adapter's own and the candidate
-arrives after it.
+field, `--item --lane --run --worktree --base --head`, plus `--verdict pass` after a
+landing. `--verdict fail` is a usage error naming that contract, not a way to grade
+an unsuccessful attempt. Every flag in the string above is the adapter's own and the
+candidate arrives after it.
 
 ## The three adapters
 
@@ -65,15 +69,16 @@ arrives after it.
 |---|---|---|
 | `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs `python3 tools/fork-check.py --registry-json` with the root as its working directory, so its path is relative for the same reason the gate program's is. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T` | `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
-| `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` / `not-done` on `fail`, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
+| `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
 
 A candidate's terminal outcome reaches the board through a fourth step this directory does
 **not** supply: after the verdict, the loop runs `tillr-item state --store S --item <id>
---state landed|in-progress --now T` (`--item-bin`, default `tillr-item`). A landed candidate's
-item becomes `landed`; a failed one's falls back to `in-progress` — Being worked on — which is
-the derived state [board-item-state-model.md](../../docs/design/board-item-state-model.md)
-[Section 2](../../docs/design/board-item-state-model.md#2-classification-of-every-status-the-board-can-show)
-gives a closed queue entry. It is bookkeeping rather than judgment, which is why it is a
+--state landed --now T` (`--item-bin`, default `tillr-item`). A landed candidate's
+item becomes `landed`; a failed attempt leaves the item's state and criteria alone.
+The next pass holds it under the refusal step's reason. See
+[board-item-state-model.md](../../docs/design/board-item-state-model.md)
+[Section 2](../../docs/design/board-item-state-model.md#2-classification-of-every-status-the-board-can-show).
+It is bookkeeping rather than judgment, which is why it is a
 sibling of `run exec` and not a fourth adapter face: the verdict retires criteria, and this
 says where the item's work stands.
 

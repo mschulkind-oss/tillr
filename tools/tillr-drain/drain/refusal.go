@@ -64,9 +64,8 @@ type RepeatedRefusal struct {
 //
 // A gate failure is a refusal and not a verdict (MQ1): no judge retired the item's
 // criteria, the item stays `in-queue` with no verdict frozen against it, and the
-// `drain.refusal` event is what the planner's named hold reads. A land that did not take is
-// the one refusal that still writes a verdict, because the gate did judge the work and the
-// verdict is what retires the criteria the judge was shown.
+// `drain.refusal` event is what the planner's named hold reads. A land that did not take
+// follows the same rule: the gate proves tree health, not criterion satisfaction.
 func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResult, step string) error {
 	l.mu.Lock()
 	result.Rejected++
@@ -87,9 +86,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 		l.reportf("loop: repeated-refusal: %s\n", line)
 	}
 	switch step {
-	case RefusalLand:
-		return l.failCandidate(ctx, candidate)
-	case RefusalGate, RefusalFence, RefusalNoOp:
+	case RefusalLand, RefusalGate, RefusalFence, RefusalNoOp:
 		return l.recordRefusal(ctx, candidate, step)
 	}
 	return nil

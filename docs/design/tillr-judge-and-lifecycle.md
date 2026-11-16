@@ -319,12 +319,7 @@ Once the store knows which criteria are the owner's, the planner can stop spendi
 
 A criterion's text is frozen once a judge has ruled on it, so that nobody lowers a bar after the fact. A landing that did not take is not such a ruling. The gate passed the work, and then the trunk could not accept it, usually because another landing got there first. Today that outcome still marks every criterion of the item as not done, which freezes text nobody judged and is the last way a failed attempt can make an item unrepairable. This block makes a failed landing behave like a failed gate already does: it is recorded against the run, and the item's criteria are left alone.
 
-<!-- tillr: item id="item-jl-land-refusal-no-verdict" paths="tools/tillr-drain/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** A landing that is refused, or that stops on a conflict, records a `drain.refusal` event naming the landing step and records no `item.verdict`. A test asserts every criterion's state is what it was before the run, and that `tillr item sync` can still change the text of those criteria afterward.
-- **c2:** The planner holds the item with a reason that names the landing and not the gate, and the waiting face has a rule for it that is not `unclassified`. The existing repair of a squash conflict still runs: a test asserts the conflict fixer is filed exactly as it was before this change.
-- **c3:** Nothing in the loop records a failing verdict any more. `rg -n 'VerdictFailed' tools/tillr-drain` returns nothing, and the verdict program refuses `--verdict fail` as a usage error that names this section.
-- **c4:** Criteria that an earlier failed landing already marked `not-done` stay as the store holds them. A test opens a store with such a row and asserts it is unchanged.
 
 ### Add the waiter and reason to every blocked item
 
@@ -382,7 +377,7 @@ A judge is an agent, and an agent's output is text that may be wrong, incomplete
 
 The gate proves the tree is healthy. It does not prove the change is what the item asked for, and for some items that is the question that matters. Such an item asks for a judge in its own block. The judge runs after the worker has committed and before the gate, so that work which misses the point costs neither the gate's time nor a landing. It reads and never writes. If it passes the work, the gate and the landing run as they do today, and only after the landing are the judge's rulings recorded, so the board never shows an item as judged done while its change is not on the trunk.
 
-<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-intake,item-jl-land-refusal-no-verdict" prose="2" -->
+<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-intake" prose="2" -->
 
 - **c1:** For an item whose block sets `judge="agent"`, the loop starts one run on the review seat in the same lane after the worker's candidate passes the fence check and before the gate. Its brief carries the criteria and the candidate's diff and names the path where it must write its verdict file. A test with stub harnesses asserts the order: worker, judge, gate, landing.
 - **c2:** A judge run that commits or leaves the worktree changed is refused, and the worker's candidate is what it was. A test asserts the candidate's commit is unchanged.

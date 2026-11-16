@@ -443,11 +443,17 @@ func TestACostTheBackendNeverReportedIsMeasuredAsUnknownNotZero(t *testing.T) {
 	}
 }
 
-// countMatching counts the invocations whose argv names needle.
+// countMatching counts the invocations whose argv names needle. A bare program
+// name matches the executable, not a directory or argument containing that word.
 func countMatching(lines []string, needle string) int {
 	n := 0
 	for _, line := range lines {
-		if strings.Contains(line, needle) {
+		if !strings.ContainsAny(needle, " /") && !strings.HasPrefix(needle, "-") {
+			words := strings.Fields(line)
+			if len(words) > 0 && filepath.Base(words[0]) == needle {
+				n++
+			}
+		} else if strings.Contains(line, needle) {
 			n++
 		}
 	}

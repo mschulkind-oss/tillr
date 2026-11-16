@@ -437,10 +437,18 @@ def test_verdict_exit_mapping(tmp):
     # The record the stub was handed is the file the adapter wrote, named by --input.
     recorded = [call for call in fixture.calls() if call.startswith("verdict record ")]
     assert recorded and "--input " + str(records[0]) in recorded[0], recorded
-    result = fixture.run_adapter("verdict", ["--verdict", "fail"], stubs={"STUB_VERDICT": 2})
+    result = fixture.run_adapter("verdict", ["--verdict", "pass"], stubs={"STUB_VERDICT": 2})
     assert result.returncode == 2, (result.returncode, result.stderr)
-    failed = sorted(fixture.run_dir.glob("item.verdict.*.json"))[0]
-    assert json.loads(failed.read_text())["payload"]["verdict"] == "not-done"
+
+
+def test_failing_verdict_is_a_usage_error(tmp):
+    """An attempt that did not land must not grade or freeze item criteria."""
+    fixture = Fixture(tmp)
+    result = fixture.run_adapter("verdict", ["--verdict", "fail"])
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria" in result.stderr, result.stderr
+    assert fixture.calls() == [], fixture.calls()
+    assert not list(fixture.run_dir.glob("item.verdict.*.json"))
 
 
 def test_missing_judge_is_not_a_failure(tmp):
@@ -604,6 +612,7 @@ def main():
             test_land_forwards_message_source,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,
+            test_failing_verdict_is_a_usage_error,
             test_missing_judge_is_not_a_failure,
             test_self_check_names_argv_without_running_it,
             test_self_check_shows_the_generated_registry,

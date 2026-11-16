@@ -9,7 +9,7 @@ exit codes onto the three contracts the loop reads.
 
   tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] <candidate flags>
   tools/tillr-loop/tillr-loop land    <candidate flags>
-  tools/tillr-loop/tillr-loop verdict --verdict pass|fail <candidate flags>
+  tools/tillr-loop/tillr-loop verdict --verdict pass <candidate flags>
   tools/tillr-loop/tillr-loop self-check <candidate flags>   # prints, runs nothing
 
 The loop appends the candidate to whatever program string it is given (one flag per
@@ -425,10 +425,12 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
 
 def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
     """Record one mechanical item.verdict per frozen criterion of the item."""
-    if ctx.verdict not in ("pass", "fail"):
+    if ctx.verdict != "pass":
         raise Refusal(
             EXIT_USAGE,
-            f"--verdict {ctx.verdict!r} is not a verdict: the loop passes pass or fail",
+            f"--verdict {ctx.verdict!r} is refused: only pass after a landing is allowed; "
+            "a failed attempt must not freeze criteria. See "
+            "docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria",
         )
     item_bin = require_binary(ctx.item_bin, "tillr-item", dry)
     show = Step(
@@ -477,7 +479,7 @@ def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
                 "item_id": ctx.item,
                 "criterion_id": criterion["criterion_id"],
                 "criterion_hash": criterion_hash(criterion["text"]),
-                "verdict": "done" if ctx.verdict == "pass" else "not-done",
+                "verdict": "done",
                 "claim_class": "verification-only",
                 # The evidence a mechanical verdict is carried by: the records the
                 # composed pipeline read, not an actor's opinion.
