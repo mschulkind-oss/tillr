@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -47,7 +48,7 @@ func (s *dirtyPathSteps) Land(_ context.Context, c Candidate) (LandOutcome, erro
 	return LandOutcome{Result: LandLanded}, nil
 }
 func (s *dirtyPathSteps) Verdict(context.Context, Candidate, string) error { s.verdicts++; return nil }
-func (s *dirtyPathSteps) ItemState(ctx context.Context, id, runID, state string) error {
+func (s *dirtyPathSteps) ItemState(ctx context.Context, id, runID, state string, _ ...item.WaitingOn) error {
 	st, err := store.Open(ctx, s.store, true)
 	if err != nil {
 		return err
