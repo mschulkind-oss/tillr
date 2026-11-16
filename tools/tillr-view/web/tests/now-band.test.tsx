@@ -221,6 +221,8 @@ function emptyItemData(itemId: string): ItemData {
     criteria: [],
     blocked_by: [],
     decisions: [],
+    verdicts: [],
+    closed_blockers: [],
     attempts: [],
   };
 }

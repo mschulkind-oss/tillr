@@ -367,8 +367,19 @@ export interface ItemDetail {
 /** One item's dossier. It carries no question list: the board does not track question
  * state, and the one question fact the pane shows — the count — comes from the document
  * route, which owns the parse (design §8.1, ledger `D-OBS6`). */
+export interface VerdictView {
+  criterion_id: string;
+  verdict: string;
+  actor: string;
+  actor_kind: string;
+  claim_class: string;
+  recorded_at: string;
+}
+
 export interface ItemData {
   item: ItemDetail;
+  verdicts: VerdictView[];
+  closed_blockers: string[];
   criteria: CriterionView[];
   blocked_by: string[];
   decisions: DispatchView[];

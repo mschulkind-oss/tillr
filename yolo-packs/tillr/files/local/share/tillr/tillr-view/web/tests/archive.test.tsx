@@ -63,6 +63,8 @@ function itemDataFor(itemId: string): ItemData {
     blocked_by: [],
     decisions: [],
     attempts: [],
+    verdicts: [],
+    closed_blockers: [],
   };
 }
 
