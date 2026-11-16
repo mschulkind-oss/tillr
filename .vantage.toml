@@ -1,0 +1,19 @@
+# Vantage planning configuration.
+#
+# Only the stage vocabulary is declared. Vantage discovers every `roadmap.md` on its
+# own, so no `[planning]` include/exclude is needed, and no roadmap path is pinned:
+# this repository keeps two, `docs/roadmap.md` and `docs/pi/roadmap.md`, and pinning
+# either would turn discovery off for the other.
+#
+# The seven words are the ones `design-doc` defines; a document's `stage:` says what
+# it owes someone, never what kind of document it is (genre belongs in `tags:`).
+# Declaring all seven is deliberate: a short table fails every other word on
+# `planning/stage-vocabulary`, so a word added here is a word the whole tree may use.
+[planning.stages]
+SKETCH = "open"       # thinking out loud; nobody should act on it
+DESIGN = "open"       # owes a ruling from the owner
+DECIDED = "ready"     # every ruling is in; nothing is built
+BUILT = "built"       # nothing owed; a graduation candidate
+GRADUATED = "done"    # terminal: the live copy is elsewhere
+SUPERSEDED = "done"   # terminal: something replaced it
+CURRENT = "done"      # evergreen, to be kept true — no date

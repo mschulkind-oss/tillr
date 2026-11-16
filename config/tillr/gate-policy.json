@@ -1,0 +1,10 @@
+{
+  "landing_strategy": "after-merge",
+  "auto_revert": false,
+  "budget_ms": 10000,
+  "red_cap": {
+    "landings": 20,
+    "minutes": 60
+  },
+  "lane_base": "green"
+}

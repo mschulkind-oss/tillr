@@ -1,0 +1,156 @@
+#!/bin/sh
+# The Claude Code adapter: the only way a drain can spend the owner's Claude subscription,
+# which pi cannot reach (docs/design/tillr-claude-backend.md §2).
+#
+# It runs the Claude Code command line headless (`claude -p`) with the brief on stdin and
+# the stream of JSON lines on stdout. Three flags are always passed, and each is a
+# measured fact rather than a preference:
+#
+#   * `--strict-mcp-config` (D-CB1) — without it the run loads every connector server the
+#     account and the jail know, which tripled the prompt and gives a worker mail, calendar
+#     and chat tools that can act outside the repository. With it the run sees only the
+#     servers a policy row names with `--mcp-config` in its harness arguments.
+#   * `--dangerously-skip-permissions` — a headless run cannot ask, so without it every
+#     write is refused. The adapter passes it itself and exports `YOLO_NO_LAUNCH_FLAGS=1`
+#     so the jail's launcher adds nothing of its own, and the argv is the same inside a
+#     jail and outside one.
+#   * `--output-format stream-json --verbose` — the stream is the run's log and the
+#     extractor's input; the plain `json` format writes nothing until the end, so a run
+#     cut off mid-work would leave no evidence at all.
+#
+# Everything after a literal `--` is the backend row's `harness_args` (D-CB2) and goes to
+# the harness unchanged, after the fixed flags. The policy holds the data, the harness
+# holds the spelling, and this file interprets none of it.
+#
+# What is mechanically confining: NOTHING beyond the boundary snapshot, the same statement
+# the pi adapter makes. The harness has a restricted mode, but it removes the shell tool a
+# builder needs, so this adapter does not use it and claims no sandbox.
+#
+# Writes: stdout is the harness's stream; its stderr goes to `stream.err` beside the brief.
+# Exit: the harness's own code, or 124 from the wall, or 2 from a refusal that ran nothing.
+set -eu
+
+PROG=run-claude
+SELF_DIR=$(dirname -- "$0")
+. "$SELF_DIR/../preflight.sh"
+
+backend=
+model=
+effort=
+brief=../brief.md
+target=
+# No wall unless staging passes one: a total-run bound is a budget, not a fault detector,
+# and the 1800s default killed runs that had already committed (design D-RW1,
+# run-wall-ruling.md). `--timeout N` still bounds this run, and N == 0 is the same as no
+# wall.
+wall=
+session_override=
+
+usage() {
+    cat <<'USAGE'
+usage: run-claude --backend claude --model ALIAS --effort LEVEL
+                  [--brief PATH] [--target PATH] [--timeout SECONDS] [--session-id UUID]
+                  [-- HARNESS-ARGUMENTS...]
+
+  --backend   `claude` or a seat alias `claude-<role>`
+  --model     the model the harness's own `--model` accepts
+  --effort    the harness's effort level: low|medium|high|xhigh|max
+  --brief     the staged brief; default ../brief.md, fed to the harness on stdin
+  --target    the named target; default the cwd, and it must BE the cwd
+  --session-id  the stager-minted UUID; default the lane's session-id file
+  --timeout   the wall in seconds; omitted or 0 runs unbounded
+  --          everything after it is passed to the harness unchanged
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
+        --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
+        --effort) [ $# -ge 2 ] || refuse "--effort needs a value"; effort=$2; shift 2 ;;
+        --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
+        --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
+        --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
+        --session-id) [ $# -ge 2 ] || refuse "--session-id needs a value"; session_override=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        # The rest of "$@" is the harness's. It stays in the positional parameters, which
+        # are the only list POSIX sh has, so the harness argv below is built around it.
+        --) shift; break ;;
+        *) refuse "unknown argument '$1'" ;;
+    esac
+done
+
+require_backend "$backend" claude
+check_wall "$wall"
+require_opt --model "$model" "the model comes from the backend policy at staging; an adapter default would be a model in a tree that names no vendor"
+require_opt --effort "$effort" "the effort level comes from the backend policy at staging, with no default of its own"
+preflight_brief "$brief"
+require_harness claude
+target=$(resolve_target "$target")
+
+err=$(lane_path "$brief" stream.err)
+session=$session_override
+if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
+    session=$(cat "$(lane_path "$brief" session-id)")
+fi
+
+# --- the recording seam -------------------------------------------------------------
+#
+# The same seam run-pi opens, for the same reason (docs/design/session-recording.md §2.2):
+# this adapter is the parent of everything the run spawns, so `BASH_ENV` records every
+# shell command the harness's Bash tool starts and `GIT_TRACE2_EVENT` records every git
+# call, both into the run's own record directory. Every guard is fail-open (§7.1): with no
+# run id, no shim, or a directory that cannot be made, the emitters are simply absent.
+trace_dir=${TILLR_TRACE_DIR:-}
+repo_root=
+# A linked worktree's git common directory is the main checkout's `.git`, whose parent is
+# the repository root, so the adapter, the gate and the lander agree on one `.tillr/loop`.
+if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    repo_root=$(dirname -- "$common")
+fi
+if [ -n "${TILLR_RUN_ID:-}" ] && [ -z "$trace_dir" ] && [ -n "$repo_root" ]; then
+    trace_dir=$repo_root/.tillr/loop/$TILLR_RUN_ID
+fi
+shim=
+if trace_parent=$(cd -- "$SELF_DIR/../../../tillr-trace" 2>/dev/null && pwd -P); then
+    shim=$trace_parent/bash-shim.sh
+fi
+if [ -n "$trace_dir" ] && [ -r "$shim" ] && mkdir -p -- "$trace_dir" 2>/dev/null && [ -w "$trace_dir" ]; then
+    TILLR_TRACE_DIR=$trace_dir
+    GIT_TRACE2_EVENT=$trace_dir/git-trace2.jsonl
+    GIT_TRACE2_PARENT_SID=${TILLR_RUN_ID:-$$}
+    BASH_ENV=$shim
+    export TILLR_TRACE_DIR GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID BASH_ENV
+    if [ -n "$repo_root" ]; then
+        TILLR_REPO_ROOT=$repo_root
+        export TILLR_REPO_ROOT
+    fi
+fi
+
+# The lane markers, exactly as run-pi exports them, so an extension or hook can tell a
+# lane's worker from a person's session. They are never left empty: an empty marker reads
+# as "not a lane", which is how a lane worker once ran the whale's own check-in.
+BOARD_DRAIN_BRIEF=$(cd "$(dirname -- "$brief")" && pwd -P)/$(basename -- "$brief")
+BOARD_DRAIN_RUN=${TILLR_RUN_ID:-tillr-lane}
+BOARD_DRAIN_SESSION=${session:-${TILLR_RUN_ID:-tillr-lane}}
+export BOARD_DRAIN_BRIEF BOARD_DRAIN_RUN BOARD_DRAIN_SESSION
+
+YOLO_NO_LAUNCH_FLAGS=1
+export YOLO_NO_LAUNCH_FLAGS
+
+# The harness argv is built in front of the harness arguments still sitting in "$@", so
+# they keep their own words and order with no re-quoting. `${session:+...}` adds the pair
+# only when there is a session id to pass.
+set -- claude -p --output-format stream-json --verbose \
+    --model "$model" --effort "$effort" \
+    ${session:+--session-id} ${session:+"$session"} \
+    --strict-mcp-config --dangerously-skip-permissions \
+    "$@"
+
+# The wall wraps the whole argv, so the bound is one process group and not the harness's
+# own turn: omitted (or 0) prepends nothing at all.
+if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
+    set -- timeout "$wall" "$@"
+fi
+
+exec "$@" <"$brief" 2>"$err"

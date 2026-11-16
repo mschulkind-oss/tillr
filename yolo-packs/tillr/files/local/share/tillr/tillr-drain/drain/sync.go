@@ -1,0 +1,126 @@
+package drain
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/record"
+)
+
+// SyncOutcome is what the loop's startup sync did, read from the item.sync record the item
+// binary prints. Notes are pre-rendered as `file:line (heading) item: rule: message`, the
+// form the item face prints them in, because the loop only reports them.
+type SyncOutcome struct {
+	Created        int      `json:"created"`
+	Updated        int      `json:"updated"`
+	Unchanged      int      `json:"unchanged"`
+	Frozen         []string `json:"frozen,omitempty"`
+	Findings       []string `json:"findings,omitempty"`
+	Warnings       int      `json:"warnings"`
+	UnsharedOpen   int      `json:"unshared_open"`
+	StaleDocBlocks int      `json:"stale_doc_blocks"`
+	// Skipped names why no sync ran, for a step set that drives no repository.
+	Skipped string `json:"skipped,omitempty"`
+}
+
+// Line is the outcome as the loop's one summary line.
+func (o SyncOutcome) Line() string {
+	if o.Skipped != "" {
+		return "sync skipped: " + o.Skipped
+	}
+	return fmt.Sprintf("sync: created %d, updated %d, unchanged %d, frozen %d, findings %d, warnings %d; unshared_open: %d; stale_doc_blocks: %d",
+		o.Created, o.Updated, o.Unchanged, len(o.Frozen), len(o.Findings), o.Warnings, o.UnsharedOpen, o.StaleDocBlocks)
+}
+
+// syncNote is one finding, warning or frozen definition in the item.sync payload.
+type syncNote struct {
+	File    string `json:"file"`
+	Heading string `json:"heading"`
+	Line    int    `json:"line"`
+	ItemID  string `json:"item_id"`
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
+}
+
+func (n syncNote) String() string {
+	where := fmt.Sprintf("%s:%d", n.File, n.Line)
+	if n.Heading != "" {
+		where += " (" + n.Heading + ")"
+	}
+	if n.ItemID != "" {
+		where += " " + n.ItemID
+	}
+	return fmt.Sprintf("%s: %s: %s", where, n.Rule, n.Message)
+}
+
+// syncPayload is the part of the item.sync payload the loop reads.
+type syncPayload struct {
+	CreatedCount   int        `json:"created_count"`
+	UpdatedCount   int        `json:"updated_count"`
+	UnchangedCount int        `json:"unchanged_count"`
+	Frozen         []syncNote `json:"frozen"`
+	Findings       []syncNote `json:"findings"`
+	Warnings       []syncNote `json:"warnings"`
+	UnsharedOpen   int        `json:"unshared_open"`
+	StaleDocBlocks int        `json:"stale_doc_blocks"`
+}
+
+// Sync runs `tillr-item sync` over the loop's repository and store. Exit 0 and exit 1 are
+// both a sync that ran: 1 says a document carried a finding, and the documents without one
+// were written. Any other exit, or a binary that cannot be started, is a sync that could not
+// run, and the loop treats it as the fault it is.
+func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
+	if s.ItemBin == "" {
+		return SyncOutcome{}, Usagef("the loop was given no item binary: it cannot read the queue from the documents")
+	}
+	if s.Root == "" {
+		return SyncOutcome{Skipped: "the step set names no repository root"}, nil
+	}
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	args := []string{"sync", "--store", s.Store, "--root", s.Root,
+		"--now", now().UTC().Format(time.RFC3339), "--json"}
+	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
+	var stderr stderrTail
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit) && exit.ExitCode() == record.ExitNegative:
+	case errors.As(err, &exit) && exit.ExitCode() == record.ExitIncompatible:
+		// The store the loop was handed cannot be opened: the same fault the first tick would
+		// answer, so it keeps the class the loop's face promises for it.
+		return SyncOutcome{}, Incompatiblef("%s sync could not open the store %s: %s", s.ItemBin, s.Store, strings.TrimSpace(stderr.String()))
+	case errors.As(err, &exit) && exit.ExitCode() == record.ExitUsage:
+		return SyncOutcome{}, Usagef("%s sync could not run: %s", s.ItemBin, strings.TrimSpace(stderr.String()))
+	default:
+		return SyncOutcome{}, Externalf("%s sync could not run: %v: %s", s.ItemBin, err, strings.TrimSpace(stderr.String()))
+	}
+	var env struct {
+		Kind    string      `json:"kind"`
+		Payload syncPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil || env.Kind != "item.sync" {
+		return SyncOutcome{}, Externalf("%s sync answered no item.sync record (%v): %s", s.ItemBin, err, strings.TrimSpace(string(out)))
+	}
+	p := env.Payload
+	outcome := SyncOutcome{
+		Created: p.CreatedCount, Updated: p.UpdatedCount, Unchanged: p.UnchangedCount,
+		Warnings: len(p.Warnings), UnsharedOpen: p.UnsharedOpen, StaleDocBlocks: p.StaleDocBlocks,
+	}
+	for _, n := range p.Frozen {
+		outcome.Frozen = append(outcome.Frozen, n.String())
+	}
+	for _, n := range p.Findings {
+		outcome.Findings = append(outcome.Findings, n.String())
+	}
+	return outcome, nil
+}

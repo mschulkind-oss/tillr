@@ -1,0 +1,10 @@
+{
+  "id": "gate-budget-test",
+  "label": "budget admission boundary and clock-free arithmetic",
+  "command": ["python3", "tools/gate/checks/gate-budget.test.py"],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 10000,
+  "reads": ["tools/gate/checks/"],
+  "tools": ["python3"]
+}

@@ -1,0 +1,2 @@
+# Build output; the gate builds the binary in place and it is not tracked.
+/tillr-view

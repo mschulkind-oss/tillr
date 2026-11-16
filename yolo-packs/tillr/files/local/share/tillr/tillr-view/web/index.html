@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Tillr Observatory</title>
+    <script>
+      // The theme is data on <html> before the first paint, so a dark-preferring reader
+      // never sees a light frame first. `src/models/theme.ts` keeps it current afterwards;
+      // this copy exists only because a module script runs too late to avoid the flash.
+      (function () {
+        var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

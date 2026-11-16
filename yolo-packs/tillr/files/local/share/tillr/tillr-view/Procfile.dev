@@ -1,0 +1,20 @@
+# The two processes `just observatory-dev` runs, in one supervised tree.
+#
+# hivemind reads this file and owns both processes: when either one exits, the other is
+# interrupted with it, and a signal sent to hivemind tears down both process groups. That
+# is the whole reason this file exists. The recipe it replaces backgrounded the API and
+# then `exec`'d Vite, which discarded the `EXIT` trap that should have killed the API --
+# so an API could outlive the UI, keep the port, and answer the next run's browser with a
+# verdict it cached at its own startup (2026-11-15: a restarted `just observatory-dev 8250`
+# printed `bind: address already in use` while Vite proxied to the previous day's process).
+#
+# Every value below comes from the recipe, which resolves the port scheme, the store and
+# the caller's passthrough flags once, so this file carries no addresses of its own.
+#
+# TILLR_VIEW_API_ARGS is the caller's passthrough as one whitespace-separated string, split
+# here. Every flag `tillr-view serve` takes is `--flag value` or `--flag=value`, so a value
+# carrying a space is the one case that has to be spelled `--flag=value`. The flags this
+# line supplies are all defaults: the passthrough comes last, and Go's flag package lets
+# the last occurrence win, which is what makes a caller's `--store` beat this one.
+api: exec "$TILLR_VIEW_BIN" serve --store "$TILLR_VIEW_STORE" --root "$TILLR_VIEW_ROOT" --addr "$TILLR_VIEW_ADDR" --ui-at vite $TILLR_VIEW_API_ARGS
+ui: exec npm --prefix "$TILLR_VIEW_WEB" run dev -- --config vite.config.ts --port "$TILLR_VIEW_PORT"

@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""The Agy dialect: ONE JSON envelope for the whole run, not a JSONL stream.
+
+`agy --output-format json` prints a single object at the end. The report text is its
+`response`, the run's session handle is `conversation_id`, and the rest is provenance:
+
+    {"status": "SUCCESS", "conversation_id": "...", "duration_seconds": 48,
+     "num_turns": 3, "usage": {...}, "response": "...", "denied_actions": [...]}
+
+Two measured silent failures live in this envelope, and neither is a nonzero exit, so
+this dialect says them out loud on stderr where the driver will see them:
+
+  * an empty `response` with ZERO usage is a print timeout — the run hit
+    `--print-timeout` and returned nothing while reporting SUCCESS;
+  * an empty `response` with real usage and a non-empty `denied_actions` is a tool call
+    the run could not ask permission for, auto-denied in headless mode.
+
+The envelope is all-or-nothing, so its truncated fixture is a VALID envelope whose
+`response` stops before the `RESULT:` footer — the context-cap truncation of design §6
+— rather than a half-written object, which is a different (and unparseable) failure.
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import report  # noqa: E402  (the shared report shape lives one directory up)
+
+# The counters the envelope's `usage` block carries. A cache read is billed, so it counts.
+# The envelope reports NO cost: agy is a subscription-harness and its `usage` is tokens
+# only, so the header's `cost usd` stays `unknown` rather than reading as a free run.
+USAGE_COUNTERS = ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens")
+
+
+def _envelope(stream_text):
+    """The one JSON object in the stream, or None. Tolerates surrounding noise lines."""
+    stripped = stream_text.strip()
+    if not stripped:
+        return None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, dict):
+        return value
+    found = None
+    for line in stream_text.splitlines():
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            found = candidate
+    return found
+
+
+def dialect(stream_text):
+    envelope = _envelope(stream_text)
+    if envelope is None:
+        return {
+            "text": "",
+            "unparseable": 1,
+            "events": 0,
+            "lines": len(stream_text.splitlines()),
+        }
+    usage = envelope.get("usage") or {}
+    tokens, saw_tokens = 0, False
+    for key in USAGE_COUNTERS:
+        value = usage.get(key)
+        if isinstance(value, (int, float)):
+            tokens += int(value)
+            saw_tokens = True
+    text = envelope.get("response")
+    text = text if isinstance(text, str) else ""
+    denied = envelope.get("denied_actions") or []
+    if not text.strip() and not tokens:
+        print(
+            "extract-report: the envelope carries no response and no usage: this is a "
+            "print timeout, not a report",
+            file=sys.stderr,
+        )
+    if denied:
+        names = ", ".join(str(entry) for entry in denied)
+        print(
+            f"extract-report: the harness auto-denied tool calls ({names}): the run could "
+            f"not ask for permission, so a write it needed never happened",
+            file=sys.stderr,
+        )
+    return {
+        "text": text,
+        "session": envelope.get("conversation_id"),
+        "events": 1,
+        "unparseable": 0,
+        "tokens": tokens if saw_tokens else None,
+        "lines": len(stream_text.splitlines()),
+    }
+
+
+if __name__ == "__main__":
+    sys.exit(report.run(dialect))

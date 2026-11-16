@@ -1,0 +1,31 @@
+# Tools this repository's own recipe file needs, so that a jail has them.
+#
+# `.justfile` is the entry point for the fork tooling (`just done`, `just forks_*`),
+# and a jail provisions only the tools its config names: the image carries no
+# `just`, and the machine's shared mise store has the versions but no default, so
+# `just` answered "No version is set for shim: just" inside a jail until this file
+# pinned one. `/workspace` is in MISE_TRUSTED_CONFIG_PATHS, so a jail needs no
+# `mise trust` for it.
+#
+# REPO-ONLY: `rcrc` excludes this file, because rcm would otherwise deploy it to
+# `~/mise.toml`, whose scope is every directory under `$HOME` rather than this
+# repository. Keep it that way -- a second copy in the home directory would pin
+# just for unrelated projects too.
+#
+# `hivemind` supervises `just observatory-dev`'s two processes
+# (`tools/tillr-view/Procfile.dev`): it is what stops an interrupted dev run from leaving
+# an API behind to hold the port and answer the next run with a stale board. Pinned at the
+# version the shared mise store already holds, so both machines resolve it with no download.
+# `node` is pinned because `tools/fork-check.py` reads the INSTALLED node version as
+# a plan input: a step is planned when it differs from the version the last verified
+# run recorded. Two machines on different nodes therefore disagree about every plan
+# even when nothing in the tree moved -- on 2026-10-23 the host answered 24.19.0
+# while this repository's jail answered 24.21.0 from the image, which planned
+# storybook and the board suites on the host and ran them under a node the launcher
+# does not use. 24.19.0 is the version the shared mise store already
+# holds, so both machines resolve it with no download; raising the pin means
+# `mise install node` on each machine before the gate can see it.
+[tools]
+hivemind = "1.1.0"
+just = "1.58.0"
+node = "24.19.0"

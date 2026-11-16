@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Keep the repository's drain alive, without changing any item decision.
+
+Starts or adopts tillr-drain in this checkout, waits for exit, then restarts it.
+Short runs (under five minutes) wait 60s, 120s, 240s, ... up to 30 minutes.
+A run of at least five minutes resets the wait to 60s. --stop leaves the loop alive.
+Linux /proc supplies process names and identities; command lines are never searched.
+"""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+
+def process(pid):
+    """Return the kernel name, birth time, and state, or None after exit."""
+    try:
+        directory = Path("/proc") / str(pid)
+        fields = (directory / "stat").read_text().rsplit(") ", 1)[1].split()
+        return (directory.joinpath("comm").read_text().strip(), fields[19], fields[0])
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def find_loop(root):
+    """Find this user's own-named drain in this checkout, not another repository."""
+    found = []
+    for directory in Path("/proc").iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            if directory.stat().st_uid != os.getuid():
+                continue
+            info = process(int(directory.name))
+            # The pack execs tillr-drain-<source digest>; Linux exposes only the
+            # first 15 bytes of that executable name (three digest characters).
+            if info is None or not re.fullmatch(r"tillr-drain(?:-[0-9a-f]{3})?", info[0]) or info[2] == "Z":
+                continue
+            if directory.joinpath("cwd").resolve(strict=True) == root.resolve():
+                found.append(int(directory.name))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    if len(found) > 1:
+        raise RuntimeError(f"multiple tillr-drain processes in {root}: {found}; stop the extra loops first")
+    return found[0] if found else None
+
+
+def restart_delay(delay, elapsed):
+    if elapsed >= 300:
+        return 60, 60
+    return delay, min(delay * 2, 1800)
+
+
+def keep(stop, find, launch, observe, wait, clock=time.monotonic):
+    delay = 60
+    while not stop.is_set():
+        child = find()
+        if stop.is_set():
+            return
+        if child is None:
+            child = launch()
+        started = clock()
+        if not observe(child) or stop.is_set():
+            return
+        seconds, delay = restart_delay(delay, clock() - started)
+        print(f"keeper: loop exited; restart in {seconds}s", flush=True)
+        if wait(seconds):
+            return
+
+
+def observe_loop(stop, child):
+    """Wait for a child or adopted process to exit, without stopping it."""
+    owned = isinstance(child, subprocess.Popen)
+    pid = child.pid if owned else child
+    original = process(pid)
+    print(f"keeper: watching loop {pid}", flush=True)
+    if not owned and original is None:
+        return True
+    while not stop.is_set():
+        if owned:
+            if child.poll() is not None:
+                return True
+        else:
+            current = process(pid)
+            if current is None or current[2] == "Z" or current[:2] != original[:2]:
+                return True
+        stop.wait(1)
+    return False
+
+
+def loop_command(root, extra):
+    adapter = root / "tools/tillr-loop/tillr-loop"
+    command = ["tillr-drain", "loop", "--root", str(root)]
+    for face in ("gate", "land", "verdict"):
+        command.extend(["--" + face, shlex.join(["python3", str(adapter), face])])
+    return command + extra
+
+
+def stop_keeper(path):
+    try:
+        lock = path.open("r")
+    except FileNotFoundError:
+        print("keeper: not running")
+        return
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            record = json.load(lock)
+            # Open a kernel process handle BEFORE checking birth time: even if the PID
+            # is reused between verification and signaling, only this process is signaled.
+            try:
+                fd = os.pidfd_open(record["pid"])
+            except ProcessLookupError:
+                print("keeper: already exited")
+                return
+            try:
+                info = process(record["pid"])
+                if info is None or info[1] != record["start"]:
+                    raise RuntimeError("keeper identity changed; refusing to signal a reused PID")
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
+            finally:
+                os.close(fd)
+            print("keeper: stop requested; loop left running")
+        else:
+            print("keeper: not running")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository checkout (default: current directory)")
+    parser.add_argument("--stop", action="store_true", help="stop only the keeper for this checkout")
+    parser.add_argument("loop_args", nargs=argparse.REMAINDER, help="additional loop arguments after --")
+    args = parser.parse_args()
+    root = args.root.resolve()
+    extra = args.loop_args
+    if extra[:1] == ["--"]:
+        extra = extra[1:]
+    # Discovery is scoped by cwd, so moving the child's root elsewhere would break
+    # adoption. The keeper, not a passthrough option, owns that one value.
+    if any(value in ("--root", "-root") or value.startswith(("--root=", "-root=")) for value in extra):
+        parser.error("name the checkout with the keeper's --root, not a loop override")
+    if args.stop and extra:
+        parser.error("--stop does not take loop arguments")
+    if not Path("/proc/self/comm").is_file() or not hasattr(os, "pidfd_open"):
+        parser.error("the keeper needs Linux /proc and process handles")
+    path = root / ".tillr/keeper.lock"
+    try:
+        if args.stop:
+            stop_keeper(path)
+            return 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("keeper already running; use --stop to stop only it")
+            stop = threading.Event()
+            signal.signal(signal.SIGTERM, lambda *_: stop.set())
+            signal.signal(signal.SIGINT, lambda *_: stop.set())
+            lock.seek(0)
+            lock.truncate()
+            json.dump({"pid": os.getpid(), "start": process(os.getpid())[1]}, lock)
+            lock.flush()
+
+            def launch():
+                # A separate session keeps terminal Ctrl-C and --stop away from the
+                # loop. Never terminate, authorize a retry, or write to its store here.
+                child = subprocess.Popen(loop_command(root, extra), cwd=root,
+                                         stdin=subprocess.DEVNULL, start_new_session=True)
+                print(f"keeper: started loop {child.pid}", flush=True)
+                return child
+
+            keep(stop, lambda: find_loop(root), launch,
+                 lambda child: observe_loop(stop, child), stop.wait)
+            print("keeper: stopped; loop left running", flush=True)
+        return 0
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        print(f"keeper: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
