@@ -1,7 +1,7 @@
 ---
 title: Board item state model
 status: accepted
-stage: BUILT
+stage: GRADUATED
 date: 2026-11-03
 tags: [tillr, board, item, state, model, design]
 summary: "The four owner states an item is in, the six stored dispositions and the derived working projection they became, and the rules that keep run and candidate vocabulary out of the default item presentation. Written against the board CLI, whose command names appear below as history; tillr implements the model through `tillr item`."
@@ -9,7 +9,13 @@ summary: "The four owner states an item is in, the six stored dispositions and t
 
 # Board item state model
 
-> **Built in tillr, 2026-11-16 check.** UNMEASURED: the states and their freezing are in `tools/tillr-item/item/apply.go` and the projection is `ProjectItemState` in `tools/tillr-view/serveread.go`; no run was made for this note. A reference document is owed.
+> **Reference:** [Tillr item states and frozen criteria](../reference/tillr-item-states.md),
+> source-verified 2026-11-16 at `087b4385b9208bf49b20d09fefe9564ea8618e96`.
+> This document preserves the original ruling because code and tests cite its path
+> and sections. Its proposals, old command names and inspection questions below
+> are historical, not an as-built description. The reference records the implemented
+> differences, including stored queue disposition and frozen legacy `in-progress`.
+> UNMEASURED: this graduation does not claim observation of a live drain or board.
 
 > **The board CLI this document was written against was deleted on 2026-11-11**
 > (`3f02e3b916`, `afdc9a9571`). The model is live: tillr implements it in `tools/tillr-item` and
