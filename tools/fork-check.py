@@ -21,8 +21,7 @@ question, and this repository's document check, before the launch.
 
 WHAT IT RUNS, and when. Only what the change can reach:
 
-  1. ALWAYS: `sh tests/pi-patch-series.test.sh` -- the offline structural invariants
-     of every series and the packs that declare them (about half a second).
+  1. RETIRED here: structural proof is a fast tree declaration in tools/gate/checks/.
   2. WHEN a series or its pack declaration changed, OR the upstream a launch would
      build from has moved: `yolo pack series check <pack>` -- the verdict a launch
      reaches, in a scratch mirror, naming the first member that conflicts. This is the
@@ -73,23 +72,7 @@ WHAT IT RUNS, and when. Only what the change can reach:
   7. RETIRED here: rendering changed Markdown is a change declaration under
      tools/gate/checks/. It takes the caller's base and head, not the remembered baseline.
 
-  8. WHEN the change touches tracked Markdown: the SCRATCH-CITATION guard -- a
-     tracked document may not cite a path under the durable scratch directory
-     (`$YOLO_DURABLE_DIR`, `.yolo/durable`) as evidence, because that scratch is
-     retention-managed and outside the project, so the citation expires and a reader
-     cannot tell an expired citation from an unsupported claim. Prose and inline code
-     are read; a fenced block is a specimen, not a reference, and is not read (see
-     SCRATCH_EXCEPTIONS for the documented *locations* that keep a scratch path).
-     A finding is a conflict and fails the gate.
-  8a. WHEN the change touches tracked Markdown: the DESIGN-CITATION guard -- a
-     document's frontmatter may cite another document (`depends-on`, `superseded-by`,
-     `supersedes`), with an optional `#section`, and every such citation has to
-     resolve: the document must exist and the section must be a heading, an HTML
-     anchor or a vantage question in it. `uvx vantage-check` resolves the links in a
-     document's BODY, so frontmatter citations are exactly the ones nothing checked --
-     and they are where a design records what it depends on and what it replaced. A
-     citation that resolves nowhere is a conflict and fails the gate (see
-     DESIGN_CITATION_FIELDS).
+  8. RETIRED here: scratch and design citations are fast tree declarations in tools/gate/checks/.
   8b. WHEN `config/tillr/seed-items.json` changes: the LEGACY-SEED INTAKE FREEZE --
      `D-QP1` retires the file by attrition, so it may only shrink: a net-new `item_id`
      or an edit to a surviving entry is refused, while a removal is the one permitted
@@ -141,7 +124,7 @@ WHAT IT RUNS, and when. Only what the change can reach:
      so it needs `node` and nothing else. A machine without `node` names the skip.
  15. WHEN anything under a Go tool directory changes -- any entry of `GO_TOOL_DIRS`
      below, which is the list, so a directory added there is covered without editing this
-     paragraph -- run `CGO_ENABLED=0 go build ./...` then `go test ./...` in THAT
+     paragraph -- run the full `go test ./...` behavior suite in THAT
      directory: one step per directory, so a change under one tool is compiled by its own
      build and never answered by a sibling's. The step runs the WHOLE suite, with no
      `-short`: the cases that drive real child processes and wait on real expiry are the
@@ -223,14 +206,7 @@ WHAT IT RUNS, and when. Only what the change can reach:
      identity refusals to `tools/tillr-land/main_test.go`, and the gate's per-check report
      line to tests/fork-check.test.py (section 60). Everything else is named with the
      guarantee it no longer holds in the retirement document's test disposition.
- 23a. WHEN `tests/pack-sync.test.py`, anything under `tools/tillr*/` or
-     `yolo-packs/tillr/`, or the `pack-sync` recipe in the justfile changes:
-     `python3 tests/pack-sync.test.py` -- the tillr pack ships a committed copy of the nine
-     Go modules, because the pack -- not this checkout -- is what puts `tillr` on PATH in
-     a workspace with no `tools/`. The suite refuses a copy that diverges from its source
-     in file set, bytes or exec bit, and refuses the eight launchers drifting apart: they
-     are one body, and each names the module it builds. The gate discovers nothing under
-     `tests/` by glob, so this step is what runs it.
+ 23a. RETIRED here: pack synchronization is a fast tree declaration in tools/gate/checks/.
  23b. WHEN `tests/tillr-docs.test.py`, anything under `tools/tillr*/` or the
      `tillr-operating` skill changes: `python3 tests/tillr-docs.test.py` -- the layer-2
      contract of docs/design/tillr-distribution.md section 3, where `--help` is the one home
@@ -785,7 +761,6 @@ TRIAGE_COMMITS = 3
 # re-running a suite.
 TRIAGE_RUNS = 3
 LS_REMOTE_TIMEOUT = 60
-STRUCTURAL_TIMEOUT = 600
 SERIES_TIMEOUT = 1800
 FORKS_TIMEOUT = 600
 BUILD_TIMEOUT = 3600
@@ -1024,130 +999,6 @@ WAYBAR_WATCHES = (
 # dependency tree, and this repo's durable scratch.
 DOCUMENT_EXCLUDED = frozenset({".forks", "node_modules", ".yolo"})
 
-# The scratch-citation guard. `$YOLO_DURABLE_DIR` (`.yolo/durable/...`) is
-# retention-managed scratch outside the project, so a document that cites it as
-# evidence rots into a dead link the moment the artifact is collected -- and a reader
-# cannot tell an expired citation from a claim that was never true. The rule (AGENTS.md,
-# "Documents: state the evidence, never cite scratch") is to state the command, the
-# result and the date, and to copy an artifact into the repo beside the doc if it must
-# be kept. This names the token in prose and inline code; a fenced block is a command or
-# a transcript -- a specimen, not a citation -- and is not read at all.
-SCRATCH = re.compile(r"\.yolo/durable|YOLO_DURABLE_DIR")
-# The documented *locations* that legitimately keep a scratch path, keyed by the file
-# and a substring the line must carry. These say where something goes by design, not
-# what proved a past claim. Each is one intentional exception:
-SCRATCH_EXCEPTIONS = (
-    # A tool's intended output directory (the storybook's `just` recipe names it).
-    ("tools/footer-storybook/README.md", "$YOLO_DURABLE_DIR/footer-storybook"),
-    # pi-profiler's documented output directory: the `-o` default and the two prose lines
-    # that say where an artifact lands (never `/tmp`). The three citing lines read
-    # differently, so each keeps its own marker -- its own line's text -- and the
-    # exception cannot grow to cover a different line in that file.
-    ("tools/pi-profiler/README.md", "$YOLO_DURABLE_DIR/pi-profiler/<stamp>-<pid>"),
-    ("tools/pi-profiler/README.md", "Artifacts go to `-o`, or under `$YOLO_DURABLE_DIR`"),
-    ("tools/pi-profiler/README.md", "Artifacts default to a stamped directory under `$YOLO_DURABLE_DIR`"),
-    # The configured PI_SUBAGENTS_WORKTREE_DIR value, at its own reference and in the
-    # shipped pi rule that repeats it (so the edit has one home).
-    ("docs/research/agent-worktree-lifecycle.md", "/workspace/.yolo/durable/worktrees/pi-subagents"),
-    ("docs/pi/agent-work-control.md", "PI_SUBAGENTS_WORKTREE_DIR=$YOLO_DURABLE_DIR/worktrees"),
-    ("yolo-packs/matt/briefing/work-rules.md", "PI_SUBAGENTS_WORKTREE_DIR=$YOLO_DURABLE_DIR/worktrees"),
-    # `just tillr-build`'s documented output directory: the section states where a source
-    # build of the tillr programs lands, which is a location by design rather than evidence
-    # of a past claim. The marker is that line's own text.
-    ("docs/design/tillr-distribution.md", "$YOLO_DURABLE_DIR/bin"),
-    # The evidence-location rule: it names where an agent PUTS evidence, not what proved a
-    # past claim. Its marker is that line's own text, so the exception cannot grow to cover
-    # a different line in the file.
-    ("yolo-packs/matt/briefing/work-rules.md", "repository or under `$YOLO_DURABLE_DIR`; agent scratch and working files never go in"),
-    ("yolo-packs/matt/files/pi-rules.md", 'git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/<task>"'),
-    ("docs/pi/system-prompts.md", 'git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/<task>"'),
-    # The coordinator spill directory its reference documents (that file is a separate
-    # lane's work, so this gate must not refuse it).
-    ("docs/reference/work-control.md", "$YOLO_DURABLE_DIR/work-control/bash-output"),
-    # The owner-answer journal's directory, documented the same way in the same file as a
-    # designed location (one per whale session, read by the owner), not evidence of a past
-    # claim.
-    ("docs/reference/work-control.md", "$YOLO_DURABLE_DIR/journals"),
-    # The scratch-clone directory a fork rebase is made in: the skill names where to
-    # clone by design (never `/tmp`), so this is a location, not evidence of a past
-    # claim. The skill is repo-owned at `.pi/skills/`, and this gate's exceptions live
-    # with the gate. Each marker is
-    # the text of one line, not the bare token, so the exception can never grow to
-    # cover a different line in that file that cites scratch.
-    (".agents/skills/fork-series-evergreen/SKILL.md", "Fresh scratch clone under `$YOLO_DURABLE_DIR`"),
-    (".agents/skills/fork-series-evergreen/SKILL.md", "$YOLO_DURABLE_DIR/rebase-"),
-    # The same skill's lane-checkout line: it names where a lane puts its own clone and
-    # where a `patches/` directory goes by design, so it is a location too. It cites
-    # scratch on a line of its own, which is why the two markers above do not cover it.
-    (".agents/skills/fork-series-evergreen/SKILL.md",
-     "under `$YOLO_DURABLE_DIR`, and leave any `patches/` directory to `export`"),
-    # The land-queue suite's scratch base: the doc tells a lane running beside others to
-    # give the suite its own, because `tests/land-queue.test.sh` derives the base from
-    # `${YOLO_DURABLE_DIR:-$PWD/.land-queue-tests}`. That names the variable to set, not
-    # an artifact that proved a past claim, so the prose keeps it. The marker is the
-    # phrase as that sentence wraps in the document, not the whole sentence: the
-    # document is wrapped, and a marker that spans the wrap matches no line at all.
-    ("docs/pi/landing-queue.md", "`YOLO_DURABLE_DIR` when lanes run beside each other"),
-    # Where a Go test's scratch lives by design -- the harness convention that every
-    # suite under tools/ follows -- and the reference's directory table, whose worktree
-    # row names the helper that returns that directory. Each is a location a reader is
-    # being told about, never an artifact that proved a past claim, and each marker is
-    # that line's own text so the exception cannot grow to cover a neighbouring line.
-    ("docs/design/board-state-machine-plan.md",
-     "Test scratch lives under `$YOLO_DURABLE_DIR` via `scratch(t, prefix)`"),
-    ("docs/reference/landing-system.md",
-     "| Lane worktrees | `durableWorktreesDir()`, under `$YOLO_DURABLE_DIR` |"),
-    # The operator's own binary: the hand-drain card and the runbook each pin the path of
-    # the board built from the trunk, because a stale binary refuses the store rather than
-    # misreporting. That is where the command a reader types lives, not an artifact that
-    # proved a past claim, and each marker is its own line's text so the exception cannot
-    # grow to cover a neighbouring line.
-    ("docs/design/hand-drain-tactics-2026-10-31.md",
-     "Every `board` below means `/workspace/.yolo/durable/bin/board`"),
-    ("docs/reference/landing-runbook.md",
-     "`/workspace/.yolo/durable/bin/board`. A stale binary does not misreport: it refuses"),
-    # The tillr lane plan and implementation plan name where a lane's scratch and a
-    # fixture's store go by design (never `/tmp`), and the plan's digest finding quotes
-    # the environment value that made a digest irreproducible. Each is a location or a
-    # quoted value a reader is being told about, never an artifact that proved a past
-    # claim, and each marker is that line's own text so the exception cannot grow to
-    # cover a neighbouring line.
-    ("docs/design/board-utilities-lanes.md",
-     "`$YOLO_DURABLE_DIR`, never `/tmp`, and the report names the scratch paths it used"),
-    ("docs/design/board-utilities-plan.md",
-     "`$YOLO_DURABLE_DIR`, `storeFixture(t, prefix)` returns"),
-    ("docs/design/board-utilities-plan.md",
-     "`land-queue`'s `YOLO_DURABLE_DIR` differs per process"),
-)
-
-# The design-citation guard. A document's frontmatter is where a design records what it
-# depends on and what it replaced, and those are citations of OTHER DOCUMENTS:
-# `depends-on: autonomous-landing.md`, `superseded-by: ../pi/roadmap.md#the-section`. A
-# citation is a `doc_path` plus an optional `#anchor`, and it has to resolve: the
-# document must exist and the section must be a heading, an HTML anchor or a vantage
-# question in it. `uvx vantage-check` resolves the links in a document's BODY, so these
-# are exactly the citations nothing checked -- measured on 2026-10-27, four tracked
-# documents cited `activity-facts.md#OQ-SI1`, a section that document does not have.
-#
-# The check reads every tracked document, not only `docs/design/`: a plan cites the
-# design it implements the same way, and the four findings above were all in `docs/pi/`.
-# It reads the tree only -- never the board store -- because the gate runs in a scratch
-# mirror, where a store read would answer for the wrong workspace
-# (docs/design/agent-runtime.md §17.3); the store's half of the same question is the
-# board doctor's I6.
-DESIGN_CITATION_FIELDS = ("depends-on", "superseded-by", "supersedes")
-# A citation that names a document. A `supersedes:` value is free prose as often as it
-# is a path (`supersedes: the "which runtime do we adopt" framing`), so only a value
-# ending in a Markdown extension is read as a citation; prose is not a dangling link.
-DESIGN_CITATION_DOC = re.compile(r"\.(?:md|markdown)(?:#.*)?$", re.IGNORECASE)
-# Where a citation's path is resolved from, in order: beside the citing document (how
-# the corpus writes a sibling), the repository root, then the two roots a document is
-# commonly written against. The first that exists wins.
-DESIGN_CITATION_ROOTS = ("", "docs", "docs/design")
-MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(.*)$")
-MARKDOWN_HTML_ANCHOR = re.compile(r'<a\s+[^>]*(?:id|name)="([^"]+)"')
-MARKDOWN_VANTAGE_QUESTION = re.compile(r"<!--\s*vantage:\s*question\s+id=([^\s]+)")
-
 HEX = re.compile(r"^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -1215,13 +1066,6 @@ SOURCE = re.compile(r"^git\+(?P<url>[^?]+)(?:\?ref=(?P<ref>[^&]+))?")
 # refusal: the check would report a verdict on bytes that are not in the commit. A
 # dirty path anywhere else -- a config file, a note, anything the checks do not read
 # -- is named and ignored, so a tree with unrelated edits still gets a verdict.
-STRUCTURAL_INPUTS = (
-    "yolo-packs/",
-    "bin/pi-forks",
-    "bin/pi-forks.list",
-    "tools/fork-check.py",
-    "tests/pi-patch-series.test.sh",
-)
 
 # A change to one of these means the fork question may have a different answer: the
 # series itself, or the pack that declares where it applies. `bin/pi-forks` is the
@@ -1546,37 +1390,6 @@ TILLR_LOOP_WATCHES = ("tools/tillr-loop/",)
 TILLR_LOOP_INPUT = (re.compile(r"^tools/tillr-loop/"),)
 TILLR_LOOP_TIMEOUT = 300
 
-# tests/pack-sync.test.py is the only assertion that the tillr pack's committed copy of
-# the nine `tools/tillr*` modules still matches its source. The copy is what the pack
-# ships to a workspace that has no `tools/`, so a stale copy is a `tillr` on PATH built
-# from source nobody edited. It reads the source tree, the generated tree and the eight
-# launchers, so a change to any of them plans it. `tools/tillr-trace/` is mirrored too and
-# has no launcher: it ships the `BASH_ENV` shim the adapter sources, which is why the
-# watch list is the mirrored set rather than the Go modules.
-PACK_SYNC_TEST = "tests/pack-sync.test.py"
-PACK_SYNC_WATCHES = (
-    PACK_SYNC_TEST,
-    "tools/tillr/",
-    "tools/tillr-cli/",
-    "tools/tillr-drain/",
-    "tools/tillr-gate/",
-    "tools/tillr-item/",
-    "tools/tillr-land/",
-    "tools/tillr-run/",
-    "tools/tillr-store/",
-    "tools/tillr-trace/",
-    "tools/tillr-view/",
-    "yolo-packs/tillr/",
-    "justfile",
-)
-PACK_SYNC_INPUT = (
-    re.compile(r"^" + re.escape(PACK_SYNC_TEST) + r"$"),
-    re.compile(r"^tools/tillr(-[a-z]+)?/"),
-    re.compile(r"^yolo-packs/tillr/"),
-    re.compile(r"^(?:\.justfile|justfile)$"),
-)
-PACK_SYNC_TIMEOUT = 300
-
 # tests/tillr-docs.test.py is the only assertion that a face a document names is a face the
 # binary answers, and that no document grew a flag table. `--help` is the one home of a flag
 # (docs/design/tillr-distribution.md Section 3), so a document that restates one is the page
@@ -1776,7 +1589,6 @@ GATE_CODE = (
     ".justfile",
 )
 
-STRUCTURAL_TEST = "tests/pi-patch-series.test.sh"
 
 # The gate's own audit suite. `tests/fork-check.test.py` is the only thing that
 # exercises the routing above, and nothing else in this repository runs it -- so
@@ -1881,23 +1693,8 @@ HOOKS_INSTALL_TIMEOUT = 120
 # cache is left at its shared default (`~/.cache/go-build`); this check must not
 # allocate a per-worktree cache -- see `yolo-packs/matt/briefing/shared-go-cache.md`.
 #
-# One module is TWO steps, split at the build: `go-build` compiles the module and its
-# test files, and a suite kind runs the whole behavior suite. GO_LANDING_SUITE_DIRS
-# selects `go-substrate`: store, migration, and event-kind conformance failures break
-# the machinery other work stands on (landing-velocity.md section 4.3 rule 1).
-# Other modules keep `go-tool` on the rolling tier. Both steps use the same path watch.
-#
-# The routine suite runs without `-short`, so integration cases are never excluded.
-# The retired board tool is deliberately absent: the board was replaced by tillr, its
-# suite has been red since 2026-11-07 (the gate-remedy-loop cases), and the owner ruled on
-# 2026-11-10 that a tool being retired is not worth a gate step.
-#
-# The tillr modules are here for the opposite reason: they are the replacement, and this
-# check is the only thing in the repository that compiles them -- no `just` recipe, no pack
-# build and no `go.work` does (verified 2026-11-10 for GATE-4). `tools/tillr` is the
-# substrate, and it carries the conformance suite that is the event-kind oracle's surviving
-# home, so leaving it out left that oracle in a suite no gate ran. Each is its own module
-# with its own `go.mod`, so each gets its own build and suite.
+# Builds and test compilation belong to the parallel go-build tree declaration.
+# This program retains one behavior suite per changed Go tool directory.
 GO_TOOL_DIRS = (
     "tools/pi-profiler",
     "tools/tillr",
@@ -1943,40 +1740,8 @@ GO_TOOL_TIMEOUT = 3600
 GO_TEST_TIMEOUT = "3600s"
 # The build step's own liveness guard. A compile is minutes at worst, and this is a
 # liveness guard rather than a verdict, like the suite's timeout above.
-GO_BUILD_TIMEOUT = 1800
 
 
-def go_build_command(directory: str) -> str:
-    """The build and the test-compile for one Go tool directory, run from this checkout.
-
-    `go test -run '^$'` compiles every test file and runs no case, which is the half of
-    the old combined step that proves the module still builds. It is used instead of
-    `go vet` because vet also judges style, and style is not what the landing tier owns.
-    """
-    # The build writes its binaries to a temporary directory, never into the checkout: a
-    # gate run must leave the working tree byte-identical, and `go build ./...` in a main
-    # package otherwise drops a multi-megabyte binary beside the source (measured
-    # 2026-11-11: tools/tillr-gate/tillr-gate, 5.1 MB, left untracked by a gate run).
-    #
-    # `-o` is passed only when the module HAS a main package. `go build -o <dir> ./...`
-    # exits 1 with "no main packages to build" for a library-only module, which is
-    # tools/tillr's shape, so the flag alone failed a module that compiles perfectly
-    # (measured 2026-11-11: the go-build step for tools/tillr went red on a clean tree).
-    # The build is kept rather than dropped because `go test` compiles a main package as a
-    # library and so cannot catch a main package with no `main` function.
-    #
-    # The `go list` output is NOT piped through `tr -d '\n'`: a `case` pattern matches
-    # across newlines, so the pipe bought nothing, and it hid a `go list` failure behind
-    # `tr`'s exit status in a shell without `pipefail` (this runs under `sh -c`). The
-    # assignment carries `go list`'s own status into the `&&` chain instead.
-    #
-    # The temporary directory is removed by an EXIT trap rather than by a trailing
-    # `rm -rf`, so every failure path cleans up: a `go list` that fails, a `go build` that
-    # fails, and a `go test` that fails all leave the shell through the trap.
-    return (f"cd {directory} && tmp=$(mktemp -d) && trap 'rm -rf \"$tmp\"' EXIT && "
-            f"mains=$(CGO_ENABLED=0 go list -f '{{{{if eq .Name \"main\"}}}}M{{{{end}}}}' ./...) && "
-            f"case \"$mains\" in *M*) CGO_ENABLED=0 go build -o \"$tmp\" ./... ;; esac && "
-            f"CGO_ENABLED=0 go test -run '^$' ./...")
 
 
 def go_tool_command(directory: str) -> str:
@@ -4813,7 +4578,7 @@ EXCLUSIVE_CHECKS = {
 # here so a reader (and a consumer of the report's `plan` line) can count it, and adding
 # a member is a deliberate edit rather than a side effect of some check's watches.
 # `plan_integrity` is the one place they are planned.
-INTEGRITY_CHECKS = ("structural", "file-size")
+INTEGRITY_CHECKS = ("file-size",)
 
 # The line a run ends with, immediately before the plan line, naming why every check ran
 # and every step did not. The payload is one JSON object on one line; `print_selection`
@@ -4865,11 +4630,8 @@ CHECK_KIND_GROUP = {
     # the layer, the render it produces, the dispatch order,
     # the hang-analysis report, a landing's contract, a tool that no
     # longer builds, or a guard whose finding is real no longer holds.
-    "structural": KIND_VERDICT,
     "file-size": KIND_VERDICT,
     "waybar": KIND_VERDICT,
-    "scratch": KIND_VERDICT,
-    "design-citations": KIND_VERDICT,
     "storybook": KIND_VERDICT,
     "rank-order": KIND_VERDICT,
     "session-forensics": KIND_VERDICT,
@@ -4886,7 +4648,6 @@ CHECK_KIND_GROUP = {
     # The pack's committed copy of the modules, and the front end's own build and suite: a
     # copy that diverges from its source, or a screen that does not compile, is this
     # change's own red rather than an inability to answer.
-    "pack-sync": KIND_VERDICT,
     "observatory-web": KIND_VERDICT,
     "meta-muse": KIND_VERDICT,
     "yolo-config": KIND_VERDICT,
@@ -4895,7 +4656,6 @@ CHECK_KIND_GROUP = {
     # one module: a module that does not compile is this change's own red, and so is a
     # failing case in its suite. The build always lands; the substrate's suite also
     # lands, while the other behavior suites roll (docs/design/landing-velocity.md).
-    "go-build": KIND_VERDICT,
     "go-tool": KIND_VERDICT,
     "go-substrate": KIND_VERDICT,
     # The seat-profile encoding's own tests: a suite that fails is a verdict about the
@@ -4972,13 +4732,11 @@ TIER_ROLLING = "rolling"
 CHECK_TIER = {
     # The integrity set: properties of the tree, sub-second to seconds, and unconditional
     # today. Rule 1 and rule 3.
-    "structural": TIER_LANDING,
     "file-size": TIER_LANDING,
     # The trunk must always compile. A non-compiling trunk breaks every lane's next rebase
     # and the next gate itself, so the build and the test-compile are pre-publish, always
     # (invariant I2). The substrate suite also lands: its store, migration, and event-kind
     # conformance failures break the machinery other work stands on (rule 1).
-    "go-build": TIER_LANDING,
     "go-substrate": TIER_LANDING,
     # The drain suite exceeds 30s alone and with three concurrent suites (measurements
     # beside GO_TOOL_DIRS). It rolls under section 4.3 rule 3, not a retired tool's cost.
@@ -5008,8 +4766,6 @@ CHECK_TIER = {
     # call: `rank-order` (20s) lands under rule 3, and F2 is
     # the mechanism that moves one, with evidence.
     "waybar": TIER_LANDING,
-    "scratch": TIER_LANDING,
-    "design-citations": TIER_LANDING,
     "rank-order": TIER_LANDING,
     "session-forensics": TIER_LANDING,
     "session-budget": TIER_LANDING,
@@ -5019,7 +4775,6 @@ CHECK_TIER = {
     "tillr-loop": TIER_LANDING,
     # The pack's copy of the modules is a property of the tree, and the front end's build is
     # what the served binary embeds: both land.
-    "pack-sync": TIER_LANDING,
     "observatory-web": TIER_LANDING,
     "meta-muse": TIER_LANDING,
     "yolo-config": TIER_LANDING,
@@ -5076,11 +4831,8 @@ CHEAP_CHECK_SECONDS = 10.0
 # is the old flat admission, so the default is the only place the tuning lives.
 HEAVY_JOBS_DEFAULT = 6
 CHECK_COST_ESTIMATE = {
-    "structural": 5.0,
     "file-size": 0.0,
     "waybar": 4.0,
-    "scratch": 0.0,
-    "design-citations": 0.0,
     "storybook": 20.0,
     "rank-order": 20.0,
     "session-forensics": 15.0,
@@ -5095,7 +4847,6 @@ CHECK_COST_ESTIMATE = {
     # PATH answering a chosen exit code, so the price is Python startup plus a few dozen
     # subprocesses rather than any real work.
     "tillr-loop": 5.0,
-    "pack-sync": 3.0,
     "observatory-web": 20.0,
     "meta-muse": 15.0,
     "seat-profiles": 8.0,
@@ -5105,7 +4856,6 @@ CHECK_COST_ESTIMATE = {
     # The design prices it at 15-30s provisionally; 30.0 is the upper bound until the
     # timings timeline has a reading of its own (the landing gate's first run writes one,
     # and S1's report is where the distribution replaces this number).
-    "go-build": 30.0,
     # Per-step costs come from the module table; a kind-only check uses the largest
     # declared member rather than inheriting a deleted monolith's price.
     "go-tool": max(cost for directory, cost in GO_TOOL_COST_ESTIMATE.items()
@@ -5305,7 +5055,7 @@ class Check:
         self.ended = ""
         # The check's clock in nanoseconds, stamped where the check starts and ends. The
         # evidence record's `seconds` is rounded to a tenth, so an in-process guard (the
-        # `.ts` budget, the scratch guard, the design-citation guard) records `0.0s` and
+        # `.ts` budget) records `0.0s` and
         # the waterfall cannot draw it. These are the same two ends at full precision, and
         # they are what `--spans-out` writes; a minute on one axis needs both ends, and a
         # duration alone cannot tell two checks that ran beside each other from two that
@@ -5339,10 +5089,8 @@ class Check:
     def command_line(self) -> str:
         """The command this check ran, in a spelling a reader can re-run.
 
-        The four in-process guards -- the `.ts` size budget, the scratch-citation
-        guard, the unreachable-citation guard and the legacy-seed intake freeze -- run
-        no command at all, so they name the gate's own guard rather than an empty line
-        that reads as a broken record.
+        The remaining in-process `.ts` size warning runs no command, so it names
+        the gate's own guard rather than an empty line that reads as a broken record.
         """
         if self.argv:
             return shlex.join(self.argv)
@@ -6058,200 +5806,20 @@ def is_document(root: Path, path: str) -> bool:
     return (root / path).is_file()
 
 
-def tracked_markdown(root: Path) -> list[str]:
-    """Every tracked Markdown file, repo-relative (which excludes `.forks/`, node_modules
-    and `.yolo/` for free -- none are tracked).
-    """
-    return [path for path in git(root, "ls-files", "*.md").split("\n") if path]
 
 
-def scratch_citations(root: Path) -> list[str]:
-    """Every tracked Markdown line that cites scratch, outside a fenced specimen.
-
-    One `path:line: text` per finding. Fenced blocks are skipped whole -- a command or
-    a transcript in a fence is a specimen, not a reference -- and `SCRATCH_EXCEPTIONS`
-    allows the documented locations. There is no `--all`: the guard is repository-wide,
-    because a convention the tree already violates is not one a change can be trusted
-    to leave alone.
-    """
-    findings: list[str] = []
-    for path in tracked_markdown(root):
-        text = (root / path).read_text(encoding="utf-8", errors="replace")
-        in_fence = False
-        for number, line in enumerate(text.splitlines(), 1):
-            if line.lstrip().startswith(("```", "~~~")):
-                in_fence = not in_fence
-                continue
-            if in_fence or not SCRATCH.search(line):
-                continue
-            if any(path == allowed and marker in line for allowed, marker in SCRATCH_EXCEPTIONS):
-                continue
-            findings.append(f"{path}:{number}: {line.strip()}")
-    return findings
 
 
-def frontmatter_entries(text: str) -> list[tuple[int, str]]:
-    """A document's YAML frontmatter as `(line number, line)`, or nothing.
-
-    Frontmatter is the block between the first `---` and the next one, and this reads it
-    the way the corpus writes it: a header of one-line fields, with block lists under a
-    field that has no value of its own. A document with no frontmatter cites nothing
-    this guard can read, and one whose block never closes has no frontmatter either --
-    `uvx vantage-check` judges the malformed document, not this guard.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return []
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            return [(number, lines[number - 1]) for number in range(2, index + 1)]
-    return []
 
 
-def frontmatter_citations(entries: list[tuple[int, str]]) -> list[tuple[int, str, str]]:
-    """Every document citation a frontmatter block declares, as `(line, field, value)`.
-
-    A field is one scalar (`depends-on: a.md`), one inline list (`depends-on: [a.md,
-    b.md]`) or a block list (the field with no value, then `- a.md` lines), and a value
-    keeps its quotes stripped and its trailing comment dropped. A block list belongs to
-    the field that opened it and ends at the next field, so an indented continuation of
-    some other field is never read as a citation.
-    """
-    citations: list[tuple[int, str, str]] = []
-    field: str | None = None
-    for number, line in entries:
-        stripped = line.strip()
-        name, separator, value = stripped.partition(":")
-        if separator and not stripped.startswith("-"):
-            field = name.strip() if name.strip() in DESIGN_CITATION_FIELDS else None
-            if field is None:
-                continue
-            value = value.strip()
-            if value.startswith("[") and value.endswith("]"):
-                for part in value[1:-1].split(","):
-                    candidate = part.strip().strip("\"'")
-                    if candidate:
-                        citations.append((number, field, candidate))
-            elif value:
-                citations.append((number, field, strip_yaml_comment(value)))
-            continue
-        if field is None:
-            continue
-        item = re.match(r"^-\s+(.*)$", stripped)
-        if item:
-            candidate = strip_yaml_comment(item.group(1).strip())
-            if candidate:
-                citations.append((number, field, candidate))
-            continue
-        # Any other line at this level closes the block list; a deeper indent is a
-        # continuation of the item above, which is prose in a field this guard reads as
-        # one token and therefore does not resolve.
-        if stripped and not line.startswith((" ", "\t")):
-            field = None
-    return citations
 
 
-def strip_yaml_comment(value: str) -> str:
-    """A frontmatter scalar without its trailing ` # comment` and without quotes."""
-    comment = value.find(" #")
-    if comment >= 0:
-        value = value[:comment]
-    return value.strip().strip("\"'")
 
 
-def markdown_anchors(text: str) -> set[str]:
-    """Every anchor a document declares: heading slugs, HTML ids and vantage questions.
-
-    The three forms are the ones the corpus uses, and the same three the retired
-    board CLI's `anchorPresent` accepts -- a citation
-    that resolves for the gate must resolve for the doctor, or the two halves of one
-    mechanism would disagree about what "the section exists" means.
-    """
-    anchors: set[str] = set()
-    for line in text.splitlines():
-        heading = MARKDOWN_HEADING.match(line)
-        if heading:
-            anchors.add(markdown_slug(heading.group(1)))
-        for match in MARKDOWN_HTML_ANCHOR.findall(line):
-            anchors.add(match.lower())
-        for match in MARKDOWN_VANTAGE_QUESTION.findall(line):
-            anchors.add(match.lower())
-    return anchors
 
 
-def markdown_slug(heading: str) -> str:
-    """A heading's GitHub-style anchor: lowercase, punctuation dropped, spaces joined.
-
-    It is the same reduction the board CLI applies (`slugifyHeading`), so a `#section`
-    that resolves here resolves there.
-    """
-    kept = "".join(
-        character for character in heading.strip().lower()
-        if character.isalnum() or character in "- "
-    )
-    return "-".join(kept.split())
 
 
-def design_citation_findings(root: Path) -> list[str]:
-    """Every frontmatter document citation that resolves to nothing.
-
-    One `path:line: field: value: reason` per finding, over every tracked Markdown file:
-    the guard is a repository convention rather than a diff, because a citation that
-    already dangles is not one a change can be trusted to leave alone (the scratch guard
-    reads the whole tree for the same reason). A citation is read as a `doc_path` and an
-    optional `#anchor`; the path is resolved beside the citing document, at the
-    repository root, then under `docs/` and `docs/design/`, and the anchor must be one of
-    the target's headings, HTML ids or vantage questions.
-    """
-    findings: list[str] = []
-    anchor_cache: dict[str, set[str] | None] = {}
-
-    def anchors_of(relative: str) -> set[str] | None:
-        if relative not in anchor_cache:
-            try:
-                anchor_cache[relative] = markdown_anchors(
-                    (root / relative).read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                anchor_cache[relative] = None
-        return anchor_cache[relative]
-
-    for path in tracked_markdown(root):
-        try:
-            text = (root / path).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for number, field, value in frontmatter_citations(frontmatter_entries(text)):
-            if not DESIGN_CITATION_DOC.search(value):
-                continue
-            target, _, anchor = value.partition("#")
-            resolved = None
-            if target:
-                for base in (os.path.dirname(path), *DESIGN_CITATION_ROOTS):
-                    candidate = os.path.normpath(os.path.join(base, target))
-                    if candidate.startswith("..") or candidate.startswith("/"):
-                        continue
-                    if (root / candidate).is_file():
-                        resolved = candidate
-                        break
-            else:
-                resolved = path
-            if resolved is None:
-                findings.append(
-                    f"{path}:{number}: {field}: {value}: names no tracked document "
-                    f"(looked beside the document, at the repository root, and under "
-                    f"docs/ and docs/design/)"
-                )
-                continue
-            if not anchor:
-                continue
-            present = anchors_of(resolved)
-            if present is not None and anchor.lower() in present:
-                continue
-            findings.append(
-                f"{path}:{number}: {field}: {value}: {resolved} has no such section "
-                f"(no heading, HTML anchor or vantage question matches #{anchor})"
-            )
-    return findings
 
 
 def tracked_typescript_lines(root: Path) -> list[tuple[str, int]]:
@@ -6440,10 +6008,6 @@ def dirty_state(root: Path) -> dict[str, tuple[int, int] | None]:
     return state
 
 
-def structural_integrity() -> Check:
-    """The series' shape: every series still applies to the pack that declares it."""
-    return Check("structural", "every series' shape, and the packs that declare them",
-                 ["sh", STRUCTURAL_TEST], "always", STRUCTURAL_TIMEOUT, watches=STRUCTURAL_INPUTS)
 
 
 def file_size_integrity() -> Check:
@@ -6462,7 +6026,6 @@ def file_size_integrity() -> Check:
 # how each member is built, so a kind added to one without the other fails here rather than
 # silently planning nothing or being planned twice.
 INTEGRITY_BUILDERS = {
-    "structural": structural_integrity,
     "file-size": file_size_integrity,
 }
 
@@ -6634,29 +6197,6 @@ def build_plan(
     else:
         plan.not_planned("waybar (module configuration, CPU appearance)",
                          "no Waybar input changed")
-
-    documents = sorted(path for path in changed if is_document(root, path))
-    if documents:
-        # Repo-wide, because the guard is a convention rather than a diff: it reads
-        # every tracked document, so every one of them is a path it must judge in the
-        # commit rather than the working tree.
-        plan.checks.append(
-            Check("scratch", "no tracked Markdown cites a scratch path as evidence",
-                  [], "the change touches Markdown, so the repository's documents are read",
-                  0, watches=tuple(tracked_markdown(root)))
-        )
-        # Repo-wide for the same reason as the scratch guard, and diff-independent: a
-        # frontmatter citation is a claim about a document that exists now, so the
-        # whole corpus is read rather than the changed files.
-        plan.checks.append(
-            Check("design-citations",
-                  "every frontmatter document citation resolves to a document and a section",
-                  [], "the change touches Markdown, so the repository's documents are read",
-                  0, watches=tuple(tracked_markdown(root)))
-        )
-    else:
-        plan.not_planned("scratch (scratch-citation guard)",
-                         "no tracked Markdown changed in the selected range")
 
     for name, inputs, artifact, why, skip in STORYBOOKS:
         matched = [path for path in changed if any(pattern.match(path) for pattern in inputs)]
@@ -6859,25 +6399,6 @@ def build_plan(
         plan.not_planned("tillr-loop (python3 tools/tillr-loop/test.py)",
                          "the loop adapter, its suite and its README are unchanged")
 
-    # tests/pack-sync.test.py is the only assertion that the tillr pack's committed copy
-    # matches its source. A change to the test, to a module it mirrors, to the pack tree or
-    # to the recipe that generates it plans it; nothing else does.
-    pack_sync = [path for path in changed
-                 if any(pattern.match(path) for pattern in PACK_SYNC_INPUT)]
-    # A repository without the sync test has nothing to sync: the fixture repositories the
-    # gate's own suite builds carry a `tools/tillr-land` and no pack, and planning a step
-    # that cannot run there would make every one of those cases red for the wrong reason.
-    if pack_sync and (root / PACK_SYNC_TEST).exists():
-        plan.checks.append(
-            Check("pack-sync", "the tillr pack's committed copy still matches tools/tillr*",
-                  ["python3", PACK_SYNC_TEST],
-                  "the sync test, a mirrored module, the pack tree, or the recipe changed",
-                  PACK_SYNC_TIMEOUT, watches=PACK_SYNC_WATCHES)
-        )
-    else:
-        plan.not_planned("pack-sync (python3 tests/pack-sync.test.py)",
-                         "the sync test, the mirrored modules and the pack tree are unchanged")
-
     # tests/tillr-docs.test.py is the only assertion that a documented face exists and that no
     # document carries a flag table. A change to the test, to a module a README belongs to, or
     # to the skill that composes them plans it; nothing else does. The same fixture guard as
@@ -7038,26 +6559,13 @@ def build_plan(
         plan.not_planned("matt-render (node --test)",
                          "no work-class render test or layer changed")
 
-    # The Go tools under tools/ are built and tested from this checkout; nothing else
-    # compiles them, so this is the only place a build that stopped working or a failing
-    # test is caught. Two steps per directory, in this order: `go-build` compiles the
-    # module and its test files, and the directory's suite kind runs the behavior suite.
-    # Each tool is its own module, so a change under one must be answered by that tool's
-    # build and never by a sibling's. Suites run without `-short`: no integration case is
-    # excluded. GO_LANDING_SUITE_DIRS declares which suites must pass before landing.
-    # A machine without `go` names the skip rather than silently dropping required proof.
+    # Build and test compilation moved to the whole-tree go-build declaration.
+    # This planner still selects the full behavior suite of each changed module.
     for directory in GO_TOOL_DIRS:
         suite_kind = "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool"
         watches = (directory + "/",)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
         if go_tool and shutil.which("go"):
-            plan.checks.append(
-                Check("go-build", f"{directory} builds and its test files compile",
-                      ["sh", "-c", go_build_command(directory)],
-                      f"a path under {directory}/ changed", GO_BUILD_TIMEOUT,
-                      watches=watches, selected_by=tuple(go_tool),
-                      drop=("LAND_BATCH_LIMIT",))
-            )
             plan.checks.append(
                 Check(suite_kind, f"{directory}'s whole suite passes",
                       ["sh", "-c", go_tool_command(directory)],
@@ -7067,10 +6575,8 @@ def build_plan(
                       drop=("LAND_BATCH_LIMIT",))
             )
         elif go_tool:
-            plan.unavailable(f"go-build ({directory})", "go is unavailable here", kind="go-build")
             plan.unavailable(f"{suite_kind} ({directory})", "go is unavailable here", kind=suite_kind)
         else:
-            plan.not_planned(f"go-build ({directory})", f"no path under {directory}/ changed")
             plan.not_planned(f"{suite_kind} ({directory})", f"no path under {directory}/ changed")
 
     # The shared pipeline-evidence format. The gate is the producer that still ships here,
@@ -8482,19 +7988,7 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         if cached_verdict(root, check, cache, runtime, env, drop, cancel):
             check.seconds = round(check.seconds + preflight_seconds, 2)
             return
-    if check.kind == "scratch":
-        pass_started = time.monotonic()
-        findings = scratch_citations(root)
-        check.rc = 1 if findings else 0
-        check.output = "\n".join(findings)
-        seconds = time.monotonic() - pass_started
-    elif check.kind == "design-citations":
-        pass_started = time.monotonic()
-        findings = design_citation_findings(root)
-        check.rc = 1 if findings else 0
-        check.output = "\n".join(findings)
-        seconds = time.monotonic() - pass_started
-    elif check.kind == "file-size":
+    if check.kind == "file-size":
         pass_started = time.monotonic()
         warnings = typescript_size_findings(root)
         refusals = []
@@ -8765,16 +8259,6 @@ def plan_gate(root: Path, options) -> GatePlan:
 DOCUMENT_SELECTS = [{"regex": r".*\.md$", "exclude_dirs": sorted(DOCUMENT_EXCLUDED),
                      "must_exist": True}]
 CHANGE_DEPENDENT_DECLARATIONS = {
-    ("scratch", 0): {
-        "id": "scratch",
-        "label": "no tracked Markdown cites a scratch path as evidence",
-        "selects": DOCUMENT_SELECTS,
-    },
-    ("design-citations", 0): {
-        "id": "design-citations",
-        "label": "every frontmatter document citation resolves to a document and a section",
-        "selects": DOCUMENT_SELECTS,
-    },
     ("storybook", 0): {
         "id": "storybook/roster",
         "label": "regenerate the pi-subagents roster storybook",

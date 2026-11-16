@@ -74,13 +74,17 @@ declared timeout produces no judgment (exit 4), not a failed check.
 [The budget declaration](../../tools/gate/checks/gate-budget.json) runs arithmetic admission:
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](../../tools/gate/checks/gate-budget-test.json) reads only the check
-directory. These declarations carry fast/heavy policy into the plan; per-fast-check
-budget deadlines and remembered tree results are separate work, not implemented by this
-loader.
+directory. The fast total is 8,950 milliseconds, including the admission check.
+A fast check is stopped at its declared budget. A tree check records `over-budget`
+(meaning its judgment is deferred to the heavy run) without failing an otherwise
+passing run; that outcome is never stored as a remembered pass. A change check
+that reaches its budget answers “could not judge” (exit 4), since no tree-only
+run can supply its missing judgment.
 
 ## Caller-owned change checks
 
-`checks` runs only the change declarations in a directory. A change check judges the
+`checks` runs the change declarations in a directory, optionally including its fast
+tree declarations. Heavy tree checks are left to the heavy runner. A change check judges the
 caller’s commit range, not the tree alone; the
 [design defines that distinction](../../docs/design/gate-rework.md#61-the-caller-names-the-base).
 The base and head are required, and the base must be an ancestor of the head. Missing or
@@ -95,8 +99,11 @@ tillr-gate checks --base <lane-base> --head <candidate-head> --logs <run>/change
 The repository’s change declarations cover commit identity, the frozen seed, commit
 citations, rendering changed Markdown, and refusing newly added TypeScript files over
 3,000 lines. Existing TypeScript size warnings remain in the older tree program. The
-[loop’s default judge](../gate/change-gate.py) runs these declarations first, then the
-remaining tree program; it stops if any change check fails or cannot judge.
+[loop’s default judge](../gate/change-gate.py) runs the change declarations and fast tree
+checks first, then the remaining tree program; it stops if any check fails or cannot judge.
+The fast tree checks cover Markdown conventions, series structure, the pack mirror, and
+parallel Go builds. Structural proof is not remembered because it also reads Git refs
+outside the judged tree.
 
 ## What it refuses
 

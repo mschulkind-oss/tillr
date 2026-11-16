@@ -121,17 +121,17 @@ func TestPlanSelectsTheGoToolSteps(t *testing.T) {
 	reg := load(t)
 	root := filepath.Join("..", "..")
 	lander := reg.Plan([]string{"tools/tillr-land/main.go"}, root)
-	if !hasCheck(lander, "go-build/tools-tillr-land-builds-and-its-test-files-compile") {
+	if !hasCheck(lander, "go-tool/tools-tillr-land-s-whole-suite-passes") {
 		t.Fatalf("a tillr-land-only change did not select the lander's build step: %v", ids(lander))
 	}
-	if hasCheck(lander, "go-build/tools-pi-profiler-builds-and-its-test-files-compile") {
+	if hasCheck(lander, "go-tool/tools-pi-profiler-s-whole-suite-passes") {
 		t.Fatalf("a tillr-land-only change selected the pi-profiler build step: %v", ids(lander))
 	}
 	profiler := reg.Plan([]string{"tools/pi-profiler/main.go"}, root)
-	if !hasCheck(profiler, "go-build/tools-pi-profiler-builds-and-its-test-files-compile") {
+	if !hasCheck(profiler, "go-tool/tools-pi-profiler-s-whole-suite-passes") {
 		t.Fatalf("a pi-profiler-only change did not select the pi-profiler build step: %v", ids(profiler))
 	}
-	if hasCheck(profiler, "go-build/tools-tillr-land-builds-and-its-test-files-compile") {
+	if hasCheck(profiler, "go-tool/tools-tillr-land-s-whole-suite-passes") {
 		t.Fatalf("a pi-profiler-only change selected the mq build step: %v", ids(profiler))
 	}
 }
@@ -185,7 +185,7 @@ func TestPlanCarriesTheFieldsACommandListCannot(t *testing.T) {
 	if len(liveness.Env) == 0 {
 		t.Fatalf("the liveness harness's declaration carries no environment")
 	}
-	build, ok := byID["go-build/tools-tillr-land-builds-and-its-test-files-compile"]
+	build, ok := byID["go-tool/tools-tillr-land-s-whole-suite-passes"]
 	if !ok {
 		t.Fatalf("the mq build step was not selected: %v", ids(checks))
 	}
@@ -213,14 +213,12 @@ func TestPlanCarriesTheFieldsACommandListCannot(t *testing.T) {
 	}
 }
 
-// The gate runs three checks as its own code rather than as a command: the file-size
-// ceiling, the scratch-citation guard, and the frontmatter-citation resolver. A registry of
-// commands cannot spell them, so it names them separately -- and carries the same selection
-// a command declaration does, so a planner can say which of them a change owes. Pinning the
-// set is what makes a fourth one a deliberate edit rather than a silent drop.
+// The legacy registry retains the in-process TypeScript size warning. The two
+// Markdown convention guards now have executable tree declarations, so they must
+// not also appear here.
 func TestTheRegistryNamesTheChecksItCannotCommand(t *testing.T) {
 	reg := load(t)
-	want := map[string]bool{"file-size": true, "scratch": true, "design-citations": true}
+	want := map[string]bool{"file-size": true}
 	got := map[string]bool{}
 	for _, c := range reg.InProcess {
 		if c.ID == "" || c.Kind == "" || c.Label == "" {

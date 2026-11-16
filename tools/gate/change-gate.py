@@ -20,7 +20,7 @@ def main():
         if actual.stdout != named.stdout:
             print("change-gate: could not judge: --head is not checked out", file=sys.stderr)
             return 4
-        checked = subprocess.run([args.runner, "checks", "--base", args.base, "--head", args.head,
+        checked = subprocess.run([args.runner, "checks", "--fast-tree", "--base", args.base, "--head", args.head,
                                   "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs])
         if checked.returncode:
             return checked.returncode

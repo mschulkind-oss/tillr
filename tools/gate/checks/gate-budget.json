@@ -4,7 +4,7 @@
   "command": ["python3", "tools/gate/checks/gate-budget.py", "tools/gate/checks/"],
   "scope": "change",
   "tier": "fast",
-  "budget_ms": 100,
+  "budget_ms": 300,
   "reads": ["tools/gate/checks/"],
   "tools": ["python3"]
 }

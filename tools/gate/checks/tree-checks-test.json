@@ -1,0 +1,10 @@
+{
+  "id": "tree-checks-test",
+  "label": "Whole-tree check migration regression suite",
+  "command": ["python3", "tools/gate/checks/tree_checks_test.py"],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 60000,
+  "reads": ["tools/gate/checks/", "tools/fork-check.py"],
+  "tools": ["python3", "git", "go"]
+}

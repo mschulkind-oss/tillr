@@ -12,11 +12,8 @@ of the command:
   * a series that changes pulls in the working-copy check and the build; a series whose
     working copy is absent refuses the run -- naming the missing checkout and its setup --
     instead of recording a verdict over steps that never ran;
-  * changed Markdown selects the repository-wide scratch and frontmatter citation guards;
-    rendering changed documents is owned by the declaration runner's fixture suite;
-  * a document that cites a scratch path as evidence fails the scratch-citation guard
-    and does not advance the baseline, while a citation inside a fenced block -- a
-    specimen -- passes;
+  * Markdown convention guards, document rendering, structural proof, pack sync and
+    parallel Go builds are owned by the declaration runner's fixture suites;
   * a change that can change what the roster storybook renders regenerates it, and a
     change that cannot leaves it alone;
   * a change to the meta-muse pack, the personal layer that selects it, or either of the
@@ -75,9 +72,8 @@ of the command:
     materializes or judges a series (`MECHANISM`) still forces every fork check -- so a
     gate-only change lands in a pass while a fork's patch branch is behind its upstream
     (board item 412);
-  * a change under any Go tool directory plans that directory's own build and unit
-    test -- one step per directory, watching that directory alone -- and a machine
-    without `go` names that directory's skip;
+  * a change under any Go tool directory plans that directory's whole behavior
+    suite, watching that directory alone; a machine without `go` names its skip;
   * a change to the rank-order suite, the rank alphabet it reads, or the pi-subagents
     series that builds its working copy runs the suite through `node --test`, and a
     missing working copy refuses the run (exit 2) instead of reporting an all-skipped
@@ -563,6 +559,13 @@ def run(repo: Path, env, *args):
     )
 
 
+def waybar_fixture(repo):
+    (repo / "config/waybar").mkdir(parents=True, exist_ok=True)
+    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
+    (repo / "tests/test_waybar_cpu.py").write_text(
+        "import unittest\nclass Fixture(unittest.TestCase):\n def test_cpu(self): pass\n")
+
+
 def calls(base: Path, name: str):
     path = base / name
     return path.read_text().splitlines() if path.exists() else []
@@ -958,7 +961,7 @@ with tempfile.TemporaryDirectory() as tmp:
     result = run(repo, env, "--explain")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "would run" in result.stdout, result.stdout
-    assert "       watches: yolo-packs/, bin/pi-forks," in result.stdout, result.stdout
+    assert "would run  file-size" in result.stdout, result.stdout
     # It runs no check, but the plan still asks the bridge which upstream a launch
     # would build -- one call, and it fetches, so the plan cannot name a stale release.
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
@@ -969,7 +972,6 @@ with tempfile.TemporaryDirectory() as tmp:
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
-    assert "no tracked Markdown changed in the selected range" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
     # 13. A change that can change what the roster storybook renders regenerates it
@@ -1025,114 +1027,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls(base, "footer-storybook-calls") == [], calls(base, "footer-storybook-calls")
     assert "no footer or storybook tooling changed" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # 15. The scratch-citation guard: a tracked document that cites a scratch path as
-    #     evidence fails the gate and does not advance the baseline; prose and inline
-    #     code are read, a fenced block is a specimen, and a documented location on the
-    #     allowlist passes.
-    clear(base, "uvx-calls", "uvx-rc", "uvx-out", "uvx-err")
-    guard_baseline = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-    (repo / "docs" / "guide.md").write_text(
-        "# Guide\n\nThe result is recorded in `.yolo/durable/activity-next/report.md`.\n"
-    )
-    commit(repo, "cite scratch as evidence")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  scratch" in result.stdout and "FAILED" in result.stdout, result.stdout
-    assert "docs/guide.md" in result.stdout and ".yolo/durable" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == guard_baseline, record(repo)["baseline"]
-    assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
-
-    # The same repository, refused instead of judged: the dirty path exits 2 while the
-    # finding above exits 1, so the two numbers a caller reads are disjoint and a run
-    # that never started can never be taken for a verdict against the change (item 262).
-    (repo / "docs" / "guide.md").write_text("# Guide\n\nDirty, and not committed.\n")
-    refused = run(repo, env)
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    assert "REFUSED" in refused.stdout, refused.stdout
-    assert "FAILED" not in refused.stdout, refused.stdout
-    sh(repo, "git", "checkout", "--quiet", "--", ".")
-
-    # A fenced command is a specimen, not a citation: it does not fail the guard.
-    (repo / "docs" / "guide.md").write_text(
-        "# Guide\n\n```bash\ncat .yolo/durable/activity-next/report.md\n```\n"
-    )
-    commit(repo, "keep the citation in a fence")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "run  scratch" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-
-    # A documented location on the allowlist does not fail the guard -- the allowlist is
-    # file- and marker-specific, so it takes the line in the file it names. The run is
-    # VERIFIED, so the baseline advances to this commit.
-    (repo / "tools" / "footer-storybook" / "README.md").write_text(
-        "# Footer storybook\n\nArtifacts land under `$YOLO_DURABLE_DIR/footer-storybook` by design.\n"
-    )
-    commit(repo, "document an output location")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == sh(repo, "git", "rev-parse", "HEAD").stdout.strip(), record(repo)["baseline"]
-
-    # 15a. The design-citation guard: a document's frontmatter may cite another
-    #      document, with an optional section, and every citation has to resolve. The
-    #      gate resolves both halves -- the document and the anchor -- over every tracked
-    #      document, so a citation to a document that does not exist and one to a section
-    #      that document does not have are each a verdict. A prose `supersedes:` value is
-    #      not a citation and is not read, which is the shape the corpus uses for "this
-    #      document replaces a framing, not a file".
-    sh(repo, "git", "checkout", "--quiet", "--", ".")
-    design = repo / "docs" / "design"
-    design.mkdir(parents=True, exist_ok=True)
-    (design / "target.md").write_text(
-        "---\ntitle: Target\nstatus: accepted\n---\n\n# Target\n\n## 3. The section\n\ntext\n"
-    )
-    (design / "citing.md").write_text(
-        "---\ntitle: Citing\nstatus: in-review\ndepends-on:\n  - target.md#3-the-section\n"
-        "superseded-by: target.md\nsupersedes: the \"which runtime do we adopt\" framing\n---\n\n"
-        "# Citing\n\n## 1. Body\n"
-    )
-    commit(repo, "cite a document from frontmatter")
-    clear(base, "uvx-calls")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "run  design-citations" in result.stdout, result.stdout
-    assert "fork-check: VERIFIED" in result.stdout, result.stdout
-    citation_baseline = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
-
-    # A section the target does not have fails the gate and does not advance the baseline.
-    (design / "citing.md").write_text(
-        "---\ntitle: Citing\nstatus: in-review\ndepends-on:\n  - target.md#9-the-section-that-moved\n---\n\n"
-        "# Citing\n\n## 1. Body\n"
-    )
-    commit(repo, "cite a section that moved")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  design-citations" in result.stdout and "FAILED" in result.stdout, result.stdout
-    assert "docs/design/citing.md" in result.stdout and "9-the-section-that-moved" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == citation_baseline, record(repo)["baseline"]
-
-    # A document the citation names but the tree does not have is the other half, and it
-    # fails the same way: the guard resolves the path, not only the anchor.
-    (design / "citing.md").write_text(
-        "---\ntitle: Citing\nstatus: in-review\ndepends-on: gone.md#1-body\n---\n\n# Citing\n"
-    )
-    commit(repo, "cite a document that is gone")
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "docs/design/citing.md" in result.stdout and "names no tracked document" in result.stdout, result.stdout
-    assert record(repo)["baseline"]["commit"] == citation_baseline, record(repo)["baseline"]
-
-    # Resolving again verifies, so the guard is a verdict on the tree rather than a latch.
-    (design / "citing.md").write_text(
-        "---\ntitle: Citing\nstatus: in-review\ndepends-on: target.md\n---\n\n# Citing\n"
-    )
-    commit(repo, "cite the document only")
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "run  design-citations" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
     # 16. A pack that declares `patch_branch` and no `patches` still deploys a
@@ -1585,7 +1479,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert run(repo, env).returncode == 0
     baseline = record(repo)["baseline"]
     targets = record(repo)["targets"]
-    (repo / "docs/guide.md").write_text("# Broken doc\n\nEvidence .yolo/durable/unretained.txt\n")
+    waybar_fixture(repo)
+    (repo / "config/waybar/config").write_text("broken\n")
+    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
     commit(repo, "break documentation")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -1611,7 +1507,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["last_audit"]["outcome"] == "failed", record(repo)
     result = run(repo, env, "--since", "HEAD~2")
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  scratch" in result.stdout, result.stdout
+    assert "run  waybar" in result.stdout, result.stdout
 
 # The real recipe must inherit the approved point, not silently narrow to HEAD^.
 # Run its actual default arguments in a fixture with failure from an earlier task.
@@ -1627,7 +1523,9 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert run(repo, env).returncode == 0
     approved = record(repo)["baseline"]
-    (repo / "docs/guide.md").write_text("# Earlier broken document\n\nEvidence .yolo/durable/unretained.txt\n")
+    waybar_fixture(repo)
+    (repo / "config/waybar/config").write_text("broken\n")
+    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
     commit(repo, "earlier task leaves a failed document check")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -1637,12 +1535,12 @@ with tempfile.TemporaryDirectory() as tmp:
     clear(base, "uvx-calls")
     result = run(repo, env, *default_args)
     assert result.returncode == 1, "A later commit must not hide the earlier failure:\n" + result.stdout
-    assert "run  scratch" in result.stdout, "Default completion must check earlier unapproved documents"
+    assert "run  waybar" in result.stdout, "Default completion must check earlier unapproved documents"
     assert record(repo)["baseline"] == approved, record(repo)
 
     # Once all pending checks pass, the approved point rolls forward to HEAD.
     clear(base, "uvx-rc", "uvx-out")
-    (repo / "docs/guide.md").write_text("# Repaired document\n")
+    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
     commit(repo, "repair the pending failure")
     result = run(repo, env, *default_args)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1828,12 +1726,11 @@ with tempfile.TemporaryDirectory() as tmp:
     #     the re-read sees the write and refuses.
     sh(repo, "git", "checkout", "--quiet", "--", ".")
     raced_path = repo / "yolo-packs" / "matt" / "patches" / "pi-subagents" / "0001-x.patch"
+    raced_path.write_text("a changed series selects the fork checks\n")
+    commit(repo, "select a fork check before racing its input")
     spec = importlib.util.spec_from_file_location("fork_check_race", repo / "tools" / "fork-check.py")
     racer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(racer)
-    assert racer.watched_path(
-        "yolo-packs/matt/patches/pi-subagents/0001-x.patch", set(racer.STRUCTURAL_INPUTS)
-    ), racer.STRUCTURAL_INPUTS
     real_ls_remote = racer.ls_remote
 
     def ls_remote_racing_the_plan(url):
@@ -1962,10 +1859,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stderr.splitlines()[0].startswith("fork-check: planning"), result.stderr
     assert "fork-check: plan ready" in result.stderr, result.stderr
-    assert "fork-check: ok structural" in result.stderr, result.stderr
-    assert "fork-check: ok scratch" in result.stderr, result.stderr
-    assert result.stderr.index("fork-check: ok structural") \
-        < result.stderr.index("fork-check: ok scratch"), result.stderr
+    assert "fork-check: ok file-size" in result.stderr, result.stderr
+    assert "fork-check: ok file-size" in result.stderr, result.stderr
     # One line per check, and no second one announcing a start: a start line would be in
     # start order while the results are in plan order, so the two would disagree.
     assert "fork-check: running" not in result.stderr, result.stderr
@@ -2052,7 +1947,7 @@ with tempfile.TemporaryDirectory() as tmp:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     go_tool_steps = 2 * len(module.GO_TOOL_DIRS)
-    assert "8 check(s) passed" in headline, headline
+    assert "7 check(s) passed" in headline, headline
     # The count is DERIVED from the report, not from a constant: the headline's number must
     # equal the number of steps the report names as not run. A constant here was a hand
     # sweep waiting to happen -- it went stale twice in one day, once when the pack-sync
@@ -2456,7 +2351,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # commit or the fork point with one -- never a first run and never a refusal.
     assert "so this run plans from " in result.stdout, result.stdout
     assert "history was rewritten under it" in result.stdout, result.stdout
-    assert "would run  scratch" in result.stdout, result.stdout
+    assert "would run  file-size" in result.stdout, result.stdout
     assert "REFUSED" not in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
     assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
@@ -2885,7 +2780,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (go_stub / "go").chmod(0o755)
     # The substrate suite lands; the other behavior suites roll. Both still share the
     # build's watch and run the whole suite.
-    GO_KINDS = ("go-build", "go-tool", "go-substrate")
+    GO_KINDS = ("go-tool", "go-substrate")
     # Suite kinds are selected dynamically, so the later literal-Check inventory
     # cannot discover them. Name both declarations here rather than letting a removed
     # kind hide behind the landing-tier default.
@@ -2908,7 +2803,7 @@ with tempfile.TemporaryDirectory() as tmp:
         return "go-substrate" if directory in module.GO_LANDING_SUITE_DIRS else "go-tool"
 
     def directory_kinds(directory):
-        return ("go-build", suite_kind(directory))
+        return (suite_kind(directory),)
 
     def go_plan(changed):
         planned = module.build_plan(
@@ -2944,7 +2839,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 module.apply_tier(plan, tier)
                 selected = [check.kind for check in plan.checks
                             if check.watches == (f"{directory}/",)]
-                expected = (["go-build"] if tier == module.TIER_LANDING else [])
+                expected = []
                 if tier == suite_tier:
                     expected.append(expected_suite_kind)
                 assert selected == expected, (directory, tier, selected)
@@ -2961,26 +2856,17 @@ with tempfile.TemporaryDirectory() as tmp:
             assert [check.kind for check in checks] == list(directory_kinds(directory)), (
                 f"{directory} plans {[(check.kind, check.label) for check in checks]}; "
                 f"skips: {[skip.label for skip in skips]}")
-            assert checks[0].label == f"{directory} builds and its test files compile", \
-                checks[0].label
-            assert checks[1].label == f"{directory}'s whole suite passes", checks[1].label
-            # The build step compiles the module and its test files, and runs no case.
-            # The expected argv is DERIVED from the function, not copied: the command
-            # changed once already (the temp-dir build) and a copied string went stale.
-            assert checks[0].argv == ["sh", "-c", module.go_build_command(directory)], \
-                checks[0].argv
             # The suite step is the WHOLE suite: `-short` would skip the
             # integration cases, which is the blind spot item 570 closed. The build is
             # the other step's job, so this command does not repeat it.
-            assert checks[1].argv == ["sh", "-c", module.go_tool_command(directory)], \
-                checks[1].argv
-            assert "-short" not in checks[1].argv[-1], checks[1].argv
-            assert "go build" not in checks[1].argv[-1], checks[1].argv
+            assert checks[0].argv == ["sh", "-c", module.go_tool_command(directory)], \
+                checks[0].argv
+            assert "-short" not in checks[0].argv[-1], checks[0].argv
+            assert "go build" not in checks[0].argv[-1], checks[0].argv
             for check in checks:
                 assert check.watches == (f"{directory}/",), check.watches
-            assert checks[0].timeout == module.GO_BUILD_TIMEOUT, checks[0].timeout
-            assert checks[1].timeout == module.GO_TOOL_TIMEOUT, checks[1].timeout
-            assert checks[1].cost == module.GO_TOOL_COST_ESTIMATE[directory], checks[1].cost
+            assert checks[0].timeout == module.GO_TOOL_TIMEOUT, checks[0].timeout
+            assert checks[0].cost == module.GO_TOOL_COST_ESTIMATE[directory], checks[0].cost
         #      The directory the change did not touch is named as not run, so the plan
         #      accounts for every Go tool it knows.
         for directory in tool_dirs:
@@ -3011,10 +2897,8 @@ with tempfile.TemporaryDirectory() as tmp:
             checks, skips = go_plan([f"{directory}/main.go"])
             assert [check.kind for check in checks] == list(directory_kinds(directory)), \
                 (directory, [check.kind for check in checks])
-            assert checks[0].label == f"{directory} builds and its test files compile", \
-                checks[0].label
-            assert checks[1].label == f"{directory}'s whole suite passes", checks[1].label
-            assert "-short" not in checks[1].argv[-1], checks[1].argv
+            assert checks[0].label == f"{directory}'s whole suite passes", checks[0].label
+            assert "-short" not in checks[0].argv[-1], checks[0].argv
             assert not [skip for skip in skips if "integration" in skip.label], \
                 (directory, [skip.label for skip in skips])
         #      The declaration, the second step's command and the directory tuple that
@@ -3039,16 +2923,16 @@ with tempfile.TemporaryDirectory() as tmp:
         repo, [], module.Record(base / "names-state.json"), ["tools/tillr-land/main.go"], None, True,
     )
     planned, required = module.plan_kinds(plan)
-    assert "go-build" in planned, planned
+    assert "go-build" not in planned, planned
     assert "go-tool" in planned, planned
     assert set(required) <= set(planned), (planned, required)
-    assert {"structural", "file-size"} <= set(required), required
+    assert {"file-size"} <= set(required), required
     line_buffer = io.StringIO()
     with contextlib.redirect_stdout(line_buffer):
         module.print_plan(module.Record(base / "names-state.json"), plan, "0" * 40, "1" * 40)
     plan_line = line_buffer.getvalue().strip().splitlines()[-1]
     plan_fields = dict(field.split("=", 1) for field in plan_line.split()[2:])
-    assert "go-build" in plan_fields["checks"].split(","), plan_fields
+    assert "go-build" not in plan_fields["checks"].split(","), plan_fields
     assert "go-tool" in plan_fields["checks"].split(","), plan_fields
     assert set(plan_fields["required"].split(",")) <= set(plan_fields["checks"].split(",")), plan_fields
     assert plan_fields["checks"] == ",".join(planned), plan_fields
@@ -3085,7 +2969,7 @@ with tempfile.TemporaryDirectory() as tmp:
         planned, required = module.plan_kinds(unanswered)
         assert "go-build" not in planned, planned
         assert "go-tool" not in planned, planned
-        assert "go-build" in required, required
+        assert "go-build" not in required, required
         assert "go-tool" in required, required
         substrate = module.build_plan(
             repo, [], module.Record(base / "names-state.json"), ["tools/tillr/store/store.go"], None, True,
@@ -3107,10 +2991,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # as a subset let a landing cite this pass as less than the package's verdict (item
     # 544). The build label names the compile, which is the other step.
     assert [check.label for check in checks] == [
-        "tools/tillr-land builds and its test files compile",
         "tools/tillr-land's whole suite passes"], [check.label for check in checks]
-    assert checks[0].argv == ["sh", "-c", module.go_build_command("tools/tillr-land")], checks[0].argv
-    assert checks[1].argv == ["sh", "-c", module.go_tool_command("tools/tillr-land")], checks[1].argv
+    assert checks[0].argv == ["sh", "-c", module.go_tool_command("tools/tillr-land")], checks[0].argv
     for outside in ("bashrc", "tools/tillr-gate/main.go"):
         checks, skips = go_plan([outside])
         assert not [check for check in checks if "tillr-land" in check.label], \
@@ -3159,8 +3041,6 @@ with tempfile.TemporaryDirectory() as tmp:
     # No second step is planned, and the report does not claim a subset ran.
     result = run(repo, env)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  go-build" in result.stdout, result.stdout
-    assert "tools/tillr-land builds and its test files compile" in result.stdout, result.stdout
     assert "tools/tillr-land's whole suite passes" in result.stdout, result.stdout
     # The verdict names the suite step, and only it: the build step passed.
     assert "go-tool: tools/tillr-land's whole suite passes" in result.stdout, result.stdout
@@ -3168,124 +3048,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "go-tool-integration" not in result.stdout, result.stdout
     assert "-short unit subset" not in result.stdout, result.stdout
     assert "last_full_audit" not in record(repo), record(repo)
-
-    # The other direction: a build that does not compile is the build step's red, and the
-    # suite step still reports its own result rather than inheriting the blame. The stub
-    # answers `go list` with a main package, because the build is only run when one exists
-    # (see the library-only case below).
-    (go_stub / "go").write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "list" ]; then echo M; exit 0; fi\n'
-        'if [ "$1" = "build" ]; then exit 1; fi\n'
-        "exit 0\n"
-    )
-    result = run(repo, env)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "go-build: tools/tillr-land builds and its test files compile" in result.stdout, \
-        result.stdout
-    assert "go-tool: tools/tillr-land" not in result.stdout, result.stdout
-
-    # `--all` plans the same two steps: the second integration step is deleted, not merely
-    # unused.
-    result = run(repo, env, "--all")
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "go-tool-integration" not in result.stdout, result.stdout
-
-    # A library-only module has no main package, and `go build -o <dir> ./...` exits 1 with
-    # "no main packages to build" for it -- so the build is run only when `go list` reports
-    # a main package. A stub that fails any `build` call proves the call is not made: the
-    # step is green because there is nothing to build, not because the build was skipped
-    # over a failure. Measured 2026-11-11: the go-build step for tools/tillr went red on a
-    # clean tree for exactly this reason.
-    (go_stub / "go").write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "list" ]; then exit 0; fi\n'
-        'if [ "$1" = "build" ]; then exit 1; fi\n'
-        "exit 0\n"
-    )
-    result = run(repo, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "go-build: tools/tillr-land" not in result.stdout, result.stdout
-    assert "go-tool: tools/tillr-land" not in result.stdout, result.stdout
-
-# 28i. THE BUILD PROBE IS RIGHT FOR ALL THREE MODULE SHAPES. `go build -o <dir> ./...`
-#      exits 1 for a library-only module, so `-o` is passed only when `go list` reports a
-#      main package; the build is kept because `go test` compiles a main package as a
-#      library and returns 0 for a main package with no `main` function. The three shapes
-#      are run against the real toolchain through a recording wrapper, so the case proves
-#      the command's own logic rather than a stub's imitation of it. TMPDIR is redirected,
-#      so "leaves nothing behind" is a measurement rather than a guess about /tmp.
-real_go = shutil.which("go")
-# The wrapper must exec the toolchain's own binary, not whatever `go` resolves to on
-# PATH: on a mise-managed machine that is a shim, and a shim reached through a PATH whose
-# first entry is the wrapper recurses (measured 2026-11-11: "mise ERROR shim fallback
-# recursion detected for go"). GOROOT names the real binary.
-real_go_bin = None
-if real_go is not None:
-    goroot = subprocess.run([real_go, "env", "GOROOT"], capture_output=True, text=True)
-    if goroot.returncode == 0:
-        candidate = Path(goroot.stdout.strip()) / "bin" / "go"
-        if candidate.is_file():
-            real_go_bin = str(candidate)
-if real_go_bin is None:
-    print("skip 28i: no go toolchain on PATH, so the three module shapes cannot be run")
-else:
-    with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
-        go_record = base / "go-calls"
-        wrapper = base / "go-wrap"
-        wrapper.mkdir()
-        (wrapper / "go").write_text(
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "$*" >> {go_record}\n'
-            f'exec {real_go_bin} "$@"\n'
-        )
-        (wrapper / "go").chmod(0o755)
-        tmpdir = base / "tmp"
-        tmpdir.mkdir()
-        shape_env = {**os.environ, "PATH": f"{wrapper}:{os.environ['PATH']}",
-                     "TMPDIR": str(tmpdir)}
-
-        spec = importlib.util.spec_from_file_location("fork_check_go_shapes", SCRIPT)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        def shape(name, source):
-            directory = base / name
-            directory.mkdir()
-            (directory / "go.mod").write_text(f"module example.com/{name}\n\ngo 1.24\n")
-            (directory / "main.go").write_text(source)
-            go_record.write_text("")
-            result = subprocess.run(["sh", "-c", module.go_build_command(str(directory))],
-                                    env=shape_env, capture_output=True, text=True)
-            return result, go_record.read_text(), directory
-
-        # A library-only module: no main package, so no build is attempted and the
-        # test-compile is the whole step.
-        result, go_calls, directory = shape(
-            "library", "package library\n\nfunc F() int { return 1 }\n")
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "build" not in go_calls, go_calls
-        assert "test" in go_calls, go_calls
-
-        # A main package with no `main` function: the build catches it, and `go test`
-        # alone would not -- it compiles the package as a library and returns 0.
-        result, go_calls, directory = shape(
-            "nomain", "package main\n\nfunc helper() int { return 1 }\n")
-        assert result.returncode == 1, result.stdout + result.stderr
-        assert "build" in go_calls, go_calls
-
-        # A healthy main package: the build runs, the test-compile runs, and the checkout
-        # is left byte-identical -- no binary beside the source.
-        result, go_calls, directory = shape("healthy", "package main\n\nfunc main() {}\n")
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "build" in go_calls, go_calls
-        assert sorted(p.name for p in directory.iterdir()) == ["go.mod", "main.go"], \
-            sorted(p.name for p in directory.iterdir())
-
-        # Every shape leaves the temporary directory empty: the EXIT trap removes it on
-        # the success path and on both failure paths.
-        assert list(tmpdir.iterdir()) == [], list(tmpdir.iterdir())
 
 # 29. The rank-order suite runs in the gate. It proves a capacity-queued dispatch follows
 #     the pile's rank -- it imports the production pump and the ordering helper from the
@@ -4388,7 +4150,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # A document finding is the case that needed this: the entry said "documents ... exited
     # 1", and the checker's own report -- the line that names the missing target -- existed
     # only on the terminal.
-    (repo / "tests/pi-patch-series.test.sh").write_text(
+    waybar_fixture(repo)
+    (repo / "tests/waybar-ai-modules.test.sh").write_text(
         '#!/bin/sh\n'
         f'if [ -f "{base}/uvx-rc" ]; then cat "{base}/uvx-out"; exit 1; fi\n'
         'exit 0\n')
@@ -4402,7 +4165,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 1, result.stdout + result.stderr
     assert excerpt.exists(), "a failing run writes the excerpt beside the record"
     text = excerpt.read_text()
-    assert "command: sh tests/pi-patch-series.test.sh" in text, text
+    assert "command: sh tests/waybar-ai-modules.test.sh" in text, text
     assert "exit code: 1" in text, text
     assert "link/missing-target" in text, text
     # The report names the file, so the terminal says where to look without a paste.
@@ -4434,7 +4197,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "earlier line(s) dropped" in text, text
     # Rewritten, not appended: the file describes the most recent failing run, and its
     # header names that run because older entries carry the same path.
-    assert text.count("=== structural") == 1, text
+    assert text.count("=== waybar") == 1, text
     assert "link/missing-target" not in text, text
 
     # A green run afterwards leaves the last failure's excerpt alone: fixing the document
@@ -5520,13 +5283,13 @@ with tempfile.TemporaryDirectory() as tmp:
     # Nothing changed, so the names are the integrity set alone -- and every kind the plan
     # requires is one it ran: that is the pair a landing reads rather than guessing which
     # steps a diff selected.
-    assert plan_fields["checks"] == "file-size,structural", plan_fields
+    assert plan_fields["checks"] == "file-size", plan_fields
     assert plan_fields["required"] == plan_fields["checks"], plan_fields
     assert plan_fields["head"] == sh(repo, "git", "rev-parse", "HEAD").stdout.strip(), plan_fields
     # A run with nothing to do still carries the integrity set: that is the floor under the
-    # selection, and it is the same two checks on every run.
-    assert plan_fields["integrity"] == "2", plan_fields
-    assert "  run  structural " in result.stdout and "  run  file-size " in result.stdout, result.stdout
+    # selection, and the surviving file-size warning runs every time.
+    assert plan_fields["integrity"] == "1", plan_fields
+    assert "  run  file-size " in result.stdout, result.stdout
 
     # A change no step but the documents and the integrity set reaches: the plan is a
     # fraction of the gate, and the line says so against the record's own full-gate price.
@@ -5541,7 +5304,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert plan_fields["base"] == verified_before, (plan_fields, verified_before)
     # The doc change reaches the documents step, and the plan names it: a landing reads
     # this pair rather than reconstructing the selection from the tree.
-    assert "scratch" in plan_fields["checks"].split(","), plan_fields
+    assert "waybar" not in plan_fields["checks"].split(","), plan_fields
     assert set(plan_fields["required"].split(",")) <= set(plan_fields["checks"].split(",")), plan_fields
     ran, notrun, priced = int(plan_fields["ran"]), int(plan_fields["notrun"]), int(plan_fields["priced"])
     seconds, full, saved = (float(plan_fields[key]) for key in ("seconds", "full", "saved"))
@@ -5575,7 +5338,7 @@ with tempfile.TemporaryDirectory() as tmp:
                              {"label": "another fast recorded step", "seconds": 0.02}]}],
     }))
     floor_plan = module.Plan()
-    slow = module.Check("scratch", "a document was checked", [], "a document changed", 0)
+    slow = module.Check("waybar", "a document was checked", [], "a document changed", 0)
     slow.seconds = 0.1
     floor_plan.checks = [slow]
     printed = io.StringIO()
@@ -5594,23 +5357,23 @@ with tempfile.TemporaryDirectory() as tmp:
     # skip, because nothing about it was unanswerable.
     reuse_plan = module.Plan()
     reuse_plan.checks = [
-        module.Check("scratch", "a document was checked", [], "a document changed", 0,
+        module.Check("waybar", "a document was checked", [], "a document changed", 0,
                      watches=("docs/",)),
         module.Check("go-tool", "tools/tillr-land builds", [], "a path under tools/tillr-land/ changed", 0,
                      watches=("tools/tillr-land/",)),
-        module.Check("structural", "every series' shape", [], "always", 0),
+        module.Check("file-size", "every series' shape", [], "always", 0),
         module.Check("series", "pack matt: 1 series", [], "the series changed", 0,
                      watches=("yolo-packs/matt/",), reusable=False),
     ]
-    module.apply_reuse(reuse_plan, ["scratch", "structural", "series"])
-    assert [check.kind for check in reuse_plan.reused] == ["scratch"], reuse_plan.reused
-    assert [check.kind for check in reuse_plan.checks] == ["go-tool", "structural", "series"], \
+    module.apply_reuse(reuse_plan, ["waybar", "file-size", "series"])
+    assert [check.kind for check in reuse_plan.reused] == ["waybar"], reuse_plan.reused
+    assert [check.kind for check in reuse_plan.checks] == ["go-tool", "file-size", "series"], \
         reuse_plan.checks
     # The integrity set is never reused: it is a property of the tree, and the tree is what
     # moved. A check that declares itself not reusable is never reused either: its verdict
     # depends on an input outside its watches, so a moved upstream between the two gates
     # would be invisible. Both are re-run even when the caller asked for them.
-    assert "structural" not in [check.kind for check in reuse_plan.reused], reuse_plan.reused
+    assert "file-size" not in [check.kind for check in reuse_plan.reused], reuse_plan.reused
     assert "series" not in [check.kind for check in reuse_plan.reused], reuse_plan.reused
     # A `kind:label` selector names one check of a shared kind, and the label is matched
     # EXACTLY: the caller reads it from the selection line this gate printed, so a prefix
@@ -5627,22 +5390,22 @@ with tempfile.TemporaryDirectory() as tmp:
     with contextlib.redirect_stdout(printed):
         module.print_plan(module.Record(floor_state), reuse_plan, "base", "head")
     reuse_fields = dict(field.split("=", 1) for field in printed.getvalue().split()[2:])
-    assert reuse_fields["reused"] == "scratch", printed.getvalue()
-    assert "scratch" not in reuse_fields["checks"].split(","), printed.getvalue()
+    assert reuse_fields["reused"] == "waybar", printed.getvalue()
+    assert "waybar" not in reuse_fields["checks"].split(","), printed.getvalue()
     # The selection line carries the reused check with the watches that licensed it, so a
     # reader of the record can see what the run did not buy and why.
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
         module.print_selection(reuse_plan, ["docs/reuse.md"])
     reuse_selection = json.loads(printed.getvalue()[len(module.SELECTION_PREFIX):])
-    assert [one["kind"] for one in reuse_selection["reused"]] == ["scratch"], \
+    assert [one["kind"] for one in reuse_selection["reused"]] == ["waybar"], \
         reuse_selection["reused"]
     assert reuse_selection["reused"][0]["watches"] == ["docs/"], reuse_selection["reused"]
     # A reuse list belongs to the gate invocation that was handed it, never to a check: a
     # check that spawns another gate (the self-suite does) must not hand its own reuse down,
     # or the inner gate would skip checks the outer one was told to skip.
-    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "scratch"}), \
-        module.environ({"FORK_CHECK_REUSE": "scratch"})
+    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "waybar"}), \
+        module.environ({"FORK_CHECK_REUSE": "waybar"})
 
     # The landing path names the base it is gating (board item 299), so the plan's diff is
     # the batch's own rather than whatever verified baseline this history offers. The
@@ -5657,7 +5420,7 @@ with tempfile.TemporaryDirectory() as tmp:
                          [line for line in forced.stdout.splitlines() if line.strip()][-1].split()[2:])
     assert forced_fields["base"] == forced_base, forced_fields
     assert forced_fields["head"] == forced_head, forced_fields
-    assert "scratch" in forced_fields["checks"].split(","), forced_fields
+    assert "waybar" not in forced_fields["checks"].split(","), forced_fields
     # A base this history does not contain is refused rather than planned from, because a
     # plan about a tree this history lacks cannot be this batch's answer.
     unresolved = run(repo, {**env, "FORK_CHECK_PLAN_BASE": "0" * 40})
@@ -5671,8 +5434,8 @@ with tempfile.TemporaryDirectory() as tmp:
     #     by contract and both survive the tail. A check selected by a watched path records
     #     that path; a check in the fixed integrity set records that it is unconditional;
     #     a step that did not run records the reason it did not.
-    (repo / "docs" / "selection.md").write_text(
-        "# a document\n\nWhy did the documents check run?\n")
+    waybar_fixture(repo)
+    (repo / "config/waybar/config").write_text("changed\n")
     commit(repo, "docs: a document for the selection line")
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -5681,12 +5444,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert lines[-2].startswith(module.SELECTION_PREFIX), lines[-3:]
     selection = json.loads(lines[-2][len(module.SELECTION_PREFIX):])
     by_kind = {one["kind"]: one for one in selection["checks"]}
-    documents = by_kind["scratch"]
-    assert "docs/selection.md" in documents["selected_by"], documents
+    documents = by_kind["waybar"]
+    assert "config/waybar/config" in documents["selected_by"], documents
     assert documents["unconditional"] is False, documents
     assert documents["why"], documents
     assert documents["watches"], documents
-    structural = by_kind["structural"]
+    structural = by_kind["file-size"]
     assert structural["unconditional"] is True, structural
     assert structural["selected_by"] == [], structural
     # A step the change gave no reason to run is named with its reason, and a step the
@@ -5696,10 +5459,10 @@ with tempfile.TemporaryDirectory() as tmp:
     # to read the gate's source and guess.
     entry = record(repo)["runs"][-1]
     recorded = {one["kind"]: one for one in entry["checks"]}
-    assert "docs/selection.md" in recorded["scratch"]["selected_by"], recorded["scratch"]
-    assert recorded["scratch"]["why"], recorded["scratch"]
-    assert recorded["structural"]["unconditional"] is True, recorded["structural"]
-    assert recorded["structural"]["selected_by"] == [], recorded["structural"]
+    assert "config/waybar/config" in recorded["waybar"]["selected_by"], recorded["waybar"]
+    assert recorded["waybar"]["why"], recorded["waybar"]
+    assert recorded["file-size"]["unconditional"] is True, recorded["file-size"]
+    assert recorded["file-size"]["selected_by"] == [], recorded["file-size"]
     assert entry["skips"], entry
     assert any(not one["planned"] and one["why"] for one in entry["skips"]), entry["skips"]
     # `--explain` prints the same line, so a planning pass and a run answer "why did this
@@ -5715,7 +5478,7 @@ with tempfile.TemporaryDirectory() as tmp:
     explained_selection = json.loads(explain_lines[-1][len(module.SELECTION_PREFIX):])
     assert {one["kind"] for one in explained_selection["checks"]} == set(by_kind), \
         explained_selection["checks"]
-    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["scratch"]
+    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["waybar"]
     assert explained_documents["selected_by"] == documents["selected_by"], explained_documents
 
     # ── the hostile-matrix preflight ────────────────────────────────────────────
@@ -5915,7 +5678,7 @@ assert verdict.verdict_of([timed_out]) == ("unproven", 2), verdict.verdict_of([t
 # runner on either verified nothing about the change and must not become its red. Exit 2
 # and never a pass, so a candidate stays queued instead of being called wrong for what
 # this machine could not do.
-for kind, rc in (("pipeline-evidence", 124), ("go-tool", 127), ("structural", 137),
+for kind, rc in (("pipeline-evidence", 124), ("go-tool", 127), ("file-size", 137),
                  ("fork-quality", 124)):
     could_not_run = verdict.Check(kind, "label", ["true"], "why", 1)
     could_not_run.rc = rc
@@ -5950,7 +5713,7 @@ assert not bad_tiers, f"these kinds declare a tier that is not landing or rollin
 assert verdict.check_tier("a-kind-nobody-declared") == verdict.TIER_LANDING, (
     "an unnamed kind must default to the landing tier, the safe side"
 )
-assert verdict.check_tier("go-build") == verdict.TIER_LANDING, verdict.check_tier("go-build")
+assert verdict.check_tier("unregistered-fixture") == verdict.TIER_LANDING, verdict.check_tier("unregistered-fixture")
 assert verdict.check_tier("go-substrate") == verdict.TIER_LANDING, verdict.check_tier("go-substrate")
 assert verdict.check_tier("go-tool") == verdict.TIER_ROLLING, verdict.check_tier("go-tool")
 print(f"fork-check tier table: {len(tiered)} kind(s) declared, "
@@ -5986,7 +5749,7 @@ print("fork-check routing: 51 audit cases, range diagnostics, approved-baseline 
       "the baseline is kept per branch, so two worktrees started together both verify, a "
       "candidate outside HEAD's history is skipped rather than refused, and an entry ahead "
       "of this branch plans from the fork point rather than reading as a first run; "
-      "every Go tool directory gets its own build step, and the step runs the whole "
+      "every changed Go tool directory gets its whole behavior suite, "
       "suite, the integration cases included; "
       "a long run is observable while it runs, and one PI_FORKS_ROOT reading serves both "
       "the gate and the driver, and it moves only the fork checkouts -- the fork steps "
@@ -7035,13 +6798,13 @@ with tempfile.TemporaryDirectory() as tmp:
     # fork's longer quality step, and the two quality steps of one fork serialize.
     candidate = "/w/.forks/candidate"
     measured = [
-        ("structural", "every series' shape, and the packs that declare them", 0.85, ()),
+        ("file-size", "every series' shape, and the packs that declare them", 0.85, ()),
         ("file-size", "no tracked .ts file over 2,000 lines", 0.10, ()),
-        ("scratch", "a fixed convention guard", 0.22, ()),
-        ("scratch", "3 changed Markdown file(s)", 5.07, ()),
-        ("scratch", "no tracked Markdown cites a scratch path as evidence", 0.58, ()),
-        ("design-citations", "every frontmatter document citation resolves to a document and a section", 0.45, ()),
-        ("scratch", "a second convention guard", 0.18, ()),
+        ("waybar", "a fixed convention guard", 0.22, ()),
+        ("waybar", "3 changed Markdown file(s)", 5.07, ()),
+        ("waybar", "no tracked Markdown cites a scratch path as evidence", 0.58, ()),
+        ("file-size", "a synthetic document convention check", 0.45, ()),
+        ("waybar", "a second convention guard", 0.18, ()),
         ("pi-forks", "bin/pi-forks: the driver's own cases", 174.19, ()),
         ("hooks-install", "bin/hooks-install: a marked copy is replaced and drift reported", 3.16, ()),
         ("series", "pack matt: 7 series", 0.02, ()),
@@ -7277,7 +7040,7 @@ def _floor_check(kind, seconds, cost, writes=(), exclusive=False):
     return check
 
 floor_checks = [
-    _floor_check("structural", 5.0, 5.0),
+    _floor_check("file-size", 5.0, 5.0),
     _floor_check("patch-branch-inv2", 10.0, 10.0, writes=("/candidate/a",)),
     _floor_check("fork-quality", 100.0, 60.0, writes=("/candidate/a",)),
     _floor_check("patch-branch-inv2", 20.0, 10.0, writes=("/candidate/b",)),
@@ -7290,7 +7053,7 @@ assert efficiency.s1_floor(floor_checks) == 525.0, efficiency.s1_floor(floor_che
 # A check that did not run contributes nothing: the floor is under what ran.
 not_run = _floor_check("fork-quality", 999.0, 60.0)
 not_run.not_run_reason = "the run stopped on a red"
-assert efficiency.s1_floor([_floor_check("structural", 5.0, 5.0), not_run]) == 5.0
+assert efficiency.s1_floor([_floor_check("file-size", 5.0, 5.0), not_run]) == 5.0
 # No checks, no floor: the line prints `-` rather than dividing by zero.
 assert efficiency.s1_floor([]) == 0.0
 line = efficiency.efficiency_line(efficiency.ChangeClass("docs-only", 15.0, "only Markdown"), 7.0, 5.0)
@@ -7304,7 +7067,7 @@ assert "ratio=-" in efficiency.efficiency_line(
 cause_check = efficiency.Check("fork-quality", "fork x: npm run test", ["true"], "why", 1,
                                cause="drift")
 assert cause_check.cause == "drift"
-assert efficiency.Check("structural", "s", ["true"], "why", 1).cause == ""
+assert efficiency.Check("file-size", "s", ["true"], "why", 1).cause == ""
 with tempfile.TemporaryDirectory() as tmp:
     record_path = Path(tmp) / "state.json"
     store = efficiency.Record(record_path)
@@ -7355,7 +7118,7 @@ with tempfile.TemporaryDirectory() as tmp:
 # own run.
 with tempfile.TemporaryDirectory() as tmp:
     plan = efficiency.Plan()
-    plan.checks.append(efficiency.Check("structural", "s", ["true"], "always", 1, cost=1.0))
+    plan.checks.append(efficiency.Check("file-size", "s", ["true"], "always", 1, cost=1.0))
     quality = efficiency.Check("fork-quality", "fork pi-subagents: npm run test:unit",
                                ["true"], "its upstream moved", 1, cost=60.0, cause="drift")
     quality.seconds = 10.0
@@ -7546,19 +7309,19 @@ with tempfile.TemporaryDirectory() as tmp:
     representative = {
         "driver-test-only": (
             ["tests/pi-forks.test.sh"],
-            ["file-size", "pi-forks", "structural"],
+            ["file-size", "pi-forks"],
         ),
         "driver-behavior": (
             ["bin/pi-forks"],
             ["file-size", "fork-quality", "fork-quality",
              "fork-quality", "patch-branch-inv2", "patch-branch-inv2", "pi-forks",
-             "series", "structural"],
+             "series"],
         ),
         "one-fork-series": (
             ["yolo-packs/matt/patches/pi-subagents/0001-x.patch"],
             ["build", "file-size", "fork-quality", "fork-quality",
              "fork-quality", "forks-check", "patch-branch-inv2", "patch-branch-inv3",
-             "pi-forks", "rank-order", "series", "storybook", "structural"],
+             "pi-forks", "rank-order", "series", "storybook"],
         ),
     }
     for name, (changed, expected) in representative.items():
@@ -7583,7 +7346,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert executed(plan) == [
         "extension-residue", "file-size",
         "fork-quality", "fork-quality", "fork-quality", "matt-render",
-        "patch-branch-inv2", "patch-branch-inv2", "pi-forks", "series", "structural",
+        "patch-branch-inv2", "patch-branch-inv2", "pi-forks", "series",
         "yolo-config",
     ], executed(plan)
 
@@ -7667,9 +7430,9 @@ with tempfile.TemporaryDirectory() as tmp:
     def tier_plan():
         plan = module.Plan()
         plan.checks = [
-            module.Check("go-build", "a build", ["true"], "why", 1),
+            module.Check("go-substrate", "a build", ["true"], "why", 1),
             module.Check("go-tool", "a suite", ["true"], "why", 1),
-            module.Check("structural", "the shape", ["true"], "why", 1),
+            module.Check("file-size", "the shape", ["true"], "why", 1),
         ]
         plan.skips = [module.Skip("go-tool (tools/tillr-land)", "no path under tools/tillr-land/ changed",
                                   planned=False, kind="go-tool")]
@@ -7678,13 +7441,13 @@ with tempfile.TemporaryDirectory() as tmp:
     full = tier_plan()
     module.apply_tier(full, None)
     assert full.tier is None, full.tier
-    assert [check.kind for check in full.checks] == ["go-build", "go-tool", "structural"], \
+    assert [check.kind for check in full.checks] == ["go-substrate", "go-tool", "file-size"], \
         [check.kind for check in full.checks]
     assert not any(skip.owed for skip in full.skips), full.skips
 
     landing = tier_plan()
     module.apply_tier(landing, module.TIER_LANDING)
-    assert [check.kind for check in landing.checks] == ["go-build", "structural"], \
+    assert [check.kind for check in landing.checks] == ["go-substrate", "file-size"], \
         [check.kind for check in landing.checks]
     owed = [skip for skip in landing.skips if skip.owed]
     assert [skip.kind for skip in owed] == ["go-tool"], \
@@ -7715,7 +7478,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not any(skip.owed for skip in rolling.skips), rolling.skips
     # The go-tool step nothing selected stays not-planned; the landing kinds become not
     # this run's business.
-    assert {skip.kind for skip in rolling.skips} == {"go-tool", "go-build", "structural"}, \
+    assert {skip.kind for skip in rolling.skips} == {"go-tool", "go-substrate", "file-size"}, \
         [skip.kind for skip in rolling.skips]
 
     # 59b. The plan line names the tier, the owed kinds, and the landing-wall model. The
@@ -7734,7 +7497,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert landing_fields["tier"] == "landing", landing_fields
     assert landing_fields["owed"] == "go-tool", landing_fields
     assert "go-tool" not in landing_fields["checks"].split(","), landing_fields
-    assert "go-build" in landing_fields["checks"].split(","), landing_fields
+    assert "go-substrate" in landing_fields["checks"].split(","), landing_fields
     # The model is over the landing subset, so it is at most the run's own cost.
     assert float(landing_fields["landing"]) <= float(landing_fields["seconds"]) + 0.1, \
         landing_fields
@@ -7764,7 +7527,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     result = run(repo, env, "--tier", "landing", "--explain")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "would run  go-build" in result.stdout, result.stdout
+    assert "would run  go-build" not in result.stdout, result.stdout
     assert "would run  go-tool" not in result.stdout, result.stdout
     assert "would owe" in result.stdout, result.stdout
     assert "tools/tillr-land's whole suite passes" in result.stdout, result.stdout
@@ -7795,7 +7558,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert fields["tier"] == "landing", fields
     assert fields["owed"] == "go-tool", fields
     assert "go-tool" not in fields["checks"].split(","), fields
-    assert "go-build" in fields["checks"].split(","), fields
+    assert "go-substrate" not in fields["checks"].split(","), fields
 
     # 59g. A full run still advances the baseline, and its plan line names the full tier,
     #      no owed kinds, and a landing-wall model no larger than the run itself.

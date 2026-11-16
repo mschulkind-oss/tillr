@@ -41,6 +41,14 @@ class Changes(unittest.TestCase):
                                                   {"item_id": "item-b", "title": "B"}]}))
         (self.repo / "README.md").write_text("# Fixture\n")
         shutil.copytree(ROOT / "tools/gate", self.repo / "tools/gate", ignore=shutil.ignore_patterns("__pycache__"))
+        # These cases judge routing and findings, not whether a subprocess fits a
+        # production fast budget. Deadline semantics have signal-blocking Go cases.
+        for path in (self.repo / "tools/gate/checks").glob("*.json"):
+            declaration = json.loads(path.read_text())
+            if declaration["scope"] == "change":
+                declaration.update(tier="heavy", timeout_ms=60000)
+                declaration.pop("budget_ms", None)
+                path.write_text(json.dumps(declaration))
         self.base = self.commit()
         self.bin = self.repo / "stubs"
         self.bin.mkdir()
@@ -247,13 +255,58 @@ class Changes(unittest.TestCase):
         ran = self.runner_check("--base", self.base, "--head", "HEAD", "--checks", str(declarations))
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         migrated = {check["check_id"] for check in json.loads(ran.stdout)["payload"]["checks"]}
-        # The old plan for this seed/Markdown/gate-source fixture had these ten kinds.
-        before = {"structural", "file-size", "commit-identity", "seed-freeze", "citations",
-                  "documents", "scratch", "design-citations", "pipeline-evidence", "self-suite"}
+        # Change checks remain disjoint from the legacy program. The two Markdown
+        # conventions and structural proof now belong to the tree declarations.
+        before = {"file-size", "commit-identity", "seed-freeze", "citations",
+                  "documents", "pipeline-evidence", "self-suite"}
         self.assertEqual(migrated | remaining, before)
         self.assertFalse((IDS - {"file-size"}) & remaining)
+        tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build"}
+        self.assertFalse(tree_ids & remaining)
+        exported = subprocess.run(["python3", "tools/fork-check.py", "--registry-json"],
+                                  cwd=self.repo, env=self.env, capture_output=True, text=True)
+        self.assertEqual(exported.returncode, 0, exported.stdout + exported.stderr)
+        legacy_registry = json.loads(exported.stdout)
+        legacy_ids = {check["id"] for check in legacy_registry["declarations"]}
+        legacy_ids.update(check["id"] for check in legacy_registry["in_process"])
+        declaration_ids = {json.loads(path.read_text())["id"]
+                           for path in (self.repo / "tools/gate/checks").glob("*.json")}
+        self.assertFalse(legacy_ids & declaration_ids, legacy_ids & declaration_ids)
+        self.assertEqual(migrated | remaining | tree_ids,
+                         before | {"scratch", "design-citations", "structural", "pack-sync", "go-build"})
+        for kind in tree_ids:
+            declaration = json.loads((self.repo / "tools/gate/checks" / (kind + ".json")).read_text())
+            self.assertEqual(declaration["scope"], "tree")
+            self.assertEqual(declaration["tier"], "fast")
+
+    def stub_tree_commands(self):
+        # Only the fixture commands change: the real scope/tier/id declarations
+        # determine the adapter's executed inventory, independently of the legacy gate.
+        for path in (self.repo / "tools/gate/checks").glob("*.json"):
+            declaration = json.loads(path.read_text())
+            if declaration["scope"] == "tree":
+                declaration.update(command=["true"], remember=False)
+                path.write_text(json.dumps(declaration))
+
+    def test_adapter_executes_the_complete_disjoint_fast_inventory(self):
+        self.stub_tree_commands()
+        (self.repo / "tools/fork-check.py").write_text('print("legacy inventory: file-size warning")\n')
+        (self.repo / "README.md").write_text("# Changed\n")
+        head = self.commit()
+        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+                                 "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
+                                cwd=self.repo, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        verdict, legacy = result.stdout.splitlines()
+        checks = json.loads(verdict)["payload"]["checks"]
+        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build"}
+        self.assertEqual({check["check_id"] for check in checks}, expected)
+        self.assertEqual(len(checks), len(expected))
+        self.assertTrue(all(check["result"] == "pass" for check in checks))
+        self.assertEqual(legacy, "legacy inventory: file-size warning")
 
     def test_loop_program_runs_change_runner_before_remaining_program(self):
+        self.stub_tree_commands()
         (self.repo / "tools/fork-check.py").write_text('print("remaining program ran")\n')
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()

@@ -1,0 +1,17 @@
+{
+  "id": "pack-sync",
+  "label": "Whole-tree pack-sync check",
+  "command": [
+    "python3",
+    "tests/pack-sync.test.py"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 500,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "python3"
+  ]
+}

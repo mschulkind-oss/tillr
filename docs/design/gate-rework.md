@@ -757,16 +757,7 @@ what ships"; the owner may overturn it.
 
 ### The fast tier is the ten checks that fit
 
-<!-- tillr: item
-     id="item-gate-fast-tier"
-     paths="tools/tillr-gate/,tools/gate/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** `scratch`, `design-citations`, `structural`, `pack-sync` and one `go-build` check that builds every module under the Go tool directories in parallel are declaration files with `tier` set to `fast`, deleted from `tools/fork-check.py` with their suite cases.
-- **c2:** The `gate-budget` check passes on the tree: the fast tier's `budget_ms` values sum to 9,000 or less. A test adds a fixture fast check that takes the sum over and asserts `gate-budget` fails naming the sum.
-- **c3:** The runner stops a fast tree check at its `budget_ms`, records it as `over-budget`, and exits as a pass when nothing else failed. A fast change check that reaches its deadline makes the run "could not judge". The test drives a check that blocks until signalled, so it asserts the recorded state and not a duration.
-- **c4:** The union assertion of the change-check slice still holds: no check id is planned by both programs and none was dropped.
 
 ### The policy file names the strategy
 
@@ -777,7 +768,7 @@ Built: this landed in commit `431d78efe`.
 <!-- tillr: item
      id="item-gate-heavy-runner"
      paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-view/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-fast-tier"
+     blocked_by=""
 -->
 
 - **c1:** Under `after-merge`, each landing triggers a heavy run in a detached worktree at the trunk tip. A test lands three fixture changes while one run is held open and asserts exactly one further run starts, on the newest tip.
