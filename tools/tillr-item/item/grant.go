@@ -16,8 +16,7 @@ import (
 // The claim classes a delegated sign-off grant may name, in the spelling
 // agent-runtime.md §12's "The default grant, until the owner rules" gives them: a
 // verification-only claim is the class the default grant in force covers, and the other
-// three are the classes it leaves escalating rather than signing. qa-verification is the
-// class design D-AQA1 adds for an automated QA harness, which needs no grant at all. The
+// three are the classes it leaves escalating rather than signing. The
 // vocabulary is closed because a free-text scope is a paragraph, and a paragraph is not a
 // class a store can check a verdict against.
 const (
@@ -30,16 +29,24 @@ const (
 	ClaimDirection = "direction"
 	// ClaimOwnerOnly is every class §28.1 reserves to the owner.
 	ClaimOwnerOnly = "owner-only"
-	// ClaimQAVerification is an automated QA harness's judgment on a candidate it did not
-	// build (design D-AQA1): the class an autoqa verdict makes, spelled apart from
-	// ClaimVerification so a read view can tell a delegated sign-off from QA. No grant is
-	// required for it — a grant may name it, and does not have to.
-	ClaimQAVerification = "qa-verification"
 )
 
 var claimClasses = map[string]bool{
 	ClaimVerification: true, ClaimRedGateTriage: true, ClaimDirection: true, ClaimOwnerOnly: true,
-	ClaimQAVerification: true,
+}
+
+// validateClaimClass checks new writes only; stored grants retain their original scope.
+// Both verdicts and grants use the same writable vocabulary (design D-JL7).
+func validateClaimClass(class, id string) error {
+	if class == "qa-verification" {
+		return Rejectionf("actor-retired", id,
+			"claim class %q is retired: write %q for verification claims instead", class, ClaimVerification)
+	}
+	if !claimClasses[class] {
+		return Usagef("%q is not a claim class: want one of %s, %s, %s, %s",
+			class, ClaimVerification, ClaimRedGateTriage, ClaimDirection, ClaimOwnerOnly)
+	}
+	return nil
 }
 
 // unboundedScopes are the spellings that name every claim rather than a class, which
@@ -118,9 +125,8 @@ func decodeGrant(env record.Envelope) (grantPayload, time.Time, error) {
 			return grantPayload{}, time.Time{}, Rejectionf("grant-unbounded", payload.GrantID,
 				"grant %q names every claim (%q): a grant names the claim classes it covers, and one reading all claims is unbounded", payload.GrantID, class)
 		}
-		if !claimClasses[class] {
-			return grantPayload{}, time.Time{}, Usagef("%q is not a claim class: want one of %s, %s, %s, %s, %s",
-				class, ClaimVerification, ClaimRedGateTriage, ClaimDirection, ClaimOwnerOnly, ClaimQAVerification)
+		if err := validateClaimClass(class, payload.GrantID); err != nil {
+			return grantPayload{}, time.Time{}, err
 		}
 	}
 	return payload, expiresAt.UTC(), nil

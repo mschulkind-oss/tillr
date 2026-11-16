@@ -29,12 +29,6 @@ const (
 	ActorAgent = "agent"
 	// ActorHuman is a person issuing the verdict explicitly.
 	ActorHuman = "human"
-	// ActorAutoQA is an automated QA harness recording a judgment on work it did not do
-	// (design D-AQA1): an independent reviewer, not the pipeline retiring its own landed
-	// attempt and not a delegated sign-off. No grantor exists to grant a harness a
-	// sign-off, so it needs none — and it names the actor whose work it judged, which is
-	// what keeps "who judged" answerable without borrowing `agent`'s grant.
-	ActorAutoQA = "autoqa"
 )
 
 // The four verdicts an item's criterion can be judged under. Only a verdict retires an
@@ -47,7 +41,7 @@ const (
 )
 
 var (
-	actorKinds    = map[string]bool{ActorMechanical: true, ActorAgent: true, ActorHuman: true, ActorAutoQA: true}
+	actorKinds    = map[string]bool{ActorMechanical: true, ActorAgent: true, ActorHuman: true}
 	verdictValues = map[string]bool{VerdictDone: true, VerdictNotDone: true, VerdictBlocked: true, VerdictDefective: true}
 )
 
@@ -128,12 +122,10 @@ func RecordVerdict(ctx context.Context, tx *store.Tx, env record.Envelope) (reco
 	return envelopeOf(VerdictRecordKind, id, env.CreatedAt, payload)
 }
 
-// decodeVerdict reads and validates the item.verdict payload. Everything it refuses
-// here is malformed input (exit 2): a verdict this store cannot name, a value outside a
-// closed vocabulary, or a verdict that does not say whose work it judges — a delegated
-// one, or an autoqa one, whose judged_actor is the whole of its accountability. The
-// refusals that are negative decisions — the binding, the evidence, the independence
-// and the grant — are made by the checks that need the store to answer them.
+// decodeVerdict reads and validates a new item.verdict payload. Unknown values and
+// missing fields are malformed input (exit 2); retired AutoQA values are negative
+// decisions (exit 1) with replacements. Existing events are never decoded here.
+// The binding, evidence, independence and grant checks need the store to answer them.
 func decodeVerdict(env record.Envelope) (verdictPayload, error) {
 	var payload verdictPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -148,16 +140,17 @@ func decodeVerdict(env record.Envelope) (verdictPayload, error) {
 	if !verdictValues[payload.Verdict] {
 		return verdictPayload{}, Usagef("%q is not a verdict: want one of done, not-done, blocked, defective", payload.Verdict)
 	}
-	if !claimClasses[payload.ClaimClass] {
-		return verdictPayload{}, Usagef("%q is not a claim class: want one of %s, %s, %s, %s, %s",
-			payload.ClaimClass, ClaimVerification, ClaimRedGateTriage, ClaimDirection, ClaimOwnerOnly, ClaimQAVerification)
+	if payload.ActorKind == "autoqa" {
+		return verdictPayload{}, Rejectionf("actor-retired", payload.ItemID,
+			"actor kind %q is retired: write %q for a runner or %q under a recorded grant for a reviewer, with the AutoQA identity in actor",
+			payload.ActorKind, ActorMechanical, ActorAgent)
+	}
+	if err := validateClaimClass(payload.ClaimClass, payload.ItemID); err != nil {
+		return verdictPayload{}, err
 	}
 	if !actorKinds[payload.ActorKind] {
-		return verdictPayload{}, Usagef("%q is not an actor kind: want one of %s, %s, %s, %s",
-			payload.ActorKind, ActorMechanical, ActorAgent, ActorHuman, ActorAutoQA)
-	}
-	if payload.ActorKind == ActorAutoQA && payload.JudgedActor == "" {
-		return verdictPayload{}, Usagef("an autoqa-issued verdict needs a judged_actor: it records whose work the criterion judges")
+		return verdictPayload{}, Usagef("%q is not an actor kind: want one of %s, %s, %s",
+			payload.ActorKind, ActorMechanical, ActorAgent, ActorHuman)
 	}
 	if payload.ActorKind == ActorAgent {
 		if payload.Actor == "" {
@@ -200,12 +193,8 @@ func frozenCriterion(ctx context.Context, r *store.Reader, itemID, criterionID s
 // waived nor widened"; §14 states it for sign-off). A mechanical verdict is exempt
 // because its evidence, not its actor, is what carries it, and a human verdict is exempt
 // because the rule is about delegation — a person signing off does not need a judge.
-//
-// An autoqa verdict is a delegated verdict like an agent's: the whole point of its own
-// actor kind is that an independent reviewer judged work it did not do, so a harness
-// signing off on its own work is the one thing that kind must not be able to record.
 func checkIndependence(v verdictPayload) error {
-	if v.ActorKind != ActorAgent && v.ActorKind != ActorAutoQA {
+	if v.ActorKind != ActorAgent {
 		return nil
 	}
 	if v.Actor == v.JudgedActor {
@@ -217,9 +206,8 @@ func checkIndependence(v verdictPayload) error {
 }
 
 // checkDelegation is the store-enforced sign-off grant. A mechanical verdict needs none,
-// a human verdict needs none and an autoqa verdict needs none — no grantor issues a
-// harness a sign-off, so a grant would have to be invented for it; an agent's verdict
-// counts only under a recorded grant that is present, unexpired, and names the class of
+// a human verdict needs none; an agent's verdict counts only under a recorded grant
+// that is present, unexpired, and names the class of
 // claim the verdict makes — the three ways agent-runtime.md §12 says a delegation stops
 // short of a sign-off.
 func checkDelegation(ctx context.Context, r *store.Reader, v verdictPayload, at time.Time) error {

@@ -399,13 +399,16 @@ Ordered by how much they cost an unattended harness.
 
 ## Decision Ledger
 
-Owner-decided 2026-11-13. None of these four went through a designer pass; the question blocks stay
-below so a later pass can collect them and give post-hoc advice, and the one ruling that most needs
-that advice says so in its answer.
+Owner-decided 2026-11-13. On 2026-11-16, `D-AQA1` was superseded by `D-JL7` in
+[the judge and lifecycle design](./tillr-judge-and-lifecycle.md#5-core-boundary-for-external-autoqa-d-jl7).
+AutoQA now uses `mechanical` verdicts for runners and grant-backed `agent` verdicts for
+reviewers, with its identity in `actor`; new writes of the retired values are refused,
+while existing records remain unchanged and readable. `D-AQA2`, `D-AQA3`, and `D-AQA4`
+stand. The question blocks below preserve the original deliberation, not live rulings.
 
 | ID | Decision | Rationale | Enforced By |
 |---|---|---|---|
-| `D-AQA1` | **AutoQA records its judgments as `actor_kind: "autoqa"` under a `qa-verification` claim class, with no grant and a mandatory `judged_actor`.** | `mechanical` is legal today and makes an independent reviewer indistinguishable from the pipeline confirming itself in every read view. | `tools/tillr-item` (verdict schema and validation), `tools/tillr-view` (the actor column) |
+| `D-AQA1` | **Superseded by `D-JL7` on 2026-11-16: AutoQA uses the ordinary verdict kinds and claim classes, not `actor_kind: "autoqa"`, `qa-verification`, or `decided_by: "autoqa"` on new writes.** | An automated reviewer must use the same recorded, unexpired grant as every other agent; the `actor` identity distinguishes AutoQA without a special kind. | `tools/tillr-item` (new-record validation; legacy records and the historical schema check are preserved) |
 | `D-AQA2` | **The gate stays store-free; the loop publishes the gate observation.** | The no-store face is the gate's stated adoptability claim, and the loop already takes a span per gate invocation. | `tools/tillr-drain` (`ProcessSteps`), `tools/tillr-gate` (unchanged) |
 | `D-AQA3` | **`tillr-run exec` answers the run's own exit code, reserving 2/3/4/5 for the face's own failures.** | A standalone driver's only portable signal is the exit status, and today it reads a failed run as a green one. | `tools/tillr-run` (`exec`), the module READMEs, `tools/tillr-drain` (unchanged: it decodes the record) |
 | `D-AQA4` | **`tillr-gate change` and `tillr-run request` are faces, not a shared library.** | Both records currently have exactly one producer, and it is the loop — the one thing a standalone driver is trying not to run. | `tools/tillr-gate`, `tools/tillr-run` |

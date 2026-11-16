@@ -64,18 +64,6 @@ func mechanicalVerdict() verdictInput {
 	}
 }
 
-// autoqaVerdict is an automated QA harness's record on a lane's work: the harness did
-// not build the candidate, so it names the actor it judged and presents no grant — none
-// exists to issue one to a harness (design D-AQA1).
-func autoqaVerdict() verdictInput {
-	return verdictInput{
-		ItemID: "item_042", CriterionID: "c1", CriterionHash: hashOf(frozenText),
-		Verdict: "done", ClaimClass: "qa-verification", Reason: "the criterion's predicate holds on the landed candidate",
-		Evidence: []string{"run-record-9", "gate-verdict-7"}, EvaluatedHead: "0f1e2d",
-		ActorKind: "autoqa", Actor: "autoqa-1", JudgedActor: "lane-7",
-	}
-}
-
 // grantInput is the item.grant payload: the scope as claim classes, the grantor and the
 // expiry agent-runtime.md §12 settles.
 type grantInput struct {
@@ -300,21 +288,6 @@ func TestASelfJudgingVerdictIsRefused(t *testing.T) {
 	}
 }
 
-// An autoqa verdict is a delegated verdict, so it is bound by the same independence rule:
-// its own actor kind exists to make an independent judgment visible, and a harness signing
-// off on work it did itself is exactly what that kind must not be able to record.
-func TestAnAutoQAVerdictOnItsOwnWorkIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-autoqa-self", "open")
-	v := autoqaVerdict()
-	v.Actor = "qa-runner"
-	v.JudgedActor = "qa-runner"
-	code, out := recordVerdict(t, db, v)
-	got := assertRefused(t, code, out, "self-judging")
-	if !strings.Contains(got.Payload.Reason, "qa-runner") {
-		t.Fatalf("the refusal does not name the actor that judged itself: %q", got.Payload.Reason)
-	}
-}
-
 // The binding: a verdict names the hash of the criterion text the store froze. A verdict
 // naming any other hash is about a criterion this store does not hold, so it is refused
 // rather than recorded against whatever the row says today.
@@ -342,81 +315,6 @@ func TestAVerdictNamingNoEvidenceIsRefused(t *testing.T) {
 	got := assertRefused(t, code, out, "verdict-evidence")
 	if !strings.Contains(got.Payload.Reason, "evidence") {
 		t.Fatalf("the refusal does not name the evidence it wants: %q", got.Payload.Reason)
-	}
-}
-
-// An autoqa verdict is the fourth actor kind: a harness judging work it did not do is
-// neither the pipeline retiring its own attempt nor a delegated sign-off, so it records
-// with no grant and the criterion moves (design D-AQA1). Its judged_actor is what makes
-// the judgment attributable, and it keeps the class it claims in the record.
-func TestAnAutoqaVerdictLandsWithNoGrant(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-autoqa", "open")
-	code, out := recordVerdict(t, db, autoqaVerdict())
-	if code != 0 {
-		t.Fatalf("the autoqa verdict exited %d: %s", code, out)
-	}
-	got := decodeIssued(t, out)
-	if got.Kind != "item.verdict" {
-		t.Fatalf("the verdict face emitted kind %q", got.Kind)
-	}
-	if got.Payload.ActorKind != "autoqa" || got.Payload.GrantID != "" {
-		t.Fatalf("the verdict echoed %q under grant %q, want an ungranted autoqa verdict", got.Payload.ActorKind, got.Payload.GrantID)
-	}
-	if got.Payload.ClaimClasses != nil {
-		t.Fatalf("the verdict record carries claim_classes %v, which only a grant has", got.Payload.ClaimClasses)
-	}
-	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "done" {
-		t.Fatalf("the store holds the criterion as %+v, want the verdict's state", stored)
-	}
-	if n := eventsOfKind(t, db, "item.verdict"); n != 1 {
-		t.Fatalf("a landed autoqa verdict appended %d item.verdict events, want 1", n)
-	}
-}
-
-// The class an autoqa verdict claims is a class the face accepts, and the record echoes
-// it verbatim, so a reader sees the kind of claim rather than only who made it.
-func TestAnAutoqaVerdictRecordsItsClaimClass(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-autoqa-class", "open")
-	code, out := recordVerdict(t, db, autoqaVerdict())
-	if code != 0 {
-		t.Fatalf("the autoqa verdict exited %d: %s", code, out)
-	}
-	var recorded struct {
-		Payload struct {
-			ClaimClass  string `json:"claim_class"`
-			JudgedActor string `json:"judged_actor"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(out, &recorded); err != nil {
-		t.Fatalf("the face did not emit a record: %v\n%s", err, out)
-	}
-	if recorded.Payload.ClaimClass != "qa-verification" {
-		t.Fatalf("the verdict echoed claim_class %q, want qa-verification", recorded.Payload.ClaimClass)
-	}
-	if recorded.Payload.JudgedActor != "lane-7" {
-		t.Fatalf("the verdict echoed judged_actor %q, want the actor whose work it judged", recorded.Payload.JudgedActor)
-	}
-}
-
-// An autoqa verdict without a judged_actor is malformed input: the harness is not exempt
-// from saying whose work it judged, and a record that cannot answer that is not a
-// judgment anybody can audit. Exit 2, no record, nothing written.
-func TestAnAutoqaVerdictWithNoJudgedActorIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-autoqa-no-judge", "open")
-	v := autoqaVerdict()
-	v.JudgedActor = ""
-	code, out := recordVerdict(t, db, v)
-	if code != 2 {
-		t.Fatalf("the autoqa verdict exited %d, want 2: %s", code, out)
-	}
-	if len(strings.TrimSpace(string(out))) != 0 {
-		t.Fatalf("a malformed verdict emitted a record: %s", out)
-	}
-	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "open" {
-		t.Fatalf("a refused verdict left the criterion as %+v, want it unchanged", stored)
-	}
-	if n := eventsOfKind(t, db, "item.verdict"); n != 0 {
-		t.Fatalf("a refused verdict appended %d item.verdict events", n)
 	}
 }
 
