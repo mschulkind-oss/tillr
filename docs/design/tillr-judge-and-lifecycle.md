@@ -415,8 +415,4 @@ The loop may try a failed item once more by itself when something it recorded ha
 
 When an item could not be repaired in place, the workaround was to file a copy with `-v2` on its id and mark the original as resolved elsewhere. Six items went that way on 2026-11-14. Each copy lost the original's run history and its place in other items' dependencies, and each "resolved elsewhere" was untrue. With a failed attempt no longer freezing criteria, and with retry, re-admission and the design seat all working on the original id, the workaround has no remaining use. This block makes the sync refuse it, so the rule does not depend on anyone remembering.
 
-<!-- tillr: item id="item-jl-refuse-clone-ids" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item sync` reports the finding `clone-of-held-item` for a block whose id is another item's id followed by `-v` and a number, when the store holds that other item in a state that is not final. The finding names both ids and the retry command, and that file writes nothing.
-- **c2:** The same block is accepted when the other item is `landed`, `resolved-elsewhere` or `closed`, or is not in the store. Items already in a store under such ids are untouched. A test covers each.
-- **c3:** The operating skill's recovery section tells an operator to retry a failed item under its own id and does not describe cloning one. A test fails when that section names a `-v2` id.

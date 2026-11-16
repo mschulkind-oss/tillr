@@ -59,6 +59,31 @@ type syncRecord struct {
 	} `json:"payload"`
 }
 
+func TestSyncFaceRefusesCloneOfHeldItem(t *testing.T) {
+	repo := syncRepo(t, map[string]string{"docs/original.md": syncGood})
+	db := filepath.Join(scratch(t, "sync-clone-store"), "state.db")
+	if code, out := run(t, "sync", "--store", db, "--root", repo, "--json"); code != 0 {
+		t.Fatalf("initial sync exited %d: %s", code, out)
+	}
+	cloneRepo := syncRepo(t, map[string]string{
+		"docs/clone.md": strings.ReplaceAll(syncGood, "item-good", "item-good-v2") +
+			strings.ReplaceAll(syncGood, "item-good", "item-sibling"),
+	})
+	for _, extra := range [][]string{nil, {"--dry-run"}} {
+		args := append([]string{"sync", "--store", db, "--root", cloneRepo, "--json"}, extra...)
+		code, out := run(t, args...)
+		rec := decodeSync(t, out)
+		if code != 1 || len(rec.Payload.Findings) != 1 || rec.Payload.Findings[0].Rule != "clone-of-held-item" || len(rec.Payload.Created) != 0 {
+			t.Fatalf("clone sync exited %d: %s", code, out)
+		}
+		for _, want := range []string{"item-good-v2", "item-good", "tillr drain retry --item item-good"} {
+			if !strings.Contains(string(out), want) {
+				t.Fatalf("finding omits %q: %s", want, out)
+			}
+		}
+	}
+}
+
 func decodeSync(t *testing.T, out []byte) syncRecord {
 	t.Helper()
 	var rec syncRecord

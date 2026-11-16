@@ -45,6 +45,7 @@ var (
 	listMarker     = regexp.MustCompile(`^(?:[-*+]|[0-9]+[.)])\s`)
 	attribute      = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 	itemIDShape    = regexp.MustCompile(`^item-[a-z0-9-]+$`)
+	cloneIDShape   = regexp.MustCompile(`^(item-[a-z0-9-]+)-v[0-9]+$`)
 	linkTarget     = regexp.MustCompile(`\]\(([^)\s]+)`)
 )
 
@@ -373,6 +374,25 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 		} else {
 			r = nil
+		}
+	}
+
+	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
+	// ids keep their definitions and history; sync does not retroactively rename them.
+	for _, b := range blocks {
+		id := b.payload.ItemID
+		if _, exists := held[id]; exists {
+			continue
+		}
+		match := cloneIDShape.FindStringSubmatch(id)
+		if match == nil {
+			continue
+		}
+		original := match[1]
+		if st, exists := held[original]; exists && !terminalStates[st.state] {
+			report.Findings = append(report.Findings, note(b, "clone-of-held-item",
+				fmt.Sprintf("item %q copies held item %q in state %q; retry the original under its own id with tillr drain retry --item %s (see tillr drain retry --help)", id, original, st.state, original)))
+			bad[b.file] = true
 		}
 	}
 
