@@ -15,7 +15,7 @@ function mount(refused = false) {
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/questions": return new Response(JSON.stringify(envelope({ items: [], unknown: [], missing: [], counts: { items: 0, questions: 0, holds: 0 }, state: "questions-ok" })));
       case "/api/v1/passes": return new Response(JSON.stringify(envelope([{ dispatched_at_ms: 1794840000000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }], stop: "queue-drained", detail: "all held: item-held waits on OQ-1" }])));
-      case "/api/v1/waiting": return refused ? new Response(JSON.stringify({ error: { code: "store-unreadable", message: "waiting is locked" } }), { status: 503 }) : new Response(JSON.stringify(envelope([{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "today", class_source: "rule" }])));
+      case "/api/v1/why": return refused ? new Response(JSON.stringify({ error: { code: "store-unreadable", message: "waiting is locked" } }), { status: 503 }) : new Response(JSON.stringify(envelope({ rows: [{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "current plan", class_source: "planner" }], summary: { lanes_busy: 0, lanes_offered: 1, running: 0, could_run: 0, held: { "question-open": 1 } } })));
       default: throw new Error(`Unexpected route: ${input}`);
     }
   });
@@ -25,10 +25,10 @@ function mount(refused = false) {
   return { ...view, fetch, client };
 }
 
-test("Home shell reads only snapshot, passes and waiting; nav and pause are real controls", async () => {
+test("Home shell reads snapshot, passes and the planner's why rows; nav and pause are real controls", async () => {
   const { container, fetch } = mount();
   await screen.findAllByRole("link", { name: "item-held" });
-  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/waiting"]));
+  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why"]));
   expect(container.textContent).toContain("all held");
   for (const id of ["item-held", "OQ-1"]) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);

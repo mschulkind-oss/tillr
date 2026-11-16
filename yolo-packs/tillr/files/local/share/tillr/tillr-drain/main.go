@@ -49,6 +49,8 @@ func dispatch(args []string) int {
 	}
 	face, rest := args[0], args[1:]
 	switch face {
+	case "why":
+		return whyFace(rest)
 	case "plan":
 		return planFace(rest)
 	case "once":
@@ -424,21 +426,7 @@ func readPass(path string) (drain.Pass, error) {
 // names none: a tick without a policy is not an error, it is a tick that can dispatch
 // nothing, and every otherwise-dispatchable item holds with reason `no-policy`.
 func readPolicy(ref string) (*drain.Policy, error) {
-	if ref == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(ref)
-	if err != nil {
-		return nil, drain.Usagef("reading the policy %s: %v", ref, err)
-	}
-	var policy drain.Policy
-	if err := json.Unmarshal(raw, &policy); err != nil {
-		return nil, drain.Usagef("reading the policy %s: %v", ref, err)
-	}
-	if err := policy.Check(); err != nil {
-		return nil, err
-	}
-	return &policy, nil
+	return drain.LoadPolicy(ref)
 }
 
 // The two flags the question hold is configured by. They are shared because the root and
@@ -501,7 +489,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "plan, once, retry, boundary, resume or loop"
+const faceList = "why, plan, once, retry, boundary, resume or loop"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

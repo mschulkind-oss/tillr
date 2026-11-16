@@ -19,7 +19,7 @@ func TestWaitingNamesOwnerRetryAfterAutomaticReadmission(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	cmd := exec.Command(bin, "waiting", "--store", h.store)
+	cmd := exec.Command(bin, "waiting", "--history", "--store", h.store)
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "automatic re-admission failed") || !strings.Contains(string(out), "tillr drain retry") {
 		t.Fatalf("waiting CLI: %v %s", err, out)

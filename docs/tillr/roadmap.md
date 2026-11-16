@@ -696,12 +696,7 @@ that ran the planner against the live store.
 
 ### Answer why any item is not running, from the planner itself
 
-<!-- tillr: item id="item-drain-why" paths="tools/tillr-drain/,tools/tillr-cli/,tools/tillr-view/,yolo-packs/tillr/,docs/" -->
 
-- **c1:** `tillr drain why` runs the planner read-only against the store and prints one line per item that is not landed: its position, the reason, and what it waits on (the question, the blocking items, the run, the lane, or the command that clears it). `tillr drain why <item>` prints that item alone with the full record. It needs no input file and writes nothing.
-- **c2:** It ends with a summary line: lanes busy of lanes offered, items running, items that could run now, and items held grouped by reason with a count. A test asserts the counts add up to the number of items that are not landed.
-- **c3:** `GET /api/v1/why` serves the same rows, and the waiting face and the observatory read their class, reason and mover from it, so a hold the loop has never acted on is shown with its real reason instead of "no pass yet". A test with a store the loop has never passed over asserts no row lacks a reason.
-- **c4:** The answer is the planner's own function, not a second set of rules. A test changes one hold rule in the planner and asserts `why` changes with it.
 
 
 ## Filed 2026-11-15: choose where each seat runs, by quota, and move work when a backend runs out
