@@ -2,7 +2,10 @@ module github.com/mschulkind-oss/tillr
 
 go 1.26.0
 
-require modernc.org/sqlite v1.61.0
+require (
+	github.com/pelletier/go-toml/v2 v2.2.3
+	modernc.org/sqlite v1.61.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect

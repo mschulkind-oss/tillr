@@ -28,6 +28,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -564,6 +565,7 @@ func printHelp(fs *flag.FlagSet) {
 // the steps and the stopping conditions — never a step's judgment.
 func loopFace(args []string) int {
 	fs := newFlagSet("loop")
+	check := fs.Bool("check", false, "validate flags, settings, policies and the existing store, then exit without starting a pass or migrating the store")
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
@@ -594,14 +596,29 @@ func loopFace(args []string) int {
 		// Nowhere to write the record: the root is what names it.
 		return fail(drain.Usagef("loop needs --root <repository>"))
 	}
+	failStartup := func(err error) int {
+		if *check {
+			return fail(err)
+		}
+		return failLoopStartup(*root, time.Now(), err)
+	}
 	if *gate == "" || *land == "" || *verdict == "" {
-		return failLoopStartup(*root, time.Now(), drain.Usagef("loop needs --gate, --land and --verdict: the three programs that judge a candidate, and the loop judges nothing itself"))
+		return failStartup(drain.Usagef("loop needs --gate, --land and --verdict: the three programs that judge a candidate, and the loop judges nothing itself"))
+	}
+	repositorySettings, err := settings.Read(*root)
+	if err != nil {
+		return failStartup(drain.Usagef("%v", err))
 	}
 	gatePolicy, absent, err := drain.ReadGatePolicy(*root)
 	if err != nil {
-		return failLoopStartup(*root, time.Now(), err)
+		return failStartup(err)
 	}
-	fmt.Fprintln(os.Stderr, gatePolicy.StartupLine(absent))
+	// Check's failure must be one diagnostic, not startup chatter followed by a
+	// refusal. Normal startup reports settings as soon as they have been read.
+	if !*check {
+		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
+		fmt.Fprintln(os.Stderr, gatePolicy.StartupLine(absent))
+	}
 	if *path == "" {
 		*path = filepath.Join(*root, ".tillr", "state.db")
 	}
@@ -616,16 +633,16 @@ func loopFace(args []string) int {
 	}
 	policy, err := readPolicy(*policyPath)
 	if err != nil {
-		return failLoopStartup(*root, time.Now(), err)
+		return failStartup(err)
 	}
 	if policy == nil {
-		return failLoopStartup(*root, time.Now(), drain.Usagef("loop needs a policy: %s names none", *policyPath))
+		return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
 	}
 	at := time.Now
 	if *now != "" {
 		parsed, err := time.Parse(time.RFC3339, *now)
 		if err != nil {
-			return failLoopStartup(*root, time.Now(), drain.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+			return failStartup(drain.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
 		}
 		at = func() time.Time { return parsed }
 	}
@@ -651,7 +668,26 @@ func loopFace(args []string) int {
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 	})
 	if err != nil {
-		return failLoopStartup(*root, at(), err)
+		return failStartup(err)
+	}
+	if *check {
+		s, err := store.OpenRead(context.Background(), *path)
+		if err != nil {
+			return fail(openFailure(err))
+		}
+		version, schemaErr := s.SchemaVersion()
+		closeErr := s.Close()
+		if schemaErr != nil {
+			return fail(drain.Incompatiblef("the store %s: %v", *path, schemaErr))
+		}
+		if closeErr != nil {
+			return fail(openFailure(closeErr))
+		}
+		if version != store.SchemaVersion {
+			return fail(drain.Incompatiblef("the store %s: schema version %d; expected %d", *path, version, store.SchemaVersion))
+		}
+		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
+		return record.ExitOK
 	}
 	// A signal is the operator's stop, and it cancels the loop's context so the in-flight
 	// tick can stop the run it started. `context.Background()` here left the loop deaf to
