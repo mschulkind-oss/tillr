@@ -2,6 +2,7 @@ package run_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,9 +26,10 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 			adapter := filepath.Join(dir, "adapter", "run-stub")
 			os.MkdirAll(filepath.Dir(adapter), 0755)
 			os.WriteFile(filepath.Join(filepath.Dir(adapter), "pause-kind"), []byte(kind+"\n"), 0644)
-			// Segment three completes; the earlier two wait inside a tool call. The gap
+			// Segment three completes; the earlier two wait inside a tool call, echoing any
+			// probe the test writes so the test can see the harness is still alive. The gap
 			// fixture deliberately ignores its pause file so the straggler bound applies.
-			script := "#!/bin/sh\nif [ -n \"${TILLR_RESUME_PROMPT_FILE:-}\" ]; then cat \"$TILLR_RESUME_PROMPT_FILE\"; fi\nn=0; [ ! -f segments ] || n=$(cat segments)\nn=$((n+1)); echo $n > segments\necho \"${TILLR_SESSION_MODE:-new}\" >> modes\nif [ $n -lt 3 ]; then trap '' TERM; echo ready; sleep 60; else echo completed; fi\n"
+			script := "#!/bin/sh\nif [ -n \"${TILLR_RESUME_PROMPT_FILE:-}\" ]; then cat \"$TILLR_RESUME_PROMPT_FILE\"; fi\nn=0; [ ! -f segments ] || n=$(cat segments)\nn=$((n+1)); echo $n > segments\necho \"${TILLR_SESSION_MODE:-new}\" >> modes\nif [ $n -lt 3 ]; then trap '' TERM; echo ready; while :; do [ ! -f probe ] || cat probe > probe-echo; sleep 0.02; done; else echo completed; fi\n"
 			os.WriteFile(adapter, []byte(script), 0755)
 			os.WriteFile(filepath.Join(filepath.Dir(adapter), "extract-report"), []byte("#!/bin/sh\nprev=; out=\nfor arg in \"$@\"; do [ \"$prev\" != --out ] || out=$arg; prev=$arg; done\nprintf 'This run report\\n' > \"$out\"\n"), 0755)
 			lane := filepath.Join(dir, "lanes", "lane")
@@ -41,6 +43,17 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 			previousSession := "12345678-1234-1234-1234-123456789abc"
 			for segment := 1; segment <= 3; segment++ {
 				req.Resume = segment > 1
+				// The straggler timer is injected, so the test, not the machine, decides when
+				// the bound elapses. The runner reports the bound it chose; the test then
+				// shows the harness still answering probes while the bound is unexpired, and
+				// only then fires it. A runner that killed the harness before its bound
+				// leaves the probes unanswered.
+				bounds := make(chan time.Duration, 1)
+				fire := make(chan time.Time)
+				opts.PauseAfter = func(d time.Duration) <-chan time.Time {
+					bounds <- d
+					return fire
+				}
 				result := make(chan error, 1)
 				state := make(chan string, 1)
 				go func() {
@@ -50,7 +63,6 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 					}
 					result <- e
 				}()
-				pauseStarted := time.Time{}
 				if segment < 3 {
 					deadline := time.Now().Add(5 * time.Second)
 					for {
@@ -63,10 +75,39 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 						}
 						time.Sleep(10 * time.Millisecond)
 					}
-					pauseStarted = time.Now()
-					if err := run.RequestPause(ctx, s, req.RunID, 2*time.Second, pauseStarted); err != nil {
+					if err := run.RequestPause(ctx, s, req.RunID, 2*time.Second, time.Now()); err != nil {
 						t.Fatal(err)
 					}
+					want := 10 * time.Second
+					if kind == run.PauseAtGap {
+						want = 2 * time.Second
+					}
+					select {
+					case got := <-bounds:
+						if got != want {
+							t.Fatalf("straggler bound=%s want=%s", got, want)
+						}
+					case err := <-result:
+						t.Fatalf("run ended before the straggler bound was set: %v", err)
+					case <-time.After(15 * time.Second):
+						t.Fatal("pause request was never acted on")
+					}
+					for round := 1; round <= 2; round++ {
+						nonce := fmt.Sprintf("segment %d round %d", segment, round)
+						os.WriteFile(filepath.Join(lane, "worktree", "probe"), []byte(nonce), 0644)
+						deadline := time.Now().Add(5 * time.Second)
+						for {
+							raw, _ := os.ReadFile(filepath.Join(lane, "worktree", "probe-echo"))
+							if string(raw) == nonce {
+								break
+							}
+							if time.Now().After(deadline) {
+								t.Fatal("killed before the pause bound")
+							}
+							time.Sleep(10 * time.Millisecond)
+						}
+					}
+					close(fire)
 				}
 				select {
 				case err := <-result:
@@ -74,16 +115,7 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 						t.Fatal(err)
 					}
 				case <-time.After(15 * time.Second):
-					t.Fatal("pause did not stop sleep 60")
-				}
-				if !pauseStarted.IsZero() {
-					minimum := 10 * time.Second
-					if kind == run.PauseAtGap {
-						minimum = 2 * time.Second
-					}
-					if time.Since(pauseStarted) < minimum {
-						t.Fatal("killed before the pause bound")
-					}
+					t.Fatal("pause did not stop the harness")
 				}
 				session, err := run.ReadSessionID(lane)
 				if err != nil {

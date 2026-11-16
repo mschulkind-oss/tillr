@@ -78,6 +78,11 @@ type ExecOptions struct {
 	// before there is a process to take one from, and it stamps the record only when the
 	// run did not actually start a process.
 	Now time.Time
+	// PauseAfter is the injected straggler timer: once a pause is requested, the runner
+	// waits on the channel it returns for the bound before it kills the harness. Nil is
+	// time.After. A test supplies one to observe the bound the runner chose and to decide
+	// when it elapses, so "the runner waited for the bound" is an ordering, not a duration.
+	PauseAfter func(time.Duration) <-chan time.Time
 }
 
 // SessionIDFile is the lane layout's harness session handle: one UUID, in the lane directory
@@ -318,7 +323,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	var note string
 	startedAt := time.Now().UTC()
-	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath)
+	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter)
 	if pauseErr != nil {
 		logFile.Close()
 		return record.Envelope{}, pauseErr

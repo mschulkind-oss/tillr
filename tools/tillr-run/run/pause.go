@@ -95,7 +95,10 @@ func pendingPause(ctx context.Context, s *store.Store, id string) (*pauseRequest
 // waitForPause leaves the harness alone until a durable pause request arrives.
 // At-gap adapters watch TILLR_PAUSE_REQUEST and exit at a tool-call gap. The
 // runner enforces the straggler bound; other adapters receive TERM immediately.
-func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, path string) (error, bool, bool, error) {
+func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, path string, after func(time.Duration) <-chan time.Time) (error, bool, bool, error) {
+	if after == nil {
+		after = time.After
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -125,19 +128,17 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, 
 				bound = 10 * time.Second
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 			}
-			timer := time.NewTimer(bound)
+			elapsed := after(bound)
 			select {
 			case err := <-done:
-				timer.Stop()
 				// A harness may exit while its shell is still running. Pausing must not
 				// leave that shell writing concurrently with the next session.
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				return err, true, kind != PauseAtGap, nil
-			case <-timer.C:
+			case <-elapsed:
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				return <-done, true, true, nil
 			case <-ctx.Done():
-				timer.Stop()
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				return <-done, false, false, nil
 			}
