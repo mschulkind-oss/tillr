@@ -744,16 +744,7 @@ what ships"; the owner may overturn it.
 
 ### A machine without the forks is told what it lacks
 
-<!-- tillr: item
-     id="item-gate-needs-unavailable"
-     paths="tools/tillr-gate/,tools/gate/,tools/fork-check.py,tests/fork-check.test.py,tests/pi-patch-series.test.sh,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** A test reproduces the fault of 2026-11-15 on the tree before the fix: in a fresh clone with no local `patch/*` branch, `sh tests/pi-patch-series.test.sh` fails on the lines that assert a patch branch exists in this clone.
-- **c2:** That assertion moves into a declared check whose `needs` names the ref. In the same fresh clone the structural suite passes, and the runner reports the moved check as `unavailable` with the fetch command that provides the branch.
-- **c3:** A run whose only non-passing checks are unavailable exits as a pass and prints the count of unavailable checks apart from passed, remembered and failed. A test asserts the four counts.
-- **c4:** A ref a check needs joins its fingerprint: a test moves the ref and asserts the check runs again.
 
 ### The fast tier is the ten checks that fit
 
