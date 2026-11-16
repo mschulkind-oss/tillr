@@ -242,3 +242,20 @@ func TestASecondWriterWaitsForTheFirstInsteadOfFailing(t *testing.T) {
 		}
 	}
 }
+
+// A writable handle commits without flushing the write-ahead log: synchronous=NORMAL
+// (1), so a commit never holds SQLite's writer across a disk flush. The log is flushed
+// before each checkpoint and the database after it. An OS crash or power loss can roll
+// back the last commits; it cannot corrupt the store.
+func TestAWritableStoreCommitsWithoutFlushingTheLog(t *testing.T) {
+	s := writeStore(t)
+	var level int
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`PRAGMA synchronous`).Scan(&level)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if level != 1 {
+		t.Fatalf("PRAGMA synchronous = %d on a writable handle, want 1 (NORMAL)", level)
+	}
+}

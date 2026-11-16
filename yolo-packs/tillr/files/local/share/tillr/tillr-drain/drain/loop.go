@@ -471,6 +471,9 @@ type Loop struct {
 	previousAnswers string
 
 	sessionInitialized bool
+	// keepWAL and walKeeper are the WAL keeper (see openWALKeeper); sessionMu guards them.
+	keepWAL   bool
+	walKeeper *store.Store
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail string
@@ -567,7 +570,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.recordResult(&result)
+	defer l.closeWALKeeper()
 	defer l.endSession()
+	l.keepWALWhileRunning()
 	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
 		return faultResult(result, Usagef("the loop has no usable policy"))
 	}
@@ -578,10 +583,17 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		}
 		return faultResult(result, err)
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	stopHeartbeat := l.keepSessionAlive(ctx, cancel)
+	ctx, cancelCause := context.WithCancelCause(ctx)
+	cancel := func() { cancelCause(nil) }
+	stopHeartbeat := l.keepSessionAlive(ctx, func() { cancelCause(errHeartbeatFailed) })
 	defer func() {
+		// The heartbeat's failure is reported beside the error Run already has, labelled
+		// as the heartbeat's, never in its place: replacing it hid what startup was doing.
 		if heartbeatErr := stopHeartbeat(); heartbeatErr != nil {
+			heartbeatErr = fmt.Errorf("session heartbeat: %w", heartbeatErr)
+			if err != nil {
+				heartbeatErr = errors.Join(err, heartbeatErr)
+			}
 			result, err = faultResult(result, heartbeatErr)
 		}
 	}()
@@ -606,7 +618,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// written, and the rest of the queue is still work — but a sync that cannot run at all
 	// is a fault, because a drain over a queue it could not read is a drain over a guess.
 	if _, err := l.refreshDocuments(ctx, &result); err != nil {
-		if ctx.Err() != nil {
+		if operatorStopped(ctx) {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
 			return result, nil
@@ -618,7 +630,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// staging is the operator's stop, not a staging failure: the signal is why the git
 	// worktree add was abandoned.
 	if err := l.stageLanes(ctx); err != nil {
-		if ctx.Err() != nil {
+		if operatorStopped(ctx) {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
 			return result, nil
@@ -638,7 +650,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			// A stop that arrived while the tick was reading the store is still the
 			// operator's stop, not a store failure: the signal is why the write was
 			// abandoned, and the record says so.
-			if ctx.Err() != nil {
+			if operatorStopped(ctx) {
 				result.Stop = StopOperatorStop
 				result.Detail = "the loop was asked to stop"
 				return result, nil
@@ -733,6 +745,17 @@ func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
 		}
 	}
 	return nil
+}
+
+// errHeartbeatFailed is the cause the session heartbeat cancels Run's work with. A step
+// abandoned for it was stopped by the heartbeat's failure, not by the operator, so its
+// error is kept and reported beside the heartbeat's.
+var errHeartbeatFailed = errors.New("the session heartbeat failed")
+
+// operatorStopped answers whether ctx was canceled by the operator (a signal, or the
+// caller's own cancel) rather than by a failed heartbeat.
+func operatorStopped(ctx context.Context) bool {
+	return ctx.Err() != nil && !errors.Is(context.Cause(ctx), errHeartbeatFailed)
 }
 
 // faultResult names a run error in the result the deferred record writes, and answers the

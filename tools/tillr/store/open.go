@@ -191,8 +191,16 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 // The driver applies this mode only to a transaction that is not read-only (tx.go,
 // newTx), so a read path on a writable handle must pass the read-only option to keep its
 // deferred begin: ReadTx is where that happens.
+//
+// The writable handle runs synchronous=NORMAL, so a commit appends to the write-ahead
+// log without flushing it to disk; the log is flushed before each checkpoint and the
+// database after it. The default, FULL, flushed inside every commit, and a commit holds
+// SQLite's writer, so one slow disk flush became a writer every other connection waited
+// behind until its busy timeout. The trade: an OS crash or power loss can roll back the
+// last committed transactions. It cannot corrupt the store, and an application crash
+// loses nothing. Dropping the synchronous pragma below restores FULL.
 func dsn(path string, readOnly bool) string {
-	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
+	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	if readOnly {
 		params = "?mode=ro&_pragma=busy_timeout(5000)"
 	}

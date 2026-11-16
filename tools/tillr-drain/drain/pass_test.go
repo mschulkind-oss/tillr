@@ -18,6 +18,7 @@ func passFixture(t *testing.T, ids ...string) (refusalLoopFixture, *Loop) {
 	f := newRefusalLoopFixture(t, ids...)
 	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
 	l.cfg.Policy.Backends = map[string]Backend{"fixture": {Adapter: "fixture"}}
+	holdWALKeeper(t, f.storePath)
 	return f, l
 }
 

@@ -141,6 +141,7 @@ func workflowLoopFixture(t *testing.T, mode string) (refusalLoopFixture, *Loop, 
 	stage := &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")}
 	steps := &workflowSteps{t: t, f: f, mode: mode}
 	l := f.loop(t, steps, stage)
+	holdWALKeeper(t, f.storePath)
 	l.cfg.Lanes = []string{"lane-1"}
 	l.cfg.Policy.Seats = map[string]string{"scout": "fixture", "build": "fixture"}
 	return f, l, steps
