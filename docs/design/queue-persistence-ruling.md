@@ -1,7 +1,7 @@
 ---
 title: "Shared Documents Carry the Work; Private Queue State Stays Private"
 status: accepted
-stage: DECIDED
+stage: CURRENT
 updated: 2026-11-15
 tags:
   - tillr
@@ -20,6 +20,8 @@ vantage:
 ---
 
 # Shared Documents Carry the Work; Private Queue State Stays Private
+
+> **Carried out.** `tillr item sync` reads item blocks from documents (commit `3c215883d`), and the lander writes no trailer. This document stays as the record of the ruling.
 
 **Status:** 2026-11-15. Ruled and executable today; nothing below waits on [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger), [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger), or [a closed question](tillr-queue-persistence.md).
 

@@ -1,13 +1,15 @@
 ---
 title: "Tillr — loop readiness: what blocks an overnight burn, and what to leave broken"
 status: proposed
-stage: DECIDED
+stage: CURRENT
 updated: 2026-11-12
 tags: [tillr, drain, gate, loop, readiness, design-ruling]
 next: "Land B1–B4 (~115 LOC across 4 files), pass the end-to-end canary in a throwaway clone, then run a 1-lane 6-tick burn on item-seed-02 and item-seed-04"
 ---
 
 # Tillr — loop readiness: what blocks an overnight burn, and what to leave broken
+
+> **Carried out** in commit `1c742dcbd`, which cleared the four things that stopped the first burn. This document stays as the record.
 
 **Status:** 2026-11-12. Read against [`main`](../../AGENTS.md) at `a7d942d2c8` and the live
 canary run of 2026-11-12 (`item-canary-01` dispatched on `deepseek-v3.2`, committed on

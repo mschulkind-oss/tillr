@@ -848,3 +848,17 @@ the first step is a short design that joins them, not a build.
 - **c2:** That design ends with a build order of item blocks, each small enough for one run inside one path fence, each with criteria a test can check, and each naming the items it waits on in `blocked_by`.
 - **c3:** The first block proves the smallest end-to-end slice of the design and waits on nothing in that design.
 - **c4:** This roadmap no longer lists this design as waiting on a ruling.
+
+## Filed 2026-11-16: three built designs are owed a reference
+
+A design that is built should become a reference a maintainer can read without the history of how
+it was argued. Three designs are built and have none, so they sit in the planning index as owed.
+
+### Write the references for the item states, usage capture and the upstream-pin check
+
+<!-- tillr: item id="item-docs-three-references" paths="docs/" -->
+
+- **c1:** `docs/reference/tillr-item-states.md` describes the states an item can be in and what freezes, as built, with every claim checked against `tools/tillr-item` and `tools/tillr-view` and the commit it was verified at stated. [The item state model](../design/board-item-state-model.md) is marked graduated and points at it.
+- **c2:** `docs/reference/usage-capture.md` does the same for what the pi fork and the usage-capture extension record of a provider's usage, and [the usage capture contract](../pi/usage-capture-contract.md) points at it.
+- **c3:** `docs/reference/citation-upstream-pin.md`, or a section of an existing gate reference if one fits, does the same for the gate's upstream-pin rule in `tools/fork-check.py`, and [its fix record](../pi/citation-upstream-pin-2026-11-02.md) points at it.
+- **c4:** No file that code or a test cites by path is moved or deleted, and `uvx vantage-check index` lists none of the three under "Ready to graduate".
