@@ -853,7 +853,17 @@ it was argued. Three designs are built and have none, so they sit in the plannin
 
 <!-- tillr: item id="item-docs-three-references" paths="docs/" -->
 
+**Ruling, 2026-11-16 (answers the third run's conflict):** the third run stopped because c3 named
+`tools/fork-check.py` as the home of the upstream-pin rule, and that file's step 22 now reads
+"RETIRED here: commit citations are a change declaration under tools/gate/checks/". The
+upstream-pin rule is the one that lets a document cite a commit outside this repository's history
+when the commit belongs to an upstream project. It is implemented in
+`tools/gate/checks/change_common.py` (`UPSTREAM_REF` and `unreachable_citations`) and run by
+`tools/gate/checks/citations.py`; c3 now names those files. The fix record still names the older
+location, so the reference says the rule moved and the record is left as written apart from its
+pointer. Reading those files needs no wider paths: the item writes only under `docs/`.
+
 - **c1:** `docs/reference/tillr-item-states.md` describes the states an item can be in and what freezes, as built, with every claim checked against `tools/tillr-item` and `tools/tillr-view` and the commit it was verified at stated. [The item state model](../design/board-item-state-model.md) is marked graduated and points at it.
 - **c2:** `docs/reference/usage-capture.md` does the same for what the pi fork and the usage-capture extension record of a provider's usage, and [the usage capture contract](../pi/usage-capture-contract.md) points at it.
-- **c3:** `docs/reference/citation-upstream-pin.md`, or a section of an existing gate reference if one fits, does the same for the gate's upstream-pin rule in `tools/fork-check.py`, and [its fix record](../pi/citation-upstream-pin-2026-11-02.md) points at it.
+- **c3:** `docs/reference/citation-upstream-pin.md`, or a section of an existing gate reference if one fits, does the same for the gate's upstream-pin rule as built in `tools/gate/checks/change_common.py` and run by `tools/gate/checks/citations.py`, and [its fix record](../pi/citation-upstream-pin-2026-11-02.md) points at it.
 - **c4:** No file that code or a test cites by path is moved or deleted, and `uvx vantage-check index` lists none of the three under "Ready to graduate".
