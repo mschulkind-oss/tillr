@@ -173,8 +173,18 @@ func TestResumeSecondFailureHonorsContinuedHistory(t *testing.T) {
 			}
 			l.build.Digest = "changed"
 			second := mustPlan(t, l)[0]
-			if !second.decision.Readmitted || second.decision.Attempt != first.Attempt+1 {
+			if second.decision.Attempt != first.Attempt+1 {
 				t.Fatalf("not second attempt: %+v", second.decision)
+			}
+			// A prior a loop stop interrupted is no attempt outcome (item-drain-stop-keeps-runs
+			// c4): its item is dispatched again without spending a re-admission. A judged
+			// prior still needs the changed build to be re-admitted.
+			if mode == "prior-still-orphaned" {
+				if second.decision.Readmitted || second.decision.Reason != "earlier run orphaned by a loop stop" {
+					t.Fatalf("interrupted prior spent a re-admission: %+v", second.decision)
+				}
+			} else if !second.decision.Readmitted {
+				t.Fatalf("not re-admitted: %+v", second.decision)
 			}
 			second.decision.RunRequest.Command = []string{continuationShell(t), "-c", "kill -TERM $$"}
 			steps.at = steps.at.Add(100 * time.Millisecond)

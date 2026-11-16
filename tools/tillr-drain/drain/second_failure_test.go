@@ -65,7 +65,11 @@ func TestSecondFailureRoutesToDesign(t *testing.T) {
 				l.build.Digest = "changed"
 			}
 			second := mustPlan(t, l)[0]
-			if second.decision.Action != ActionRetry && !second.decision.Readmitted {
+			if mode == "stopped" || mode == "first-stopped" {
+				if second.decision.Action != ActionDispatch || second.decision.Readmitted || second.decision.RetryID != "" {
+					t.Fatalf("stop spent an allowance: %+v", second.decision)
+				}
+			} else if second.decision.Action != ActionRetry && !second.decision.Readmitted {
 				t.Fatalf("not readmitted: %+v", second.decision)
 			}
 			finishHeldPass(t, f, l, second, run.EndNormalExit)

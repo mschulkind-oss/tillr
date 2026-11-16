@@ -147,6 +147,11 @@ func init() {
 	if err := store.RegisterDDL("drain", DispatchDDL+PassDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL); err != nil {
 		panic(err)
 	}
+	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER"} {
+		if err := store.RegisterColumn("drain", "drain_sessions", name, definition); err != nil {
+			panic(err)
+		}
+	}
 	for name, definition := range map[string]string{
 		"ended_at": "INTEGER", "decision_counts": "TEXT", "applied_count": "INTEGER",
 		"gate_count": "INTEGER",

@@ -1715,14 +1715,13 @@ func TestALaneHeldWithNoExpiryStopsTheLoopAsLanesLeased(t *testing.T) {
 	}
 }
 
-// Stopping the loop stops the run: a SIGTERM to the loop reaches the run face, which kills
-// the adapter's process group, writes the terminal record and frees the lane. The negative
-// control is the first night's `pkill -f 'tillr drain loop'`: an orphaned worker finished a
-// minute later and committed a candidate nobody judged, while its lane stayed leased.
-func TestASigtermStopsTheLoopAndItsRun(t *testing.T) {
+// A raw supervisor signal leaves the run alive. The explicit stop face is
+// covered separately, including its opt-in end-runs behavior.
+func TestASigtermStopsOnlyTheLoop(t *testing.T) {
 	marker := filepath.Join(scratch(t, "sigterm-marker"), "started")
 	adapter := stub(t, "sleeping-adapter", counting+`echo started > "$STUB_MARKER"
-sleep 300
+while [ ! -f "$STUB_MARKER.release" ]; do sleep 0.02; done
+printf 'RESULT: done\n'
 `)
 	f := newLoopFixture(t, adapter)
 	t.Setenv("STUB_MARKER", marker)
@@ -1741,6 +1740,7 @@ sleep 300
 		"--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"),
 		"--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0),
 	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var out strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1751,7 +1751,8 @@ sleep 300
 	// orphan behind. A process that already exited answers an error this ignores.
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	waitForFile(t, marker, 30*time.Second)
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	// Like a terminal signal, this targets the supervisor's whole process group.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
 		cmd.Process.Kill()
 		t.Fatalf("signalling the loop failed: %v", err)
 	}
@@ -1766,11 +1767,15 @@ sleep 300
 		cmd.Process.Kill()
 		t.Fatalf("the loop did not stop after SIGTERM: %s", out.String())
 	}
-	// The run face is gone: no `tillr-run exec` survived the loop.
-	if pids := matchingPIDs(t, f.store); len(pids) > 0 {
-		t.Fatalf("a run process outlived the stopped loop: %v", pids)
+	if pids := matchingPIDs(t, f.store); len(pids) == 0 {
+		t.Fatal("the ordinary loop signal ended its run")
 	}
-	// Exactly one terminal runs row, and the lane is free.
+	writeFile(t, marker+".release", "finish")
+	deadline := time.Now().Add(10 * time.Second)
+	for len(terminalRunRows(t, f.store)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Exactly one terminal runs row, and the lane is free after the run finishes.
 	rows := terminalRunRows(t, f.store)
 	if len(rows) != 1 {
 		t.Fatalf("the stopped run left %d terminal runs row(s), want exactly 1: %v", len(rows), rows)

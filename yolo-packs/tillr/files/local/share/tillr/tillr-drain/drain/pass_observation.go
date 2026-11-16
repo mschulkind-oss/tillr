@@ -54,11 +54,19 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		return Incompatiblef("%v", err)
 	}
 	defer s.Close()
+	owner, err := currentLoopOwner()
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(owner)
+	if err != nil {
+		return err
+	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at)
-   VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
+		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner)
+   VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
    refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at`,
-			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli())
+			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw))
 		return err
 	})
 	if err == nil && l.keepWAL && l.walKeeper == nil {

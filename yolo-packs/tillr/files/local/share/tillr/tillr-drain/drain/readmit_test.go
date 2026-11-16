@@ -93,7 +93,7 @@ func TestHeldPassReadmitsOnlyOnceForChangedInputs(t *testing.T) {
 	}
 }
 
-func TestOrphanedNoCommitPassReadmitsOnce(t *testing.T) {
+func TestOrphanedNoCommitPassSpendsNoReadmission(t *testing.T) {
 	for _, cause := range []string{run.EndSignal, run.EndLeaseReclaimed, run.EndTimeLimit, run.EndNormalExit} {
 		t.Run(cause, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
@@ -112,9 +112,18 @@ func TestOrphanedNoCommitPassReadmitsOnce(t *testing.T) {
 				t.Fatalf("ordinary termination re-admitted: %+v", d)
 			}
 			if orphan {
-				finishHeldPass(t, f, l, mustPlan(t, l)[0], cause)
-				if next := mustPlan(t, l)[0].decision; next.Reason != "readmission-exhausted" || next.Action != ActionHold {
-					t.Fatalf("orphan looped: %+v", next)
+				for attempt := 2; attempt <= 3; attempt++ {
+					p := mustPlan(t, l)[0]
+					if p.decision.Readmitted || p.decision.RetryID != "" {
+						t.Fatalf("interruption charged an allowance: %+v", p.decision)
+					}
+					finishHeldPass(t, f, l, p, cause)
+					fixtureWrite(t, f, func(tx *store.Tx) error {
+						return appendEffect(tx, loopOrphanedKind, p.decision.RunRequest.RunID, struct{}{}, l.cfg.Now())
+					})
+				}
+				if next := mustPlan(t, l)[0].decision; next.Action != ActionDispatch || next.Attempt != 4 || next.Readmitted || next.RetryID != "" {
+					t.Fatalf("repeated interruption spent a budget: %+v", next)
 				}
 			}
 		})

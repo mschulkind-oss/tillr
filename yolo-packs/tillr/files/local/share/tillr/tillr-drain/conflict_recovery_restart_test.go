@@ -19,6 +19,7 @@ func TestInterruptedRecoveredRepairSettlesExistingCommitWithoutColdRestart(t *te
 		writeFile(t, filepath.Join(signals, name), "fixture\n")
 	}
 	marker := filepath.Join(signals, "repair-committed")
+	t.Cleanup(func() { writeFile(t, marker+".release", "finish") })
 	adapter := stub(t, "adapter", fmt.Sprintf(`case "$TILLR_RUN_ID" in
  *-cfix)
   if [ -f %q ]; then echo duplicate-cold-repair; printf 'RESULT: done\n'; exit 0; fi
@@ -27,9 +28,10 @@ func TestInterruptedRecoveredRepairSettlesExistingCommitWithoutColdRestart(t *te
   git add base.txt
   git -c user.name=stub -c user.email=stub@example.invalid commit -q -m repaired
   touch %q
-  while :; do sleep 0.01; done ;;
+  while [ ! -f %q ]; do sleep 0.01; done
+  printf 'RESULT: done\n'; exit 0 ;;
 esac
-`, marker, marker)+conflictAdapter)
+`, marker, marker, marker+".release")+conflictAdapter)
 	f := newLoopFixture(t, adapter)
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
@@ -79,12 +81,13 @@ esac
 	}
 	logPath := filepath.Join(f.laneRoot, "lane-1", "run-item_041-a1-cfix.log")
 	before := readText(t, logPath)
+	writeFile(t, marker+".release", "finish")
 	restarted, restartErr := f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(context.Background())
 	if restartErr != nil || restarted.Dispatched != 0 || restarted.Landed != 1 || stage.calls != 2 {
 		t.Fatalf("restarted a successfully staged repair: %+v / %v calls=%d", restarted, restartErr, stage.calls)
 	}
 	after := readText(t, logPath)
-	if after != before || !strings.Contains(after, "repair-only-marker") || strings.Contains(after, "duplicate-cold-repair") {
+	if !strings.HasPrefix(after, before) || !strings.Contains(after, "repair-only-marker") || strings.Contains(after, "duplicate-cold-repair") {
 		t.Fatalf("repair transcript overwritten: %q -> %q", before, after)
 	}
 	found := false

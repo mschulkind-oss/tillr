@@ -165,16 +165,39 @@ as the owner's next act. An authorized retry begins a fresh allowance, but uncha
 inputs still hold. Older runs with no recorded inputs need an owner retry rather than a
 guessed comparison.
 
-A loop-owned run stopped with its loop, or closed by reclaiming its abandoned lease,
-also qualifies after examination proves it left no commit. For an unbounded claim with
-no terminal record, replacement loops compare the recorded process ID and start time
-within the same Linux boot, process namespace, and user identity, then check that no worker carrying
-that run and store identity survives. Only a proven-dead owner with no live worker is
-reclaimed. Foreign or legacy claims without that evidence remain protected.
-Its decision says the earlier
-run was orphaned by a loop stop. A worker signal without evidence of a loop stop, a time
-limit, or a run that left a commit does not qualify on this basis. The same one-attempt
-allowance applies.
+A loop stop or fault leaves in-flight runs alone. Their terminal records survive the
+supervisor, and the next loop settles and judges each normally, including runs that
+finished while no loop was running.
+
+```sh
+tillr drain stop --root <repository>                 # stop supervision only
+tillr drain stop --root <repository> --end-runs      # also end in-flight runs
+```
+
+The explicit flag is the drain's only run-ending path. It sends SIGTERM to each run
+face, not a `tillr run pause` request: the flag was built before the pause command
+existed, and no item has changed it since; the face ends its adapter and writes
+its terminal record. Ending a run this way starts the item over, not the session.
+The interruption is recorded before signaling. It is no attempt outcome: no retry,
+failover, or automatic re-admission allowance is spent, regardless of how often it
+happens. The next pass dispatches the item again on its interrupted backend.
+
+A stop acts on what this process domain (boot, PID namespace and user) can see and
+reports the rest on stderr, one `loop: stop left alone:` line each. A session from
+another domain whose heartbeat is more than five seconds past its recorded next pass
+belongs to a loop that died without ending it, such as one killed by a jail relaunch,
+and is left alone. One whose heartbeat is current is a live loop this domain cannot
+signal: the stop exits non-zero naming it, after stopping the local loops and, with
+`--end-runs`, ending the local runs. A run owned by another domain is reported and left as it is. A run whose
+run face is gone but whose worker survives is ended like any other: the interruption is
+recorded, then every process of this user carrying that run and store identity gets SIGTERM.
+
+For an unbounded claim with no terminal record, replacement loops compare the recorded
+process ID and start time within the same Linux boot, process namespace, and user
+identity, then check that no worker carrying that run and store identity survives.
+Only a proven-dead owner with no live worker is reclaimed. Foreign or legacy claims
+without that evidence remain protected. A normal offline finish is still judged;
+a worker signal without evidence of supervisor interruption is not exempted.
 
 ## Owner edits and waiting landings
 
@@ -311,11 +334,16 @@ spends at most the existing one conflict-fix run. The waiting view names the ite
 staging cause, and this correction as the next action.
 
 Successful staging transfers pending ownership to the repair request and its new base
-in one store transaction before execution starts. After an interruption, the next loop
-settles that existing repair's terminal record and commit; it never starts the same
-repair ID cold or truncates its transcript. Settlement and judgment use the ordinary
-pass transitions, so spend is counted once and the launching examination cannot race
-the repair's settlement.
+in one store transaction before execution starts. A loop stop or crash leaves the
+repair running; the next loop settles that existing repair's terminal record and
+commit, and never starts the same repair ID cold or truncates its transcript.
+Settlement and judgment use the ordinary pass transitions, so spend is counted once
+and the launching examination cannot race the repair's settlement. A repair ended by
+an explicit `tillr drain stop --end-runs` is different: it is recorded as
+interrupted, so the next loop pins its head (`refs/tillr/runs/<run-id>`), resets the
+lane and dispatches again without judging it, even when it left a commit. That commit
+is kept under the pin but never gated; this is the cost of an end that spends no
+attempt.
 
 Measured 2026-11-16 with the
 [repair-staging regression](./conflict_hold_test.go): before containment, a staging
@@ -325,9 +353,10 @@ event, so a replacement loop selected the same candidate for judgment again. The
 regression now requires both siblings to land, two unchanged restarts to stage nothing,
 and a corrected policy input to recover the original repair. The original failure event
 and candidate commit remain available. The
-[interrupted-recovery regression](./conflict_recovery_restart_test.go) also stops a
-recovered worker after it commits, then requires an unchanged restart to land that
-commit with zero new dispatches and an unchanged repair transcript.
+[interrupted-recovery regression](./conflict_recovery_restart_test.go) also stops the
+loop after a recovered worker commits, leaves that worker running until it is released,
+then requires an unchanged restart to land that commit with zero new dispatches and a
+repair transcript that only grew: everything written before the stop is still its prefix.
 
 ## The fence, and the session
 
@@ -402,6 +431,11 @@ second `runs` row. It re-takes the boundary bracket at the resume and
 re-derives the fence from the item's `allowed_paths`, because the killed segment may have
 committed before it died. It refuses a run the gate judged: continuing judged work is a
 retry, which a person authorizes.
+
+Interrupting `resume` or `once` (Ctrl-C, SIGTERM) stops that command, not its worker:
+the run face is started in its own process group, outside the command's context, so
+it finishes and writes its terminal record, and the next loop settles it.
+`tillr drain stop --end-runs` is the only drain command that ends a run.
 
 A real runner continuation reopens an unjudged examination even when the loop already
 examined an interrupted or no-op segment. It supersedes that segment's orphan marker and

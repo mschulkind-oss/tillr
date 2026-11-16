@@ -459,6 +459,7 @@ type Loop struct {
 	policyRecorded bool
 	// active owns only completion triggers, never terminal outcomes. Outcomes are
 	// reconstructed from the store by the next pass or a replacement Loop.
+	examinations    sync.WaitGroup
 	active          map[string]bool
 	completions     chan runCompletion
 	laneChanges     map[string]int
@@ -540,6 +541,11 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.Report == nil {
 		cfg.Report = io.Discard
 	}
+	// Read the process identity now, outside every store transaction; each later
+	// claim and reap answers it from memory.
+	if _, err := currentLoopOwner(); err != nil {
+		return nil, err
+	}
 	l := &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
@@ -597,12 +603,19 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			result, err = faultResult(result, heartbeatErr)
 		}
 	}()
+	// Deferred calls run last-first: the end-runs sweep below runs after the
+	// examinations are cancelled and drained, so a wall continuation an
+	// examination was about to start cannot start after the sweep.
+	defer func() {
+		if stopErr := l.endRequestedRuns(); stopErr != nil {
+			result, err = faultResult(result, stopErr)
+		}
+	}()
 	defer func() {
 		cancel()
-		for len(l.active) > 0 {
-			c := <-l.completions
-			l.takeCompletion(c, &result)
-		}
+		// Judging workers own short-lived leases, not model lifetimes. Finish
+		// their cancellation cleanup before this process exits.
+		l.examinations.Wait()
 	}()
 	// The result is written on every way out, including the failing one: a loop that stopped
 	// on a store it could not open is a stop an operator needs the record of, and a file
@@ -1047,23 +1060,9 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	if ctx.Err() != nil {
-		if err := appendJudgment(context.WithoutCancel(ctx), l.cfg.Store, loopOrphanedKind, "run", request.RunID, struct{}{}, l.cfg.Now().UTC()); err != nil {
-			return laneOutcome{err: err}
-		}
-	}
 	stop, err := l.closeRunBracket(context.WithoutCancel(ctx), worktree, request, tick, at, before, result, watched)
 	if err != nil || stop != "" {
 		return laneOutcome{stop: stop, err: err}
-	}
-	if ctx.Err() != nil {
-		// The run's terminal record and its lane's release are written by `run exec`
-		// before it answers, through its own signal handling; the loop never judges a run
-		// the operator cut short.
-		l.mu.Lock()
-		result.Detail = "the loop was asked to stop; the in-flight run was stopped and its lane released"
-		l.mu.Unlock()
-		return laneOutcome{stop: StopOperatorStop}
 	}
 	return laneOutcome{}
 }
@@ -1187,7 +1186,6 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			break
 		}
 	}
-	class := ClassifyAttempt(record, log)
 	if decision.Workflow != nil {
 		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result)
 		if handled {
@@ -1195,16 +1193,16 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			return laneOutcome{err: nodeErr}
 		}
 	}
-	// A stopped loop did not learn that the harness was broken. Inspect its tree
-	// before classification can fail over or resume it: no commit records a no-op,
-	// while a commit goes through the ordinary gate.
+	// An interrupted run is evidence about the supervisor, not the item. It is
+	// neither judged nor charged to any attempt budget, even if it left a commit.
 	orphaned, err := l.orphanedRun(ctx, record)
 	if err != nil {
 		return laneOutcome{err: err}
 	}
 	if orphaned {
-		class = AttemptAnswered
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
 	}
+	class := ClassifyAttempt(record, log)
 	if class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {
 			return laneOutcome{err: err}
