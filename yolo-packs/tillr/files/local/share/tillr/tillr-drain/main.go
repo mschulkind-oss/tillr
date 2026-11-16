@@ -463,8 +463,8 @@ func readPolicy(ref string) (*drain.Policy, error) {
 const (
 	questionsRootHelp = "the repository the items' design_doc references resolve against"
 	questionsCmdHelp  = "the program that answers Vantage's index, as one command line (default: " +
-		"vantage-check index --format json; name \"uvx vantage-check index --format json\" when the tool is " +
-		"installed through uvx and not on PATH). A program that is not there holds the affected items with " +
+		"uvx vantage-check index --format json). An explicit override replaces the default. " +
+		"A program that is not there holds the affected items with " +
 		drain.ReasonQuestionsUnknown + " rather than dispatching them"
 )
 

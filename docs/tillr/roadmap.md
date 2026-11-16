@@ -80,7 +80,9 @@ what a run used and never a price.
 
 ## 2. Keep the loop running
 
-Second by rule 2. [The overnight velocity evaluation](../research/tillr-drain-velocity.md)
+Second by rule 2. [Make Vantage's intended invocation the default](#route-vantage-index-reads-through-uvx-by-default)
+comes first in recovery because an unavailable question reader holds otherwise actionable work.
+[The overnight velocity evaluation](../research/tillr-drain-velocity.md)
 puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
 not authorization to change the drain's policy.
@@ -98,6 +100,34 @@ on this page, in this order:
   and [the loop says why every item is where it is](#filed-2026-11-15-the-loop-says-why-every-item-is-where-it-is-and-what-it-has-spent).
   Third because half the lanes sat idle with no stated reason, and the second of these also
   carries the spend ceiling and turning the after-merge check back on.
+
+### Route Vantage index reads through uvx by default
+
+The owner confirmed on 2026-11-16 that running Vantage through its package runner is the
+intended installation method. The shared tillr default instead assumes a standalone executable.
+In this jail that executable is absent, so planner and view reads produce unknown-question holds;
+the same reads succeed through the package runner. Fix this before other recovery work so a tool
+invocation mistake does not hide the real reasons items are held.
+
+**Outcomes**
+
+- Read Vantage's question index through the intended installation without a per-command override.
+- Keep explicit command overrides and honest failure reporting; never interpret a failed index as no questions.
+
+**Agent Details**
+
+- **Where:** the shared default in [`vantage.go`](../../tools/tillr-drain/vantage/vantage.go), its
+  consumers in [`tillr-view`](../../tools/tillr-view/) and [`tillr-drain`](../../tools/tillr-drain/),
+  and the [committed tillr delivery](../../yolo-packs/tillr/).
+- **Verify:** put a recording package-runner stub on PATH with no standalone checker; default
+  reads must invoke `uvx vantage-check index --format json`. Keep override, command-failure,
+  malformed-index and open-question tests. Sync and lint the delivery.
+
+<!-- tillr: item id="item-vantage-uvx-default" paths="tools/tillr-drain/,tools/tillr-view/,tests/,yolo-packs/tillr/,docs/tillr/roadmap.md" prose="2" -->
+
+- **c1:** With no explicit override, planner and view index reads use the package runner; a regression uses a recording stub and no standalone checker and asserts the full argument list.
+- **c2:** Explicit overrides still run exactly the chosen command, and missing or failing commands and malformed index output hold affected items rather than treating them as question-free; regression tests cover these cases.
+- **c3:** Help text names the actual default, the committed delivery matches its sources, and the applicable tests and pack lint pass.
 
 ## 3. Roll onto new code without ending runs
 

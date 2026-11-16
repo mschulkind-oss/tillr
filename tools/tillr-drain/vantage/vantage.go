@@ -183,11 +183,10 @@ func cleanDocumentPath(path string) string {
 }
 
 // DefaultIndexCommand is the program that answers Vantage's index, spelled as this
-// repository's own documents invoke it. A caller overrides it when the tool is installed
-// some other way (through `uvx`, say); a caller that has it on no path at all gets
-// `questions-unknown` for every item whose design document is in the tree, which is the hold
-// the three-answer shape exists to produce.
-var DefaultIndexCommand = []string{"vantage-check", "index", "--format", "json"}
+// repository's intended installation invokes it: through uvx, without requiring a
+// standalone checker on PATH. Callers may explicitly override the command. A missing
+// or failed command produces questions-unknown, never an empty question list.
+var DefaultIndexCommand = []string{"uvx", "vantage-check", "index", "--format", "json"}
 
 // IndexTimeout bounds the index command. It is a wall on the tool and not a budget on the
 // tick: a tool that has not answered by then is the `questions-unknown` case, and the item is
