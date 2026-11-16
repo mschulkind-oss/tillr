@@ -333,3 +333,17 @@ func TestWaitingAbsenceAndReadFailures(t *testing.T) {
 		t.Fatalf("unknown similar reason: %q", got)
 	}
 }
+
+// A replacement loop holds an item on `run-live` while a run from the earlier loop is still
+// alive. The row must say what is waited on and name the operator's one option.
+func TestWaitingRunLiveNamesTheSurvivingRun(t *testing.T) {
+	rule := waitingRuleFor("run-live")
+	if rule.class != "waits on work" || rule.where != "lane" {
+		t.Fatalf("run-live rule = %+v, want waits on work in the lane", rule)
+	}
+	for _, want := range []string{"earlier loop", "finish", "tillr drain stop --end-runs"} {
+		if !strings.Contains(rule.mover, want) {
+			t.Errorf("run-live mover %q does not mention %q", rule.mover, want)
+		}
+	}
+}

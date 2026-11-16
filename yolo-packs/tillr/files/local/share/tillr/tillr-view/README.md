@@ -218,6 +218,11 @@ The terminal prints the duration after the paths in **Why**; Home shows it besid
 **Since**. A different dirty path set starts a different reason sequence and a
 new clock. A landed item no longer appears in this view.
 
+A replacement loop holds an item on `run-live` while a run from an earlier loop is still
+alive, because stopping a loop leaves its runs alone. It reads `waits on work` at `lane`.
+**Mover** says the run finishes and the loop then settles it; the operator's option is
+`tillr drain stop --end-runs`, which ends the surviving runs.
+
 A retained conflict repair that cannot be staged uses its recorded failure event
 instead: **Why** includes `conflict-repair-staging-failed` and the exact staging
 cause, **Mover** names the input correction that enables the next repair pass, and

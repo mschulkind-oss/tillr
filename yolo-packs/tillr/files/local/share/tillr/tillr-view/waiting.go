@@ -63,6 +63,7 @@ var waitingRules = map[string]waitingRule{
 	"capacity":                       {"waits on work", "queue", "the next pass"},
 	"no-lane":                        {"waits on work", "queue", "a free lane"},
 	"no-fence":                       {"needs you", "queue", "the owner"},
+	"run-live":                       {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
 	"fork-held":                      {"waits on work", "queue", "cause not recorded"},
 	"failover":                       {"ready", "queue", "the next pass"},
 	"seat-degraded":                  {"ready", "queue", "the next pass"},
