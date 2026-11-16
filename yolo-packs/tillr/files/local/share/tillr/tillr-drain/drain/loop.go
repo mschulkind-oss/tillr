@@ -1627,6 +1627,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if landed.Result == LandRefused && landed.Reason == "trunk-worktree-uncommitted" {
 		return "", false, l.holdDirty(ctx, candidate, landed.ConflictPaths)
 	}
+	if landed.Result == LandRefused && landed.Reason == LandAlreadyOnTrunk {
+		return "", false, l.settleAlreadyOnTrunk(ctx, candidate)
+	}
 	if landed.Result == LandSquashConflict {
 		// A conflict is not a refusal: the trunk moved and the candidate no longer squashes
 		// onto it. It is the one negative outcome the next run can resolve, so it becomes

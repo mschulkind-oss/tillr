@@ -58,9 +58,9 @@ verdict — every one was a patch-id mismatch, a git error, or a regeneration fa
 
 *Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/) for the landing transaction. The board
 pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are retired; in
-[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed eight-value set
+[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed nine-value set
 (`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `trunk-rewritten`, `patch-rewind`,
-`patch-at-head`, `item-not-landable`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
+`patch-at-head`, `item-not-landable`, `already-on-trunk`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tools/tillr-land/land/conformance_test.go), and `squash-conflict`
 (`ResultSquashConflict`) is its own outcome rather than a refusal. `trunk-rewritten` is
 an infrastructure hold: the drain retains the already-gated candidate, records both tips,
@@ -70,10 +70,10 @@ and waits for restored history without a failing candidate verdict or another ga
 move between the gate and `pass` is squashed onto the moved tip by `Trunk.Squash`
 ([`trunk.go`](../../tools/tillr-land/land/trunk.go)) and recorded on `landings` with both
 `gated_tree` and `landed_tree`, never refused on patch-id or base drift. Every refusal in `Reasons()`
-names a specific fact about the verdict, the patch ref, uncommitted worktree paths, or the
-owner's closed/resolved item disposition, and
-non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`) leave the verdict standing and
-pin `refs/tillr/runs/<run_id>` at the head.
+names a specific fact about the verdict, the patch ref, uncommitted worktree paths, the
+owner's closed/resolved item disposition, or a trunk that already carries the change, and
+non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`, `already-on-trunk`) leave the
+verdict standing and pin `refs/tillr/runs/<run_id>` at the head.
 
 ## 2. Re-application preserves the change, not the patch
 
@@ -123,9 +123,17 @@ and emits a `land.landing` event with both trees: `gated_tree` is the candidate 
 verdict bound, and `landed_tree` is `squash.Tree`, the tree the trunk published. There is no separate
 carry flag or candidate queue: when the trunk has not moved (`trunkBefore == base_sha`), `gated_tree`
 equals `landed_tree`; when a concurrent landing moved the trunk, `gated_tree` differing from
-`landed_tree` is the normal outcome of that concurrent landing and not a defect (when the moved trunk
-already holds the candidate's entire change, `squash.Tree == trunkBefore^{tree}`; see
-[Section 10](#10-supersession-is-a-verdict-not-a-stall)). A squash that conflicts is recorded on
+`landed_tree` is the normal outcome of that concurrent landing and not a defect. When the moved trunk
+already holds the candidate's entire change, `squash.Tree == trunkBefore^{tree}`, and the landing is
+refused as `already-on-trunk` rather than published as an empty commit; see
+[Section 10](#10-supersession-is-a-verdict-not-a-stall). Across a crash between `Trunk.Move` and
+the receipt, a retry of the same run does not squash or publish again. Before the move, the lander
+points its marker ref `refs/tillr/landed/<run_id>` at the squash commit. A retry that finds that
+commit in the trunk's history, as exactly this head's squash onto its parent, records it as the
+landing. A retry of a landing that was recorded answers the stored row and writes nothing. This is
+not a general once-only guarantee. A marker an owner deleted, an unrecorded landing an owner
+reverted, and a run id reused by a second store over the same repository are each answered
+differently; the [lander README](../../tools/tillr-land/README.md) states each case. A squash that conflicts is recorded on
 `landings` with `result = "squash-conflict"` (`ResultSquashConflict`) and `conflict_paths`, and pins
 `refs/tillr/runs/<run_id>` at `head_sha` — never landed, never re-gated, because the conflict is
 about the candidate rather than the machinery. Both outcomes are pinned in
@@ -240,24 +248,33 @@ land; with one lander there is no second program to hand-carry past, which is th
 Work whose change is already on the trunk exits the queue on that finding. "Already present" is a
 result, and the record may be corrected retroactively; it is not a state to wait in.
 
-*Enforced by:* **partially — the squash computes the unchanged tree, and nothing checks
-`squash.Tree == trunkBefore^{tree}` yet.** `Trunk.Squash`
-([`trunk.go`](../../tools/tillr-land/land/trunk.go), landed in `e07510bba4`) three-way merges
+*Enforced by:* the lander records the finding and the drain exits the item on it. `Trunk.Squash` ([`trunk.go`](../../tools/tillr-land/land/trunk.go)) three-way merges
 `base..head` onto `trunkBefore` via `git merge-tree --write-tree --merge-base=<base> <trunkBefore> <head>`.
-When `trunkBefore` already holds the candidate's change, git's merge stages nothing beyond the
-current tip and answers `squash.Tree == trunkBefore^{tree}` without any patch comparison of ours.
-Neither `Trunk.Squash` nor `Land` ([`landing.go`](../../tools/tillr-land/land/landing.go)) checks
-`squash.Tree == trunkBefore^{tree}` today: `Trunk.Squash` still passes `squash.Tree` to
-`git commit-tree -p <trunkBefore>`, and `Land` advances the trunk to that empty squash commit and
-records `result = "landed"` on `landings` with both `gated_tree` and `landed_tree` (where
-`landed_tree` equals `trunkBefore^{tree}`).
+When `trunkBefore` already holds the candidate's change, git's merge answers
+`squash.Tree == trunkBefore^{tree}` without any patch comparison of ours. `Trunk.SquashWithMessage`
+now checks exactly that and answers an `Empty` squash with no commit. `Land`
+([`landing.go`](../../tools/tillr-land/land/landing.go)) then records `result = "refused"`,
+`reason = "already-on-trunk"`, pins the head, and moves nothing, so no empty commit reaches the
+trunk. The case is pinned by `TestAnEmptySquashIsRefusedAsAlreadyOnTrunk` in
+[`idempotent_test.go`](../../tools/tillr-land/idempotent_test.go). The one exception is a retry
+of this run's own unrecorded landing: that is recorded as the landing it was (see
+[Section 3](#3-gate-what-will-be-the-tip-once)). On the dispatch side, `tillr-drain`'s
+`landCandidate` ([`loop.go`](../../tools/tillr-drain/drain/loop.go)) gives `already-on-trunk`
+its own branch (`settleAlreadyOnTrunk` in
+[`already_on_trunk.go`](../../tools/tillr-drain/drain/already_on_trunk.go)). The branch records the
+passing verdict and moves the item to `resolved-elsewhere`, the existing terminal state for an
+intent that another path satisfied. The loop then marks the work examined and releases the lane, as
+it does after a landing. The item is never held as `land-refused`. The case is pinned by the
+`commit` subtest of `TestDirtyPathWaitRetainsCandidateAcrossReplacement` in
+[`dirty_hold_test.go`](../../tools/tillr-drain/drain/dirty_hold_test.go).
 
-*Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) does not stall a
-superseded candidate — there is no candidate queue to wait in, and the three-way merge onto
-`trunkBefore` succeeds cleanly — and it does not yet short-circuit on
-`squash.Tree == trunkBefore^{tree}` to record an `already-present` finding instead of publishing an
-empty commit on the trunk. The lander's `patch-at-head` and `patch-rewind` refusals are about
-`refs/heads/patch/*` delivery branches, not about an ordinary change the trunk already holds.
+*Scope:* **the landing transaction and the drain.** [`tools/tillr-land`](../../tools/tillr-land/)
+does not stall a superseded candidate: there is no candidate queue to wait in, and the finding is a
+recorded refusal rather than a commit. `tillr-drain` exits the item on that refusal. What is not
+enforced yet: the `resolved-elsewhere` move records no pointer to the commit that carries the
+change, because `tillr-item state` takes none today. The lander's `patch-at-head` and `patch-rewind`
+refusals are about `refs/heads/patch/*` delivery branches, not about an ordinary change the trunk
+already holds.
 
 ## 11. A failure is diagnosed, not waited out
 

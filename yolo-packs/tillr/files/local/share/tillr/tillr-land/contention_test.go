@@ -286,6 +286,8 @@ func TestFinalMoveFailureRollsBackReceiptAndReleasesWriter(t *testing.T) {
 	}
 }
 
+// A receipt that fails after the Move is reported, and the retry records the commit the
+// trunk already carries rather than squashing the change a second time.
 func TestReceiptFailureAfterMoveIsReportedWithoutReplay(t *testing.T) {
 	f := newContentionFixture(t)
 	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
@@ -298,11 +300,69 @@ func TestReceiptFailureAfterMoveIsReportedWithoutReplay(t *testing.T) {
 	if a.err == nil || !strings.Contains(a.err.Error(), "receipt fixture failure") {
 		t.Fatalf("receipt failure lost: %+v %v", a.landing, a.err)
 	}
-	if tip := f.f.trunk(t); tip == f.f.baseSHA {
+	moved := f.f.trunk(t)
+	if moved == f.f.baseSHA {
 		t.Fatal("fixture did not reach the external Move")
 	}
 	assertLandingCount(t, f, 0)
-	// This is the existing non-atomic boundary, not an invitation to replay Land.
+	// The boundary stays non-atomic; the retry is what makes it idempotent.
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`DROP TRIGGER reject_receipt`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a = finishLanding(t, startLanding(t, context.Background(), f))
+	if a.err != nil || !a.landing.Landed() || a.landing.TrunkAfter != moved || a.landing.TrunkBefore != f.f.baseSHA {
+		t.Fatalf("retry did not record the moved trunk %s: %+v %v", moved, a.landing, a.err)
+	}
+	if tip := f.f.trunk(t); tip != moved {
+		t.Fatalf("retry moved the trunk again, to %s", tip)
+	}
+	assertLandingCount(t, f, 1)
+}
+
+// A recovery decided during preparation is rechecked inside the writer: a receipt for the
+// same commit committed meanwhile — by a lander that took another lock file, the one path
+// past land.lock — is refused rather than recorded a second time.
+func TestRecoveryRechecksTheReceiptInsideTheWriter(t *testing.T) {
+	f := newContentionFixture(t)
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER reject_receipt BEFORE INSERT ON landings BEGIN SELECT RAISE(ABORT,'receipt fixture failure'); END;`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a := finishLanding(t, startLanding(t, context.Background(), f)); a.err == nil {
+		t.Fatalf("fixture: the receipt did not fail: %+v", a.landing)
+	}
+	moved := f.f.trunk(t)
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`DROP TRIGGER reject_receipt`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Preparation decides on the recovery, then pins: hold it at the pin.
+	entered, release := stallGit(t, "update-ref")
+	done := startLanding(t, context.Background(), f)
+	awaitGit(t, entered)
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO landings (landing_id, item_id, run_id, verdict_id, result, base_sha, head_sha, trunk_before, trunk_after)
+			VALUES ('landing_other', 'item_042', 'run-contention', 'verdict-other', 'landed', ?, ?, ?, ?)`,
+			f.f.baseSHA, f.f.headSHA, f.f.baseSHA, moved)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := finishLanding(t, done)
+	if a.err == nil || !strings.Contains(a.err.Error(), "recorded during preparation") {
+		t.Fatalf("a receipt written during preparation was not rechecked: %+v %v", a.landing, a.err)
+	}
+	assertLandingCount(t, f, 1)
 }
 
 func assertNoLandingMove(t *testing.T, f contentionFixture) {

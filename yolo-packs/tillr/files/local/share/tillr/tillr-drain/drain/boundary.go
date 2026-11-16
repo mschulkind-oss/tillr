@@ -321,11 +321,20 @@ func tillrRef(ref string) bool {
 
 func trunkHistoryRef(ref string) bool { return ref == observedTrunkRef || ref == lostTrunkRef }
 
+// landerRef names the refs tillr-land writes for every landing: the run pin at the head
+// (refs/tillr/runs/<run_id>) and the landed marker at the squash commit
+// (refs/tillr/landed/<run_id>), which is how a retry finds a landing whose receipt was
+// lost. A sibling lane's landing writes both while this bracket's run is in flight.
+func landerRef(ref string) bool {
+	return strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/")
+}
+
 // runRefExcused answers whether a ref may move without convicting this run.
-// Ordinary refs belong to other Git users; registered sibling branches and run
-// pins are moved by the loop. An unassigned ref inside tillr's namespaces is not.
+// Ordinary refs belong to other Git users; registered sibling branches and the
+// lander's run pins and landed markers are moved by the loop. An unassigned ref
+// inside tillr's namespaces is not.
 func runRefExcused(ref string, before *Boundary) bool {
-	if trunkHistoryRef(ref) || !tillrRef(ref) || strings.HasPrefix(ref, "refs/tillr/runs/") {
+	if trunkHistoryRef(ref) || !tillrRef(ref) || landerRef(ref) {
 		return true
 	}
 	for _, wt := range before.Worktrees {

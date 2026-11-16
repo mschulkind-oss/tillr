@@ -43,6 +43,10 @@ func (s *dirtyPathSteps) Land(_ context.Context, c Candidate) (LandOutcome, erro
 	}
 	tip := runGit(s.t, s.root, "rev-parse", "HEAD")
 	tree := strings.Split(runGit(s.t, s.root, "merge-tree", "--write-tree", "--merge-base="+c.BaseSHA, tip, c.HeadSHA), "\n")[0]
+	if tree == runGit(s.t, s.root, "rev-parse", tip+"^{tree}") {
+		// The real lander's finding for a change the trunk already carries.
+		return LandOutcome{Result: LandRefused, Reason: LandAlreadyOnTrunk}, nil
+	}
 	commit := runGit(s.t, s.root, "commit-tree", tree, "-p", tip, "-m", "land")
 	runGit(s.t, s.root, "merge", "--ff-only", commit)
 	return LandOutcome{Result: LandLanded}, nil
@@ -58,6 +62,19 @@ func (s *dirtyPathSteps) ItemState(ctx context.Context, id, runID, state string,
 		_, err := tx.Exec(`UPDATE items SET state=? WHERE item_id=?`, state, id)
 		return err
 	})
+}
+
+func itemStateOf(t *testing.T, storePath, id string) string {
+	t.Helper()
+	s := openFixture(t, storePath)
+	defer s.Close()
+	var state string
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func TestDirtyPathWaitRetainsCandidateAcrossReplacement(t *testing.T) {
@@ -117,8 +134,8 @@ func TestDirtyPathWaitRetainsCandidateAcrossReplacement(t *testing.T) {
 			if resolution == "restore" {
 				runGit(t, f.root, "restore", "base.txt")
 			} else {
-				// Commit the candidate's content: the next landing is now a no-op merge,
-				// not a conflict between an unrelated owner edit and the candidate.
+				// Commit the candidate's content, as the hold advises: the trunk now
+				// carries the whole change, so the lander finds it already there.
 				writeForkFile(t, filepath.Join(f.root, "base.txt"), "candidate\n")
 				runGit(t, f.root, "add", "base.txt")
 				runGit(t, f.root, "commit", "-qm", "owner")
@@ -127,6 +144,26 @@ func TestDirtyPathWaitRetainsCandidateAcrossReplacement(t *testing.T) {
 				t.Fatalf("reopen %s / %v", stop, err)
 			}
 			drainOwned(t, replacement, &result)
+			if resolution == "commit" {
+				// Already on the trunk is a finding the item exits on, never a hold that
+				// waits for a person: the verdict is recorded, the item is resolved
+				// elsewhere, and nothing is planned for it again.
+				if result.Landed != 0 || result.Rejected != 0 || steps.lands != 2 || steps.gates != 1 || steps.verdicts != 1 {
+					t.Fatalf("already-on-trunk did not settle the item: %+v / %+v", result, steps)
+				}
+				if state := itemStateOf(t, f.storePath, "item-a"); state != "resolved-elsewhere" {
+					t.Fatalf("item state %q, want resolved-elsewhere", state)
+				}
+				for _, p := range mustPlan(t, replacement) {
+					if p.decision.ItemID == "item-a" && p.decision.Action != ActionHold && p.decision.Action != "" {
+						t.Fatalf("a resolved item was planned again: %+v", p.decision)
+					}
+					if p.decision.ItemID == "item-a" && strings.HasPrefix(p.decision.Reason, ReasonLandRefused) {
+						t.Fatalf("a resolved item is held as land-refused: %+v", p.decision)
+					}
+				}
+				return
+			}
 			if result.Landed != 1 || steps.lands != 2 || steps.gates != 1 || steps.verdicts != 1 {
 				t.Fatalf("wait did not land by itself: %+v / %+v", result, steps)
 			}

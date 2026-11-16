@@ -57,6 +57,12 @@ const (
 	ReasonItemNotLandable = "item-not-landable"
 	// ReasonTrunkRewritten means the locked trunk no longer contains the observed tip.
 	ReasonTrunkRewritten = "trunk-rewritten"
+	// ReasonAlreadyOnTrunk is a change the trunk already carries: the squash answers the
+	// tip's own tree, so the only commit it could write is an empty one. It is a fact about
+	// the trunk, not a failure of the candidate (landing principle 10), and nothing moves.
+	// A retry of this run's own unrecorded landing is not this refusal: that is recorded as
+	// the landing it was.
+	ReasonAlreadyOnTrunk = "already-on-trunk"
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -70,6 +76,7 @@ func Reasons() []string {
 		ReasonPatchAtHead,
 		ReasonItemNotLandable,
 		ReasonTrunkRewritten,
+		ReasonAlreadyOnTrunk,
 	}
 }
 
@@ -195,6 +202,15 @@ type LandingRequest struct {
 // scope-checked identity and the selected source commit's message, naming no item, and `Trunk.Move`
 // fast-forwards the trunk onto it. A squash that conflicts is its own outcome, not a repair: the verdict
 // stands, the head is pinned, and a repair lane reads the conflict paths from the row.
+//
+// Landing is idempotent across the one boundary that is not atomic: the trunk move is a
+// Git write and the receipt is a SQLite commit, and a crash can keep the first and lose the
+// second. Before the move, the squash commit is recorded at refs/tillr/landed/<run_id>. A
+// later call for the same run finds that commit in the trunk's history, checks it is exactly
+// this head's squash onto its parent, and records the row for it without squashing again.
+// A squash that answers the trunk's own tree — the change is already there, and no marker
+// says this run put it there — is refused as already-on-trunk rather than published as an
+// empty commit.
 func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (answer Landing, err error) {
 	// Preserve cancellation identity even when a Git helper adds its exit-code diagnostic.
 	defer func() {
@@ -282,6 +298,9 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 	if err != nil {
 		return Landing{}, err
 	}
+	if prepared.stored != nil {
+		return *prepared.stored, nil
+	}
 	// Only the final check, Move and receipt need SQLite's single writer. Close
 	// either wins during preparation or waits here and sees the committed receipt.
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
@@ -298,6 +317,53 @@ type preparedLanding struct {
 	historyBefore                  historySnapshot
 	history                        *trunkHistory
 	observationRef, observationTip string
+	// tip is the trunk tip read under land.lock, which the final check compares against.
+	// It is landing.TrunkBefore except for a recovered landing, whose row records the move
+	// it already made.
+	tip string
+	// recovered is a landing this run already published and the store never recorded:
+	// the row is written for that commit and the trunk is not moved again.
+	recovered bool
+	// stored is the receipt this run already recorded for this head at its marker: the
+	// request is a retry of a recorded landing, answered with that row and nothing written.
+	stored *Landing
+}
+
+// landingRecorded answers whether a landed row already names commit as its trunk_after.
+func landingRecorded(r rowQueryer, commit string) (bool, error) {
+	var recorded bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM landings WHERE result = ? AND trunk_after = ?)`, ResultLanded, commit).Scan(&recorded); err != nil {
+		return false, Internalf("checking for a recorded landing at %s: %v", commit, err)
+	}
+	return recorded, nil
+}
+
+// storedLanding answers the landed row this item's run already recorded for this head at
+// commit, if there is one: the receipt a retry of a recorded landing is answered with.
+func storedLanding(r rowQueryer, req LandingRequest, commit string) (*Landing, error) {
+	var l Landing
+	var conflicts string
+	err := r.QueryRow(`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
+		       trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason
+		  FROM landings
+		 WHERE result = ? AND trunk_after = ? AND item_id = ? AND run_id = ? AND head_sha = ?
+		 ORDER BY rowid LIMIT 1`, ResultLanded, commit, req.ItemID, req.RunID, req.HeadSHA).Scan(
+		&l.LandingID, &l.ItemID, &l.RunID, &l.VerdictID, &l.Result, &l.Reason, &l.BaseSHA, &l.HeadSHA,
+		&l.TrunkBefore, &l.TrunkAfter, &l.GatedTree, &l.LandedTree, &conflicts, &l.GateSkippedReason)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, Internalf("reading the recorded landing at %s: %v", commit, err)
+	}
+	if err := json.Unmarshal([]byte(conflicts), &l.ConflictPaths); err != nil {
+		return nil, Internalf("decoding the conflict paths of landing %s: %v", l.LandingID, err)
+	}
+	if len(l.ConflictPaths) == 0 {
+		// A landed row stores none, and the answer the landing first gave carried none.
+		l.ConflictPaths = nil
+	}
+	return &l, nil
 }
 
 func itemNotLandable(r rowQueryer, id string) (bool, error) {
@@ -317,27 +383,69 @@ func itemNotLandable(r rowQueryer, id string) (bool, error) {
 // prepareLanding holds land.lock but no SQLite transaction across Git or disk work.
 func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landing, req LandingRequest) (preparedLanding, error) {
 	p := preparedLanding{landing: landing}
+	// A verdict that passes is the only request whose run may already have landed; the
+	// patch-branch refusals Land decided are what a recovered landing looks like from the
+	// branch's side, so they do not hide one.
+	verdictPasses, _ := decide(req, landing.GatedTree)
+	marker, hasMarker := "", false
+	if verdictPasses == ResultLanded {
+		var err error
+		if marker, hasMarker, err = t.LandedMarker(req.RunID); err != nil {
+			return p, err
+		}
+	}
+	notLandable, markerRecorded := false, false
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
-		notLandable, err := itemNotLandable(r, req.ItemID)
-		if err != nil {
+		var err error
+		if notLandable, err = itemNotLandable(r, req.ItemID); err != nil {
 			return err
 		}
-		if notLandable {
-			p.landing.Result, p.landing.Reason = ResultRefused, ReasonItemNotLandable
+		if hasMarker {
+			if p.stored, err = storedLanding(r, req, marker); err != nil || p.stored != nil {
+				return err
+			}
+			if markerRecorded, err = landingRecorded(r, marker); err != nil {
+				return err
+			}
 		}
-		if p.landing.Landed() && req.ObservedTrunk != "" {
+		if req.ObservedTrunk != "" {
 			p.historyBefore, err = readHistory(r)
 		}
 		return err
 	})
-	if err != nil {
+	if err != nil || p.stored != nil {
+		// A retry of a recorded landing: its receipt is the answer. Nothing is squashed,
+		// pinned, moved or written, so a retry cannot add a second row or a second commit.
 		return p, err
 	}
 	trunkBefore, err := t.Head(req.BaseRef)
 	if err != nil {
 		return p, err
 	}
+	p.tip = trunkBefore
 	p.landing.TrunkBefore, p.landing.TrunkAfter = trunkBefore, trunkBefore
+	if hasMarker && !markerRecorded {
+		parent, ok, err := t.RecoveredLanding(req.BaseSHA, req.HeadSHA, marker, trunkBefore)
+		if err != nil {
+			return p, err
+		}
+		if ok {
+			if notLandable {
+				return p, Externalf("%s already carries %s, the landing of run %s, but the store has no receipt for it and item %s is now closed or resolved elsewhere: nothing was recorded or moved; decide by hand whether the item stays closed with its change on the trunk, or revert %s",
+					req.BaseRef, marker, req.RunID, req.ItemID, marker)
+			}
+			landedTree, err := t.TreeOf(marker)
+			if err != nil {
+				return p, err
+			}
+			p.recovered = true
+			p.landing.Result, p.landing.Reason = ResultLanded, ""
+			p.landing.TrunkBefore, p.landing.TrunkAfter, p.landing.LandedTree = parent, marker, landedTree
+		}
+	}
+	if notLandable {
+		p.landing.Result, p.landing.Reason = ResultRefused, ReasonItemNotLandable
+	}
 	if p.landing.Landed() && req.ObservedTrunk != "" {
 		p.observationRef, p.observationTip = req.BaseRef, trunkBefore
 		if PatchRef(req.BaseRef) != "" {
@@ -357,14 +465,24 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		}
 		if rewritten {
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkRewritten
+			p.recovered = false
+			p.landing.TrunkBefore, p.landing.TrunkAfter, p.landing.LandedTree = trunkBefore, trunkBefore, ""
 		}
 	}
-	if p.landing.Landed() {
+	if p.recovered {
+		// The range was preserved before the original move; preserving it again is
+		// idempotent and keeps the commit list if the crash came before it was flushed.
+		if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
+			return p, err
+		}
+	} else if p.landing.Landed() {
 		p.squash, err = t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
 		if err != nil {
 			return p, err
 		}
-		if p.squash.Conflicted() {
+		if p.squash.Empty {
+			p.landing.Result, p.landing.Reason = ResultRefused, ReasonAlreadyOnTrunk
+		} else if p.squash.Conflicted() {
 			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, p.squash.Conflicts
 		} else {
 			p.landing.LandedTree = p.squash.Tree
@@ -376,6 +494,8 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 				p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkUncommitted
 				p.landing.ConflictPaths = clashing
 			} else if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
+				return p, err
+			} else if err := t.MarkLanded(req.RunID, p.squash.Commit); err != nil {
 				return p, err
 			}
 		}
@@ -394,16 +514,29 @@ func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLandin
 	if err != nil {
 		return Landing{}, err
 	}
+	if notLandable && p.recovered {
+		return Landing{}, Externalf("%s already carries %s, the landing of run %s, but item %s was closed while the receipt was being prepared: nothing was recorded or moved; decide by hand whether the item stays closed with its change on the trunk, or revert %s",
+			req.BaseRef, landing.TrunkAfter, req.RunID, req.ItemID, landing.TrunkAfter)
+	}
 	if notLandable {
 		landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
 		landing.LandedTree, landing.ConflictPaths = "", nil
+	}
+	if p.recovered {
+		recorded, err := landingRecorded(tx, landing.TrunkAfter)
+		if err != nil {
+			return Landing{}, err
+		}
+		if recorded {
+			return Landing{}, Externalf("the landing of run %s at %s was recorded during preparation; nothing was recorded twice", req.RunID, landing.TrunkAfter)
+		}
 	}
 	tip, err := t.Head(req.BaseRef)
 	if err != nil {
 		return Landing{}, err
 	}
-	if tip != landing.TrunkBefore {
-		return Landing{}, Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, landing.TrunkBefore, tip)
+	if tip != p.tip {
+		return Landing{}, Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, p.tip, tip)
 	}
 	if !notLandable && p.observationRef != "" {
 		current, err := readHistory(tx)
@@ -426,8 +559,10 @@ func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLandin
 	if err := ctx.Err(); err != nil {
 		return Landing{}, err
 	}
-	if landing.Landed() {
-		if err := t.Move(req.BaseRef, p.squash.Commit, landing.TrunkBefore); err != nil {
+	// A recovered landing's move already happened: its row is written and nothing moves,
+	// so the history keeps the tip read under the lock.
+	if landing.Landed() && !p.recovered {
+		if err := t.Move(req.BaseRef, p.squash.Commit, p.tip); err != nil {
 			return Landing{}, err
 		}
 		landing.TrunkAfter = p.squash.Commit

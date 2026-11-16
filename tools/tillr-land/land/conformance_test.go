@@ -12,6 +12,7 @@ import (
 // queries against a closed set rather than a scattering of string literals.
 func TestTheRefusalReasonsAreTheRegisteredSet(t *testing.T) {
 	want := []string{
+		"already-on-trunk",
 		"item-not-landable",
 		"patch-at-head",
 		"patch-rewind",

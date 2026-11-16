@@ -22,7 +22,9 @@ no SQLite transaction held across Git. Its final write transaction checks dispos
 again, checks the prepared trunk tip and applicable history snapshot, then performs the
 final Move and writes the receipt. Close can win during preparation; after final Move
 starts, it waits for the receipt and refuses an already-landed item. Changed history or
-trunk inputs produce an explicit error without a Move, not automatic replay.
+trunk inputs produce an explicit error without a Move. A retry prepares again from the
+start. If this run's landing is already on the trunk, the retry records it and does not
+squash it a second time (see the residual below).
 
 Each Loop still performs full owner-aware initialization on its first successful session
 refresh. Only that Loop's later heartbeat/end opens omit redundant migration. New Loops
@@ -87,8 +89,35 @@ The final writer still spans trunk `rev-parse`, Move's worktree discovery, tip c
 and SQLite receipt/event commit. Hooks, storage or scheduling can make these operations
 exceed SQLite's unchanged five-second busy timeout. Releasing this exclusion requires a
 new close/land serialization design; it is not part of this repair. Git Move and SQLite
-receipt commit remain non-atomic: an error after Move can leave a moved trunk without a
-receipt and is reported, never automatically replayed.
+receipt commit remain non-atomic: an error, a killed process, or an OS crash after Move can
+leave a moved trunk without a receipt. The first failure is reported. The drain then retries
+the gated candidate, and that retry is idempotent rather than a second squash:
+
+- Before Move, the lander points `refs/tillr/landed/<run_id>` at the squash commit. That ref
+  is the lander's own marker. It is local and never pushed, and the commit itself still
+  carries only the head's message.
+- On a retry, the marker's commit must be in the trunk's history and must be exactly this
+  head's squash onto its own parent. When both hold, the lander writes the missing receipt
+  for that commit and does not move the trunk.
+- A retry of a landing whose receipt was committed answers that receipt and writes nothing.
+  The final writer rechecks for a receipt before it records a recovered landing, so a
+  receipt committed during preparation is not recorded twice.
+- A squash that would only reproduce the trunk's own tree is refused as `already-on-trunk`.
+  It is never published as an empty commit. That refusal is the fallback when the marker
+  itself was lost. The drain settles that refusal as `resolved-elsewhere` rather than holding
+  the item for a person.
+- The drain's per-run boundary comparison excuses the lander's own `refs/tillr/landed/` and
+  `refs/tillr/runs/` refs, so a landing during a sibling run convicts nothing.
+- The reverse loss is a store that recorded a landing whose commit Git no longer has, because
+  Git's defaults flush neither refs nor loose objects. When the drain's `trunk_history` row
+  names such a commit, the next landing fails as an external error that names the commit,
+  and nothing moves. A store with no `trunk_history` row does not detect it.
+
+The lander's
+[state invariants](../../../tools/tillr-land/README.md#state-invariants) state the same
+rule, and its
+[known cases](../../../tools/tillr-land/README.md#known-cases-the-marker-does-not-settle)
+name where the marker's answer is not the trunk's current content.
 
 Pack delivery requires `just pack-sync`, `yolo pack lint yolo-packs/tillr`, then the
 human's `yolo host apply --assert` and relaunch. This recovery does not perform deployment

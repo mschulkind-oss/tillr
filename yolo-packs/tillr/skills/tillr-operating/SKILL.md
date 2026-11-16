@@ -187,6 +187,7 @@ Stop the loop and read the record, rather than retrying, when:
 - the gate answers `4` — it could not judge, and a retry does not make it able to;
 - `tillr store check` answers non-zero — nothing built on that store is trustworthy;
 - a land refuses — the loop records it and moves on; a second attempt is a decision for
-  a human, not for the loop. A squash conflict is the one negative land answer that is not
-  a stop: the loop spends its one conflict-fix run and holds the item only if that run
-  conflicts too.
+  a human, not for the loop. Two negative land answers are not stops. On a squash
+  conflict the loop spends its one conflict-fix run and holds the item only if that run
+  conflicts too. On `already-on-trunk` (the trunk already carries the whole change) the
+  loop records the verdict and settles the item as `resolved-elsewhere`.
