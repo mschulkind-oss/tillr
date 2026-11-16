@@ -60,6 +60,10 @@ type Squash struct {
 	Commit    string
 	Tree      string
 	Conflicts []string
+	// Empty is a squash whose merged tree is the trunk's own: the trunk already carries
+	// the whole change. It names no commit, because the only commit it could write is an
+	// empty one (landing principle 10: already present is a finding, not a landing).
+	Empty bool
 }
 
 // Conflicted reports whether the change does not squash onto the trunk. A conflicted squash
@@ -109,6 +113,7 @@ func (t *Trunk) MessageSource(base, head, source string) (string, error) {
 }
 
 // SquashWithMessage merges head's tree but takes the message and author date from source.
+// A merge that answers trunk's own tree is an Empty squash and writes no commit.
 func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time) (Squash, error) {
 	identity, err := t.LandingIdentity()
 	if err != nil {
@@ -126,6 +131,13 @@ func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time
 	tree = strings.TrimSpace(tree)
 	if tree == "" {
 		return Squash{}, Externalf("squashing %s onto %s in %s answered no tree", head, trunk, t.repo)
+	}
+	trunkTree, err := t.TreeOf(trunk)
+	if err != nil {
+		return Squash{}, err
+	}
+	if tree == trunkTree {
+		return Squash{Tree: tree, Empty: true}, nil
 	}
 	raw, err := t.git("cat-file", "commit", source)
 	if err != nil {
@@ -192,6 +204,110 @@ func (t *Trunk) Pin(runID, sha string) error {
 		return Externalf("pinning refs/tillr/runs/%s at %s in %s: %v", runID, sha, t.repo, err)
 	}
 	return nil
+}
+
+// landedMarkerRef is the ref a landing points at its squash commit before it moves the
+// trunk. It is the lander's own record, in Git, of which commit a run's landing wrote: Git's
+// trunk move and the store's receipt are two writes, so a process killed between them, or
+// an OS crash that keeps the ref and loses the store's last commits, leaves a trunk that
+// carries a landing no `landings` row names. The marker is how a retry of that run finds the
+// commit again instead of squashing the change a second time. It lives under refs/tillr/
+// beside the run pins, is never pushed, and names no item: the commit itself stays the
+// head's message only (ruling D-RS3).
+func landedMarkerRef(runID string) string { return "refs/tillr/landed/" + runID }
+
+// checkRunRef refuses a run id that is not a valid ref name component, by git's
+// check-ref-format rules. The id is spliced into the marker's ref name and from there into a
+// revision expression, so an id carrying revision syntax (`x~1`, `x^`, `x@{1}`) would read a
+// different object than the marker; it is refused before any Git read rather than left for
+// a later update-ref to reject.
+func checkRunRef(runID string) error {
+	bad := func(why string) error {
+		return Usagef("run id %q cannot name a ref (%s): use letters, digits, '-', '_' and '.'", runID, why)
+	}
+	if runID == "" || runID == "@" {
+		return bad("empty or '@'")
+	}
+	if strings.Contains(runID, "..") || strings.Contains(runID, "@{") || strings.Contains(runID, "//") {
+		return bad("'..', '@{' or '//'")
+	}
+	if strings.HasSuffix(runID, "/") || strings.HasSuffix(runID, ".") {
+		return bad("ends with '/' or '.'")
+	}
+	for _, c := range runID {
+		if c < 0x20 || c == 0x7f || strings.ContainsRune(" ~^:?*[\\", c) {
+			return bad(fmt.Sprintf("contains %q", c))
+		}
+	}
+	for _, component := range strings.Split(runID, "/") {
+		if strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return bad("a component starts with '.' or ends with '.lock'")
+		}
+	}
+	return nil
+}
+
+// LandedMarker answers the commit a previous landing of runID wrote, if any.
+func (t *Trunk) LandedMarker(runID string) (string, bool, error) {
+	if err := checkRunRef(runID); err != nil {
+		return "", false, err
+	}
+	out, stderr, err := t.runGit(nil, "rev-parse", "--verify", "--quiet", landedMarkerRef(runID)+"^{commit}")
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(stderr) == "" {
+			return "", false, nil
+		}
+		return "", false, Externalf("reading %s in %s: %s", landedMarkerRef(runID), t.repo, failureText(stderr, err))
+	}
+	return strings.TrimSpace(out), true, nil
+}
+
+// MarkLanded points runID's marker at the squash commit its landing is about to publish.
+// It is written before the trunk moves, so a move that survives a crash always has one;
+// a landing refused or failed after this leaves a marker at a commit the trunk does not
+// carry, which RecoveredLanding ignores.
+func (t *Trunk) MarkLanded(runID, commit string) error {
+	if err := checkRunRef(runID); err != nil {
+		return err
+	}
+	if _, err := t.git("update-ref", landedMarkerRef(runID), commit); err != nil {
+		return Externalf("marking %s at %s in %s: %v", landedMarkerRef(runID), commit, t.repo, err)
+	}
+	return nil
+}
+
+// RecoveredLanding answers whether marker is a landing of base..head that the trunk at tip
+// already carries, and the trunk commit it was squashed onto. Both must hold, so no tree
+// comparison alone can satisfy it: the marker commit is in tip's history (an interleaved
+// later landing does not hide it), and it is exactly the squash of base..head onto its own
+// parent (a later, different head for the same run is not it). An unrelated commit with the
+// same tree is never the marker's commit, because only the lander writes the marker, and it
+// writes one only for a non-empty squash, so a marker commit always changed something.
+func (t *Trunk) RecoveredLanding(base, head, marker, tip string) (string, bool, error) {
+	onTrunk, err := t.historyAncestor(marker, tip)
+	if err != nil || !onTrunk {
+		return "", false, err
+	}
+	parent, err := t.git("rev-parse", "--verify", marker+"^1")
+	if err != nil {
+		return "", false, nil
+	}
+	parent = strings.TrimSpace(parent)
+	out, stderr, err := t.runGit(nil, "merge-tree", "--write-tree", "--merge-base="+base, parent, head)
+	if err != nil {
+		if len(conflictReports(out)) > 0 {
+			return "", false, nil
+		}
+		return "", false, Externalf("re-squashing %s onto %s in %s: %s", head, parent, t.repo, failureText(stderr, err))
+	}
+	merged, _, _ := strings.Cut(out, "\n")
+	merged = strings.TrimSpace(merged)
+	markerTree, err := t.TreeOf(marker)
+	if err != nil {
+		return "", false, err
+	}
+	return parent, merged == markerTree, nil
 }
 
 // Identity is the author and committer a landing publishes: the identity the repository's

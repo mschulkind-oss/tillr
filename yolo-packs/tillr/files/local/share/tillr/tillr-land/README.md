@@ -49,15 +49,60 @@ The design that splits this surface into `--help`, this README and the compositi
   Move and receipt. A changed preparation input is an explicit error, not automatic
   replay. The final Move and history-retention refs can still be slow; see the
   [contention recovery boundary](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/README.md#exact-residual-limitation).
+- **A retry of a run does not squash or publish its change a second time.** Git's Move and
+  the SQLite receipt are two writes, and a crash can keep the first and lose the second.
+  Before Move, the lander points `refs/tillr/landed/<run_id>` at the squash commit. That ref
+  is the lander's own marker: it is local, it is never pushed, and the commit itself names
+  no item. A run id must be a valid ref name component, and one that is not is refused
+  (exit 2) before any Git read. A retry of the same run is answered in one of three ways:
+  - The store already holds a `landed` row for this item, run and head at the marker's
+    commit. The retry answers that row with exit 0 and writes nothing: no row, no event, no
+    ref.
+  - No row names the marker's commit, the commit is in the trunk's history, and it is
+    exactly this head's squash onto its own parent. The retry records that commit as the
+    landing and does not move the trunk. Neither an unrelated commit with the same tree nor
+    a different head for the same run passes that check.
+  - Otherwise the retry squashes as a first landing would. A squash that would only
+    reproduce the trunk's tree is refused as `already-on-trunk` and is never published as
+    an empty commit.
+
+  A `trunk_history` tip whose object Git no longer has is an external failure that names
+  the commit, and nothing moves. A Git failure while reading that tip is reported as the
+  Git failure, not as a lost commit. The cases are pinned in
+  [`idempotent_test.go`](idempotent_test.go), and the writer-side recheck in
+  [`contention_test.go`](contention_test.go). The [known cases](#known-cases-the-marker-does-not-settle)
+  below are where this answer is not what an operator might expect.
 - **The lease on the trunk excludes other landers, never the gate.** `land.lock` spans
   preparation and the final Move/receipt window. The gate runs in another process before
   `pass` is called.
-- **A non-landing pins its head.** A squash conflict or a refusal answers
+- **A non-landing pins its head.** A squash conflict or a refusal, `already-on-trunk` included, answers
   `refs/tillr/runs/<run_id>` at the head before the lock is released, so a head the gate saw
   cannot be garbage-collected before a conflict-fixer or a person reads it.
 - **Authorship follows the landing.** The squashed commit carries the identity the
   repository's git config states, never the lane branch's, and a repository that states one
   in a scope a lane can write is refused rather than trusted.
+
+## Known cases the marker does not settle
+
+The landed marker (`refs/tillr/landed/<run_id>`, above) is evidence that this run published
+a commit. It is not evidence that the trunk still carries the change, or that the run id
+belongs to only one store. Two cases follow from that.
+
+- **An owner reverts a landing the store never recorded.** The marker's commit is still in
+  the trunk's history under the revert. A retry of that run records it as `landed`, although
+  the trunk no longer carries the change. *Operator:* a revert means the item's change is not
+  on the trunk. Re-open or re-dispatch the item under a new run, and correct the recorded
+  `landed` row by hand if a reader needs it gone.
+- **Two stores share one repository and reuse a run id.** Markers are per repository and
+  receipts are per store. A second store that lands a candidate with the same content under
+  the same run id finds the first store's marker. It records the first store's commit as its
+  own landing. *Operator:* do not reuse run ids across stores over one repository. If it
+  happened, correct the second store's row by hand.
+
+Markers accumulate as run pins do: nothing deletes `refs/tillr/landed/*` or
+`refs/tillr/runs/*`, and pruning either is an operator's decision. Deleting a marker loses
+recovery for that run's unrecorded landing. A retry then squashes again, and it is refused as
+`already-on-trunk` when the trunk still carries the change.
 
 ## Standalone invocation
 

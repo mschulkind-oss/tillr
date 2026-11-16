@@ -215,6 +215,10 @@ the original candidate and verdict, including after a supervisor restart; it
 neither dispatches a replacement run nor reruns the gate. Each wait check uses the
 change reapplied onto the current trunk, so an already-applied path does not keep
 blocking the remainder; a merge conflict reaches the lander's conflict handling.
+When the owner commits the candidate's whole change, the lander finds it already
+there and refuses the landing as `already-on-trunk`. The drain records the passing
+verdict and moves the item to `resolved-elsewhere`; it does not hold the item as
+`land-refused`.
 An unchanged wait is not a candidate refusal or a failing verdict. Even
 `--exit-when-drained` keeps
 waiting while this retained landing can reopen. If the dirty path set changes,
@@ -256,7 +260,7 @@ convictions and attribution limits are:
 | :--- | :--- | :--- |
 | Remote-tracking refs, tags, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | No | Ordinary Git users can move them while a run is active. |
 | Trunk commits or rewritten trunk history | No | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, and the two trunk-history refs | No | These are deliveries or concurrent loop work. |
+| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | No | These are deliveries or concurrent loop work. |
 | An unassigned ref inside tillr's namespaces | Yes | No run or loop delivery owns that ref. |
 | Main-checkout uncommitted content | No | Content belongs to the owner, regardless of when it appeared. |
 | Changed status of a path in a watched, idle sibling worktree | Yes | The run was not assigned that worktree. Siblings that became active are removed from the comparison. |
