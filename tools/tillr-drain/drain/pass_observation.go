@@ -75,7 +75,7 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		if err != nil {
 			return Incompatiblef("%v", err)
 		}
-		l.walKeeper = keeper
+		l.walKeeper, l.lastCheckpoint = keeper, at
 	}
 	if err == nil {
 		l.sessionInitialized = true
@@ -117,7 +117,11 @@ func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) 
 				done <- nil
 				return
 			case <-ticker.C:
-				if err := l.refreshSession(ctx, l.cfg.Now().Add(PassInterval)); err != nil {
+				err := l.refreshSession(ctx, l.cfg.Now().Add(PassInterval))
+				if err == nil {
+					err = l.checkpointIfDue(ctx)
+				}
+				if err != nil {
 					if ctx.Err() != nil {
 						done <- nil
 					} else {

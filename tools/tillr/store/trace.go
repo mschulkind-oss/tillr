@@ -18,7 +18,8 @@ const (
 	sqliteTraceSlowSpan    = 2 * time.Second // Observation only, never cancellation.
 	sqliteTraceActiveLimit = 32
 	// One queue slot holds one phase record or one span's stack sample. A span queues
-	// each phase as it happens, so a WriteTx costs three slots.
+	// each phase as it happens, so a WriteTx on a writable handle costs four slots:
+	// begin, its checkpoint policy (autocheckpoint.*), acquired and end.
 	sqliteTraceQueueLimit = 1024
 	sqliteTraceStackLimit = 1 << 20
 	// The bound on a program's exit flush: long enough for a healthy stderr to take a
@@ -101,7 +102,7 @@ type sqliteTraceRecord struct {
 	path, operation string
 	started, at     time.Time
 	sink            io.Writer
-	phase           string
+	phase, detail   string
 	err             error
 	snapshot, stage string
 	truncated       bool
@@ -162,7 +163,11 @@ func startSQLiteTrace(path, operation string) *sqliteTraceSpan {
 
 // record queues one phase now, so a span still in flight when its process exits or
 // is killed has already handed over everything up to its current phase.
-func (s *sqliteTraceSpan) record(phase string, err error) {
+func (s *sqliteTraceSpan) record(phase string, err error) { s.recordDetail(phase, "", err) }
+
+// recordDetail is record with key=value fields after the error, such as a log's frame count.
+// A caller builds detail only when the span is not nil, so tracing off formats nothing.
+func (s *sqliteTraceSpan) recordDetail(phase, detail string, err error) {
 	if s == nil {
 		return
 	}
@@ -172,7 +177,9 @@ func (s *sqliteTraceSpan) record(phase string, err error) {
 	s.stage = phase
 	o.pending.Add(1)
 	o.mu.Unlock()
-	o.enqueue(s.phaseRecord(at, phase, err))
+	r := s.phaseRecord(at, phase, err)
+	r.detail = detail
+	o.enqueue(r)
 }
 
 func (s *sqliteTraceSpan) finish(err error) {
@@ -282,7 +289,11 @@ func (o *sqliteTraceObserver) write(r sqliteTraceRecord) error {
 	w := o.buffer
 	w.Reset(r.sink)
 	if r.snapshot == "" {
-		fmt.Fprintf(w, "tillr-sqlite at=%s pid=%d tx=%d store=%q operation=%q phase=%s elapsed=%s error=%q\n", r.at.UTC().Format(time.RFC3339Nano), os.Getpid(), r.id, r.path, r.operation, r.phase, r.at.Sub(r.started), errorText(r.err))
+		fmt.Fprintf(w, "tillr-sqlite at=%s pid=%d tx=%d store=%q operation=%q phase=%s elapsed=%s error=%q", r.at.UTC().Format(time.RFC3339Nano), os.Getpid(), r.id, r.path, r.operation, r.phase, r.at.Sub(r.started), errorText(r.err))
+		if r.detail != "" {
+			fmt.Fprintf(w, " %s", r.detail)
+		}
+		fmt.Fprintln(w)
 		return w.Flush()
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(r.snapshot, "\n"), "\n") {

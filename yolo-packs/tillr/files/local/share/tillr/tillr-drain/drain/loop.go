@@ -472,9 +472,22 @@ type Loop struct {
 	previousAnswers string
 
 	sessionInitialized bool
-	// keepWAL and walKeeper are the WAL keeper (see openWALKeeper); sessionMu guards them.
-	keepWAL   bool
-	walKeeper *store.Store
+	// keepWAL and walKeeper are the store's checkpoint owner, lastCheckpoint is the clock
+	// reading of its last checkpoint, and restartPending is whether that cycle left the log
+	// unrestarted, so the next heartbeat tries again (see openWALKeeper); sessionMu guards
+	// all four. missedRestarts, reportedLogBytes and reportedLockError are the heartbeat
+	// goroutine's own.
+	// beforeCheckpoint and checkpointed are test seams, run just before and just after
+	// each heartbeat checkpoint.
+	keepWAL           bool
+	walKeeper         *store.CheckpointOwner
+	lastCheckpoint    time.Time
+	restartPending    bool
+	missedRestarts    int
+	reportedLogBytes  int64
+	reportedLockError bool
+	beforeCheckpoint  func()
+	checkpointed      func(store.Checkpointed)
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail string

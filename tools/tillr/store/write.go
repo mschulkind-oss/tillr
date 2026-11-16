@@ -27,17 +27,38 @@ type Tx struct {
 // (dsn, open.go), so this read-then-write transaction waits for an in-flight writer
 // instead of being answered SQLITE_BUSY at its first write, and a second writer waits
 // here rather than failing.
-func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) (result error) {
-	var trace *sqliteTraceSpan
+func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) error {
+	operation := ""
 	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
-		operation := ""
 		if pc, _, _, ok := runtime.Caller(1); ok {
 			operation = runtime.FuncForPC(pc).Name()
 		}
-		trace = startSQLiteTrace(s.path, operation)
 	}
+	return s.writeTx(ctx, operation, fn)
+}
+
+// writeTx is WriteTx with the traced operation named by the caller, so the checkpoint
+// owner's own write reads as what it is rather than as the function that called it.
+//
+// The checkpoint policy is decided inside the span and before "acquired". One phase,
+// autocheckpoint.off or autocheckpoint.default, marks its end and its outcome, so the
+// wait for SQLite's writer is the time from that phase to "acquired". The policy takes no
+// SQLite lock: two flock calls, and a pragma only when the decision changed.
+func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) error) (result error) {
+	trace := startSQLiteTrace(s.path, operation)
 	defer func() { trace.finish(result) }()
-	tx, err := s.db.BeginTx(ctx, nil)
+	// One connection carries both the checkpoint policy and the transaction it is for.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("store: beginning the write transaction: %w", err)
+	}
+	defer conn.Close()
+	if s.writable {
+		if err := s.applyPolicyOn(ctx, conn, trace); err != nil {
+			return err
+		}
+	}
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: beginning the write transaction: %w", err)
 	}
