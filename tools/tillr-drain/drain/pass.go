@@ -56,12 +56,21 @@ type pendingWork struct {
 }
 
 func readPending(r *store.Reader) (map[string]*pendingWork, error) {
+	works, _, err := readPendingHistory(r)
+	return works, err
+}
+
+// Keep every attempt's effective examination state, including superseded dispatches.
+// Second-failure routing needs the same continuation semantics as current planning.
+func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*pendingWork, error) {
 	events, err := r.Events(0)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	works := map[string]*pendingWork{}
 	byRun := map[string]*pendingWork{}
+	judged := map[string]bool{}
+	segments := map[string]bool{}
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
@@ -70,14 +79,57 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 		case dispatchStartedKind, nodeAdvancedKind:
 			var work pendingWork
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
+		case GateVerdictKind:
+			if e.ObjectType == "run" {
+				judged[*e.ObjectID] = true
+			}
+		case "land.landing":
+			var landing struct {
+				RunID string `json:"run_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &landing); err != nil {
+				return nil, nil, err
+			}
+			judged[landing.RunID] = true
+		case run.ResumeKind:
+			// Exec emits this in the claim transaction, after run.allocate and
+			// before the continued process starts. A terminal record alone is
+			// not continuation authorization. Replayed segment events must not
+			// undo a later examination of that same segment.
+			var segment struct {
+				RunID     string `json:"run_id"`
+				ItemID    string `json:"item_id"`
+				LaneID    string `json:"lane_id"`
+				Backend   string `json:"backend"`
+				SessionID string `json:"session_id"`
+				ResumedAt string `json:"resumed_at"`
+			}
+			if err := json.Unmarshal(e.Payload, &segment); err != nil {
+				return nil, nil, err
+			}
+			key := fmt.Sprintf("%s@%d:%s", *e.ObjectID, e.At.UnixMilli(), e.Payload)
+			if segments[key] {
+				continue
+			}
+			segments[key] = true
+			work := byRun[*e.ObjectID]
+			if e.ObjectType != "run" || work == nil || judged[*e.ObjectID] || work.Gated || work.Decision.RunRequest == nil {
+				continue
+			}
+			req := work.Decision.RunRequest
+			if segment.RunID != req.RunID || segment.ItemID != req.ItemID || segment.LaneID != work.Decision.LaneID || segment.Backend != req.Backend || !run.IsSessionID(segment.SessionID) || segment.ResumedAt == "" {
+				continue
+			}
+			work.Done, work.Orphaned, work.Examining = false, false, false
+			work.Owner, work.Candidate, work.DirtyHold, work.RepairHold = nil, nil, nil, nil
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				work.Examining = true
 			}
@@ -94,7 +146,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				c.Request = work.Decision.RunRequest
 				c.Seat = work.Decision.Seat
@@ -104,7 +156,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.Candidate, work.Gated = &c, true
@@ -112,7 +164,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 		case BoundaryCheckKind:
 			var check boundaryCheckPayload
 			if err := json.Unmarshal(e.Payload, &check); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if !check.Clean {
 				// Continuation checks have segment identities; the payload retains
@@ -131,7 +183,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			if work := byRun[*e.ObjectID]; work != nil {
 				var hold dirtyHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				work.DirtyHold = &hold
 				work.Candidate = &hold.Candidate
@@ -140,14 +192,14 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			if work := byRun[*e.ObjectID]; work != nil {
 				var hold repairHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				work.RepairHold = &hold
 			}
 		case itemFaultClearedKind:
 			var fault ItemFault
 			if err := json.Unmarshal(e.Payload, &fault); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if work := byRun[fault.RunID]; work != nil && fault.Reason == StopHostBoundaryViolation {
 				work.BoundaryFailed = false
@@ -158,7 +210,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			}
 		}
 	}
-	return works, nil
+	return works, byRun, nil
 }
 
 func terminalRecord(r *store.Reader, id string) (*run.Record, error) {

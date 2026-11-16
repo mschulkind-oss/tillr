@@ -547,6 +547,8 @@ type resume struct {
 }
 
 // appendResume writes one run.resume event on the run it continues.
+// Keep subsecond precision in the payload: readers distinguish executions from
+// event replay even when the store's millisecond timestamps are identical.
 func appendResume(ctx context.Context, tx *store.Tx, req Request, laneID, sessionID string, at time.Time) error {
 	body, err := json.Marshal(resume{
 		RunID:     req.RunID,
@@ -554,7 +556,7 @@ func appendResume(ctx context.Context, tx *store.Tx, req Request, laneID, sessio
 		LaneID:    laneID,
 		Backend:   req.Backend,
 		SessionID: sessionID,
-		ResumedAt: at.UTC().Format(time.RFC3339),
+		ResumedAt: at.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		return Internalf("encoding the %s event for %q: %v", ResumeKind, req.RunID, err)
