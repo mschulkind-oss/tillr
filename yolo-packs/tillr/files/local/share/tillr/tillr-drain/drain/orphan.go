@@ -168,7 +168,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time)
 		return err
 	}
 	for _, work := range works {
-		if work.Done || work.Decision.RunRequest == nil {
+		if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 			continue
 		}
 		dead, err := ownerDead(work.Owner, here)
@@ -186,11 +186,45 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time)
 		if live {
 			continue
 		}
+		if work.Examining {
+			// Examination is not another execution of the node. Recover its
+			// lease without inventing a terminal node record or spending a run.
+			if work.ParentRunID != "" {
+				live, err := liveRunProcess(l.cfg.Store, work.ParentRunID)
+				if err != nil {
+					return err
+				}
+				if live {
+					continue
+				}
+			}
+			if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id IN (?,?) AND state=?`, run.LaneStateIdle, work.Decision.LaneID, id, work.ParentRunID, run.LaneStateLeased); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationReleasedKind, id, struct{}{}, at); err != nil {
+				return err
+			}
+			continue
+		}
 		var terminal int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM runs WHERE run_id = ?`, id).Scan(&terminal); err != nil {
 			return err
 		}
 		if terminal > 0 {
+			if work.Decision.Workflow != nil && !work.Orphaned {
+				rec, err := terminalRecord(tx.Reader(), id)
+				if err != nil {
+					return err
+				}
+				// The runner can record its signal after the loop has died,
+				// leaving no loop-stop marker. Proven owner death and no live
+				// worker still make this interrupted node safe to replay.
+				if rec != nil && rec.EndCause == run.EndSignal {
+					if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
+						return err
+					}
+				}
+			}
 			continue
 		}
 		// Reap under the same transaction and guarded by this exact claim. No

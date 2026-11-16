@@ -914,11 +914,61 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		if decision.Workflow != nil {
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
-			spec.Continue = decision.NodeIndex > 0
+			spec.Continue = decision.NodeIndex > 0 || decision.WorkflowRestart
+			if decision.WorkflowRestart {
+				previous, stagedErr := l.stagedNodeRun(decision)
+				if stagedErr != nil {
+					return nil, stagedErr
+				}
+				// A crash before first staging owns no existing lane contents.
+				// Keep the ordinary unlanded-commit refusal in that case.
+				if previous == "" && decision.NodeIndex == 0 {
+					spec.Continue = false
+				} else {
+					target := l.laneTarget(decision.LaneID)
+					nodeBase := decision.NodeBaseSHA
+					if decision.NodeIndex == 0 && decision.NodeStartRunID == "" && previous != "" {
+						raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, previous), BaseSHAFile))
+						if err != nil {
+							return nil, err
+						}
+						nodeBase = strings.TrimSpace(string(raw))
+						spec.BaseSHA = nodeBase
+					}
+					if decision.NodeIndex == 0 {
+						spec.BaseSHA = nodeBase
+					}
+					if _, err := l.git(ctx, target, "reset", "--hard", nodeBase); err != nil {
+						return nil, err
+					}
+					if _, err := l.git(ctx, target, "clean", "-fdx"); err != nil {
+						return nil, err
+					}
+				}
+			}
 			spec.PreviousReport = decision.PreviousReport
 		}
-		err := l.cfg.Stage.Stage(ctx, spec)
+		var err error
+		if decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {
+			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
+			err = headErr
+			if err == nil && head != decision.NodeBaseSHA {
+				err = Externalf("lane %s holds a change nobody landed: %s is not the recorded node start %s, and staging does not reset a candidate", decision.LaneID, head, decision.NodeBaseSHA)
+			}
+		}
 		if err == nil {
+			err = l.cfg.Stage.Stage(ctx, spec)
+		}
+		if err == nil {
+			if decision.Workflow != nil {
+				if decision.NodeIndex == 0 {
+					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
+				}
+				decision.NodeStartRunID = decision.RunRequest.RunID
+				if err := l.recordStagedNode(ctx, decision); err != nil {
+					return nil, err
+				}
+			}
 			staged = append(staged, decision)
 			continue
 		}

@@ -132,12 +132,68 @@ func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
 
 const nodeAdvancedKind = "drain.node-advanced"
 
+// stagedNodeRun retains proof of staging across repeated restart dispatches.
+// Archives cover a crash after staging but before recordStagedNode; an unstaged
+// first claim owns no preexisting lane contents.
+func (l *Loop) stagedNodeRun(d Decision) (string, error) {
+	if d.NodeStartRunID != "" {
+		return d.NodeStartRunID, nil
+	}
+	for id := d.RunRequest.RunID; ; id = strings.TrimSuffix(id, "-restart") {
+		_, err := os.Stat(filepath.Join(RunDir(l.cfg.Root, id), BaseSHAFile))
+		if err == nil {
+			return id, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		if !strings.HasSuffix(id, "-restart") {
+			return "", nil
+		}
+	}
+}
+
+// recordStagedNode retains proof that this node was staged. The first node's
+// base names the actual target, including a fork checkout staging materialized.
+// The archived base also covers a crash between staging and this write; no
+// worker starts before this write.
+func (l *Loop) recordStagedNode(ctx context.Context, d Decision) error {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		works, err := readPending(tx.Reader())
+		if err != nil {
+			return err
+		}
+		work := works[d.ItemID]
+		if work == nil || work.Done || work.Decision.RunRequest.RunID != d.RunRequest.RunID {
+			return fmt.Errorf("workflow staging lost its claim for %s", d.RunRequest.RunID)
+		}
+		work.Decision = d
+		return appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, l.cfg.Now().UTC())
+	})
+}
+
 func startNode(tx *store.Tx, d Decision) error {
 	if d.Workflow == nil {
 		return nil
 	}
-	_, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'running')`, d.ItemID, d.Attempt, d.Workflow.Stages[d.NodeIndex].ID, d.RunRequest.RunID)
-	return err
+	result, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'running')
+ ON CONFLICT(item_id,attempt,node_id) DO UPDATE SET run_id=excluded.run_id,outcome='running' WHERE node_runs.outcome='running'`, d.ItemID, d.Attempt, d.Workflow.Stages[d.NodeIndex].ID, d.RunRequest.RunID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("workflow node %s already finished in attempt %d", d.Workflow.Stages[d.NodeIndex].ID, d.Attempt)
+	}
+	return nil
 }
 
 func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) error {
@@ -159,8 +215,14 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next := d
 	next.NodeIndex++
 	next.PreviousReport = report
-	next.NodeBaseSHA = l.headOf(ctx, d.LaneID)
-	next.Inputs = nil
+	head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+	if err != nil {
+		return err
+	}
+	next.NodeBaseSHA = head
+	next.NodeStartRunID = ""
+	next.WorkflowRestart = false
+	next.WorkflowRelease = false
 	stage := next.Workflow.Stages[next.NodeIndex]
 	next.Seat = stage.Seat
 	next.Action, next.Reason = ActionDispatch, "workflow-next-node"
@@ -175,11 +237,15 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 		return err
 	}
 	defer s.Close()
+	owner, err := currentLoopOwner()
+	if err != nil {
+		return err
+	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE run_id=?`, d.RunRequest.RunID); err != nil {
 			return err
 		}
-		return appendEffect(tx, nodeAdvancedKind, d.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: base, Ready: true, ParentRunID: d.RunRequest.RunID}, l.cfg.Now().UTC())
+		return appendEffect(tx, nodeAdvancedKind, next.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: base, Ready: true, ParentRunID: d.RunRequest.RunID, Owner: owner, Examining: true}, l.cfg.Now().UTC())
 	})
 }
 

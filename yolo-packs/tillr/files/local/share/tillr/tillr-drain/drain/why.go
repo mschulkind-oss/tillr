@@ -189,6 +189,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Why = d.Reason + ": " + work.RepairHold.Cause
 			row.Mover = work.RepairHold.NextAction
 		}
+		if d.Workflow != nil {
+			row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
+		}
 		if d.Action == ActionDispatch || d.Action == ActionRetry {
 			assigned[d.LaneID] = d.ItemID
 		}
