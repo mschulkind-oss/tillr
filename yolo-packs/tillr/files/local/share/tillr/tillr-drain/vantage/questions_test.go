@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -110,6 +111,50 @@ func TestVantageQuestionsReportsAnUnreadableIndex(t *testing.T) {
 	source := &VantageQuestions{Root: root, Command: []string{"false"}, Context: context.Background()}
 	if _, err := source.Document("docs/design/open.md"); err == nil {
 		t.Fatalf("an index command that failed answered a document")
+	}
+}
+
+func TestIndexDefaultUsesUvxWithoutAStandaloneChecker(t *testing.T) {
+	root := t.TempDir()
+	record := filepath.Join(root, "arguments")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INDEX_ARGUMENTS\"\nprintf '%s\\n' '{\"index\":{\"documents\":[{\"path\":\"docs/open.md\",\"questions\":[{\"id\":\"OQ-1\",\"state\":\"open\"}]}]}}'\n"
+	if err := os.WriteFile(filepath.Join(root, "uvx"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	t.Setenv("INDEX_ARGUMENTS", record)
+	index := ReadVantageIndex(context.Background(), root, nil)
+	questions, err := index.Questions("docs/open.md")
+	if err != nil || len(questions) != 1 || questions[0].ID != "OQ-1" {
+		t.Fatalf("default index lost the open question: %v / %v", questions, err)
+	}
+	args, err := os.ReadFile(record)
+	if err != nil || string(args) != "vantage-check\nindex\n--format\njson\n" {
+		t.Fatalf("package runner arguments = %q / %v", args, err)
+	}
+}
+
+func TestIndexOverrideDoesNotRequireUvx(t *testing.T) {
+	root := t.TempDir()
+	stub := filepath.Join(root, "custom-index")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\n[ \"$1\" = custom ] || exit 9\nprintf '%s\\n' '{\"index\":{\"documents\":[]}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	if _, err := ReadVantageIndex(context.Background(), root, []string{stub, "custom"}).Questions("docs/open.md"); err != nil {
+		t.Fatalf("explicit command depended on the default: %v", err)
+	}
+}
+
+func TestMissingUvxDoesNotFallBackToAStandaloneChecker(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "vantage-check"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"index\":{\"documents\":[]}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	_, err := ReadVantageIndex(context.Background(), root, nil).Questions("docs/open.md")
+	if err == nil || !strings.Contains(err.Error(), "uvx vantage-check index --format json") {
+		t.Fatalf("missing package runner did not report the intended command: %v", err)
 	}
 }
 
