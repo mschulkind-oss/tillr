@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
 )
@@ -362,13 +363,16 @@ func (s *ProcessSteps) Verdict(ctx context.Context, candidate Candidate, verdict
 // the loop planned from. A move that does not take fails the step: an item left in the
 // queue after its candidate landed is the board disagreeing with the trunk, and an
 // unattended night may not report a landing the board never recorded.
-func (s *ProcessSteps) ItemState(ctx context.Context, itemID, runID, state string) error {
+func (s *ProcessSteps) ItemState(ctx context.Context, itemID, runID, state string, waiting ...item.WaitingOn) error {
 	if s.ItemBin == "" {
 		return Usagef("the loop was given no item binary: it cannot record where an item's work stands")
 	}
 	args := []string{"state",
 		"--store", s.Store, "--item", itemID, "--state", state,
 		"--now", s.Now().UTC().Format(time.RFC3339)}
+	if len(waiting) > 0 {
+		args = append(args, "--waiter", waiting[0].Waiter, "--reason", waiting[0].Reason)
+	}
 	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr

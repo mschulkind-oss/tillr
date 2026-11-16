@@ -2,6 +2,7 @@ package item
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
@@ -70,7 +71,8 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 	if c.Status == "answered" || c.Status == "closed" {
 		state = "in-queue"
 	}
-	if _, err := SetState(nil, tx, c.ItemID, state, at); err != nil {
+	reason, _, _ := strings.Cut(c.Text, "\n")
+	if _, err := SetState(nil, tx, c.ItemID, state, at, WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason)}); err != nil {
 		return err
 	}
 	body, err := json.Marshal(c)

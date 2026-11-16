@@ -313,6 +313,8 @@ func stateFace(args []string) (record.Envelope, int) {
 	path := fs.String("store", "", "the store to write")
 	id := fs.String("item", "", "the item whose state moves")
 	state := fs.String("state", "", "the state to move it to")
+	waiter := fs.String("waiter", "", "blocked waiter: owner, design, plan, or item:<id>")
+	reason := fs.String("reason", "", "why the blocked item waits")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -325,7 +327,7 @@ func stateFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.SetState(ctx, tx, *id, *state, at.UTC())
+		return item.SetState(ctx, tx, *id, *state, at.UTC(), item.WaitingOn{Waiter: *waiter, Reason: *reason})
 	})
 }
 

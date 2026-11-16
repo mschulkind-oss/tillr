@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 const blockedDefinition = "### Work\n\n<!-- tillr: item id=\"item-route\" paths=\"candidate.txt,docs/work.md\" seat=\"build\" -->\n\n- **c1:** impossible contract\n"
@@ -58,6 +60,24 @@ func TestBlockedReportRoutesOnceToDesignThenOwner(t *testing.T) {
 	}
 	if got := itemStateOf(t, f.store, "item-route"); got != "blocked" {
 		t.Fatalf("state %s", got)
+	}
+	s, err := store.OpenRead(context.Background(), f.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.ReadTx(context.Background(), func(r *store.Reader) error {
+		waiting, underlying, err := item.ReadWaitingOn(r, "item-route")
+		if err != nil {
+			return err
+		}
+		if waiting == nil || waiting.Waiter != "owner" || waiting.Reason != "Conflict: c1 contradicts the API" || underlying != "in-queue" {
+			t.Fatalf("stored blocked metadata: %+v, from %q", waiting, underlying)
+		}
+		return nil
+	})
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
 	events := eventsOf(t, f.store)
 	var last map[string]any

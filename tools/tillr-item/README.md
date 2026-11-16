@@ -31,6 +31,15 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 - **An item's state and its criteria's states are different writes.** An item's state says
   where the work stands; a criterion's state says what a judge found. One face moving both
   would make a criterion's freeze depend on a caller's care.
+- **A new blocked state move names who must act and why.** `state --state blocked`
+  requires `--waiter` and `--reason`; either missing or blank is refused as
+  `blocked-waiter-missing`. The waiter is `owner`, `design`, `plan`, or `item:<id>` for
+  an item this store holds. Only `not-started`, `in-queue`, and `blocked` may move to
+  `blocked`. The item stores `waiting_on` with `waiter` and `reason`, plus
+  `underlying_state`, the state before the first blocked move. Updating a blocked
+  item's waiter preserves that original state. Moving to `not-started` or `in-queue`
+  clears all three values. `show` prints the stored metadata; an older blocked row
+  with none remains readable and says `waiter not recorded`.
 - **A verdict is the only writer of a criterion's state.** No other face moves one, which
   is what makes a recorded judgment the answer to "why is this criterion where it is".
 - **A decision is superseded, never edited.** The superseded record stays and the new one

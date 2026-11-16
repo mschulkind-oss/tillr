@@ -34,13 +34,15 @@ var frozenStates = map[string]bool{"abandoned": true, "deleted": true, "in-progr
 // itemPayload is the item.record payload: design §5.3's field list, plus the two
 // fields the store sets and the input never carries.
 type itemPayload struct {
-	ItemID    string      `json:"item_id"`
-	Title     string      `json:"title"`
-	BodyRef   string      `json:"body_ref"`
-	State     string      `json:"state"`
-	Criteria  []criterion `json:"criteria"`
-	BlockedBy []string    `json:"blocked_by"`
-	DesignDoc string      `json:"design_doc,omitempty"`
+	ItemID          string      `json:"item_id"`
+	Title           string      `json:"title"`
+	BodyRef         string      `json:"body_ref"`
+	State           string      `json:"state"`
+	WaitingOn       *WaitingOn  `json:"waiting_on,omitempty"`
+	UnderlyingState string      `json:"underlying_state,omitempty"`
+	Criteria        []criterion `json:"criteria"`
+	BlockedBy       []string    `json:"blocked_by"`
+	DesignDoc       string      `json:"design_doc,omitempty"`
 	// AllowedPaths is the item's fence: the repo-relative path prefixes a run's change
 	// may include (design §3's Fence section). An item that names none has no fence, which
 	// is legal to store — an item outlives any one run — and refused by staging, where a
@@ -135,7 +137,9 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		 ON CONFLICT(item_id) DO UPDATE SET
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
-		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose`,
+		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose,
+		   waiting_on = CASE WHEN excluded.state = 'blocked' THEN items.waiting_on ELSE '' END,
+		   underlying_state = CASE WHEN excluded.state = 'blocked' THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
 		allowedPaths, payload.Rank, payload.Seat, payload.Prose,
 	); err != nil {
@@ -148,6 +152,9 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		return record.Envelope{}, err
 	}
 
+	if payload.WaitingOn, payload.UnderlyingState, err = ReadWaitingOn(tx.Reader(), payload.ItemID); err != nil {
+		return record.Envelope{}, err
+	}
 	payload.UpdatedAt = env.CreatedAt.UTC().Format(time.RFC3339)
 	body, err := json.Marshal(payload)
 	if err != nil {

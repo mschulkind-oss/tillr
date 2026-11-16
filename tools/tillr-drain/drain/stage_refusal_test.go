@@ -462,8 +462,10 @@ func (s *recordingSteps) Land(_ context.Context, _ Candidate) (LandOutcome, erro
 	return LandOutcome{Result: LandLanded}, nil
 }
 func (s *recordingSteps) Verdict(_ context.Context, _ Candidate, _ string) error { return nil }
-func (s *recordingSteps) ItemState(_ context.Context, _, _, _ string) error      { return nil }
-func (s *recordingSteps) Index(_ context.Context) error                          { return nil }
+func (s *recordingSteps) ItemState(_ context.Context, _, _, _ string, _ ...item.WaitingOn) error {
+	return nil
+}
+func (s *recordingSteps) Index(_ context.Context) error { return nil }
 func (s *recordingSteps) Sync(_ context.Context) (SyncOutcome, error) {
 	return SyncOutcome{Skipped: "a recording step set reads no documents"}, nil
 }

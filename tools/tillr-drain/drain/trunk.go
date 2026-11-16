@@ -456,7 +456,7 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate Candidate, g
 	if err := l.recordTrunkRefusal(ctx, candidate, redSHA, redChecks, fixerID); err != nil {
 		return false, err
 	}
-	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked); err != nil {
+	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + fixerID, Reason: "trunk-already-red: " + strings.Join(redChecks, ", ")}); err != nil {
 		return false, err
 	}
 	l.mu.Lock()

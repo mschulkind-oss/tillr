@@ -11,7 +11,11 @@ import (
 // state runs the state face against one store.
 func state(t *testing.T, db, id, want, now string) (int, []byte) {
 	t.Helper()
-	return run(t, "state", "--store", db, "--item", id, "--state", want, "--now", now)
+	args := []string{"state", "--store", db, "--item", id, "--state", want, "--now", now}
+	if want == "blocked" {
+		args = append(args, "--waiter", "owner", "--reason", "needs a decision")
+	}
+	return run(t, args...)
 }
 
 // The state face is the writer of board-item-state-model.md §2's item states: a landed
@@ -69,6 +73,9 @@ func TestStateIsIdempotent(t *testing.T) {
 	seeded.State = "blocked"
 	if code, out := apply(t, db, envelope(t, "item.record", "rec-1", seeded)); code != 0 {
 		t.Fatalf("apply exited %d: %s", code, out)
+	}
+	if code, out := state(t, db, "item_042", "blocked", "2026-11-10T00:09:00Z"); code != 0 {
+		t.Fatalf("initial block exited %d: %s", code, out)
 	}
 	updates := eventsOfKind(t, db, "item.update")
 	code, out := state(t, db, "item_042", "blocked", "2026-11-10T00:10:00Z")

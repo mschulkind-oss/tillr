@@ -64,7 +64,9 @@ type storeItem struct {
 	AllowedPaths []string
 	// Rank is the item's place in the queue's order (schema 5): a sparse lexical token,
 	// empty for an item the queue sorts after every ranked one.
-	Rank string
+	Rank          string
+	Waiter        string
+	WaitingReason string
 }
 
 // storeCriterion is one row of item_criteria.
@@ -155,6 +157,46 @@ func nullableString(v sql.NullString) string {
 // rank first, and a store too old to carry the column answers the same rows unranked
 // rather than refusing the whole board.
 func readItems(r *store.Reader) ([]storeItem, error) {
+	items, err := readItemsBase(r)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Query(`SELECT item_id, waiting_on FROM items WHERE state = 'blocked'`)
+	if isMissingColumn(err) {
+		return items, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	waiting := map[string]struct {
+		Waiter string `json:"waiter"`
+		Reason string `json:"reason"`
+	}{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		if raw == "" {
+			continue
+		}
+		w := waiting[id]
+		if err := json.Unmarshal([]byte(raw), &w); err != nil {
+			return nil, fmt.Errorf("item %s blocked metadata: %w", id, err)
+		}
+		waiting[id] = w
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Waiter, items[i].WaitingReason = waiting[items[i].ItemID].Waiter, waiting[items[i].ItemID].Reason
+	}
+	return items, nil
+}
+
+func readItemsBase(r *store.Reader) ([]storeItem, error) {
 	rows, err := r.Query(`SELECT item_id, title, COALESCE(body_ref, ''), state,
 		COALESCE(design_doc, ''), updated_at, COALESCE(allowed_paths, ''), COALESCE(rank, '') FROM items ORDER BY item_id`)
 	if isMissingColumn(err) {
@@ -697,8 +739,12 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 		}
 	case "blocked":
 		p.State = "blocked"
-		p.Underlying = "the store marks it blocked"
+		p.Underlying = "waiter not recorded"
 		p.WaitingOn = waitingOn
+		if item.Waiter != "" {
+			p.Underlying = item.Waiter + ": " + item.WaitingReason
+			p.WaitingOn = []string{item.Waiter}
+		}
 	case "in-queue":
 		p.State = "in_queue"
 	case "in-progress":
@@ -719,13 +765,15 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 		if p.Underlying == "" {
 			p.Underlying = "an unresolved blocked_by edge"
 		}
-		p.WaitingOn = waitingOn
+		if item.State != "blocked" || item.Waiter == "" {
+			p.WaitingOn = waitingOn
+		}
 	}
 	// A question hold is the loop's latest decision about the item, so it wins over the
 	// store's own state: the store says in-queue, and the planner says the design still
 	// asks something. A terminal item keeps its terminal state; a stale hold cannot reopen
 	// work that has landed.
-	if hold != "" && p.State != "landed" && p.State != "resolved_elsewhere" && p.State != "closed" {
+	if hold != "" && (item.State != "blocked" || item.Waiter == "") && p.State != "landed" && p.State != "resolved_elsewhere" && p.State != "closed" {
 		p.State = "blocked"
 		p.Hold = hold
 		p.Underlying = hold

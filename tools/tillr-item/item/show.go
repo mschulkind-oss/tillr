@@ -21,6 +21,9 @@ func Show(r *store.Reader, id, root string) (record.Envelope, error) {
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	if payload.State == "blocked" && (payload.WaitingOn == nil || payload.WaitingOn.Waiter == "") {
+		payload.WaitingOn = &WaitingOn{Waiter: "waiter not recorded"}
+	}
 	if payload.DesignDoc != "" {
 		questions, err := ReadQuestions(root, payload.DesignDoc)
 		if errors.Is(err, ErrDesignDocMissing) {
@@ -59,6 +62,9 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 	}
 	if err != nil {
 		return itemPayload{}, time.Time{}, Internalf("reading item %q: %v", id, err)
+	}
+	if payload.WaitingOn, payload.UnderlyingState, err = ReadWaitingOn(r, id); err != nil {
+		return itemPayload{}, time.Time{}, err
 	}
 	stored := time.UnixMilli(updatedAt).UTC()
 	payload.UpdatedAt = stored.Format(time.RFC3339)
