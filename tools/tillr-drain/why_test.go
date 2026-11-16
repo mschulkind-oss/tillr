@@ -8,13 +8,18 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
-	path := fixture(t, itemRecordRanked("ready", "in-queue", "a"), itemRecordRanked("blocked", "in-queue", "b", "ready"), itemRecord("landed", "landed"), itemRecord("closed", "closed"), itemRecord("resolved", "resolved-elsewhere"))
+	path := fixture(t, itemRecordRanked("ready", "in-queue", "a"), itemRecordRanked("blocked", "in-queue", "b", "ready"), itemRecord("landed", "landed"), itemRecord("closed", "in-queue"), itemRecord("resolved", "resolved-elsewhere"))
+	// An item is closed through the lifecycle face, not by applying a record that says so:
+	// the store has refused that since closing gained a required reason and author.
+	closeFixtureItem(t, path, "closed")
 	ref := policy(t, "true")
 	before, err := os.ReadFile(path)
 	if err != nil {
@@ -142,5 +147,21 @@ func TestWhyEmptyStoreAndMissingStore(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("missing store was created: %v", err)
+	}
+}
+
+func closeFixtureItem(t *testing.T, path, id string) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := store.Open(ctx, path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, id, "not wanted", "owner", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
