@@ -133,6 +133,20 @@ The record of what happened, and `tillr view status` for where the store stands 
 Where a record was never emitted (see Known Gaps), the absence is the finding — not a
 reason to reconstruct the history from memory.
 
+## Recovery
+
+Retry a failed item under its own id with `tillr drain retry`. Read the failed
+run's record, correct the cause, and authorize the retry through that face; learn
+its required inputs from `tillr drain retry --help`. Keep the original item so
+its run history and other items' dependencies remain attached to the same id.
+Do not file a replacement item to escape a hold or mark the original resolved
+elsewhere when its intent has not been satisfied.
+
+Sync reports `clone-of-held-item` when a new id appends a numeric version suffix
+to an unfinished item already in the store. The finding names both ids and the
+retry command, and that document writes nothing. Final items and ids already in
+the store are not refused by this rule.
+
 ## Stop conditions
 
 Stop the loop and read the record, rather than retrying, when:

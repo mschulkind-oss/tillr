@@ -568,7 +568,34 @@ def case_rolling_enabled():
        f"{len(ROLLING_HISTORY)} named historical exception)")
 
 
+def recovery_errors(text):
+    """Recovery keeps the original item's identity and never names a replacement id."""
+    section = re.search(r"^## Recovery\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if not section:
+        return ["operating skill has no Recovery section"]
+    body = section.group(1)
+    errors = []
+    if "tillr drain retry" not in body or "own id" not in body:
+        errors.append("Recovery must retry the failed item under its own id")
+    if re.search(r"\bitem-[a-z0-9-]+-v2\b", body):
+        errors.append("Recovery names a cloned -v2 item id")
+    return errors
+
+
+def case_recovery():
+    specimen = "## Recovery\nRetry under its own id with `tillr drain retry`.\n"
+    if recovery_errors(specimen):
+        fail("same-id recovery fixture was refused")
+    if not recovery_errors(specimen + "Use `item-failed-v2`.\n"):
+        fail("recovery guard accepted a cloned -v2 item id")
+    errors = recovery_errors(text_of(SKILL))
+    if errors:
+        fail("\n".join(errors))
+    ok("Recovery retries the failed item under its own id; cloned-id fixture refused")
+
+
 def main():
+    case_recovery()
     case_rolling_guard_fixtures()
     case_rolling_enabled()
     # The operating skill documents the repository keeper too. Keep its behavior
