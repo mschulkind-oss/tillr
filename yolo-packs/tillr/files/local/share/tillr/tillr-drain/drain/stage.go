@@ -244,14 +244,17 @@ func OutOfFence(durableDir string) string {
 // StageSpec is one dispatch as the stager reads it: the request's identity, the values the
 // brief's header carries, and the commit the worktree is pinned to.
 type StageSpec struct {
-	BlockConflict *item.Conflict
-	LaneID        string
-	ItemID        string
-	RunID         string
-	Backend       string
-	BaseSHA       string
-	WorkingDir    string
-	TimeoutMS     int
+	Continue       bool
+	Node           *WorkflowStage
+	PreviousReport string
+	BlockConflict  *item.Conflict
+	LaneID         string
+	ItemID         string
+	RunID          string
+	Backend        string
+	BaseSHA        string
+	WorkingDir     string
+	TimeoutMS      int
 	// SessionID pins the harness session this dispatch runs under. Empty mints a UUID: a
 	// lane is reused by unrelated runs, so the id beside the brief describes the last run
 	// there and reading it back would hand one item's transcript to the next (sessionIDFor).
@@ -356,6 +359,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			return err
 		}
 		baseSHA = strings.TrimSpace(head)
+		if spec.Continue {
+			baseSHA = spec.BaseSHA
+		}
 		target, targetKind = fork.Checkout, "fork checkout"
 	}
 	// The brief names the same scratch directory `run exec` exports, so the two have to
@@ -373,8 +379,19 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
-	if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {
-		return err
+	if !spec.Continue {
+		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {
+			return err
+		}
+	}
+	if spec.Node != nil {
+		brief += "\n## Workflow node\n\nRun only node " + spec.Node.ID + " on the " + spec.Node.Seat + " seat; access: " + spec.Node.Access + ".\n"
+		if spec.Node.Access == "read_only" {
+			brief += "Read only: do not change files in the target or commit. Write your findings in the report and finish with RESULT: done. The item criteria describe the whole workflow, not this node.\n"
+		}
+		if spec.PreviousReport != "" {
+			brief += "Read the previous node report: " + spec.PreviousReport + "\n"
+		}
 	}
 	// The session id is resolved before the lane is written: it is the handle a killed run
 	// is resumed from, and a lane with no session id is a run whose transcript nothing can

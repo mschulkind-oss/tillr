@@ -66,6 +66,7 @@ type itemPayload struct {
 	Seat string `json:"seat,omitempty"`
 	// Prose is the version of the prose guide recorded by the document author.
 	Prose     string `json:"prose,omitempty"`
+	Workflow  string `json:"workflow"`
 	UpdatedAt string `json:"updated_at,omitempty"`
 	EventSeq  int64  `json:"event_seq,omitempty"`
 	// Questions and QuestionsSource are show's read-through of the design document
@@ -149,16 +150,16 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		return record.Envelope{}, err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(item_id) DO UPDATE SET
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
-		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose,
+		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow,
 		   waiting_on = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.waiting_on ELSE '' END,
 		   underlying_state = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
-		allowedPaths, payload.Rank, payload.Seat, payload.Prose,
+		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the item: %v", err)
 	}

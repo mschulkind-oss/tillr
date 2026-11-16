@@ -52,7 +52,7 @@ var (
 // syncAttributes is the closed attribute set of a directive. Anything else — `rank`, `state`,
 // `after`, a typo — is a finding, because the ruling keeps state and order out of documents
 // and a misspelt attribute would otherwise be dropped in silence.
-var syncAttributes = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true}
+var syncAttributes = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true}
 
 // roadmapDocuments are the roadmaps whose `## Icebox` and `## Exploration` sections park a
 // document: an item block in a parked document is synced as `not-started`, not `in-queue`.
@@ -311,6 +311,17 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		found, findings := parseItemBlocks(doc.Path, doc.Content)
 		for i := range found {
 			found[i].parked = parked[doc.Path]
+			if ref := found[i].payload.Workflow; ref != "" {
+				rule, message := "", ""
+				if !WorkflowRefValid(ref) {
+					rule, message = "invalid-workflow", "workflow must have the form <name>@v<N>"
+				} else if info, err := os.Stat(filepath.Join(in.Root, "config", "tillr", "workflows", ref+".json")); err != nil || !info.Mode().IsRegular() {
+					rule, message = "workflow-missing", "workflow file config/tillr/workflows/"+ref+".json does not exist"
+				}
+				if rule != "" {
+					findings = append(findings, SyncNote{File: doc.Path, Heading: found[i].heading, Line: found[i].line, ItemID: found[i].payload.ItemID, Rule: rule, Message: message})
+				}
+			}
 			report.Warnings = append(report.Warnings, proseWarnings(found[i])...)
 		}
 		blocks = append(blocks, found...)
@@ -634,6 +645,8 @@ func definitionDiff(block, stored itemPayload) string {
 		return "design_doc"
 	case block.Seat != stored.Seat:
 		return "seat"
+	case block.Workflow != stored.Workflow:
+		return "workflow"
 	case block.Prose != stored.Prose:
 		return "prose"
 	case strings.Join(block.AllowedPaths, "\x00") != strings.Join(stored.AllowedPaths, "\x00"):
@@ -853,7 +866,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 			}
 			rest = rest[m[1]:]
 			if !syncAttributes[name] {
-				later("unknown-attribute", "attribute %q is not one of id, paths, blocked_by, seat or prose: a block carries no state, rank or tombstone", name)
+				later("unknown-attribute", "attribute %q is not one of id, paths, blocked_by, seat, prose or workflow: a block carries no state, rank or tombstone", name)
 				continue
 			}
 			if _, twice := attrs[name]; twice {
@@ -866,6 +879,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		id := strings.TrimSpace(attrs["id"])
 		b.payload.ItemID = id
 		b.payload.Prose = attrs["prose"]
+		b.payload.Workflow = attrs["workflow"]
 		for _, f := range pending {
 			bad(f[0], "%s", f[1])
 		}

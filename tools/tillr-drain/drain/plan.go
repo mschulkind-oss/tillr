@@ -65,10 +65,14 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
-	ConflictID    string         `json:"conflict_id,omitempty"`
-	BlockConflict *item.Conflict `json:"block_conflict,omitempty"`
-	Inputs        *RunInputs     `json:"inputs,omitempty"`
-	Readmitted    bool           `json:"readmitted,omitempty"`
+	Workflow       *Workflow      `json:"workflow,omitempty"`
+	NodeIndex      int            `json:"node_index,omitempty"`
+	NodeBaseSHA    string         `json:"node_base_sha,omitempty"`
+	PreviousReport string         `json:"previous_report,omitempty"`
+	ConflictID     string         `json:"conflict_id,omitempty"`
+	BlockConflict  *item.Conflict `json:"block_conflict,omitempty"`
+	Inputs         *RunInputs     `json:"inputs,omitempty"`
+	Readmitted     bool           `json:"readmitted,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
 	// failover runs. Positions use the design's closed set: queued, running, candidate,
@@ -114,9 +118,10 @@ type Decision struct {
 // itemRow is the item state this face reads: the columns a decision turns on, and the
 // rank that decides the order the decisions come in.
 type itemRow struct {
-	ItemID string
-	State  string
-	Rank   string
+	Workflow string
+	ItemID   string
+	State    string
+	Rank     string
 	// Allowed is the item's allowed_paths, the source of the fence its run is held to.
 	Allowed []string
 	// DesignDoc is the design document the item names, relative to the repository or
@@ -265,7 +270,24 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		tick:      tick, policy: policy, held: lanes, itemStates: states, history: history,
 		priors: priors, retries: retries, classes: classes, latest: latest, questions: questions,
 		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items),
-		inputs: inputs, inputDecisions: inputDecisions, works: works,
+		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
+	}
+	var hasNodes bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
+		return nil, readFailure(err)
+	}
+	for _, row := range items {
+		var count int
+		if hasNodes {
+			if err := r.QueryRow(`SELECT COALESCE(MAX(attempt),0) FROM node_runs WHERE item_id=?`, row.ItemID).Scan(&count); err != nil {
+				return nil, readFailure(err)
+			}
+		}
+		if count > 0 {
+			p.attempts[row.ItemID] = count + 1
+		} else {
+			p.attempts[row.ItemID] = len(priors[row.ItemID]) + 1
+		}
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
@@ -280,12 +302,32 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		} else if work := works[item.ItemID]; work != nil && !work.Done {
 			// An already dispatched attempt advances before readiness and retry
 			// rules: a terminal record is work to settle, not a retry to authorize.
-			decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate)
+			decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut)
 			if err != nil {
 				return nil, readFailure(err)
 			}
 		} else {
-			decision = p.decide(item, edges[item.ItemID])
+			var w *Workflow
+			var loadErr error
+			routed := item
+			if item.Workflow != "" && policy != nil {
+				w, loadErr = loadWorkflow(root, item.Workflow, policy)
+				if loadErr == nil {
+					routed.Seat = w.Stages[0].Seat
+				}
+			}
+			if loadErr != nil {
+				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + loadErr.Error(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			} else {
+				decision = p.decide(routed, edges[item.ItemID])
+				if w != nil && decision.RunRequest != nil {
+					decision.Workflow = w
+					request := *decision.RunRequest
+					request.RunID += "-n1"
+					decision.RunRequest = &request
+				}
+			}
+			identifyDecision(&decision)
 		}
 		env, err := decisionEnvelope(decision, at)
 		if err != nil {
@@ -300,6 +342,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 // the lanes it holds, the clock, and the lanes and capacity already spent by earlier
 // items in this tick.
 type planner struct {
+	attempts       map[string]int
 	shut           map[string]bool
 	conflicts      map[string]item.Conflict
 	inputs         map[string]*RunInputs
@@ -482,7 +525,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Readmitted = false
 		}
 	}
-	decision.Attempt = len(p.priors[item.ItemID]) + 1
+	decision.Attempt = p.nextAttempt(item.ItemID)
 	decision.From = "held"
 	if item.State == StateLanded {
 		decision.From = "landed"
@@ -506,7 +549,11 @@ func identifyDecision(decision *Decision) {
 	if decision.Action == ActionHold {
 		decision.Transition = "none"
 	}
-	decision.TransitionID = "transition-" + decision.ItemID + "-a" + strconv.Itoa(decision.Attempt) + "-" + decision.From
+	decision.TransitionID = "transition-" + decision.ItemID + "-a" + strconv.Itoa(decision.Attempt)
+	if decision.Workflow != nil {
+		decision.TransitionID += "-n" + strconv.Itoa(decision.NodeIndex+1)
+	}
+	decision.TransitionID += "-" + decision.From
 	if decision.To != "" {
 		decision.TransitionID += "-" + decision.To
 	}
@@ -804,7 +851,14 @@ func (p *planner) freeLane() (string, bool) {
 // request is the complete run.request a dispatch carries: design §5.6's field list,
 // built from the backend the item's attempt resolved to.
 func (p *planner) request(itemID, laneID, backendName string) *run.Request {
-	return p.policy.request(itemID, laneID, attemptRunID(itemID, len(p.priors[itemID])+1), backendName)
+	return p.policy.request(itemID, laneID, attemptRunID(itemID, p.nextAttempt(itemID)), backendName)
+}
+
+func (p *planner) nextAttempt(id string) int {
+	if n := p.attempts[id]; n > 0 {
+		return n
+	}
+	return len(p.priors[id]) + 1
 }
 
 // attemptRunID names one item's ordinal attempt, including terminal failover runs.
@@ -933,9 +987,17 @@ func decisionEnvelope(decision Decision, at time.Time) (record.Envelope, error) 
 // after every ranked one whatever its token, and item_id keeps the order total among the
 // unranked. Both halves are the query's because both are comparisons on the rows it reads.
 func readItems(r *store.Reader) ([]itemRow, error) {
+	var hasWorkflow bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow')`).Scan(&hasWorkflow); err != nil {
+		return nil, readFailure(err)
+	}
+	workflowColumn := "''"
+	if hasWorkflow {
+		workflowColumn = "COALESCE(workflow, '')"
+	}
 	rows, err := r.Query(
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
-		        COALESCE(seat, '')
+		        COALESCE(seat, ''), ` + workflowColumn + `
 		   FROM items
 		  ORDER BY COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
 	if err != nil {
@@ -948,7 +1010,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 			item    itemRow
 			allowed string
 		)
-		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow); err != nil {
 			return nil, readFailure(err)
 		}
 		if item.Allowed, err = decodeFence(allowed); err != nil {

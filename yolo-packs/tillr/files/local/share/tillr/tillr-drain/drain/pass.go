@@ -30,7 +30,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind} {
+	for _, kind := range []string{dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, loopOrphanedKind, nodeAdvancedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -38,6 +38,7 @@ func init() {
 }
 
 type pendingWork struct {
+	Ready          bool        `json:"ready,omitempty"`
 	ParentRunID    string      `json:"parent_run_id,omitempty"`
 	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
 	RepairHold     *repairHold `json:"repair_hold,omitempty"`
@@ -62,7 +63,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 			continue
 		}
 		switch e.Kind {
-		case dispatchStartedKind:
+		case dispatchStartedKind, nodeAdvancedKind:
 			var work pendingWork
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
 				return nil, err
@@ -158,10 +159,35 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 	return status.Run, nil
 }
 
-func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string) (Decision, error) {
+func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, "run-live"
+	if work.Ready {
+		if policy == nil {
+			d.Action, d.Reason, d.From, d.To = ActionHold, ReasonNoPolicy, "running", ""
+			d.RunRequest = nil
+			identifyDecision(&d)
+			return d, nil
+		}
+		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+		name := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
+		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
+		if !ok {
+			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+		} else {
+			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
+			if request == nil {
+				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
+			}
+			d.RunRequest = request
+			if degraded != "" {
+				d.Reason = seatDegradedReason(degraded, name)
+			}
+		}
+		identifyDecision(&d)
+		return d, nil
+	}
 	if work.BoundaryFailed {
 		d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, StopHostBoundaryViolation
 		identifyDecision(&d)
@@ -448,7 +474,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		switch d.Action {
 		case ActionDispatch, ActionRetry:
 			for _, owner := range works {
-				if !owner.Done && owner.Decision.LaneID == d.LaneID {
+				if !owner.Done && owner.Decision.LaneID == d.LaneID && !(owner.Ready && owner.Decision.ItemID == d.ItemID) {
 					return nil
 				}
 			}
@@ -473,12 +499,12 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				}
 				fork := forkOf(item.Allowed)
 				for _, held := range heldForks {
-					if fork != "" && held.fork == fork {
+					if fork != "" && held.fork == fork && !(work != nil && work.Ready && held.itemID == d.ItemID) {
 						return nil
 					}
 				}
 			}
-			if work != nil && !work.Done {
+			if work != nil && !work.Done && !work.Ready {
 				return nil
 			}
 			if err := correlate(tx, &d); err != nil {
@@ -509,8 +535,15 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 					return err
 				}
 			}
-			work = &pendingWork{Decision: d, BaseSHA: mainSHA, Owner: owner}
+			base := mainSHA
+			if work != nil && work.Ready {
+				base = work.BaseSHA
+			}
+			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner}
 			if _, err := run.ClaimLease(ctx, tx, *d.RunRequest, d.LaneID, at); err != nil {
+				return err
+			}
+			if err := startNode(tx, d); err != nil {
 				return err
 			}
 			if err := appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, at); err != nil {
@@ -738,7 +771,11 @@ planned:
 		switch d.Action {
 		case ActionDispatch, ActionRetry:
 			start := time.Now()
-			staged, err := l.stageDispatches(ctx, []Decision{d}, mainSHA, result)
+			base := mainSHA
+			if work != nil {
+				base = work.BaseSHA
+			}
+			staged, err := l.stageDispatches(ctx, []Decision{d}, base, result)
 			if err != nil {
 				return "", err
 			}

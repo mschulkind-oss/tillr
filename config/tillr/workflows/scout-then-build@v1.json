@@ -1,0 +1,9 @@
+{
+  "name": "scout-then-build",
+  "version": 1,
+  "stages": [
+    { "id": "scout", "kind": "agent", "seat": "scout", "access": "read_only" },
+    { "id": "work", "kind": "agent", "seat": "build", "access": "write" }
+  ],
+  "edges": [{ "from_node": "scout", "to_node": "work" }]
+}
