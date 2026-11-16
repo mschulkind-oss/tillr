@@ -25,29 +25,26 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-Thirteen questions are left for the owner on this page: five from this round's designs, and eight
+Twelve questions are left for the owner on this page: four from this round's designs, and eight
 that the pi roadmap's reconciliation of 2026-11-16 found were really tillr's. Each has options and a recorded leaning.
 They are the ones no recorded principle could answer. Twenty-three others that stood here were
 settled on 2026-11-15 and 2026-11-16 by the session's designer, at the owner's request; each
 says so in its design and is the owner's to overturn.
 
-1. [`OQ-IP2`](../design/tillr-idea-pipeline.md#OQ-IP2): how an answer saved in Vantage enters the
-   tree. First because the designer-sessions design in
-   [entry 8](#8-design-work-that-keeps-its-context) is built on the answer.
-2. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): what becomes of the pack mirror that
-   doubles every tillr change. Second because it is a cost on every landing but stops nothing.
-3. [`OQ-GM1`](../design/tillr-goal-monitor.md#OQ-GM1) and
+1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): what becomes of the pack mirror that
+   doubles every tillr change. First because it is a cost on every landing but stops nothing.
+2. [`OQ-GM1`](../design/tillr-goal-monitor.md#OQ-GM1) and
    [`OQ-GM2`](../design/tillr-goal-monitor.md#OQ-GM2): which goal the first scheduled check-in
    carries, and whether a host timer watches it. Only the owner can name the goal.
-4. [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2): whether a bug AutoQA confirms is queued for
+3. [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2): whether a bug AutoQA confirms is queued for
    building at once or held until its findings have proved accurate. Last because AutoQA is the
    last thing built.
 
-5. [Criterion repair](../design/criterion-repair.md), five questions: who may supersede a frozen
+4. [Criterion repair](../design/criterion-repair.md), five questions: who may supersede a frozen
    criterion, what the judge sees, and what happens to a stale premise or an unsatisfiable one.
    With the judge, which it amends; that a criterion is repaired by a supersession record and
    never by an edit is already settled.
-6. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
+5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
@@ -814,8 +811,9 @@ drag would be lost when the queue is rebuilt from the documents, and the owner r
 2026-11-16 that a sync sets a place only for an item it imports for the first time
 ([the queue persistence design](../design/tillr-queue-persistence.md#91-decision-ledger)), so a
 drag survives every sync but not a rebuild from nothing. An idea typed into a page has to be
-saved somewhere the tree keeps, and how words entered outside a session reach the tree is another
-([`OQ-IP2`](../design/tillr-idea-pipeline.md#OQ-IP2)). [The idea pipeline](../design/tillr-idea-pipeline.md)
+saved somewhere the tree keeps. Vantage is no model for that: the owner stated on 2026-11-16 that
+it never writes to the repository, so the observatory would be the first page that does
+([the idea pipeline's ledger](../design/tillr-idea-pipeline.md#61-settled-decisions)). [The idea pipeline](../design/tillr-idea-pipeline.md)
 already describes the flow from a sentence to a landed change, and
 [item graphs](../design/tillr-item-graphs.md) describes the designer that fleshes an idea out. So
 the first step is a short design that joins them, not a build.
