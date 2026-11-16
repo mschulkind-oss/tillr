@@ -1,0 +1,23 @@
+{
+  "id": "patch-ref-pi",
+  "label": "Local delivery branch patch/pi",
+  "command": [
+    "python3",
+    "tools/gate/checks/patch-ref.py",
+    "patch/pi"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 10000,
+  "reads": [
+    "tools/gate/checks/patch-ref.py",
+    "bin/pi-forks.list",
+    "yolo-packs/pi-fork/pack.json"
+  ],
+  "tools": [
+    "git"
+  ],
+  "needs": [
+    "ref:refs/heads/patch/pi"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "patch-ref-pi-session-search",
+  "label": "Local delivery branch patch/pi-session-search",
+  "command": [
+    "python3",
+    "tools/gate/checks/patch-ref.py",
+    "patch/pi-session-search"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 10000,
+  "reads": [
+    "tools/gate/checks/patch-ref.py",
+    "bin/pi-forks.list",
+    "yolo-packs/matt/pack.json"
+  ],
+  "tools": [
+    "git"
+  ],
+  "needs": [
+    "ref:refs/heads/patch/pi-session-search"
+  ]
+}

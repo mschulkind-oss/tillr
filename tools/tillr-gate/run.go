@@ -30,12 +30,14 @@ func init() {
 	}
 }
 
-// The three overall verdict results. Checks can also carry ResultOverBudget.
-// `error` is not a shade of `fail`: the check could not judge the candidate.
+// Check outcomes also include unavailable: an optional declared machine ref is
+// absent. It is neither a pass nor a failure, and does not block the run.
+// `error` means the judge itself could not run, so the candidate was not judged.
 const (
-	ResultPass  = "pass"
-	ResultFail  = "fail"
-	ResultError = "error"
+	ResultUnavailable = "unavailable"
+	ResultPass        = "pass"
+	ResultFail        = "fail"
+	ResultError       = "error"
 	// ResultOverBudget means a fast tree check must be judged by the heavy run.
 	// It is neither a pass that can be remembered nor a candidate failure.
 	ResultOverBudget = "over-budget"
@@ -47,6 +49,7 @@ const (
 // triage the gate program's output was reduced to -- so a red verdict can be read rather
 // than re-run.
 type VerdictCheck struct {
+	MissingNeeds []MissingNeed `json:"missing_needs,omitempty"`
 	// Memory describes result reuse without changing the pass/fail/error contract.
 	Memory      string `json:"memory,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -216,6 +219,9 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 		return outcome
 	}
 	for _, need := range check.Needs {
+		if strings.HasPrefix(need, "ref:") {
+			continue // resolved before execution and result lookup
+		}
 		if _, err := os.Stat(need); err != nil {
 			return outcome
 		}

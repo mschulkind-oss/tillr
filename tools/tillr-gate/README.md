@@ -81,6 +81,36 @@ passing run; that outcome is never stored as a remembered pass. A change check
 that reaches its budget answers “could not judge” (exit 4), since no tree-only
 run can supply its missing judgment.
 
+## Optional local refs
+
+A declaration names an optional local Git ref in `needs` with the prefix `ref:`:
+
+```json
+{"needs": ["ref:refs/heads/patch/pi"]}
+```
+
+The name must be a full ref; a single `*` wildcard can also match a set of refs.
+Git's fetch-refspec grammar validates the name, so `?`, bracket patterns and malformed
+refs are refused rather than reported with a fetch command that cannot work.
+Before command execution or remembered-result lookup, a missing ref makes that check
+`unavailable`. Its verdict entry lists `missing_needs`, each with the need and the
+`git fetch origin` command that creates the local ref. The runner never fetches it.
+An unavailable check is neither passed nor failed, and a run with only passed,
+remembered and unavailable checks exits 0. The summary prints those three counts and
+failed checks separately. Bare path needs from older generated registries retain their
+existing missing-checkout error contract.
+
+Every matched ref's name and resolved commit enters the tree check's
+[fingerprint](../../docs/design/gate-rework.md#62-a-tree-checks-result-is-remembered-by-fingerprint),
+the identifier of its declared inputs. Moving a ref reruns the check; removing it makes
+the check unavailable even if a pass was remembered. A ref changing while its command
+runs prevents that result from being remembered under the original inputs.
+
+The eight patch-ref declarations judge local fork delivery branches. The
+[structural suite](../../tests/pi-patch-series.test.sh) judges only the tree's locator
+and pack metadata, so it passes in a fresh clone without those branches. The pi ref
+check also judges the build script stored on its branch.
+
 ## Caller-owned change checks
 
 `checks` runs the change declarations in a directory, optionally including its fast
