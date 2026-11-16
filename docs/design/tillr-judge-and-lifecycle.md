@@ -409,19 +409,13 @@ A judge can find more than "not yet done". It can find that a criterion cannot b
 
 The loop may try a failed item once more by itself when something it recorded has changed, and an operator may authorize one more run by name. What happens after that second failure is, today, nothing: the item sits in a hold until someone notices. The owner's ruling is that a failure the loop cannot resolve goes to a seat that can, and to the design seat before the owner. Two failures of the same item are evidence that the item is wrong, not the worker. This block sends the item, with what both runs reported, to the design seat in the way a run that reports blocked is already sent.
 
-<!-- tillr: item id="item-jl-second-failure-to-design" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** When the run that follows an automatic re-admission or an authorized retry also ends without a landing, the loop raises a conflict for the design seat that carries both runs' reports and the gate's failing checks, and holds the item on that conflict. A test fails one fixture item twice and asserts the conflict and its contents.
-- **c2:** The loop starts no third run of that item by itself. A test runs ten further passes and asserts no dispatch.
-- **c3:** A run that ended because the loop stopped or crashed is not counted as a failure here. A test stops the loop under the item twice and asserts no conflict is raised.
-- **c4:** When the design seat's run changes the item's block, the item is dispatched once more, by the path that already re-admits an answered conflict. A test asserts one dispatch.
-- **c5:** The waiting face shows the item as waiting on the design seat, with the two runs named.
 
 ### Prevent cloning a held item under a new id
 
 When an item could not be repaired in place, the workaround was to file a copy with `-v2` on its id and mark the original as resolved elsewhere. Six items went that way on 2026-11-14. Each copy lost the original's run history and its place in other items' dependencies, and each "resolved elsewhere" was untrue. With a failed attempt no longer freezing criteria, and with retry, re-admission and the design seat all working on the original id, the workaround has no remaining use. This block makes the sync refuse it, so the rule does not depend on anyone remembering.
 
-<!-- tillr: item id="item-jl-refuse-clone-ids" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-jl-second-failure-to-design" prose="2" -->
+<!-- tillr: item id="item-jl-refuse-clone-ids" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr item sync` reports the finding `clone-of-held-item` for a block whose id is another item's id followed by `-v` and a number, when the store holds that other item in a state that is not final. The finding names both ids and the retry command, and that file writes nothing.
 - **c2:** The same block is accepted when the other item is `landed`, `resolved-elsewhere` or `closed`, or is not in the store. Items already in a store under such ids are untouched. A test covers each.

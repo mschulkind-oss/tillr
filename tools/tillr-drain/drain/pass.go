@@ -567,7 +567,11 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		return appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
+		at := l.cfg.Now().UTC()
+		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, at); err != nil {
+			return err
+		}
+		return routeSecondFailure(tx, d, at)
 	})
 }
 
