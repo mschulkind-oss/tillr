@@ -50,8 +50,14 @@ says so in its design and is the owner's to overturn.
 6. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
-[The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) is now decided, and it, AutoQA
-and queue persistence each carry one design-seat item that turns the design into build items.
+[The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
+it carried is a row of its ledger, and on 2026-11-16 it was cut into
+[thirteen build items](../design/tillr-judge-and-lifecycle.md#8-build-order) that live in the
+design. The first stops a gate pass from retiring a criterion only the owner can settle and waits
+on nothing. Part of the design was already built under other items, and
+[its seventh section](../design/tillr-judge-and-lifecycle.md#7-what-the-tree-already-holds)
+measures which part. AutoQA and queue persistence each still carry one design-seat item that turns
+the design into build items.
 
 Two designs left this list on 2026-11-15. [Item graphs](../design/tillr-item-graphs.md) is
 decided: one commit per item, all of refinement built, read-only nodes in parallel, and lanes
@@ -792,12 +798,7 @@ are filed here instead, outside the documents they change.
 
 ### Cut the judge and lifecycle design into build items
 
-<!-- tillr: item id="item-design-judge-lifecycle-slices" seat="design" paths="docs/design/tillr-judge-and-lifecycle.md,docs/tillr/roadmap.md" -->
 
-- **c1:** Every question in [the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md) is answered and folded into the design's body and decision ledger, the design's frontmatter says `status: accepted` and `stage: DECIDED`, and `uvx vantage-check` on it reports nothing.
-- **c2:** That design ends with a build order of item blocks, each small enough for one run inside one path fence, each with criteria a test can check, and each naming the items it waits on in `blocked_by`.
-- **c3:** The first block proves the smallest end-to-end slice of the design and waits on nothing in that design.
-- **c4:** This roadmap no longer lists this design as waiting on a ruling.
 
 ## Filed 2026-11-16: the observatory stops being read-only
 
