@@ -467,16 +467,13 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		return 0, "", StepSpan{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")
 	}
 	argv := s.programArgv(program, candidate, extra...)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := s.stepCommand(ctx, argv, env)
 	cmd.Dir = dir
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	started := time.Now().UnixMilli()
 	out, err := cmd.Output()
-	span := stepSpan(step, argv, cmd, started, stderr.String())
+	span := stepSpan(step, cmd.Args, cmd, started, stderr.String())
 	if spanErr := s.recordStep(candidate.RunID, span); spanErr != nil {
 		return 0, "", span, spanErr
 	}

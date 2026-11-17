@@ -8,8 +8,10 @@ the contract `tillr drain loop` reads, the refusal for a judge that cannot run, 
 self-check that names a tick's argv without running it.
 """
 
+import hashlib
 import json
 import os
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -561,11 +563,93 @@ def test_verdict_all_nonmechanical_and_missing_class(tmp):
     assert result.stdout.count("left criterion") == 3, result.stdout
     assert not list(fixture.run_dir.glob("item.verdict.*.json"))
     assert not any(call.startswith("verdict record ") for call in fixture.calls())
+
+
+def test_missing_class_names_both_builds(tmp):
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    shown = json.loads(fixture.item_show.read_text())
     del shown["payload"]["criteria"][0]["claim_class"]
     fixture.item_show.write_text(json.dumps(shown))
-    result = fixture.run_adapter("verdict", ["--verdict", "pass"])
-    assert result.returncode != VERDICT_RECORDED, result
-    assert "no valid stored claim_class" in result.stderr, result.stderr
+    stamp = "adapter-revision-fixture digest adapter-digest exe /build/tillr-drain"
+    result = fixture.run_adapter("verdict", ["--verdict", "pass"],
+                                 env=fixture.env(TILLR_LOOP_ADAPTER_BUILD=stamp))
+    assert result.returncode == 4, result
+    assert "tillr-item build is older than the adapter" in result.stderr, result.stderr
+    assert stamp in result.stderr, result.stderr
+    binary = fixture.bin / "tillr-item"
+    assert str(binary.resolve()) in result.stderr, result.stderr
+    assert hashlib.sha256(binary.read_bytes()).hexdigest() in result.stderr, result.stderr
+    assert "launcher" in result.stderr, result.stderr
+    assert "no valid stored claim_class" not in result.stderr, result.stderr
+    assert not list(fixture.run_dir.glob("item.verdict.*.json"))
+
+
+def test_unknown_class_refusal_is_unchanged(tmp):
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    shown = json.loads(fixture.item_show.read_text())
+    for value in ("unknown-class", None, ""):
+        shown["payload"]["criteria"][0]["claim_class"] = value
+        fixture.item_show.write_text(json.dumps(shown))
+        result = fixture.run_adapter("verdict", ["--verdict", "pass"])
+        assert result.returncode == 4, result
+        assert result.stderr.strip() == "tillr-loop verdict: criterion c1 has no valid stored claim_class", result.stderr
+        assert not list(fixture.run_dir.glob("item.verdict.*.json"))
+
+
+def test_build_names_revision_and_unstamped_paths(tmp):
+    names = runpy.run_path(str(ADAPTER))
+    binary = Path(tmp) / "tillr-item"
+    binary.write_bytes(b"fixture native binary without a stamp")
+    go = Path(tmp) / "go"
+    go.write_text("#!/bin/sh\nprintf '\\tbuild\\tvcs.revision=fixture-revision\\n'\n")
+    go.chmod(0o755)
+    old_path = os.environ["PATH"]
+    try:
+        os.environ["PATH"] = f"{tmp}:{old_path}"
+        assert names["item_build_name"](str(binary)) == "revision fixture-revision"
+        go.write_text("#!/bin/sh\nexit 1\n")
+        unstamped = names["item_build_name"](str(binary))
+        assert str(binary) in unstamped, unstamped
+        assert hashlib.sha256(binary.read_bytes()).hexdigest() in unstamped, unstamped
+        launcher = HERE.parent.parent / "yolo-packs" / "tillr" / "programs" / "tillr-item" / "run"
+        named = names["item_build_name"](str(launcher))
+        assert "launcher" in named and str(launcher) in named, named
+        assert hashlib.sha256(launcher.read_bytes()).hexdigest() in named, named
+        # A direct, untracked adapter has no supplied stamp and must name itself honestly.
+        direct = Path(tmp) / "adapter"
+        direct.write_bytes(ADAPTER.read_bytes())
+        stamp = os.environ.pop("TILLR_LOOP_ADAPTER_BUILD", None)
+        try:
+            direct_name = runpy.run_path(str(direct))["adapter_build_name"]()
+            assert str(direct) in direct_name, direct_name
+            assert hashlib.sha256(direct.read_bytes()).hexdigest() in direct_name, direct_name
+        finally:
+            if stamp is not None:
+                os.environ["TILLR_LOOP_ADAPTER_BUILD"] = stamp
+        # A clean tracked adapter identifies the revision whose bytes it actually holds.
+        repo, _, _ = make_repo(Path(tmp) / "revision")
+        tracked = repo / "adapter"
+        tracked.write_bytes(ADAPTER.read_bytes())
+        git(repo, "add", "adapter")
+        git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "-qm", "tracked adapter")
+        revision = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+        stamp = os.environ.pop("TILLR_LOOP_ADAPTER_BUILD", None)
+        try:
+            assert runpy.run_path(str(tracked))["adapter_build_name"]() == "revision " + revision
+        finally:
+            if stamp is not None:
+                os.environ["TILLR_LOOP_ADAPTER_BUILD"] = stamp
+    finally:
+        os.environ["PATH"] = old_path
+
+
+def test_adapter_copy_matches_source(tmp):
+    copy = HERE.parent / "tillr-drain" / "drain" / "tillr-loop.py"
+    assert copy.read_bytes() == ADAPTER.read_bytes(), "run python3 tools/tillr-loop/sync-adapter.py"
 
 
 def test_failing_verdict_is_a_usage_error(tmp):
@@ -745,6 +829,10 @@ def main():
             test_verdict_exit_mapping,
             test_verdict_leaves_owner_criterion,
             test_verdict_all_nonmechanical_and_missing_class,
+            test_missing_class_names_both_builds,
+            test_unknown_class_refusal_is_unchanged,
+            test_adapter_copy_matches_source,
+            test_build_names_revision_and_unstamped_paths,
             test_failing_verdict_is_a_usage_error,
             test_missing_judge_is_not_a_failure,
             test_self_check_names_argv_without_running_it,

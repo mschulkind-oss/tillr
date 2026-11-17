@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 )
 
@@ -59,6 +58,14 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 		c.FixerBaseSHA = sha
 		checks = append(checks, programCheck{"fixer gate", s.fixerGate(c), c, nil})
 	}
+	if report != nil {
+		for _, check := range []programCheck{checks[0], checks[1], checks[2]} {
+			s.reportStepSource(report, check.name, check.program)
+		}
+		if s.FixerGateProgram != "" {
+			s.reportStepSource(report, "fixer gate", s.FixerGateProgram)
+		}
+	}
 	// Support is cached by configured command, not executable: an adapter's faces can
 	// differ. Two fixer range expansions share one negotiated contract.
 	supported := map[string]bool{}
@@ -73,7 +80,7 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 			if len(fields) == 0 {
 				return Usagef("configuration fault: no %s program", check.name)
 			}
-			cmd := exec.CommandContext(ctx, fields[0], append(fields[1:], "--help")...)
+			cmd := s.stepCommand(ctx, append(fields, "--help"), nil)
 			cmd.Dir = s.Root
 			out, err := cmd.CombinedOutput()
 			if ctx.Err() != nil {
@@ -94,7 +101,7 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 		}
 		argv := s.programArgv(check.program, check.candidate, check.extra...)
 		argv = append(argv, "--check-argv")
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd := s.stepCommand(ctx, argv, nil)
 		cmd.Dir = s.Root
 		out, err := cmd.CombinedOutput()
 		if ctx.Err() != nil {
@@ -105,4 +112,12 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 		}
 	}
 	return nil
+}
+
+func (s *ProcessSteps) reportStepSource(report io.Writer, name, program string) {
+	if s.standardAdapterArg(strings.Fields(program)) >= 0 {
+		fmt.Fprintf(report, "loop: step %s: build's embedded adapter (%s); configured %q\n", name, strings.TrimPrefix(stepBuildEnv(), "TILLR_LOOP_ADAPTER_BUILD="), program)
+	} else {
+		fmt.Fprintf(report, "loop: step %s: configured program %q\n", name, program)
+	}
 }
