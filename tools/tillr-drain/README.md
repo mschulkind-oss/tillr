@@ -690,8 +690,20 @@ candidate reachable after its lane is reset.
 For an unbounded claim with no terminal record, replacement loops compare the recorded
 process ID and start time within the same Linux boot, process namespace, and user
 identity, then check that no worker carrying that run and store identity survives.
-Only a proven-dead owner with no live worker is reclaimed. Foreign or legacy claims
-without that evidence remain protected. A normal offline finish is still judged;
+Only a proven-dead owner with no live worker is reclaimed. A claim from another
+process domain of the same user, such as one a jail relaunch left behind (the new
+container has a fresh PID namespace, so recorded PIDs name nothing), is judged from
+files instead, because every container that mounts the repository sees the same
+inodes. Its loop is proven gone when every drain session it recorded is ended, or when
+its presence file (one per loop process under `<store>.loops/`, opened for writing
+before the session is recorded and held until the process exits) has no writer. Its
+run is live while any process still holds the run's `run.record.json` or `run.stderr`
+open for writing; the face and every child that inherited those streams hold them for
+as long as they live, and absent files mean the face never started. The writer check
+is a Linux read lease, granted only on a file nobody has open for writing, so it needs
+no timeout. A proven-gone loop's run with no writer is reclaimed like a local one on the
+next pass. A claim without that evidence, including any whose files cannot be judged,
+remains protected. A normal offline finish is still judged;
 a worker signal without evidence of supervisor interruption is not exempted.
 
 An examination (the loop's settle or judge of a finished run) leases the run's lane with

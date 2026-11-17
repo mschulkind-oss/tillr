@@ -235,6 +235,15 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, reclaimed: &[]string{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
+	here, err := currentLoopOwner()
+	if err != nil {
+		return ev, err
+	}
+	// foreignRuns is every run of a claim whose owner or examiner is this user's loop in
+	// another process domain (a relaunched jail): this loop's process table cannot see
+	// those runs, so their liveness is judged from their stream files (presence.go).
+	foreignRuns := map[string]bool{}
+	var ended map[LoopOwner]bool
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		works, err := readPending(r)
 		if err != nil {
@@ -245,6 +254,15 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 			return err
 		}
 		for _, work := range works {
+			if work.Decision.RunRequest != nil && (fromOtherDomain(work.Owner, here) || fromOtherDomain(work.Examiner, here)) {
+				foreignRuns[work.Decision.RunRequest.RunID] = true
+				foreignRuns[work.ParentRunID] = true
+				for _, node := range parallelNodes(work.Decision) {
+					if node.RunRequest != nil {
+						foreignRuns[node.RunRequest.RunID] = true
+					}
+				}
+			}
 			if work.Done && work.Decision.RunRequest != nil && !l.active[work.Decision.RunRequest.RunID] {
 				if unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
 					stuck[work.Decision.RunRequest.RunID] = work
@@ -262,13 +280,21 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 				}
 			}
 		}
+		delete(foreignRuns, "")
+		if len(foreignRuns) > 0 {
+			if ended, err = endedSessionOwners(r); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		return ev, err
 	}
-	here, err := currentLoopOwner()
-	if err != nil {
-		return ev, err
+	identity := ""
+	if len(foreignRuns) > 0 {
+		if identity, err = processStoreIdentity(l.cfg.Store); err != nil {
+			return ev, err
+		}
 	}
 	anyDead := false
 	for _, owner := range owners {
@@ -276,8 +302,10 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 			continue
 		}
 		o := owner
-		dead, err := ownerDead(&o, here)
-		if err != nil {
+		var dead bool
+		if fromOtherDomain(&o, here) {
+			dead = foreignOwnerGone(identity, o, ended)
+		} else if dead, err = ownerDead(&o, here); err != nil {
 			return ev, err
 		}
 		ev.dead[owner] = dead
@@ -286,6 +314,15 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 	if anyDead || len(stuck) > 0 {
 		if ev.live, ev.faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
+		}
+		// A run started from another domain is live, and its face counted live, while
+		// its streams are written: added to what this namespace's scan saw, never
+		// subtracted from it.
+		locator, _ := l.cfg.Steps.(runStreamLocator)
+		for id := range foreignRuns {
+			if foreignRunLive(locator, id) {
+				ev.live[id], ev.faces[id] = true, true
+			}
 		}
 		for id, work := range stuck {
 			if stuckExaminationLease(work, ev.faces[id], here, ev) {
@@ -347,8 +384,9 @@ func (l *Loop) reclaimStuckLease(tx *store.Tx, work *pendingWork, at time.Time, 
 	return nil
 }
 
-// reapDeadLoopRuns closes only proven-dead loop-owned claims. Foreign/legacy
-// leases and claims whose worker is still alive keep their existing protection.
+// reapDeadLoopRuns closes only proven-dead loop-owned claims. A claim from another
+// process domain is proven dead only by the evidence presence.go reads; legacy leases,
+// unjudged owners and claims whose worker is still alive keep their protection.
 //
 // It reads no process table: every liveness answer comes from ev, gathered before
 // the transaction, and each write is guarded by the exact claim it re-reads here.

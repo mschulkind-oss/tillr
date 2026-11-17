@@ -66,6 +66,12 @@ runs to pause, so those items start over on the next pass without
 spending a retry, failover, or automatic re-admission allowance. Repeated stops
 need no authorization.
 
+After a jail relaunch, a new loop recovers the old container's runs on its own: a
+run whose loop ended its session (or left its presence file unheld) and whose
+`run.record.json` and `run.stderr` no process holds open for writing is reclaimed
+and dispatched again, with no operator action. The tillr-drain README describes the
+evidence.
+
 Stop acts on what its own process domain can see and says what it left alone on
 stderr, one `loop: stop left alone: ...` line each: a session in another process
 domain (stale heartbeat: treated as dead; current heartbeat: a live loop to stop
