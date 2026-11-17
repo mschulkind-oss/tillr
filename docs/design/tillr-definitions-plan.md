@@ -651,9 +651,9 @@ tier, the startup sync, and the roll and push settings read by
 ### Add plain-directory staging for a definition that does not land
 
 A finding needs a directory to work in, not a Git worktree with a base commit and a fence. Today
-staging always builds a worktree, `tillr run exec` accepts only that worktree as a run's working
-directory (`WorktreeDir` in [request.go](../../tools/tillr-run/run/request.go)), and the brief an
-agent receives has nine sections shaped for Git, filled with a base sha, a fence and a target
+staging always builds a worktree and refuses a request whose working directory is anything else
+(the `working_dir` check in `Stage`, [stage.go](../../tools/tillr-drain/drain/stage.go)), and the
+brief an agent receives has nine sections shaped for Git, filled with a base sha, a fence and a target
 (`briefValuesFor` in [stage.go](../../tools/tillr-drain/drain/stage.go)). This item stages a plain
 lane directory for a store that does not land, and renders the brief from the definition's own
 template.
@@ -663,12 +663,13 @@ directory.
 
 **Agent details:** staging is [stage.go](../../tools/tillr-drain/drain/stage.go); the brief
 template is the drain's `--brief-template` flag today, whose default is
-[brief-template.md](../../tools/tillr-run/backends/brief-template.md).
+[brief-template.md](../../tools/tillr-run/backends/brief-template.md). The plain directory is
+named relative to the lane directory, like every working directory a request carries.
 
 <!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition does not complete on `landing`, staging creates the lane's working directory as a plain directory, with no worktree, no base sha and no fence file, and the run request names it.
-- **c2:** `tillr run exec` accepts that working directory for such a run, and still refuses any other directory for a run under Git landing.
+- **c2:** The worktree-only rule belongs to staging, not to `tillr run exec`, and stays there: under Git landing, staging still refuses a request whose `working_dir` is not the worktree, and a test asserts that refusal. `tillr run exec` is unchanged: it accepts any working directory relative to the lane directory, refuses an absolute one, and so runs the plain directory with no new rule. Read at `65b08368`, `checkRequest` in [exec.go](../../tools/tillr-run/run/exec.go) refuses only an absolute `working_dir`, and `TestTerminalEndCauses/success` runs with `"."`; do not tighten either.
 - **c3:** The brief is rendered from the definition's `brief_template`, and no value staging fills in for it names a sha, a fence or a trunk. A test renders a brief from a fixture template and asserts its values.
 - **c4:** A test stages one item of a fixture definition and asserts the directory, the request and the brief.
 - **c5:** Under the Git-landing definition staging is unchanged; the existing stage and loop suites pass unchanged.
