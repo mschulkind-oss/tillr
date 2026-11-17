@@ -219,12 +219,22 @@ crashes, times out or produces no extractable verdict means the gate's own integ
 the batch fails closed; a suite that names failing assertions is a verdict about the tree it ran
 against, and must route like one.
 
+"Times out" means stopped making progress, never ran longer than expected. The owner ruled on
+2026-11-17 ([`D-GR15`](gate-rework.md#decision-ledger)): "target budgets, watch for stalls, but
+don't let 'load is high' cause failures that would otherwise finish just fine." A time limit on a
+check is a target that is measured and reported; a check still making progress is not stopped
+because a clock passed and is never "could not judge"; what ends one early is a stall seen by a
+watchdog, and a stall is named and leads to a named next step.
+
 *Measured 2026-11-02:* a single stale assertion in `tests/fork-check.test.py` was reported as "not
 verified" rather than as a verdict, so a whole batch refused and re-armed on a five-minute clock
 instead of the offender being isolated.
 
 *Enforced by:* `d78e05685` landed the split, with tests pinning both arms and the rule that a red
-self-suite still never passes the batch.
+self-suite still never passes the batch. The 2026-11-17 half is **not enforced yet**: on that date
+`tillr-gate` still stops a fast check at its ceiling and answers exit 4 (`fastCeilingMS` in
+[`run.go`](../../tools/tillr-gate/run.go)), and the gate program and `tools/fork-check.py` still
+stop checks on fixed timeouts.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a gate
 verdict whose result is `error` is refused with `ReasonVerdictError`, never read as a failure of the
