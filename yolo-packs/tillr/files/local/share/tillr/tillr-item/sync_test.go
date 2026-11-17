@@ -95,8 +95,8 @@ func decodeSync(t *testing.T, out []byte) syncRecord {
 	return rec
 }
 
-// A store initialized by the store face has no item tables. Preview must treat it as
-// empty without creating those tables, appending events, or changing the database bytes.
+// A store initialized by the store face has every item table, empty (b0c26afac). Preview
+// must leave them empty, append no events, and not change the store's content.
 func TestSyncDryRunFreshStore(t *testing.T) {
 	repo := syncRepo(t, map[string]string{"docs/good.md": syncGood})
 	dir := scratch(t, "sync-fresh-store")
@@ -118,15 +118,40 @@ func TestSyncDryRunFreshStore(t *testing.T) {
 		}
 		defer s.Close()
 		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-			var tables, events int
-			if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'item%'`).Scan(&tables); err != nil {
-				return err
-			}
+			var events int
 			if err := r.QueryRow(`SELECT count(*) FROM events`).Scan(&events); err != nil {
 				return err
 			}
-			if tables != 0 || events != 0 {
-				t.Fatalf("fresh store holds %d item tables and %d events, want neither", tables, events)
+			rows, err := r.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'item%'`)
+			if err != nil {
+				return err
+			}
+			var names []string
+			for rows.Next() {
+				var n string
+				if err := rows.Scan(&n); err != nil {
+					rows.Close()
+					return err
+				}
+				names = append(names, n)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if len(names) == 0 {
+				t.Fatal("initialized store holds no item tables, want them created empty")
+			}
+			for _, n := range names {
+				var count int
+				if err := r.QueryRow(`SELECT count(*) FROM "` + n + `"`).Scan(&count); err != nil {
+					return err
+				}
+				if count != 0 {
+					t.Fatalf("fresh store table %s holds %d rows, want none", n, count)
+				}
+			}
+			if events != 0 {
+				t.Fatalf("fresh store holds %d events, want none", events)
 			}
 			return nil
 		}); err != nil {
