@@ -25,6 +25,7 @@ type judgeRouteSteps struct {
 	mechanical int
 	afterLand  func()
 	afterGate  func()
+	entries    []item.JudgeEntry
 }
 
 func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -82,6 +83,9 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 				hash = "wrong"
 			}
 			output := item.JudgeOutput{EvaluatedHead: s.workerHead, EvaluatedTree: runGit(s.t, target, "rev-parse", s.workerHead+"^{tree}"), Outcome: outcome, Verdicts: []item.JudgeEntry{{CriterionID: "c1", CriterionHash: hash, Verdict: verdict, ClaimClass: item.ClaimVerification, Reason: "the first judge reason", Evidence: []string{"commit:" + s.workerHead}}}}
+			if s.entries != nil {
+				output.Outcome, output.Verdicts = "fail", s.entries
+			}
 			raw, _ := json.Marshal(output)
 			writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), string(raw))
 		}

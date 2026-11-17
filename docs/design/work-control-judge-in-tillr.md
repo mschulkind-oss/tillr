@@ -297,6 +297,18 @@ caller and then to nothing.
 
 ## Retirement in the end state
 
+The judge's placement is settled by
+[D-JL1](./tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1):
+a pre-approved graph's evaluator runs before the gate and landing, so blocked or
+defective findings stop publication. The written verdict file covers every stored
+criterion and binds its text hash, claim class, reason, and evidence to the
+candidate's head and tree. Blocked findings also identify the waiter.
+[D-JL2](./tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2)
+keeps standalone generic judging on that same checked file intake, rather than
+running a second generic judge after a graph's evaluator. Agent rulings require
+a covering grant; mechanical rulings are limited to verification-only criteria,
+not owner decisions.
+
 The end state retires pipeline completions with no human in the loop, by
 two verdict paths that are never merged into one:
 

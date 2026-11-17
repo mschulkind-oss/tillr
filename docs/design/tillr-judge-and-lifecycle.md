@@ -368,13 +368,7 @@ The gate proves the tree is healthy. It does not prove the change is what the it
 
 A judge can find more than "not yet done". It can find that a criterion cannot be judged until someone answers a question, or that the item's premise is false and no amount of work will satisfy it. Both are worth more than a failed attempt, because they say who must act. A blocked finding sends the item to the seat that can answer. A defective finding is a ruling: it is recorded, and the item is closed with the judge's reason, so the queue stops spending on work that was wrong from the start. This block finishes the judge step with those two outcomes.
 
-<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the judge's outcome is `blocked`, the item is moved to blocked with the waiter and the reason from the judge's entry. No verdict is recorded and the gate does not run.
-- **c2:** When the outcome is `defective`, the judge's verdicts are recorded through the intake and the item is closed with the reason `defective: <criterion>: <reason>`. The gate does not run and the lane is freed. A test asserts the trunk did not move.
-- **c3:** A verdict file that holds more than one kind of failing entry is settled by the first that applies of defective, blocked and not-done. A test covers the three pairs.
-- **c4:** The waiting face has a rule for each of the two outcomes. A test asserts neither shows as `unclassified`.
-- **c5:** [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) points from "Retirement in the end state" to `D-JL1` and `D-JL2` for where the judge runs and what its file must hold.
 
 **What this block builds on:** the judge step of the block before it in the build order, which is on the trunk. It landed on 2026-11-17 under the subject `feat(tillr): judge opted-in candidates before gating`. The first run of this block on the same day was staged from a base older than that landing, found no judge step in the loop, and stopped. It was right to stop, and the block stands as written: it does not build the judge step, and it is not built on a tree without one. The check is one command, `rg -n 'ReasonEvalFailed' tools/tillr-drain/drain/`. A tree where it prints nothing is staged too early. A run reports that as a staging fault, and the answer is a restage on the current trunk, not another change to this block.
 

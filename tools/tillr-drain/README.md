@@ -53,7 +53,19 @@ file without recording verdicts. A missing or refused file holds the item as
 `judge-unreadable`, attributed to the review run rather than the worker; it does
 not consume the worker's automatic re-admission or second-failure allowance. A valid
 `not-done` finding holds it as `eval-failed`, without a gate, landing, or criterion
-verdict. The waiting view includes the first failing criterion's reason.
+verdict. The waiting view includes the controlling criterion's reason.
+
+A valid `blocked` finding moves the item to blocked with the entry's reason and
+its structured `waiting_on.waiter`; it records no criterion verdict. A valid
+`defective` finding records the file through the same intake and closes the item
+with `defective: <criterion>: <reason>`, attributed to the judge. Intake and closure
+share one transaction. Neither route gates or lands the candidate, and settlement
+frees the lane. Missing or invalid blocker metadata holds as `judge-unreadable`
+without changing the item's disposition. For mixed failures, `defective` takes
+precedence over `blocked`, which takes precedence over `not-done`, regardless of
+file order. The first entry of the controlling kind supplies the reason.
+A judge's blocker is not a failed attempt: second-attempt settlement preserves
+its waiter and reason rather than replacing them with a generic design conflict.
 
 A pass permits the ordinary gate and landing. Only a successful landing records
 the checked agent verdicts, bound to the landed commit, and marks the item landed
@@ -71,9 +83,10 @@ when a judge committed before its terminal record was lost.
 
 The [judge-routing tests](./drain/judge_route_test.go) cover ordering, authority,
 read-only restoration, failure attribution, and mechanical-path compatibility.
-The next [lifecycle block](../../docs/design/tillr-judge-and-lifecycle.md#route-a-judges-blocked-and-defective-findings-to-their-states)
-owns disposition changes for `blocked` and `defective` findings; until that block
-lands, those non-pass findings are held without recording verdicts.
+The [disposition tests](./drain/judge_disposition_test.go) cover blocked metadata,
+criterion intake and closure, the three failure pairs in both file orders, lane
+release, and an unchanged trunk. The
+[blocker tests](./drain/judge_blocker_test.go) cover unreadable blocked metadata.
 
 ## Pass observations and report identity
 

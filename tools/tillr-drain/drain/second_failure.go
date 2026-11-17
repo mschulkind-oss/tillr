@@ -39,7 +39,9 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 	if err != nil {
 		return err
 	}
-	if attemptHistory.refusals[outcomeRun] == RefusalTrunkAlreadyRed || attemptHistory.judgeHolds[outcomeRun] == ReasonJudgeUnreadable {
+	if attemptHistory.refusals[outcomeRun] == RefusalTrunkAlreadyRed || attemptHistory.judgeHolds[outcomeRun] == ReasonJudgeUnreadable || attemptHistory.judgeHolds[outcomeRun] == ReasonJudgeBlocked {
+		// A checked blocker already names the next mover; it is not a failed
+		// attempt to reroute to design.
 		return nil
 	}
 	var state string
@@ -106,7 +108,7 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 			continue
 		}
 		pd := decisions[prior.RunID]
-		if attemptHistory.refusals[prior.RunID] == RefusalTrunkAlreadyRed || attemptHistory.judgeHolds[prior.RunID] == ReasonJudgeUnreadable || pd.BlockConflict != nil || pd.Seat == "design" {
+		if attemptHistory.refusals[prior.RunID] == RefusalTrunkAlreadyRed || attemptHistory.judgeHolds[prior.RunID] == ReasonJudgeUnreadable || attemptHistory.judgeHolds[prior.RunID] == ReasonJudgeBlocked || pd.BlockConflict != nil || pd.Seat == "design" {
 			continue
 		}
 		// An authorized predecessor can be a standalone terminal run. The
