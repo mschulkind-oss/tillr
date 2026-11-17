@@ -1332,7 +1332,7 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	// The worker's durable outcome belongs to its already applied transition.
 	// Index it even when no successor is dispatchable, or when shutdown is
 	// consuming the completion. Empty polls never call this path.
-	defer l.index(context.Background())
+	defer l.index()
 	delete(l.active, c.id)
 	if c.result != nil {
 		mergeExamination(result, c.result)
@@ -1437,7 +1437,7 @@ planned:
 				result.FirstGeneration = strings.TrimPrefix(timing.TickID, "gen-")
 			}
 			result.LastGeneration = strings.TrimPrefix(timing.TickID, "gen-")
-			l.index(ctx)
+			l.index()
 		}
 	}()
 	if !l.nonLanding {
