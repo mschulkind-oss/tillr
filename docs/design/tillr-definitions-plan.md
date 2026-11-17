@@ -316,6 +316,19 @@ What the lifecycle landing left for this item to extend, as read on the trunk on
   c3, whose test therefore starts from a state that is neither finished nor blocked.
 - A write of the state an item already has still answers the item and appends no event, so a
   repeated move does not overwrite a stored receipt.
+- The legacy frozen states (`abandoned`, `deleted`, `in-progress`) stay readable and are never
+  written, so no move into one exists and none takes a receipt.
+
+**A second answer that this block replaces:** while the first run's stop was being answered, a
+second amendment was drafted against the older base. It said this item could be built before the
+lifecycle item, by reading the definition's finished list beside the hard-coded state tables, and
+it kept the lifecycle item as a blocker. The lifecycle item landed before that draft did, and the
+two did not merge. The draft is dropped, not merged: the tables it told a run to leave alone
+(`writableStates`, `terminalState`, `terminalStates`) are no longer in the item utility
+(`rg -n 'writableStates|terminalStates?\b' tools/tillr-item/` prints nothing on 2026-11-17), and
+the blocker it kept is met. What it said that still holds is already above: finished states come
+from the store's definition, and frozen states take no receipt. The marker below therefore names
+no blocker.
 
 **Agent details:** the pointer flag is `--resolves-via`, the name the queued
 [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
