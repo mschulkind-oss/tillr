@@ -375,9 +375,23 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	if item.IsCommentItem(spec.ItemID) {
+		task, err := s.commentTask(ctx, spec, durableDir)
+		if err != nil {
+			return err
+		}
+		for i := range values {
+			if values[i].placeholder == "TASK" {
+				values[i].text = task
+			}
+		}
+	}
 	brief, err := renderBrief(s.Template, recorded.ItemID, values)
 	if err != nil {
 		return err
+	}
+	if item.IsCommentItem(spec.ItemID) {
+		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
 	}
 	if !spec.Continue {
 		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {

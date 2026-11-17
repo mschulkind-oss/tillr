@@ -96,6 +96,23 @@ residue counters — `unshared_open`, the open store items no block declares, an
 `stale_doc_blocks`, the blocks whose item this store already holds as `landed` — and writes
 nothing.
 
+## Hand-driven review comments
+
+```sh
+tillr item comments take --store .tillr/state.db --doc docs/design/example.md --vantage http://localhost:8001 --repo tillr
+```
+
+Intake reads Vantage's public review interface and prints one generated item id, or nothing
+when no comment is pending. It writes the batch and its design-seat item in one transaction;
+that item's fence includes the document, its existing companion plan, and roadmaps linking
+to it. Generated ids end in a numeric batch counter, unlike the build items implementing
+this feature, and `sync` excludes them from its missing-definition count. A document with an
+open batch does not get another one.
+
+The [designer-session design](../../docs/design/tillr-designer-sessions.md#the-words-this-design-uses)
+defines batches and desks. Automatic quiet-period intake is a later slice; this command is
+the hand-driven path.
+
 ## What it refuses
 
 - **A state move the item's own state machine does not allow** — refused, with the item

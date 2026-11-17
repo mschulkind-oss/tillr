@@ -974,6 +974,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 		}
+		if err := l.stageComment(ctx, &decision, &spec); err != nil {
+			return nil, err
+		}
 		if decision.Workflow != nil {
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
 			spec.Continue = decision.NodeIndex > 0 || decision.WorkflowRestart
@@ -1192,6 +1195,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		prepared = true
 		return laneOutcome{}
 	}
+	if err := l.recordDesigner(ctx, decision, record); err != nil {
+		return laneOutcome{err: err}
+	}
 	diagnostic, outputErr := runOutputTail(RunDir(l.cfg.Root, record.RunID))
 	if outputErr != nil {
 		return laneOutcome{err: outputErr}
@@ -1302,6 +1308,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
 	}
+	if item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
+		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: l.laneTarget(lane), HeadSHA: l.headOf(ctx, lane)}
+		candidate.RefusalDetail = "comment run did not report RESULT: done"
+		if err := l.refuse(ctx, candidate, result, RefusalGate); err != nil {
+			return laneOutcome{err: err}
+		}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
+	}
 	target := l.laneTarget(lane)
 	baseSHA := l.laneBase(lane)
 	if baseSHA == "" {
@@ -1313,6 +1327,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if headSHA == baseSHA {
+		if item.IsCommentItem(request.ItemID) && reportFooter(log) == "done" && record.ExitCode != nil && *record.ExitCode == 0 {
+			candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: target, BaseSHA: baseSHA, HeadSHA: headSHA}
+			if err := l.answerCommentWithoutCommit(ctx, candidate, result); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
+		}
 		if class == AttemptUnjudged {
 			// A wall cut the run short with nothing committed. The lane still holds this
 			// run's worktree, brief and session id, so the attempt gets one continuation
@@ -1462,6 +1483,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	defer func() { *prepared = candidate }()
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
+	}
+	if item.IsCommentItem(candidate.ItemID) {
+		if _, _, err := l.readCommentReplies(ctx, candidate); err != nil {
+			candidate.RefusalDetail = err.Error()
+			if err := l.rejectCommentReplies(ctx, candidate, result); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
 	}
 	// A candidate reaching this point is a run that committed, and the count is taken here
 	// rather than at the dispatch so a run that produced no commit is never read as a
@@ -1676,6 +1706,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 			return "", false, err
 		}
 		return "", false, nil
+	}
+	if err := l.deliverCommentReplies(ctx, candidate); err != nil {
+		return "", false, err
 	}
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "landed"); err != nil {
 		terminal := asItemTerminal(err)
@@ -2057,6 +2090,16 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 // reset's job.
 func (l *Loop) resetLane(ctx context.Context, lane string) error {
 	path := l.lanePath(lane)
+	if strings.HasPrefix(lane, "desk-") {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return nil
+		}
+		if _, err := l.git(ctx, path, "reset", "--hard", TrunkRef); err != nil {
+			return err
+		}
+		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
+		return err
+	}
 	if _, err := l.git(ctx, path, "checkout", "--force", "-B", LaneBranch(l.cfg.LaneRoot, lane), TrunkRef); err != nil {
 		return err
 	}

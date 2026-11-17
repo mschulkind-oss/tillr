@@ -118,6 +118,21 @@ block with a finding, and every other document was still written. `tillr item` a
 the apply, decision, mail, grant and verdict faces; staging is what the loop needs before it
 runs anything.
 
+### Take a review batch by hand
+
+`tillr item comments take`
+
+This reads one document's pending review threads from Vantage and prints the new item id,
+or nothing when none is pending. The loop runs that batch on the design seat at a fixed
+[document desk](../../../../docs/design/tillr-designer-sessions.md#the-desk), reusing its last
+recorded designer rather than a numbered lane's unrelated session. A desk has a worktree
+only during its run. Automatic intake and the full expiry policy are later build slices.
+
+A committed revision delivers replies after its recorded landing and after the served
+checkout matches it. An answer-only run records `answered`, skips gate and landing, delivers
+its replies, and closes the item. Delivery waiting on an owner's edit remains in the store
+for a later pass; repeated delivery retains the same nonce.
+
 ## 3. Run — execute a candidate in an isolated lane
 `tillr run exec`
 

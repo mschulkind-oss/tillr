@@ -401,12 +401,38 @@ after it is done:
 A fence that names none of those derives nothing: this is a rule about the paths given, not a
 widening of every fence.
 
-**A lane is not a session.** Staging mints a fresh harness session id for every dispatch and
-writes it beside the brief as `session-id`; it never reads that file back. The lane directory
-is reused by unrelated runs, so its `session-id` describes whatever ran there last, and
-reusing it hands one item's transcript to the next. The one caller that keeps a lane's id is
-`resume`, which names the id it continues — that is what makes a continuation a continuation
-rather than a cold start.
+**A pool lane is not a session.** Staging mints a fresh harness session id for an ordinary
+dispatch and writes it beside the brief as `session-id`; it never treats that file as the
+next item's session. `resume` explicitly names the id it continues. Review-comment items
+instead reuse their document's recorded designer at a fixed
+[desk](../../docs/design/tillr-designer-sessions.md#the-desk), outside the numbered pool.
+
+## Hand-driven comment delivery
+
+An item created by `tillr item comments take` dispatches on the design seat to its document's
+desk. The loop registers the lane before execution, adds its worktree for the run, and
+removes that worktree after settlement. New build dispatches for the document wait with
+`design-under-comment` until its batch settles; already-running workers are not interrupted.
+The staged task carries the complete review threads,
+the four-line answering rule, and the document's changes since the preceding turn.
+
+The loop records the last designer from the completed stream, plus the document's blob and
+the session's dispatch reason. Unreported provider measurements remain absent rather than
+being replaced by a configured lifetime. Run spend stays in the ordinary run record. This
+first slice supports the hand-driven new-session and resumed-session path; the full expiry,
+compaction, and automatic-intake policy remains in the design's subsequent build items.
+
+A successful committed revision delivers replies only against its recorded landing, once
+the served document matches the landed blob. A reply-only `RESULT: done` records `answered`,
+skips gate and landing, and closes the item through the item utility's lifecycle API. Missing,
+duplicate, wrong-turn, or foreign replies fail criterion 1. Blocked, failed, and gate-refused
+runs deliver nothing.
+
+Delivery is durable: the loop records immutable reply bytes, writes one scratch file, and
+renames it onto a JSON-lines inbox name. Each reply echoes Vantage's `id`, `round` (the reaction
+count at intake), and root text version, with a stable item-and-comment nonce. A later pass
+retries pending deliveries from the store, including those waiting on an owner's unsaved
+edit; it never needs the desk worktree or the original reply file again.
 
 ## Ask the planner why
 

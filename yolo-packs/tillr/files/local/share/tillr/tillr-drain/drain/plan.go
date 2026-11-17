@@ -65,17 +65,19 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
-	NodeStartRunID  string         `json:"node_start_run_id,omitempty"`
-	WorkflowRestart bool           `json:"workflow_restart,omitempty"`
-	WorkflowRelease bool           `json:"workflow_release,omitempty"`
-	Workflow        *Workflow      `json:"workflow,omitempty"`
-	NodeIndex       int            `json:"node_index,omitempty"`
-	NodeBaseSHA     string         `json:"node_base_sha,omitempty"`
-	PreviousReport  string         `json:"previous_report,omitempty"`
-	ConflictID      string         `json:"conflict_id,omitempty"`
-	BlockConflict   *item.Conflict `json:"block_conflict,omitempty"`
-	Inputs          *RunInputs     `json:"inputs,omitempty"`
-	Readmitted      bool           `json:"readmitted,omitempty"`
+	DesignerSessionID string         `json:"designer_session_id,omitempty"`
+	DesignerReason    string         `json:"designer_reason,omitempty"`
+	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
+	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
+	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
+	Workflow          *Workflow      `json:"workflow,omitempty"`
+	NodeIndex         int            `json:"node_index,omitempty"`
+	NodeBaseSHA       string         `json:"node_base_sha,omitempty"`
+	PreviousReport    string         `json:"previous_report,omitempty"`
+	ConflictID        string         `json:"conflict_id,omitempty"`
+	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
+	Inputs            *RunInputs     `json:"inputs,omitempty"`
+	Readmitted        bool           `json:"readmitted,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
 	// failover runs. Positions use the design's closed set: queued, running, candidate,
@@ -101,9 +103,9 @@ type Decision struct {
 	// dispatch and every other hold leave both empty.
 	RetryID         string `json:"retry_id,omitempty"`
 	SupersedesRunID string `json:"supersedes_run_id,omitempty"`
-	// DeferredBy names the item whose live lease or unfinished examination owns
-	// the requested fork, or an earlier dispatch in the same plan. It is empty
-	// for other holds, distinguishing a resource deferral from an item's own hold.
+	// DeferredBy names the item behind a resource deferral: a live fork owner,
+	// the trunk's fixer, or an open review batch for the requested design document.
+	// It is empty for an item's own hold.
 	DeferredBy string `json:"deferred_by,omitempty"`
 	// QuestionID names the question a `question-open` hold is waiting on: the first
 	// unanswered question in the design document's own order, as Vantage's index reports it.
@@ -121,6 +123,7 @@ type Decision struct {
 // itemRow is the item state this face reads: the columns a decision turns on, and the
 // rank that decides the order the decisions come in.
 type itemRow struct {
+	Designer *lastDesigner
 	Workflow string
 	ItemID   string
 	State    string
@@ -166,6 +169,14 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	items, err := readItems(r)
 	if err != nil {
 		return nil, err
+	}
+	for i := range items {
+		if item.IsCommentItem(items[i].ItemID) {
+			items[i].Designer, err = readDesigner(r, items[i].DesignDoc)
+			if err != nil {
+				return nil, readFailure(err)
+			}
+		}
 	}
 	edges, err := readEdges(r)
 	if err != nil {
@@ -266,7 +277,14 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		rows.Close()
 		tick.AvailableLanes = &offered
 	}
+	commentHolds := map[string]string{}
+	for _, row := range items {
+		if item.IsCommentItem(row.ItemID) && row.State != StateLanded && row.State != "closed" && row.State != StateResolvedElsewhere {
+			commentHolds[plannerDocumentKey(root, row.DesignDoc)] = row.ItemID
+		}
+	}
 	p := &planner{
+		commentHolds: commentHolds, documentRoot: root,
 		conflicts: conflicts,
 		shut:      shut,
 		forks:     forks,
@@ -381,7 +399,18 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 // planner is one tick's decision state: the tick, the policy, the store's item states and
 // the lanes it holds, the clock, and the lanes and capacity already spent by earlier
 // items in this tick.
+func plannerDocumentKey(root, doc string) string {
+	if root != "" && !filepath.IsAbs(doc) {
+		doc = filepath.Join(root, doc)
+	}
+	return filepath.Clean(doc)
+}
+
 type planner struct {
+	// An open review batch holds new build dispatches for its document; workers
+	// already running settle normally, without being interrupted by intake.
+	commentHolds   map[string]string
+	documentRoot   string
 	attempts       map[string]int
 	shut           map[string]bool
 	conflicts      map[string]item.Conflict
@@ -506,6 +535,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.DeferredBy = p.fixerOpen
 	case item.State != StateInQueue:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
+	case !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
+		decision.Action, decision.Reason = ActionHold, "design-under-comment"
+		decision.DeferredBy = p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)]
 	case questions.reason != "":
 		decision.Action, decision.Reason = ActionHold, questions.reason
 		decision.QuestionID = questions.questionID
@@ -535,6 +567,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane()
+		if itemIsComment(item.ItemID) {
+			lane = commentDesk(item.DesignDoc)
+			ok = !p.held[lane] && !p.assigned[lane]
+		}
 		if !ok {
 			decision.Action, decision.Reason = ActionHold, ReasonNoLane
 			break
@@ -585,6 +621,13 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
+	}
+	if itemIsComment(item.ItemID) && decision.RunRequest != nil {
+		decision.DesignerReason = "no-designer"
+		if d := item.Designer; d != nil {
+			decision.DesignerSessionID = d.SessionID
+			decision.DesignerReason = "resumed-warm"
+		}
 	}
 	identifyDecision(&decision)
 	return decision
@@ -646,7 +689,7 @@ type questionState struct {
 // An item that names no document at all is not one of the four: it has no document to be
 // missing, and its question state is simply not a fact this planner needs.
 func (p *planner) questionState(item itemRow) questionState {
-	if item.DesignDoc == "" {
+	if itemIsComment(item.ItemID) || item.DesignDoc == "" {
 		return questionState{}
 	}
 	if p.questions == nil {
@@ -895,6 +938,9 @@ func indexPriorRuns(priors map[string][]priorRun) (map[string]AttemptClass, map[
 // not already assigned it.
 func (p *planner) freeLane() (string, bool) {
 	for _, lane := range *p.tick.AvailableLanes {
+		if strings.HasPrefix(lane, "desk-") {
+			continue
+		}
 		if p.assigned[lane] {
 			continue
 		}

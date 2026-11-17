@@ -1,0 +1,19 @@
+Answer the review comments on docs/design/example.md.
+
+Comment id: comment-2
+Turn count (Vantage round): 0
+Heading: Shape
+Passage:
+A passage.
+Question id: OQ-1
+Thread:
+Reviewer: Why this shape?
+
+Revise the document so a first reader never has the question.
+A comment that rules on an open question is recorded by the answering protocol.
+A comment that only asks gets a reply and settles nothing.
+Never copy the thread into the document.
+
+What moved: unchanged
+Previous session transcript (optional reading): /PREVIOUS/transcript.jsonl
+Write one commit for a revision, and exactly one JSON line per comment to /SCRATCH/replies.jsonl. Each line carries id, round (the turn count above), and summary: one or two sentences answering the comment and naming the section changed. If the document already answers it, write the replies without a commit and end RESULT: done.
