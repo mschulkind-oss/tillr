@@ -19,7 +19,7 @@ depends-on:
 
 # Work reaches tillr through several doors, and every door ends in the same shape
 
-> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. A proposal written from the owner's statements; nothing here is built as its own item. Code facts read on this checkout on 2026-11-17 (`tools/tillr-item/item/prose.go`, `sync.go`, `tools/tillr-drain/drain/plan.go`).
 

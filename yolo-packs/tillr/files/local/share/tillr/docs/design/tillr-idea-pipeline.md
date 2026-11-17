@@ -15,7 +15,7 @@ next: "Cut the idea flow into build items once the observatory-actions design se
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
 
-> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-13. Unbuilt design, measured against `/workspace/.tillr/state.db` (schema 5, 49 items: 33 `in-queue`, 13 `blocked`, 2 `landed`, 1 `closed`), `tillr-*` CLI faces, and the served `/api/v1/*` observatory wire.
 

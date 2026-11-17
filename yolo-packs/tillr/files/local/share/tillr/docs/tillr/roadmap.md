@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -49,17 +49,20 @@ says so in its design and is the owner's to overturn.
 5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md#open-questions) carries
+[What tillr will change for AutoQA](../design/tillr-separable-parts.md) carries
 eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
 AutoQA's requests with that proposal, and which of its small changes are filed before the drain
-proof.
+proof. All eight wait for the reply from AutoQA's agent, and the proposal marks
+[`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) and
+[`OQ-SP6`](../design/tillr-separable-parts.md#OQ-SP6) as worth answering before the second round.
 
-[The core and the landing definition](../design/tillr-core-and-git-landing.md#open-questions)
+[The core and the landing definition](../design/tillr-core-and-git-landing.md)
 writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). None needs an answer before the
-second round of conversation with AutoQA's agent, which is the owner's stated order.
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5), the naming question, which is worth
+settling first. The other four wait for the reply from AutoQA's agent; none of them needs an answer before
+the second round of conversation with it, which is the owner's stated order.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
@@ -847,7 +850,14 @@ arrives, such as review comments on a design, it starts at once.
 
 ### Run owner-facing work on lanes outside the cap
 
-<!-- inert copy of a tillr directive: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
+<!-- inert copy of a tillr directive: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
+needs two readers the fence left out. The settings file is read by `tools/tillr/settings/`, which
+refuses any table other than `roll` and `push`, so it refuses `[lanes]`. An item block is read by
+`tools/tillr-item/item/sync.go`, which refuses `express` as an unknown attribute. Both directories
+are added to this item's paths. The work extends those two readers and adds no second reader of
+either file inside the loop or the view. The criteria below are unchanged.
 
 - **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
@@ -1117,7 +1127,14 @@ item is not the cause, and re-dispatching it fixes nothing until the fault is fi
 to see the count, and after a stated number of orphaned attempts the item should wait for a person,
 with the faults that killed its runs named, instead of being sent out again.
 
-<!-- inert copy of a tillr directive: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- inert copy of a tillr directive: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
+needs a reader the fence left out. The settings file is read by `tools/tillr/settings/`, which
+refuses any table other than `roll` and `push`, so it refuses `[orphan]`. That directory is added
+to this item's paths. The work extends that one reader to take `orphan.limit`, a whole number of
+at least one that defaults to three, and adds no second reader of the settings file inside the
+loop or the view. The criteria below are unchanged.
 
 - **c1:** The waiting face and the item's record show the number of orphaned attempts per item, and the loop's settings file takes `orphan.limit`, defaulting to three. A test asserts the count is shown for an item with two orphaned runs and for an item with none.
 - **c2:** When an item's orphaned attempts reach the limit, the planner holds it with the reason `orphan-limit`, which names each stopping loop's recorded fault, for example `fault: store: database is locked` or `gate-harness-error`. A test with three orphaned runs asserts the hold, the reason text and that nothing is dispatched.
@@ -1127,7 +1144,7 @@ with the faults that killed its runs named, instead of being sent out again.
 **Agent details:**
 
 - **Ref:** the interrupted-run rule in `tools/tillr-drain/README.md`; the loop stop records in `.tillr/loop/` carry each stop's fault text.
-- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`.
+- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`; the settings reader in `tools/tillr/settings/settings.go` for `orphan.limit`; the pack's copy under `yolo-packs/tillr/`.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: five `drain.orphaned` events for `item-sync-design-without-item`, the stops recorded as `fault` and `gate-harness-error`.
 
 ## Filed 2026-11-16: work the queue triage found stranded
@@ -1150,12 +1167,7 @@ awaiting an answer that could never come. A second design seat, on Bedrock, was 
 and idle the whole time. A conflict should go to a design seat that can take it, and a design run
 refused by a limit should leave the conflict free to be sent again rather than awaiting forever.
 
-<!-- inert copy of a tillr directive: item id="item-drain-design-seat-quota-failover" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the planner dispatches a conflict's design run, it skips every design seat whose quota window is recorded as shut and sends the run to the first one that is open. A test with two design seats, the first shut, asserts the run goes to the second.
-- **c2:** When every design seat's window is shut, the item is held as `backend-window`, the reason a build item gets when its seat is shut, naming the seat and the reset time, and no design run starts. A test asserts the hold and that nothing is dispatched.
-- **c3:** A design run that ends because its backend refused it for a usage limit records the seat's window as shut and returns its conflict to `raised`, so the next pass can send it to another seat. A test feeds a fixture run that exits on a weekly-limit message and asserts the conflict is `raised` and the window is shut.
-- **c4:** A conflict whose design run ended any other way without an answer keeps today's behavior. A test asserts that a design run that ends normally with no block change still moves the conflict to the owner.
 
 **Agent details:**
 
@@ -1174,11 +1186,7 @@ first item of the judge-and-lifecycle chain, held as `retry-stale` with its conf
 its answer landed, so five items behind it could not start. The planner should send an item whose
 conflict is answered to its build, whatever retry its earlier runs used.
 
-<!-- inert copy of a tillr directive: item id="item-drain-answered-conflict-beats-stale-retry" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** An item whose latest conflict is `answered` is dispatched to its build even when an operator's retry for one of its earlier runs was used by a run before the one that raised the conflict. A test stores a retry used by run a7, a conflict raised by a7's conflict-fix run and answered by a design run, and asserts the plan dispatches rather than holding `retry-stale`.
-- **c2:** A retry that names a run older than the latest, with no answered conflict after it, is still refused as `retry-stale`. A test asserts it.
-- **c3:** `tillr drain why` names the answered conflict as the reason the item moves, so an operator can see why the retry no longer matters.
 
 **Agent details:**
 
@@ -1269,12 +1277,7 @@ answer but a longer report and the newer run's id. That record carries evidence 
 lacks, so it is kept, and the views show it as evidence added to the same conflict. A repeat is
 therefore a record equal to the last one in every field, not only in the three routing fields.
 
-<!-- inert copy of a tillr directive: item id="item-conflict-transition-not-duplicate" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Recording a conflict whose every field equals the last record of the same conflict writes no conflict event. A test records the same conflict twice and asserts one event. A second test records it again with only the report and run id changed, as the drain's second-failure route does, and asserts a second event that holds the longer report.
-- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, not as a second conflict. A record that changes the status or the design run is named by that change; a record that changes only the report is named as added evidence, with the run it came from. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
-- **c3:** The item tool's documentation states that a conflict is recorded once per transition, and that a record equal to the last one is not written.
-- **c4:** The waiting face keeps a conflict's transitions when another hold on the same item, a fault or a repair, supplies the reason line. A test renders an item with a conflict that has two transitions and a later fault hold, and asserts both the fault's reason and the transitions.
 
 **Agent details:**
 
@@ -1317,12 +1320,7 @@ refusal is right, because every landing would fail the same way. Finding out at 
 is late. The loop's existing start-up check reads its settings, policies and store, but never asks
 the step programs whether they accept what it will send. It should, before any run starts.
 
-<!-- inert copy of a tillr directive: item id="item-drain-check-step-program-flags" paths="tools/tillr-drain/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr drain loop --check`, and the loop's own start-up, hand each configured gate, fixer gate, land and verdict program the argument list the loop would send, with every optional flag present, in a mode that judges nothing. A program that refuses it stops the start with a usage fault naming the program and the flag.
-- **c2:** The mode that judges nothing is defined once in the drain's README as part of the step-program contract, and the tillr-loop adapter implements it. A test starts a loop with an adapter that lacks one flag and asserts the start is refused before any run is dispatched.
-- **c3:** A step program that does not implement the mode is reported once at start-up as unchecked, and the loop still starts. A test asserts the warning.
-- **c4:** A step program's usage refusal at run time is reported as a configuration fault naming the program, not as an external failure. A test asserts the stop's class.
 
 **Agent details:**
 
@@ -1527,3 +1525,43 @@ candidate that happened to meet it.
 - **Evidence:** 2026-11-17, a hand commit on the trunk that put a documented build directory in a tracked README passed `just done`. `python3 tools/gate/checks/scratch.py` at the trunk then exited 1 with two findings, and the drain's gate refused the next candidate on the `scratch` check. A rolling run over the range holding that commit finished green and moved its watermark.
 - **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` is `python3 tools/fork-check.py --replay --only {only}`, and `{only}` is the failing check ids from the gate's verdict. The replay matches fork-check kinds, and the gate's tree-check ids are a separate set. `python3 tools/fork-check.py --replay --only scratch` in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that fork-check also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
 - **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
+
+## Filed 2026-11-17: what two lanes showed
+
+A drain pass the owner watched on 2026-11-17, with two lanes running, showed two ways the loop
+spends runs on work that is then lost or never needed. Each item below comes from one of them.
+
+### Prevent a settled run from discarding its uncommitted work
+
+When a worker ends a run and its lane still holds edits that were never committed, the loop
+throws them away. It settles the run, pins the lane's head, and resets the lane to the trunk. If
+the worker never committed, that head is the base commit, so the pin points at nothing the
+worker did, and only the report and the logs survive. The next attempt for the item, the design
+seat that answers its conflict, and the owner all start without the diff. A run that cost real
+money can therefore leave nothing behind but a sentence saying the work was incomplete. The
+fix is on the loop's side: when it settles a run, it saves what the lane holds before it resets
+the lane, on a ref that is never landed, never gated and never treated as the item's candidate,
+and it tells the next run and the owner where that ref is. The worker's side of the same problem
+is the queued item `item-run-commit-before-ending`; this item covers the work the worker still
+leaves behind when it ends, is killed, or is orphaned.
+
+<!-- inert copy of a tillr directive: item id="item-keep-settled-run-uncommitted-work" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When the loop settles a run that reported blocked, ended without a candidate, or was orphaned, and the lane holds uncommitted changes, it commits them on a ref under `refs/tillr/` before it resets the lane. The commit is not on the item's candidate ref, is never landed and is never gated. A test with a fixture lane that has a modified file asserts the ref holds the file's content after the reset.
+- **c2:** A lane with no uncommitted changes preserves nothing and creates no ref. A test asserts that a clean lane's settlement leaves the ref list as it was.
+- **c3:** Untracked files inside the item's fence are included in the preserved commit. Files outside the fence are preserved too and are flagged as outside it in the record. A test asserts both.
+- **c4:** The run's settlement event records the ref and a summary of the files and line counts. A test asserts the event carries both.
+- **c5:** The run-boundary check excuses the new ref the way it excuses `refs/tillr/runs/`. A test asserts a sibling run's preservation does not convict a run in flight.
+- **c6:** The brief for the next attempt of the same item, and the brief for the design-seat run that answers its conflict, name the ref, say that earlier work exists and say why that run stopped. The run view and the waiting view show the ref and its summary to the owner. A test asserts the brief text and the view output.
+- **c7:** A retention rule drops the ref when its item reaches a terminal state, and the README states it. A test asserts the ref is gone after the item lands and after it is dropped.
+- **c8:** The loop does the Git work for preservation outside any SQLite write transaction. A test asserts that no Git command runs while a write transaction is open.
+
+**Agent details:**
+
+- **Ref:** `tools/tillr-drain/README.md`, the boundary table of refs a run may move and the section on an interrupted run's pin; [the model-tiering design](../design/tillr-planning-node-model-tiering.md), which measures that runs which edited files and then ended uncommitted or were killed are $98 of $228 (43%) of Sol spend; `item-run-commit-before-ending`, the worker side.
+- **Where:** `abandon` and `pin` in `tools/tillr-drain/drain/loop.go`; the reported-blocked branch there; `resetLane`; the orphan release in `tools/tillr-drain/drain/pass.go`; `landerRef` in `tools/tillr-drain/drain/boundary.go`; the conflict-fix brief in `tools/tillr-drain/drain/stage.go`; the run view in `tools/tillr-view/`.
+- **Evidence:** 2026-11-17, `rg -n 'reset|clean -|checkout --|stash' tools/tillr-drain/drain/*.go`: `resetLane` runs `git checkout --force -B <lane branch> <trunk>` then `git reset --hard <trunk>`, which reverts tracked edits and does not remove untracked files, and `rg -n 'clean -' tools/tillr-drain/drain` finds no `git clean`. `abandon` pins `l.headOf(lane)` before the reset, and a lane with uncommitted edits has the base as its head.
+- **Evidence:** 2026-11-17, `rg -n 'refs/tillr/runs' tools/tillr-drain/drain/stage.go`: the only brief that names a pin is the conflict-fix brief, and it names the head of a committed candidate. No brief for a later attempt, a design-seat run or a continued session names uncommitted work, and nothing carries it.
+- **Evidence:** 2026-11-17, the drain operator's notes: run `run-item-conflict-transition-not-duplicate-a1` (Pi build seat, 7 min 41 s, 5,280,378 tokens, $1.02) reported blocked with about 19 files modified and nothing committed. When the loop settled it, `refs/tillr/runs/run-item-conflict-transition-not-duplicate-a1` pointed at the base commit, the lane was reset (reflog `reset: moving to HEAD`), and `git status` was empty. The diff was lost; the report and test logs remained.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` ($9.89) implemented the change and ended without committing; see `item-run-commit-before-ending`.
+- **Evidence:** 2026-11-17, `rg -n 'update-ref -d|prune' tools/tillr-drain/drain --glob '!*_test.go'` finds no ref deletion: nothing tillr keeps under `refs/tillr/` is ever dropped today, so this item states a retention rule instead of inheriting one.

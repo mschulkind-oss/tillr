@@ -1,6 +1,6 @@
 # tillr-loop
 
-> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 The three programs `tillr drain loop` requires, so a person can start the loop with one
 command and nothing on its command line is a judgment.
@@ -65,6 +65,10 @@ step's branches add: `--observed-trunk`, `--base-ref` and `--message-from` on th
 step, `--store` and `--verdict pass` on the verdict step after a landing. `--verdict fail` is a usage error naming that contract, not a way to grade
 an unsuccessful attempt. Every flag in the string above is the adapter's own and the
 candidate arrives after it.
+
+The adapter also supports startup argument validation under the drain's
+[step-program argument contract](../tillr-drain/README.md#step-program-argument-contract).
+That mode is separate from `self-check`, which composes and displays real invocations.
 
 ## The three adapters
 
@@ -174,7 +178,7 @@ the plan reads after an export, and that the self-check names the composed argv 
 the derived verdict path, the generated registry and the candidate head — while invoking no
 stub at all. No test runs a real gate, a real store or a model.
 
-`drain-argv.json` is every argument list `tillr drain loop` sends these faces, one per
+[drain-argv.json](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/drain-argv.json) is every argument list `tillr drain loop` sends these faces, one per
 optional branch: the ordinary gate, the fixer's two ranges, the land step with each of its
 optional flags, and the verdict. The drain's own suite writes and checks it from its
 `ProcessSteps` code paths, with the real adapter as the program

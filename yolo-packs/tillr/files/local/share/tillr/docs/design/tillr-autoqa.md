@@ -25,7 +25,7 @@ vantage:
 
 # Standalone AutoQA on the Tillr Contracts
 
-> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-14. Design in review, verified against `tools/tillr*`, [yolo-packs/tillr/pack.json](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json), [config/tillr/seed-items.json](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/seed-items.json), and [tests/tillr-docs.test.py](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) at `HEAD` (`6851b49015`). Tree measurement confirms zero executable AutoQA code exists yet, while the general standalone CLI contracts from [autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) (`D-AQA2` in `2050271d4a`; `D-AQA3` and `D-AQA4` in `defecac1de`) are already built.
 
