@@ -480,15 +480,7 @@ refuse it at start, by name, when it is missing a hook.
 The six steps and their flags are `ProcessSteps` in [steps.go](../../tools/tillr-drain/drain/steps.go)
 and the flags in [main.go](../../tools/tillr-drain/main.go).
 
-<!-- tillr: item id="item-def-hook-contract" paths="tools/tillr-drain/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The definition package's README states the hook contract: `describe`; the six steps `gate`, `land`, `verdict`, `replay`, `rolling` and `fixer-gate` with the flags the drain passes them today; `complete-item` with `--item`, `--run`, `--store` and `--root`; `after-completion` with `--item`, `--store` and `--root`; and `detail` with `--body-ref` and `--root`. For each it states the record printed and what each exit code means.
-- **c2:** When the store's definition names a hook program and a step's flag is not given on the drain's command line, the drain runs that step as `<program> <hook> <flags>`. A step flag on the command line still wins.
-- **c3:** At start the drain runs `<program> describe`, which prints the hooks it answers and the flags each accepts. The drain refuses to start with exit 2, naming the hook, when the definition lists a hook the program does not answer or when a hook does not accept a flag the drain will pass.
-- **c4:** A hook the definition does not list is never called. A step whose hook is not listed and whose flag is not given behaves as an empty step flag does today.
-- **c5:** A test runs a pass with a stub hook program that records its argv, and asserts each hook's flags and the refusal at start.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
-- **c7:** Under the Git-landing definition, which names no hook program yet, the drain runs exactly as before, and the existing loop suites pass unchanged.
 
 ### Move tillr-loop into being the Git-landing definition's hook program
 
@@ -505,7 +497,7 @@ a second use copies.
 `DefaultFixerGateProgram` in [trunk.go](../../tools/tillr-drain/drain/trunk.go). The flag-form cases
 are [drain-argv.json](../../tools/tillr-loop/drain-argv.json).
 
-<!-- tillr: item id="item-def-tillr-loop-hooks" paths="tools/tillr-loop/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-hook-contract" prose="2" -->
+<!-- tillr: item id="item-def-tillr-loop-hooks" paths="tools/tillr-loop/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr-loop describe` prints the hooks it answers and their flags, in the contract's shape: `gate`, `land`, `verdict` and `fixer-gate` as today, and `replay` and `rolling` as faces that run the programs the drain defaults to today.
 - **c2:** The embedded Git-landing definition names `tillr-loop` as its hook program and lists those six hooks.
@@ -589,7 +581,7 @@ trunk history in [trunk_history.go](../../tools/tillr-drain/drain/trunk_history.
 tier, the startup sync, and the roll and push settings read by
 [settings.go](../../tools/tillr/settings/settings.go).
 
-<!-- tillr: item id="item-def-loop-start-without-git" paths="tools/tillr-drain/,tools/tillr/settings/,yolo-packs/tillr/,docs/" blocked_by="item-def-hook-contract" prose="2" -->
+<!-- tillr: item id="item-def-loop-start-without-git" paths="tools/tillr-drain/,tools/tillr/settings/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the store's definition does not complete on `landing`, the loop's start runs no Git command, no `tillr item sync`, no trunk history, no rolling tier and no roll or push.
 - **c2:** A test starts `tillr drain loop --exit-when-drained` on a root outside any Git repository, with `GIT_CEILING_DIRECTORIES` set so no parent repository is found, and asserts exit 0. A second test starts it on a subdirectory of a repository and asserts exit 0.

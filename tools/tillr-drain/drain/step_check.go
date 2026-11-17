@@ -10,7 +10,7 @@ import (
 const stepArgvCheckVersion = "tillr-step-argv-check-v1"
 
 func (s *ProcessSteps) programArgv(program string, c Candidate, extra ...string) []string {
-	argv := append([]string{}, strings.Fields(program)...)
+	argv := s.commandArgv(program)
 	argv = append(argv, candidateArgs(c, s.Root)...)
 	return append(argv, extra...)
 }
@@ -37,6 +37,9 @@ func (s *ProcessSteps) verdictArgs(verdict string) []string {
 // a program. Unsupported programs receive help only, never candidate flags that could
 // accidentally judge or land. No step spans or judgment records are written here.
 func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) error {
+	if err := s.checkHooks(ctx); err != nil {
+		return err
+	}
 	sha := strings.Repeat("1", 40)
 	c := Candidate{ItemID: "startup-check", LaneID: "startup-check", RunID: "startup-check",
 		Worktree: s.Root, BaseSHA: sha, HeadSHA: sha, ObservedTrunk: sha,
@@ -70,6 +73,11 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 	// differ. Two fixer range expansions share one negotiated contract.
 	supported := map[string]bool{}
 	for _, check := range checks {
+		// Empty definition steps retain the runtime empty-step behavior. Their
+		// declared hooks were already checked without invoking any step.
+		if s.isHookCommand(check.program) || (s.hooks != nil && check.program == "") {
+			continue
+		}
 		key := check.program
 		if check.name == "fixer gate" {
 			key = s.FixerGateProgram
@@ -115,6 +123,10 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 }
 
 func (s *ProcessSteps) reportStepSource(report io.Writer, name, program string) {
+	if s.isHookCommand(program) {
+		s.reportHookSource(report, name, program)
+		return
+	}
 	if s.standardAdapterArg(strings.Fields(program)) >= 0 {
 		fmt.Fprintf(report, "loop: step %s: build's embedded adapter (%s); configured %q\n", name, strings.TrimPrefix(stepBuildEnv(), "TILLR_LOOP_ADAPTER_BUILD="), program)
 	} else {

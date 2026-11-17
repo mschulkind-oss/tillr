@@ -27,6 +27,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -659,7 +660,14 @@ func loopFace(args []string) int {
 		}
 		return failLoopStartup(*root, time.Now(), err)
 	}
-	if *gate == "" || *land == "" || *verdict == "" {
+	if *path == "" {
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	hooks, err := storeHooks(context.Background(), *path, *check)
+	if err != nil {
+		return failStartup(err)
+	}
+	if hooks == nil && (*gate == "" || *land == "" || *verdict == "") {
 		return failStartup(drain.Usagef("loop needs --gate, --land and --verdict: the three programs that judge a candidate, and the loop judges nothing itself"))
 	}
 	repositorySettings, err := settings.Read(*root)
@@ -715,6 +723,9 @@ func loopFace(args []string) int {
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
 		TraceBin: resolveTraceBin(*root, *traceBin, traceBinNamed), TraceRoot: *traceRoot,
 	}
+	explicitSteps := map[string]bool{}
+	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
+	steps.ConfigureHooks(hooks, explicitSteps)
 	stager := &drain.LaneStager{
 		Root: *root, LaneRoot: *laneRoot, Store: *path, Template: *briefTemplate, Now: at,
 	}
@@ -783,6 +794,37 @@ func loopFace(args []string) int {
 		fmt.Println("loop: stopped by the operator")
 	}
 	return drain.StopExitCode(result.Stop)
+}
+
+// storeHooks reads the declaration without migrating or creating a store. The
+// reader and its transaction are closed before any hook process is started.
+func storeHooks(ctx context.Context, path string, check bool) (*definition.Hooks, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, nil // An absent store uses the embedded, hook-free definition.
+	} else if err != nil {
+		return nil, openFailure(err)
+	}
+	s, err := store.OpenRead(ctx, path)
+	if err != nil {
+		return nil, openFailure(err)
+	}
+	defer s.Close()
+	// Preserve --check's schema refusal before querying metadata in a store
+	// whose tables may be incompatible or absent.
+	if check {
+		version, err := s.SchemaVersion()
+		if err != nil {
+			return nil, drain.Incompatiblef("the store %s: %v", path, err)
+		}
+		if version != store.SchemaVersion {
+			return nil, drain.Incompatiblef("the store %s: schema version %d; expected %d", path, version, store.SchemaVersion)
+		}
+	}
+	declaration, err := definition.ForStore(ctx, s)
+	if err != nil {
+		return nil, drain.Usagef("store definition: %v", err)
+	}
+	return declaration.Parsed.Hooks, nil
 }
 
 // spendLine is what the loop spent, as one line. It is a measurement and never a budget:
