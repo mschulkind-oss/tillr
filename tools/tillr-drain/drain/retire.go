@@ -2,11 +2,13 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // retireDocumentBlock is loop-owned maintenance, after the worker's fence check and before
@@ -128,4 +130,38 @@ func (l *Loop) recoverRetirement(ctx context.Context, candidate Candidate) (Cand
 	}
 	candidate.HeadSHA = head
 	return candidate, nil
+}
+
+// retiredOriginal answers whether the loop recorded a completed retirement binding for
+// runID: its newest drain.retirement names both the worker head and the maintenance tree.
+// Only that record excuses a conflict-fix run's block removal, so a run the loop never
+// retired is judged exactly as before.
+func (l *Loop) retiredOriginal(ctx context.Context, runID string) (bool, error) {
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	var raw []byte
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`, candidateRetirementKind, runID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			if err := rows.Scan(&raw); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil || raw == nil {
+		return false, err
+	}
+	var c Candidate
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return false, err
+	}
+	return c.WorkerHeadSHA != "" && c.RetirementTreeSHA != "", nil
 }

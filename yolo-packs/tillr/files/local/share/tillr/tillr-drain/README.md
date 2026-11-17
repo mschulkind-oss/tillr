@@ -531,6 +531,22 @@ loop after a recovered worker commits, leaves that worker running until it is re
 then requires an unchanged restart to land that commit with zero new dispatches and a
 repair transcript that only grew: everything written before the stop is still its prefix.
 
+## Conflict repair of a retired candidate
+
+Before the gate, the loop adds its own commit to a candidate, `chore: retire landed
+document block`. This **retirement** commit removes the item's block from its document,
+so the block is gone once the change lands. A conflict-fix run of such a candidate
+starts from the worker's own commit. Its brief names that commit to re-apply, and its
+conflict markers are computed from it. The brief also names the pinned head, the
+worker's commit plus the retirement, and tells the worker not to re-apply it. After the
+fix, the loop retires the block again.
+
+A fix that carries the retirement anyway is not refused as the worker editing its own
+item block. The fence check compares the fix's block against exactly what the loop's
+retirement makes of the fix's base, and only for a run whose original candidate has a
+recorded `drain.retirement`. A fix that changes its own block in any other way is still
+refused.
+
 ## The fence, and the session
 
 A run's fence is derived from the item's `allowed_paths`, in one function, and every reader
