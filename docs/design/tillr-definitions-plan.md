@@ -186,13 +186,7 @@ run the store does not hold it prints its record and exits 1 (`statusFace` in
 raised on 2026-11-17 against a c1 that asked that face for exit 0; no file of the run utility
 changes.
 
-<!-- tillr: item id="item-def-tables-at-init" paths="tools/tillr-store/,tools/tillr/store/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** After `tillr store init` alone, `tillr drain why`, `tillr view waiting`, `tillr view status` and `tillr run lanes` each exit 0 with an empty answer, and `tillr run status --run <id>`, for an id the store does not hold, exits 1 with the record it prints for an absent run. None exits 3 or names a missing table. A test builds those binaries, runs each against a store only `init` created, and asserts each exit code and answer.
-- **c2:** `tillr store init` creates every table and column any utility registers. A test compares an init-only store's schema with the schema of a store the loop has opened, table by table and column by column.
-- **c3:** No read face creates or migrates a table.
-- **c4:** Every existing test of the store utility and the core library passes unchanged, and a store created before this change opens and drains as before. A test opens such a store.
-- **c5:** The store utility's README says that `init` creates the whole schema.
 
 ### Add the definition file and the Git-landing definition
 
@@ -229,7 +223,7 @@ where the declaration lives; the direction document records it for him to confir
 **Agent details:** the reader every utility uses lives in the definition package; no utility parses
 the stored content itself.
 
-<!-- tillr: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-tables-at-init" prose="2" -->
+<!-- tillr: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr store init --definition <file>` validates the file with the definition package and records its name, version, content and SHA-256 in the store, with an event. An invalid file is refused with exit 2, and no store is created.
 - **c2:** `tillr store definition --store <path>` prints the recorded definition as a record. A store with none recorded answers the embedded Git-landing definition, marked as the default. A test reads a store created before this change.
