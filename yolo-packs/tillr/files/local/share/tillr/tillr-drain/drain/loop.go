@@ -2314,10 +2314,46 @@ func (l *Loop) lanePath(lane string) string {
 // empty is the ordinary lane, which is also what a lane staged before this file existed
 // reads as.
 func (l *Loop) laneTarget(lane string) string {
-	if target := l.laneFile(lane, TargetFile); target != "" {
+	if target := l.laneForkTarget(lane); target != "" {
 		return target
 	}
 	return l.lanePath(lane)
+}
+
+// laneForkTarget is the fork checkout staging recorded for the lane's item, or "" for an
+// ordinary item. A recorded target counts only when the lane's own item fence names a path
+// inside it — staging rewrites every fork-series fence to `.forks/lanes/<lane>/<fork>` —
+// because a lane is reused, and a lane staged before staging cleared a fork item's files
+// still holds a target its current item never asked for (lane-9, 2026-11-17).
+func (l *Loop) laneForkTarget(lane string) string {
+	target := l.laneFile(lane, TargetFile)
+	if target == "" {
+		return ""
+	}
+	fencePath, err := l.itemFencePath(lane)
+	if err != nil {
+		return ""
+	}
+	body, err := os.ReadFile(fencePath)
+	if err != nil {
+		return ""
+	}
+	root, err := filepath.Abs(l.cfg.Root)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	for _, entry := range fenceEntries(string(body)) {
+		entry = strings.TrimSuffix(entry, "/")
+		if entry == rel || strings.HasPrefix(entry, rel+"/") {
+			return target
+		}
+	}
+	return ""
 }
 
 // laneBase is the sha staging pinned for the lane's candidate: the trunk for an ordinary
@@ -2332,12 +2368,15 @@ func (l *Loop) laneBase(lane string) string {
 // lanePatchRef is the patch branch a fork-series item's delivery moves, and empty for an
 // ordinary item whose landing moves the trunk.
 func (l *Loop) lanePatchRef(lane string) string {
+	if l.laneForkTarget(lane) == "" {
+		return ""
+	}
 	return l.laneFile(lane, PatchRefFile)
 }
 
 // laneFile answers one line staging wrote in the lane directory, or "" when the file is not
 // there. A lane is reused, so a file left by a previous run is overwritten by the next
-// stage; a lane whose stage wrote none is not a fork lane.
+// stage, and staging an ordinary item removes a fork item's target and patch ref.
 func (l *Loop) laneFile(lane, name string) string {
 	body, err := os.ReadFile(filepath.Join(l.laneDirPath(lane), name))
 	if err != nil {
