@@ -140,6 +140,33 @@ func TestPlaceCrowdedAndRepeatedFirst(t *testing.T) {
 		})
 	}
 }
+func TestPlaceRespacingRetainsUnchangedTargetReceipt(t *testing.T) {
+	// The moved target happens to already have its respaced key. Other rows
+	// change, but its stored receipt must still be echoed rather than zeroed.
+	path, s := placeFixture(t, "i0000000", "i0000000", "i0000000")
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET event_seq=77 WHERE item_id='2'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out := run(t, "place", "--store", path, "--item", "2", "--before", "1")
+	if code != 0 {
+		t.Fatalf("%d %s", code, out)
+	}
+	var answer struct {
+		Payload struct {
+			EventSeq int64 `json:"event_seq"`
+		}
+	}
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.Payload.EventSeq != 77 {
+		t.Fatalf("receipt %d; want 77", answer.Payload.EventSeq)
+	}
+}
+
 func TestPlaceRefusalsAndSelfAreReadOnly(t *testing.T) {
 	for _, tc := range []struct {
 		id          string
