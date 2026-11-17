@@ -1296,3 +1296,117 @@ criteria are written in those terms.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Question for the builder, answered in its report and not a criterion:** whether the presence of an editor swap or lock file for a landed path, a sign the file is open and may hold unsaved changes, should appear in the landing's log line as information for the owner. It must not pause the landing, because the owner ruled that a predicted conflict is the only pause.
 - **Evidence:** 2026-11-17, `Trunk.Move` runs `git -c merge.autoStash=false merge --ff-only` in the main checkout, so git itself refuses when the move would overwrite uncommitted content and otherwise advances only the changed paths; git's fast-forward keeps staged entries on untouched paths, but no test pins it. `TestALandingLeavesUncommittedContentOnAnUntouchedPathAlone` (untracked file only) and `TestALandingIsRefusedWhenTheTrunkWorktreeHoldsUncommittedContentOnALandedPath` in `tools/tillr-land/main_test.go`, and `TestUnrelatedDirtyPathDoesNotDelayLanding` in `tools/tillr-drain/drain/dirty_hold_test.go`, pin the two cases. `rg -n -i 'MERGE_HEAD|rebase-merge' tools/tillr-land tools/tillr-drain --glob '*.go'` returns nothing, so no code names an in-progress merge or rebase. `TestLockedLandingAcceptsFastForwardBeyondObservedTip` in `tools/tillr-land/trunk_history_test.go` pins the forward move, and `TestTheDrainLandsThroughTheRealAdapterAndTheRealLander` in `tools/tillr-drain/drain/step_argv_contract_test.go` pins `trunk-rewritten`. `rg -n -i dirty yolo-packs/tillr/skills/tillr-operating/` returns nothing (2026-11-17).
+
+## Filed 2026-11-17: make the Go suites fast and trustworthy
+
+A worker building one queue item on 2026-11-17 spent most of 35 minutes waiting on repeated full
+runs of the drain's Go suite. The drain's rolling run executes the same suites inside the loop
+after each trunk move, and has been seen taking from 12 seconds to about 3 minutes, which delays
+dispatch while it runs. The measurements below were made on 2026-11-16 and 2026-11-17 on a
+32-core machine with go 1.27.3 and git 2.56.0, on an exported copy of the tools directory, with
+the load average between 3 and 30. These four items make the suites fast, keep their cached
+results honest, and stop them leaving files behind. The gate forbids tests that assert on elapsed
+wall-clock time, so every speed claim is evidence in a report, never a test assertion.
+
+### Add a sharded runner for the tillr Go suites
+
+A full `go test ./... -count=1` in the drain module takes about 64 seconds, yet it uses only
+about 1.7 of the machine's 32 cores. None of the 462 tests calls `t.Parallel()`, and the heavy
+ones set process environment variables that stub programs read, so marking them parallel does not
+help: a trial on the 127 root tests that do not set environment left the wall time unchanged. The
+shared state is process-wide, but separate processes do not share it. Building each package's
+test binary once and running several of them side by side, each with its own slice of the tests,
+took the same suite to 13.7 to 14.5 seconds with six shards. The drain's rolling run and the
+repository gate both pay the 64 seconds today, and the cost estimate the gate plans with still
+says 30.9 seconds.
+
+<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
+- **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
+- **c3:** The runner exits non-zero when any test fails, when a shard cannot start, or when a shard exits without reporting every test assigned to it. A test per case asserts the exit code and a message that names the shard.
+- **c4:** Shards do not interfere: each gets its own scratch subdirectory and its own git global configuration file. A test runs two shards that write to the same relative name and asserts neither sees the other's file.
+- **c5:** The drain's rolling tier and `just done` run the drain suite through the runner, and the other tillr modules do too wherever the measured wall time drops. The report lists each module with its before and after wall time.
+- **c6:** The suite cost estimate in the gate's check planner is refreshed from a measurement of the runner, with the command and date in the comment beside it.
+- **c7:** The worker brief and the `tillr-operating` skill tell workers how to run the sharded runner and when to prefer a targeted `-run`.
+- **c8:** The report records the drain suite's wall time before and after, as command, result and date. No test asserts elapsed time.
+
+**Agent details:**
+
+- **Where:** a new runner beside `tools/fork-check.py`; the drain module in `tools/tillr-drain/`; `GO_TOOL_COST_ESTIMATE` and its comment in `tools/fork-check.py`; the `.justfile` recipe that runs the gate; `yolo-packs/tillr/`.
+- **Evidence:** 2026-11-16, `go test ./... -count=1` in the drain module: 64.0 s and 64.3 s wall at load 3 to 6 (package `drain` 215 tests in 64 s, root package 247 tests in 55 s, run side by side), 69.3 s at load 17 to 23, 118 s with `-p 1`. User 70 s plus system 37 s over 64 s wall is about 1.7 cores. Compile and link cost about 2 s. A run makes about 18,900 `git` execs (11,505 of them `git rev-parse`). Turning git's fsync off changed nothing (63 to 66 s); test directories on a memory filesystem saved about 5 s and made `TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath` fail.
+- **Evidence:** 2026-11-16, sharding with a test binary built once per package and balanced on recorded durations: K=6 took 13.7 to 14.5 s, K=8 took 14.5 s, K=4 took 17.9 s, at load 7 to 30. The only failures were three tests that need the `config/` directory, absent from the exported copy.
+- **Evidence:** 2026-11-16, `t.Parallel()` trial on the 127 of 247 root tests that do not call `t.Setenv`: root wall unchanged at 55.0 s. `t.Setenv` appears at 43 call sites in the root package and 17 in `drain`, and the stub adapters read `GATE_ROOT`, `STUB_ROOT`, `RETIRE_*` and `PASS_*` from the environment.
+- **Evidence:** the cost estimate was recorded at 30.9 s on 2026-11-15; `rg -n 'COST_ESTIMATE|30\.9' tools/fork-check.py` finds it (2026-11-17).
+
+### Route the slowest drain and store tests through injected clocks
+
+Several of the slowest tests spend their time waiting on real clocks that the code under test
+could take from the test instead. Waiting is not what these tests check: they check what the loop
+does after a hold, a missed restart or a busy store, not that a second really passed. Each wait
+is small, but together they are about a fifth of the drain suite and most of the store suite, and
+the owner pays them on every full run. The fix is to make each wait a setting that production
+leaves alone and a test shortens, and to prove each shortened test still catches the bug it was
+written for.
+
+<!-- tillr: item id="item-drain-tests-use-injected-clocks" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-run/,yolo-packs/tillr/" blocked_by="" prose="2" -->
+
+- **c1:** The store poll interval becomes a per-loop setting. Its default stays 100 ms, and a test pins that default. The idle-pass test injects a short interval, and `document_wait_test.go` and every other user of the old constant follow.
+- **c2:** The missed-restart and finite-lease tests use the injected clocks the code already has, and take no real second. The checkpoint cycle loop uses the existing heartbeat clock seam instead of real 1 s heartbeats.
+- **c3:** The SQLite busy timeout is a parameter of the store open that a test can shorten. The default stays 5000 ms, and a test pins it.
+- **c4:** The trace observer threshold is configurable for its tests, with the production default unchanged and pinned.
+- **c5:** The wall-timeout test for a stopped wall continuation and the terminal-end-cause wall case in the run module use a shortened, injected timeout, with the production default pinned.
+- **c6:** Each named test still fails when the behavior it guards is broken. The report records, per test, the mutation applied, the failing output, and the revert.
+- **c7:** After the change, no test in the drain or store packages waits one second or more on a real clock. The report lists the slowest remaining tests with their times as command, result and date, and no test asserts elapsed time.
+
+**Agent details:**
+
+- **Where:** `StorePollInterval` is a `const` in `tools/tillr-drain/drain/trigger.go`; the store open and its busy timeout in `tools/tillr/store/`; `checkpointCycleLoop` and `heartbeatClock` in the drain module; the run module's terminal-cause test in `tools/tillr-run/`.
+- **Evidence:** 2026-11-17, `TestDefaultWaitReportsFiveHoldsOnceAcrossOneHundredIdlePasses` takes 11.4 s, which is 101 idle passes at 100 ms. With the interval at 1 ms it took under 1.4 s and the `drain` package went from 59 s to 50 s.
+- **Evidence:** 2026-11-17, `TestABusyCheckpointWriteDoesNotFaultTheLoop` 6.1 s and, in the store, `TestABusyOwnerWriteSkipsTheCycleWithoutAnError` 5.0 s wait out `busy_timeout(5000)`. `TestAMissedRestartIsReportedAndRetriedAtTheNextHeartbeat` 2.07 s waits two real 1 s heartbeats although a `heartbeatClock` seam exists that `checkpointCycleLoop` does not use. `TestALaneHeldByAFiniteLeaseIsWaitedOnNotStopped` 2.19 s seeds a real 2 s lease although the loop takes a clock. `TestBlockedTraceSinkDoesNotRetainRealSessionMutex` 2.24 s sleeps 2200 ms for an observer threshold. `TestStopDuringWallContinuation` 2.85 s uses a 1 s backend wall timeout with a stub `sleep 3`. In the run module `TestTerminalEndCauses/wall` takes 1.0 s.
+- **Evidence:** 2026-11-17, the `tools/tillr` suite takes 13.5 s, all in `store`, about 10 s of it the busy timeout and three waits of about 2.1 s on the trace threshold. `tools/tillr-view` takes 9.2 s (145 tests, none parallel) and is not in this item.
+
+### Prevent a cached test pass from hiding a broken sibling program
+
+Go's test cache decides whether a package's tests need to run again by looking at the package's
+own sources and inputs. The drain's root tests build the sibling programs `tillr-item`,
+`tillr-run`, `tillr-land`, `tillr-gate` and `tillr-view` with a child `go build`, and the cache
+cannot see those sources. A change to one of them can therefore leave the drain's tests reporting
+`(cached)` and passing, although a fresh run would fail. That is a green result that is not true,
+and it is the reason workers are told to pass `-count=1` every time, which makes the slow suite
+slower still. Once the cache is trustworthy, workers can use it.
+
+<!-- tillr: item id="item-test-cache-sees-sibling-programs" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-run/,tools/tillr-land/,tools/tillr-gate/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** After a behavior change in any of the five sibling programs, `go test ./...` in the drain module without `-count=1` re-runs the affected package and does not report `(cached)`. A check reproduces the experiment under Evidence below, once per sibling, and asserts the package is not cached.
+- **c2:** On an unchanged tree the same command still reports `(cached)`. A check asserts it.
+- **c3:** The README of the drain module states the mechanism in plain words, for example that the test binary declares the sibling sources as inputs the cache can see.
+- **c4:** The sibling build inputs are listed in one place, and a test fails when a sibling program's package directory is missing from that list.
+- **c5:** The worker brief and the `tillr-operating` skill say: use a targeted `-run` while working, run the full suite once before committing, and drop `-count=1` for the working loop. They say this only after c1 and c2 hold.
+
+**Agent details:**
+
+- **Where:** the child `go build` calls in the root test files of `tools/tillr-drain/`; `yolo-packs/tillr/skills/tillr-operating/` and the worker brief in `yolo-packs/tillr/`.
+- **Evidence:** 2026-11-17, with `println(...); os.Exit(9)` inserted at the top of `tillr-item`'s `main()`, `go test ./...` in the drain module still printed `ok ... (cached)` in 1.0 s. Forcing a re-run made the root package fail. On an unchanged tree `go test ./...` without `-count=1` returned in 1.0 s.
+
+### Prevent test runs from leaving built-binary directories behind
+
+Each tillr module's `TestMain` builds the programs its tests need into a scratch directory, then
+defers removing it and calls `os.Exit` with the test result. `os.Exit` skips deferred calls, so
+the removal never runs and every run leaves its directory behind. The directories sit in the
+durable scratch directory, outside the repository, and nobody sees them grow until the disk
+fills. The drain's own are about 38 MB each. The fix is a `TestMain` that removes the directory
+before it exits, on every path, and a check that keeps it true.
+
+<!-- tillr: item id="item-test-runs-remove-their-binary-directories" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-run/,tools/tillr-land/,tools/tillr-gate/,tools/tillr-view/,tools/tillr-cli/,tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,tests/" blocked_by="" prose="2" -->
+
+- **c1:** Every tillr module whose `TestMain` builds into a scratch directory removes it before exiting on every path: pass, fail, and a panic where practical. The report lists each module that was changed.
+- **c2:** A test or check counts the `tillr-*-bin-*` and `tillr-drain-trace-*` entries in the durable scratch directory before and after a suite run, and finds no increase.
+- **c3:** A repository check fails when a `TestMain` calls `os.Exit` while a `defer` in the same function is the only thing removing a directory.
+- **c4:** The report states how many leftover directories exist and their size, and leaves deleting the existing ones to the owner, with the exact command, because they are outside the repository.
+
+**Agent details:**
+
+- **Where:** the `TestMain` in the root test file of each tillr module, for example `tools/tillr-drain/main_test.go`, `tools/tillr-item/main_test.go` and `tools/tillr-land/main_test.go`; the drain trace directory is in the drain tests; a new check under `tests/`.
+- **Evidence:** 2026-11-17, `rg -n 'os.Exit|RemoveAll' tools/tillr*/main_test.go` shows `defer os.RemoveAll(dir)` followed by `os.Exit(...)` in the root test files of `tillr-drain`, `tillr-item`, `tillr-land`, `tillr-cli`, `tillr-view`, among others.
+- **Evidence:** 2026-11-17 re-count in the durable scratch directory: 1,555 `tillr-drain-bin-*`, 138 `tillr-item-bin-*`, 103 `tillr-run-bin-*`, 97 `tillr-land-bin-*`, 96 `tillr-gate-bin-*` and 145 `tillr-drain-trace-*` directories, 2,134 in all. One `tillr-drain-bin-*` sample measured 38 MB with `du -sh`. Earlier the same day the count was 1,439 drain directories, about 50 GB by `du`.
