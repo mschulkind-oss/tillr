@@ -33,7 +33,7 @@ func TestUnchangedTrunkObservationDoesNotWaitForStoreWriter(t *testing.T) {
 	select {
 	case observationErr = <-done:
 		close(release)
-	case <-time.After(time.Second):
+	case <-time.After(heartbeatStallBound):
 		close(release)
 		observationErr = <-done
 		t.Errorf("unchanged observation tried to migrate or write behind another store writer")
