@@ -90,5 +90,5 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 	if outcome == "fault" {
 		return ReasonInfraExhausted, nil
 	}
-	return fmt.Sprintf("node-failed: %s", node), nil
+	return fmt.Sprintf("%s: %s", ReasonNodeFailed, node), nil
 }

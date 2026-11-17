@@ -231,14 +231,6 @@ const (
 	StateLanded = "landed"
 )
 
-// terminalStates are the item states that satisfy a blocked_by edge. An item in one of
-// them is done with, so it no longer blocks the items that name it.
-var terminalStates = map[string]bool{
-	"landed":             true,
-	"resolved-elsewhere": true,
-	"closed":             true,
-}
-
 // LaneStateLeased is the lane state a run holds: run's claim writes it with the lease,
 // and its terminal record or a release clears it (design §5.6). A lane in it is
 // unavailable until its lease is at or before the tick's now, at which point it is

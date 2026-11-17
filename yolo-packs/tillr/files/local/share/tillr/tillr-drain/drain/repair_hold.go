@@ -108,6 +108,9 @@ func (l *Loop) holdRepair(ctx context.Context, hold *repairHold, cause error) er
 	// Append, rather than overwrite: a changed input may fail differently, and both
 	// failures must remain evidence. Unchanged inputs never get here from the planner.
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := requireHold(tx.Reader(), ReasonRepairStagingFailed); err != nil {
+			return err
+		}
 		if err := refuseTerminalItem(tx.Reader(), hold.ItemID, "repair"); err != nil {
 			return err
 		}

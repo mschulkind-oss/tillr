@@ -158,6 +158,9 @@ func (l *Loop) intakeComments(ctx context.Context) error {
 // checkCommentDispatch reads Vantage immediately before the item is claimed. It
 // returns false on an outage; it closes only when every captured id is gone or resolved.
 func (l *Loop) checkCommentDispatch(ctx context.Context, p plannedApplication, at time.Time) (bool, bool, error) {
+	if !p.checksComments() {
+		return true, false, nil
+	}
 	base, repo, err := l.commentServer()
 	if err != nil {
 		return false, false, err

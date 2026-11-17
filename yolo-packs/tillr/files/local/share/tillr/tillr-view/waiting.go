@@ -16,6 +16,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -46,6 +47,8 @@ type waitingRule struct{ class, where, mover string }
 // Fast whole-tree declarations run at landing, in just done, and in rolling;
 // rolling also judges the deferred suites. Either red waits on the named fixer.
 var waitingRules = map[string]waitingRule{
+	"Vantage not answering":          {"needs a cause", "queue", "check Vantage availability"},
+	"node-output-missing":            {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
 	"workflow-invalid":               {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
 	"node-failed":                    {"needs you", "lane", "inspect the named node and authorize a retry"},
 	"gate-stall-rerun":               {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
@@ -202,11 +205,22 @@ func waitingFace(args []string) (record.Envelope, int) {
 		}
 		return record.Envelope{}, exitFor(err)
 	}
+	s, err := store.OpenRead(ctx, *path)
+	if err != nil {
+		return record.Envelope{}, exitFor(err)
+	}
+	declared, err := definition.ForStore(ctx, s)
+	s.Close()
+	if err != nil {
+		return record.Envelope{}, exitFor(err)
+	}
 	sortWaitingDocuments(rows)
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
 	} else {
-		err = printWaiting(os.Stdout, rows)
+		if _, err = fmt.Fprintf(os.Stdout, "definition: %s\n", declared.Name); err == nil {
+			err = printWaiting(os.Stdout, rows)
+		}
 	}
 	if err != nil {
 		return record.Envelope{}, exitFor(err)

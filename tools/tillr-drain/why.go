@@ -90,6 +90,9 @@ func whyFace(args []string) int {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	if !*asJSON {
+		fmt.Fprintf(os.Stdout, "definition: %s\n", answer.Definition)
+	}
 	if itemID != "" {
 		for _, row := range answer.Rows {
 			if row.ItemID == itemID {

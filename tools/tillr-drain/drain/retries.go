@@ -11,6 +11,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -152,7 +153,11 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		}
 		return Retry{}, readFailure(err)
 	}
-	if terminalStates[state] {
+	declared, err := definition.ForReader(tx.Reader())
+	if err != nil {
+		return Retry{}, readFailure(err)
+	}
+	if finishedState(declared.Parsed, state) {
 		return Retry{}, Usagef("item %q is %q: a retry does not re-open a terminal item", req.ItemID, state)
 	}
 

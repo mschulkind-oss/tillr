@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -141,7 +142,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 func TestWhyEmptyStoreAndMissingStore(t *testing.T) {
 	path := fixture(t)
 	code, out := invoke(t, "why", "--store", path)
-	if code != 0 || strings.TrimSpace(string(out)) != "summary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; held []" {
+	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; held []" {
 		t.Fatalf("empty: %d %s", code, out)
 	}
 	path = filepath.Join(scratch(t, "absent-why"), "absent.db")

@@ -126,6 +126,9 @@ func (l *Loop) holdDirty(ctx context.Context, c Candidate, paths []string) error
 // previously seen path set. Ordinary stable decision IDs would deduplicate that
 // return and leave the face showing the intervening wait forever.
 func recordDirtyDecision(tx *store.Tx, d Decision, at time.Time) error {
+	if err := requireHold(tx.Reader(), d.Reason); err != nil {
+		return err
+	}
 	var action, reason string
 	var latest int64
 	err := tx.QueryRow(`SELECT action,reason,dispatched_at FROM dispatches WHERE item_id=? ORDER BY dispatched_at DESC,decision_id DESC LIMIT 1`, d.ItemID).Scan(&action, &reason, &latest)

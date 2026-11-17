@@ -460,14 +460,7 @@ does not replay it.
   header to keep an old assertion. The before-and-after test in c4 compares the rows, not the
   header.
 
-<!-- tillr: item id="item-def-planner-lifecycle" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The planner reads the store's definition once per pass. It dispatches an item's own work only when the item is in the definition's ready state, and a dependency is met when the blocker is in one of the definition's finished states. A conflict's answer run is still dispatched while the item is in the definition's blocked state. The drain keeps no finished-state list of its own.
-- **c2:** The planner raises a prerequisite hold, such as `no-fence`, the open-question holds, `design-doc-missing` or `trunk-path-dirty`, only when the definition names that prerequisite. A test with a fixture definition that names none asserts that an item with no fence and no design document is dispatched.
-- **c3:** The holds only landing can raise are listed in one table in the drain and raised only when the definition completes on `landing`. Every hold reason is a named constant. A test asserts that every hold reason the drain defines is either in that table or in the drain's list of general holds, and that no hold carries a reason written as a bare string, so a new hold cannot ship unclassed.
-- **c4:** Under the Git-landing definition every pass decides exactly as before. The existing planner and loop suites pass with two named edits and no others: `TestWhyChangesWithPlannerHoldRule` sets its custom finished state through a fixture definition, and the definition package's import guard also allows the drain and the view. The one exception is a test that asserts the exact text or line count of `tillr drain why` or of the waiting face: it is updated for the header line c5 adds, and for nothing else. A test runs `tillr drain why` on one fixture store before and after the change and asserts identical rows.
-- **c5:** `tillr drain why` and the waiting face print the definition's name in their header.
-- **c6:** A store created before this change opens and drains as before.
 
 ### Add the hook program contract and check it at loop start
 
@@ -487,7 +480,7 @@ refuse it at start, by name, when it is missing a hook.
 The six steps and their flags are `ProcessSteps` in [steps.go](../../tools/tillr-drain/drain/steps.go)
 and the flags in [main.go](../../tools/tillr-drain/main.go).
 
-<!-- tillr: item id="item-def-hook-contract" paths="tools/tillr-drain/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-planner-lifecycle" prose="2" -->
+<!-- tillr: item id="item-def-hook-contract" paths="tools/tillr-drain/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The definition package's README states the hook contract: `describe`; the six steps `gate`, `land`, `verdict`, `replay`, `rolling` and `fixer-gate` with the flags the drain passes them today; `complete-item` with `--item`, `--run`, `--store` and `--root`; `after-completion` with `--item`, `--store` and `--root`; and `detail` with `--body-ref` and `--root`. For each it states the record printed and what each exit code means.
 - **c2:** When the store's definition names a hook program and a step's flag is not given on the drain's command line, the drain runs that step as `<program> <hook> <flags>`. A step flag on the command line still wins.
