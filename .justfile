@@ -7,6 +7,40 @@
 default:
     @just help
 
+# Python is excluded: adopting its formatter would rewrite 84 files at once.
+# shell, TypeScript, and Lua are excluded because they have no pinned formatter.
+# Adding a language means pinning its formatter in mise.toml and landing the reformat
+# as its own commit. Only tracked source is ours; vendor and fork trees are not.
+# Format Go with gofmt; --check lists changes without writing and exits 1 on drift.
+[positional-arguments]
+format *args:
+    #!/usr/bin/env python3
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    if sys.argv[1:] not in ([], ["--check"]):
+        print("usage: just format [--check]", file=sys.stderr)
+        sys.exit(2)
+    listing = subprocess.check_output([
+        "git", "ls-files", "-z", "--", "tools/", "yolo-packs/tillr/files/local/share/tillr/",
+    ])
+    files = []
+    for entry in listing.split(b"\0"):
+        path = Path(os.fsdecode(entry))
+        if (entry and path.suffix == ".go" and "vendor" not in path.parts
+                and ".forks" not in path.parts and path.is_file()
+                and not any(part.is_symlink() for part in (path, *path.parents))):
+            files.append(str(path))
+    if files:
+        if sys.argv[1:]:
+            result = subprocess.run(["gofmt", "-l", *files], capture_output=True)
+            sys.stdout.buffer.write(result.stdout)
+            sys.stderr.buffer.write(result.stderr)
+            sys.exit(result.returncode or int(bool(result.stdout)))
+        subprocess.run(["gofmt", "-w", *files], check=True)
+
 # Create portable nvim config archive
 nvim_dist:
     #!/usr/bin/env bash
