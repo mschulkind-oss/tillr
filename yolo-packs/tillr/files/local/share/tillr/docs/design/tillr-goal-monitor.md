@@ -3,7 +3,7 @@ title: "A goal monitor: a scheduled check-in that inspects the board and files w
 date: 2026-11-14
 status: in-review
 stage: DESIGN
-next: "Rule OQ-GM1 (the first goal and its cadence) and OQ-GM2 (whether the outside authority gets a host timer); then build item-tillr-scheduled-items, then item-tillr-goal-checkin-graph, then item-retire-steering-timer."
+next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-17 (\"let's icebox this goal stuff until we have a use for it again\"), on the tillr roadmap's Icebox. Picking it up means ruling OQ-GM1 and OQ-GM2, then filing the three slices of Section 10, none of which is in the queue."
 depends-on:
   - scheduled-tasks.md
   - tillr-item-graphs.md
@@ -15,9 +15,9 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 # A goal monitor: a scheduled check-in that inspects the board and files what it finds
 
-> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-14. Design in review; nothing built. Read against the tree at `cb3488a8`: the four documents named in `depends-on` were read in full, and the symbols this design changes were read where they live. Line numbers are anchors at that commit. Two questions remain for the owner ([OQ-GM1](#OQ-GM1), [OQ-GM2](#OQ-GM2)); everything else here is ruled.
+**Status:** 2026-11-17: **iceboxed by the owner**, who said "let's icebox this goal stuff until we have a use for it again." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted; nothing is built, and none of the three slices in [§10](#10-the-three-downstream-slices) is in the queue. 2026-11-14: design in review. Read against the tree at `cb3488a8`: the four documents named in `depends-on` were read in full, and the symbols this design changes were read where they live. Line numbers are anchors at that commit. Two questions remain for the owner ([OQ-GM1](#OQ-GM1), [OQ-GM2](#OQ-GM2)); everything else here is ruled.
 
 > **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](tillr-item-graphs.md#31-named-versioned-graph-templates) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/graphs/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
 
@@ -27,7 +27,7 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 **Cost.** One nullable-column migration and one admission gate that [scheduled-tasks already specifies](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns); one bounded wait in the drain loop, which is also the fix for a stop that currently reports the opposite of the truth ([§8](#8-the-plannothing-stop-a-not-due-item-is-a-wait-not-a-stop)); one tracked graph template and the approval record that guards it; and four registered `command` leaves. No new binary, no daemon, no cron parser, and no second dispatcher.
 
-**Needs your ruling:** [OQ-GM1](#OQ-GM1) (the first goal and its cadence) and [OQ-GM2](#OQ-GM2) (whether the outside authority gets a host-level timer).
+**Parked, not asked:** [OQ-GM1](#OQ-GM1) (the first goal and its cadence) and [OQ-GM2](#OQ-GM2) (whether the outside authority gets a host-level timer) stay open and unanswered while the design is iceboxed.
 
 **Terms.** *Goal* (coined here) — a recurring item whose frozen criteria state a property the system should hold, not a change to make, and whose correct outcome on a check-in is a no-op that the judge can still call done. *Check-in* (coined here) — one run of a goal's graph: the mechanical collection, the decision, and the actions it files. *Goal monitor* (coined here) — the composition of a goal, the clock that makes it due, and its check-in graph. *Outside authority* (coined here) — the actor that can see the monitor is not running, because it is not the monitor. *Not due*, *due time*, *recurrence*, *drain*, *admission* and *rank* are [scheduled-tasks §2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#2-the-item-fields)'s and are used here in exactly that sense. The role the repository already names is the **on-call** ([§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)); the monitor is its scheduled half, and the breakage planner is its event-driven half. **Steering** is the manual act both replace, and the `active-steering` skill remains its protocol. **The board**, here and throughout, is the observatory's queue screen, never the retired work board; see [observatory-design.md §1.3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md#13-non-purposes).
 
@@ -575,6 +575,8 @@ questions for no gain the owner can use.
    person reading the queue, and a daily cadence makes its own false negatives visible within a
    week.
 
+   _Parked 2026-11-17:_ not asked while the design is iceboxed; it is ruled when the design is picked up.
+
    **Answer:**
    > _(empty — fill in when decided)_
 
@@ -592,6 +594,8 @@ questions for no gain the owner can use.
    _Leaning:_ Not yet — a paging timer is worth building once a check-in has actually been missed,
    and building it now would make the monitor's liveness look solved before it has been observed
    once.
+
+   _Parked 2026-11-17:_ not asked while the design is iceboxed; it is ruled when the design is picked up.
 
    **Answer:**
    > _(empty — fill in when decided)_

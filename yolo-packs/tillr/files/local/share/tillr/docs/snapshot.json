@@ -1,13 +1,13 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "0cd258278938dded8a534229e1e2f475c763303e",
+  "commit": "b8eac4989e23049fbc50e8fa0fe2bc6b06f7ad74",
   "date": "2026-11-17",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
   "documents": [
     {
       "source": "docs/tillr/design-status.md",
-      "blob": "f73c511901f5cc53d07a75af4b041cdabe57c4ad",
+      "blob": "b2dd9059c57624a921bf48d8f0c114be07197584",
       "delivered": "docs/tillr/design-status.md"
     },
     {
@@ -42,7 +42,7 @@
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "699f4e83a288666a23e13cbf279c6bf061af9177",
+      "blob": "4fe8dd9d35ba54a0bf913afced83c96259d23db4",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
@@ -87,7 +87,7 @@
     },
     {
       "source": "docs/design/criterion-repair.md",
-      "blob": "48aa71ae9b790d8b45318ebefb5eb38be67307a2",
+      "blob": "4919d21111e53a9ac8d7493349a1d23eb55bb11a",
       "delivered": "docs/design/criterion-repair.md"
     },
     {
@@ -157,7 +157,7 @@
     },
     {
       "source": "docs/design/tillr-selfhosted-build.md",
-      "blob": "2a09234a9bc02e331594b727054cdbbf46344832",
+      "blob": "d1dccec692fbb5bc25d9746b1273933acdf32164",
       "delivered": "docs/design/tillr-selfhosted-build.md"
     },
     {
@@ -172,12 +172,12 @@
     },
     {
       "source": "docs/design/tillr-goal-monitor.md",
-      "blob": "842ae255ebb2160c262b1dd066425804b14ac60d",
+      "blob": "e6fd1f01768edd7639da2a3bd26836efb08bb5ba",
       "delivered": "docs/design/tillr-goal-monitor.md"
     },
     {
       "source": "docs/design/tillr-autoqa.md",
-      "blob": "35322f1961ade9dd55a90291a1b3be5160719a93",
+      "blob": "4c0efd7b0b92cc87a4e5aee5ab18ec6336fde884",
       "delivered": "docs/design/tillr-autoqa.md"
     },
     {

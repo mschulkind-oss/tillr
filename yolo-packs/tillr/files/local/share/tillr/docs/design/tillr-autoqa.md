@@ -2,7 +2,7 @@
 title: "Standalone AutoQA on the Tillr Contracts"
 status: in-review
 stage: DESIGN
-updated: 2026-11-14
+updated: 2026-11-17
 tags:
   - tillr
   - autoqa
@@ -12,7 +12,7 @@ tags:
   - testing
   - design
 summary: "How AutoQA runs as a sectioned-off, self-gated exploratory testing tool with its own Tillr store, cheap-agent probe fan-out, saturation-bounded refill, deterministic reproducer and W2 judge confirmation, two-stage deduplication, and closed-loop precision throttling — while retiring every accidental AutoQA artifact from Tillr core."
-next: "Rule OQ-AQ1 through OQ-AQ3 in Vantage, retire the accidental AutoQA artifacts under D-AQ7, and run the first bounded dogfood campaign against tools/tillr*."
+next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-17 (\"I don't want to design this yet\"), on the tillr roadmap's Icebox. Picking it up means ruling OQ-AQ2, then the design-seat item item-design-autoqa-slices cuts it into build items."
 depends-on:
   - tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
@@ -25,9 +25,9 @@ vantage:
 
 # Standalone AutoQA on the Tillr Contracts
 
-> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-14. Design in review, verified against `tools/tillr*`, [yolo-packs/tillr/pack.json](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json), [config/tillr/seed-items.json](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/seed-items.json), and [tests/tillr-docs.test.py](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) at `HEAD` (`6851b49015`). Tree measurement confirms zero executable AutoQA code exists yet, while the general standalone CLI contracts from [autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) (`D-AQA2` in `2050271d4a`; `D-AQA3` and `D-AQA4` in `defecac1de`) are already built.
+**Status:** 2026-11-17: **iceboxed by the owner**, who said "ice box this autoqa on the roadmap for now. I don't want to design this yet." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted, and nothing below is being built. 2026-11-14: design in review, verified against `tools/tillr*`, [yolo-packs/tillr/pack.json](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json), [config/tillr/seed-items.json](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/seed-items.json), and [tests/tillr-docs.test.py](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) at `HEAD` (`6851b49015`). Tree measurement confirms zero executable AutoQA code exists yet, while the general standalone CLI contracts from [autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) (`D-AQA2` in `2050271d4a`; `D-AQA3` and `D-AQA4` in `defecac1de`) are already built.
 
 > **In short.** Do not embed AutoQA inside `tillr` and do not rewrite a second queue, runner, or UI beside `tillr`. Build AutoQA as a standalone, self-gated tool (`autoqa`) that runs its **own** isolated `tillr` store and lane pool over pre-approved [tillr-item-graphs.md](tillr-item-graphs.md) templates and [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) verdicts, banging cheap floor-model agents against read-only snapshots of any System Under Test (SUT) — starting with `tillr` itself — and exporting only deduplicated, deterministically reproducible, independently judged bugs under a hard false-positive precision governor.
 
@@ -40,7 +40,7 @@ vantage:
 
 **Cost.** One standalone Go module and optional pack for AutoQA, two pre-approved W1 graph templates (`qa-probe@v1`, `qa-confirm@v1`), one SUT target adapter for `tillr`, and one cleanup commit removing the accidental AutoQA surface from `tools/tillr-item/`, `yolo-packs/tillr/`, and the eight module READMEs. **Zero** new states, DAG primitives, or judge/grant rules inside `tillr` core.
 
-**Needs your ruling:** [OQ-AQ2](#OQ-AQ2).
+**Parked, not asked:** [OQ-AQ2](#OQ-AQ2) stays open and unanswered while the design is iceboxed. It is what holds the design's one queue item, so the item stays out of dispatch until the design is picked up.
 
 **Reads with:** [tillr-item-graphs.md](tillr-item-graphs.md) ([§3.1](tillr-item-graphs.md#31-named-versioned-graph-templates)–[§3.3](tillr-item-graphs.md#33-producer-bound-artifacts-exit-conditions-and-the-evaluator-slot), fixed upstream graph and `evaluator_slot` contract), [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) ([§2.1](tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1) and [§5](tillr-judge-and-lifecycle.md#5-core-boundary-for-external-autoqa-d-jl7), fixed upstream judge contract and `D-JL7` retirement of `ActorAutoQA`), [board-utilities.md](board-utilities.md) ([§5](board-utilities.md#5-independent-use-the-boundary-made-concrete), standalone utility boundaries), [tillr-distribution.md](tillr-distribution.md) ([§3](tillr-distribution.md#3-documentation-split-and-the-honesty-rule) and [§5](tillr-distribution.md#5-the-autoqa-handoff-through-the-pack)), and [tillr-idea-pipeline.md](tillr-idea-pipeline.md) ([§1](tillr-idea-pipeline.md#1-item-kinds-states-and-edges)–[§2](tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules), `derived_from` lineage).
 
@@ -253,6 +253,8 @@ Every accidental AutoQA artifact currently in this repository receives an explic
 
    _Leaning:_ Option A — calibrates `triage_judge` on real `tillr` findings before spending unattended `/workspace` build lanes.
 
+   _Parked 2026-11-17:_ not asked while the design is iceboxed; it is ruled when the design is picked up.
+
    **Answer:**
 
    > _(empty — fill in when decided)_
@@ -267,9 +269,9 @@ Once this document reaches `stage: DECIDED`, three tracked documents owe targete
 
 ## Queue item
 
-This design is on [the tillr roadmap](../tillr/roadmap.md), so it has an item in the queue. While
-a question above is open the item is held and names that question as what it waits on, which is
-how the design shows up beside the rest of the work instead of only on the roadmap page.
+This design is in [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), and it keeps its item in
+the queue. While a question above is open the item is held and names that question as what it
+waits on, so while the design is parked the item waits on [OQ-AQ2](#OQ-AQ2) and is never dispatched.
 
 ### Cut the AutoQA design into build items
 

@@ -19,7 +19,7 @@ depends-on:
 
 # Plan first, then give each node the cheapest seat whose check it can pass
 
-> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16, with review aids added on 2026-11-17. This is a proposal, and none of it is built. The evidence is the loop's event log at event 4343 (generated 2026-11-17 03:33 UTC) and 334 pi run logs, read against the tree at `424cc9db0`. Every figure is marked **measured**, with its source, or **estimated**, with its assumption. On 2026-11-17 the owner asked to review the questions before anything is built. So [the decision box](#what-i-am-asking-you-to-decide) asks each one in a line, and [Section 15](#15-ready-to-file-on-your-word) holds everything that would be filed on a yes, written out but not yet live. Two faults in the run record that wait on no question were filed the same day as `item-pt-copied-usage` and `item-pt-cache-rewrites`.
 
