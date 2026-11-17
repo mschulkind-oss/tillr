@@ -1931,20 +1931,25 @@ loses nothing, and the fix belongs in how the test waits for its own capture.
 - **Evidence:** 2026-11-17, with the load average near 26 on a 32-core machine, 24 copies of the compiled test binary each ran the test 100 times, and 14 of the 24 failed. The failure line was `trace_queue_test.go:190: the trace never reported its loss (want a line ending "dropped spans=0 records=20 sink_errors=0"): []`. On the same machine, `go test -count=50` and `go test -race -count=200` of that one test, run alone, both passed, so the failure needs load.
 - **Evidence:** `reportLoss` in `tools/tillr/store/trace.go` flushes the report to the sink before it stores the reported count, and `FlushSQLiteTrace` waits for that count, so the product's order is correct. The test's `read` returns the buffer the copier goroutine fills, with no wait for that copier.
 
-### Make the cloud-usage mod pass strict plugin validation
+### Prevent strict validation failures in the cloud-usage mod
 
-The cloud-usage mod keeps a journal of Claude Code's model usage. Its README, and the criteria of
-the item that adds channel and route intent to it, list `claude plugin validate --strict` among the
-checks that must pass. On 2026-11-17 that command fails on the untouched mod at `main` under the
-installed Claude Code. A worker building the channel-route item saw the same failure on an export of
-the base, so it stopped as its brief says and the item was held. Until the check passes on the
-base, no change to the mod can show that it did not break it.
+The cloud-usage mod keeps a journal of Claude Code's model usage. Strict plugin validation treats
+warnings as errors, so it must pass before workers can use it to check their changes. On
+2026-11-17 it failed on the unchanged mod with the installed Claude Code. A worker adding channel
+and route intent reproduced the failure on a copy of its base revision and stopped, leaving that
+work on hold. Fixing the underlying warnings will let workers distinguish problems in their own
+changes from problems already present in the mod.
 
-Every message is a TypeScript warning from the mod's hooks, and `--strict` treats warnings as
-errors. The mod's `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`, which Claude Code
-writes on first load and the repository ignores. That directory is absent here, so this is the
-leading suspect, and the other two mods fail the same way. That is not yet established, and the
-builder settles it.
+The warnings come from TypeScript checks on the mod's hooks. Missing type declarations generated
+by Claude Code are the leading suspect, but that cause has not been established. The implementing
+agent must determine whether the declarations, the mod's configuration, its sources, or a
+combination need fixing. Validation must still check the hooks and reject warnings after the fix.
+
+**Outcomes:**
+
+- Pass strict validation from a clean checkout without weakening the checks.
+- Catch future validation failures with an automated test and document any setup needed.
+- Keep the mod's existing behavior and tests working.
 
 <!-- tillr: item id="item-mod-passes-strict-plugin-validate" paths="yolo-packs/matt-mods/mods/cloud-usage/,yolo-packs/matt-mods/README.md,tests/" blocked_by="" prose="2" -->
 
@@ -1957,6 +1962,8 @@ builder settles it.
 **Agent details:**
 
 - **Where:** `yolo-packs/matt-mods/mods/cloud-usage/tsconfig.json`, `hooks/*.ts` and `tests/*.ts` in that mod; the "Develop and test" section of `yolo-packs/matt-mods/README.md`; the "Offline development" section of the mod's README.
+- **Investigate:** The mod's `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`. Claude Code writes that configuration and its type declarations on first load; the repository ignores the generated directory. Establish whether its absence explains the warnings before choosing a fix.
+- **Verify:** Run the strict validation command in c1 and record `claude --version` and the date. Add the regression test specified in c3, check the clean-checkout instructions in c4, and run every existing suite and pack lint listed in c5.
 - **Evidence:** 2026-11-17, `claude plugin validate --strict yolo-packs/matt-mods/mods/cloud-usage` listed 22 warnings and ended `Validation failed (--strict treats warnings as errors)`: 12 TS5097 (an import path ending in `.ts` while `allowImportingTsExtensions` is off), 5 TS2345 and 4 TS2532 (possibly undefined values), and one TS2304 (`Cannot find name 'setTimeout'`). The same command also failed for `todo-cleanup` and `tok-stats`.
 - **Evidence:** 2026-11-17, `.claude-plugin/types/` is absent from the mod's checkout and from `~/.claude/mods/cloud-usage` in this jail, and `.gitignore` lists `/yolo-packs/matt-mods/mods/*/.claude-plugin/types/`. A copy of the mod validated outside the repository failed the same way. No test or recipe invokes the validator: `rg -n 'plugin validate' tests .justfile tools/fork-check.py` finds nothing outside the READMEs and docs.
 
