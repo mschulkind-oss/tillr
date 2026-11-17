@@ -116,13 +116,13 @@ describe("a live elapsed is the viewer's clock, and says so", () => {
 });
 
 describe("each absence is named, never a zero", () => {
-  test("a lease the store did not record says so", () => {
+  test("a leased lane with no expiry is still a recorded lease", () => {
     const snapshot: SnapshotData = {
       ...liveSnapshotData,
       lanes: [{ ...liveSnapshotData.lanes[0], leased_until_ms: null }],
     };
     const { container } = rail(snapshot);
-    expect(container.querySelector(".now-band__lease")?.textContent).toBe("lease not recorded");
+    expect(container.querySelector(".now-band__lease")?.textContent).toBe("lease has no expiry");
   });
 
   test("a run with no start says so instead of drawing 0s", () => {

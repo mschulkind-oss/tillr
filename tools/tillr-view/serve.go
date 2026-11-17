@@ -933,6 +933,11 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	if err != nil {
 		return nil, unreadable(err)
 	}
+	// A current session is the loop's present state; the file describes a previous
+	// stop and must not advise restarting a loop that is already running.
+	if active {
+		stopReason, stopNote = "", ""
+	}
 	out.Drain = drainSummary{
 		UnreportedRuns:     unreported,
 		CostUnreportedRuns: costUnreported,
