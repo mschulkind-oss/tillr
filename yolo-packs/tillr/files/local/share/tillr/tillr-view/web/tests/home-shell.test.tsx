@@ -73,7 +73,7 @@ test("Questions Close and browser Back keep the shell route synchronized", async
 
 test("a refused waiting route stays visible in the shell", async () => {
   const { container } = mount(true);
-  await screen.findByText("Waiting refused: waiting is locked");
+  await screen.findByText(/which items are waiting is unknown.*: waiting is locked/);
   expect(container.querySelector(".home table")).toBeNull();
   expect(container.textContent).toContain("all held");
 });

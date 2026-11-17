@@ -54,6 +54,78 @@ An external caller points these at a store snapshot and reads the same JSON the 
 round decided, `lanes` lists every configured lane and its current or last run, and
 `running` answers what is in flight.
 
+## Starting the observatory
+
+From any directory, with any `PATH` that holds the toolchain (`go` and `git`, plus `node` and
+`npm` when the front end needs building), on the host or in a yolo jail:
+
+```sh
+just --justfile /path/to/checkout/.justfile observatory [port]      # one process, default 4318
+just --justfile /path/to/checkout/.justfile observatory-dev [port]  # Vite on port, API on port+1
+```
+
+Inside the checkout, `just observatory` is the same command. Both recipes run
+[`tools/observatory/run.sh`](https://github.com/mschulkind-oss/tillr/blob/main/tools/observatory/run.sh), which serves *this* checkout's board from
+*this* checkout's build:
+
+- **Both programs are built from this tree.** `tillr-view` and the `tillr-drain` it asks for
+  Waiting are built static (`CGO_ENABLED=0`) into
+  `${YOLO_DURABLE_DIR:-${XDG_CACHE_HOME:-~/.cache}}/tillr-observatory/<key>/`, where `<key>`
+  is the first 16 hex digits of the sha256 of the checkout's absolute path. Two checkouts
+  never share that directory. The server is handed the planner with `--tillr-drain`, and the
+  store and root as absolute paths, so neither `PATH` nor the working directory decides which
+  board is served.
+- **The front end is rebuilt only when it is older than its sources.** Once `web/dist` is
+  current, `just observatory` needs no Node. `node_modules` is stamped with the platform that
+  installed it (`node_modules/.tillr-platform`) and is reinstalled with `npm ci` when another
+  platform runs it, because a host and a container share it.
+- **The URL** is `http://127.0.0.1:<port>`, printed at startup. For `observatory-dev`, that
+  port is Vite's UI, and the API one above it answers JSON only.
+
+### Reaching it from the host when it runs in a jail
+
+A yolo jail with bridged networking has its own `localhost`, so a server in the jail is
+reachable only from inside the container until the workspace publishes its port. Add this
+to the **workspace's** `yolo-jail.toml` (`$YOLO_HOST_DIR/yolo-jail.toml` on the host,
+`/workspace/yolo-jail.toml` in the jail), for each port you want to open:
+
+```toml
+[machine]
+ports = [{ host = 4318, jail = 4318 }]
+```
+
+Then run `yolo config apply` and `yolo stop` on the host, and relaunch the jail. While a
+port is listed there, the recipe binds `0.0.0.0` (the container's side of the publish), and
+the host opens `http://localhost:<port>`. For a port that is not listed, it binds
+`127.0.0.1` and prints the line to add. `observatory-dev` publishes only the UI port: the
+API is reached through Vite's proxy. The jail cannot see whether it was relaunched after the
+line was added, so a listed port that does not answer from the host means it has not been.
+
+### What each refusal means
+
+Every refusal is one sentence on stderr, and it names the fix:
+
+- **`go is not on PATH`** or **`git is not on PATH`**: the toolchain is missing, so nothing
+  was built. Run from a shell that has `go` and `git`.
+- **`the front end in … is missing or older than its sources, and node is not on PATH`**:
+  the embedded UI would be stale. Run once with Node. After that, no Node is needed.
+- **`node is not on PATH`** or **`hivemind is not on PATH`** (dev only): Vite or its
+  supervisor is missing. Install it, or use `just observatory`.
+- **`… is already this build … serving …: open http://…`** (exit 0): the same build already
+  serves this store. Open the URL.
+- **`… is held by an observatory built from <rev> …, not this build`**: an older server
+  holds the port. Stop it with the `fuser` command the message prints, then run again.
+- **`… is already in use by something that is not an observatory`**: another program holds
+  the port. Free the port or pick another one.
+- **`… is already answering, so this run would not be the face you see`** (dev only): the
+  API port is held. This check runs before any build. Stop the holder and run again.
+
+The header's build line gains **behind the checkout** when the checkout's tillr sources have
+moved past the running server's revision, which a long-lived server otherwise hides. The
+check runs `git diff` between the build's revision and `HEAD` over `tools/tillr*`, plus the
+working tree for a clean build, and its result is cached for three seconds. Restart with
+`just observatory`.
+
 ## Every lane's current work
 
 `tillr-view lanes` and `GET /api/v1/lanes` read the same rows. Home's lane strip
@@ -63,7 +135,10 @@ defines its three states: idle, running, and settling. A terminal run still held
 by a lease is settling, not evidence that a gate or landing is in progress.
 
 Rows carry the item, seat, backend, attempt number, run id, state-start clock,
-and latest action with its clock. An idle row retains its last run and recorded
+and latest action with its clock. The seat is the one the dispatch decision recorded
+(`dispatches.seat`), else the item's requested seat, and `seat_source` says which
+(`dispatch`, `item` or `none`). `none` means the item asked for no seat and the
+policy's default ran it, which Home shows as "no seat asked (policy default)". An idle row retains its last run and recorded
 outcome. Attempt numbers count distinct runs for that item, including allocations
 that have no terminal row yet. Missing clocks are null, never zero elapsed time.
 
@@ -83,7 +158,12 @@ that mark. The strip refreshes on store/log notifications and polls every five
 seconds for step files and quiet ages; Pause stops automatic refreshes.
 
 `--loop-dir` and `--lane-root` default to the loop and lanes directories beside
-the store. The JSON command prints the same array served as the API's `data`.
+the store, on every face including `serve`, so each file is found from the store
+the server was given and never from a path recorded under another mount. Before
+2026-11-16, `serve` had no lane-root default. Every lane then showed `open : no such
+file or directory` and no action. A log that is truly absent is now a plain note:
+`no stream log at <path>`. The JSON command prints the same array served as the API's
+`data`.
 
 ## Trace downloads
 
@@ -174,8 +254,16 @@ The route's `data` object carries `rows`, `summary`, and the planner's event
 sequence; its response snapshot uses that same sequence. Each row includes the
 full planner decision. No readiness rules are duplicated in the view utility.
 
-The read-only drain binary must be on PATH. A missing binary, invalid policy,
-or incompatible store produces an explicit refusal, never a historical answer
+The planner is found in this order: `--tillr-drain <path>`, then the `tillr-drain` in the
+server's own directory (where `just observatory` and `just tillr-build` put both), then
+the pack launcher's `tillr-drain-<digest>` beside a `tillr-view-<digest>`, and only then
+`PATH`. Its answer must carry a build stamp that matches the server's: the same VCS
+revision and dirty flag, or the same launcher digest. A planner that names no build, or
+another one, is refused as `planner-mismatch`. A planner that cannot be found or run is
+refused as `planner-unavailable`. Both answer 503 and name the fix. Neither is a store
+failure, and neither says the drain is not moving: the snapshot and its loop heartbeat
+still answer, and Home reads "the planner could not be asked". An invalid policy or
+an incompatible store produces an explicit refusal, never a historical answer
 presented as current. Each request starts one planner process and reads the
 current document index; it does not migrate the store or write decisions.
 

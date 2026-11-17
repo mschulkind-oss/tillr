@@ -105,3 +105,18 @@ test("each class remains a distinct shape and word when color is forced", () => 
   expect(new Set(badges.map(b => b.querySelector("svg")?.getAttribute("data-glyph"))).size).toBe(6);
   expect(new Set(badges.map(b => b.textContent)).size).toBe(6);
 });
+
+// The owner's screenshot of 2026-11-17: the header said MOVING (the heartbeat was current)
+// while Home's list heading said "Not moving · not yet read", because the planner could not
+// be found. A planner that cannot be asked says nothing about whether the drain is moving.
+test("a planner that cannot be asked is not a drain that is not moving", () => {
+  const error = Object.assign(new Error("no tillr-drain beside this server"), { code: "planner-unavailable" });
+  const { container } = render(<Home snapshot={snapshotData} waitingError={error} />);
+  const heading = container.querySelector("h2")!.textContent!;
+  expect(heading).not.toMatch(/not yet read/i);
+  expect(heading).toContain("the planner could not be asked");
+  const alert = screen.getByRole("alert").textContent!;
+  expect(alert).toContain("which items are waiting is unknown");
+  expect(alert).toContain("no tillr-drain beside this server");
+  expect(alert).not.toMatch(/^Waiting refused/);
+});

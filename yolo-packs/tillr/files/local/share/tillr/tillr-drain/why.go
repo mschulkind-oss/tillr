@@ -86,7 +86,13 @@ func whyFace(args []string) int {
 		return fail(drain.Usagef("item %q is absent or already landed; why reports unlanded work", itemID))
 	}
 	if *asJSON {
-		err = enc.Encode(answer)
+		// The build rides beside the answer, not inside drain.WhyAnswer: it describes the
+		// program that planned, not the plan, and tillr-view refuses an answer from a planner
+		// that is not the build it was made with (tools/tillr-view/siblings.go).
+		err = enc.Encode(struct {
+			drain.WhyAnswer
+			Build drain.BuildStamp `json:"build"`
+		}{answer, drain.ReadBuildStamp()})
 	} else {
 		for _, row := range answer.Rows {
 			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", row.Rank, row.ItemID, row.Position, row.Reason, row.Mover); err != nil {

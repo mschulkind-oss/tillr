@@ -1126,14 +1126,15 @@ OBSERVATORY_WEB_COMMAND = (
     "npm run typecheck && npm run test"
 )
 
-# The dev recipe supervises the API and UI together; the suite uses real just/hivemind
-# with stub go/npm children and two loopback ports. Baseline measured 2026-11-15: the
-# original 15 cases in 0.9s wall (18 cases with cancellation cleanup take 1.1s), so this
-# is a cheap landing check, not a rolling behavior suite. Exact
-# inputs keep unrelated changes free and watch every source the suite reads.
+# Both observatory recipes run tools/observatory/run.sh; the dev one supervises the API and
+# UI together. The suite uses real just/hivemind with stub go/npm/node children, hermetic
+# checkouts at fresh absolute paths, and loopback ports. Measured 2026-11-15: the original
+# 15 cases in 0.9s wall; 2026-11-16, with both recipes' hermetic cases, 1.3-1.4s. A cheap
+# landing check, not a rolling behavior suite. Exact inputs keep unrelated changes free and
+# watch every source the suite reads.
 OBSERVATORY_DEV_TEST = "tests/observatory-dev.test.py"
-OBSERVATORY_DEV_WATCHES = (".justfile", "tools/tillr-view/Procfile.dev", "mise.toml",
-                           OBSERVATORY_DEV_TEST)
+OBSERVATORY_DEV_WATCHES = (".justfile", "tools/observatory/run.sh", "tools/tillr-view/Procfile.dev",
+                           "mise.toml", OBSERVATORY_DEV_TEST)
 OBSERVATORY_DEV_INPUT = tuple(re.compile(r"^" + re.escape(path) + r"$")
                               for path in OBSERVATORY_DEV_WATCHES)
 # A broken recipe exercises the suite's bounded shutdown/startup waits (up to about
@@ -4882,7 +4883,8 @@ CHECK_COST_ESTIMATE = {
     "pre-push-guard": 10.0,
     "pi-forks": 20.0,
     "hooks-install": 5.0,
-    "observatory-dev": 0.9,  # Original 15-case baseline measured alone on 2026-11-15.
+    # 1.3-1.4s measured alone on 2026-11-16 with the hermetic cases for both recipes added.
+    "observatory-dev": 1.4,
     "fork-quality": 60.0,
     "session-liveness": 600.0,
     "fork-construct": 120.0,

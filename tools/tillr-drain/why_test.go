@@ -167,3 +167,28 @@ func closeFixtureItem(t *testing.T, path, id string) {
 		t.Fatal(err)
 	}
 }
+
+// The why answer names the build that planned it. `tillr-view` runs this face as a separate
+// program, and a planner of another vintage than the server reads the same store and
+// answers with different rules: the server can only refuse that mismatch if the answer
+// says which build it came from (tools/tillr-view/siblings.go).
+func TestWhyJSONNamesThePlannersBuild(t *testing.T) {
+	path := fixture(t, itemRecordRanked("ready", "in-queue", "a"))
+	code, out := invoke(t, "why", "--store", path, "--json")
+	if code != 0 {
+		t.Fatalf("why: %d %s", code, out)
+	}
+	var answer struct {
+		Rows  []drain.WhyRow    `json:"rows"`
+		Build *drain.BuildStamp `json:"build"`
+	}
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Rows) != 1 {
+		t.Fatalf("rows: %s", out)
+	}
+	if answer.Build == nil || answer.Build.Executable != bin || answer.Build.Digest == "" {
+		t.Fatalf("the why answer must name its own build (executable %s): %s", bin, out)
+	}
+}

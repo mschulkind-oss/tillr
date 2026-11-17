@@ -26,7 +26,7 @@ export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[
           {row.run_id ? <div>{row.state === "idle" ? "last: " : ""}
             {row.item_id ? <EntityLink kind="item" id={row.item_id} /> : "item unrecorded"} · <EntityLink kind="run" id={row.run_id} />
             {row.state === "idle" ? ` · ${row.outcome || "end unrecorded"}` : null}
-            <div>{row.seat || "seat unrecorded"} · {row.backend || "backend unrecorded"} · attempt {row.attempt || "—"}</div>
+            <div>{row.seat || (row.seat_source === "none" ? "no seat asked (policy default)" : "seat unrecorded")} · {row.backend || "backend unrecorded"} · attempt {row.attempt || "—"}</div>
           </div> : <div>last run —</div>}
           {row.state === "settling" ? <div className="lane-strip__derived">{row.last_step_at_ms !== null
             ? `after ${row.last_step} ~${age(now - row.last_step_at_ms)}` : "step —"}</div> : null}

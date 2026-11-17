@@ -35,6 +35,10 @@ const (
 	codeDesignDocUnreadable  = "design-doc-unreadable"
 	codeUnknownKind          = "unknown-kind"
 	codeUnknownRoute         = "unknown-route"
+	// The planner (`tillr-drain why`) is a separate program. Not finding it, or finding one
+	// of another build, is neither a store condition nor a statement about the drain.
+	codePlannerUnavailable = "planner-unavailable"
+	codePlannerMismatch    = "planner-mismatch"
 )
 
 // apiCode is one code and the status it answers with.
@@ -71,6 +75,8 @@ var apiCodes = []apiCode{
 	{codeDesignDocUnreadable, http.StatusInternalServerError},
 	{codeUnknownKind, http.StatusBadRequest},
 	{codeUnknownRoute, http.StatusNotFound},
+	{codePlannerUnavailable, http.StatusServiceUnavailable},
+	{codePlannerMismatch, http.StatusServiceUnavailable},
 }
 
 // statusFor answers the status one code pairs with. A code outside apiCodes is a bug in

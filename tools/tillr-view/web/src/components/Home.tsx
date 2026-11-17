@@ -88,8 +88,11 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
     <h1>Home</h1>
     <div className="home__columns">
       <div>
-        <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : "not yet read"} <a href="#/items">all → Items</a></h2>
-        {waitingError ? <p role="alert">Waiting refused: {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
+        {/* The list is the planner's answer, so a planner that cannot be asked leaves the LIST
+            unknown — never the drain "not moving". The loop's own state is the heartbeat in
+            the header and the loop summary, and it does not depend on the planner. */}
+        <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="#/items">all → Items</a></h2>
+        {waitingError ? <p role="alert">The planner could not be asked, so which items are waiting is unknown (the loop's own state is in the header, and does not depend on it): {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
           const group = rows.filter(row => row.class === value).sort((a, b) => {
             if (!a.rank) return b.rank ? 1 : a.item_id.localeCompare(b.item_id);
             if (!b.rank) return -1;

@@ -113,8 +113,8 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 
 func TestWhyMissingPlannerIsAnExplicitError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	_, _, err := plannerWhy(context.Background(), "unused", ".", "", "", nil)
-	if err == nil || !strings.Contains(err.Error(), "tillr-drain why") {
+	_, _, err := askPlanner(context.Background(), filepath.Join(t.TempDir(), "absent-tillr-drain"), buildStamp{}, "unused", ".", "", "", nil)
+	if err == nil || !strings.Contains(err.Error(), "--tillr-drain") || !strings.Contains(err.Error(), "just observatory") {
 		t.Fatalf("missing planner: %v", err)
 	}
 }

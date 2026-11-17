@@ -118,6 +118,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop (default: all store lanes)")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
+	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers (default: the one beside this executable, then PATH); it must be this program's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -131,7 +132,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if *history {
 		rows, err = readWaiting(ctx, *path, questions)
 	} else {
-		_, rows, err = plannerWhy(ctx, *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
+		_, rows, err = askPlanner(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
 	}
 	if err == nil {
 		rows, err = policyWaitingRows(*root, rows)

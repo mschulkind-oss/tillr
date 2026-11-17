@@ -39,6 +39,8 @@ var allErrorCodes = []string{
 	codeDesignDocUnreadable,
 	codeUnknownKind,
 	codeUnknownRoute,
+	codePlannerUnavailable,
+	codePlannerMismatch,
 }
 
 // TestEveryErrorCodeHasAStatus pins the vocabulary to its statuses: one entry per code, no
