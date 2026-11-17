@@ -301,6 +301,8 @@ A run that re-applies this block's change after a squash conflict (the lander co
 
 Once the store knows which criteria are the owner's, the planner can stop spending on items that cannot finish. An item whose only unmet criterion is an owner's ruling gains nothing from a worker: the run would end, the gate would pass, and the item would still be waiting for the owner. On 2026-11-14 an item like that was unblocked early and dispatched. This block makes the planner hold such an item before any lane is used, and makes the waiting face say plainly that the owner is the one it waits on.
 
+A note for the next run on this block: commit `e476f99f5` [unlanded] never reached the trunk, so do not cite it as evidence; describe the behavior it built in words instead (the planner holds the item with `owner-only-owed` before leasing a lane, and the waiting face names the owner and the owed criterion), and build afresh from the current trunk tip, because the earlier candidate is stale against trunk.
+
 <!-- tillr: item id="item-jl-owner-criterion-hold" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The planner holds an `in-queue` item that has an `owner-only` criterion not yet `done`, with the reason `owner-only-owed`. It leases no lane and starts no run for it. A test with two free lanes asserts zero dispatches and the reason.
