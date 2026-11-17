@@ -742,7 +742,8 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 	})
 }
 
-// refuseUnlandedCommit refuses a lane that holds a commit neither the base nor trunk contains. It reads
+// refuseUnlandedCommit refuses a lane that holds a commit neither the base nor trunk nor a
+// run pin (refs/tillr/runs/<run_id>) contains. It reads
 // the worktree's HEAD where the worktree can be read and the lane's own branch always: a lane
 // whose directory was deleted still holds its commit on that branch, and that commit is the
 // only copy of work nobody has judged.
@@ -758,6 +759,7 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 	if branch, err := s.git(ctx, s.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+LaneBranch(s.LaneRoot, spec.LaneID)); err == nil {
 		candidates = append(candidates, strings.TrimSpace(branch))
 	}
+	seen := map[string]bool{}
 	for _, sha := range candidates {
 		if sha == "" || sha == spec.BaseSHA {
 			continue
@@ -773,6 +775,20 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 			}
 		}
 		if contained {
+			continue
+		}
+		// A commit a run pin contains, or a recorded landing names, is a copy: the pin
+		// is the candidate's retention and the item restages it from there, or its
+		// change is already on the trunk. Resetting the copy loses nothing.
+		if seen[sha] {
+			continue
+		}
+		seen[sha] = true
+		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, sha)
+		if err != nil {
+			return err
+		}
+		if clearable {
 			continue
 		}
 		return unlandedLaneRefusal(spec.LaneID, sha, spec.BaseSHA)

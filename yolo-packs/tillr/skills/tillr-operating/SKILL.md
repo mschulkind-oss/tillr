@@ -140,7 +140,9 @@ run's `boundary.check`. Leave the lane root's own worktrees alone, because they 
 the loop.
 
 A lane whose own state refuses staging, such as a change nobody landed or a branch another
-worktree holds, leaves rotation for the session. The loop records it once and offers the
+worktree holds, leaves rotation for the session. A lane commit that a run pin keeps, or that a
+recorded landing names, is not refused. Staging resets that lane and records
+`drain.lane-copy-cleared`. The loop records it once and offers the
 item the next lane. `tillr view waiting` shows it as `lane:<id>` with its remedy. Reset such
 a lane only as the tillr-drain README's "Resetting a lane" describes.
 

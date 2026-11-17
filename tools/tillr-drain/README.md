@@ -938,7 +938,7 @@ offered that lane would be refused the same way. There are two such conditions:
 
 | Reason | What the lane holds | Remedy |
 | :--- | :--- | :--- |
-| `lane-holds-unlanded-change` | a commit the base does not contain, which staging will not reset | land the change, or reset the lane as described below |
+| `lane-holds-unlanded-change` | a commit that neither the base, the trunk, nor a run pin contains, and that no recorded landing names, which staging will not reset | land the change, or reset the lane as described below |
 | `lane-branch-held` | its branch, checked out by another worktree | remove the holding worktree, or stage a different lane |
 
 The loop takes such a lane **out of rotation** for the session. That means no plan offers
@@ -959,6 +959,20 @@ remedy as its mover. `tillr view lanes` prints the condition under the lane's ro
 
 Item-owned staging failures keep their behavior: they count toward the streak. Each item
 and lane prints its line once per distinct error, not once per pass.
+
+A **lane copy** is our term for a lane commit that is kept somewhere else. Staging resets a
+lane copy rather than refusing the lane. Two things make a commit a lane copy. A run pin
+(`refs/tillr/runs/<run>`, which the loop never deletes) may contain it. Or a recorded
+landing may name it as the landed head: a `land.landing` event with result `landed`. A
+squash landing puts the change on the trunk under a different sha, so the trunk's history
+never contains the candidate itself. Each reset writes one `drain.lane-copy-cleared` event.
+Its object is the lane. Its payload names the commit, the retaining pins, whether the run
+landed, and that run. An unlanded copy's change stays with its item, and the item restages
+it from the pin. A lane holding a commit that is not a lane copy is still refused.
+
+A held candidate re-staged on a newly assigned lane can be refused by that lane's state.
+That lane then leaves rotation, as above. The candidate is released again, still pinned,
+and is offered a lane in rotation. The examination does not stop the loop.
 
 ### Resetting a lane
 
@@ -1071,7 +1085,12 @@ same pass.
 
 Clearing the hold claims any free offered lane. `drain.candidate-assigned`
 records that claim before staging the pinned commit there; `drain.candidate-staged`
-records completed staging. Restart recovery finishes incomplete staging, including
+records completed staging. The assignment ends the earlier release, so a replay reads the
+newly assigned lane as occupied. That is how a second hold on that lane
+releases and resets it, like the first hold did on the original lane. Before 2026-11-17,
+a replay kept the earlier `released` flag. A second hold then freed the lease without the
+reset, and the pin moved on to another lane. That left a copy of the candidate on every
+lane it passed through. Restart recovery finishes incomplete staging, including
 a checkout materialized before its event. The candidate's head, base, run identity,
 original fence, and any passing verdict survive lane reuse. This starts no new worker
 and spends no new model attempt. A retained passing verdict retries landing, not gating.

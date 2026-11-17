@@ -433,7 +433,7 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 		return err
 	}
 	spec := StageSpec{LaneID: c.LaneID, ItemID: c.ItemID, RunID: c.RunID, BaseSHA: trunk}
-	stager := &LaneStager{Root: l.cfg.Root, LaneRoot: l.cfg.LaneRoot}
+	stager := &LaneStager{Root: l.cfg.Root, LaneRoot: l.cfg.LaneRoot, Store: l.cfg.Store, Now: l.cfg.Now}
 	// A crash can leave the checkout materialized before the staged event.
 	head, _ := l.revParse(ctx, c.Worktree, "HEAD")
 	if _, statErr := os.Stat(c.Worktree); statErr == nil {
@@ -477,4 +477,35 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 	}
 	work.NeedsStage = false
 	return nil
+}
+
+// releaseRefusedAssignment undoes a pinned candidate's assignment to a lane whose own state
+// refused the staging (refuseUnlandedCommit, refuseBranchHeld). Nothing was written to that
+// lane, and the candidate's pin is unchanged, so the release resets nothing: it records the
+// candidate released again, with its saved fence, and frees the claimed lane row. The planner
+// then offers the candidate a lane in rotation.
+func (l *Loop) releaseRefusedAssignment(ctx context.Context, work *pendingWork) error {
+	c := *work.Candidate
+	if err := l.pinnedCandidate(ctx, c); err != nil {
+		return Externalf("lane %s refused pinned candidate %s, and its pin cannot be read back: %v", c.LaneID, c.RunID, err)
+	}
+	owner, err := currentLoopOwner()
+	if err != nil {
+		return err
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
+		if err != nil || !owned {
+			return err
+		}
+		if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: true, Fence: work.HeldFence}, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		return clearCandidateRelease(tx, c, l.cfg.Now())
+	})
 }
