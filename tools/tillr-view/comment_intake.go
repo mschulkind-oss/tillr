@@ -9,8 +9,32 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Intake rows are read-only and optional on stores created before comments.
+// Comment rows are read-only and optional on stores created before comments.
+// Pending replies remain visible even after their comment item has closed.
 func waitingCommentIntake(r *store.Reader) ([]waitingRow, error) {
+	out, err := waitingCommentIntakeRows(r)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Query("SELECT item_id,document FROM comment_deliveries WHERE written=0 ORDER BY item_id,run_id")
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, doc string
+		if err := rows.Scan(&id, &doc); err != nil {
+			return nil, err
+		}
+		out = append(out, waitingRow{ItemID: id, Class: "waits on work", Where: "reply", Why: "reply delivery waits on served document " + doc, Mover: "restore the landed bytes of " + doc, Since: "—", ClassSource: "store"})
+	}
+	return out, rows.Err()
+}
+
+func waitingCommentIntakeRows(r *store.Reader) ([]waitingRow, error) {
 	var first, last string
 	var unavailable bool
 	err := r.QueryRow("SELECT first_intake,last_answer,unavailable FROM comment_intake WHERE id=1").Scan(&first, &last, &unavailable)

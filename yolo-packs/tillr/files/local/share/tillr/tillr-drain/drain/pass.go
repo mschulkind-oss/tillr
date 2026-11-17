@@ -900,6 +900,33 @@ planned:
 	if err != nil {
 		return "", err
 	}
+	// Resolve batches that disappeared before applying this snapshot. Closing a
+	// comment item changes dispatch eligibility for its document's build items,
+	// so take a fresh snapshot in this same pass, not at the next wake.
+	commentReady := map[string]bool{}
+	for {
+		closedBatch := false
+		for _, p := range plans {
+			d := p.decision
+			if !item.IsCommentItem(d.ItemID) || l.active[p.parentRunID] ||
+				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
+				continue
+			}
+			ready, closed, checkErr := l.checkCommentDispatch(ctx, p, at)
+			if checkErr != nil {
+				return "", checkErr
+			}
+			commentReady[d.ItemID] = ready
+			closedBatch = closedBatch || closed
+		}
+		if !closedBatch {
+			break
+		}
+		plans, leases, err = l.passPlansGeneration(ctx, at, &timing.TickID)
+		if err != nil {
+			return "", err
+		}
+	}
 	answers, counts, err := passAnswers(plans)
 	if err != nil {
 		return "", err
@@ -940,18 +967,10 @@ planned:
 			continue
 		}
 		if item.IsCommentItem(d.ItemID) && (d.Action == ActionDispatch || d.Action == ActionRetry || d.Action == ActionHold) {
-			ready, closed, err := l.checkCommentDispatch(ctx, p, at)
-			if err != nil {
-				return "", err
-			}
-			if !ready {
-				if closed {
-					stale = true
-				} else {
-					d.Action = ActionHold
-					d.Reason = "Vantage not answering"
-					holds = append(holds, d)
-				}
+			if !commentReady[d.ItemID] {
+				d.Action = ActionHold
+				d.Reason = "Vantage not answering"
+				holds = append(holds, d)
 				continue
 			}
 		}

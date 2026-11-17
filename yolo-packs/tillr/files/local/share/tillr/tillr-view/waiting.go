@@ -46,6 +46,7 @@ var waitingRules = map[string]waitingRule{
 	"definition-sync-failed":         {"needs you", "queue", "correct the definition and clear the fault"},
 	"backend-window":                 {"waits on work", "backend", "the reset time"},
 	"conflict-design":                {"waits on work", "queue", "design"},
+	"design-under-comment":           {"waits on work", "queue", "the comment item"},
 	"conflict-owner":                 {"needs you", "queue", "owner"},
 	"conflict-answered":              {"ready", "queue", "the next pass"},
 	"inputs-changed":                 {"ready", "queue", "the next pass"},

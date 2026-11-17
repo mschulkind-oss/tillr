@@ -405,8 +405,20 @@ func TestCommentDeliveryWaitsAndReplaysStoredBytes(t *testing.T) {
 	if err := os.Remove(filepath.Join(run.DurableDir(filepath.Join(f.laneRoot, req.LaneID), req.RunID), commentRepliesFile)); err != nil {
 		t.Fatal(err)
 	}
-	clean := runGit(t, f.root, "show", "HEAD:docs/design/example.md")
-	writeForkFile(t, filepath.Join(f.root, "docs/design/example.md"), clean+"\n")
+	clean, err := l.git(ctx, f.root, "show", "HEAD:docs/design/example.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edited := range []string{clean + "\n", strings.TrimRight(clean, "\n"), clean + " "} {
+		writeForkFile(t, filepath.Join(f.root, "docs/design/example.md"), edited)
+		if err := l.flushCommentDeliveries(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if files, _ := filepath.Glob(filepath.Join(f.root, ".vantage/inbox/*.jsonl")); len(files) != 0 {
+			t.Fatal("delivered against a byte-different document")
+		}
+	}
+	writeForkFile(t, filepath.Join(f.root, "docs/design/example.md"), clean)
 	if err = l.flushCommentDeliveries(context.Background()); err != nil {
 		t.Fatal(err)
 	}
