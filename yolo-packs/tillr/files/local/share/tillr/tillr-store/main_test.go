@@ -21,18 +21,30 @@ import (
 var bin string
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "tillr-store-test-")
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
+	root := os.Getenv("YOLO_DURABLE_DIR")
+	if root == "" {
+		root = filepath.Join("..", "..", ".yolo", "durable")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 1
+	}
+	dir, err := os.MkdirTemp(root, "tillr-store-bin-")
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 	bin = filepath.Join(dir, "tillr-store")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 func run(t *testing.T, args ...string) (int, []byte) {

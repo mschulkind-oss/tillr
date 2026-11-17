@@ -647,6 +647,12 @@ def case_designer_session_selection_documented():
 
 
 def main():
+    cleanup_tests = subprocess.run(
+        [sys.executable, str(ROOT / "tests/tillr-scratch.test.py")],
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    if cleanup_tests.returncode:
+        fail("the TestMain scratch cleanup regression tests failed")
     case_designer_session_selection_documented()
     case_comment_intake_documented()
     case_recovery()

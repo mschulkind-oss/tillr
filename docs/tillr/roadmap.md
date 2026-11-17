@@ -1584,12 +1584,7 @@ durable scratch directory, outside the repository, and nobody sees them grow unt
 fills. The drain's own are about 38 MB each. The fix is a `TestMain` that removes the directory
 before it exits, on every path, and a check that keeps it true.
 
-<!-- tillr: item id="item-test-runs-remove-their-binary-directories" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-run/,tools/tillr-land/,tools/tillr-gate/,tools/tillr-view/,tools/tillr-cli/,tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,tests/" blocked_by="" prose="2" -->
 
-- **c1:** Every tillr module whose `TestMain` builds into a scratch directory removes it before exiting on every path: pass, fail, and a panic where practical. The report lists each module that was changed.
-- **c2:** A test or check counts the `tillr-*-bin-*` and `tillr-drain-trace-*` entries in the durable scratch directory before and after a suite run, and finds no increase.
-- **c3:** A repository check fails when a `TestMain` calls `os.Exit` while a `defer` in the same function is the only thing removing a directory.
-- **c4:** The report states how many leftover directories exist and their size, and leaves deleting the existing ones to the owner, with the exact command, because they are outside the repository.
 
 **Agent details:**
 

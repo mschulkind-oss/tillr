@@ -20,18 +20,30 @@ import (
 var viewBin string
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "tillr-view-test-")
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
+	root := os.Getenv("YOLO_DURABLE_DIR")
+	if root == "" {
+		root = filepath.Join("..", "..", ".yolo", "durable")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 1
+	}
+	dir, err := os.MkdirTemp(root, "tillr-view-bin-")
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 	viewBin = filepath.Join(dir, "tillr-view")
 	build := exec.Command("go", "build", "-o", viewBin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 // runView runs one face and answers its exit code and stdout. The environment is
