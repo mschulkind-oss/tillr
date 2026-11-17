@@ -2385,12 +2385,57 @@ worktree keeps its lane, and the waiting view should say so and why.
 
 <!-- tillr: item id="item-held-candidate-frees-its-lane" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
+**Ruling, 2026-11-17 (answers the second failed attempt):** three runs stopped, and none of them
+found a fault in this design. The criteria c1 to c6 stand as written. What stopped the runs was
+the trunk: each time the builder ran the full suites, tests that were already red at its base
+failed, and the brief tells a builder to stop when that happens. This ruling settles those
+failures so that a fourth run does not stop on them, and adds c7.
+
+The first run stopped on two drain tests, `TestTheSeedFileDispatchesTheRuledItems` and
+`TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter`. Both pass on the trunk now: on
+2026-11-17 at commit `964802787`, `go test ./...` in `tools/tillr-drain` passed every package.
+They are no longer a reason to stop.
+
+The second run built the whole item and passed its gate, and its landing met a merge conflict in
+`tools/tillr-drain/drain/why.go` and in the pack copy of that file. The repair run resolved both
+by keeping the trunk's triage explanations and next actions beside the item's released-or-kept
+lane notes. That resolution is right and is kept. The repair run then stopped because the view
+suite was red at its base.
+
+The view suite is still red on the trunk, and that is the one open problem. On 2026-11-17 at
+commit `964802787`, `go test ./...` in `tools/tillr-view` failed five tests:
+`TestLiveWaitingKeepsConflictTransitions`, `TestEveryNonLandingOutcomeRecoversAndAgreesWithView`,
+`TestBuiltServerAsksItsOwnSiblingWhateverPATHHolds`, `TestWhyAPIAndWaitingBeforeAnyPass` and
+`TestWaitingDefaultStoppedRunKeepsPlannerAnswer`. All five fail the same way: the planner answers
+`reading refs/tillr/green: exit status 128`. Commit `47c82b1dc` made the planner read that ref,
+which records the last trunk commit the heavy checks proved, and these fixtures use a temporary
+directory that is not a Git repository as the repository root. A sixth failure the repair run
+saw, a missing waiting rule for `trunk-unproved`, is already fixed on the trunk.
+
+The fault is in the fixtures, not in the planner, and the repair belongs to this item, because c4
+is tested in that suite and cannot be shown green while the suite is red. A root that is not a Git
+repository is a real fault, so the planner keeps refusing it; it must not answer as though no
+commit had been proved. Each failing fixture makes its root a Git repository instead. This was
+tried on 2026-11-17: with `git init` run on the fixture's root, `TestWhyAPIAndWaitingBeforeAnyPass`
+passed with no other change. No planner code changes for this, and no test is skipped or deleted.
+If one of the five still fails once its root is a repository, and for a reason outside this
+item's paths, that is a new fact: the builder stops and reports it.
+
+The earlier work is the starting point, not something to rebuild from nothing:
+- [unlanded] the commit at `refs/tillr/preserved/run-item-held-candidate-frees-its-lane-a2-cfix` holds the second run's candidate `f1d8d3a3e` with the `why.go` conflict already resolved: 40 files, the drain and view changes, their tests, both READMEs and the pack copies.
+
+The trunk has moved since that commit's base, so the builder re-applies it rather than reusing
+its tree. On 2026-11-17, `git merge-tree --write-tree 964802787` against that commit reported no
+conflict. After re-applying, the builder runs `just pack-sync` again, so the pack copies are
+derived from the merged sources and not carried over from the old tree.
+
 - **c1:** For the holds that wait on an operator or on another item (an item fault, a gate stall, a held conflict repair), the drain releases the lane once it has pinned the candidate under `refs/tillr/runs/<run>` and read the pinned commit back. If the pin cannot be read back, the lane stays reserved. A test asserts a released lane is offered to a ready item in the same pass, and a second test asserts the unreadable-pin case keeps the lane.
 - **c2:** Clearing the hold retries the candidate from its pinned ref: the drain stages the commit onto any free lane and gates or lands it there, not onto the lane it first ran in. A test holds a candidate, takes its old lane for another item, clears the hold, and asserts the retry runs on a different lane with the same head commit.
 - **c3:** Holds that need the worktree itself keep their lane. A test names each hold class in `retainLane` and asserts the release or keep decision for it; the builder decides the kept classes from the code and lists them in the README, with the reason beside each. A conflict repair that owns the pending transition is one candidate for that list.
 - **c4:** The waiting view says, for each held item, whether its lane was released or kept, and for a kept lane names the reason.
 - **c5:** The `summary:` line of `tillr drain why` counts lanes reserved for a held candidate separately from lanes with a running worker, so `lanes 10/10 busy` no longer reads as ten running workers. A test builds a store with two reserved-idle lanes and asserts the summary names both numbers.
 - **c6:** The drain README sentences that say a retained candidate keeps its lane reserved with no worker lease describe the new rule, and name the classes that still keep a lane.
+- **c7:** The view suite is green. The five tests named in the ruling above pass because each fixture's root is a Git repository, with the planner's refusal of a root that is not one left unchanged, and `go test ./...` passes in both `tools/tillr-view` and `tools/tillr-drain`.
 
 **Agent details:**
 
