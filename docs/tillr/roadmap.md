@@ -1261,17 +1261,26 @@ routing change from a bug that wrote it twice. Nothing refuses a record that rep
 exactly, so a real double write would look the same. A conflict should read as one conflict with
 its transitions, and a repeat that changes nothing should not be written.
 
+One record is neither a routing change nor a repeat. When an item fails a second time while its
+conflict is still open, the drain writes the conflict again with the same status, design run and
+answer but a longer report and the newer run's id. That record carries evidence the first one
+lacks, so it is kept, and the views show it as evidence added to the same conflict. A repeat is
+therefore a record equal to the last one in every field, not only in the three routing fields.
+
 <!-- tillr: item id="item-conflict-transition-not-duplicate" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Recording a conflict transition whose status, design run and answer equal the conflict's last recorded transition writes no event. A test records the same transition twice and asserts one event.
-- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, naming the status change and the design run, not as a second conflict. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
-- **c3:** The item tool's documentation states that a conflict is recorded once per transition.
+- **c1:** Recording a conflict whose every field equals the last record of the same conflict writes no conflict event. A test records the same conflict twice and asserts one event. A second test records it again with only the report and run id changed, as the drain's second-failure route does, and asserts a second event that holds the longer report.
+- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, not as a second conflict. A record that changes the status or the design run is named by that change; a record that changes only the report is named as added evidence, with the run it came from. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
+- **c3:** The item tool's documentation states that a conflict is recorded once per transition, and that a record equal to the last one is not written.
+- **c4:** The waiting face keeps a conflict's transitions when another hold on the same item, a fault or a repair, supplies the reason line. A test renders an item with a conflict that has two transitions and a later fault hold, and asserts both the fault's reason and the transitions.
 
 **Agent details:**
 
 - **Ref:** `ConflictKind` and `RecordConflict` in `tools/tillr-item/item/conflict.go`, whose comment already says each routing change is recorded.
 - **Where:** `tools/tillr-item/item/conflict.go`, the drain's conflict routing in `tools/tillr-drain/drain/blocked.go`, and the events and waiting faces in `tools/tillr-view/`.
 - **Evidence:** 2026-11-17, `tillr view events --since 4243`: events 4269 (02:06:39.497 UTC) and 4275 (02:06:45.327 UTC) are both `item.conflict` with id `conflict-run-item-agent-default-bmad-superpowers-skills-a1`; the first has status `raised`, the second `awaiting` with design run `run-item-agent-default-bmad-superpowers-skills-a2`, and every other field is equal.
+- **Settled by the first attempt's conflict (2026-11-17):** that attempt compared only status, design run and answer, which suppressed the evidence record `routeSecondFailure` writes in `tools/tillr-drain/drain/second_failure.go`, and it then reshaped the drain to compensate. Compare the whole `Conflict` record instead and leave `routeSecondFailure` writing as it does; `TestSecondFailureRoutesToDesign` should pass unchanged.
+- **Verification scope:** run the Go suites from `tools/tillr-item`, `tools/tillr-drain` and `tools/tillr-view`. The pack copy is verified by `just pack-sync` and `python3 tests/pack-sync.test.py` only. Do not run `go test` inside the pack copy: at `6a9c634c`, before any change, `go test ./...` in `yolo-packs/tillr/files/local/share/tillr/tillr-item` already fails `TestSyncOverThisRepositorysDocuments`, because its `--root ../../..` resolves to the repository's top level only from `tools/tillr-item/item`. That failure is not this item's and is not a stop condition for it.
 
 ### Add the live loop's session and leases to the running view
 
