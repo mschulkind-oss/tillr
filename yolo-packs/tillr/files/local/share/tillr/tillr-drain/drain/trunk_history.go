@@ -167,6 +167,9 @@ func (l *Loop) holdRewrite(ctx context.Context, c Candidate, h trunkHistory) err
 	}
 	defer s.Close()
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "trunk-rewritten"); err != nil {
+			return err
+		}
 		d := Decision{ItemID: c.ItemID, LaneID: c.LaneID, RunRequest: c.Request, Seat: c.Seat, From: "candidate", Action: ActionHold, Reason: h.reason(), PassID: c.TickID}
 		identifyDecision(&d)
 		return recordDirtyDecision(tx, d, l.cfg.Now().UTC())

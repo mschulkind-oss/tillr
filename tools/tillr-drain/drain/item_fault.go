@@ -39,6 +39,12 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 	}
 	defer s.Close()
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if c.RunID != "" {
+			// A run's fault judges that run; a terminal item's run is not judged.
+			if err := refuseTerminalItem(tx.Reader(), c.ItemID, reason); err != nil {
+				return err
+			}
+		}
 		faults, err := ReadItemFaults(tx.Reader())
 		if err != nil {
 			return err

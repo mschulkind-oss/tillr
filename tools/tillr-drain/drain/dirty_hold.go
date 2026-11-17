@@ -105,6 +105,9 @@ func (l *Loop) holdDirty(ctx context.Context, c Candidate, paths []string) error
 	at := l.cfg.Now().UTC()
 	hold := dirtyHold{Root: l.cfg.Root, Candidate: c}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "trunk-path-dirty"); err != nil {
+			return err
+		}
 		if err := appendEffect(tx, dirtyHeldKind, c.RunID, hold, at); err != nil {
 			return err
 		}

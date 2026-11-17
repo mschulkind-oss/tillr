@@ -67,6 +67,10 @@ type RepeatedRefusal struct {
 // `drain.refusal` event is what the planner's named hold reads. A land that did not take
 // follows the same rule: the gate proves tree health, not criterion satisfaction.
 func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResult, step string) error {
+	// A refusal holds an item in the queue; a terminal item is not refused or counted.
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "refusal"); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	result.Rejected++
 	if result.RefusedSteps == nil {

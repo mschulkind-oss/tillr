@@ -82,6 +82,8 @@ var waitingRules = map[string]waitingRule{
 	"conflict-fix":                   {"ready", "land", "the next pass"},
 	"conflict-exhausted":             {"needs a cause", "land", "cause not recorded"},
 	"item-unstagleable":              {"needs a cause", "queue", "cause not recorded"},
+	// A terminal item leaves this view, so the rule names the settlement for history reads.
+	"item-already-terminal": {"moving", "lane", "the next pass settles the run without judging it"},
 	// Historical decisions remain readable after a planner removes a reason.
 	"fence-overlap": {"waits on work", "queue", "cause not recorded"},
 }

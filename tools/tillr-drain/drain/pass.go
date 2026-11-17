@@ -1007,7 +1007,11 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 		defer l.examinations.Done()
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, result: local, timing: &timing}
-		if d.WorkflowRelease {
+		if d.Reason == ReasonItemAlreadyTerminal {
+			// The plan read the terminal state and the claim's version check rebound it;
+			// the settling write rereads it for the record.
+			completion.outcome.err = l.settleTerminalItem(ctx, work, &itemTerminalError{ItemID: d.ItemID, Step: "plan"})
+		} else if d.WorkflowRelease {
 			owned, err := l.stagedNodeRun(work.Decision)
 			if err == nil && (owned != "" || work.Decision.NodeIndex > 0) {
 				// The run pin is the release's retained head. A crash after
@@ -1060,6 +1064,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				if completion.outcome.err == nil && completion.outcome.stop == "" {
 					completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
 				}
+				if terminal := asItemTerminal(completion.outcome.err); terminal != nil {
+					completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
+				}
 			} else {
 				completion.outcome.err = err
 			}
@@ -1078,22 +1085,27 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			} else {
 				stop, landed, err = l.verify(ctx, &c, local, &timing)
 			}
-			retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
-			if retainLane {
-				err = nil
-			}
-			if err != nil || stop != "" {
-				l.pinQuietly(ctx, c.RunID, c.HeadSHA)
-			}
-			if err == nil && stop == "" && !retainLane {
-				if landed {
-					l.abandon(ctx, c.LaneID, "", "")
-				} else {
-					l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
+			if terminal := asItemTerminal(err); terminal != nil {
+				// The item went terminal by another route during this examination.
+				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
+			} else {
+				retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
+				if retainLane {
+					err = nil
 				}
-				err = l.markExamined(ctx, work.Decision)
+				if err != nil || stop != "" {
+					l.pinQuietly(ctx, c.RunID, c.HeadSHA)
+				}
+				if err == nil && stop == "" && !retainLane {
+					if landed {
+						l.abandon(ctx, c.LaneID, "", "")
+					} else {
+						l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
+					}
+					err = l.markExamined(ctx, work.Decision)
+				}
+				completion.outcome = laneOutcome{stop, err}
 			}
-			completion.outcome = laneOutcome{stop, err}
 		}
 		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
 			completion.outcome.err = err

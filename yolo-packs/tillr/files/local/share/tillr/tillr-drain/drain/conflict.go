@@ -34,6 +34,9 @@ func isConflictFixRun(runID string) bool {
 // or a candidate whose request the loop does not hold answers with the conflict event alone
 // and leaves the item held rather than failing it.
 func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "repair"); err != nil {
+		return "", false, err
+	}
 	if isConflictFixRun(candidate.RunID) {
 		return l.holdConflictExhausted(ctx, candidate, landed, result)
 	}
@@ -181,6 +184,9 @@ func (l *Loop) holdConflictExhausted(ctx context.Context, candidate Candidate, l
 // reads to hold the item with ReasonConflictExhausted when no fix run can be staged, and
 // the record a person reads to see which run was the fix.
 func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed LandOutcome, fixRunID string) error {
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "conflict"); err != nil {
+		return err
+	}
 	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, refusalPayload{
 		Step:          RefusalConflict,
 		ItemID:        candidate.ItemID,

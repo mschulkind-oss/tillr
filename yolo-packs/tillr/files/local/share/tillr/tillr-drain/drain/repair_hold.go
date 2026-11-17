@@ -108,6 +108,9 @@ func (l *Loop) holdRepair(ctx context.Context, hold *repairHold, cause error) er
 	// Append, rather than overwrite: a changed input may fail differently, and both
 	// failures must remain evidence. Unchanged inputs never get here from the planner.
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := refuseTerminalItem(tx.Reader(), hold.ItemID, "repair"); err != nil {
+			return err
+		}
 		return appendEffect(tx, repairHeldKind, hold.Candidate.RunID, hold, l.cfg.Now().UTC())
 	})
 	if err != nil {
@@ -132,6 +135,10 @@ func (l *Loop) handoffRepair(ctx context.Context, original Candidate, decision D
 	defer s.Close()
 	at := l.cfg.Now().UTC()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		// No repair run is started for an item that went terminal while it was staged.
+		if err := refuseTerminalItem(tx.Reader(), original.ItemID, "repair"); err != nil {
+			return err
+		}
 		if err := appendEffect(tx, examinationDoneKind, original.RunID, struct{}{}, at); err != nil {
 			return err
 		}
