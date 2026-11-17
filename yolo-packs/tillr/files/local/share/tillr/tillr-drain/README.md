@@ -682,6 +682,22 @@ Then:
 The next pass re-checks the lane, because its HEAD changed. No drain command runs these
 checks and the reset for you yet; one is queued work.
 
+## Where step programs come from
+
+For gate, fixer gate, land and verdict, a configured command naming the standard
+adapter at `tools/tillr-loop/tillr-loop` under `--root` runs the copy embedded in the
+drain binary. The live working-tree file is not read at the next step, even after a
+landing changes or removes it. Absolute script paths and relative paths under the root
+select the same copy. Other configured programs run unchanged. Startup names that choice
+for each step; command spans show `-` for the adapter supplied to Python on stdin.
+
+The committed [adapter copy](./drain/tillr-loop.py) is compiled from the same sources
+as the drain. Rebuild the tillr programs together and restart the loop to change its
+standard step programs; an adapter-only landing cannot change a running loop's steps.
+The [adapter README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-loop/README.md#step-programs-belong-to-the-running-build)
+names the copy-regeneration command and the missing-field build-mismatch refusal.
+The repository checks the adapter invokes still come from the judged tree, not this copy.
+
 ## Step-program argument contract
 
 A **step program** is the configured gate, fixer gate, land or verdict command that
@@ -943,7 +959,8 @@ after it is done:
   module's own `README.md` when the fence names a sub-path inside the module rather than its
   directory;
 - `tools/tillr-loop/` as a whole when the fence reaches that module, whose `test.py` and
-  `README.md` sit beside the program;
+  `README.md` sit beside the program, plus the drain's embedded adapter copy and that
+  file's pack mirror so a later adapter-only change can commit all required copies;
 - `tests/fork-check.test.py` for `tools/fork-check.py`, and
   `tests/tillr-muse-backend.test.py` for `tools/tillr-run/backends/`.
 

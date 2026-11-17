@@ -2322,12 +2322,7 @@ The refusal also blamed the store ("has no valid stored claim_class") when the s
 the binary was old. The step programs and the binaries should change together, and a field the
 adapter needs but the binary does not print should be refused as a build mismatch.
 
-<!-- tillr: item id="item-loop-steps-match-binaries" paths="tools/tillr-loop/,tools/tillr-drain/,.justfile,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The step programs the loop runs come from the same build as the Go programs they call, so landing a change to `tools/tillr-loop/` does not change the running loop's steps until its binaries are rebuilt too. A test lands a fixture change to the adapter and asserts the running loop's next step still runs the adapter of its own build.
-- **c2:** When `tillr item show` prints a criterion with no `claim_class` field at all, the verdict step's refusal says the `tillr-item` build is older than the adapter and names both builds, instead of saying the store holds no class. A build is named by its revision when it has one and otherwise by its path and digest; a `tillr-item` that is the pack's launcher script is named as that launcher, and the eight launchers are not changed to report more. A test covers a missing field and an unknown class separately.
-- **c3:** A field present with an unknown value is still refused as it is today. A test asserts that refusal is unchanged.
-- **c4:** The drain README and the `tillr-loop` README say where the loop's step programs are read from and when they change.
 
 **Agent details:**
 

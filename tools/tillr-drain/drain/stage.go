@@ -100,6 +100,7 @@ const (
 //   - `tools/tillr-loop/` as a whole whenever the fence reaches `tillr-loop`. That module is a
 //     program and its README and `test.py` sit beside it, so a fence naming
 //     `tools/tillr-loop/tillr-loop` barred a lane from the two files the change is judged by.
+//     The drain's embedded copy and its pack mirror also travel with an adapter change.
 //   - `forkCheckTest` for `tools/fork-check.py`, and `museBackendTest` for
 //     `tools/tillr-run/backends/`: each is the suite for exactly the path it is derived from.
 //
@@ -132,6 +133,8 @@ func fencePaths(allowed []string) []string {
 			add(tillrDocsTest)
 			if module == "tillr-loop" {
 				add("tools/tillr-loop/")
+				add("tools/tillr-drain/drain/tillr-loop.py")
+				add("yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py")
 			}
 		}
 		if named == "tools/fork-check.py" {

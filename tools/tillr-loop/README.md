@@ -20,6 +20,39 @@ tools/tillr-loop/tillr-loop self-check \
   --item <id> --lane <id> --run <id> --worktree <lane-worktree> --base <sha> --head <sha>
 ```
 
+## Step programs belong to the running build
+
+When a configured command names this repository's standard adapter under the loop's
+`--root`, the drain runs its own compiled-in copy, not the live working-tree file. This
+applies to gate, fixer gate, land and verdict, including the keeper's `python3` commands
+and direct script commands. Startup prints one line per step identifying the build's
+embedded adapter or an unchanged caller-configured program. Other scripts run exactly
+as configured; naming a different adapter path does not select the embedded copy.
+
+The copy is committed as [tillr-loop.py](../tillr-drain/drain/tillr-loop.py) and embedded
+in the drain binary. A landing that edits the source therefore does not change a running
+loop's next step. Rebuild the tillr programs together and restart the loop to change its
+standard step programs. Direct invocations from a shell still read the file named on
+that command line. The underlying repository checks are not embedded by this mechanism.
+
+After editing the adapter, regenerate its copy, then mirror the pack and commit both:
+
+```sh
+python3 tools/tillr-loop/sync-adapter.py
+just pack-sync
+```
+
+Both the drain suite and this adapter's suite refuse drift between source and copy.
+The green-commit build recipe compiles the committed copy from the same revision as its
+Go programs; it does not regenerate from the current checkout.
+
+The drain supplies its build stamp through `TILLR_LOOP_ADAPTER_BUILD`. If `tillr-item
+show` omits a criterion's `claim_class` field, verdict refuses with exit 4, says the
+`tillr-item` build is older than the adapter, and names both builds. Revisions identify
+builds when available; otherwise paths and SHA-256 digests identify them. A pack launcher
+is named as that launcher, without executing it to discover its cached binary. A present
+but unknown class still receives the existing invalid-stored-class refusal.
+
 ## No budget: the pile is the only throttle
 
 `tillr drain loop` has no tick budget, no dollar ceiling and no token ceiling. That is a

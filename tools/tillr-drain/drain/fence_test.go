@@ -93,6 +93,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				skill,
 				docsTest,
 				"tools/tillr-loop/",
+				"tools/tillr-drain/drain/tillr-loop.py",
+				mirror + "tillr-drain/drain/tillr-loop.py",
 			},
 			why: "a fence naming only the program barred the lane from the test and README judged with it",
 		},

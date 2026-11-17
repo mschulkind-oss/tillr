@@ -200,7 +200,9 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 	wantMoved := "tools/tillr-loop/\n" +
 		"yolo-packs/tillr/files/local/share/tillr/tillr-loop/\n" +
 		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
-		"tests/tillr-docs.test.py"
+		"tests/tillr-docs.test.py\n" +
+		"tools/tillr-drain/drain/tillr-loop.py\n" +
+		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py"
 	if fence := strings.TrimSpace(moved[drain.FenceFile]); fence != wantMoved {
 		t.Fatalf("the second run's kept fence is %q, want its own item's paths %q", fence, wantMoved)
 	}
