@@ -21,27 +21,35 @@ import (
 // Workflow is a versioned, pre-approved sequence of agent and command runs.
 // Edges order stages and select outcomes; ready stages run serially on one lane.
 type Workflow struct {
-	Name    string            `json:"name"`
-	Version int               `json:"version"`
-	Stages  []WorkflowStage   `json:"stages"`
-	Edges   []WorkflowEdge    `json:"edges"`
-	Exit    *WorkflowExit     `json:"exit,omitempty"`
-	SHA256  string            `json:"sha256,omitempty"`
-	Sources map[string]string `json:"sources,omitempty"`
+	Name           string                      `json:"name"`
+	Version        int                         `json:"version"`
+	Stages         []WorkflowStage             `json:"stages"`
+	Edges          []WorkflowEdge              `json:"edges"`
+	Exit           *WorkflowExit               `json:"exit,omitempty"`
+	SHA256         string                      `json:"sha256,omitempty"`
+	Sources        map[string]string           `json:"sources,omitempty"`
+	Args           map[string]WorkflowArgument `json:"args,omitempty"`
+	Inputs         map[string]string           `json:"inputs,omitempty"`
+	ExpansionDepth int                         `json:"expansion_depth,omitempty"`
 }
 
 // WorkflowExit names the stages required to pass; omission requires every stage.
 type WorkflowExit struct {
-	RequiresNodes     []string `json:"requires_nodes"`
-	RequiresCandidate string   `json:"requires_candidate,omitempty"`
+	RequiresNodes     []string                `json:"requires_nodes"`
+	RequiresCandidate string                  `json:"requires_candidate,omitempty"`
+	Outputs           map[string]WorkflowPort `json:"outputs,omitempty"`
 }
 type WorkflowStage struct {
 	ID         string            `json:"id"`
+	Parent     string            `json:"parent,omitempty"`
+	Args       map[string]any    `json:"args,omitempty"`
+	Repeat     string            `json:"repeat,omitempty"`
+	Prompt     string            `json:"prompt,omitempty"`
+	WriteScope WorkflowScope     `json:"write_scope,omitempty"`
 	Workflow   string            `json:"workflow,omitempty"`
 	Kind       string            `json:"kind"`
 	Seat       string            `json:"seat"`
 	Access     string            `json:"access"`
-	WriteScope json.RawMessage   `json:"write_scope,omitempty"`
 	CommandRef string            `json:"command_ref,omitempty"`
 	Flags      map[string]any    `json:"flags,omitempty"`
 	Command    []string          `json:"resolved_argv,omitempty"`
@@ -104,10 +112,13 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 			if !item.WorkflowRefValid(s.Workflow) {
 				return nil, fmt.Errorf("workflow-reference: %s: %q", s.ID, s.Workflow)
 			}
-			if s.Seat != "" || s.Access != "" || len(s.WriteScope) != 0 || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 || len(s.Inputs) != 0 || len(s.Outputs) != 0 {
-				return nil, fmt.Errorf("workflow-kind: %s: workflow stage cannot specify run fields or named inputs/outputs", s.ID)
+			if s.Seat != "" || s.Access != "" || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 {
+				return nil, fmt.Errorf("workflow-kind: %s: workflow stage cannot specify run fields", s.ID)
 			}
 			continue
+		}
+		if s.Args != nil {
+			return nil, fmt.Errorf("workflow-kind: %s: only workflow stages pass args", s.ID)
 		}
 		if s.Workflow != "" {
 			return nil, fmt.Errorf("workflow-kind: %s: only workflow stages name a workflow", s.ID)
@@ -130,19 +141,16 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		if s.Access != "read_only" && s.Access != "write" {
 			return nil, fmt.Errorf("workflow-access: %s", s.ID)
 		}
-		if len(s.WriteScope) != 0 && s.Access == "read_only" {
+		if s.WriteScope.explicit && s.Access == "read_only" {
 			return nil, fmt.Errorf("workflow-write-scope-read-only: %s", s.ID)
 		}
 		if s.Access == "write" {
-			if len(s.WriteScope) == 0 {
-				s.WriteScope = json.RawMessage(`"inherit"`)
-			}
 			if _, err := s.scopePaths(nil); err != nil {
 				return nil, err
 			}
 		}
 	}
-	if err := validateOutputWiring(&w); err != nil {
+	if err := validateTemplateWiring(&w); err != nil {
 		return nil, err
 	}
 	if w.Exit != nil {
@@ -207,14 +215,10 @@ func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
 // scopePaths expands a node's explicit paths by the same rules as an item's fence.
 // An omitted scope also inherits for decisions recorded before scopes were supported.
 func (s WorkflowStage) scopePaths(allowed []string) ([]string, error) {
-	var inherit string
-	if len(s.WriteScope) == 0 || (json.Unmarshal(s.WriteScope, &inherit) == nil && inherit == "inherit") {
+	if s.WriteScope.Paths == nil {
 		return fencePaths(allowed), nil
 	}
-	var paths []string
-	if json.Unmarshal(s.WriteScope, &paths) != nil || paths == nil {
-		return nil, fmt.Errorf("workflow-write-scope: %s: expected inherit or a path list", s.ID)
-	}
+	paths := append([]string(nil), s.WriteScope.Paths...)
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("workflow-write-scope-empty: %s", s.ID)
 	}

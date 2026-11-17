@@ -472,6 +472,8 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			if loadErr == nil && w != nil {
 				if scopeErr := w.checkScopes(item.Allowed); scopeErr != nil {
 					hold = scopeErr.Error()
+				} else {
+					loadErr = inheritWorkflowScope(w, WorkflowScope{Paths: fencePaths(item.Allowed)})
 				}
 			}
 			if hold != "" {
