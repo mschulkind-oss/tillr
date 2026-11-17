@@ -122,6 +122,10 @@ func Read(r *store.Reader) (map[string]State, error) {
 			works[w.Decision.ItemID], byRun[id] = &w, &w
 		case "drain.candidate-assigned":
 			if w := byRun[id]; w != nil {
+				// The payload omits a false lane_released: the assignment ends the
+				// earlier release, so clear it before decoding, and the assigned lane
+				// reads as occupied.
+				w.LaneReleased, w.LaneKeepReason = false, ""
 				if err := json.Unmarshal(e.Payload, w); err != nil {
 					return nil, err
 				}

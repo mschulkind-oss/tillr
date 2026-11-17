@@ -73,7 +73,9 @@ func TestReadReservationHistoryNeedsNoDrainSchema(t *testing.T) {
 	assert("kept", "candidate awaits pin verification and lane release")
 	appendEvent("drain.candidate-lane", map[string]any{"candidate": map[string]any{}, "released": true})
 	assert("released", "")
-	appendEvent("drain.candidate-assigned", map[string]any{"decision": map[string]any{"item_id": "item-a"}, "candidate": map[string]any{}, "lane_released": false})
+	// The writer's payload omits a false lane_released (omitempty): the assignment
+	// itself, not an explicit false, is what occupies the lane again.
+	appendEvent("drain.candidate-assigned", map[string]any{"decision": map[string]any{"item_id": "item-a"}, "candidate": map[string]any{}, "needs_stage": true})
 	assert("kept", "candidate awaits pin verification and lane release")
 	appendEvent("drain.examined", map[string]any{})
 	assert("", "")

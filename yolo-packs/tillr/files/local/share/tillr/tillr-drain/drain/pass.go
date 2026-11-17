@@ -305,6 +305,16 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			}
 		case candidateAssignedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
+				// The payload is the pending state at assignment, and its omitempty
+				// fields drop a false lane_released and an empty keep reason or release
+				// intent. Decoding over the replayed value kept the earlier release's
+				// lane_released, so the newly occupied lane read as free: its next hold
+				// skipped the reset and the pin moved on, leaving a copy of the
+				// candidate on every lane it passed through. The assignment ends that
+				// release, so clear its state first. Everything else decodes over the
+				// replayed value as before, keeping replay-only facts such as a gate
+				// stall's second observations.
+				work.LaneReleased, work.LaneKeepReason, work.ReleasePending = false, "", ""
 				if err := json.Unmarshal(e.Payload, work); err != nil {
 					return nil, nil, err
 				}
@@ -648,6 +658,9 @@ type runCompletion struct {
 	detail  string
 	result  *LoopResult
 	timing  *PassTiming
+	// laneRefusal is a pinned candidate's staging refused by its assigned lane's own
+	// state; the pass takes that lane out of rotation (lane_rotation.go).
+	laneRefusal *LaneRefusalError
 }
 
 // passPlans takes one read of the world. Application takes one write transaction per
@@ -1292,6 +1305,12 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	if c.detail != "" {
 		result.Detail = c.detail
 	}
+	if c.laneRefusal != nil && c.outcome.err == nil {
+		if err := l.takeLaneOutOfRotation(context.Background(), c.laneRefusal); err != nil {
+			result.StopItemID, result.StopStep = c.itemID, "lane rotation"
+			return "", err
+		}
+	}
 	if c.outcome.stop != "" || c.outcome.err != nil {
 		result.StopItemID, result.StopStep = c.itemID, c.step
 		if c.result != nil && c.result.StopStep != "" {
@@ -1602,10 +1621,17 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
 		if work.NeedsStage {
 			if err := l.stagePinnedCandidate(ctx, work); err != nil {
+				if refusal := asLaneRefusal(err); refusal != nil {
+					// The lane's own state refused the pinned candidate: the lane leaves
+					// rotation and the candidate, still pinned, is released to be offered
+					// another lane. One lane's condition never stops the loop.
+					completion.laneRefusal = refusal
+					err = l.releaseRefusedAssignment(ctx, work)
+				}
 				completion.outcome.err = err
 			}
 		}
-		if completion.outcome.err != nil {
+		if completion.outcome.err != nil || completion.laneRefusal != nil {
 			// The claimed lane remains pending so a replacement retries staging.
 		} else if d.Reason == ReasonItemAlreadyTerminal {
 			// The plan read the terminal state and the claim's version check rebound it;
