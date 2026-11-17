@@ -974,12 +974,13 @@ the directory, planned request, rendered values, and Git-staging refusal.
 ## Lanes that staging refuses
 
 Some staging refusals are about the lane, not the item it was offered. The next item
-offered that lane would be refused the same way. There are two such conditions:
+offered that lane would be refused the same way. There are three such conditions:
 
 | Reason | What the lane holds | Remedy |
 | :--- | :--- | :--- |
 | `lane-holds-unlanded-change` | a commit that neither the base, the trunk, nor a run pin contains, and that no recorded landing names, which staging will not reset | land the change, or reset the lane as described below |
 | `lane-branch-held` | its branch, checked out by another worktree | remove the holding worktree, or stage a different lane |
+| `lane-holds-uncommitted-work` | uncommitted or untracked files when a pinned candidate is staged onto it, which staging will not overwrite | commit or remove the files, or reset the lane as described below |
 
 The loop takes such a lane **out of rotation** for the session. That means no plan offers
 it an item, and the item it was offered is offered the next free lane in the same pass.
@@ -1257,9 +1258,14 @@ edits retain the lane; the loop does not overwrite the older evidence or discard
 the newer work. A recorded pruning prevents replay from recreating the ref.
 
 Preservation finishes before reset, including a workflow restart and a conflict
-repair; Git runs outside SQLite write transactions. Ordinary lane reset leaves
-untracked files in place. A workflow restart saves nonignored untracked files
-before its cleanup.
+repair; Git runs outside SQLite write transactions. An ordinary lane reset then
+removes the nonignored untracked files the preservation saved, so a released lane
+is clean for its next run; before 2026-11-17 it left them in place, and a pinned
+candidate staged onto such a lane was refused (`lane-holds-uncommitted-work`, see
+"Lanes that staging refuses"). The removal runs before the reset, under the ignore
+rules the snapshot read, so a file the run's own ignore edit hid stays in place
+rather than being deleted unsaved. Ignored files always stay. A workflow restart
+saves nonignored untracked files before its cleanup.
 
 > [!WARNING]
 > **Landing remains blocked.** A dirty tracked ignore file can hide work from the

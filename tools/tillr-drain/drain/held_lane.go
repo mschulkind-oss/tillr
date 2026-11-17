@@ -442,7 +442,17 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 			return err
 		}
 		if len(paths) > 0 {
-			return Externalf("lane %s has uncommitted work; pinned candidate was not staged", c.LaneID)
+			// The files are the lane's condition, not the candidate's: the lane leaves
+			// rotation with them untouched, and the candidate, still pinned, is offered
+			// another lane (releaseRefusedAssignment). A plain error here stopped the loop
+			// every few minutes on 2026-11-17.
+			shown := paths
+			if len(shown) > 5 {
+				shown = append(append([]string{}, shown[:5]...), fmt.Sprintf("and %d more", len(paths)-5))
+			}
+			return laneRefusalf(c.LaneID, ReasonLaneUncommittedWork,
+				"commit or remove the files, or reset the lane deliberately (tillr-drain README, \"Resetting a lane\")",
+				"lane %s has uncommitted work (%s); pinned candidate %s was not staged", c.LaneID, strings.Join(shown, ", "), c.RunID)
 		}
 	}
 	if head != c.HeadSHA {

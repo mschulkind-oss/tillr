@@ -2639,6 +2639,15 @@ func (l *Loop) resetLaneToRegistryLocked(ctx context.Context, lane, revision str
 		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
 		return err
 	}
+	// A hard reset keeps untracked files. Every caller preserves the lane's dirty work
+	// (preserveWork) before it resets, so those files already have a durable copy; left
+	// behind, they released a lane with a settled run's files in it (2026-11-17, lane-12).
+	// The clean runs before the reset, under the ignore rules the snapshot read: a file
+	// the run's own ignore edit hid from the snapshot stays ignored here, and is not
+	// deleted once the reset restores the trunk's rules. Ignored files stay.
+	if _, err := l.git(ctx, path, "clean", "-fd"); err != nil {
+		return err
+	}
 	if _, err := l.git(ctx, path, "checkout", "--force", "-B", LaneBranch(l.cfg.LaneRoot, lane), revision); err != nil {
 		return err
 	}
