@@ -18,13 +18,78 @@
 ## What this module owns
 
 `tillr-store` creates a store, seeds one from a bundle, verifies the store's own invariants,
-reads the event log back, records the store's definition, and checkpoints the store on demand.
+reads the event log back, records the store's definition, inventories the store directory,
+and checkpoints the store on demand.
 It is the utility every other utility's fixture starts from, so its report is a contract
 rather than a convenience: one `store.report` record per face describing the store as it
-stands after the face ran, except `definition`, which emits `store.definition`.
+stands after the face ran, except `definition`, which emits `store.definition`, and
+`inventory`, which prints text or one `store.inventory` record.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
+
+## Read-only inventory
+
+```bash
+tillr store inventory --root <repo>
+tillr store inventory --root <repo> --json
+```
+
+`inventory` reports what the repository's store directory holds; it never retires a
+run, caps a file, prunes a reference, creates a store, migrates it, or checkpoints it.
+The repository root must contain Git metadata and an existing regular database file.
+Missing or unreadable inputs are errors, not an empty inventory. A failure prints a
+diagnostic on standard error without a partial report on standard output.
+
+The default output is tab-separated, with quoted names so a tab or newline in a
+name cannot create a false row. Every row has a part, name, **grain** (what one count
+means), count, bytes when it measures files, and a one-line description:
+
+- **Database tables:** every table, including SQLite's internal tables, gets its
+  committed row count in one read transaction. Table rows have no bytes: the database
+  file and its coordination files appear separately, avoiding double-counting.
+- **Loop files:** files anywhere inside a run are grouped by their final filename,
+  even in nested directories. The count is the number of distinct runs containing
+  that name, not the number of files. Bytes include every occurrence of the name.
+  Loose entries outside a run are separate file rows.
+- **Lanes:** each file is named beneath its lane's worktree or other category. Counts
+  here are files, not runs. A separate lane totals section has a worktree summary row
+  and an other summary row for every lane, even when either is empty. These summarize
+  the file rows, not additional bytes: the worktree summary measures the source
+  checkout and build outputs, and the other summary measures remaining lane storage.
+- **Git references:** references beneath the tillr namespace are grouped by their
+  first path segment. Counts are references, not the size of reachable Git objects.
+- **Other files:** every remaining file beneath the store directory is named relative
+  to that directory. Unknown filenames, table names, and reference groups are printed
+  with `undescribed`; they are never excluded from counts or byte sums. This includes
+  unknown files in lane worktrees and in the other lane category. Loose loop or lane
+  files use a leading `./` in their names to distinguish them from grouped run files
+  and lane categories.
+
+Directory totals for the whole store, loop records, and lanes print both the measured
+bytes and the sum of their byte-bearing rows. Bytes mean apparent file lengths, not
+allocated disk blocks: directory metadata is excluded, hard links are counted at each
+path, and symbolic links contribute their own length without following their targets.
+The ten largest run directories are listed by descending bytes, with each run id and
+its largest file's relative path and bytes. Ties are resolved by name; an empty run has
+no largest file.
+
+`--json` emits the same information as one `store.inventory` record. Its payload has
+`rows` (part, name, grain, count, optional bytes, description), `totals` (directory,
+bytes, row_bytes), and `largest_runs` (run_id, bytes, largest_file, largest_file_bytes).
+`lane_totals` holds the worktree and other summary rows, in the same row shape. Only
+`rows` contribute to directory byte sums; `lane_totals` and `largest_runs` summarize
+those bytes rather than adding more. All lists have deterministic order. No extra
+report is appended to the JSON record.
+
+Database reads use SQLite's read-only mode and read-only shared-memory option. This
+also prevents reader coordination from changing the shared-memory file's bytes or
+modification time while another connection holds a write transaction; committed
+changes still in the write-ahead log remain visible. The inventory does not use
+SQLite's immutable mode, which would ignore that log. Files and references are
+observed separately from the database transaction, so this is not an atomic snapshot
+of a changing repository. A file that disappears or becomes unreadable during the
+walk is an error, not silently omitted. Nothing changes the existing retention policy.
 
 ## State invariants
 
