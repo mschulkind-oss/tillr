@@ -36,7 +36,7 @@ The design that splits this surface into `--help`, this README and the compositi
   already passed. The store write lock covers this check, the trunk move, and the
   receipt, so a concurrent close either prevents the move or sees the successful
   landing receipt and refuses. Standalone stores with no item table remain usable.
-- **One landing, one squash.** `Trunk.Squash` writes exactly one commit —
+- **One trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
   with the repository's scope-checked identity and the head's own message. The commit
   names no queue item: there is no `Tillr-Item:` trailer (ruling `D-RS3` in
@@ -47,7 +47,7 @@ The design that splits this surface into `--help`, this README and the compositi
   clash checks and range preservation happen outside SQLite transactions. The final
   write transaction rechecks disposition, history inputs and trunk expectations before
   Move and receipt. A changed preparation input is an explicit error, not automatic
-  replay. The final Move and history-retention refs can still be slow; see the
+  replay. The final Move, fork-cache refresh and history-retention refs can still be slow; see the
   [contention recovery boundary](../../docs/recovery/sqlite-contention/README.md#exact-residual-limitation).
 - **A retry of a run does not squash or publish its change a second time.** Git's Move and
   the SQLite receipt are two writes, and a crash can keep the first and lose the second.
@@ -78,9 +78,28 @@ The design that splits this surface into `--help`, this README and the compositi
 - **A non-landing pins its head.** A squash conflict or a refusal, `already-on-trunk` included, answers
   `refs/tillr/runs/<run_id>` at the head before the lock is released, so a head the gate saw
   cannot be garbage-collected before a conflict-fixer or a person reads it.
-- **Authorship follows the landing.** The squashed commit carries the identity the
+- **Authorship follows the trunk landing.** The squashed commit carries the identity the
   repository's git config states, never the lane branch's, and a repository that states one
   in a scope a lane can write is refused rather than trusted.
+
+## Fork delivery
+
+A fork item delivers to `refs/heads/patch/<fork>`, not the repository's trunk. Its
+passing verdict must bind the candidate's base and tree and carry a passing
+`fork-build` check, which runs the pack's build command on that exact head. The
+lander fast-forwards the patch branch to the built commit without squashing or
+rewriting fork history, and writes its landed marker before the move. The marker
+names that same head, so sibling run boundaries recognize the delivery. The shared
+cache's `main` and copy of the patch ref are refreshed before the receipt is written.
+A missing cache is first prepared privately from the gated fork's upstream metadata
+and published only when complete, at the current delivery tip. A retry after a crash
+between move and receipt completes the refresh without a second delivery; if a later
+fork item already delivered, recovery records the earlier head while keeping the
+cache at that later tip. Ancestry is rechecked against the tip read under the landing
+lock, so an external patch advance while the request waits cannot be overwritten.
+Dirty or divergent cache work is never reset. A passing verdict
+without the build check is `verdict-mismatch`, not permission to deliver. The
+regressions are in [fork_safety_test.go](fork_safety_test.go).
 
 ## Known cases the marker does not settle
 

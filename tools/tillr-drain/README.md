@@ -349,7 +349,7 @@ lands in one of three outcomes:
 | Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
 | Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
 | Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | Ignored | These are deliveries or concurrent loop work. |
-| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the squash commit before it moves the patch branch. |
+| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the built fork head before it moves the patch branch. |
 | The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
 | A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |
 | Main-checkout uncommitted content, and hand commits on the trunk | Ignored | Content belongs to the owner, regardless of when it appeared. |
@@ -618,6 +618,33 @@ item block. The fence check compares the fix's block against exactly what the lo
 retirement makes of the fix's base, and only for a run whose original candidate has a
 recorded `drain.retirement`. A fix that changes its own block in any other way is still
 refused.
+
+## Filing fork work
+
+File a fork item with a fence entry such as `.forks/lanes/lane-1/pi/`, optionally
+restricted to a subdirectory. The filed lane id is a placeholder, not a reserved
+checkout: staging rewrites it to the dispatched lane in both the brief and the fence,
+materializes that checkout, and starts it at the delivered patch tip. The worker
+commits only in that checkout and must not run `bin/pi-forks export`. The lander alone
+moves `refs/heads/patch/pi`, marks the delivery for sibling boundaries, and refreshes
+the shared cache's `main`; two items for the same fork remain serialized.
+
+The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs through
+`tillr-gate` on a clean copy of the exact candidate head with the pack's declared
+build command. The ordinary repository gate's candidate-build step reconstructs the
+currently delivered branch, not this unlanded head, so it cannot certify a fork item.
+A pack with no build command explicitly receives a source-only check instead. Build
+output stays beside the run's gate records, never in the worker's checkout. A failed
+build leaves the patch branch unmoved, and a passing verdict lacking `fork-build` is
+not a fork-delivery verdict. The lander publishes the built commit itself rather than
+squashing fork history. Dirty or divergent cache and writer checkouts are refused,
+not reset. A missing shared cache is prepared from the gated fork's upstream metadata
+and published only when complete; recovery of an earlier receipt keeps a later delivered
+tip in that cache. On 2026-11-17,
+`go test . -run 'TestFork|TestAForkLane|TestPatchBranchRetirement' -count=1` in this
+directory passed. The integration case exercises failed build refusal, two overlapping
+lane boundaries, the main checkout's `bin/pi-forks check` with existing and freshly
+created caches, and two successive fork landings.
 
 ## The fence, and the session
 

@@ -188,6 +188,18 @@ func TestPatchBranchRetirementDoesNotChangeTheExportedForkHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixtureAt(t, f.store, itemRecord("item-target", "in-queue"))
+	helper, err := os.ReadFile("fork-gate.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"tools/tillr-drain", "yolo-packs/fixture"} {
+		if err := os.MkdirAll(filepath.Join(f.root, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(f.root, "tools/tillr-drain/fork-gate.py"), string(helper))
+	writeFile(t, filepath.Join(f.root, "yolo-packs/fixture/pack.json"), `{"contributes":[{"patch_branch":"git+https://example.invalid/repo?ref=patch/fixture","build":"test -f candidate.txt"}]}`)
+	t.Setenv("PATH", filepath.Dir(sibling(t, "gate"))+string(os.PathListSeparator)+os.Getenv("PATH"))
 	loop := f.newLoop(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)))
 	candidate := drain.Candidate{ItemID: "item-target", LaneID: "lane-1", RunID: "run-fork", Worktree: fork, BaseRef: "refs/heads/patch/fixture", BaseSHA: base, HeadSHA: head}
 	_, landed, err := loop.Verify(context.Background(), candidate, &drain.LoopResult{}, nil)

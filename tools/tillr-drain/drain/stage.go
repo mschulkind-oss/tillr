@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -187,13 +186,8 @@ func forkTarget(root, laneID string, allowed []string) (ForkTarget, bool, error)
 	found := make([]ForkTarget, 0, 1)
 	seen := make(map[string]bool, 1)
 	for _, raw := range allowed {
-		cleaned := path.Clean(filepath.ToSlash(raw))
-		if !strings.HasPrefix(cleaned, prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(cleaned, prefix)
-		fork, _, _ := strings.Cut(rest, "/")
-		if fork == "" || fork == "." || fork == ".." {
+		_, fork, _, declared := item.ForkCheckoutPath(raw)
+		if !declared {
 			continue
 		}
 		// A fence may name a subdirectory of the checkout; the checkout is always the
@@ -351,8 +345,18 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	target, targetKind := worktree, "lane worktree"
 	baseSHA := spec.BaseSHA
 	if isFork {
+		for i, raw := range recorded.AllowedPaths {
+			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
+				recorded.AllowedPaths[i] = ".forks/lanes/" + spec.LaneID + "/" + name + suffix
+			}
+		}
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
 			return err
+		}
+		if !spec.Continue {
+			if err := s.refreshForkCheckout(ctx, fork); err != nil {
+				return err
+			}
 		}
 		// The candidate's base is the fork's own HEAD, not the trunk: the patch branch is
 		// the delivery the item moves, and the lane worktree the boundary watches is still
@@ -405,6 +409,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	brief, err := renderBrief(s.Template, recorded.ItemID, values)
 	if err != nil {
 		return err
+	}
+	if isFork {
+		brief = strings.Replace(brief, "## Method\n", "## Method\n\nCommit the change in the named fork checkout, on its own branch. Do not run `bin/pi-forks export`: the lander alone moves the patch branch after the candidate build gate passes and refreshes the shared cache. Do not edit the shared cache or another lane's checkout.\n", 1)
 	}
 	if item.IsCommentItem(spec.ItemID) {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
@@ -560,15 +567,26 @@ func (s *LaneStager) ensureForkCheckout(ctx context.Context, spec StageSpec, for
 		return Externalf("the fork checkout %s is not there and %s is not a driver this repository has: run `bin/pi-forks setup --lane %s --fork %s` before staging this item",
 			fork.Checkout, driver, spec.LaneID, fork.Fork)
 	}
-	cmd := exec.CommandContext(ctx, driver, "setup", "--lane", spec.LaneID, "--fork", fork.Fork)
-	cmd.Dir = s.Root
-	cmd.Env = append(os.Environ(), "PI_FORKS_ROOT="+s.Root)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return Externalf("materializing the fork checkout %s: %v: %s %s",
-			fork.Checkout, err, strings.TrimSpace(stderr.String()), strings.TrimSpace(string(out)))
+	materialize := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, driver, args...)
+		cmd.Dir = s.Root
+		cmd.Env = append(os.Environ(), "PI_FORKS_ROOT="+s.Root)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			return Externalf("materializing the fork checkout %s: %v: %s %s",
+				fork.Checkout, err, strings.TrimSpace(stderr.String()), strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, ".forks", fork.Fork)); os.IsNotExist(err) {
+		if err := materialize("setup", "--fork", fork.Fork); err != nil {
+			return err
+		}
+	}
+	if err := materialize("setup", "--lane", spec.LaneID, "--fork", fork.Fork); err != nil {
+		return err
 	}
 	if info, err := os.Stat(fork.Checkout); err != nil || !info.IsDir() {
 		return Externalf("the fork driver answered success but %s is not a directory: a lane staged there cannot run", fork.Checkout)

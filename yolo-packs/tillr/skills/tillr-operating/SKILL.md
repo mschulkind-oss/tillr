@@ -154,6 +154,15 @@ checkout matches it. An answer-only run records `answered`, skips gate and landi
 its replies, and closes the item. Delivery waiting on an owner's edit remains in the store
 for a later pass; repeated delivery retains the same nonce.
 
+To file fork work, name a checkout in the fence, for example
+`.forks/lanes/lane-1/pi/` (or a subdirectory of it). The filed lane is a placeholder;
+staging materializes the dispatched lane's checkout and names it in the brief and
+fence, starting from the delivered patch tip. The worker commits there only, never
+runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's
+`fork-build` check builds a clean copy of that exact head with the pack command; only
+then does the lander move `refs/heads/patch/pi` to the built head, write its landed
+marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
+
 ## 3. Run — execute a candidate in an isolated lane
 `tillr run exec`
 
@@ -184,7 +193,8 @@ which is the evidence a disputed verdict is settled with.
 `tillr land pass`
 
 The trunk moves only through this step, and only for a candidate that passed. One landing
-is one stateless squashed commit. A land that refuses records the item's verdict and is
+is one stateless squashed commit for ordinary repository work; a fork delivery keeps
+the built fork head and refreshes its shared cache instead. A land that refuses records the item's verdict and is
 not retried by the loop. A land that conflicts — `squash-conflict`, because another
 landing moved the trunk first — is not a refusal: the loop stages one conflict-fix run for
 the same candidate, carrying the conflicting paths and the three-way markers in its brief,

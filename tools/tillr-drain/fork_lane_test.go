@@ -36,6 +36,7 @@ func newForkLaneFixture(t *testing.T) forkLaneFixture {
 	writeFile(t, filepath.Join(fork, "fork.txt"), "the fork's base\n")
 	git(t, fork, "add", "fork.txt")
 	git(t, fork, "commit", "-m", "the fork's base")
+	git(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
 	return forkLaneFixture{stageFixture: f, fork: fork, forkBase: git(t, fork, "rev-parse", "HEAD")}
 }
 
@@ -156,7 +157,7 @@ func TestAForkLaneBoundaryExcusesItsPatchRefAndLandMovesOnlyTheTrunk(t *testing.
 		"verdict_id": "verdict_patch", "plan_id": "plan_patch",
 		"registry_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		"base_sha":        f.forkBase, "tree_sha": forkTree, "result": "pass",
-		"checks": []map[string]any{},
+		"checks": []map[string]any{{"check_id": "fork-build", "result": "pass"}},
 	}))
 	code, output := driveRecord(t, land, "pass", "--store", store, "--repo", f.root,
 		"--item", "item_041", "--run", "run-patch", "--base", f.forkBase, "--head", forkHead,

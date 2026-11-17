@@ -307,6 +307,7 @@ func (f fixture) verdict(result string) map[string]any {
 		"result":          result,
 		"checks": []map[string]any{
 			{"check_id": "go-test", "result": result, "duration_ms": 1200, "log_ref": "logs/go-test.log"},
+			{"check_id": "fork-build", "result": result, "duration_ms": 1, "log_ref": "logs/fork-build.log"},
 		},
 	}
 }
@@ -659,6 +660,9 @@ func TestALandingRefusesARepositoryLocalIdentityOverride(t *testing.T) {
 func TestAPatchBranchLandingAdvancesThePatchRef(t *testing.T) {
 	f := newFixture(t)
 	git(t, f.dir, "branch", "patch/pi", f.baseSHA)
+	cache := filepath.Join(f.dir, ".forks/pi")
+	git(t, f.dir, "clone", "--quiet", "--no-checkout", f.dir, cache)
+	git(t, cache, "checkout", "-b", "main", f.baseSHA)
 	db, code, out := f.land(t, "run-1", "pass", "--base-ref", "patch/pi")
 	if code != 0 {
 		t.Fatalf("pass exited %d: %s", code, out)
@@ -666,6 +670,9 @@ func TestAPatchBranchLandingAdvancesThePatchRef(t *testing.T) {
 	got := decodeLanding(t, out)
 	if got.Payload.Result != "landed" {
 		t.Fatalf("landing is %s/%s, want landed", got.Payload.Result, got.Payload.Reason)
+	}
+	if got.Payload.TrunkAfter != f.headSHA {
+		t.Fatalf("fork delivery rewrote the built head: got %s want %s", got.Payload.TrunkAfter, f.headSHA)
 	}
 	if moved := git(t, f.dir, "rev-parse", "refs/heads/patch/pi"); moved != got.Payload.TrunkAfter {
 		t.Fatalf("patch/pi is at %s, want %s", moved, got.Payload.TrunkAfter)

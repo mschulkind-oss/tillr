@@ -426,6 +426,9 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	p.landing.TrunkBefore, p.landing.TrunkAfter = trunkBefore, trunkBefore
 	if hasMarker && !markerRecorded {
 		parent, ok, err := t.RecoveredLanding(req.BaseSHA, req.HeadSHA, marker, trunkBefore)
+		if PatchRef(req.BaseRef) != "" {
+			parent, ok, err = req.BaseSHA, marker == req.HeadSHA && t.IsAncestor(marker, trunkBefore), nil
+		}
 		if err != nil {
 			return p, err
 		}
@@ -469,6 +472,30 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			p.landing.TrunkBefore, p.landing.TrunkAfter, p.landing.LandedTree = trunkBefore, trunkBefore, ""
 		}
 	}
+	if p.landing.Landed() && PatchRef(req.BaseRef) != "" {
+		// The pre-lock read cannot authorize a move over an external delivery made
+		// while this request waited. Recheck the tip preparation actually locked.
+		if !p.recovered {
+			switch {
+			case p.tip == req.HeadSHA:
+				p.landing.Result, p.landing.Reason = ResultRefused, ReasonPatchAtHead
+			case !t.IsAncestor(p.tip, req.HeadSHA):
+				p.landing.Result, p.landing.Reason = ResultRefused, ReasonPatchRewind
+			}
+		}
+		if p.landing.Landed() {
+			if err := t.ensureForkCache(req, p.tip); err != nil {
+				return p, err
+			}
+			cacheTip := req.HeadSHA
+			if p.recovered {
+				cacheTip = p.tip
+			}
+			if err := t.prepareForkCache(req.BaseRef, cacheTip); err != nil {
+				return p, err
+			}
+		}
+	}
 	if p.recovered {
 		// The range was preserved before the original move; preserving it again is
 		// idempotent and keeps the commit list if the crash came before it was flushed.
@@ -476,7 +503,13 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			return p, err
 		}
 	} else if p.landing.Landed() {
-		p.squash, err = t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
+		if PatchRef(req.BaseRef) != "" {
+			// Fork commits are the delivery, not a diff to squash. Publish exactly the
+			// built head; ancestry and the guarded move still refuse a rewind.
+			p.squash = Squash{Commit: req.HeadSHA, Tree: p.landing.GatedTree}
+		} else {
+			p.squash, err = t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
+		}
 		if err != nil {
 			return p, err
 		}
@@ -575,6 +608,15 @@ func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLandin
 			return Landing{}, err
 		}
 	}
+	if landing.Landed() && PatchRef(req.BaseRef) != "" {
+		cacheTip := landing.TrunkAfter
+		if p.recovered {
+			cacheTip = p.tip
+		}
+		if err := t.RefreshForkCache(req.BaseRef, cacheTip); err != nil {
+			return Landing{}, err
+		}
+	}
 	return recordLanding(ctx, tx, landing, req.At)
 }
 
@@ -652,6 +694,17 @@ func decide(req LandingRequest, tree string) (result, reason string) {
 	}
 	switch req.Verdict.Result {
 	case VerdictPass:
+		if PatchRef(req.BaseRef) != "" {
+			built := false
+			for _, check := range req.Verdict.Checks {
+				if check.CheckID == "fork-build" && check.Result == VerdictPass {
+					built = true
+				}
+			}
+			if !built {
+				return ResultRefused, ReasonVerdictMismatch
+			}
+		}
 		return ResultLanded, ""
 	case VerdictFail:
 		return ResultRefused, ReasonVerdictFailed

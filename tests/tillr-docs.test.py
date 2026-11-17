@@ -662,8 +662,19 @@ def case_cache_safe_working_loop_documented():
     ok("worker brief and operating skill use targeted tests and cache-safe full verification")
 
 
+def case_fork_filing_documented():
+    for path in (ROOT / "tools/tillr-drain/README.md", SKILL):
+        text = text_of(path)
+        for required in (".forks/lanes/lane-1/pi/", "placeholder", "worker", "commits",
+                         "bin/pi-forks export", "lander", "fork-build", "shared cache"):
+            if required not in text:
+                fail(f"{path.relative_to(ROOT)} omits fork filing guidance: {required}")
+    ok("fork filing names the rebound fence, worker commit and lander-owned delivery")
+
+
 def main():
     case_cache_safe_working_loop_documented()
+    case_fork_filing_documented()
     cleanup_tests = subprocess.run(
         [sys.executable, str(ROOT / "tests/tillr-scratch.test.py")],
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},

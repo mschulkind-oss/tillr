@@ -78,6 +78,20 @@ func exec(t *testing.T, s *store.Store, query string, args ...any) {
 	}
 }
 
+func TestSyncForkFenceIsMaterializedByStaging(t *testing.T) {
+	s := syncStore(t)
+	root := scratch(t)
+	report := runSync(t, s, root, doc("docs/fork.md", strings.Replace(goodBlock, `paths="tools/thing/"`, `paths=".forks/lanes/lane-1/pi/src/"`, 1)))
+	if len(report.Findings) != 0 {
+		t.Fatalf("fork item findings: %+v", report.Findings)
+	}
+	for _, warning := range report.Warnings {
+		if warning.Rule == "path-missing" {
+			t.Fatalf("staging's fork checkout was warned as missing: %+v", warning)
+		}
+	}
+}
+
 const goodBlock = `# Plan
 
 ### Build the thing

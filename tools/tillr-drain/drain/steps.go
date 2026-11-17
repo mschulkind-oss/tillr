@@ -246,6 +246,9 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		env = append(env, "TILLR_GATE_SPANS_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile))
 	}
 	program := s.GateProgram
+	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); fork != candidate.BaseRef {
+		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
+	}
 	if IsTrunkFixer(candidate.ItemID) && s.FixerGateProgram != "" {
 		program = s.fixerGate(candidate)
 	}

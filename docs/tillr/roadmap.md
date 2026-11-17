@@ -1850,15 +1850,7 @@ other-lane patch-branch move it excuses is one the lander has marked. A moved pa
 reaches every host at its next launch once it is pushed, so it should move only after the gate has
 built it. The three usage-recording fork items wait on this one.
 
-<!-- tillr: item id="item-drain-fork-lane-safety" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-item/,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** An item whose fence names `.forks/lanes/<lane>/<fork>/` for any lane id is staged against the dispatched lane's own checkout of that fork, materialized if it is missing, with that fork's patch branch as the delivery. An item filed with `lane-1` in its fence therefore runs on whichever lane it is given. A test dispatches such an item to `lane-3` and asserts the staged target, patch ref and base.
-- **c2:** The brief and the fence check both name the dispatched lane's checkout, and a write to another lane's checkout is outside the fence. A test asserts both.
-- **c3:** A fork run's delivery never convicts a sibling run. One way is for the lander to be the only mover of the patch branch, with its landed marker, and for the fork brief to tell the worker not to run `bin/pi-forks export`. The other is for the run boundary to excuse a move made by a fork run the loop registered. A test runs a fork item and an ordinary item on two lanes, delivers the fork, and asserts that neither run is convicted.
-- **c4:** The patch branch moves only after a gate verdict that built the candidate head with the pack's build command. The builder records which gate step does that for a patch-branch fork today, and adds one if none does. A test gives a candidate whose build fails and asserts that it is refused and the branch is unmoved.
-- **c5:** After a fork landing, the shared cache's `main` is at the landed tip. `bin/pi-forks check --fork <fork>` then passes from the main checkout, and the next item for the same fork starts from that tip. A test lands two fork items one after the other and asserts that the second's base is the first's head.
-- **c6:** The drain README and the `tillr-operating` skill each give one paragraph on how to file a fork item: the fence spelling, what the worker commits, and who moves the patch branch.
-- **c7:** The item sync reads a fence entry under `.forks/lanes/<lane>/<fork>/` as a fork checkout that staging materializes, and does not warn that the path is missing. A test syncs a block with such a fence on a repository with no `.forks` directory and asserts that no `path-missing` warning is printed.
 
 **Agent details:**
 

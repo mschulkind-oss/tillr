@@ -337,6 +337,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if in.Root != "" {
 		for _, b := range blocks {
 			for _, p := range b.payload.AllowedPaths {
+				if _, _, _, checkout := ForkCheckoutPath(p); checkout {
+					continue // staging materializes the dispatched lane's checkout
+				}
 				if _, err := os.Stat(filepath.Join(in.Root, filepath.FromSlash(p))); err != nil {
 					report.Warnings = append(report.Warnings, note(b, "path-missing",
 						fmt.Sprintf("paths names %q, which does not exist under the repository root; the slice may create it", p)))

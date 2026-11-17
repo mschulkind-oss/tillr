@@ -93,7 +93,7 @@ change onto the moved tip (`git merge-tree --write-tree --merge-base=<base> <tru
 landing and not a defect. The replay ruling's step 1 — the board pass's squash-merge — was the
 earlier route to the same mechanism; it retired with the board.
 
-*Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: every
+*Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: every trunk
 landing runs `Trunk.Squash` to three-way merge the candidate change onto the current tip and records
 both trees on `landings` without inspecting `git patch-id`.
 [Section 3](#3-gate-what-will-be-the-tip-once) is the same mechanism from the throughput side.
@@ -109,7 +109,7 @@ incoming change.
 inverted polarity as principle 2, in a different place. This is the owner's stated model, modeled on
 a merge queue with "require branches up to date" off.
 
-*Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/). Every candidate lands through one
+*Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/). Every trunk candidate lands through one
 stateless squash (`Land` in [`landing.go`](../../tools/tillr-land/land/landing.go) calling
 `Trunk.Squash` in [`trunk.go`](../../tools/tillr-land/land/trunk.go)): the gate runs beforehand
 outside `land.lock`, and under `land.lock` `Trunk.Squash` three-way merges `base..head` onto
@@ -145,6 +145,14 @@ and [`trunk_test.go`](../../tools/tillr-land/land/trunk_test.go)
 
 [`board-utilities.md`](board-utilities.md) [§5.4](board-utilities.md#54-land-alone) states that
 contract for `land`.
+
+Fork delivery branches are not the trunk: the lander publishes the exact built fork
+head rather than rewriting fork history. A passing `fork-build` check is required,
+and the locked tip must be an ancestor of that head. Cache preparation and receipt
+recovery retain the current delivered tip. This is the
+[lander's fork-delivery contract](../../tools/tillr-land/README.md#fork-delivery),
+verified on 2026-11-17 by `go test ./... -run 'TestFork|TestAPatchBranch' -count=1`
+in the lander's module.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it, and its
 behavior is test-pinned rather than intended: `Trunk.Squash` is the single path every candidate moves
