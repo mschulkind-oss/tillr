@@ -110,8 +110,9 @@ function useRead<T>(
 }
 
 // Poll even with a live socket: finished step files and quiet ages are not store events.
-export const useLanesQuery = (enabled: boolean, paused = false) =>
-  useRead(queryKeys.lanes(), fetchLanes, enabled, false, paused);
+export const useLanesQuery = (enabled: boolean, paused = false, laneOpen = false) =>
+  useQuery({queryKey: queryKeys.lanes(), queryFn: ({signal}) => fetchLanes(signal), enabled,
+    retry: false, refetchOnWindowFocus: false, refetchInterval: paused ? false : laneOpen ? 1000 : FALLBACK_POLL_MS});
 
 export const usePassesQuery = (enabled: boolean, paused = false) =>
   useRead(queryKeys.passes(), fetchPasses, enabled, false, paused);
@@ -199,17 +200,35 @@ export const useRunExchangesQuery = (
  * cursor is what pages back through the rest. */
 export const useRunTranscriptQuery = (
   runId: string | null,
-  live: boolean,
+  _live: boolean,
   enabled = true,
   paused = false,
-) =>
-  useRead<TranscriptData>(
-    queryKeys.runTranscript(runId ?? ""),
-    (signal) => fetchRunTranscript(runId as string, null, signal),
-    runId !== null && enabled,
-    live,
-    paused,
-  );
+) => {
+  const client = useQueryClient();
+  return useQuery<ApiEnvelope<TranscriptData>, Error>({
+    queryKey: queryKeys.runTranscript(runId ?? ""),
+    queryFn: async ({ signal }) => {
+      const previous = client.getQueryData<ApiEnvelope<TranscriptData>>(queryKeys.runTranscript(runId ?? ""));
+      let page = await fetchRunTranscript(runId as string, null, signal, previous?.data.cursor);
+      const entries = new Map((previous?.data.entries ?? []).map(entry => [entry.id ?? `${entry.source}:${entry.seq}`, entry]));
+      for (const entry of page.data.entries) entries.set(entry.id ?? `${entry.source}:${entry.seq}`, entry);
+      while (page.data.has_more && previous) {
+        const cursor = page.data.cursor;
+        page = await fetchRunTranscript(runId as string, null, signal, cursor);
+        if (page.data.has_more && page.data.cursor === cursor) throw new Error("Transcript cursor did not advance.");
+        for (const entry of page.data.entries) entries.set(entry.id ?? `${entry.source}:${entry.seq}`, entry);
+      }
+      return {...page, data: {...page.data, before: previous ? previous.data.before : page.data.before, entries: [...entries.values()]}};
+    },
+    enabled: runId !== null && enabled,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    // File growth needs no store event. Poll only an open transcript, including
+    // when the socket is unavailable; Pause still stops every automatic read.
+    refetchInterval: paused ? false : 1000,
+  });
+};
 
 export const useRunTimelineQuery = (
   runId: string | null,

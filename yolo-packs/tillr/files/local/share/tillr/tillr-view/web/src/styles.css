@@ -2718,3 +2718,12 @@ kbd {
 .lane-strip__action, .lane-strip__derived { color: var(--ink-2); margin-top: var(--s1); }
 .lane-strip__quiet { color: var(--state-cause); }
 .lane-strip small { display: block; color: var(--ink-3); }
+
+/* A lane's four pipeline steps and bounded transcript viewport. */
+.lane-pipeline, .lane-graph ol { display: flex; flex-wrap: wrap; gap: 1.5rem; padding: 0; list-style: none; }
+.lane-pipeline [aria-current="step"] { font-weight: 700; color: var(--accent); }
+.transcript__entries { max-height: 32rem; overflow-y: auto; overflow-anchor: none; }
+.transcript-entry summary { cursor: pointer; }
+.transcript-entry__command { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transcript__markdown { overflow-wrap: anywhere; padding: 0.5rem; }
+.transcript__markdown pre { overflow-x: auto; }

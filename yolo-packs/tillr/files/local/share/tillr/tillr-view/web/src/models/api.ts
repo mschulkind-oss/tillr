@@ -171,18 +171,19 @@ export const fetchRunTranscript = (
   runId: string,
   before: string | null,
   signal?: AbortSignal,
+  after?: string,
 ) =>
   read<TranscriptData>(
     `/api/v1/runs/${encodeURIComponent(runId)}/transcript${
-      before === null ? "" : `?before=${encodeURIComponent(before)}`
+      after !== undefined ? `?after=${encodeURIComponent(after)}` : before === null ? "" : `?before=${encodeURIComponent(before)}`
     }`,
     signal,
   );
 
 /** One entry of a run's transcript, answered whole: what a truncated body points at. */
-export const fetchRunTranscriptEntry = (runId: string, seq: number, signal?: AbortSignal) =>
+export const fetchRunTranscriptEntry = (runId: string, seq: number, signal?: AbortSignal, identity?: string) =>
   read<TranscriptEntryData>(
-    `/api/v1/runs/${encodeURIComponent(runId)}/transcript/${seq}`,
+    `/api/v1/runs/${encodeURIComponent(runId)}/transcript/${seq}${identity ? `?identity=${encodeURIComponent(identity)}` : ""}`,
     signal,
   );
 
