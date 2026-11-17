@@ -208,7 +208,7 @@ func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					h.exec(fmt.Sprintf(`INSERT INTO items(item_id,title,state,updated_at) VALUES ('%s','hold','in-queue',1); INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at) VALUES ('%s','%s','hold','%s',1000)`, name.Name, name.Name, name.Name, reason))
+					h.exec(`INSERT INTO items(item_id,title,state,updated_at) VALUES (?,'hold','in-queue',1); INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at) VALUES (?,?,'hold',?,1000)`, name.Name, name.Name, name.Name, reason)
 					rule, ok := waitingRules[reason]
 					if !ok {
 						t.Errorf("drain exports %s = %q without a waiting rule", name.Name, reason)
