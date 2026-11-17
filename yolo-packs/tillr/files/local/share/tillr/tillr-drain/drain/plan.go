@@ -74,6 +74,8 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
+	// Parallel lists sibling readers claimed with this node; the item retains one pending owner.
+	Parallel []Decision `json:"parallel,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
 	Designer          *lastDesigner  `json:"-"`
 	DesignerSessionID string         `json:"designer_session_id,omitempty"`

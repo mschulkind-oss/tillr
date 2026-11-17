@@ -18,7 +18,7 @@ import (
 const WorkflowRules = `workflow-json, workflow-unknown-field, workflow-identity,
 workflow-edges, workflow-empty-stages, workflow-stage-id, workflow-duplicate-id,
 workflow-kind, workflow-command, workflow-timeout, workflow-unknown-seat,
-workflow-access, workflow-write-scope, workflow-write-scope-empty,
+workflow-access, workflow-max-parallel, workflow-write-scope, workflow-write-scope-empty,
 workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcome,
 workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
@@ -47,7 +47,13 @@ func workflowFields(raw []byte) []error {
 			findings = append(findings, fmt.Errorf("workflow-unknown-field: %s: unknown field %q", stage, key))
 		}
 	}
-	check(object, "name version stages edges exit args inputs", "graph")
+	check(object, "name version stages edges exit args inputs max_parallel", "graph")
+	if raw, present := object["max_parallel"]; present {
+		var limit int
+		if json.Unmarshal(raw, &limit) != nil || limit < 1 || limit > 8 {
+			findings = append(findings, fmt.Errorf("workflow-max-parallel: graph: expected an integer from 1 through 8"))
+		}
+	}
 	for _, field := range []string{"stages", "edges"} {
 		var objects []map[string]json.RawMessage
 		if json.Unmarshal(object[field], &objects) != nil {

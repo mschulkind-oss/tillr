@@ -30,8 +30,10 @@ import (
 // runs row (D-UT19), and it is optional: a run dispatched for no item names none, and
 // the record then carries no item_id rather than an empty string read as an id.
 type Request struct {
-	RunID  string `json:"run_id"`
-	ItemID string `json:"item_id"`
+	// ReadOnlyGroup shares one lane lease with sibling readers of the same item.
+	ReadOnlyGroup string `json:"read_only_group,omitempty"`
+	RunID         string `json:"run_id"`
+	ItemID        string `json:"item_id"`
 	// NodeID optionally identifies the node whose program this run executes.
 	NodeID     string   `json:"node_id,omitempty"`
 	LaneID     string   `json:"lane_id"`
@@ -163,6 +165,9 @@ func DurableDir(laneDir, runID string) string {
 	return filepath.Join(laneDir, "durable", runID)
 }
 
+// NodeDir keeps a parallel node's brief, session, log and report apart from siblings.
+func NodeDir(laneDir, runID string) string { return filepath.Join(laneDir, "nodes", runID) }
+
 // Exec runs one request to a terminal state and records it.
 //
 // The lane root is the caller's: exec creates it and the run's lane directory under
@@ -201,6 +206,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	laneDir := filepath.Join(root, laneID)
 	workDir := filepath.Join(laneDir, req.WorkingDir)
+	artifactDir := laneDir
+	if req.ReadOnlyGroup != "" {
+		artifactDir = NodeDir(laneDir, req.RunID)
+	}
+	if err := os.MkdirAll(artifactDir, 0755); err != nil {
+		return record.Envelope{}, err
+	}
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return record.Envelope{}, Internalf("creating the lane directory %q: %v", workDir, err)
 	}
@@ -215,15 +227,15 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// again while recording itself as a continuation.
 	sessionID := ""
 	if req.Resume {
-		sessionID, err = ReadSessionID(laneDir)
+		sessionID, err = ReadSessionID(artifactDir)
 		if err != nil {
 			return record.Envelope{}, err
 		}
 		if sessionID == "" {
-			return record.Envelope{}, Usagef("run %q cannot be resumed: %s carries no session id, so there is no session to continue and a resume would start cold", req.RunID, filepath.Join(laneDir, SessionIDFile))
+			return record.Envelope{}, Usagef("run %q cannot be resumed: %s carries no session id, so there is no session to continue and a resume would start cold", req.RunID, filepath.Join(artifactDir, SessionIDFile))
 		}
 	}
-	mode, prompt, err := prepareContinuation(req, pauseKind, laneDir, workDir, durableDir)
+	mode, prompt, err := prepareContinuation(req, pauseKind, artifactDir, workDir, durableDir)
 	if err != nil {
 		return record.Envelope{}, err
 	}
@@ -233,12 +245,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	// A fresh continuation minted a new session id; the resume event names it.
 	if req.Resume {
-		sessionID, err = ReadSessionID(laneDir)
+		sessionID, err = ReadSessionID(artifactDir)
 		if err != nil {
 			return record.Envelope{}, err
 		}
 	}
-	logPath := filepath.Join(laneDir, req.RunID+".log")
+	logPath := filepath.Join(artifactDir, req.RunID+".log")
 	// A resume appends to the run's log instead of truncating it. The log is the run's record
 	// of what its harness said, and a killed attempt's half of it is the evidence the resume
 	// exists to keep: `os.Create` here would delete the transcript the second segment is
@@ -348,7 +360,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	var note string
 	startedAt := time.Now().UTC()
-	monitor := &settledMonitor{log: logPath, stderr: filepath.Join(laneDir, "stream.err"), backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
+	monitor := &settledMonitor{log: logPath, stderr: filepath.Join(artifactDir, "stream.err"), backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
 	if monitor.after == nil {
 		monitor.after = time.After
 	}
@@ -428,7 +440,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// the lane driver reads. Never attach a report left by a previous extraction.
 	if body, err := os.ReadFile(reportPath); err == nil {
 		payload.ArtifactRefs = append(payload.ArtifactRefs, ArtifactRef{Kind: "report", Ref: reportPath})
-		if err := os.WriteFile(filepath.Join(laneDir, "report.md"), body, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(artifactDir, "report.md"), body, 0o644); err != nil {
 			return record.Envelope{}, Internalf("writing the lane report: %v", err)
 		}
 	}
@@ -609,6 +621,9 @@ func parseSpend(report string) (*Usage, error) {
 func checkRequest(req Request) error {
 	if req.RunID == "" {
 		return Usagef("a run.request needs a run_id")
+	}
+	if req.ReadOnlyGroup != "" && (req.ItemID == "" || req.NodeID == "" || req.RunID == "." || req.RunID == ".." || strings.ContainsAny(req.RunID, "/\\")) {
+		return Usagef("a read-only group needs an item, node and safe run id")
 	}
 	if req.Backend == "" {
 		return Usagef("a run.request needs a backend: the adapter program that produced the run, named by staging rather than guessed from argv")

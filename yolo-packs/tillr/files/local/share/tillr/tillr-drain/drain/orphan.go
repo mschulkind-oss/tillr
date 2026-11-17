@@ -368,6 +368,15 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 			continue
 		}
+		if work.Examining && len(work.Decision.Parallel) > 0 {
+			live := false
+			for _, node := range parallelNodes(work.Decision) {
+				live = live || ev.faces[node.RunRequest.RunID]
+			}
+			if live {
+				continue
+			}
+		}
 		if work.Examiner != nil {
 			if ev.ownerDead(work.Examiner) {
 				// An examination is claimed only for a run that has ended, so the run face
@@ -396,6 +405,13 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if !ev.ownerDead(work.Owner) {
 			continue
 		}
+		if !work.Examining {
+			if handled, err := l.reapParallel(ctx, tx, work, ev); err != nil {
+				return err
+			} else if handled {
+				continue
+			}
+		}
 		id := work.Decision.RunRequest.RunID
 		if ev.live[id] {
 			continue
@@ -406,7 +422,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 			if work.ParentRunID != "" && ev.live[work.ParentRunID] {
 				continue
 			}
-			if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id IN (?,?) AND state=?`, run.LaneStateIdle, work.Decision.LaneID, id, work.ParentRunID, run.LaneStateLeased); err != nil {
+			if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id IN (?,?,?) AND state=?`, run.LaneStateIdle, work.Decision.LaneID, id, work.ParentRunID, work.Decision.RunRequest.ReadOnlyGroup, run.LaneStateLeased); err != nil {
 				return err
 			}
 			if err := appendEffect(tx, examinationReleasedKind, id, struct{}{}, at); err != nil {

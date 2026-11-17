@@ -776,24 +776,44 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 	}
 	var out []storeRun
 	for _, lane := range lanes {
-		if lane.State != laneStateLeased || lane.RunID == "" || have[lane.RunID] {
-			continue
+		ids := lane.ActiveNodes
+		if len(ids) == 0 {
+			ids = []string{lane.RunID}
 		}
-		allocated, ok := allocations[lane.RunID]
-		if !ok {
-			// The lease exists and the allocation event does not: the item and the start
-			// are unknown, so there is no run to project. The lane row still renders as
-			// leased, which is the honest half of the answer.
-			continue
+		for _, id := range ids {
+			if lane.State != laneStateLeased || id == "" {
+				continue
+			}
+			if have[id] {
+				// A continued group member has an earlier terminal segment on
+				// its same run row. Keep one row and project its current lease.
+				if len(lane.ActiveNodes) > 0 {
+					for i := range known {
+						if known[i].RunID == id {
+							known[i].State = liveRunState
+							known[i].FinishedAtMS = 0
+							known[i].ExitCode = nil
+						}
+					}
+				}
+				continue
+			}
+			allocated, ok := allocations[id]
+			if !ok {
+				// The lease exists and the allocation event does not: the item and the start
+				// are unknown, so there is no run to project. The lane row still renders as
+				// leased, which is the honest half of the answer.
+				continue
+			}
+			out = append(out, storeRun{
+				RunID:       id,
+				ItemID:      allocated.ItemID,
+				LaneID:      lane.LaneID,
+				Backend:     allocated.Backend,
+				State:       liveRunState,
+				StartedAtMS: allocated.StartedAtMS,
+			})
 		}
-		out = append(out, storeRun{
-			RunID:       lane.RunID,
-			ItemID:      allocated.ItemID,
-			LaneID:      lane.LaneID,
-			Backend:     allocated.Backend,
-			State:       liveRunState,
-			StartedAtMS: allocated.StartedAtMS,
-		})
 	}
 	return out
 }

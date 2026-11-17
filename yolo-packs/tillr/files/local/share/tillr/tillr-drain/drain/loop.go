@@ -1079,7 +1079,16 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			spec.InputPaths = paths
 			spec.Continue = decision.NodeIndex > 0 || decision.WorkflowRestart
-			if decision.WorkflowRestart {
+			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
+				previous, err := l.stagedNodeRun(decision)
+				if err != nil {
+					return nil, err
+				}
+				if previous == "" {
+					spec.Continue = false
+				}
+			}
+			if decision.WorkflowRestart && len(decision.Parallel) == 0 {
 				previous, stagedErr := l.stagedNodeRun(decision)
 				if stagedErr != nil {
 					return nil, stagedErr
@@ -1644,6 +1653,9 @@ func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Req
 		return run.Record{}, "", "", nil
 	}
 	laneDir := l.laneDirPath(lane)
+	if request.ReadOnlyGroup != "" {
+		laneDir = run.NodeDir(laneDir, request.RunID)
+	}
 	if _, err := os.Stat(filepath.Join(laneDir, BriefFile)); err != nil {
 		return run.Record{}, "", "", nil
 	}

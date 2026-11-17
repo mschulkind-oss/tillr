@@ -101,13 +101,59 @@ func ClaimLease(ctx context.Context, tx *store.Tx, req Request, laneID string, s
 		until := startedAt.Add(time.Duration(req.TimeoutMS)*time.Millisecond + time.Duration(LeaseGraceMS)*time.Millisecond).UnixMilli()
 		leasedUntil = &until
 	}
+	leaseID := req.RunID
+	if req.ReadOnlyGroup != "" {
+		if req.ItemID == "" || req.NodeID == "" {
+			return 0, Usagef("a read-only group needs an item and node id")
+		}
+		leaseID, leasedUntil = req.ReadOnlyGroup, nil
+		var live int
+		if err := tx.Reader().QueryRow(`SELECT COUNT(*) FROM lanes l WHERE lane_id=? AND state=? AND run_id!=? AND NOT EXISTS(SELECT 1 FROM read_only_runs m WHERE m.run_id=l.run_id AND m.group_id=? AND m.item_id=? AND m.lane_id=l.lane_id)`, laneID, LaneStateLeased, leaseID, leaseID, req.ItemID).Scan(&live); err != nil {
+			return 0, err
+		}
+		if live != 0 {
+			return 0, Usagef("lane is leased outside the read-only group")
+		}
+		var conflicting int
+		if err := tx.Reader().QueryRow(`SELECT COUNT(*) FROM read_only_runs WHERE group_id=? AND (item_id!=? OR lane_id!=?)`, leaseID, req.ItemID, laneID).Scan(&conflicting); err != nil {
+			return 0, err
+		}
+		if conflicting != 0 {
+			return 0, Usagef("read-only group belongs to another item or lane")
+		}
+		if err := tx.Reader().QueryRow(`SELECT COUNT(*) FROM read_only_runs WHERE run_id=? AND (group_id!=? OR item_id!=? OR lane_id!=?)`, req.RunID, leaseID, req.ItemID, laneID).Scan(&conflicting); err != nil {
+			return 0, err
+		}
+		if conflicting != 0 {
+			return 0, Usagef("run already belongs to another read-only group")
+		}
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO lanes (lane_id, state, run_id, leased_until) VALUES (?, ?, ?, ?)
 		 ON CONFLICT(lane_id) DO UPDATE SET
 		   state = excluded.state, run_id = excluded.run_id, leased_until = excluded.leased_until`,
-		laneID, LaneStateLeased, req.RunID, leasedUntil,
+		laneID, LaneStateLeased, leaseID, leasedUntil,
 	); err != nil {
 		return 0, Internalf("leasing lane %q to %q: %v", laneID, req.RunID, err)
+	}
+	memberAllocated := false
+	if req.ReadOnlyGroup != "" {
+		result, err := tx.Exec(`INSERT INTO read_only_runs(run_id,group_id,item_id,lane_id) VALUES(?,?,?,?) ON CONFLICT(run_id) DO NOTHING`, req.RunID, req.ReadOnlyGroup, req.ItemID, laneID)
+		if err != nil {
+			return 0, err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		// Membership and allocation commit together, so an existing member
+		// already has a claim; no scan through the lane's history is needed.
+		memberAllocated = n == 0
+		if req.Resume {
+			if _, err := tx.Exec(`UPDATE read_only_runs SET settled=0 WHERE run_id=?`, req.RunID); err != nil {
+				return 0, err
+			}
+		}
 	}
 	// A drain claims before dispatching exec. Refreshing that same claim must
 	// not record a second attempt; continuations likewise only refresh the lease.
@@ -122,7 +168,7 @@ func ClaimLease(ctx context.Context, tx *store.Tx, req Request, laneID string, s
 			return 0, Internalf("reading allocation payload: %v", err)
 		}
 	}
-	if req.Resume || allocated.RunID == req.RunID {
+	if memberAllocated || req.Resume || allocated.RunID == req.RunID {
 		if leasedUntil == nil {
 			return 0, nil
 		}
@@ -208,6 +254,18 @@ func ReapExpiredLeases(ctx context.Context, tx *store.Tx, now time.Time) ([]Rele
 		releases = append(releases, release)
 	}
 	return releases, nil
+}
+
+// ReleaseLaneInTx closes a proven-dead group's members in the caller's ownership transaction.
+func ReleaseLaneInTx(ctx context.Context, tx *store.Tx, laneID, reason string, now time.Time) (Release, error) {
+	lane, found, err := readLane(tx.Reader(), laneID)
+	if err != nil {
+		return Release{}, err
+	}
+	if !found || lane.state != LaneStateLeased {
+		return refused(laneID, ReasonLaneFree, now), nil
+	}
+	return freeLane(ctx, tx, lane, reason, now)
 }
 
 // ReleaseLane is design §5.6's standalone release face: it frees one lane and records
@@ -363,6 +421,37 @@ func freeLane(ctx context.Context, tx *store.Tx, lane lease, reason string, now 
 		release.RunID = *lane.runID
 	}
 	if lane.runID != nil {
+		rows, err := tx.Reader().Query(`SELECT run_id FROM read_only_runs WHERE group_id=? AND settled=0`, *lane.runID)
+		if err != nil {
+			return Release{}, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return Release{}, err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return Release{}, err
+		}
+		for _, id := range ids {
+			member := lane
+			member.runID = &id
+			if _, err = closeRun(ctx, tx, member, now); err != nil {
+				return Release{}, err
+			}
+		}
+		// A continued member can retain an earlier terminal row, so closeRun
+		// may have nothing to write. Releasing the group still settles every
+		// abandoned membership before any replacement reader claims its lane.
+		if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE group_id=? AND lane_id=?`, *lane.runID, lane.laneID); err != nil {
+			return Release{}, err
+		}
 		closed, err := closeRun(ctx, tx, lane, now)
 		if err != nil {
 			return Release{}, err

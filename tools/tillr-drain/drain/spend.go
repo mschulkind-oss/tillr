@@ -79,7 +79,12 @@ func (l *Loop) snapshotSpend(result *LoopResult) error {
 			return err
 		}
 		if l.sessionID != "" {
-			result.StartedSpend, err = read(`WHERE EXISTS (SELECT 1 FROM events e WHERE e.object_id=runs.run_id AND e.kind=? AND json_extract(e.payload,'$.loop_id')=?)`, dispatchStartedKind, l.sessionID)
+			result.StartedSpend, err = read(`WHERE EXISTS (
+    SELECT 1 FROM events e WHERE e.kind=? AND json_extract(e.payload,'$.loop_id')=?
+    AND (e.object_id=runs.run_id OR EXISTS (
+      SELECT 1 FROM json_each(e.payload,'$.decision.parallel') sibling
+      WHERE json_extract(sibling.value,'$.run_request.run_id')=runs.run_id
+    )))`, dispatchStartedKind, l.sessionID)
 			if err != nil {
 				return err
 			}

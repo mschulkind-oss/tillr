@@ -19,8 +19,9 @@ import (
 )
 
 // Workflow is a versioned, pre-approved sequence of agent and command runs.
-// Edges order stages and select outcomes; ready stages run serially on one lane.
+// Edges order stages and select outcomes; ready readers share one lane.
 type Workflow struct {
+	MaxParallel    int                         `json:"max_parallel,omitempty"`
 	Name           string                      `json:"name"`
 	Version        int                         `json:"version"`
 	Stages         []WorkflowStage             `json:"stages"`
@@ -98,6 +99,12 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	}
 	if !item.WorkflowRefValid(ref) || w.Name+"@v"+strconv.Itoa(w.Version) != ref {
 		return nil, fmt.Errorf("workflow-identity: name and version must match %s", ref)
+	}
+	if w.MaxParallel < 0 || w.MaxParallel > 8 {
+		return nil, fmt.Errorf("workflow-max-parallel: expected 1 through 8, or omitted")
+	}
+	if w.MaxParallel == 0 {
+		w.MaxParallel = 4
 	}
 	if w.Edges == nil {
 		return nil, fmt.Errorf("workflow-edges: edges must be a list")
@@ -380,6 +387,7 @@ func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) erro
 // examination lease. It never resets the worktree between nodes.
 func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string) error {
 	next := d
+	next.Parallel = nil
 	index, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
 		return err

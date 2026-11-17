@@ -68,7 +68,33 @@ func (s *ProcessSteps) startRun(id string, start func() error) error {
 		}
 		stopped := 0
 		err = db.ReadTx(ctx, func(r *store.Reader) error {
-			return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND object_id = ?`, loopOrphanedKind, id).Scan(&stopped)
+			if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND object_id = ?`, loopOrphanedKind, id).Scan(&stopped); err != nil {
+				return err
+			}
+			var member int
+			if err := r.QueryRow(`SELECT COUNT(*) FROM read_only_runs WHERE run_id=?`, id).Scan(&member); err != nil {
+				return err
+			}
+			if member == 0 {
+				return nil
+			}
+			works, err := readPending(r)
+			if err != nil {
+				return err
+			}
+			for _, work := range works {
+				for _, node := range parallelNodes(work.Decision) {
+					if node.RunRequest != nil && node.RunRequest.RunID == id {
+						if work.Orphaned || work.Done {
+							stopped++
+						}
+						return nil
+					}
+				}
+			}
+			// An old member not in the current group may not launch after recovery.
+			stopped++
+			return nil
 		})
 		db.Close()
 		if err != nil {
@@ -404,8 +430,9 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 			return err
 		}
 		type candidate struct {
-			work *pendingWork
-			rec  *run.Record
+			work    *pendingWork
+			rec     *run.Record
+			control string
 		}
 		var candidates []candidate
 		if err := db.ReadTx(ctx, func(r *store.Reader) error {
@@ -417,14 +444,18 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 				if work.Done || work.Decision.RunRequest == nil {
 					continue
 				}
-				rec, err := terminalRecord(r, work.Decision.RunRequest.RunID)
-				if err != nil {
-					return err
+				for _, node := range parallelNodes(work.Decision) {
+					rec, err := terminalRecord(r, node.RunRequest.RunID)
+					if err != nil {
+						return err
+					}
+					if rec != nil && rec.Resumed {
+						continue
+					}
+					copy := *work
+					copy.Decision = node
+					candidates = append(candidates, candidate{&copy, rec, work.Decision.RunRequest.RunID})
 				}
-				if rec != nil && rec.Resumed {
-					continue
-				}
-				candidates = append(candidates, candidate{work, rec})
 			}
 			return nil
 		}); err != nil {
@@ -432,6 +463,7 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 		}
 		var owners []*runFaceOwner
 		var ended []string
+		ending := map[string]bool{}
 		for _, c := range candidates {
 			work, id := c.work, c.work.Decision.RunRequest.RunID
 			faces, err := liveRunFaces(path, id, here)
@@ -471,8 +503,9 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 				faces = workers
 			}
 			owners = append(owners, faces...)
-			if !work.Orphaned {
-				ended = append(ended, id)
+			if !work.Orphaned && !ending[c.control] {
+				ended = append(ended, c.control)
+				ending[c.control] = true
 			}
 		}
 		if len(ended) > 0 {

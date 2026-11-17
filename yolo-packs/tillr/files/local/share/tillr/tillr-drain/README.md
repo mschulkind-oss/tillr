@@ -198,6 +198,32 @@ remain symbolic: their unknown scope is constrained by enclosing stages rather
 than rejected against an invented path. Each real invocation validates its
 concrete paths and reports its actual expansion.
 
+## Parallel read-only nodes
+
+Ready read-only [nodes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-graphs.md#the-words)
+of one item start together on its existing lane and worktree. A workflow's
+`max_parallel` sets how many may run together: omission means 4, and the
+maximum is 8. Writing nodes always run alone; neither a reader nor another
+writer starts until the writing node finishes.
+
+Each reader has its own run id, staged brief, harness session, log, report,
+and recorded spend. Adapter metadata lives beneath the lane's node directory;
+it does not consume another lane. The item's lane stays leased until every
+reader has a terminal record. The waiting view and Home's lane line report the
+number of running nodes, not additional lanes.
+
+The loop checks the shared worktree only after all readers finish. A changed
+HEAD or dirty tree holds the item as `boundary-scope-escape`, naming every node
+that ran together rather than blaming one reader. A failed reader does not
+cancel its siblings: their reports and declared outputs are retained, and the
+item follows its failure edges or holds after they finish. On restart,
+finished nodes retain their results; only interrupted executions run again.
+Continuing any held reader with `tillr-drain resume` reopens its whole set. The
+loop waits for that continuation, retains finished siblings without rerunning
+or charging them again, and advances to the following node once. Shutdown
+accounting includes every reader's latest recorded spend, not just the reader
+that owns the set's dispatch record.
+
 ## Registered command nodes
 
 A workflow stage with `kind: command` runs a registered program, not a model.

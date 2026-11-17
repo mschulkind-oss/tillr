@@ -21,6 +21,7 @@ import (
 // laneRow describes only recorded states. A completed command is not evidence that
 // the next command is in progress; LastStep is deliberately the last finished step.
 type laneRow struct {
+	RunningNodes int              `json:"running_nodes,omitempty"`
 	Nodes        []laneNode       `json:"nodes"`
 	Pipeline     []pipelineStep   `json:"pipeline"`
 	PipelineNote string           `json:"pipeline_note,omitempty"`
@@ -313,11 +314,15 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 	}
 	for _, lane := range d.lanes {
 		row := laneRow{LaneID: lane.LaneID, State: "idle", LatestAction: laneAction{Kind: "unrecorded", Clock: stateNoneClock}}
+		row.RunningNodes = len(lane.ActiveNodes)
 		run := last[lane.LaneID]
 		if lane.State == laneStateLeased {
 			run = runs[lane.RunID]
 			row.State = "running"
-			if run.State != "" && run.State != liveRunState {
+			if row.RunningNodes > 0 {
+				run = runs[lane.ActiveNodes[0]]
+			}
+			if row.RunningNodes == 0 && run.State != "" && run.State != liveRunState {
 				row.State = "settling"
 			}
 		}

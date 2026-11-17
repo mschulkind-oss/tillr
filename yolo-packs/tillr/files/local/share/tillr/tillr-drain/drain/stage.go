@@ -245,6 +245,7 @@ func OutOfFence(durableDir string) string {
 // StageSpec is one dispatch as the stager reads it: the request's identity, the values the
 // brief's header carries, and the commit the worktree is pinned to.
 type StageSpec struct {
+	Isolated       bool // parallel readers keep their own adapter metadata
 	Continue       bool
 	Node           *WorkflowStage
 	InputPaths     map[string]string
@@ -551,7 +552,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 	}
 	runDir := RunDir(s.Root, spec.RunID)
-	for _, dir := range []string{laneDir, runDir} {
+	metadataDir := laneDir
+	if spec.Isolated {
+		metadataDir = run.NodeDir(laneDir, spec.RunID)
+	}
+	for _, dir := range []string{metadataDir, runDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Externalf("creating the run's directory %s: %v", dir, err)
 		}

@@ -492,6 +492,16 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			}
 			row.Waited = elapsed.String()
 		}
+		for _, lane := range lanes {
+			if len(lane.ActiveNodes) == 0 {
+				continue
+			}
+			if allocated, ok := allocations[lane.ActiveNodes[0]]; ok && allocated.ItemID == item.ItemID {
+				row.Class, row.Where = "waits on work", "lane"
+				row.Why = fmt.Sprintf("%d nodes running", len(lane.ActiveNodes))
+				row.Mover = "the item's nodes to finish"
+			}
+		}
 		out = append(out, row)
 	}
 	addConflictHistory(out, conflicts)
