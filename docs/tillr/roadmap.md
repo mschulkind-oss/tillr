@@ -1128,14 +1128,23 @@ inherited.
 
 <!-- tillr: item id="item-drain-record-killed-run-spend" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
+**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because c4 asked
+a spend ceiling to count killed runs, and the tree has no ceiling.
+[The momentum principle](../design/momentum-principle.md#what-this-forbids) forbids a spend or
+token ceiling, and two tests in `tools/tillr-drain` hold that line:
+`TestTheSpendLineNamesTheMeasurement` fails a spend line that names a ceiling, and
+`TestTheLoopCommandRefusesTheDeletedBudgets` refuses the deleted budget flags. c4 is therefore
+replaced by a criterion about measurement only. This item adds no ceiling, no hold, no setting and
+no stop; it makes the totals complete, whoever reads them. c1 to c3 are unchanged.
+
 - **c1:** A run that ends because its loop stopped records the spend its backend can report for the work done so far, or records that the backend could not report it, and never leaves the field empty. A test kills a fixture worker that has produced usage output and asserts the recorded spend equals that output.
 - **c2:** When no spend can be read for a killed run, the record says `unreported` for that run, and every total the views print states how many runs were unreported. A test asserts a total over one reported and one unreported run reads as a lower bound.
 - **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. A test settles a run started by a previous loop and asserts its cost appears only on the carried-over line.
-- **c4:** The spend ceiling counts a killed run's recorded spend, so a loop that keeps being killed cannot spend past the ceiling unseen.
+- **c4:** Every spend total the loop and the views print counts a killed run's recorded spend the same way as a finished run's, so a loop that keeps being killed cannot spend unseen. Nothing in this item compares a total against a limit or holds an item because of one. A test kills two fixture workers in two successive loops, each after usage output, and asserts that the next loop's spend line and the view's total for the item both include the spend of both killed runs and that neither line names a ceiling.
 
 **Agent details:**
 
-- **Ref:** `item-drain-spend-ceiling` in this document is the consumer of these totals.
+- **Ref:** the consumers of these totals are the loop's spend line (`spendLine` in `tools/tillr-drain`) and the spend lines in `tools/tillr-view/`. `item-drain-spend-ceiling` in this document is not a consumer this item builds for: it asks for a ceiling the momentum principle forbids, and that contradiction is that item's to settle, not this one's.
 - **Where:** the usage capture and run-finish records in `tools/tillr-drain/drain/` and `tools/tillr-run/`; the pass record and the spend lines in `tools/tillr-view/`.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed.
 
