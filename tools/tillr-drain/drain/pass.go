@@ -1208,6 +1208,9 @@ plans:
 	if l.rollingRuns(result) != before {
 		return "", nil
 	}
+	if l.heavyInFlight() {
+		return l.waitForTrigger(ctx, leases, at, result)
+	}
 	return l.planNothing(ctx, holds, leases, at, result)
 }
 

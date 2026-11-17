@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -130,6 +131,14 @@ func statusFace(args []string) (record.Envelope, int) {
 		// that with exit 2 and no record. A design document that is not there is a state
 		// the report carries, not a refusal.
 		return record.Envelope{}, code
+	}
+	if *src.store != "" && subject == nil {
+		proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
+		if err != nil {
+			payload.HeavyFault = err.Error()
+		} else {
+			payload.Heavy = &proof
+		}
 	}
 	return envelope("view.status", payload), code
 }

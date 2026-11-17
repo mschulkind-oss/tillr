@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +29,9 @@ import (
 type ProcessSteps struct {
 	// RunBin is the `tillr-run` binary the run step executes: `run exec`.
 	RunBin string
+	// HeavyGateBin is the declaration judge used after a landing (default tillr-gate).
+	HeavyGateBin         string
+	heavyReplaySelectors sync.Map // stable span ID -> legacy kind:label selector
 	// ItemBin is the `tillr-item` binary the item-state step executes: `item state`. It
 	// is this utility's neighbour rather than the caller's program, for `RunBin`'s reason:
 	// a run's execution and an item's state are both the tillr utilities' own, and only

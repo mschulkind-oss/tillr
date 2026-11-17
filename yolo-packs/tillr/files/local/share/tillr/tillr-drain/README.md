@@ -214,8 +214,58 @@ another restart.
   backends; the check refuses the policy otherwise and names the seat
   ([the claude backend design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
 
-## Rolling trunk audits
+## After-merge heavy runs
 
+With `landing_strategy` set to `after-merge`, each landing and loop startup trigger
+one [heavy runner](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer).
+It judges a detached checkout of the trunk tip, independently of dispatch. Landings
+while it works owe one further run on the newest tip, not one run per landing. A
+nonblocking process lock beside the gate's result store admits one writer across loops.
+A busy lock does not consume the pending trigger. Judges inherit that lock through a
+small supervising process: losing the drain owner closes a pipe, so that process ends
+and reaps its judge before releasing ownership. A replacement can then safely recover
+the detached checkout left by a killed runner.
+
+Supervision requires Linux child adoption and stable kernel process handles. Adoption
+makes the supervisor the parent of abandoned grandchildren, including legacy commands
+in separate sessions; the handles prevent signaling a reused process ID. It waits for
+the kernel to confirm every descendant has exited before acknowledging cleanup, with
+no cancellation timeout on that acknowledgement. `heavy.cleanup-pending` remains beside
+the result store until confirmation. A remaining guard reports unconfirmed cleanup and
+blocks checkout removal and recovery until an operator independently recovers those
+processes and clears it; a released lock alone is not treated as cleanup evidence.
+
+The runner judges every heavy tree declaration, reusing the gate's remembered results,
+and the legacy rolling checks that have not yet migrated to declarations. `--heavy-gate`
+names the declaration judge; `--rolling` still names the legacy program. An explicitly
+empty `--rolling` disables that legacy coverage, not the declaration checks. Missing
+programs or missing verdict evidence are reported as faults, never silently passed.
+
+A run with no failing or unjudged check advances `refs/tillr/green` with a guarded Git
+update: the value read before judging must still be the current value, and it must be
+an ancestor of the judged tip. Unavailable checks are listed, not counted as passes.
+A failing check holds the pointer and is run alone at the pointer and by bisection on
+recorded landings in the range. Legacy span IDs retain their kind and label so replay
+uses the old program's selector vocabulary rather than confusing its stable report ID
+with a selector. Red at the pointer is a gate fault, naming the check's needs and tools;
+otherwise the first red landing receives one commit-deduplicated fixer containing every
+check attributed to it and the union of their repair paths. With no pointer yet the
+report says there is no proved baseline to accuse a landing; it does not claim that a
+nonexistent pointer was judged red. Automatic revert
+is not implemented: selecting `auto_revert` reports that limitation and holds the pointer
+instead of silently filing a fixer in its place.
+
+Budgets are reported targets, never deadlines. The summary names each overrun's measured
+and declared times without changing the verdict. A sampled stall is retried once on the
+same tip; a second stall is red and files a fixer. A loop stop ends check processes before
+removing their checkout. `tillr-view status --store <store> --root <repository>` reports
+the green commit, recorded landings since it, first-red attribution, unavailable checks,
+and overruns. The shared report lives beside the result store in the Git common directory;
+the retired rolling watermark is neither read nor written on this path.
+
+## Legacy rolling trunk audits
+
+The following cadence remains only on the `before-merge` compatibility path.
 With no watermark (the tip last judged green by the rolling checks), the default rolling
 run audits every tracked path at the trunk tip with every applicable rolling-tier check,
 regardless of the repository gate's remembered baseline.

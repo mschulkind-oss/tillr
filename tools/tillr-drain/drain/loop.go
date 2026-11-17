@@ -442,7 +442,12 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
-	cfg LoopConfig
+	gatePolicy                  GatePolicy
+	heavyMu                     sync.Mutex
+	heavyWG                     sync.WaitGroup
+	heavyRunning                bool
+	heavyWanted, heavyAttempted string
+	cfg                         LoopConfig
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
 	// Each examination has its own result, transferred to the pass at completion.
 	mu sync.Mutex
@@ -601,6 +606,10 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 			cfg.VantageRepo = filepath.Base(root)
 		}
 	}
+	gatePolicy, _, err := ReadGatePolicy(cfg.Root)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -615,7 +624,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
+	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -690,6 +699,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		// Judging workers own short-lived leases, not model lifetimes. Finish
 		// their cancellation cleanup before this process exits.
 		l.examinations.Wait()
+		l.heavyWG.Wait()
 	}()
 	// The result is written on every way out, including the failing one: a loop that stopped
 	// on a store it could not open is a stop an operator needs the record of, and a file

@@ -624,6 +624,7 @@ func loopFace(args []string) int {
 	land := fs.String("land", "", "the land program: exit 0 landed, 1 not landed")
 	verdict := fs.String("verdict", "", "the verdict program: records the item's verdict, named by --verdict")
 	replay := fs.String("replay", drain.DefaultReplayProgram, "the program that re-runs a red gate's failing checks on the base, so a trunk-red failure acquits the item instead of convicting it; {only} is the comma-separated failing check ids. Empty disables the acquittal")
+	heavyGate := fs.String("heavy-gate", "tillr-gate", "the declaration judge for after-merge heavy runs")
 	rolling := fs.String("rolling", drain.DefaultRollingProgram, "the program that runs the rolling tier over the trunk range; {since} is `--since <watermark>` or `--all`. Empty disables the rolling tier")
 	fixerGate := fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the FULL untiered gate a fixer item runs instead of --gate; it is handed the candidate's flags like --gate, and its verdict record is what the land program reads; {green} is `--since <last_green_sha>` or `--all`. Empty leaves a fixer on --gate, which cannot prove the sibling breakage its range reaches")
 	traceBin := fs.String("trace-bin", "", "the tillr-trace program the loop runs after each tick to index what the tick's runs recorded (default: the repository's tools/tillr-trace, the pack's copy, or PATH). An explicit empty value disables the index step")
@@ -697,7 +698,7 @@ func loopFace(args []string) int {
 		}
 	})
 	steps := &drain.ProcessSteps{
-		RunBin: *runBin, ItemBin: *itemBin, Store: *path, LaneRoot: *laneRoot, Root: *root, Now: at,
+		RunBin: *runBin, HeavyGateBin: *heavyGate, ItemBin: *itemBin, Store: *path, LaneRoot: *laneRoot, Root: *root, Now: at,
 		GateProgram: *gate, LandProgram: *land, VerdictProgram: *verdict,
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
 		TraceBin: resolveTraceBin(*root, *traceBin, traceBinNamed), TraceRoot: *traceRoot,

@@ -425,6 +425,13 @@ func (l *Loop) rollingUnknownStreak(ctx context.Context) int {
 // other lane's gate verdict in the store's rollback-journal mode. One short write keeps
 // the concurrency the two-lane case exists to prove.
 func (l *Loop) bumpLandings(ctx context.Context) error {
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		if err != nil {
+			return err
+		}
+		return l.startHeavy(ctx, tip)
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return Incompatiblef("%v", err)
@@ -562,11 +569,15 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 		return "", Externalf("the trunk is red at %s but the fixer fence is empty: the suspect change and the failing checks (%s) name no path outside the gate's own code, so no fixer can be filed",
 			shortSHA(redSHA), strings.Join(failing, ", "))
 	}
-	criteria := "the full gate is green at " + shortSHA(redSHA) + ", and the next rolling run advances the watermark"
+	nextProof := "the next rolling run advances the watermark"
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		nextProof = "the next heavy run advances refs/tillr/green"
+	}
+	criteria := "the full gate is green at " + shortSHA(redSHA) + ", and " + nextProof
 	if len(failing) > 0 {
 		// The brief names what was red. A fixer told only the sha has to re-run the gate to
 		// find out, and a rolling red already recorded its failing checks.
-		criteria = "the full gate is green at " + shortSHA(redSHA) + " (red: " + strings.Join(failing, ", ") + "), and the next rolling run advances the watermark"
+		criteria = "the full gate is green at " + shortSHA(redSHA) + " (red: " + strings.Join(failing, ", ") + "), and " + nextProof
 	}
 	// A generated fixer has no body reference: its criteria are the whole brief body.
 	if len(dropped) > 0 {
@@ -656,6 +667,9 @@ func trunkFixerOpen(items []itemRow) string {
 // proved, and a red range proves nothing. An unknown run — the program was not there or
 // could not judge — likewise advances nothing.
 func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, result *LoopResult) error {
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		return l.startHeavy(ctx, mainSHA)
+	}
 	step, ok := l.cfg.Steps.(RollingStep)
 	if !ok || !step.RollingConfigured() || mainSHA == "" {
 		return nil
@@ -871,7 +885,13 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 	// The fixer's gate is the full untiered range since the last green. The watermark is
 	// read once here, on the tick's own goroutine, so the gate step never opens a store
 	// read while a sibling lane is writing.
-	if state, err := l.loadRollingState(ctx); err == nil {
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		green, err := heavyGreen(ctx, l.cfg.Root)
+		if err != nil {
+			return candidate, err
+		}
+		candidate.FixerBaseSHA = green
+	} else if state, err := l.loadRollingState(ctx); err == nil {
 		candidate.FixerBaseSHA = state.WatermarkSHA
 	}
 	if _, err := l.git(ctx, candidate.Worktree, "rebase", mainSHA); err != nil {

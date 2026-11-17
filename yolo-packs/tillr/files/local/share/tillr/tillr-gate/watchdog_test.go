@@ -163,11 +163,9 @@ func TestProgressingCheckOutlivesEveryTarget(t *testing.T) {
 			if result.Result != ResultPass || result.OverBudgetMS == 0 {
 				t.Fatalf("own verdict lost: %+v", result)
 			}
-			target := 2
-			if tier == "fast" {
-				target = 1
-			}
-			if result.BudgetMS != target {
+			// An explicit budget is the target for every tier, even when an older
+			// timeout spelling is also present. Neither one stops progress.
+			if result.BudgetMS != 1 {
 				t.Fatalf("wrong target recorded: %+v", result)
 			}
 			if result.DurationMS != 71000 {
