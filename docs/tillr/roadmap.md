@@ -1813,7 +1813,7 @@ answer a failure that was never in its design. This item makes the two verifying
 gate sees, files a fixer when the trunk is red, and stops a red trunk from being charged to the
 candidate that happened to meet it.
 
-<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/tillr-view/,tools/gate/,tools/fork-check.py,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/tillr-view/,tools/gate/,tools/fork-check.py,.justfile,tests/,config/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped before
 editing because c6 changes the waiting view, whose source is `tools/tillr-view/waiting.go`, and
@@ -1877,6 +1877,41 @@ things are settled.
 
 c4 is restated below to say this. No other criterion changes, and no new hold reason is added.
 
+**Ruling, 2026-11-17 (answers the eighth run's conflict):** the run was right to stop, and nothing
+in c1 to c8 changes. The run reapplied the earlier candidate onto a moved trunk, and its targeted
+tests passed. It stopped because the full `tools/tillr-drain` suite showed three failures that the
+candidate did not cause. Two of them are red on the trunk with no change applied, and the third
+depends on machine load. The evidence is below.
+
+The two trunk failures both come from commit `bb6e286b5`, which made every criterion carry a claim
+class: a stored label that says who may settle the criterion. A criterion with no label is read as
+`verification-only`, meaning a passing check settles it. That commit refuses a criterion whose text
+begins "Owner decision recorded" unless its label is something other than `verification-only`, and
+it makes the loop's verdict step refuse a criterion that `tillr item show` prints with no label.
+The commit did not update two things that the drain suite reads:
+
+- `config/tillr/seed-items.json` has eleven criteria whose text begins "Owner decision recorded",
+  and none states a claim class. Seeding stops at the first, in `item-pile-507-allowlist-hunt`.
+- The stand-in `tillr-item` in `tools/tillr-drain/drain/step_argv_contract_test.go` prints a
+  criterion with no `claim_class` field, so the real adapter refuses the drain's verdict call.
+
+Every candidate for this item changes `tools/tillr-drain/`, so every candidate meets that suite,
+and the item cannot land while the suite is red. An acquittal would not help: on today's trunk an
+acquitted item is stranded, which is the fault c4 repairs. The two repairs are therefore part of
+this item, as c9, in the same way as c8. `config/tillr/` is now inside the paths for the seed
+file. Neither repair changes the claim-class rule itself: `tools/tillr-item/` and
+`tools/tillr-loop/` are not changed.
+
+The third failure, `TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery/legacy`, is not this
+item's and is not repaired here. It waits 20 seconds for a child process to start, and it passed
+three times out of three when run alone on the same commit. A run that sees it fail in the full
+suite runs it alone once. If it passes alone, the run reports both results with the command and
+date and carries on to its commit. If it fails alone, the run stops as before.
+
+The eighth run's resolved tree is preserved under the ref
+`refs/tillr/preserved/run-item-whole-tree-checks-in-done-and-rolling-a8-cfix`. The next run starts
+from it and adds c9, and does not redo c1 to c8.
+
 - **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
 - **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
 - **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
@@ -1885,6 +1920,7 @@ c4 is restated below to say this. No other criterion changes, and no new hold re
 - **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
 - **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
 - **c8:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree.
+- **c9:** `go test ./... -run 'TestTheSeedFileDispatchesTheRuledItems|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` passes. Each of the eleven criteria in `config/tillr/seed-items.json` whose text begins "Owner decision recorded" states `"claim_class": "owner-only"`, and no other seed entry changes. The stand-in `tillr-item` in `step_argv_contract_test.go` prints `"claim_class": "verification-only"` for its criterion, as the real `tillr item show` does. The report gives the full `go test ./...` result for `tools/tillr-drain`, with the date.
 
 **Agent details:**
 
@@ -1897,6 +1933,8 @@ c4 is restated below to say this. No other criterion changes, and no new hold re
 - **Where (c8):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`, whose comment reads `` `ci` is a no-op ``; the supervision cases start the recipe with the repository as its working directory. `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
 - **Evidence:** 2026-11-17, the sixth run added a loop test that acquits an item on a red tree check, marks its fixer `landed` and runs the loop again with a green gate. `go test ./... -run TestAcquittedTreeCandidateIsGatedAfterItsFixerLands` in `tools/tillr-drain` failed with `stop=queue-drained, dispatched=0, landed=0` and the item still `blocked`. Read at trunk commit `f721f4e12`: `rg -n 'StateBlocked' tools/tillr-drain/drain --glob '!*_test.go'` printed five lines: the constant and its comment, the one write in `acquitTrunkAlreadyRed`, and two reads in the planner. None of them moves an item out of that state.
 - **Where (c4):** `acquitTrunkAlreadyRed` in `tools/tillr-drain/drain/trunk.go` writes the `blocked` state and the waiter. `isBlocked` and the `switch` in `decide`, in `tools/tillr-drain/drain/plan.go`, put the `blocked` rule before the `trunk-broken` rule. `mayBeARetry` in the same file is the rule that holds a second attempt for an owner. `ReadWaitingOn` in `tools/tillr-item/item/waiting.go` reads the waiter and the underlying state, and the drain already imports that package, so nothing outside the paths changes.
+- **Evidence:** 2026-11-17, in a lane worktree at trunk commit `eed8cffa8` with a clean `git status`, `go test ./... -run 'TestTheSeedFileDispatchesTheRuledItems|TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` exited 1. The seed test printed `seed entry "item-pile-507-allowlist-hunt": criterion "c1" records an owner decision but is verification-only: declare its claim class`. The argv test printed `the verdict program answered exit 4 for item-a (pass): tillr-loop verdict: criterion c1 has no valid stored claim_class`. The heavy test passed in that run and in three more runs with `-count=1 -run TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery`. The eighth run saw it fail once, inside the full suite, with `judge child did not start`.
+- **Where (c9):** `checkCriteria` in `tools/tillr-item/item/apply.go` holds the refusal, and `ownerCriterion` in `tools/tillr-item/item/claim.go` is the pattern it matches. `rg -n 'Owner decision recorded' config/tillr/seed-items.json` printed eleven lines at `eed8cffa8`, and `rg -n 'claim_class' config/tillr/seed-items.json` printed none. `adapterStubs` in `tools/tillr-drain/drain/step_argv_contract_test.go` writes the stand-in's `show` record. `compose_verdict` in `tools/tillr-loop/tillr-loop` is the reader that refuses a missing class. The loop's own suite, `tools/tillr-loop/test.py`, already gives its fixture criteria a `claim_class`.
 
 ## Filed 2026-11-17: what two lanes showed
 
