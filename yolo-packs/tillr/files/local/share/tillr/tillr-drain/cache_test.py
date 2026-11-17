@@ -2,7 +2,7 @@
 """Exercise Go's real result cache against broken sibling mains in an isolated clone.
 
 Run from any directory. --run narrows the development reproduction; omit it for the
-acceptance check (literal go test ./..., with no cache-disabling flags).
+acceptance check (go test ./... with a hang-guard -timeout and no cache-disabling flags).
 """
 import argparse
 import os
@@ -33,7 +33,9 @@ with tempfile.TemporaryDirectory(prefix='sibling-cache-', dir=scratch) as temp:
             shutil.copy2(src, dst)
     module = repo / 'tools/tillr-drain'
     env = dict(os.environ, YOLO_DURABLE_DIR=str(Path(temp) / 'scratch'))
-    command = ['go', 'test', './...']
+    # -timeout is a hang guard, never a budget: a loaded machine runs the drain
+    # suite for ten minutes or more, and Go's default 10m would kill it with no failing test.
+    command = ['go', 'test', './...', '-timeout', '60m']
     if args.run:
         command += ['-run', args.run]
 

@@ -1432,7 +1432,11 @@ and lane restoration are separate operator actions, not performed by this test.
 ## Test
 
 `go test ./...` in this directory builds the binary and drives each face against a scratch
-store and scratch lane roots; the drain package's own suite pins the decision rules.
+store and scratch lane roots; the drain package's own suite pins the decision rules. Pass
+`-timeout 60m`: the drain package takes 276 to 562 seconds on a loaded machine, and Go's
+default 10-minute per-package timeout would kill it with no failing test. The 60 minutes is
+a hang guard, not a budget. The gate and `tools/go-test-shards.py` already disable the
+timeout (`-timeout 0`).
 
 The test binary declares the sibling sources as inputs that Go's test-result cache can
 see. A child `go build` does not record its reads in the parent's test log, and Go ignores

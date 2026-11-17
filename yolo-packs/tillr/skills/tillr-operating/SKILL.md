@@ -250,6 +250,7 @@ scratch directory. For a focused edit, prefer a targeted test before the full su
 
 ```bash
 cd tools/tillr-drain && go test ./... -run '^TestName$'
+# a full run: add -timeout 60m, because Go's default 10m can kill the drain package under load
 ```
 
 Before committing, run the full suite for the modules the change reaches. Workers

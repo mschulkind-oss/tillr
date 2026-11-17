@@ -226,7 +226,7 @@ func TestMain(m *testing.M) {
 
     def test_drain_name_parity(self):
         module = ROOT / 'tools/tillr-drain'
-        baseline = subprocess.run(['go', 'test', '-json', './...', '-count=1'],
+        baseline = subprocess.run(['go', 'test', '-json', './...', '-count=1', '-timeout', '60m'],
                                   cwd=module, capture_output=True, text=True)
         self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
         report = self.root / 'drain.jsonl'
