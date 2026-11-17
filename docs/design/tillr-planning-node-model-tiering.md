@@ -590,7 +590,7 @@ This puts Luna only behind a deterministic check on single-turn edits. That keep
 
 ### 7.5 How the owner learns a placement is wrong
 
-Visibility comes first, and tillr records facts, not statistics. The owner's ruling of 2026-11-15 puts comparison statistics in a separate project ([the seat-share item](../tillr/roadmap.md#split-a-seats-work-between-backends-by-a-simple-share)), and that ruling holds here: per-kind rates are computed there, not in tillr (`D-PT5`).
+Visibility comes first, and tillr records facts, not statistics. The owner's ruling of 2026-11-15 puts comparison statistics in a separate project ([the seat-share item](../tillr/roadmap.md#add-backend-shares-to-distribute-seat-work)), and that ruling holds here: per-kind rates are computed there, not in tillr (`D-PT5`).
 
 - **What tillr records on each node run:** its seat, rung, backend, model and effort; whether it was an escalation and from which run; its check's outcome; its usage; its declared size and the files it actually changed; and whether it continued a session.
 - **What the item page shows:** the nodes, each with its seat, rung and outcome ([the node-view block](./tillr-item-graphs.md#add-an-items-nodes-and-their-runs-to-the-item-page)), and the plan with any refusal. It shows usage, never a price ([the observatory ruling](./observatory-redesign.md)).
@@ -662,12 +662,12 @@ Each "before" figure is measured from the logs. Each "after" figure is estimated
 | :--- | :--- |
 | **Ten lanes** | Planning adds nodes, not lanes. One item still holds one lane ([`D-IG8`](./tillr-item-graphs.md#42-worktree-sequencing-at-single-lane-concurrency)). A planned item holds its lane for more nodes, but each node is shorter. More sessions at once against Bedrock may throttle, which is not measured |
 | **The gate** | Unchanged and run once. The `full` command runs the gate's own selection first, so a red result becomes a fix node rather than a new attempt |
-| **[The spend ceiling](../tillr/roadmap.md#stop-dispatching-when-the-spend-ceiling-is-reached)** | Sums every node run of an item, plan included. It cannot see child sessions until [the observatory block](./observatory-redesign.md#record-child-sessions-and-the-criteria-a-node-says-it-has-finished) lands, and [the killed-run item](../tillr/roadmap.md#add-the-spend-of-killed-runs-to-the-record) fixes the missing usage |
+| **[The spend ceiling](../tillr/roadmap.md#stop-dispatching-when-the-spend-ceiling-is-reached)** | Sums every node run of an item, plan included. It cannot see child sessions until [the observatory block](./observatory-redesign.md#add-worker-progress-and-child-session-records) lands, and [the killed-run item](../tillr/roadmap.md#add-the-spend-of-killed-runs-to-the-record) fixes the missing usage |
 | **[Commit before ending](../tillr/roadmap.md#prevent-a-build-run-from-ending-with-passing-work-uncommitted)** | 28% of Sol runs that edited ended uncommitted. A cheaper rung would carry the same defect and look like a weaker model, so stage 2 waits on this item (P5) |
 | **The test-suite wait** | Test is 33% of wall time. `tools/tillr-drain`'s suite took 63.4 s on an idle machine (rolling run, 2026-11-17 02:36 UTC), and one run spent 1,267 s in tests. Slices run their own package's check, and the full suite runs once as a command, so no model session sits through it. Ten lanes compete for CPU, which is not measured |
 | **[The design seat's quota](../tillr/roadmap.md#route-design-work-past-a-design-seat-that-is-out-of-quota)** | Planning runs on Sol and adds no design load. The re-plan rung and the judge use Fable. 13 of 19 `claude-designer` runs exited on the weekly limit |
 | **Resumable sessions** | Pause and continue (`637458006`) is the mechanism a warm fix continuation reuses. Resuming mid-graph (`6ee7e1d04`) is why a stop costs one node |
-| **[Express lanes](../tillr/roadmap.md#run-owner-facing-work-on-lanes-outside-the-cap)** | Never planned, so work the owner is waiting on pays no planning delay |
+| **[Express lanes](../tillr/roadmap.md#add-dedicated-lanes-for-owner-facing-work)** | Never planned, so work the owner is waiting on pays no planning delay |
 
 ---
 
