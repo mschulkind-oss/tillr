@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -27,7 +27,7 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-Twelve questions are left for the owner on this page: four from this round's designs, and eight
+Five questions are left for the owner on this page: one from this round's designs, and four
 that the pi roadmap's reconciliation of 2026-11-16 found were really tillr's. Each has options and a recorded leaning.
 They are the ones no recorded principle could answer. Twenty-three others that stood here were
 settled on 2026-11-15 and 2026-11-16 by the session's designer, at the owner's request; each
@@ -35,18 +35,14 @@ says so in its design and is the owner's to overturn.
 
 1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): what becomes of the pack mirror that
    doubles every tillr change. First because it is a cost on every landing but stops nothing.
-2. [`OQ-GM1`](../design/tillr-goal-monitor.md#OQ-GM1) and
-   [`OQ-GM2`](../design/tillr-goal-monitor.md#OQ-GM2): which goal the first scheduled check-in
-   carries, and whether a host timer watches it. Only the owner can name the goal.
-3. [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2): whether a bug AutoQA confirms is queued for
-   building at once or held until its findings have proved accurate. Last because AutoQA is the
-   last thing built.
 
-4. [Criterion repair](../design/criterion-repair.md), five questions: who may supersede a frozen
-   criterion, what the judge sees, and what happens to a stale premise or an unsatisfiable one.
-   With the judge, which it amends; that a criterion is repaired by a supersession record and
-   never by an edit is already settled.
-5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
+2. [Criterion repair](../design/criterion-repair.md), one question,
+   [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4): whether the judge step looks for a criterion
+   whose premise has expired. With the judge, which it amends. The owner ruled the other four on
+   2026-11-17: the whale supersedes with a required reason, the judge sees both texts, an
+   unsatisfiable criterion is repaired by reopen then supersede, and a supersession refuses a
+   verdict in flight. None of it is built.
+3. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
 [What tillr will change for Product QA](../design/tillr-separable-parts.md) carries
@@ -101,8 +97,8 @@ it carried is a row of its ledger, and on 2026-11-16 it was cut into
 design. The first stops a gate pass from retiring a criterion only the owner can settle and waits
 on nothing. Part of the design was already built under other items, and
 [its seventh section](../design/tillr-judge-and-lifecycle.md#7-what-the-tree-already-holds)
-measures which part. AutoQA still carries one design-seat item that turns the design into build
-items.
+measures which part. AutoQA's one design-seat item stays held while that design is in the
+[Icebox](#icebox).
 
 [Queue persistence](../design/tillr-queue-persistence.md) is decided and waits on no ruling: every
 question it carried is a row of its ledger, and on 2026-11-16 it was cut into
@@ -247,8 +243,8 @@ get cheaper by being opened again.
   ([the retirement design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md#9-open-questions)), and so is deleting
   `.workboard.toml`, which nothing reads any more.
 - [Scheduled tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#12-open-questions) is fully settled and unbuilt:
-  tillr has no due date or interval on an item yet. It is the substrate of the goal monitor in
-  [entry 1](#1-rulings-that-are-waiting-on-the-owner).
+  tillr has no due date or interval on an item yet. It is the substrate of the goal monitor,
+  which is in the [Icebox](#icebox).
 
 ## Icebox
 
@@ -265,6 +261,22 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   [`config/tillr/backend-policy.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.json) keeps it out of
   every fail-over. Picking it up means subscribing, naming `muse` in a policy again, and cutting
   its second stage from the design.
+
+- **AutoQA, tillr's exploratory testing of itself** ([design](../design/tillr-autoqa.md)), iceboxed
+  2026-11-17. The owner: "ice box this autoqa on the roadmap for now. I don't want to design this
+  yet." No AutoQA code exists. Its one open question,
+  [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), is left unanswered and holds the design's one
+  queue item, `item-design-autoqa-slices`, so the drain never dispatches it. Picking it up means
+  ruling that question, which releases the item to cut the design into build items. This is not
+  the Product QA pipeline, which [entry 1](#1-rulings-that-are-waiting-on-the-owner) covers.
+
+- **The goal monitor** ([design](../design/tillr-goal-monitor.md)), iceboxed 2026-11-17. The owner:
+  "let's icebox this goal stuff until we have a use for it again." Nothing is built and none of its
+  three slices is in the queue. Its two open questions,
+  [`OQ-GM1`](../design/tillr-goal-monitor.md#OQ-GM1) and
+  [`OQ-GM2`](../design/tillr-goal-monitor.md#OQ-GM2), are left unanswered. Picking it up means a
+  use for a scheduled check-in, ruling those two, and filing the slices, starting with
+  [scheduled tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#12-open-questions), its substrate.
 
 ## What this page does not cover
 

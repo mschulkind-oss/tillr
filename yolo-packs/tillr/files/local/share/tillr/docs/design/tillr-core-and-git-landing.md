@@ -19,7 +19,7 @@ depends-on:
 
 # tillr is a core of queues and graphs, and landing in Git is one definition on top of it
 
-> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. A draft that writes down a direction. Round two with the Product QA pipeline
 is folded in, with the owner's words as they reported them and as he stated them directly
