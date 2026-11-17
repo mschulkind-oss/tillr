@@ -6,7 +6,7 @@ next: "Rule OQ-TD1, OQ-TD2, OQ-TD3 and OQ-TD4 — pack layout, machine config, a
 
 # Ship `tillr` as one source-built pack with eight `PATH` binaries and a two-skill contract
 
-**Status:** 2026-11-12. Pack unbuilt; the nine Go modules under [`tools/`](../../tools) work and have landed a live candidate on an unattended tick. Evidence verified at `32aed3dc31`.
+**Status:** 2026-11-12, when the pack was unbuilt; it is built as of 2026-11-16 ([`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) ships the source tree and the eight launchers). Then, the nine Go modules under [`tools/`](../../tools) work and have landed a live candidate on an unattended tick. Evidence verified at `32aed3dc31`.
 
 > **In short.** Distribute `tillr` through a single pack (`yolo-packs/tillr`) following the `../../yolo-packs/merge-queue/pack.json` source-plus-launcher pattern: nine Go modules synced as source, eight `program` entries on `PATH`, a three-tier documentation split where `--help` alone owns flags, and an official pack skill that hands the unfinished toolset to AutoQA for design review.
 

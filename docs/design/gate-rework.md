@@ -20,7 +20,7 @@ vantage:
 
 # The gate lands a change in ten seconds and remembers nothing it cannot recompute
 
-**Status:** 2026-11-15. Nothing built. Every timing is from one run made for this design at
+**Status:** 2026-11-15; by 2026-11-16 six of the nine slices of [Section 11](#11-build-order) had landed and the other three are queued. Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger). Its three open
 questions were settled the same day by the session's designer on recorded principle, at the
