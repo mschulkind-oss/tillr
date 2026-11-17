@@ -1,15 +1,36 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/record"
 )
+
+// selectHeavyDeclarations selects the full heavy tree set even on an empty diff.
+// Fingerprint memory, not diff selection, decides which of these actually executes.
+func selectHeavyDeclarations(reg *Registry, only string) error {
+	selected := []Declaration{}
+	for _, check := range reg.Declarations {
+		if check.Scope == "tree" && check.Tier == "heavy" && (only == "" || check.ID == only) {
+			check.Forced = "heavy-tree"
+			selected = append(selected, check)
+		}
+	}
+	if only != "" && len(selected) != 1 {
+		return externalf("heavy check %q is not declared at this revision", only)
+	}
+	reg.Declarations = selected
+	reg.InProcess = nil
+	return nil
+}
 
 // checksFace judges declaration-file change checks using only the caller's range.
 // The adapter can include fast tree declarations in the same verdict; heavy tree
@@ -22,6 +43,8 @@ func checksFace(args []string) int {
 	root := flags.String("worktree", ".", "checkout containing the change")
 	directory := flags.String("checks", "tools/gate/checks", "declaration directory")
 	fastTree := flags.Bool("fast-tree", false, "include fast tree declarations alongside change checks")
+	heavyTree := flags.Bool("heavy-tree", false, "judge every heavy tree declaration, without change or fast checks")
+	only := flags.String("only", "", "with --heavy-tree, judge exactly this heavy check for attribution")
 	logs := flags.String("logs", "", "check log directory (required)")
 	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "keep a working check's own verdict; only keep is supported")
 	if code, answered := parseFlags(flags, args); answered {
@@ -66,25 +89,43 @@ func checksFace(args []string) int {
 		fmt.Fprintln(os.Stderr, "tillr-gate checks: could not judge:", err)
 		return record.ExitExternal
 	}
-	changes := registry.Declarations[:0]
-	for _, check := range registry.Declarations {
-		if check.Scope == "change" || *fastTree && check.Scope == "tree" && check.Tier == "fast" {
-			// --fast-tree asks for a verdict on every admitted fast tree check,
-			// including a remembered pass when none of its inputs changed. Reads
-			// bounds the fingerprint, not this face's explicitly requested set.
-			if check.Scope == "tree" && check.Forced == "" {
-				check.Forced = "fast-tree"
-			}
-			changes = append(changes, check)
+	if *heavyTree {
+		if *fastTree {
+			fmt.Fprintln(os.Stderr, "tillr-gate checks: --heavy-tree and --fast-tree are mutually exclusive")
+			return record.ExitUsage
 		}
+		if err := selectHeavyDeclarations(registry, *only); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return record.ExitExternal
+		}
+	} else {
+		if *only != "" {
+			fmt.Fprintln(os.Stderr, "tillr-gate checks: --only requires --heavy-tree")
+			return record.ExitUsage
+		}
+		changes := registry.Declarations[:0]
+		for _, check := range registry.Declarations {
+			if check.Scope == "change" || *fastTree && check.Scope == "tree" && check.Tier == "fast" {
+				// --fast-tree asks for a verdict on every admitted fast tree check,
+				// including a remembered pass when none of its inputs changed. Reads
+				// bounds the fingerprint, not this face's explicitly requested set.
+				if check.Scope == "tree" && check.Forced == "" {
+					check.Forced = "fast-tree"
+				}
+				changes = append(changes, check)
+			}
+		}
+		registry.Declarations = changes
 	}
-	registry.Declarations = changes
 	registry.InProcess = nil
 	plan, err := Plan(registry, change, *root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tillr-gate checks: could not judge:", err)
 		return exitCode(err)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	options.Context = ctx
 	verdict, runErr := RunWith(plan, *root, *logs, options)
 	if verdict.Kind != "" {
 		var payload VerdictPayload

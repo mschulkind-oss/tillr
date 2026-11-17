@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,7 @@ const ExitStalled = 6
 // watchSources injects observation and scheduling, not a kill deadline. A nil
 // sampler requests the kernel CPU clock, initialized before the child runs.
 type watchSources struct {
+	Context context.Context
 	Now     func() time.Time
 	Ticks   func() (<-chan time.Time, func())
 	Sample  func(int, *os.File) (watchSample, error)
@@ -111,10 +113,18 @@ func watchCommand(cmd *exec.Cmd, log *os.File, sources *watchSources) (error, wa
 	go func() { done <- cmd.Wait() }()
 	ticks, stop := sources.Ticks()
 	defer stop()
+	var canceled <-chan struct{}
+	if sources.Context != nil {
+		canceled = sources.Context.Done()
+	}
 	for {
 		select {
 		case err := <-done:
 			return err, state
+		case <-canceled:
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+			return sources.Context.Err(), state
 		case <-ticks:
 			select {
 			case err := <-done:

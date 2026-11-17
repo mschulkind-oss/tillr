@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 )
@@ -22,10 +23,12 @@ import (
 // report: Items, Candidates and Runs answer every item, candidate and run the source
 // holds, and the subject components stay null because no single item was asked about.
 type statusPayload struct {
-	GeneratedAt time.Time       `json:"generated_at"`
-	Snapshot    snapshot        `json:"snapshot"`
-	Subject     *record.Subject `json:"subject,omitempty"`
-	Found       *bool           `json:"found,omitempty"`
+	Heavy       *heavy.HeavyStatus `json:"heavy,omitempty"`
+	HeavyFault  string             `json:"heavy_fault,omitempty"`
+	GeneratedAt time.Time          `json:"generated_at"`
+	Snapshot    snapshot           `json:"snapshot"`
+	Subject     *record.Subject    `json:"subject,omitempty"`
+	Found       *bool              `json:"found,omitempty"`
 	// Item is the subject's item.record payload, or null when the stream carries none.
 	Item *itemRecord `json:"item"`
 	// Items are every item the source holds, ordered by item_id for a store and by first

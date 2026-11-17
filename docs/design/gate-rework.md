@@ -795,24 +795,14 @@ Built: this landed in commit `431d78efe`.
 
 After a landing the trunk holds changes that only the heavy checks have judged, so one runner proves the tip and moves the green pointer only when nothing failed. Criterion c4 was aligned on 2026-11-17 with the owner's ruling on time limits ([`D-GR15`](#decision-ledger), [Section 6.5](#65-ten-seconds-is-a-failing-test)): a budget overrun in the heavy run is measured and reported and fails nothing, and nothing here carries a fast check from the fast tier.
 
-<!-- tillr: item
-     id="item-gate-heavy-runner"
-     paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-view/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** Under `after-merge`, each landing triggers a heavy run in a detached worktree at the trunk tip. A test lands three fixture changes while one run is held open and asserts exactly one further run starts, on the newest tip.
-- **c2:** A run with no failing check moves `refs/tillr/green` to the tip it judged by compare-and-swap. A test asserts the ref, asserts a second runner started beside the first exits without running, and asserts a pointer that is not an ancestor of the tip is refused and reported.
-- **c3:** A run with a failing check leaves the pointer unmoved and names the first red landing, found by running that one check on the landings in the range. With `auto_revert` false one fixer item is filed against that landing. A check that is red at the pointer too is reported as a gate fault and files no fixer. A test covers the three cases.
-- **c4:** A heavy check that runs past its `budget_ms` is recorded with its measured and declared times and reported on the run's summary and in `tillr-view status`. The overrun alone never turns the run red and files no fixer. A run is red only for a check's own failing verdict, or for a second stall of the same check on the same tip, handled as `item-gate-stall-watchdog` defines it. The test supplies the measured time through the runner's injected clock and asserts the run still moves the pointer.
-- **c5:** `tillr-view status` prints the green commit, the number of landings since it, each failing check with its first red landing, and the unavailable checks. The rolling watermark row is no longer read.
 
 ### tillr builds from the green pointer
 
 <!-- tillr: item
      id="item-gate-deploy-from-green"
      paths=".justfile,tools/tillr-drain/,tests/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-heavy-runner"
+     blocked_by=""
 -->
 
 - **c1:** `just tillr-build` builds the eight programs from the tree of `refs/tillr/green`. A test sets the pointer one commit behind a trunk tip that changes a program's version string and asserts the built program reports the older string.
@@ -824,7 +814,7 @@ After a landing the trunk holds changes that only the heavy checks have judged, 
 <!-- tillr: item
      id="item-gate-scale-test"
      paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-heavy-runner"
+     blocked_by=""
 -->
 
 - **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands.

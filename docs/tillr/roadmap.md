@@ -389,7 +389,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### Landing stops at the red cap and says which check is red
 
-<!-- tillr: item id="item-gate-red-cap" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-gate-heavy-runner" -->
+<!-- tillr: item id="item-gate-red-cap" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** When the trunk is more landings, or more minutes, past the last green commit than `red_cap` allows, a landing is refused before the trunk moves, and the refusal names the red check and the open fixer item.
 - **c2:** The refused item is not convicted: it keeps its candidate, is held with a reason of its own that names the cap, and lands with no new run once the green pointer moves. A test lands a fixer and asserts the held candidate lands on the next pass.
@@ -399,7 +399,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### A new lane starts from the last green commit
 
-<!-- tillr: item id="item-gate-lane-base" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="item-gate-heavy-runner" -->
+<!-- tillr: item id="item-gate-lane-base" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** With `lane_base` set to `green`, a lane's worktree is cut from the green pointer, and its recorded base is that commit; with `tip` it is cut from the trunk tip as today.
 - **c2:** An item whose blocker landed after the green pointer is not dispatched until the pointer contains the blocker's landing, and its waiting reason says it waits on the trunk being proved, not on the blocker.

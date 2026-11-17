@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -81,7 +82,10 @@ const FastTierCapMS = 9000
 const TreeOverrunKeep = "keep"
 
 // RunOptions supplies observation sources. Nil uses the real clock and CPU sampler.
-type RunOptions struct{ watchdog *watchSources }
+type RunOptions struct {
+	watchdog *watchSources
+	Context  context.Context
+}
 
 // Carrying at a budget would drop a working check's judgment. Refuse it explicitly.
 func treeOverrunFlag(value string) (RunOptions, error) {
@@ -168,7 +172,22 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 	var failure error
 	for index, check := range plan.Checks {
 		check.watchdog = options.watchdog
-		outcome, memoryErr := memory.run(check, root, logs, index)
+		if options.Context != nil {
+			sources := realWatchSources()
+			if check.watchdog != nil {
+				*sources = *check.watchdog
+			}
+			sources.Context = options.Context
+			check.watchdog = sources
+		}
+		var outcome VerdictCheck
+		var memoryErr error
+		if options.Context != nil && options.Context.Err() != nil {
+			outcome = VerdictCheck{CheckID: check.CheckID, Result: ResultError}
+			memoryErr = options.Context.Err()
+		} else {
+			outcome, memoryErr = memory.run(check, root, logs, index)
+		}
 		if memoryErr != nil {
 			outcome.Result = ResultError
 			if failure == nil {
@@ -288,6 +307,10 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := inheritHeavyOwnership(cmd); err != nil {
+		fmt.Fprintln(logFile, err)
+		return outcome
+	}
 	started := sources.Now()
 	outcome.StartUnixNano = started.UnixNano()
 	var cpu io.Closer
@@ -304,6 +327,10 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 		return outcome
 	}
 	waitErr, state := watchCommand(cmd, logFile, sources)
+	if cleanupErr := endCheckGroup(cmd.Process.Pid); cleanupErr != nil {
+		fmt.Fprintf(logFile, "check process group cleanup failed: %v\n", cleanupErr)
+		waitErr = cleanupErr
+	}
 	ended := sources.Now()
 	outcome.EndUnixNano = ended.UnixNano()
 	outcome.DurationMS = ended.Sub(started).Milliseconds()
@@ -340,6 +367,11 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 
 // Non-fast timeout declarations are targets, never command deadlines.
 func checkTargetMS(check PlanCheck) int {
+	if check.BudgetMS > 0 {
+		return check.BudgetMS
+	}
+	// Older heavy declarations spell their target timeout_ms. An explicit
+	// budget_ms takes precedence; neither spelling is a kill deadline.
 	if check.Tier != "fast" && check.TimeoutMS > 0 {
 		return check.TimeoutMS
 	}

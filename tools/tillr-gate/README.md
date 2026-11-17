@@ -197,6 +197,24 @@ The fast tree checks cover Markdown conventions, series structure, the pack mirr
 parallel Go builds. Structural proof is not remembered because it also reads Git refs
 outside the judged tree.
 
+## Judging heavy declarations
+
+The [after-merge runner](../tillr-drain/README.md#after-merge-heavy-runs) calls `checks`
+with `--heavy-tree` to select every heavy tree declaration, even when the supplied range
+is empty. Change and fast tree checks are excluded. `--only <check-id>` selects exactly
+one heavy declaration for attribution; a missing or non-heavy name refuses judgment.
+The existing fingerprint result memory still determines whether a selected check runs.
+An explicit `budget_ms` is the reported target; older heavy declarations without it use
+`timeout_ms` as their target. Neither target kills a working check. A termination signal
+cancels and reaps each declaration's process group before this face returns. Successful
+completion also ends background children before the judged checkout can be removed;
+cleanup observes process exit rather than imposing a deadline on the check.
+
+```sh
+tillr-gate checks --heavy-tree --base <tip> --head <tip> --worktree <detached-checkout> --logs <logs>
+tillr-gate checks --heavy-tree --only <check-id> --base <tip> --head <tip> --worktree <detached-checkout> --logs <logs>
+```
+
 ## What it refuses
 
 - **A plan with no registry** — a gate with no registry would pass everything.
