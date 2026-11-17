@@ -407,12 +407,65 @@ as recovery evidence; a new run reads it and does not land it as it stands.
   pass. Adding the definition's hash to a dispatch's recorded inputs would change stored payloads
   under Git landing, against c4 and c6, so it is left out.
 
+**What the next stopped run settled:** a later run on 2026-11-17 started before the rulings above
+were on the trunk. It built most of the item and stopped, reporting that c1 could not be met inside
+its paths: the planner reads the definition, then asks the item utility's sync which items'
+documents are unshared, and sync reads the definition again for itself. The run concluded that it
+needed to change sync, in `tools/tillr-item/`. It does not, and this item's paths stay as they are.
+The rulings below say how the criteria read, and c4 is reworded to match. That run's uncommitted
+work is kept at the ref `refs/tillr/preserved/run-item-def-planner-lifecycle-a4`. It was built on
+an older base and against none of the rulings above, so a new run reads it for its approach and
+does not replay it.
+
+- **What "once per pass" in c1 means.** The planner's own decisions in a pass (ready, finished,
+  which prerequisites apply, whether the definition completes on landing) all come from one
+  definition value, read at the top of `Plan` and passed down. No drain code reads it a second time
+  in the same pass. A read made by another package for its own use, through the reader the planner
+  hands it, is not a second planner read. It cannot disagree with the first either: `Plan` takes a
+  `store.Reader`, which is one read transaction, and `definition.ForReader` reads inside it, so
+  both reads return the same declaration. Sync keeps reading its own definition, `SyncInput` gains
+  no field, and the drain does not copy sync's logic or cache anything.
+- **The document check is itself a prerequisite.** The sync dry run in `documentPrerequisites`, and
+  the `triage-no-block` dispatch and the `design-doc-missing` hold it feeds, run only when the
+  definition names `design-document`. Under a definition that does not name it, sync is not called in a pass at all.
+- **Each prerequisite name gates its own holds, including the checks that come before them.**
+  `fence` gates `no-fence`. `design-document` gates the document holds above. `design-questions`
+  gates every open-question hold, and also the `Vantage not answering` hold that
+  [pass.go](../../tools/tillr-drain/drain/pass.go) raises when the comment source cannot be
+  reached: a definition that does not name `design-questions` never asks that source anything, so
+  it never raises that hold. `owner-clean` gates `trunk-path-dirty`. Being gated by a prerequisite
+  does not make a hold landing-only: `Vantage not answering` stays in the general list.
+- **The new constants are plain strings, and each has a waiting rule.** The ruling above that every
+  hold reason is a named constant stands, and it adds exactly three: one each for
+  `Vantage not answering`, `node-output-missing` and `workflow-invalid`. The stopped run wrote one
+  of its constants as an alias of the refusal kind, and gave neither a waiting rule, so
+  `TestWaitingEveryDrainReasonHasARule` in
+  [waiting_internal_test.go](../../tools/tillr-view/waiting_internal_test.go) failed twice. That
+  test requires every exported `Reason…` constant in the drain to be a string literal and to have
+  an entry in `waitingRules` in [waiting.go](../../tools/tillr-view/waiting.go). So each new
+  constant is declared with its text as a literal, the `node-output-missing` one repeats the text
+  of `RefusalNodeOutput` and does not refer to it, and `waitingRules` gains the entries that are
+  missing (`workflow-invalid` has one already). That test is not edited. No constant is added
+  beyond those three.
+- **No check that the definition changed between planning and writing.** The stopped run added one
+  when a dispatch is applied. No criterion asks for it, replacing a live store's definition is not
+  something this plan has built yet, and the ruling above already says a replaced definition takes
+  effect at the next pass. Leave it out.
+- **What "as before" in c4 covers.** It covers what a pass decides: the rows, actions and reasons.
+  c5 adds a header line to `tillr drain why` and to the waiting face, so a test that asserts the
+  exact text or the line count of those two outputs is updated for that one line and nothing else.
+  The stopped run met two: `TestWhyEmptyStoreAndMissingStore` in
+  [why_test.go](../../tools/tillr-drain/why_test.go) and `TestWaitingCLIAndAPI` in
+  [waiting_internal_test.go](../../tools/tillr-view/waiting_internal_test.go). Do not hide the
+  header to keep an old assertion. The before-and-after test in c4 compares the rows, not the
+  header.
+
 <!-- tillr: item id="item-def-planner-lifecycle" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The planner reads the store's definition once per pass. It dispatches an item's own work only when the item is in the definition's ready state, and a dependency is met when the blocker is in one of the definition's finished states. A conflict's answer run is still dispatched while the item is in the definition's blocked state. The drain keeps no finished-state list of its own.
 - **c2:** The planner raises a prerequisite hold, such as `no-fence`, the open-question holds, `design-doc-missing` or `trunk-path-dirty`, only when the definition names that prerequisite. A test with a fixture definition that names none asserts that an item with no fence and no design document is dispatched.
 - **c3:** The holds only landing can raise are listed in one table in the drain and raised only when the definition completes on `landing`. Every hold reason is a named constant. A test asserts that every hold reason the drain defines is either in that table or in the drain's list of general holds, and that no hold carries a reason written as a bare string, so a new hold cannot ship unclassed.
-- **c4:** Under the Git-landing definition every pass decides exactly as before. The existing planner and loop suites pass with two named edits and no others: `TestWhyChangesWithPlannerHoldRule` sets its custom finished state through a fixture definition, and the definition package's import guard also allows the drain and the view. A test runs `tillr drain why` on one fixture store before and after the change and asserts identical rows.
+- **c4:** Under the Git-landing definition every pass decides exactly as before. The existing planner and loop suites pass with two named edits and no others: `TestWhyChangesWithPlannerHoldRule` sets its custom finished state through a fixture definition, and the definition package's import guard also allows the drain and the view. The one exception is a test that asserts the exact text or line count of `tillr drain why` or of the waiting face: it is updated for the header line c5 adds, and for nothing else. A test runs `tillr drain why` on one fixture store before and after the change and asserts identical rows.
 - **c5:** `tillr drain why` and the waiting face print the definition's name in their header.
 - **c6:** A store created before this change opens and drains as before.
 
