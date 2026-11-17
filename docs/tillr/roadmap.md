@@ -1233,3 +1233,40 @@ the step programs whether they accept what it will send. It should, before any r
 - **Ref:** the step-program exit codes in `tools/tillr-loop/README.md`; the loop's `--check` face in `tools/tillr-drain/main.go`; the argument lists pinned in `tools/tillr-loop/drain-argv.json`.
 - **Where:** `loopFace` in `tools/tillr-drain/main.go`, `ProcessSteps` in `tools/tillr-drain/drain/steps.go`, and the adapter's `self-check` face in `tools/tillr-loop/tillr-loop`.
 - **Evidence:** 2026-11-17 02:08:40 UTC, `tillr drain loop` stopped with exit 4 and `the land program answered exit 2 for item-agent-default-bmad-superpowers-skills: ... unrecognized arguments: --observed-trunk 01142982834a72e786616b25458aac140be0bd6d`, after design run `run-item-agent-default-bmad-superpowers-skills-a2` (91 s, $1.413319) and a passing gate at 02:08:36 UTC.
+
+### Route a landing around the owner's uncommitted edits on the same path
+
+The owner expects to edit, pull and commit in the main checkout while the loop runs, without
+warning, and expects a landing to cope. On 2026-11-17 the owner said: "we're supposed to be able
+to ad hoc land stuff. and if the drain needs to land, didn't we decide autostash equiv was ok?
+like you pulled some remote change when work was going on, which I will also do without warning
+sometimes." They did decide it. The old board design ruled on 2026-10-31 that the landing
+stashes the owner's uncommitted work, moves the trunk and re-applies the work, as `git pull
+--autostash` does (decision D33 in `docs/design/board-state-machine.md`, section 9, built as
+task P10 in `docs/design/board-state-machine-plan.md`). The move to tillr dropped it with the
+old board tool (`docs/design/tillr-seed-triage.md`, row 592), and nothing replaced it.
+
+Tillr does something different today. A landing never touches unrelated uncommitted paths, so
+those do not delay it. When the owner's uncommitted content sits on a path the landing changes,
+the lander refuses and the loop holds the already-gated candidate with `trunk-path-dirty` until
+the owner commits or restores that path. The owner waits for the loop, or the loop waits for the
+owner, which is the blocking the autostash ruling was meant to remove. The wanted behavior is
+the old ruling, adapted to the rules tillr already has: the owner's work is set aside and
+restored inside the landing, and nothing of it is lost when it cannot be restored.
+
+<!-- tillr: item id="item-land-across-owner-edits" paths="tools/tillr-land/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When a landing changes a path that holds the owner's uncommitted content in the main checkout, the lander sets that content aside (staged, unstaged and untracked), moves the trunk, and restores it, and the landing is not held. Where the owner's edits do not overlap the landed hunks, the owner's files afterwards are exactly what they were, staged state included, on top of the new trunk tip. A test lands over a staged and an unstaged edit on a landed path and asserts both.
+- **c2:** When restoring conflicts with what landed, the landing still completes, the owner's version is kept in a named ref the lander's message states, and the owner is told in one line which paths collided and how to recover them. Nothing of the owner's is lost and nothing is left as conflict markers in the checkout. A test collides on one path and asserts the landing, the ref, the message and the checkout contents.
+- **c3:** The ref is outside `refs/stash` and under `refs/tillr/`, which the drain's run-boundary check already excuses for the lander's own markers. This reconciles with the rule that a `refs/stash` written in the target stops a tick. A test runs a boundary check across a landing that set content aside and asserts no conviction.
+- **c4:** The set-aside and restore run inside the landing's existing lock, so a second lander or an owner command from the lander cannot interleave. They add no Git work inside a SQLite write transaction. A test holds the lock and asserts a second landing is refused while content is set aside.
+- **c5:** A crash between the set-aside and the restore leaves the owner's content recoverable from the named ref, and the next landing restores it or reports it. A test kills the lander at that point and asserts both outcomes.
+- **c6:** The owner's untracked file on a path the landing adds is set aside and restored by the same rule as c1 and c2: restored when the file is byte-identical to what landed, otherwise kept in the named ref and reported as a collision. A test asserts no loss in either case.
+- **c7:** `trunk-path-dirty` remains only for a case these criteria hold, and the drain README, the lander README, the waiting rule in the view and the `tillr-operating` skill say so. A rg of those four for the old statement that a dirty landed path holds the landing returns nothing.
+- **c8:** The owner pulling, committing or rebasing forward on `main` while candidates are gated or in flight needs no drain intervention: a forward move is replayed onto, and a rewritten history is refused with `trunk-rewritten`. The lander README states both. A test with an owner commit between gate and landing asserts the landing and the unchanged verdict; the rewritten case is already pinned.
+
+**Agent details:**
+
+- **Ref:** `docs/design/board-state-machine.md` section 9 (D33, "the comparison-and-swap autostashes"); `docs/design/board-state-machine-plan.md` P10 (tests, fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the `refs/stash` rule in `docs/design/tillr-day2.md` and the boundary table in `tools/tillr-drain/README.md`.
+- **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
+- **Evidence:** 2026-11-17, `Trunk.Move` runs `git -c merge.autoStash=false merge --ff-only` in the main checkout, so git itself refuses when the move would overwrite uncommitted content, and `merge.autoStash=false` is set on purpose so a user's config cannot change that. `TestALandingLeavesUncommittedContentOnAnUntouchedPathAlone` and `TestALandingIsRefusedWhenTheTrunkWorktreeHoldsUncommittedContentOnALandedPath` in `tools/tillr-land/main_test.go`, and `TestUnrelatedDirtyPathDoesNotDelayLanding` in `tools/tillr-drain/drain/dirty_hold_test.go`, pin the two cases. For the owner moving trunk, `TestLockedLandingAcceptsFastForwardBeyondObservedTip` in `tools/tillr-land/trunk_history_test.go` pins the forward move, and `TestTheDrainLandsThroughTheRealAdapterAndTheRealLander` in `tools/tillr-drain/drain/step_argv_contract_test.go` pins `trunk-rewritten`. The `tillr-operating` skill has no mention of `trunk-path-dirty` (`rg -n -i dirty yolo-packs/tillr/skills/tillr-operating/` returns nothing, 2026-11-17).
