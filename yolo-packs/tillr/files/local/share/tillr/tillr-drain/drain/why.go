@@ -203,6 +203,26 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Why = d.Reason + ": " + work.RepairHold.Cause
 			row.Mover = work.RepairHold.NextAction
 		}
+		if d.Reason == ReasonQuestionOpen && strings.HasPrefix(d.ConflictID, "triage-") {
+			row.Mover = "the owner; answer " + d.QuestionID
+			if questions != nil {
+				if doc, err := questions.Document(it.DesignDoc); err == nil {
+					for _, q := range doc.Questions {
+						if q.ID == d.QuestionID {
+							row.Why += ": " + q.Title
+						}
+					}
+				}
+			}
+		}
+		if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
+			row.Why += ": " + c.Text
+			if c.WaitingOn == "owner" {
+				row.Mover = "the owner; close the item or answer the conflict"
+			} else {
+				row.Mover = "triage on the design seat"
+			}
+		}
 		if d.Workflow != nil {
 			row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
 		}
@@ -226,6 +246,12 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 
 func whyPresentation(d Decision) (class, where, mover string) {
 	where = "queue"
+	if c := d.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "design" {
+		if d.From == "running" || d.From == "candidate" {
+			return "moving", "lane", "triage on the design seat"
+		}
+		return "waits on work", where, "triage on the design seat"
+	}
 	if d.From == "running" || d.From == "candidate" {
 		where = "lane"
 		if d.From == "candidate" {

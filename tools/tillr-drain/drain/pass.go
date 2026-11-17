@@ -444,7 +444,14 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 		return "", err
 	}
 	work := works[d.ItemID]
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq})
+	triageVersion := ""
+	if d.BlockConflict != nil && d.BlockConflict.TriageVersion != "" {
+		triageVersion, _, err = requestVersion(r, d.ItemID)
+		if err != nil {
+			return "", err
+		}
+	}
+	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion})
 	return string(raw), err
 }
 
@@ -588,6 +595,21 @@ func (l *Loop) applyPlan(ctx context.Context, p plannedApplication, mainSHA stri
 
 func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	if p.decision.Action == ActionHold {
+		if c := p.decision.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "owner" {
+			s, err := store.Open(ctx, l.cfg.Store, true)
+			if err != nil {
+				return false, nil, err
+			}
+			defer s.Close()
+			err = s.WriteTx(ctx, func(tx *store.Tx) error {
+				version, err := inputVersion(tx.Reader(), p.decision)
+				if err != nil || version != p.version {
+					return err
+				}
+				return item.RecordConflict(tx, *c, at)
+			})
+			return false, nil, err
+		}
 		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(p.decision.Reason, ReasonTrunkRewritten+": ") {
 			return false, nil, nil
 		}

@@ -219,9 +219,13 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	if source, ok := questions.(*VantageQuestions); ok {
 		root = source.Root
 	}
+	unshared, err := documentPrerequisites(r, root)
+	if err != nil {
+		return nil, err
+	}
 	inputs := map[string]*RunInputs{}
 	for _, row := range items {
-		if row.State != StateInQueue {
+		if row.State != StateInQueue || unshared[row.ItemID] {
 			continue
 		}
 		inputs[row.ItemID], err = currentRunInputs(r, row, policy, root, build)
@@ -255,7 +259,13 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	if err := checkOverrides(policy, states); err != nil {
 		return nil, err
 	}
-	if err := checkSeats(policy, items); err != nil {
+	seatItems := make([]itemRow, 0, len(items))
+	for _, row := range items {
+		if !unshared[row.ItemID] {
+			seatItems = append(seatItems, row)
+		}
+	}
+	if err := checkSeats(policy, seatItems); err != nil {
 		return nil, err
 	}
 	works, err := readPending(r)
@@ -380,6 +390,11 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			}
 			if err != nil {
 				return nil, readFailure(err)
+			}
+		} else if unshared[item.ItemID] {
+			decision, err = p.triageDecision(r, item)
+			if err != nil {
+				return nil, err
 			}
 		} else {
 			var w *Workflow

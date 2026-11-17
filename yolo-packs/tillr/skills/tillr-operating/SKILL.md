@@ -68,6 +68,16 @@ A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
 The former stay option is removed; waiting no longer needs an option.
 
+## Declare document-fed work before building it
+
+In a store fed by documents, an item needs a document block before it is built.
+This is a prerequisite of the repository landing workflow, not a queue rule.
+The [drain’s prerequisite reference](../../../../tools/tillr-drain/README.md#document-fed-workflow-prerequisite)
+defines the comparison, the one-document triage run on the design seat, and the
+three outcomes: a ready declaration, a declaration with an owner question, or a
+duplicate/finished report waiting on the owner. Stores with no declared item
+continue to route items to their own seats.
+
 ## Keep the repository loop running
 
 In this repository, `just tillr-keep` runs the **keeper**: the process that starts

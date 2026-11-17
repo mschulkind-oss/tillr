@@ -29,6 +29,9 @@ type Conflict struct {
 	Status          string   `json:"status"`
 	DesignRunID     string   `json:"design_run_id,omitempty"`
 	AnswerHead      string   `json:"answer_head,omitempty"`
+	// TriageVersion hashes the stored title, body reference, and criteria of a request
+	// that has no document block. Empty for an ordinary specification conflict.
+	TriageVersion string `json:"triage_version,omitempty"`
 }
 
 func init() {
@@ -63,8 +66,10 @@ func ReadConflicts(r *store.Reader) (map[string]Conflict, error) {
 // same transaction. A record equal in every field to this conflict's last record
 // writes nothing. Criteria and verdicts are never written by this operation.
 func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
-	if c.ConflictID == "" || c.ItemID == "" || c.RunID == "" || c.Text == "" || c.WaitingOn == "" {
-		return Usagef("a conflict needs its identity, item, run, report, and waiting seat")
+	noRunTriage := c.TriageVersion != "" && c.DesignRunID == "" &&
+		(c.Status == "owner" || c.Status == "answered" || c.Status == "closed")
+	if c.ConflictID == "" || c.ItemID == "" || (c.RunID == "" && !noRunTriage) || c.Text == "" || c.WaitingOn == "" {
+		return Usagef("a conflict needs its identity, item, run, report, and waiting seat; owner triage with no run may omit the run")
 	}
 	switch c.Status {
 	case "raised", "awaiting", "owner", "answered", "closed":

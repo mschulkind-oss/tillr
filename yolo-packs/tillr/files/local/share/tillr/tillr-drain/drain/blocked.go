@@ -92,6 +92,9 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	if d.BlockConflict != nil {
 		c := *d.BlockConflict
 		c.Text += "\n\nDesign run " + d.RunRequest.RunID + ":\n" + text
+		if c.TriageVersion != "" {
+			c.DesignRunID = d.RunRequest.RunID
+		}
 		c.Status, c.WaitingOn = "owner", "owner"
 		return l.saveBlockConflict(ctx, c)
 	}

@@ -524,6 +524,8 @@ type stagedItem struct {
 	ItemID       string   `json:"item_id"`
 	Title        string   `json:"title"`
 	BodyRef      string   `json:"body_ref"`
+	Seat         string   `json:"seat"`
+	Workflow     string   `json:"workflow"`
 	AllowedPaths []string `json:"allowed_paths"`
 	Criteria     []struct {
 		CriterionID string `json:"criterion_id"`
@@ -999,10 +1001,11 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	if recorded.ItemID == "" {
 		return nil, Usagef("staging %s: the store holds no item %q, and a brief is about one item", spec.RunID, spec.ItemID)
 	}
-	if recorded.Title == "" {
+	triage := spec.BlockConflict != nil && spec.BlockConflict.TriageVersion != ""
+	if recorded.Title == "" && !triage {
 		return nil, ItemContentf(recorded.ItemID, "title", "item %s carries no title, so the brief has no statement of the outcome wanted: add a title to the item and dispatch it again", recorded.ItemID)
 	}
-	if len(recorded.Criteria) == 0 {
+	if len(recorded.Criteria) == 0 && !triage {
 		return nil, ItemContentf(recorded.ItemID, "criteria", "item %s carries no criteria, and design §3 makes an item without one undispatachable: a brief's criteria are what a verdict judges. Add a criterion and dispatch it again", recorded.ItemID)
 	}
 	if len(recorded.AllowedPaths) == 0 {
@@ -1011,10 +1014,14 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	// The template numbers its first criterion ("1. {{CRITERION_1}}"), so the value is the
 	// first criterion's text followed by the rest already numbered: an item with four
 	// criteria renders four numbered lines and one with one renders one.
-	criteria := recorded.Criteria[0].Text
-	for i, c := range recorded.Criteria[1:] {
-		criteria += fmt.Sprintf("\n%d. %s", i+2, c.Text)
+	criteria := "None stored: the request needs criteria before it can be built."
+	if len(recorded.Criteria) > 0 {
+		criteria = recorded.Criteria[0].Text
+		for i, c := range recorded.Criteria[1:] {
+			criteria += fmt.Sprintf("\n%d. %s", i+2, c.Text)
+		}
 	}
+	requestCriteria := criteria
 	task := taskSection(recorded)
 	facts := "None carried: staging read no code facts for this item, so nothing here is evidence about the tree. Read the fence's paths yourself before editing."
 	settled := "None recorded: this item names no settled decision, so this brief settles nothing. Where this brief is wrong about the tree, stop and report the conflict instead of inventing a mechanism."
@@ -1028,6 +1035,11 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		task = fmt.Sprintf("Answer conflict %s raised by run %s against %s. Your brief is the complete conflict record at %s. Read it before editing. Amend only that item's block; do not implement the original work.", c.ConflictID, c.RunID, c.BodyRef, filepath.Join(filepath.Dir(target), "conflict.json"))
 		criteria = "The document's item block is amended to answer the recorded conflict. Leave its directive and item identity intact."
 		settled = "This run acts on the design seat. A report of blocked routes the conflict to the owner; landing an amendment returns the original work to its own seat."
+		if c.TriageVersion != "" {
+			task = triageTask(recorded)
+			criteria = requestCriteria
+			settled = "Document-fed workflow prerequisite: an item needs a document block before it is built. This is its one triage run for this request version."
+		}
 	}
 	// The order matters: it is the order a brace pair is attributed in, and the item's own
 	// fields come first so the record — not the run — is what a refusal names. TASK carries

@@ -243,6 +243,43 @@ another restart.
   backends; the check refuses the policy otherwise and names the seat
   ([the claude backend design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
 
+## Document-fed workflow prerequisite
+
+**An item needs a document block before it is built.** This prerequisite belongs
+to the document-fed Git landing workflow, not to the queue’s general readiness rules.
+A store is document-fed when at least one stored item, in any state, has a block in
+the tracked documents that sync reads. A store with no such item keeps its ordinary
+seat and workflow routing. Closed, landed, and otherwise terminal items are never
+counted as unshared or sent to triage.
+
+An open item without a block goes to **triage**, the design-seat run that shapes a
+stored request into a document declaration, with reason `triage-no-block`. It runs
+before the item’s own seat or workflow. Its fence admits only the Markdown document
+its body reference names. The brief carries the stored title, reference, criteria,
+and the [prose guide](https://github.com/mschulkind-oss/tillr/blob/main/.agents/skills/tillr-prose-style/SKILL.md), and offers
+exactly three results:
+
+1. A ready block with the same item id, committed for the normal gate and landing.
+2. That block plus a numbered owner question explaining what is missing; after
+   landing, the existing `question-open` rule holds the item.
+3. A report naming a duplicate item or explaining why the work is already done.
+
+Before the gate, the loop checks the pinned candidate with the same sync parser.
+Any finding or warning on the triage block refuses it, including `prose-unmarked`
+and every `prose-shape` warning. A landed block binds to the stored item by id,
+and the item then returns to its own seat without an operator command.
+
+A report with no block, a blocked run, or a request whose reference names no
+repository-relative Markdown document under `docs/` becomes an owner `item.conflict`.
+Sync reads only that document scope. Its report
+remains visible under `conflict-owner`. The owner accepts a duplicate or finished
+verdict by closing the item, or rejects it by answering the conflict. Answering
+does not authorize another triage run for unchanged text: each version of the
+stored title, body reference, and criteria gets at most one run. Changing any of
+those fields permits one new run; changing rank or state does not. Waiting output
+names the design seat while triage is due or running, then the owner and the
+question or conflict. Startup sync output includes the `unshared_open` count.
+
 ## After-merge heavy runs
 
 With `landing_strategy` set to `after-merge`, each landing and loop startup trigger

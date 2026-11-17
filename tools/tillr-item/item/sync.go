@@ -1,12 +1,10 @@
 package item
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -15,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mschulkind-oss/tillr-item/docshare"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -38,21 +37,16 @@ const SyncRecordKind = "item.sync"
 // that writes the directive inside inline code never starts a line with it, so the forty-odd
 // mentions in the two queue-persistence documents are not blocks.
 var (
-	directiveStart = regexp.MustCompile(`^<!--\s*tillr:\s*item(?:\s|-->|$)`)
+	directiveStart = docshare.Start
+	attribute      = docshare.AttributePattern
 	headingLine    = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*$`)
 	criterionLine  = regexp.MustCompile(`^[-*+]\s+\*\*(c[0-9]+):\*\*\s*(.*)$`)
 	bulletTitle    = regexp.MustCompile(`^(\s*)[-*+]\s+\*\*(.+?)\*\*`)
 	listMarker     = regexp.MustCompile(`^(?:[-*+]|[0-9]+[.)])\s`)
-	attribute      = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 	itemIDShape    = regexp.MustCompile(`^item-[a-z0-9-]+$`)
 	cloneIDShape   = regexp.MustCompile(`^(item-[a-z0-9-]+)-v[0-9]+$`)
 	linkTarget     = regexp.MustCompile(`\]\(([^)\s]+)`)
 )
-
-// syncAttributes is the closed attribute set of a directive. Anything else — `rank`, `state`,
-// `after`, a typo — is a finding, because the ruling keeps state and order out of documents
-// and a misspelt attribute would otherwise be dropped in silence.
-var syncAttributes = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true, "claims": true}
 
 // roadmapDocuments are the roadmaps whose `## Icebox` and `## Exploration` sections park a
 // document: an item block in a parked document is synced as `not-started`, not `in-queue`.
@@ -69,10 +63,7 @@ var terminalStates = map[string]bool{
 }
 
 // SyncDocument is one tracked Markdown file: its repo-relative slash path and its bytes.
-type SyncDocument struct {
-	Path    string
-	Content []byte
-}
+type SyncDocument = docshare.Document
 
 // SyncInput is one sync run: the repository root the documents were read from (a path in a
 // block that does not exist under it is a warning), the documents, and the clock.
@@ -120,6 +111,7 @@ type SyncReport struct {
 	// UnsharedOpen counts the store's non-terminal items that no document block declares:
 	// private residue (docs/design/queue-persistence-ruling.md Section 4). The oldest one's
 	// last write is named so the residue's age is visible, not only its size.
+	DocumentFed        bool     `json:"document_fed"`
 	UnsharedOpen       int      `json:"unshared_open"`
 	UnsharedOpenIDs    []string `json:"unshared_open_ids"`
 	UnsharedOpenOldest string   `json:"unshared_open_oldest,omitempty"`
@@ -149,40 +141,14 @@ type syncBlock struct {
 // block in it would enter one developer's store and no one else's. A tracked file deleted
 // from the working tree is skipped, since there is nothing to read.
 func ReadSyncDocuments(root string) ([]SyncDocument, error) {
-	// The root must be a repository's top level: a subdirectory would make `docs` name some
-	// other directory, and the documents read would be nobody's queue.
-	probe := exec.Command("git", "-C", root, "rev-parse", "--show-prefix")
-	var probeErr bytes.Buffer
-	probe.Stderr = &probeErr
-	prefix, err := probe.Output()
+	docs, err := docshare.ReadTracked(root)
 	if err != nil {
-		return nil, Externalf("asking git whether %s is a repository: %v: %s", root, err, strings.TrimSpace(probeErr.String()))
-	}
-	if p := strings.TrimSpace(string(prefix)); p != "" {
-		return nil, Usagef("--root %s is the subdirectory %s of a repository, not its top level", root, p)
-	}
-	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", "docs")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, Externalf("listing the tracked documents of %s with git: %v: %s", root, err, strings.TrimSpace(stderr.String()))
-	}
-	docs := []SyncDocument{}
-	for _, name := range strings.Split(string(out), "\x00") {
-		if name == "" || !strings.HasSuffix(name, ".md") {
-			continue
+		var subdir docshare.SubdirectoryError
+		if errors.As(err, &subdir) {
+			return nil, Usagef("%s", err)
 		}
-		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, Externalf("reading %s: %v", name, err)
-		}
-		docs = append(docs, SyncDocument{Path: name, Content: content})
+		return nil, Externalf("%s", err)
 	}
-	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 	return docs, nil
 }
 
@@ -475,6 +441,17 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 	}
 
+	states := make(map[string]string, len(held))
+	for id, st := range held {
+		states[id] = st.state
+	}
+	fed, missing := docshare.Sharing(in.Documents, states)
+	report.DocumentFed = fed
+	unshared := make(map[string]bool, len(missing))
+	for _, id := range missing {
+		unshared[id] = true
+	}
+
 	// The counters read the store as it is: sync never moves an item's state, so a block's
 	// item is `landed` after this run exactly when it was before it.
 	ids := make([]string, 0, len(held))
@@ -485,10 +462,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	var oldest int64
 	for _, id := range ids {
 		st := held[id]
-		if terminalStates[st.state] || IsCommentItem(id) {
-			continue
-		}
-		if _, declared := byID[id]; declared {
+		if !unshared[id] {
 			continue
 		}
 		report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
@@ -786,35 +760,9 @@ func parkedDocuments(docs []SyncDocument) map[string]bool {
 // fenceState tracks fenced code blocks (``` and ~~~) line by line. step answers whether the
 // line is fence content or a fence delimiter, which is every line no directive, heading or
 // criterion may come from.
-type fenceState struct {
-	char byte
-	n    int
-}
+type fenceState struct{ docshare.Fence }
 
-func (f *fenceState) step(line string) bool {
-	trimmed := strings.TrimLeft(line, " \t")
-	run := func(c byte) int {
-		n := 0
-		for n < len(trimmed) && trimmed[n] == c {
-			n++
-		}
-		return n
-	}
-	if f.n > 0 {
-		if n := run(f.char); n >= f.n && strings.TrimSpace(trimmed[n:]) == "" {
-			f.n = 0
-		}
-		return true
-	}
-	for _, c := range []byte{'`', '~'} {
-		if n := run(c); n >= 3 {
-			f.char, f.n = c, n
-			return true
-		}
-	}
-	return false
-}
-
+func (f *fenceState) step(line string) bool { return f.Step(line) }
 func splitLines(content []byte) []string {
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 	return strings.Split(text, "\n")
@@ -885,38 +833,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		body = strings.TrimSpace(strings.TrimPrefix(body, "tillr:"))
 		body = strings.TrimPrefix(body, "item")
 
-		attrs := map[string]string{}
-		// Attribute findings are recorded once the id is read, so each one names its item
-		// whenever the directive names one.
-		var pending [][2]string
-		later := func(rule, format string, args ...any) {
-			pending = append(pending, [2]string{rule, fmt.Sprintf(format, args...)})
-		}
-		for rest := strings.TrimSpace(body); rest != ""; rest = strings.TrimSpace(rest) {
-			m := attribute.FindStringSubmatchIndex(rest)
-			if m == nil {
-				later("malformed-directive", "cannot read an attribute at %q: an attribute is name=\"value\"", firstWord(rest))
-				break
-			}
-			name := rest[m[2]:m[3]]
-			value := ""
-			for g := 4; g <= 8; g += 2 {
-				if m[g] >= 0 {
-					value = rest[m[g]:m[g+1]]
-					break
-				}
-			}
-			rest = rest[m[1]:]
-			if !syncAttributes[name] {
-				later("unknown-attribute", "attribute %q is not one of id, paths, blocked_by, seat, prose, workflow or claims: a block carries no state, rank or tombstone", name)
-				continue
-			}
-			if _, twice := attrs[name]; twice {
-				later("duplicate-attribute", "attribute %q appears twice", name)
-				continue
-			}
-			attrs[name] = value
-		}
+		attrs, pending := docshare.Attributes(body)
 
 		id := strings.TrimSpace(attrs["id"])
 		b.payload.ItemID = id
