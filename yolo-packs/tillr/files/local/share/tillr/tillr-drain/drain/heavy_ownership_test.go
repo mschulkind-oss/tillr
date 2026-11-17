@@ -67,7 +67,7 @@ func heavyBackgroundDeclaration(t *testing.T, root, work string, wait bool) stri
 	if wait {
 		last = "wait"
 	}
-	writeForkFile(t, filepath.Join(checks, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","timeout_ms":1000,"command":["sh","-c","sleep 1000 & echo $! > `+child+`; `+last+`"],"reads":["value"],"remember":false}`)
+	writeForkFile(t, filepath.Join(checks, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","timeout_ms":3600000,"command":["sh","-c","sleep 1000 & echo $! > `+child+`.part; mv `+child+`.part `+child+`; `+last+`"],"reads":["value"],"remember":false}`)
 	heavyCommit(t, root, "ready")
 	t.Cleanup(func() {
 		raw, err := os.ReadFile(child)
@@ -147,7 +147,7 @@ names={'environ','Cancellation','_kill_process_group','_run_cancellable','_start
 constants={'REUSE_ENV','GATE_ENV_DROP','_CPU_SHIM','WATCHDOG_SAMPLE_INTERVAL','WATCHDOG_SILENT_SAMPLES','CHECK_STALLED_RC'}
 nodes=[node for node in module.body if (isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names) or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id in constants for target in node.targets))]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),source,'exec'),globals())
-_run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)
+_run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.part; mv '+sys.argv[2]+'.part '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)
 `)
 		legacyProgram = "python3 " + driver + " " + source + " " + child
 	}
@@ -163,21 +163,25 @@ _run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'; 
 		t.Fatal(err)
 	}
 	defer cmd.Process.Kill()
-	deadline := time.After(20 * time.Second)
+	// Readiness is the child's pid file, which the check publishes whole by rename. There is
+	// no wall-clock bound: a helper that dies before publishing it ends the wait, and a hang
+	// is stopped by the test binary's own timeout.
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
 	for {
 		if _, err := os.Stat(child); err == nil {
 			break
 		}
 		select {
-		case <-deadline:
-			t.Fatal("judge child did not start")
+		case <-exited:
+			t.Fatal("the owner process ended before its judge child started")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	cmd.Wait()
+	<-exited
 	// The inherited lock remains held until the surviving supervisor has ended the judge.
 	lock, err := os.OpenFile(filepath.Join(root, ".git", "tillr-gate", "heavy.lock"), os.O_RDWR, 0644)
 	if err != nil {

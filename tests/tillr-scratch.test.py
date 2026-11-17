@@ -2,7 +2,9 @@
 """Check TestMain cleanup; --suites also measures scratch growth around uncached suites.
 
 The default check is part of tillr-docs.test.py, so the repository gate runs it.
-Only this check's own scratch is removed. Existing leftovers are never deleted.
+The check judges only what it made: the suites run against a private durable root created
+for this run, so a test process another lane starts at the same moment cannot appear in
+the count. Nothing outside that private root is read, counted or deleted.
 """
 
 import argparse
@@ -27,13 +29,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suites", action="store_true")
     args = parser.parse_args()
-    root = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / ".yolo/durable")).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    before = entries(root)
-    print(f"scratch before: {len(before)}", flush=True)
+    shared = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / ".yolo/durable")).resolve()
+    shared.mkdir(parents=True, exist_ok=True)
     result = 0
-    with tempfile.TemporaryDirectory(prefix="tillr-cleanup-check-", dir=root) as scratch:
-        env = {**os.environ, "YOLO_DURABLE_DIR": str(root), "TMPDIR": scratch}
+    with tempfile.TemporaryDirectory(prefix="tillr-cleanup-check-", dir=shared) as scratch:
+        root = Path(scratch) / "durable"
+        root.mkdir()
+        tmp = Path(scratch) / "tmp"
+        tmp.mkdir()
+        before = entries(root)
+        print(f"scratch before: {len(before)}", flush=True)
+        env = {**os.environ, "YOLO_DURABLE_DIR": str(root), "TMPDIR": str(tmp)}
         command = ["go", "test", "-count=1", "tests/tillr-testmain_test.go"]
         print("+ " + " ".join(command), flush=True)
         result = subprocess.run(command, cwd=ROOT, env=env).returncode
@@ -47,7 +53,7 @@ def main():
                 if code:
                     result = code
                     break
-    after = entries(root)
+        after = entries(root)
     added = after - before
     print(f"scratch after: {len(after)}; new entries: {len(added)}", flush=True)
     for name in sorted(added):

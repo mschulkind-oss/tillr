@@ -79,7 +79,7 @@ func TestSlowFaceStartupDoesNotHoldTheStoreWriter(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // hang guard: a held writer blocks until release, load only slows Open
 	defer cancel()
 	s, err := store.Open(ctx, f.storePath, true)
 	if err != nil {

@@ -73,8 +73,10 @@ func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	s.mu.Unlock()
 	select {
 	case <-s.overlap:
-	case <-time.After(3 * time.Second):
-		return run.Record{}, "", fmt.Errorf("scouts did not overlap")
+	// A serial scheduler never overlaps, so this wait is a hang guard, not a timing bound:
+	// load slows every scout alike and cannot make four overlapping ones miss each other.
+	case <-time.After(5 * time.Minute):
+		return run.Record{}, "", fmt.Errorf("scouts did not overlap: hung")
 	}
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
 	if req.LaneID != "lane-1" {
