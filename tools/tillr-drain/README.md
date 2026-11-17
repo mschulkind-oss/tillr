@@ -867,7 +867,9 @@ For gate, fixer gate, land and verdict, a configured command naming the standard
 adapter at `tools/tillr-loop/tillr-loop` under `--root` runs the copy embedded in the
 drain binary. The live working-tree file is not read at the next step, even after a
 landing changes or removes it. Absolute script paths and relative paths under the root
-select the same copy. Other configured programs run unchanged. Startup names that choice
+select the same copy. Other configured programs run unchanged. Definition-hook invocations always run
+the exact declared executable, even at this standard path. Automatic fork-gate
+selection applies only to configurations without a hook program. Startup names that choice
 for each step; command spans show `-` for the adapter supplied to Python on stdin.
 
 The committed [adapter copy](./drain/tillr-loop.py) is compiled from the same sources
@@ -879,8 +881,17 @@ The repository checks the adapter invokes still come from the judged tree, not t
 
 ## Step-program argument contract
 
+A store definition may instead name one hook program. Its selected steps supply
+command-line defaults, with explicit step flags (including empty values) taking
+precedence. Startup checks the program's `describe` record, not synthetic candidate
+calls. Unlisted hooks are never called; unlisted steps default to empty. The
+[definition package's hook contract](../tillr/definition/README.md#hook-program-contract)
+names the flags, records, and exits for all hooks. A definition without a hook
+program retains the existing defaults and requirements.
+
 A **step program** is the configured gate, fixer gate, land or verdict command that
-receives the candidate's flags. Its help invocation (`<command> --help`) must judge
+receives the candidate's flags. For explicit command-line programs and definitions
+without hook programs, its help invocation (`<command> --help`) must judge
 nothing. Programs supporting startup argument validation advertise the literal
 `tillr-step-argv-check-v1` in that help output and accept `--check-argv` alongside
 normal arguments. This is the drain's contract, not the adapter's broader self-check.

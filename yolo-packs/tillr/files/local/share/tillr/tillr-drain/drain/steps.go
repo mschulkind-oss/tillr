@@ -15,6 +15,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -28,6 +29,8 @@ import (
 // that invented those records would be a second, silent implementation of two utilities.
 // The named program reads the candidate on its argv and answers with its exit code.
 type ProcessSteps struct {
+	hooks        *definition.Hooks
+	hookCommands map[string][]string
 	// RunBin is the `tillr-run` binary the run step executes: `run exec`.
 	RunBin string
 	// HeavyGateBin is the declaration judge used after a landing (default tillr-gate).
@@ -267,7 +270,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 			"TILLR_FAST_VERDICT_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateFastVerdictFile))
 	}
 	program := s.GateProgram
-	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); fork != candidate.BaseRef {
+	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); s.hooks == nil && fork != candidate.BaseRef {
 		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
 	}
 	if IsTrunkFixer(candidate.ItemID) && s.FixerGateProgram != "" {
@@ -479,7 +482,15 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		return 0, "", StepSpan{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")
 	}
 	argv := s.programArgv(program, candidate, extra...)
-	cmd := s.stepCommand(ctx, argv, env)
+	var cmd *exec.Cmd
+	if s.isHookCommand(program) {
+		// The definition selects this exact executable, even at the legacy
+		// adapter path. Only CLI programs opt into the embedded adapter.
+		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Env = append(os.Environ(), env...)
+	} else {
+		cmd = s.stepCommand(ctx, argv, env)
+	}
 	cmd.Dir = dir
 	var stderr stderrTail
 	cmd.Stderr = &stderr
@@ -692,7 +703,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	// candidate's own red cannot hide behind a different red already on its base.
 	for _, check := range checks {
 		program := strings.ReplaceAll(s.ReplayProgram, "{only}", check)
-		argv := strings.Fields(program)
+		argv := s.commandArgv(program)
 		if len(argv) == 0 {
 			return ReplayOutcome{Rev: rev, Known: false}, nil
 		}
@@ -838,7 +849,7 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	} else {
 		program = strings.ReplaceAll(program, "{since}", "--since "+baseSHA)
 	}
-	argv := strings.Fields(program)
+	argv := s.commandArgv(program)
 	if len(argv) == 0 {
 		return RollingOutcome{Known: false}, nil
 	}

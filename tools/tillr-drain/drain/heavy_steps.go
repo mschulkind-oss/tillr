@@ -106,7 +106,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 	}
 	// Substitute after tokenization: a legacy label may contain spaces, but
 	// its kind:label selector is one argv value, never multiple arguments.
-	argv := strings.Fields(program)
+	argv := s.commandArgv(program)
 	for i := range argv {
 		argv[i] = strings.ReplaceAll(argv[i], "{only}", selector)
 	}

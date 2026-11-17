@@ -8,7 +8,8 @@ the owner has not chosen the final names.
 
 This package reads and validates that data and answers an open store's declaration.
 The store utility records and reports it. Item state, apply, close, reopen, and
-sync read its lifecycle vocabulary; drain integration remains separate work.
+sync read its lifecycle vocabulary; drain reads it for planning and hook startup
+validation.
 This package does not open a store, dispatch work, check a prerequisite, or run a
 program. The consumer column below includes both current and intended readers.
 
@@ -86,8 +87,93 @@ judgments the core cannot make. These terms come from
 
 A hook's argument vector goes directly to a process, not a shell. Arguments after
 the executable may be empty strings. Hook names are declarations, not a closed
-vocabulary in this package; matching them to a program's capabilities and defining
-its records and exit codes belongs to the later hook-contract integration.
+vocabulary in this package. The drain checks them against the program's capabilities
+using the [hook program contract](#hook-program-contract).
+
+## Hook program contract
+
+A hook is called as the exact `hooks.argv` vector followed by its name and the
+flags below. No shell parses that vector; spaces and empty arguments are retained.
+The process runs outside every SQLite write transaction. Diagnostics go to stderr;
+stdout is reserved for the hook's answer. JSON answers are single objects, not
+log lines mixed with JSON.
+
+The drain's `loop` and `loop --check` read the store's declaration without migration,
+close that reader, and run `describe` before any pass starts. Only names in
+`hooks.names` are checked and selected. An explicit step flag (even an empty value)
+wins over the definition. With a hook program, an unlisted step defaults to empty,
+not the Git-landing step default; an empty gate, land, or verdict cannot judge a
+candidate, an empty replay cannot acquit it, an empty rolling does no rolling work,
+and an empty fixer gate leaves fixers on the ordinary gate. With no hook program,
+the existing command-line requirements and defaults remain unchanged.
+
+### Describe
+
+`<argv> describe` takes no flags and prints this capability record (example):
+
+```json
+{"hooks":{"gate":["--item","--lane","--run","--worktree","--base","--head","--root"],"replay":["--only"]}}
+```
+
+The `hooks` object maps each answered name to its accepted flag spellings, including
+leading `--`. It may advertise names the definition does not select; they are not
+called. Every selected name must appear, and every flag in its contract below must
+be accepted, including flags used only in optional branches. This also checks
+selected names whose step is overridden on the command line. Unknown names may be
+advertised for other consumers, but the drain assigns them no flags or calls.
+Exit 0 means a valid description; any other exit, malformed record, missing selected
+hook, or missing flag refuses loop startup with exit 2. Missing-hook and missing-flag
+diagnostics name the hook. Describe does not judge a candidate or mutate the store.
+Definition hooks need not implement the legacy `--help` / `--check-argv` negotiation;
+explicit CLI step programs still use that existing preflight.
+
+### Candidate steps
+
+**Candidate flags** means `--item`, `--lane`, `--run`, `--worktree`, `--base`,
+`--head`, and `--root`: the item, lane, run, working directory, base commit, candidate
+commit, and owning repository. The drain hands these to every candidate step.
+The record envelope mentioned below is the suite's
+[versioned record format](../record/envelope.go). Gate artifacts are written under the
+run's loop directory, not returned as mixed stdout logging.
+
+| Hook | Flags passed | Answer record and exit meaning |
+| :--- | :--- | :--- |
+| `gate` | Candidate flags | No stdout record required. The gate writes its `gate.verdict` artifact and measured check spans. Exit 0 passes, 1 fails, 2 refuses arguments (configuration fault), 6 is a stalled gate, and any other exit could not judge. |
+| `land` | Candidate flags; optional `--observed-trunk`, `--base-ref`, `--message-from` | Prints a `land.landing` envelope with payload `result`, `reason`, `trunk_after`, and optional `conflict_paths`, `lock_observation`, `red_cap`. Exit 0 lands; 1 refuses or conflicts (the record distinguishes them); 2 refuses arguments; other exits fail the step. An empty stdout retains the legacy exit-only answer. |
+| `verdict` | Candidate flags; `--store`, `--verdict` (`pass` or `fail`) | Records criterion verdicts in the named store; stdout is not consumed. Exit 0 records the requested verdict, 2 refuses arguments, any other exit fails the step. |
+| `fixer-gate` | Candidate flags; either `--all` or `--since` with the last proved commit | Same artifacts and exit meanings as `gate`; the full untiered gate for a trunk fixer. |
+
+`--observed-trunk` is the loop's last observed trunk tip; `--base-ref` names a
+retained base reference when present; `--message-from` names the worker commit
+whose message is kept when present. These optional flags must still be advertised.
+Gate and fixer-gate receive `TILLR_GATE_SPANS_OUT` and `TILLR_FAST_VERDICT_OUT`;
+land receives `TILLR_LAND_OBSERVE=1`. The drain keeps these existing artifact and
+observation conventions. The gate may also write failing-check details used for
+base replay. See [the drain reference](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md).
+
+### Revision checks
+
+| Hook | Flags passed | Answer record and exit meaning |
+| :--- | :--- | :--- |
+| `replay` | `--only` with one failing check identifier | No stdout record consumed. Runs once per check in a detached worktree at the revision being judged. Exit 0 means that check passes, 1 means red, any other exit means unknown (never evidence for acquittal). |
+| `rolling` | Either `--all` on the first run or `--since` with the proved watermark | No stdout record consumed. Runs in a detached worktree at the trunk tip and writes check spans to `TILLR_GATE_SPANS_OUT`. Exit 0 proves green; 1 proves red only if spans name failing checks; 6 reports stalled checks; all other exits are unknown. Unknown advances no watermark and files no fixer. |
+
+For definition hooks the hook name selects the operation: replay receives only
+`--only`, not the legacy adapter's `--replay`; rolling receives the range flags,
+not the legacy adapter's `--tier rolling`. Revision checks and fixer gates retain
+`PI_FORKS_ROOT`, naming the owning repository even from a detached worktree.
+
+### Completion and detail hooks
+
+These contracts are reserved for the
+[completion integration](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md#add-completion-through-the-definitions-hook-for-items-that-never-land).
+This change validates selected hooks at startup but does not yet call them.
+
+| Hook | Flags | Answer record and exit meaning |
+| :--- | :--- | :--- |
+| `complete-item` | `--item`, `--run`, `--store`, `--root` | Prints one JSON object with `state`, `reason`, and optional `resolves_via` pointer. It first records criterion verdicts in the store. Exit 0 requests the named finished state; 1 leaves the item unfinished; any other exit holds it as a hook fault. The core must validate the state and recorded verdicts before moving the item, with actor `definition:<name>`. |
+| `after-completion` | `--item`, `--store`, `--root` | No stdout record required. Exit 0 completes follow-up work; 1 is a negative answer; any other exit is a hook fault. It does not undo the already completed item. Invocation and negative-answer routing are future integration work. |
+| `detail` | `--body-ref`, `--root` | Prints one JSON record envelope of kind `item.detail`, with a definition-specific payload for the item's referenced details. Exit 0 supplies details; 1 means no detail is available; any other exit is a hook fault. Display rendering is future integration work. |
 
 ### Closed prerequisite vocabulary
 
