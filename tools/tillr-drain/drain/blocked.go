@@ -26,6 +26,9 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	switch {
 	case c.WaitingOn == "owner":
 		d.Reason = ReasonConflictOwner
+		// The design run that handed the conflict over is named beside it, so a view
+		// says which run ended without an answer (design_unanswered.go).
+		d.DeferredBy = c.DesignRunID
 	case c.Status != "raised":
 	case p.policy == nil:
 		d.Reason = ReasonNoPolicy

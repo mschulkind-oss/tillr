@@ -1374,6 +1374,9 @@ planned:
 		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
 			return "", err
 		}
+		if err := l.settleUnansweredDesignRuns(ctx); err != nil {
+			return "", err
+		}
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}

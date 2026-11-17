@@ -706,6 +706,41 @@ next pass. A claim without that evidence, including any whose files cannot be ju
 remains protected. A normal offline finish is still judged;
 a worker signal without evidence of supervisor interruption is not exempted.
 
+### A design run that ends without answering
+
+A raised conflict gets one design-seat dispatch, and the claim marks the conflict
+`awaiting` that design run. The design run's settlement answers the conflict in most
+outcomes. An amended block that lands answers it. A `blocked` report, a removed block or
+an unchanged block hands it to the owner. A design run can also end before any of those:
+its candidate refused at the gate, no commit, a refused landing, or a loop stop. Before
+2026-11-17 such a conflict stayed `awaiting` an ended run, and every view said
+`conflict-design`, "waits on work: design", with nobody working. At each pass the loop
+now applies this rule to every blocked item whose conflict awaits an ended design run:
+
+1. A design run a loop stop interrupted (`drain.orphaned`) is no attempt. The conflict is
+   raised again and the design seat is dispatched.
+2. A design run that ended any other way is an attempt. Its inputs are the item's block
+   and its design document, compared between the run's base and the trunk tip, and any
+   trunk fixer that landed after its dispatch. When one of them changed, the conflict is
+   raised once more. That is the one automatic attempt per input change, as for a build
+   run above.
+3. Otherwise the conflict goes to the owner (`conflict-owner`, "needs you"). Its text
+   names the design run and how it ended, such as `refused at gate`, and `tillr drain why`
+   names the run beside the conflict.
+4. An owner hold that rule 3 wrote is compared again when the trunk moves. An input change
+   that lands later still earns the one automatic attempt if it was not spent.
+5. A design run that also ends without answering after that automatic attempt goes to the
+   owner, whatever changed since. There is no further automatic run and no timer.
+
+Each unanswered design run except an interrupted one writes one `drain.design-unanswered`
+event naming the conflict, the run, its outcome, what changed, and whether the conflict was
+raised again. A record with `reraised` true spends the conflict's automatic attempt. The
+owner's remedy is to amend the item block or the design document, which raises the conflict
+once more if the attempt is unspent, or to release or close the item. A triage conflict
+keeps its own rule, one triage run per request version. The
+[unanswered-design tests](./drain/design_unanswered_test.go) cover the owner hand-off, the
+re-raise after an input change, the later re-raise from the owner, and the interrupted run.
+
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
 no expiry while it works, and releases that lease once it ends, on every path. The write
 that records the run examined (`drain.examined`) also releases the lane. Only a live run
