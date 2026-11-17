@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Store is one open store.
 type Store struct {
-	db   *sql.DB
-	path string
+	db          *sql.DB
+	path        string
+	busyTimeout time.Duration
 	// writable is whether Open made this handle; only a writable handle commits, so only
 	// its close can checkpoint (checkpoint.go).
 	writable bool
@@ -37,14 +39,18 @@ type Store struct {
 // With create, a missing store is created and the schema is migrated; without it
 // the store must already exist and is not migrated. Mode conversion needs SQLite's
 // exclusive lock and fails explicitly if it cannot acquire it.
-func Open(ctx context.Context, path string, create bool) (*Store, error) {
-	return open(ctx, path, create, create)
+func Open(ctx context.Context, path string, create bool, options ...OpenOption) (*Store, error) {
+	return open(ctx, path, create, create, options...)
 }
 
 // open is Open with creating a missing store and migrating it separated: a checkpoint
 // owner that starts before any store exists creates the empty WAL database and leaves the
 // migration to the program that then opens it with create (CreateAndOwnCheckpoints).
-func open(ctx context.Context, path string, create, migrate bool) (result *Store, resultErr error) {
+func open(ctx context.Context, path string, create, migrate bool, options ...OpenOption) (result *Store, resultErr error) {
+	cfg, err := storeOpenConfig(options)
+	if err != nil {
+		return nil, err
+	}
 	if path == "" {
 		return nil, errors.New("store: a store path is required")
 	}
@@ -57,7 +63,7 @@ func open(ctx context.Context, path string, create, migrate bool) (result *Store
 	}
 	trace := startSQLiteTrace(path, "open")
 	defer func() { trace.finish(resultErr) }()
-	s := &Store{path: path, writable: true}
+	s := &Store{path: path, writable: true, busyTimeout: cfg.busyTimeout}
 	// The sidecar first, so that even this open's own failure paths close no connection
 	// that is the store's last. A store that does not exist yet gets it once WAL is
 	// selected, before anything is migrated.
@@ -65,7 +71,7 @@ func open(ctx context.Context, path string, create, migrate bool) (result *Store
 	if _, err := os.Stat(path); err == nil {
 		attached = s.attachSidecar(ctx, trace)
 	}
-	db, err := sql.Open("sqlite", dsn(path, false))
+	db, err := sql.Open("sqlite", dsn(path, false, cfg.busyTimeout))
 	if err != nil {
 		s.release(nil)
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
@@ -133,7 +139,7 @@ var failSidecar func() error
 func (s *Store) attachSidecar(ctx context.Context, trace *sqliteTraceSpan) bool {
 	trace.record("sidecar.begin", nil)
 	if s.sidecar == nil {
-		db, err := sql.Open("sqlite", dsn(s.path, true))
+		db, err := sql.Open("sqlite", dsn(s.path, true, s.busyTimeout))
 		if err != nil {
 			trace.record("sidecar.end", err)
 			return false
@@ -159,7 +165,11 @@ func (s *Store) attachSidecar(ctx context.Context, trace *sqliteTraceSpan) bool 
 
 // OpenRead opens an existing store read-only. It never migrates: the read-only face
 // is safe to point at a store a writer is using.
-func OpenRead(ctx context.Context, path string) (*Store, error) {
+func OpenRead(ctx context.Context, path string, options ...OpenOption) (*Store, error) {
+	cfg, err := storeOpenConfig(options)
+	if err != nil {
+		return nil, err
+	}
 	if path == "" {
 		return nil, errors.New("store: a store path is required")
 	}
@@ -169,7 +179,7 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	db, err := sql.Open("sqlite", dsn(path, true))
+	db, err := sql.Open("sqlite", dsn(path, true, cfg.busyTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s read-only: %w", path, err)
 	}
@@ -178,7 +188,7 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, readOpenError(path, err)
 	}
-	return &Store{db: db, path: path}, nil
+	return &Store{db: db, path: path, busyTimeout: cfg.busyTimeout}, nil
 }
 
 // Close closes the store. A writable handle first checkpoints the log if it is due
@@ -333,10 +343,11 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 // What NORMAL leaves inside a writer is the log restart's header flush. The writable handle
 // also runs wal_autocheckpoint=0, so no commit checkpoints: checkpoint.go decides which
 // program checkpoints, and so which writer pays that flush.
-func dsn(path string, readOnly bool) string {
-	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(0)&_txlock=immediate"
+func dsn(path string, readOnly bool, wait time.Duration) string {
+	busy := fmt.Sprintf("_pragma=busy_timeout(%d)", wait.Milliseconds())
+	params := "?" + busy + "&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(0)&_txlock=immediate"
 	if readOnly {
-		params = "?mode=ro&_pragma=busy_timeout(5000)"
+		params = "?mode=ro&" + busy
 	}
 	return "file:" + path + params
 }

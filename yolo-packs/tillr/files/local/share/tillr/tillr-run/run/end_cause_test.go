@@ -33,7 +33,7 @@ func TestTerminalEndCauses(t *testing.T) {
 		{"success", []string{"/bin/true"}, 0, "normal-exit", false},
 		{"nonzero", []string{"/bin/sh", "-c", "exit 7"}, 0, "normal-exit", false},
 		{"signal", []string{"/bin/sh", "-c", "kill -TERM $$"}, 0, "signal", false},
-		{"wall", []string{"/bin/sleep", "10"}, 1000, "time-limit", false},
+		{"wall", []string{"/bin/sleep", "10"}, 10, "time-limit", false},
 		{"missing", []string{"/no/such/tillr-command"}, 0, "failed-to-start", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

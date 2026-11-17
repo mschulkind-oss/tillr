@@ -301,6 +301,9 @@ type LoopConfig struct {
 	// DefaultBackoffBase. It is a wait, never a stop: the ruling's answer to a repeated
 	// fault is to report it and try again, because the pile still holds work.
 	BackoffBase time.Duration
+	// StorePollInterval bounds the wait before noticing a new store fact. Zero
+	// selects DefaultStorePollInterval; it never bounds the amount of work.
+	StorePollInterval time.Duration
 	// GateBudget is the bound on the gate's own wall time for one tick. 0 is
 	// DefaultGateBudget, which is the one place the budget is stated; this field exists so a
 	// test can measure the overrun path with a bound it can cross, and a face that never sets
@@ -519,6 +522,8 @@ type Loop struct {
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
 	heartbeatClock func() heartbeatTicker
+	// keeperOpen lets tests shorten the checkpoint writer's SQLite lock wait.
+	keeperOpen func(context.Context, string) (*store.CheckpointOwner, error)
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
 	syncedSHA    string
 	syncClearSeq int64
@@ -554,6 +559,12 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	}
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = DefaultBackoffBase
+	}
+	if cfg.StorePollInterval < 0 {
+		return nil, Usagef("the loop needs a non-negative store poll interval")
+	}
+	if cfg.StorePollInterval == 0 {
+		cfg.StorePollInterval = DefaultStorePollInterval
 	}
 	if cfg.GateBudget < 0 {
 		return nil, Usagef("the loop needs a non-negative gate budget: it bounds the gate's own wall time, not a run's")

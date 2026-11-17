@@ -150,13 +150,15 @@ func TestARunningLoopCheckpointsOnItsHeartbeatWithoutTheSessionLock(t *testing.T
 	checkpoints := make(chan struct{}, 1)
 	var offset atomic.Int64
 	base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	ticks := make(chan time.Time, 1)
 	steps := &checkpointWaitingSteps{
-		advance:     func() { offset.Add(int64(CheckpointInterval)) },
+		advance:     func() { offset.Add(int64(CheckpointInterval)); ticks <- base.Add(time.Duration(offset.Load())) },
 		checkpoints: checkpoints,
 		t:           t,
 	}
 	l := f.loop(t, steps, &itemContentStager{})
 	l.cfg.Now = func() time.Time { return base.Add(time.Duration(offset.Load())) }
+	l.heartbeatClock = func() heartbeatTicker { return heartbeatTicker{C: ticks, Stop: func() {}} }
 	var lockFree, announced bool
 	l.beforeCheckpoint = func() {
 		if l.sessionMu.TryLock() {

@@ -250,8 +250,8 @@ func IsBusy(err error) bool {
 // answers the owner. It takes the shared lock before it opens its handles. A lock file it
 // cannot open does not stop it: it then checkpoints as an owner nobody else can see
 // (LockError), and other handles' closes go on checkpointing past CheckpointFrames.
-func OwnCheckpoints(ctx context.Context, path string) (*CheckpointOwner, error) {
-	return ownCheckpoints(ctx, path, false, nil)
+func OwnCheckpoints(ctx context.Context, path string, options ...OpenOption) (*CheckpointOwner, error) {
+	return ownCheckpoints(ctx, path, false, nil, options...)
 }
 
 // CreateAndOwnCheckpoints is OwnCheckpoints for a program that will create the store if
@@ -259,8 +259,8 @@ func OwnCheckpoints(ctx context.Context, path string) (*CheckpointOwner, error) 
 // as an empty WAL database, not migrated, so the migration that follows (Open with create)
 // runs while this owner already holds the store. A loop's startup is then never a stretch
 // with no owner, in which other programs' closes would checkpoint.
-func CreateAndOwnCheckpoints(ctx context.Context, path string) (*CheckpointOwner, error) {
-	return ownCheckpoints(ctx, path, true, nil)
+func CreateAndOwnCheckpoints(ctx context.Context, path string, options ...OpenOption) (*CheckpointOwner, error) {
+	return ownCheckpoints(ctx, path, true, nil, options...)
 }
 
 // ownCheckpoints makes the owner. held, when not nil, is the owner's lock file already
@@ -268,7 +268,13 @@ func CreateAndOwnCheckpoints(ctx context.Context, path string) (*CheckpointOwner
 // in place of a shared lock: a second descriptor's shared lock would wait on the first's
 // exclusive one forever, because flocks on two open files conflict even in one process.
 // On failure the owner releases held too.
-func ownCheckpoints(ctx context.Context, path string, create bool, held *os.File) (*CheckpointOwner, error) {
+func ownCheckpoints(ctx context.Context, path string, create bool, held *os.File, options ...OpenOption) (*CheckpointOwner, error) {
+	if _, err := storeOpenConfig(options); err != nil {
+		if held != nil {
+			held.Close()
+		}
+		return nil, err
+	}
 	missing := false
 	if _, err := os.Stat(path); err != nil {
 		if !create || !errors.Is(err, os.ErrNotExist) {
@@ -294,10 +300,10 @@ func ownCheckpoints(ctx context.Context, path string, create bool, held *os.File
 	var err error
 	if missing {
 		// The writer creates the file and selects WAL; the keeper can then attach to it.
-		o.writer, err = open(ctx, path, true, false)
+		o.writer, err = open(ctx, path, true, false, options...)
 	}
 	if err == nil {
-		if o.keeper, err = OpenRead(ctx, path); err == nil {
+		if o.keeper, err = OpenRead(ctx, path, options...); err == nil {
 			// The read maps the log's shared index, which attaches the keeper to it.
 			err = o.keeper.ReadTx(ctx, func(r *Reader) error {
 				var n int
@@ -306,7 +312,7 @@ func ownCheckpoints(ctx context.Context, path string, create bool, held *os.File
 		}
 	}
 	if err == nil && o.writer == nil {
-		o.writer, err = Open(ctx, path, false)
+		o.writer, err = Open(ctx, path, false, options...)
 	}
 	if err != nil {
 		o.release()
@@ -490,7 +496,7 @@ func TruncateLog(ctx context.Context, path string) (result Checkpointed, resultE
 		err = db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &c.LogFrames, &c.CopiedFrames)
 	}
 	trace.record("truncate.end", err)
-	if _, resetErr := db.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err == nil {
+	if _, resetErr := db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", owner.writer.busyTimeout.Milliseconds())); err == nil {
 		err = resetErr
 	}
 	if err != nil {

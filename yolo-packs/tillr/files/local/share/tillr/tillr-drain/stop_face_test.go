@@ -25,6 +25,11 @@ func stopEventsOf(t *testing.T, path, kind string) []event.Event {
 
 func startStopFixture(t *testing.T, f loopFixture, lanes int, gateOverride ...string) (*exec.Cmd, *strings.Builder) {
 	t.Helper()
+	return startStopFixtureWithRun(t, f, lanes, sibling(t, "run"), gateOverride...)
+}
+
+func startStopFixtureWithRun(t *testing.T, f loopFixture, lanes int, runBin string, gateOverride ...string) (*exec.Cmd, *strings.Builder) {
+	t.Helper()
 	policy := filepath.Join(scratch(t, "stop-policy"), "policy.json")
 	raw, err := json.Marshal(f.policy)
 	if err != nil {
@@ -35,7 +40,7 @@ func startStopFixture(t *testing.T, f loopFixture, lanes int, gateOverride ...st
 	if len(gateOverride) > 0 {
 		gate = gateOverride[0]
 	}
-	cmd := exec.Command(bin, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", fmtInt(lanes), "--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"), "--gate", gate, "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
+	cmd := exec.Command(bin, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", fmtInt(lanes), "--policy", policy, "--run-bin", runBin, "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"), "--gate", gate, "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
 	out := new(strings.Builder)
 	cmd.Stdout = out
 	cmd.Stderr = out

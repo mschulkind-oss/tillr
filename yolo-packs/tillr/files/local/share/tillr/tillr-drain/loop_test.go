@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1667,16 +1668,37 @@ func seedLeaseNoExpiry(t *testing.T, path, laneID, runID string) {
 // the lease expires and re-plans, and the item then dispatches. The negative control is the
 // stop the first night's drain made: without the wait, the loop reports `queue-drained` while
 // the item is `no-lane` and the lane is still held.
+// leaseExpiryReport advances the injected clock only after the loop announces a
+// wait. A broken early-stop path therefore cannot expire the lease by accident.
+type leaseExpiryReport struct {
+	strings.Builder
+	expire func()
+}
+
+func (r *leaseExpiryReport) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "waiting for a lease expiry") {
+		r.expire()
+	}
+	return r.Builder.Write(p)
+}
+
 func TestALaneHeldByAFiniteLeaseIsWaitedOnNotStopped(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
-	// The lease is real and long enough to outlive the loop's own staging (which creates a
-	// git worktree before the first tick): the loop's clock is the wall clock, so the wait
-	// is the time until the lease expires and nothing else.
-	seedLease(t, f.store, "lane-1", "run-1", time.Now().Add(2*time.Second).UnixMilli())
-	report := &strings.Builder{}
+	base := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	var offset atomic.Int64
+	now := func() time.Time { return base.Add(time.Duration(offset.Load())) }
+	seedLease(t, f.store, "lane-1", "run-1", base.Add(2*time.Second).UnixMilli())
+	report := &leaseExpiryReport{expire: func() { offset.Store(int64(2 * time.Second)) }}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
-	loop := f.newLoopAt(t, 1, steps, passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, report, time.Now)
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
+		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Now: now, Report: report, StorePollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := loop.Run(context.Background())
 	if err != nil {

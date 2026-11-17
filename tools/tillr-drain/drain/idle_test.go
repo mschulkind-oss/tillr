@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -13,6 +14,7 @@ import (
 func TestDefaultWaitReportsFiveHoldsOnceAcrossOneHundredIdlePasses(t *testing.T) {
 	f, l := passFixture(t, "held-0", "held-1", "held-2", "held-3", "held-4", "held-5", "held-6")
 	l.cfg.ExitWhenDrained = false
+	l.cfg.StorePollInterval = time.Millisecond
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
 		return err

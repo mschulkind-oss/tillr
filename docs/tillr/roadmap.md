@@ -1598,15 +1598,7 @@ the owner pays them on every full run. The fix is to make each wait a setting th
 leaves alone and a test shortens, and to prove each shortened test still catches the bug it was
 written for.
 
-<!-- tillr: item id="item-drain-tests-use-injected-clocks" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-run/,yolo-packs/tillr/" blocked_by="" prose="2" -->
 
-- **c1:** The store poll interval becomes a per-loop setting. Its default stays 100 ms, and a test pins that default. The idle-pass test injects a short interval, and `document_wait_test.go` and every other user of the old constant follow.
-- **c2:** The missed-restart and finite-lease tests use the injected clocks the code already has, and take no real second. The checkpoint cycle loop uses the existing heartbeat clock seam instead of real 1 s heartbeats.
-- **c3:** The SQLite busy timeout is a parameter of the store open that a test can shorten. The default stays 5000 ms, and a test pins it.
-- **c4:** The trace observer threshold is configurable for its tests, with the production default unchanged and pinned.
-- **c5:** The wall-timeout test for a stopped wall continuation and the terminal-end-cause wall case in the run module use a shortened, injected timeout, with the production default pinned.
-- **c6:** Each named test still fails when the behavior it guards is broken. The report records, per test, the mutation applied, the failing output, and the revert.
-- **c7:** After the change, no test in the drain or store packages waits one second or more on a real clock. The report lists the slowest remaining tests with their times as command, result and date, and no test asserts elapsed time.
 
 **Agent details:**
 

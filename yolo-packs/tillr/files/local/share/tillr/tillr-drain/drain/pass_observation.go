@@ -52,7 +52,11 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if l.keepWAL && l.walKeeper == nil {
 		// The keeper first, so the migration below, and every other program's close
 		// meanwhile, runs with the owner held: startup is never a stretch without one.
-		keeper, err := openWALKeeper(ctx, l.cfg.Store)
+		openKeeper := l.keeperOpen
+		if openKeeper == nil {
+			openKeeper = openWALKeeper
+		}
+		keeper, err := openKeeper(ctx, l.cfg.Store)
 		if err != nil {
 			return Incompatiblef("%v", err)
 		}
