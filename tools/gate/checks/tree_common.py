@@ -95,6 +95,15 @@ SCRATCH_EXCEPTIONS = (
      "`$YOLO_DURABLE_DIR`, `storeFixture(t, prefix)` returns"),
     ("docs/design/board-utilities-plan.md",
      "`land-queue`'s `YOLO_DURABLE_DIR` differs per process"),
+    # The observatory recipe's build directory: tools/observatory/run.sh builds the two
+    # programs into that directory by design, and the README says where, so a reader can
+    # find the binaries. It is a location, not an artifact that proved a past claim. The
+    # pack ships a mirror of the README, which carries the same line. Each marker is that
+    # line's own text so the exception cannot grow to cover a neighbouring line.
+    ("tools/tillr-view/README.md",
+     "tillr-observatory/<key>/`, where `<key>`"),
+    ("yolo-packs/tillr/files/local/share/tillr/tillr-view/README.md",
+     "tillr-observatory/<key>/`, where `<key>`"),
 )
 
 
