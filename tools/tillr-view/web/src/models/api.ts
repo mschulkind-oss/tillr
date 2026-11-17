@@ -7,6 +7,7 @@ import type {
   ArtifactData,
   ArtifactPayload,
   DocData,
+  DesignsData,
   ExchangesData,
   GateData,
   ItemData,
@@ -37,6 +38,8 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
+
+export const fetchDesigns = (signal?: AbortSignal) => read<DesignsData>("/api/v1/designs", signal);
 
 async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<T>> {
   const response = await fetch(path, { signal, headers: { Accept: "application/json" } });

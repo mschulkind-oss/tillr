@@ -33,7 +33,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
+	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -848,6 +848,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+	if err := l.confirmCommentReplies(ctx); err != nil {
+		return "", err
+	}
 	if err := l.flushCommentDeliveries(ctx); err != nil {
 		return "", err
 	}

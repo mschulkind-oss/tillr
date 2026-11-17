@@ -10,6 +10,7 @@
 // answer is said in words, never drawn as zero: "unknown" and "none open" dispatch
 // differently, and a zero would erase the difference (design §8.3).
 
+import { DesignerCard } from "./Designers";
 import { RefusalState, refusalCode } from "./RefusalState";
 import type { RefusalSentence } from "./RefusalState";
 import { vantageLink } from "../models/document";
@@ -142,6 +143,7 @@ export function DocumentPane({ doc, error, pending, onRetry, baseUrl }: Document
         <FrontmatterCard frontmatter={doc.frontmatter} />
       )}
 
+      <DesignerCard designer={doc.last_designer} />
       <p className="doc__count">{questionLine(doc.open_questions, doc.questions_state)}</p>
 
       <p className="doc__link-line">

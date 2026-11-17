@@ -400,6 +400,31 @@ missing usage or a claim that the backend reported its full spend. A total is
 `tokens_unrecorded_runs` and `cost_unrecorded_runs` also expose partially reported
 runs. Runs with no item association are not assigned to an invented item.
 
+## Designers and review replies
+
+The **Designs** page lists documents named by the store. Each document's page shows
+its last designer's session, cache expiration time, measured context size, handled
+batches and summed recorded cost. Missing measurements stay visibly unknown.
+The item's design-document pane shows the same designer record.
+
+The arrival counts distinguish comments changed within the selected session's cache
+lifetime, after it, and comments with no session to resume. Unmeasured arrivals are
+separate rather than silently counted as late. Use these counts when choosing
+`comments.refresh_hours`. Retrying staging does not add another arrival record.
+
+A comment item's page shows the session-choice reason, threads and replies. A reply
+waits on the served checkout before its file is written and stays `written` while
+in the inbox. After the file disappears, the loop reads Vantage's review interface:
+`delivered` means an agent turn answers the reply's round, `dropped` means the comment
+is absent, and `not confirmed` means the comment remains without that answer.
+A failed read changes nothing; confirmation never holds the item open.
+
+The loop receives its Vantage address and repository name at startup, not through
+another settings read. With neither provided, written replies stay `written` and the
+page says replies are not being confirmed. These pages only read loop-owned records:
+`GET /api/v1/designs` supplies designers and arrival counts, while the existing item
+and document routes carry their comment and designer details.
+
 ## What it refuses
 
 - **A failed `serve` open is retried on the next API read.** After repairing or creating

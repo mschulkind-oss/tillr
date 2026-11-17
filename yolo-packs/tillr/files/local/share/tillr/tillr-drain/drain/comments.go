@@ -58,6 +58,18 @@ func init() {
  CREATE TABLE IF NOT EXISTS comment_deliveries (
  run_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document TEXT NOT NULL,
  blob_id TEXT NOT NULL, body TEXT NOT NULL, written INTEGER NOT NULL DEFAULT 0
+ );
+ CREATE TABLE IF NOT EXISTS comment_arrivals (
+ item_id TEXT NOT NULL, comment_id TEXT NOT NULL, session_id TEXT NOT NULL,
+ reason TEXT NOT NULL, cache_lifetime_seconds INTEGER, seconds_since_request REAL,
+ PRIMARY KEY(item_id,comment_id)
+ );
+ CREATE TABLE IF NOT EXISTS comment_reply_states (
+ run_id TEXT NOT NULL, comment_id TEXT NOT NULL, state TEXT NOT NULL,
+ PRIMARY KEY(run_id,comment_id)
+ );
+ CREATE TABLE IF NOT EXISTS comment_confirmation (
+ id INTEGER PRIMARY KEY CHECK(id=1), configured INTEGER NOT NULL
  );`); err != nil {
 		panic(err)
 	}
@@ -195,8 +207,10 @@ func (l *Loop) stageComment(ctx context.Context, d *Decision, spec *StageSpec) e
 		}
 		spec.SessionID = session
 		d.DesignerSessionID = session
-		_, err = tx.Exec("INSERT INTO comment_runs(run_id,item_id,session_id,reason) VALUES(?,?,?,?) ON CONFLICT(run_id) DO NOTHING", d.RunRequest.RunID, d.ItemID, session, d.DesignerReason)
-		return err
+		if _, err = tx.Exec("INSERT INTO comment_runs(run_id,item_id,session_id,reason) VALUES(?,?,?,?) ON CONFLICT(run_id) DO NOTHING", d.RunRequest.RunID, d.ItemID, session, d.DesignerReason); err != nil {
+			return err
+		}
+		return recordCommentArrivals(tx, *d)
 	})
 }
 

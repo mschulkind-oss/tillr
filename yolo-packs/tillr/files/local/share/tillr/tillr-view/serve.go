@@ -329,6 +329,7 @@ func (s *server) routes() http.Handler {
 	// built from. It reads Vantage's index fresh per request, so an answer written there
 	// leaves the list on the next read rather than after a restart.
 	mux.HandleFunc("GET /api/v1/questions", s.get(s.questionsPayload))
+	mux.HandleFunc("GET /api/v1/designs", s.get(s.designsPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}", s.get(s.runPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}/exchanges", s.get(s.exchangesPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}/timeline", s.get(s.timelinePayload))
@@ -939,7 +940,8 @@ func unreadable(err error) *apiFailure {
 // Vantage, which owns the rendering (design §8.3, ledger `OQ-OBD2`). The document's prose
 // is served by the tool that authored the dialect, so this face carries none of it.
 type documentData struct {
-	ItemID string `json:"item_id"`
+	LastDesigner *designerView `json:"last_designer"`
+	ItemID       string        `json:"item_id"`
 	// Path is the document's path relative to the served root, slash-separated — the
 	// spelling Vantage's `#/` route takes, and the one the pane shows. The resolved
 	// absolute path is deliberately not the answer: a link built from it would be a path
@@ -1057,7 +1059,12 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 	// leaves the count on the next read rather than after a restart.
 	questions := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
 	answer := readQuestions(questions, it.DesignDoc)
+	designer, err := readLastDesigner(r, documentLinkPath(s.root, path))
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	return documentData{
+		LastDesigner:   designer,
 		ItemID:         id,
 		Path:           documentLinkPath(s.root, path),
 		Frontmatter:    parseFrontmatter(string(raw)),
@@ -1072,13 +1079,14 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
-	Item           itemDetail      `json:"item"`
-	Criteria       []criterionView `json:"criteria"`
-	BlockedBy      []string        `json:"blocked_by"`
-	Decisions      []dispatchView  `json:"decisions"`
-	Attempts       []attemptView   `json:"attempts"`
-	Verdicts       []verdictView   `json:"verdicts"`
-	ClosedBlockers []string        `json:"closed_blockers"`
+	Comments       *commentItemView `json:"comments,omitempty"`
+	Item           itemDetail       `json:"item"`
+	Criteria       []criterionView  `json:"criteria"`
+	BlockedBy      []string         `json:"blocked_by"`
+	Decisions      []dispatchView   `json:"decisions"`
+	Attempts       []attemptView    `json:"attempts"`
+	Verdicts       []verdictView    `json:"verdicts"`
+	ClosedBlockers []string         `json:"closed_blockers"`
 }
 
 // verdictView preserves each recorded judgment, not just the criterion's current state.
@@ -1144,6 +1152,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		Decisions:      []dispatchView{},
 		Attempts:       []attemptView{},
 		ClosedBlockers: []string{},
+	}
+	out.Comments, err = readCommentItem(r, id)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	out.Verdicts, err = readItemVerdicts(r, id)
 	if err != nil {

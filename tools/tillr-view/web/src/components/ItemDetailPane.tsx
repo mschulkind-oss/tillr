@@ -6,6 +6,7 @@
 
 import type { ReactNode } from "react";
 
+import { CommentThreads } from "./Designers";
 import { DocumentPane } from "./DocumentPane";
 import { EpistemicBadge } from "./EpistemicBadge";
 import { RefusalState, refusalCode } from "./RefusalState";
@@ -400,6 +401,7 @@ export function ItemDetailPane({
             )}
           </Section>
 
+          {item?.comments && <CommentThreads data={item.comments} />}
           <Section title="Design document" note={detail.design_doc || "none named"}>
             <DocumentPane {...doc} />
           </Section>

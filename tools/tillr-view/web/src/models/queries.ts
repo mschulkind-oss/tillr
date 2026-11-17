@@ -6,6 +6,7 @@ import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-q
 
 import {
   fetchItem,
+  fetchDesigns,
   fetchItemDoc,
   fetchQuestions,
   fetchRun,
@@ -24,6 +25,7 @@ import type {
   ApiEnvelope,
   ArtifactData,
   DocData,
+  DesignsData,
   ExchangesData,
   GateData,
   ItemData,
@@ -142,6 +144,9 @@ export const useQuestionsQuery = (enabled: boolean, paused = false) =>
     refetchOnWindowFocus: false,
     refetchInterval: enabled && !paused ? QUESTIONS_POLL_MS : false,
   });
+
+// Designer expiry is a clock change, so this read polls even with a live socket.
+export const useDesignsQuery = (enabled: boolean, paused = false) => useRead<DesignsData>(["designs"], signal => fetchDesigns(signal), enabled, false, paused);
 
 export const useItemQuery = (itemId: string | null, live: boolean, paused = false) =>
   useRead<ItemData>(

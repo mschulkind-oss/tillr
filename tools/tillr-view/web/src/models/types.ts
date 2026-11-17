@@ -395,6 +395,7 @@ export interface VerdictView {
 }
 
 export interface ItemData {
+  comments?: CommentItemView;
   item: ItemDetail;
   verdicts: VerdictView[];
   closed_blockers: string[];
@@ -634,7 +635,37 @@ export interface DocumentFrontmatter {
  * questions, and the path a Vantage link is built from. `frontmatter` is null when the
  * document opens with no frontmatter block at all — a state the pane names rather than
  * drawing as five blanks. */
+export interface DesignerBatch {
+  item_id: string;
+  run_id: string;
+  reason: string;
+  cost_usd: number | null;
+}
+export interface DesignerView {
+  session_id: string;
+  last_request: string;
+  cache_lifetime_seconds: number | null;
+  context_tokens: number | null;
+  compacted: boolean;
+  state: "warm" | "expired" | "compacted";
+  warm_until: string | null;
+  batches: DesignerBatch[];
+  cost_usd: number | null;
+  missing_costs: number;
+}
+export interface DesignsData {
+  designs: {path: string; last_designer: DesignerView | null}[];
+  arrivals: {within_lifetime: number; after_lifetime: number; no_session: number; unmeasured: number};
+}
+export interface CommentItemView {
+  document: string;
+  runs: DesignerBatch[];
+  confirmation_note: string;
+  comments: {id: string; comment: string; reactions: unknown[]; replies: {id: string; run_id: string; round: number; summary: string; state: "waiting on the served checkout" | "written" | "delivered" | "dropped" | "not confirmed"}[]}[];
+}
+
 export interface DocData {
+  last_designer?: DesignerView | null;
   item_id: string;
   /** The document's path relative to the served root, slash-separated: the spelling a
    * Vantage link takes, and the one the pane shows. */

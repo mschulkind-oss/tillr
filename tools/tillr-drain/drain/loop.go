@@ -314,6 +314,10 @@ type LoopConfig struct {
 	// DefaultIndexCommand, and a program that is not there holds the affected items with
 	// `questions-unknown` rather than dispatching them.
 	QuestionsCmd []string
+	// VantageURL and VantageRepo are handed over at startup for reply confirmation.
+	// Empty values disable confirmation; this check never reads settings.
+	VantageURL  string
+	VantageRepo string
 	// ExitWhenDrained opts out of the default wait when nothing is dispatchable.
 	ExitWhenDrained bool
 	// Steps is what the loop drives.
