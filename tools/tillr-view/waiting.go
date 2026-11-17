@@ -115,7 +115,7 @@ func waitingRuleFor(reason string) waitingRule {
 	if strings.HasPrefix(reason, "seat-degraded: seat ") {
 		return waitingRules["seat-degraded"]
 	}
-	return waitingRule{"unclassified", "queue", "—"}
+	return waitingRule{"needs a cause", "queue", "add a history rule for this recorded reason"}
 }
 
 func waitingFace(args []string) (record.Envelope, int) {
@@ -272,7 +272,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		if waitingTerminal(item.State) {
 			continue
 		}
-		row := waitingRow{Rank: item.Rank, ItemID: item.ItemID, Class: "unclassified", Where: "queue", Why: "no pass yet", Mover: "—", Since: "no pass yet", ClassSource: "rule"}
+		row := waitingRow{Rank: item.Rank, ItemID: item.ItemID, Class: "waits on the loop", Where: "queue", Why: "not yet planned", Mover: "the next pass", Since: "no pass yet", ClassSource: "rule"}
 		var latestRun *storeRun
 		var active *storeRun
 		for i := range runs {
@@ -306,13 +306,31 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			return nil, err
 		}
 		row.Where = waitingFurtherStage(row.Where, stage)
-		last, since, deferredBy, found, err := waitingDecision(r, item.ItemID)
+		var stoppedAt int64
+		var stopped bool
+		var stoppedRun string
+		if latestRun != nil {
+			stoppedAt, stopped, err = waitingStoppedRun(r, latestRun.RunID)
+			if err != nil {
+				return nil, err
+			}
+			if stopped {
+				stoppedRun = latestRun.RunID
+				if active != nil && active.RunID == stoppedRun {
+					active = nil
+				}
+			}
+		}
+		last, since, deferredBy, found, err := waitingDecision(r, item.ItemID, stoppedRun, stoppedAt)
 		if err != nil {
 			return nil, err
 		}
 		if found {
 			rule := waitingRuleFor(last.Reason)
 			row.Class, row.Why, row.Mover = rule.class, last.Reason, rule.mover
+			if strings.TrimSpace(row.Why) == "" {
+				row.Why = "reason not recorded"
+			}
 			row.Where = waitingFurtherStage(row.Where, rule.where)
 			row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
 			if deferredBy != "" {
@@ -360,12 +378,15 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		}
 		if item.State == "blocked" && item.Waiter != "" {
 			row.Class, row.Mover, row.Why = "waits on work", item.Waiter, item.WaitingReason
+			if strings.TrimSpace(row.Why) == "" {
+				row.Why = "waiting reason not recorded"
+			}
 			row.ClassSource = "store"
 			row.Since = time.UnixMilli(item.UpdatedAtMS).UTC().Format(time.RFC3339Nano)
 			if item.Waiter == "owner" {
 				row.Class = "needs you"
 			}
-		} else if item.State == "blocked" && row.Mover == "—" {
+		} else if item.State == "blocked" && !found && row.Why == "not yet planned" {
 			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
 		}
 		if found && last.Action == "hold" && latestRun != nil && active == nil {
@@ -403,6 +424,12 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		}
 		if active != nil {
 			row.Class, row.Where, row.Mover = "moving", "lane", active.RunID
+		}
+		if stopped && (!found || last.DispatchedMS < stoppedAt) {
+			row.Class, row.Where = "waits on the loop", "lane"
+			row.Why, row.Mover = "run ended by a stop", latestRun.RunID
+			row.Since = time.UnixMilli(stoppedAt).UTC().Format(time.RFC3339Nano)
+			row.ClassSource = "rule"
 		}
 		if row.Class == "waits on work" && strings.HasPrefix(row.Why, "trunk-path-dirty: ") {
 			started, err := time.Parse(time.RFC3339Nano, row.Since)
@@ -502,6 +529,21 @@ func waitingEndCause(r *store.Reader, runID string) (string, error) {
 	}
 }
 
+// The event sequence orders stop/resume segments, even within one millisecond.
+func waitingStoppedRun(r *store.Reader, runID string) (int64, bool, error) {
+	var kind string
+	var at int64
+	err := r.QueryRow(`SELECT kind, ts FROM events WHERE object_type = 'run' AND object_id = ?
+  AND kind IN ('drain.orphaned', 'run.resume') ORDER BY seq DESC LIMIT 1`, runID).Scan(&kind, &at)
+	if isMissingTable(err) || errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil || kind != "drain.orphaned" {
+		return 0, false, err
+	}
+	return at, true, nil
+}
+
 func waitingTerminal(state string) bool {
 	return state == "landed" || state == "closed" || state == "resolved-elsewhere"
 }
@@ -509,12 +551,21 @@ func waitingTerminal(state string) bool {
 // Each decision query returns at most one row for one displayed item. SQL finds
 // the latest answer, last interruption, and first answer after that interruption;
 // no history slice or arbitrary time window can truncate the exact streak.
-func waitingDecision(r *store.Reader, itemID string) (storeDispatch, int64, string, bool, error) {
+func waitingDecision(r *store.Reader, itemID, stoppedRun string, stoppedAt int64) (storeDispatch, int64, string, bool, error) {
 	var last storeDispatch
 	var mover string
+	where := ` WHERE item_id = ?`
+	args := []any{itemID}
+	if stoppedRun != "" {
+		// A launch tied with (or recorded after) its stop cannot supersede the
+		// stop. Remove it before choosing a decision so an equally timed hold
+		// wins regardless of lexical decision ID order. Retry also launches runs.
+		where += ` AND NOT (COALESCE(run_id, '') = ? AND action IN ('dispatch', 'retry') AND dispatched_at >= ?)`
+		args = append(args, stoppedRun, stoppedAt)
+	}
 	selectLatest := func(column string) error {
 		return r.QueryRow(`SELECT decision_id, action, reason, dispatched_at, `+column+`
-   FROM dispatches WHERE item_id = ? ORDER BY dispatched_at DESC, decision_id DESC LIMIT 1`, itemID).
+   FROM dispatches`+where+` ORDER BY dispatched_at DESC, decision_id DESC LIMIT 1`, args...).
 			Scan(&last.DecisionID, &last.Action, &last.Reason, &last.DispatchedMS, &mover)
 	}
 	err := selectLatest(`COALESCE(deferred_by, '')`)
@@ -529,17 +580,17 @@ func waitingDecision(r *store.Reader, itemID string) (storeDispatch, int64, stri
 	}
 	var brokenAt int64
 	var brokenID string
-	err = r.QueryRow(`SELECT dispatched_at, decision_id FROM dispatches
-  WHERE item_id = ? AND (action != ? OR reason != ?)
-  ORDER BY dispatched_at DESC, decision_id DESC LIMIT 1`, itemID, last.Action, last.Reason).Scan(&brokenAt, &brokenID)
+	err = r.QueryRow(`SELECT dispatched_at, decision_id FROM dispatches`+where+`
+  AND (action != ? OR reason != ?)
+  ORDER BY dispatched_at DESC, decision_id DESC LIMIT 1`, append(args, last.Action, last.Reason)...).Scan(&brokenAt, &brokenID)
 	var since int64
 	if errors.Is(err, sql.ErrNoRows) {
-		err = r.QueryRow(`SELECT dispatched_at FROM dispatches WHERE item_id = ?
-   ORDER BY dispatched_at, decision_id LIMIT 1`, itemID).Scan(&since)
+		err = r.QueryRow(`SELECT dispatched_at FROM dispatches`+where+`
+   ORDER BY dispatched_at, decision_id LIMIT 1`, args...).Scan(&since)
 	} else if err == nil {
-		err = r.QueryRow(`SELECT dispatched_at FROM dispatches WHERE item_id = ?
+		err = r.QueryRow(`SELECT dispatched_at FROM dispatches`+where+`
    AND (dispatched_at, decision_id) > (?, ?)
-   ORDER BY dispatched_at, decision_id LIMIT 1`, itemID, brokenAt, brokenID).Scan(&since)
+   ORDER BY dispatched_at, decision_id LIMIT 1`, append(args, brokenAt, brokenID)...).Scan(&since)
 	}
 	return last, since, mover, true, err
 }

@@ -33,7 +33,7 @@ export const CLASS_GLYPHS = {
   "needs a cause": "cross",
   pass: "check",
   skipped: "slash",
-  unclassified: "dashed-ring",
+  "waits on the loop": "ring",
   stopped: "filled-square",
   "not known": "dashed-ring",
 } as const;

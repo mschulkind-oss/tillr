@@ -41,6 +41,18 @@ test("Items presets, class and reason persist in the URL on cold mount", () => {
   expect(window.location.hash).toContain("state=landed");
 });
 
+test("Items offers waits on the loop, not an unclassified hold", () => {
+  route("#/items?state=unlanded");
+  const held = { ...rows[0], class: "waits on the loop", why: "not yet planned", mover: "the next pass" };
+  render(<ItemsView waiting={[held]} snapshot={snapshotData} />);
+  const classes = screen.getByLabelText("Class");
+  expect(within(classes).queryByRole("option", { name: "unclassified" })).toBeNull();
+  expect(within(classes).getByRole("option", { name: "waits on the loop" })).toBeTruthy();
+  fireEvent.change(classes, { target: { value: "waits on the loop" } });
+  expect(screen.getAllByRole("row")).toHaveLength(2);
+  expect(screen.getByRole("cell", { name: "not yet planned" })).toBeTruthy();
+});
+
 test("Passes fold consecutive identical answers independent of decision order, not separated matches", () => {
   route("#/passes?range=all");
   const a = pass(4000), b = pass(3000), c = pass(2000, "ready"), d = pass(1000);

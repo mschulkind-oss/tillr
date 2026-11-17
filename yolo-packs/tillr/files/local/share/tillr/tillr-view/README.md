@@ -374,17 +374,29 @@ places the array in its usual `data` field beside the read transaction's snapsho
 
 
 The classes are `needs you`, `waits on work`, `needs a cause`, `ready`, `moving`, and
-`unclassified`. The store does not record a class yet, so every row carries
-`class_source: "rule"`: a fixed reason table in this binary supplies the class, with a
-live run supplying `moving`. Unknown reasons remain verbatim and read `unclassified`,
-not a guessed hold. A test enumerates every exported drain reason to require its rule.
+`waits on the loop`. A fixed reason table supplies the class (`class_source: "rule"`),
+with a live run supplying `moving`; explicit stored waits carry `class_source: "store"`.
+Unknown reasons remain verbatim and read `needs a cause`, with a mover that calls for
+adding the missing history rule, not a guessed hold. A test enumerates every exported
+drain reason, requires its rule by name, and builds a store holding each reason to
+check that every history row has a class, reason, and mover.
 
 **Why** is the newest decision's reason, not a fresh planner prediction. **Since** is
 an absolute UTC time: the first decision of the unbroken trailing sequence with the
 same action and reason. A changed action breaks that sequence even when the reason is
 unchanged. The reader selects only the newest decision and the sequence's exact start
 for each displayed item; neither a page size nor a time window truncates the sequence.
-An item with no decision reads `no pass yet` in both fields.
+An item with no decision reads `waits on the loop` with **Why** `not yet planned`,
+**Mover** `the next pass`, and **Since** `no pass yet`.
+
+If the latest run has a recorded `drain.orphaned` event (an explicit loop stop), the
+history row instead reads `waits on the loop` with **Why** `run ended by a stop`,
+that run's id as **Mover**, and the stop time as **Since**. A later `run.resume`
+event for that run withdraws the stop label, even if both events share a millisecond.
+A decision recorded at or after the stop also replaces the label, unless it is the
+dispatch that launched the stopped run. A hold tied with the stop therefore wins.
+Signals, exit codes, and run state alone do not establish a stop. None of these
+history labels changes the default face's fresh planner answer.
 
 A landing held by owner content reads `waits on work` at `land`, with
 `trunk-path-dirty: ` and the dirty paths in **Why**, and `commit or restore the path`
