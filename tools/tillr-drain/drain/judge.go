@@ -19,6 +19,8 @@ const (
 	ReasonJudgeGrantAbsent = "judge-grant-absent"
 	ReasonJudgeUnreadable  = "judge-unreadable"
 	ReasonEvalFailed       = "eval-failed"
+	ReasonJudgeBlocked     = "judge-blocked"
+	ReasonJudgeDefective   = "judge-defective"
 	judgeRequestKind       = "drain.judge.request"
 	judgeReceiptFile       = "judge.json"
 	judgeLandedKind        = "drain.judge.landed"
@@ -288,17 +290,58 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		return c, false, err
 	}
 	if checked.Outcome != "pass" {
-		reason := "judge did not pass"
+		// CheckJudge owns precedence. Select the first entry of that kind,
+		// not the first failing entry, which may describe a lesser outcome.
 		for _, entry := range checked.Output.Verdicts {
-			if entry.Verdict != item.VerdictDone {
-				reason = entry.Reason
-				break
+			if entry.Verdict == checked.Outcome {
+				return c, false, l.settleJudgeFailure(ctx, c, entry, options, result)
 			}
 		}
-		return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonEvalFailed, reason, result)
+		return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
 	}
 	c.Judge = receipt
 	return c, true, nil
+}
+
+// settleJudgeFailure routes a checked ruling without running the gate or landing.
+// Defective intake and closure share a transaction: neither can survive alone.
+func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
+	reason := ReasonEvalFailed
+	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
+		var waiting item.WaitingOn
+		if entry.Verdict == item.VerdictBlocked {
+			if err := json.Unmarshal(entry.WaitingOn, &waiting); err != nil {
+				return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonJudgeUnreadable, "invalid blocked waiting_on: "+err.Error(), result)
+			}
+			waiting.Reason = entry.Reason
+			reason = ReasonJudgeBlocked
+		} else {
+			reason = ReasonJudgeDefective
+		}
+		db, err := store.Open(ctx, l.cfg.Store, true)
+		if err != nil {
+			return err
+		}
+		err = db.WriteTx(ctx, func(tx *store.Tx) error {
+			if entry.Verdict == item.VerdictBlocked {
+				_, err := item.SetState(ctx, tx, c.ItemID, StateBlocked, options.At, waiting)
+				return err
+			}
+			if _, err := item.RecordJudge(ctx, tx, c.Judge.Raw, options); err != nil {
+				return err
+			}
+			_, err := item.Close(ctx, tx, c.ItemID, "defective: "+entry.CriterionID+": "+entry.Reason, options.Actor, options.At)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			if _, rejected := item.RejectionOf(err); rejected {
+				return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+			}
+			return err
+		}
+	}
+	return l.holdJudge(ctx, c, c.Judge.Request.RunID, reason, entry.Reason, result)
 }
 
 func writeJudgeReceipt(path string, receipt *JudgeReceipt) error {
@@ -363,7 +406,9 @@ Act as an independent read-only judge. Do not commit, edit the worktree, or writ
 Write your JSON verdict to %s. The object has evaluated_head=%q, evaluated_tree=%q,
 outcome (pass or fail), and verdicts covering every criterion below. Each entry has
 criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), claim_class,
-reason, and evidence (nonempty locator strings). Do not include actor or judged_actor.
+reason, and evidence (nonempty locator strings). A blocked entry also needs waiting_on
+with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
+why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
 
 ## Fence

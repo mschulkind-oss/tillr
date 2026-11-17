@@ -74,8 +74,11 @@ tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
 An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
 `status` answers where the board stands now, `events` answers what happened in order,
 For opted-in agent reviews, the waiting face recognizes `judge-grant-absent`,
-`judge-unreadable`, and `eval-failed`. A failed or unreadable review includes its
-recorded first reason, rather than presenting an unexplained hold. The
+`judge-unreadable`, `eval-failed`, `judge-blocked`, and `judge-defective`. A failed
+or unreadable review includes its recorded controlling reason, rather than an
+unexplained hold. A blocked item names its recorded waiter and reason; a defective
+item is closed and leaves the waiting list. Its historical reason still has an
+explicit classification. The
 [drain's judge contract](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#opted-in-judgment-before-the-gate)
 defines those outcomes and when the judge's verdicts become records.
 

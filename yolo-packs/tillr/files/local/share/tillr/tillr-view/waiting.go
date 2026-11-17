@@ -76,6 +76,8 @@ var waitingRules = map[string]waitingRule{
 	"judge-grant-absent":             {"needs you", "queue", "issue a grant covering the item's criteria"},
 	"judge-unreadable":               {"needs a cause", "judge", "inspect the judge run"},
 	"eval-failed":                    {"waits on work", "judge", "amend the candidate against the judge's reason"},
+	"judge-blocked":                  {"waits on work", "judge", "the recorded waiter; answer the judge's blocker"},
+	"judge-defective":                {"needs you", "judge", "owner; reopen the closed item only if its premise is corrected"},
 	"gate-failed":                    {"needs a cause", "gate", "cause not recorded"},
 	"red-cap":                        {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                   {"needs you", "land", "inspect the refused landing and authorize a retry"},

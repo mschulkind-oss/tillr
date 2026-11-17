@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -228,6 +229,19 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if len(row.WaitingOn) > 0 {
 			row.Mover = strings.Join(row.WaitingOn, ", ")
+		}
+		if it.State == StateBlocked && d.Reason == ReasonBlocked {
+			waiting, _, err := item.ReadWaitingOn(r, it.ItemID)
+			if err != nil {
+				return answer, err
+			}
+			if waiting != nil {
+				row.Class, row.Mover, row.Why = "waits on work", waiting.Waiter, waiting.Reason
+				row.ClassSource = "store"
+				if waiting.Waiter == "owner" {
+					row.Class = "needs you"
+				}
+			}
 		}
 		if d.Action == ActionHold && (d.Reason == ReasonConflictDesign || d.Reason == ReasonConflictOwner) && d.BlockConflict != nil {
 			row.Mover += "; " + d.BlockConflict.WaitingOn

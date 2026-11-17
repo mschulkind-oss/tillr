@@ -13,7 +13,7 @@ import (
 )
 
 func TestSecondFailureRoutesToDesign(t *testing.T) {
-	for _, mode := range []string{"readmission", "retry", "stopped", "first-stopped", "landed", "no-reference", "blocked", "standalone", "repair"} {
+	for _, mode := range []string{"readmission", "retry", "stopped", "first-stopped", "landed", "no-reference", "blocked", "standalone", "repair", "judge-blocked-retry", "judge-blocked-readmission", "prior-judge-blocked"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
 			l.cfg.Policy.Seats = map[string]string{"build": "fixture", "design": "fixture"}
@@ -47,12 +47,17 @@ func TestSecondFailureRoutesToDesign(t *testing.T) {
 				}
 				return err
 			})
+			if mode == "prior-judge-blocked" {
+				if err := l.holdJudge(context.Background(), Candidate{ItemID: "item-a", RunID: first.decision.RunRequest.RunID}, first.decision.RunRequest.RunID+"-judge", ReasonJudgeBlocked, "prior judge needs a sequence", &LoopResult{}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if mode == "stopped" || mode == "first-stopped" {
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					return appendEffect(tx, loopOrphanedKind, first.decision.RunRequest.RunID, struct{}{}, l.cfg.Now())
 				})
 			}
-			if mode == "retry" || mode == "standalone" || mode == "repair" {
+			if mode == "retry" || mode == "standalone" || mode == "repair" || mode == "judge-blocked-retry" {
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					ack := ""
 					if mode == "standalone" {
@@ -97,6 +102,15 @@ func TestSecondFailureRoutesToDesign(t *testing.T) {
 				return nil
 			})
 			completed := second.decision
+			if strings.HasPrefix(mode, "judge-blocked-") {
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					_, err := item.SetState(context.Background(), tx, "item-a", StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "plan", Reason: "judge needs a sequence"})
+					return err
+				})
+				if err := l.holdJudge(context.Background(), Candidate{ItemID: "item-a", RunID: completed.RunRequest.RunID}, completed.RunRequest.RunID+"-judge", ReasonJudgeBlocked, "judge needs a sequence", &LoopResult{}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if mode == "blocked" {
 				if err := l.reportedBlock(context.Background(), completed, "c1 requires a ruling\nRESULT: blocked\n"); err != nil {
 					t.Fatal(err)
@@ -136,7 +150,20 @@ func TestSecondFailureRoutesToDesign(t *testing.T) {
 			}
 			var c item.Conflict
 			fixtureWrite(t, f, func(tx *store.Tx) error { cs, err := item.ReadConflicts(tx.Reader()); c = cs["item-a"]; return err })
-			if mode == "stopped" || mode == "first-stopped" || mode == "landed" {
+			if strings.HasPrefix(mode, "judge-blocked-") {
+				if c.ConflictID != "" {
+					t.Errorf("judge block raised a second-failure conflict: %+v", c)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					waiting, _, err := item.ReadWaitingOn(r, "item-a")
+					if waiting == nil || waiting.Waiter != "plan" || waiting.Reason != "judge needs a sequence" {
+						t.Errorf("judge metadata overwritten: %+v", waiting)
+					}
+					return err
+				})
+				return
+			}
+			if mode == "stopped" || mode == "first-stopped" || mode == "landed" || mode == "prior-judge-blocked" {
 				if c.ConflictID != "" {
 					t.Fatalf("nonfailure raised conflict: %+v", c)
 				}
