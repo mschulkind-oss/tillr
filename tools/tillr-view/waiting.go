@@ -73,6 +73,9 @@ var waitingRules = map[string]waitingRule{
 	"node-scope-outside-fence":       {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
 	"candidate-no-op":                {"needs a cause", "lane", "cause not recorded"},
 	"run-unjudged":                   {"needs a cause", "lane", "cause not recorded"},
+	"judge-grant-absent":             {"needs you", "queue", "issue a grant covering the item's criteria"},
+	"judge-unreadable":               {"needs a cause", "judge", "inspect the judge run"},
+	"eval-failed":                    {"waits on work", "judge", "amend the candidate against the judge's reason"},
 	"gate-failed":                    {"needs a cause", "gate", "cause not recorded"},
 	"red-cap":                        {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                   {"needs you", "land", "inspect the refused landing and authorize a retry"},
@@ -389,6 +392,18 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				}
 			}
 		}
+		if found && (last.Reason == "eval-failed" || last.Reason == "judge-unreadable") {
+			var detail string
+			err := r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events
+ WHERE kind='drain.refusal' AND json_valid(payload) AND json_extract(payload,'$.item_id')=?
+ AND json_extract(payload,'$.step')=? ORDER BY seq DESC LIMIT 1`, item.ItemID, last.Reason).Scan(&detail)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingTable(err) {
+				return nil, err
+			}
+			if detail != "" {
+				row.Why += ": " + detail
+			}
+		}
 		if found && last.Reason == "gate-stall-rerun" {
 			detail, err := waitingGateStall(r, item.ItemID)
 			if err != nil {
@@ -665,7 +680,7 @@ func waitingDecision(r *store.Reader, itemID, stoppedRun string, stoppedAt int64
 	return last, since, mover, true, err
 }
 
-var waitingStages = []string{"queue", "lane", "fence", "gate", "land", "trunk"}
+var waitingStages = []string{"queue", "lane", "fence", "judge", "gate", "land", "trunk"}
 
 func waitingFurtherStage(a, b string) string {
 	for i := len(waitingStages) - 1; i >= 0; i-- {
@@ -684,10 +699,11 @@ func waitingRecordedStage(r *store.Reader, itemID string, run *storeRun) (string
 		runID = run.RunID
 		var step int
 		err := r.QueryRow(`SELECT COALESCE(MAX(CASE
-   WHEN kind = 'gate.verdict' THEN 3
+   WHEN kind = 'gate.verdict' THEN 4
    WHEN kind = 'drain.refusal' THEN CASE json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END, '$.step')
-    WHEN 'no-op' THEN 1 WHEN 'fence' THEN 2 WHEN 'gate' THEN 3
-    WHEN 'land' THEN 4 WHEN 'conflict' THEN 4 ELSE 0 END
+    WHEN 'no-op' THEN 1 WHEN 'fence' THEN 2
+    WHEN 'eval-failed' THEN 3 WHEN 'judge-unreadable' THEN 3 WHEN 'gate' THEN 4
+    WHEN 'land' THEN 5 WHEN 'conflict' THEN 5 ELSE 0 END
    ELSE 0 END), 0) FROM events
    WHERE object_type = 'run' AND object_id = ? AND kind IN ('gate.verdict','drain.refusal')`, runID).Scan(&step)
 		if err != nil && !isMissingTable(err) {

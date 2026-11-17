@@ -41,6 +41,14 @@ With no proved pointer yet, the loop uses the tip and says so once. The
 [lane-base contract](../../../../tools/tillr-drain/README.md#the-commit-a-new-lane-starts-from)
 explains recorded bases and safe reuse of idle lanes.
 
+An item may ask for an independent review with `judge="agent"` in its directive.
+The loop requires a covering unexpired grant before dispatch and a mapped `review`
+seat. It runs the read-only judge after the fence check and before the gate; only a
+successful landing records the checked agent verdicts, without the mechanical
+verdict program. `judge-grant-absent`, `judge-unreadable`, and `eval-failed` are
+holds, not criterion verdicts. The [opted-in judge contract](../../../../tools/tillr-drain/README.md#opted-in-judgment-before-the-gate)
+explains the retained file, failure reasons, and candidate restoration.
+
 Use the stop face for an explicit operator request:
 
 ```sh

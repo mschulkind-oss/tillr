@@ -325,6 +325,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 // git reported rather than a list of bare paths. A conflict-fix run's brief names both the
 // paths that can be parsed out of those lines and the lines themselves.
 type LandOutcome struct {
+	TrunkAfter      string
 	LockObservation *LandObservation
 	RedCap          *redcap.Hold
 	Result          string
@@ -360,6 +361,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 		return LandOutcome{}, Internalf("reading the land record for %s: %v", candidate.ItemID, err)
 	}
 	var landing struct {
+		TrunkAfter      string           `json:"trunk_after"`
 		LockObservation *LandObservation `json:"lock_observation"`
 		RedCap          *redcap.Hold     `json:"red_cap"`
 		Result          string           `json:"result"`
@@ -372,6 +374,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	if landing.Result != "" {
 		outcome.Result = landing.Result
 	}
+	outcome.TrunkAfter = landing.TrunkAfter
 	outcome.RedCap = landing.RedCap
 	outcome.Reason = landing.Reason
 	outcome.ConflictPaths = landing.ConflictPaths

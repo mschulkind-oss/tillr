@@ -31,6 +31,50 @@ died without a verdict from its own harness session; `loop` is the unattended su
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
 
+## Opted-in judgment before the gate
+
+An item directive with `judge="agent"` asks for an independent, read-only review
+of its committed candidate. Before dispatching the worker, planning requires one
+unexpired grant covering every criterion's claim class; otherwise the item waits
+as `judge-grant-absent`. The policy must map the `review` seat. Items without that
+attribute keep the existing mechanical retirement path and start no review run.
+
+After the worker passes its fence check, the review runs in the same lane with
+its own run and session identities. Its brief includes the criteria, their hashes,
+the candidate's tree identity, the path to its exact retained diff, and the path
+for its written verdict. Keeping the raw diff outside the brief lets ordinary code
+containing literal brace pairs pass the adapter's template preflight.
+The verdict file stays in the review run's durable records. The worker's brief
+and session inputs are restored afterward. A review that commits or dirties the
+worktree is refused; the drain restores the original committed candidate.
+
+The [item judge intake](../tillr-item/README.md#written-judge-verdicts) checks the written
+file without recording verdicts. A missing or refused file holds the item as
+`judge-unreadable`, attributed to the review run rather than the worker; it does
+not consume the worker's automatic re-admission or second-failure allowance. A valid
+`not-done` finding holds it as `eval-failed`, without a gate, landing, or criterion
+verdict. The waiting view includes the first failing criterion's reason.
+
+A pass permits the ordinary gate and landing. Only a successful landing records
+the checked agent verdicts, bound to the landed commit, and marks the item landed
+in the same store transaction. The mechanical verdict program is skipped. A gate
+or landing refusal records no judge verdict and keeps that step's own hold reason.
+The checked file and caller-owned provenance travel with a retained gated candidate,
+so a later landing attempt does not start a second review.
+
+If authority expires during the gate, landing waits for a new covering grant. If
+it expires during publication, the drain retains the exact landed commit before
+settlement. A new covering grant then records the checked file and item state
+without repeating the worker, review, gate, or landing. An unfinished review
+handoff is recovered before the worker's recorded-head guard, including restoration
+when a judge committed before its terminal record was lost.
+
+The [judge-routing tests](./drain/judge_route_test.go) cover ordering, authority,
+read-only restoration, failure attribution, and mechanical-path compatibility.
+The next [lifecycle block](../../docs/design/tillr-judge-and-lifecycle.md#route-a-judges-blocked-and-defective-findings-to-their-states)
+owns disposition changes for `blocked` and `defective` findings; until that block
+lands, those non-pass findings are held without recording verdicts.
+
 ## Pass observations and report identity
 
 The [successor design](../../docs/design/tillr-drain-successor.md#25-one-pass-what-it-advances-and-what-bounds-it)

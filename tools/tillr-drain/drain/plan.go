@@ -139,12 +139,14 @@ type Decision struct {
 // itemRow is the item state this face reads: the columns a decision turns on, and the
 // rank that decides the order the decisions come in.
 type itemRow struct {
-	Designer *lastDesigner
-	Workflow string
-	Command  *WorkflowStage
-	ItemID   string
-	State    string
-	Rank     string
+	JudgeMode  string
+	JudgeGrant string
+	Designer   *lastDesigner
+	Workflow   string
+	Command    *WorkflowStage
+	ItemID     string
+	State      string
+	Rank       string
 	// Allowed is the item's allowed_paths, the source of the fence its run is held to.
 	Allowed []string
 	// DesignDoc is the design document the item names, relative to the repository or
@@ -188,6 +190,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		return nil, err
 	}
 	for i := range items {
+		if items[i].JudgeMode == "agent" {
+			items[i].JudgeGrant, err = judgeGrant(r, items[i].ItemID, at)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if item.IsCommentItem(items[i].ItemID) {
 			items[i].Designer, err = readDesigner(r, items[i].DesignDoc)
 			if err != nil {
@@ -410,6 +418,10 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			}
 			if !settled {
 				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
+			}
+			if err == nil && !settled && decision.Action == ActionJudge && item.JudgeMode == "agent" && item.JudgeGrant == "" {
+				decision.Action, decision.Reason, decision.To = ActionHold, ReasonJudgeGrantAbsent, ""
+				identifyDecision(&decision)
 			}
 			if err == nil && work.LaneReleased && decision.Action != ActionHold {
 				lane, ok := p.freeLane()
@@ -671,6 +683,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.DeferredBy = p.fixerOpen
 	case item.State != StateInQueue:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
+	case item.JudgeMode == "agent" && item.JudgeGrant == "":
+		decision.Action, decision.Reason = ActionHold, ReasonJudgeGrantAbsent
 	case !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
 		decision.Action, decision.Reason = ActionHold, "design-under-comment"
 		decision.DeferredBy = p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)]
@@ -979,13 +993,20 @@ func (p *planner) retryHoldReason(itemID string) string {
 	if latest == "" {
 		return ReasonRunLinkMissing
 	}
+	if reason := p.history.judgeHolds[latest]; reason != "" {
+		return reason
+	}
 	switch p.history.refusals[latest] {
+	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeGrantAbsent:
+		return p.history.refusals[latest]
 	case RefusalNodeOutput:
 		return RefusalNodeOutput
 	case RefusalFence:
 		return ReasonBoundaryScopeEscape
 	case RefusalNoOp:
 		return ReasonCandidateNoOp
+	case RefusalGate:
+		return ReasonGateFailed
 	case RefusalLand:
 		return ReasonLandRefused
 	case RefusalConflict:
@@ -1262,9 +1283,17 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	if hasWorkflow {
 		workflowColumn = "COALESCE(workflow, '')"
 	}
+	var hasJudge bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='judge_mode')`).Scan(&hasJudge); err != nil {
+		return nil, readFailure(err)
+	}
+	judgeColumn := "''"
+	if hasJudge {
+		judgeColumn = "COALESCE(judge_mode, '')"
+	}
 	rows, err := r.Query(
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
-		        COALESCE(seat, ''), ` + workflowColumn + `
+		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `
 		   FROM items
 		  ORDER BY COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
 	if err != nil {
@@ -1277,7 +1306,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 			item    itemRow
 			allowed string
 		)
-		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode); err != nil {
 			return nil, readFailure(err)
 		}
 		if item.Allowed, err = decodeFence(allowed); err != nil {
@@ -1324,6 +1353,9 @@ func checkSeats(policy *Policy, items []itemRow) error {
 		return nil
 	}
 	for _, it := range items {
+		if it.JudgeMode == "agent" && it.JudgeGrant != "" && len(policy.seatList("review")) == 0 {
+			return Usagef("item %q asks for an agent judge, but the policy does not map the review seat", it.ItemID)
+		}
 		if it.Seat == "" {
 			continue
 		}
@@ -1482,6 +1514,8 @@ type runHistory struct {
 	// candidate with no commit apart from an ordinary answered run, whose own record says
 	// neither.
 	refusals map[string]string
+	// Judge holds gate item progress without classifying its writer as failed.
+	judgeHolds map[string]string
 	// gateResults is every run the gate answered, keyed by run id, valued by the gate's own
 	// `result` (`pass`, `fail`, `error`). `judged` says the gate ran; this says what it
 	// said, which is the difference between a hold for a red gate and one for a land that
@@ -1503,7 +1537,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 	}
 	history := runHistory{
 		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{},
-		refusals: map[string]string{}, gateResults: map[string]string{},
+		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
 	}
 	for _, e := range events {
 		if e.Kind == GateVerdictKind && e.ObjectType == "run" && e.ObjectID != nil {
@@ -1518,10 +1552,14 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 		}
 		if e.Kind == RefusalKind && e.ObjectType == "run" && e.ObjectID != nil {
 			var payload struct {
-				Step string `json:"step"`
+				Step        string `json:"step"`
+				WriterRunID string `json:"writer_run_id"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Step != "" {
 				history.refusals[*e.ObjectID] = payload.Step
+				if payload.WriterRunID != "" {
+					history.judgeHolds[payload.WriterRunID] = payload.Step
+				}
 			}
 			continue
 		}

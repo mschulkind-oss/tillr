@@ -132,6 +132,9 @@ func (p *planner) readmission(itemID string, now *RunInputs) (string, bool) {
 	}
 	spent := false
 	for _, prior := range priors {
+		if p.history.judgeHolds[prior.RunID] == ReasonJudgeUnreadable {
+			continue
+		}
 		d := p.inputDecisions[prior.RunID]
 		if d.Action == ActionRetry {
 			spent = false

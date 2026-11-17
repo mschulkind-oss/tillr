@@ -84,7 +84,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, RetryAckKind, "drain.graph-completed", FixerAttachedKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, "drain.graph-completed", FixerAttachedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}

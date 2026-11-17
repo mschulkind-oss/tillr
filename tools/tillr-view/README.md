@@ -73,6 +73,12 @@ tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
 
 An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
 `status` answers where the board stands now, `events` answers what happened in order,
+For opted-in agent reviews, the waiting face recognizes `judge-grant-absent`,
+`judge-unreadable`, and `eval-failed`. A failed or unreadable review includes its
+recorded first reason, rather than presenting an unexplained hold. The
+[drain's judge contract](../tillr-drain/README.md#opted-in-judgment-before-the-gate)
+defines those outcomes and when the judge's verdicts become records.
+
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
 round decided, `lanes` lists every configured lane and its current or last run, and
 `running` answers what is in flight. `status --text` prints a readable summary;
