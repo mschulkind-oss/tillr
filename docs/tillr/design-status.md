@@ -44,12 +44,11 @@ was not delivered points at the repository on GitHub.
 - **Superseded / historical:** kept as a record; listed in
   [the second table](#superseded-and-historical-records) and not delivered with the pack.
 
-**Reading order for an agent from another project.** This page first; then the owner's stated
-design direction for tillr, which will be the first row of
-[the status table](#status-of-every-design) (on 2026-11-16 it was still being written, so the row
-is not there yet); then
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md), tillr's proposal to the
-AutoQA pipeline and the contract between the two, which is the first row until then.
+**Reading order for an agent from another project.** This page first; then
+[the core and the Git-landing definition](../design/tillr-core-and-git-landing.md), the owner's
+stated direction for tillr, which is the first row of [the status table](#status-of-every-design);
+then [What tillr will change for AutoQA](../design/tillr-separable-parts.md), tillr's proposal to
+the AutoQA pipeline and the contract between the two, which now sits under that direction.
 
 **What is stable to build on.** tillr's seam for another program is processes and records: each
 face (one subcommand of one program) reads and writes versioned JSON records, and its exit code is
@@ -89,12 +88,14 @@ with the pack as a skill, says how the eight programs compose across the loop's 
 
 ## Status of every design
 
-Ordered for a reader from another project: the proposal addressed to that reader first, then the
+Ordered for a reader from another project: the owner's direction first, then the proposal
+addressed to that reader, then the
 roadmap, then from the foundation outward. "Next" lists queued item ids in the order their dependencies
 allow, first the ones that wait on nothing.
 
 | Document | Covers | Status (2026-11-16) | What tillr builds next | Pack |
 | :--- | :--- | :--- | :--- | :--- |
+| [The core and the Git-landing definition](../design/tillr-core-and-git-landing.md) | The owner's direction: tillr as general machinery of queues and graphs whose nodes are agents and commands, with landing changes in a Git repository as one small, separate definition on top; where the Git-landing assumption is wired in today, three shapes for that one definition, and the extension points a second use would fill. | The owner's stated direction, 2026-11-17; a proposal for both projects to react to; nothing built. Open: [OQ-CG1](../design/tillr-core-and-git-landing.md#OQ-CG1), [OQ-CG2](../design/tillr-core-and-git-landing.md#OQ-CG2), [OQ-CG3](../design/tillr-core-and-git-landing.md#OQ-CG3), [OQ-CG4](../design/tillr-core-and-git-landing.md#OQ-CG4), [OQ-CG5](../design/tillr-core-and-git-landing.md#OQ-CG5), none of which needs an answer before that conversation | Nothing is filed: AutoQA's agent reacts to its sections 4 to 6, then the owner and both sides decide what to build | shipped |
 | [What tillr will change for AutoQA](../design/tillr-separable-parts.md) | tillr's proposal to the AutoQA pipeline: what changes now, what waits on the queued design, what tillr will not take, and the contract between the two. | Proposed, awaiting the owner: [OQ-SP1](../design/tillr-separable-parts.md#OQ-SP1), [OQ-SP2](../design/tillr-separable-parts.md#OQ-SP2), [OQ-SP3](../design/tillr-separable-parts.md#OQ-SP3), [OQ-SP4](../design/tillr-separable-parts.md#OQ-SP4), [OQ-SP5](../design/tillr-separable-parts.md#OQ-SP5), [OQ-SP6](../design/tillr-separable-parts.md#OQ-SP6), [OQ-SP7](../design/tillr-separable-parts.md#OQ-SP7), [OQ-SP8](../design/tillr-separable-parts.md#OQ-SP8) | The proposed small changes of its section 3, filed as items only once the owner rules | shipped |
 | [Roadmap — tillr](roadmap.md) | The order of all remaining tillr work and the reason for it. | Current; reconciled 2026-11-15 | Its own blocks: eight drain items are ready (`item-drain-recover-commands`, `item-drain-express-lanes`, `item-drain-record-killed-run-spend`, `item-drain-hold-repeatedly-orphaned`, `item-drain-design-seat-quota-failover`, `item-drain-answered-conflict-beats-stale-retry`, `item-conflict-transition-not-duplicate`, `item-drain-check-step-program-flags`), then gate, policy, sync and view items | shipped |
 | [Board utilities](../design/board-utilities.md) | The founding contract: seven programs over one store, each runnable alone, joined by processes and records. | Built: the seven `tillr-<noun>` programs and the shared `tools/tillr` library | Nothing; the contract is in force | shipped |
