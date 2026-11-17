@@ -1,4 +1,5 @@
 import { LaneStrip } from "./LaneStrip";
+import { loopAlive } from "../models/loop";
 import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
 
@@ -26,7 +27,7 @@ const STOP_GUIDANCE: Record<string, string> = {
   "gate-stall-rerun": "same candidate reruns when fewer gates are in flight or none other are",
   "gate-stalled": "diagnose the stalled check and clear the item fault",
   "gate-harness-error": "repair the gate harness before restarting",
-  "fault": "diagnose the recorded fault before restarting",
+  "fault": "Owner must recover the missing stop explanation before restarting",
 };
 
 /** Shares the header's recorded-session rule: running runs alone never prove loop liveness. */
@@ -35,13 +36,17 @@ export function LoopSummary({ drain, passes, error, snapshot, now = Date.now() }
 }) {
   const session = drain?.session;
   const ended = session != null && session.ended_at_ms !== null;
-  const alive = session != null && !ended && now <= session.next_pass_at_ms + (drain?.session_grace_ms ?? 0);
-  const state = ended ? "stopped" : alive ? "moving" : "not known";
+  const alive = loopAlive(drain, now);
+  const stop = alive ? null : drain?.stop;
+  const state = stop || ended ? "stopped" : alive ? "moving" : "not known";
   const latest = newestPasses(passes ?? [])[0];
   return <section className="loop-summary" aria-label="Loop summary">
     <div className="loop-summary__state"><ClassState value={state} />
-      <span>{ended ? drain?.last_stop_reason || "stop reason not recorded" : alive ? "The recorded heartbeat is current." : session ? "Loop heartbeat overdue." : drain?.session_note || "No session recorded."}</span>
-      <span>{ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "inspect the recorded stop before deciding whether to restart" : alive ? "watch the next pass" : "inspect the loop session before restarting"}</span>
+      <span>{alive ? "Loop alive: the recorded heartbeat is current." : "no loop is running"}</span>
+      {stop ? <span>stopped since {new Date(stop.at_ms).toISOString()} · <EntityText value={stop.item_id || "no single item (loop-wide)"} snapshot={snapshot} passes={passes} /> · {stop.step} · {stop.sentence} Next: {stop.next}</span> : <>
+        <span>{ended ? drain?.last_stop_reason || "stop reason not recorded" : alive ? "watch the next pass" : drain?.session_note || "No session recorded."}</span>
+        {!alive ? <span>Stop explanation not recorded. {ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting" : "Owner checks the loop session before restarting"}</span> : null}
+      </>}
     </div>
     {!alive && drain?.stop_note ? <p><EntityText value={drain.stop_note} snapshot={snapshot} passes={passes} /></p> : null}
     {error ? <p role="alert">Passes refused: {error.message}</p> : latest ? <>

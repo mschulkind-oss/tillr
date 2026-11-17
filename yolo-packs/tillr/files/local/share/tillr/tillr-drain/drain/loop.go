@@ -418,7 +418,10 @@ type LoopResult struct {
 	CostUnknownExample  string `json:"cost_unknown_example,omitempty"`
 	// Detail names what stopped the loop when the reason alone does not: the boundary
 	// paths of a violation, or the item and class of a broken harness.
-	Detail string `json:"detail"`
+	Detail          string           `json:"detail"`
+	StopItemID      string           `json:"stop_item_id,omitempty"`
+	StopStep        string           `json:"stop_step,omitempty"`
+	StopExplanation *StopExplanation `json:"stop_explanation,omitempty"`
 	// ExitCode is the status the process answered with, written for StopFault, where the
 	// fault's own code (a policy that will not load is usage, a store that will not open is
 	// incompatible) is the fact a reader cannot derive from the reason. A clean stop omits
@@ -2189,6 +2192,8 @@ func (l *Loop) stopForViolations(violations []Violation, items, lanes []string, 
 	detail := fmt.Sprintf("%d change(s) outside %s: %s", len(violations), strings.Join(lanes, ", "), strings.Join(lines, "; "))
 	l.mu.Lock()
 	result.Detail = detail
+	result.StopItemID = strings.Join(items, ", ")
+	result.StopStep = "boundary check"
 	l.mu.Unlock()
 	l.reportf("loop: boundary violation during %s:\n  %s\n",
 		strings.Join(items, ", "), strings.Join(lines, "\n  "))

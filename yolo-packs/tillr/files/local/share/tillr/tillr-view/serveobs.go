@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/stop"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -166,12 +167,13 @@ func (b *drainBuild) named() bool {
 // clock (the running face's stale test) and a reader that needs only its reason cannot
 // read two different files.
 type loopResult struct {
-	Path      string
-	Env       record.Envelope
-	Stop      string
-	Build     *drainBuild
-	Note      string
-	BuildNote string
+	Path        string
+	Env         record.Envelope
+	Stop        string
+	Explanation *stopExplanation
+	Build       *drainBuild
+	Note        string
+	BuildNote   string
 }
 
 // newestLoopResult reads the newest loop result under the loop directory. Applied
@@ -263,8 +265,12 @@ func (obs *observations) newestLoopResult() loopResult {
 		}
 	}
 	var payload struct {
-		Stop  string      `json:"stop"`
-		Build *drainBuild `json:"build"`
+		Stop        string           `json:"stop"`
+		Detail      string           `json:"detail"`
+		ItemID      string           `json:"stop_item_id"`
+		Step        string           `json:"stop_step"`
+		Explanation *stopExplanation `json:"stop_explanation"`
+		Build       *drainBuild      `json:"build"`
 	}
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		return loopResult{Path: path,
@@ -272,7 +278,16 @@ func (obs *observations) newestLoopResult() loopResult {
 			BuildNote: "the loop result payload could not be read",
 		}
 	}
-	out := loopResult{Path: path, Env: env, Stop: payload.Stop, Build: payload.Build}
+	out := loopResult{Path: path, Env: env, Stop: payload.Stop, Explanation: payload.Explanation, Build: payload.Build}
+	// Legacy records already carry a cause and creation time. Keep those facts,
+	// and name the missing item/step rather than borrowing the newest decision.
+	if out.Explanation == nil && payload.Stop != "" && payload.Detail != "" {
+		step := payload.Step
+		if step == "" {
+			step = "not recorded (older loop result)"
+		}
+		out.Explanation = stop.Explain(payload.Stop, payload.Detail, payload.ItemID, step, env.CreatedAt)
+	}
 	if !out.Build.named() {
 		out.BuildNote = "the loop result names no build, so the board cannot vouch for the drain that wrote it"
 	}

@@ -105,8 +105,8 @@ test.each([
   ["gate-stall-rerun", "fewer gates"],
   ["gate-stalled", "clear the item fault"],
   ["gate-harness-error", "repair the gate harness"],
-  ["fault", "diagnose the recorded fault"],
-  ["future-stop", "inspect the recorded stop"],
+  ["fault", "recover the missing stop explanation"],
+  ["future-stop", "updates the reader for this stop reason"],
 ])("restart guidance is specific to %s", (reason, guidance) => {
   const { container } = render(<LoopSummary drain={{ ...drain, last_stop_reason: reason }} passes={passes} now={now} />);
   expect(container.querySelector(".loop-summary__state")?.textContent).toContain(guidance);

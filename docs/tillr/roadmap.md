@@ -507,13 +507,7 @@ means.
 
 ### A stopped loop says what stopped it, in plain words, and what happens next
 
-<!-- tillr: item id="item-obs2-stop-says-what-and-next" paths="tools/tillr-view/,tools/tillr-drain/,yolo-packs/tillr/,docs/" -->
 
-- **c1:** When the loop is not running, the header shows four things: that it is stopped and since when, the item and step that stopped it, the reason in one plain sentence taken from the loop's own stop record, and who acts next (the loop on restart, a named item's rework, or the owner). The sentence "diagnose the recorded fault before restarting" is gone. A test renders the header from a fixture stop record for each stop reason the drain can write and asserts none falls back to a generic line.
-- **c2:** The header says whether a loop process is alive right now, from the loop's heartbeat record, and says "no loop is running" when the last heartbeat is older than twice the heartbeat interval. A test covers a live, a stale and an absent heartbeat.
-- **c3:** A page that asks the server for something the server does not serve shows one line: this page needs a newer server, the server's build and the page's build, and the command that restarts it. It never prints a route list or the word "face". A test serves the page against a server without the route and asserts the line.
-- **c4:** Every term of art on a page has a one-sentence definition one hover or one click away, from one glossary file in the tree: pass, hold, hold-only pass, action, lane, run, candidate, gate, landing, heartbeat, session. A test fails when a page uses a glossary term with no definition attached, or when a term on the list has no entry.
-- **c5:** The Passes page's filters are labeled by what they do: "Item" filters to passes that touched one item, and "Action" is a list of the actions that exist, not a free text box. The hold-only checkbox reads "show passes where nothing moved".
 
 ## Filed 2026-11-15: an item that was not written to the prose guide is rewritten before anyone builds it
 

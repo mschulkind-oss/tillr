@@ -78,6 +78,7 @@ func RecordLoopResult(root string, at time.Time, build BuildStamp, result LoopRe
 	if report == nil {
 		report = io.Discard
 	}
+	result.StopExplanation = ExplainStop(result, at)
 	path := LoopResultFile(root, result.FirstGeneration, result.LastGeneration)
 	if build.named() {
 		result.Build = &build
@@ -120,6 +121,7 @@ func RecordStartupFault(root string, at time.Time, err error, report io.Writer) 
 	}
 	RecordLoopResult(root, at, ReadBuildStamp(), LoopResult{
 		Stop:     StopFault,
+		StopStep: "startup",
 		Detail:   err.Error(),
 		ExitCode: ExitCode(err),
 	}, report)

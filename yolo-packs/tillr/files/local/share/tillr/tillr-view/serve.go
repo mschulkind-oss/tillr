@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/preserved"
+	"github.com/mschulkind-oss/tillr-drain/stop"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -370,7 +371,7 @@ func (s *server) routes() http.Handler {
 	// the index page: a client that receives HTML where it expected JSON would read a
 	// routing bug as a data bug.
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, req *http.Request) {
-		f := failure(codeUnknownRoute, "%q is not a route this face serves: the routes are /api/v1/lanes, /api/v1/why, /api/v1/snapshot, /api/v1/waiting, /api/v1/passes, /api/v1/questions, /api/v1/perf/checks, /api/v1/perf/items, /api/v1/checks/{id}, /api/v1/items/{id}, /api/v1/runs/{id} and its children, /api/v1/landings and /api/v1/landings/{id}, and /api/v1/ws", req.URL.Path)
+		f := failure(codeUnknownRoute, "This page needs a newer server; restart with just observatory.")
 		f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase}
 		writeJSON(w, f.status, *f)
 	})
@@ -603,22 +604,24 @@ func (s *server) sources() sourceStates {
 
 // drainSummary is the drain's own account of itself.
 type drainSummary struct {
-	Active             bool          `json:"active"`
-	Session            *loopSession  `json:"session"`
-	SessionNote        string        `json:"session_note"`
-	SessionGraceMS     int64         `json:"session_grace_ms"`
-	RunningRuns        int           `json:"running_runs"`
-	Ticks              int           `json:"ticks"`
-	Dispatched         int           `json:"dispatched"`
-	Landed             int           `json:"landed"`
-	Rejected           int           `json:"rejected"`
-	InfraFailures      *int          `json:"infra_failures"`
-	TotalCostUSD       *float64      `json:"total_cost_usd"`
-	UnreportedRuns     int           `json:"unreported_runs"`
-	CostUnreportedRuns int           `json:"cost_unreported_runs"`
-	LastStopReason     *string       `json:"last_stop_reason"`
-	StopNote           string        `json:"stop_note"`
-	LastDecision       *dispatchView `json:"last_decision"`
+	Active              bool             `json:"active"`
+	Session             *loopSession     `json:"session"`
+	SessionNote         string           `json:"session_note"`
+	SessionGraceMS      int64            `json:"session_grace_ms"`
+	RunningRuns         int              `json:"running_runs"`
+	Ticks               int              `json:"ticks"`
+	Dispatched          int              `json:"dispatched"`
+	Landed              int              `json:"landed"`
+	Rejected            int              `json:"rejected"`
+	InfraFailures       *int             `json:"infra_failures"`
+	TotalCostUSD        *float64         `json:"total_cost_usd"`
+	UnreportedRuns      int              `json:"unreported_runs"`
+	CostUnreportedRuns  int              `json:"cost_unreported_runs"`
+	LastStopReason      *string          `json:"last_stop_reason"`
+	Stop                *stopExplanation `json:"stop"`
+	HeartbeatIntervalMS int64            `json:"heartbeat_interval_ms"`
+	StopNote            string           `json:"stop_note"`
+	LastDecision        *dispatchView    `json:"last_decision"`
 	// Build is the drain build that wrote the newest loop result, and BuildNote says why
 	// there is none. A record written before the stamp existed is a build that cannot be
 	// named, which the board draws as such rather than as a current build (build.go in
@@ -638,6 +641,9 @@ type drainSummary struct {
 }
 
 // gateTick is one tick's gate time in the board's trend.
+// stopExplanation is the account written by the drain, not UI-generated advice.
+type stopExplanation = stop.Explanation
+
 type gateTick struct {
 	TickID     string `json:"tick_id"`
 	AtMS       int64  `json:"at_ms"`
@@ -932,7 +938,9 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// dispatched one wrote three. The stop reason is the loop's own result file beside those
 	// records; a loop that has not written one answers an absence with a note, never a
 	// guessed reason.
-	stopReason, stopNote, loopBuild, buildNote := s.obs.readLoopResult()
+	loopResult := s.obs.newestLoopResult()
+	stopReason, stopNote, loopBuild, buildNote := loopResult.Stop, loopResult.Note, loopResult.Build, loopResult.BuildNote
+	stop := loopResult.Explanation
 	tickCount, _ := countTicks(r)
 	session, active, sessionNote, err := readLoopSession(r, time.Now())
 	if err != nil {
@@ -941,23 +949,25 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// A current session is the loop's present state; the file describes a previous
 	// stop and must not advise restarting a loop that is already running.
 	if active {
-		stopReason, stopNote = "", ""
+		stopReason, stopNote, stop = "", "", nil
 	}
 	out.Drain = drainSummary{
-		UnreportedRuns:     unreported,
-		CostUnreportedRuns: costUnreported,
-		Active:             active,
-		Session:            session,
-		SessionNote:        sessionNote,
-		SessionGraceMS:     SessionGraceMS,
-		RunningRuns:        running,
-		Ticks:              tickCount,
-		Dispatched:         actionCounts["dispatch"],
-		Landed:             byResult["landed"],
-		Rejected:           byResult["isolated"] + byResult["refused"],
-		StopNote:           stopNote,
-		Build:              loopBuild,
-		BuildNote:          buildNote,
+		UnreportedRuns:      unreported,
+		CostUnreportedRuns:  costUnreported,
+		Active:              active,
+		Session:             session,
+		SessionNote:         sessionNote,
+		SessionGraceMS:      SessionGraceMS,
+		RunningRuns:         running,
+		Ticks:               tickCount,
+		Dispatched:          actionCounts["dispatch"],
+		Landed:              byResult["landed"],
+		Rejected:            byResult["isolated"] + byResult["refused"],
+		StopNote:            stopNote,
+		Stop:                stop,
+		HeartbeatIntervalMS: HeartbeatIntervalMS,
+		Build:               loopBuild,
+		BuildNote:           buildNote,
 	}
 	if stopReason != "" {
 		out.Drain.LastStopReason = &stopReason
