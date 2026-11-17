@@ -232,8 +232,8 @@ func TestJudgeJSONAndOpaqueIndependence(t *testing.T) {
 	}
 }
 
-func TestJudgeModeSurvivesSeedRerank(t *testing.T) {
-	db := filepath.Join(scratch(t, "judge-seed"), "state.db")
+func TestJudgeModeSurvivesRerank(t *testing.T) {
+	db := filepath.Join(scratch(t, "judge-rank"), "state.db")
 	p := base("item-judge", "judge requested")
 	raw, err := json.Marshal(p)
 	if err != nil {
@@ -247,9 +247,8 @@ func TestJudgeModeSurvivesSeedRerank(t *testing.T) {
 	if code, out := apply(t, db, envelope(t, "item.record", "judge-request", initial)); code != 0 {
 		t.Fatalf("apply: %d %s", code, out)
 	}
-	p.Rank = "a"
-	if code, out := seed(t, db, seedDocument(t, p)); code != 0 {
-		t.Fatalf("seed: %d %s", code, out)
+	if code, out := rank(t, db, p.ItemID, "a"); code != 0 {
+		t.Fatalf("rank: %d %s", code, out)
 	}
 	if got := sqlStrings(t, db, `SELECT judge_mode FROM items`); len(got) != 1 || got[0] != "agent" {
 		t.Fatalf("rerank cleared judge: %v", got)

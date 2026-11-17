@@ -179,22 +179,10 @@ function QueueRow({
   );
 }
 
-/** The seed document the queue's ranks come from. It is named rather than described
- * because "how to rank them" is the whole point of the heading: the operator who reads
- * "16 items with no priority" needs the command, not a place to start looking. The path is
- * this repository's; a store seeded from another file ranks through the same face with
- * that file's path. */
-const SEED_DOCUMENT = "config/tillr/seed-items.json";
-
-/** howToRank is the sentence that makes the unranked block correctable from the board. It
- * names the field and the command, because the two together are the whole remedy: `rank`
- * is the store's own token (a sparse lexical string), and `tillr-item seed` is the one
- * write face that owns it — re-seeding an entry with a rank is how an order is corrected,
- * and the seed face reports such an entry under `ranked`. */
+/** The correction acts only on one item already in the store. */
 function howToRank(): string {
-  return `Rank one by giving its entry a \`rank\` in ${SEED_DOCUMENT} and re-seeding: \`tillr-item seed -from ${SEED_DOCUMENT}\`.`;
+  return "Record a priority with `tillr item rank --store <store> --item <id> --rank <token>`.";
 }
-
 /** UnrankedHeading heads the block of items the store never ranked.
  *
  * The queue is one order, and its tail is the store's silence: `unrankedCount` items sort

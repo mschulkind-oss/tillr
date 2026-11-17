@@ -79,13 +79,13 @@ class TreeChecks(unittest.TestCase):
             self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
             self.assertIn("could not judge", result.stderr)
 
-    def test_eleven_fast_checks_fit_and_extra_declaration_fails(self):
+    def test_ten_fast_checks_fit_and_extra_declaration_fails(self):
         declarations = [json.loads(path.read_text()) for path in HERE.glob("*.json")]
         fast = [check for check in declarations if check["tier"] == "fast"]
         structural = next(check for check in declarations if check["id"] == "structural")
         self.assertFalse(structural["remember"], "Git refs are not tree-memory inputs")
-        # The budget check itself is admission, not one of the eleven admitted checks.
-        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 11)
+        # The budget check itself is admission, not one of the ten admitted checks.
+        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 10)
         result = subprocess.run(["python3", str(HERE / "gate-budget.py")], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for check in declarations:

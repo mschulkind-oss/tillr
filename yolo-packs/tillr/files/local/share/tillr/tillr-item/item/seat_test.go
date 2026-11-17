@@ -121,60 +121,6 @@ func TestAnItemRefusesASeatThatDoesNotExist(t *testing.T) {
 	}
 }
 
-// The seed loader accepts a seat and stores it, so a seed document can state an item's role
-// as part of its definition. The entry the store already holds is compared on it too, which
-// the second half pins: changing the seat in a re-seed is a definition conflict, not a
-// silent rewrite.
-func TestTheSeedCarriesTheSeat(t *testing.T) {
-	ctx := context.Background()
-	s, err := store.InitFixture(ctx, filepath.Join(scratch(t), "board.sqlite3"))
-	if err != nil {
-		t.Fatalf("creating a fixture store failed: %v", err)
-	}
-	defer s.Close()
-
-	document := func(seat string) []byte {
-		raw, err := json.Marshal(map[string]any{
-			"kind":    "tillr.seed",
-			"version": "0.1.0",
-			"items": []map[string]any{{
-				"item_id": "item_042",
-				"title":   "the item item_042",
-				"state":   "in-queue",
-				"criteria": []map[string]string{
-					{"criterion_id": "c1", "text": "a criterion", "state": ""},
-				},
-				"blocked_by":    []string{},
-				"allowed_paths": []string{"items/item_042/"},
-				"seat":          seat,
-			}},
-		})
-		if err != nil {
-			t.Fatalf("building the seed document failed: %v", err)
-		}
-		return raw
-	}
-
-	at := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
-	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := item.Seed(ctx, tx, "seed.json", document(item.SeatDesign), at)
-		return err
-	}); err != nil {
-		t.Fatalf("seeding an item with the design seat failed: %v", err)
-	}
-	if got := showSeat(t, s, "item_042"); got != item.SeatDesign {
-		t.Fatalf("the seeded item's seat is %q, want %q", got, item.SeatDesign)
-	}
-
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := item.Seed(ctx, tx, "seed.json", document(item.SeatBuild), at)
-		return err
-	})
-	if err == nil || !strings.Contains(err.Error(), `seat is "design" in the store and "build" in the seed`) {
-		t.Fatalf("re-seeding a different seat answered %v, want a definition conflict naming the seat", err)
-	}
-}
-
 // items.seat is a column added to a table that already existed, so it lands through the
 // store's additive-column hook exactly as items.rank did: CREATE TABLE IF NOT EXISTS is a
 // no-op against a store that already has the table, and a store built before the seat would

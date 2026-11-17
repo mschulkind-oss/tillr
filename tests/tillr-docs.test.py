@@ -712,7 +712,29 @@ def case_document_fed_prerequisite_documented():
         fail("the operating skill must route the reader to the drain prerequisite")
 
 
+def case_seed_retirement_documented():
+    for retired in ("config/tillr/seed-items.json", "tools/tillr-drain/seed_test.go",
+                    "tools/tillr-item/item/seed.go", "tools/gate/checks/seed-freeze.json",
+                    "tools/gate/checks/seed-freeze.py"):
+        if (ROOT / retired).exists():
+            fail(f"retired seed intake remains: {retired}")
+    roadmap = text_of(ROOT / "docs/pi/roadmap.md")
+    for item in ("item-seed-01", "item-seed-03", "item-seed-05", "item-output-cap-gate-wireid",
+                 "item-or-routing", "item-seat-bounds-wiring", "item-pi-ui-latency-campaign"):
+        if item not in roadmap:
+            fail(f"roadmap lost retired seed work: {item}")
+        if re.search(r'<!-- tillr: item\b[^>]*\bid="' + re.escape(item) + '"', roadmap, re.S):
+            fail(f"retired seed work became dispatchable instead of prose: {item}")
+    for path in (ROOT / "tools/tillr-view/web/README.md",
+                 ROOT / "tools/tillr-view/web/src/components/QueueRail.tsx", SKILL):
+        text = text_of(path)
+        if "tillr item rank" not in text:
+            fail(f"{path.relative_to(ROOT)} omits the replacement priority command")
+    ok("seed intake is retired; seven unfinished rows survive as prose and priority has a writer")
+
+
 def main():
+    case_seed_retirement_documented()
     green_build_tests = subprocess.run(
         [sys.executable, str(ROOT / "tests/tillr-build.test.py")],
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},

@@ -82,24 +82,14 @@ type criterion struct {
 
 // Apply is item's one record→row mapping: it validates the record, writes the rows
 // it describes, appends the transition's event in the same transaction, and answers
-// the record as stored. The write face and the seed materializer both call it, so a
+// the record as stored. The write face and document sync both call it, so a
 // fixture cannot construct a state the write face would reject (lanes §1, OQ-L2).
 func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envelope, error) {
 	return ApplyWithReceipt(ctx, tx, env, MoveReceipt{})
 }
 
-// apply shares the record writer with seed's validated rank-only updates. That
-// private path may change a finished item's rank, never its state or definition.
 // ApplyWithReceipt records an authorized finished-state move with its reason and actor.
 func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, receipt MoveReceipt) (record.Envelope, error) {
-	return apply(ctx, tx, env, false, receipt)
-}
-
-func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool, receipts ...MoveReceipt) (record.Envelope, error) {
-	receipt := MoveReceipt{}
-	if len(receipts) > 0 {
-		receipt = receipts[0]
-	}
 	var payload itemPayload
 	// Read the whole value to retain the item id even when an unknown field sorts
 	// before item_id. Only unknown fields must refuse a replay: ordinary typed
@@ -161,9 +151,6 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		// including when a record also tries to reopen or rename the item.
 		if d.IsFinished(from) && from != d.Closed && from == payload.State {
 			comparison := payload
-			if seedRank {
-				comparison.Rank = stored.Rank
-			}
 			if !sameTerminalDefinition(stored, comparison) {
 				return record.Envelope{}, terminalRejection(payload.ItemID, from)
 			}

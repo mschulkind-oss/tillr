@@ -23,7 +23,7 @@ for the places each one says work is owed.
 
 - **item** — new dispatchable work, delivered with this lane as a JSON array of item payloads
   (`config/tillr/seed-items.json`'s shape) that another pass splices in and ranks;
-- **covered** — one of the 29 items already in [`config/tillr/seed-items.json`](../../config/tillr/seed-items.json)
+- **covered** — one of the 29 items already in `config/tillr/seed-items.json`
   already owns it, named by id;
 - **ruling** — an owner decision, seeded as a `blocked` item whose fence is the document that
   records it;

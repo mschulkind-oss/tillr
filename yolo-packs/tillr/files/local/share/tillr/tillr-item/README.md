@@ -19,9 +19,9 @@
 
 `tillr-item` writes and reads work items, and the four ledgers that attach to them: the
 decisions a board records, the mail deliveries a lane is sent, the sign-off grants a
-delegation runs under, and the verdicts a judge records. It also writes a whole seed
-document's items in one transaction, and `sync` materializes the item blocks of the
-repository's tracked documents — the only intake from documents. A fence entry
+delegation runs under, and the verdicts a judge records. `sync` materializes the item
+blocks of the repository's tracked documents — the only intake from documents.
+The retired `seed` command refuses with a pointer to `tillr item sync`. A fence entry
 under `.forks/lanes/<lane>/<fork>/` names a checkout staging materializes for the
 assigned lane, so `sync` does not warn that it is missing even on a fresh repository.
 Other absent paths still receive the ordinary `path-missing` warning.
@@ -85,8 +85,8 @@ The following rules describe Git-landing, including its established refusal name
   checked first and keep their names even when a record changes other fields too.
   Writing the same state or applying the same definition succeeds without changing
   the item or appending an event. Verdicts followed by the move to `landed` still
-  finish the item; the explicit close and reopen commands are unchanged. Seed
-  retains its existing authority to change rank alone, preserving the finished
+  finish the item; the explicit close and reopen commands are unchanged. `rank`
+  changes rank alone, preserving the finished
   item's state and definition; raw `apply` cannot change that rank. Sync
   reports a landed item's remaining document block as stale and a resolved item's
   changed definition as frozen. It writes neither change and still syncs the
@@ -147,11 +147,15 @@ The following rules describe Git-landing, including its established refusal name
   `blocked_by` naming nothing a block declares or the store holds is reported with its file
   and heading, and the face exits `1` after the other documents are applied. A path that
   does not exist yet is a warning, since the slice may create it.
-- **A seed is one transaction.** An item that cannot be written takes the batch with it,
-  rather than leaving half a document applied. A rank-only seed changes the rank alone,
-  apart from `updated_at` and `event_seq` bookkeeping. It preserves every other stored
-  field, including `workflow` (the item's chosen sequence of work steps), criteria and
-  dependency edges. Items with a workflow do not need to be skipped when ranking.
+- **Rank changes priority, not an item's definition.** `tillr item rank` requires an
+  existing item and an explicit `--rank` token. It changes only rank, `updated_at` and
+  `event_seq` bookkeeping, appending one `item.update` event in the same transaction.
+  State, criteria, fence, dependency edges, workflow and runs remain unchanged, including
+  on finished or closed items. Repeating the stored rank changes nothing and appends
+  no event. An empty token clears priority; an omitted token is refused. Tokens use
+  `0123456789abcdefghijklmnopqrstuvwxyz`, compared as strings;
+  an empty rank sorts after every recorded priority. `--now` is optional and defaults
+  to the wall clock.
 - **A mail delivery is acknowledged once, by a named session.** A second acknowledgement is
   a refusal and not a second row.
 
@@ -183,6 +187,7 @@ holds the original and checks the candidate before the gate.
 tillr-item show
 tillr-item decision list
 tillr-item sync
+tillr item rank --store .tillr/state.db --item item-042 --rank am
 tillr item close --store .tillr/state.db --item item-042 --reason "not doing this" --by owner
 tillr item reopen --store .tillr/state.db --item item-042 --reason "wanted again" --by owner
 ```

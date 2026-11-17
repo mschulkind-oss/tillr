@@ -9,7 +9,8 @@ description: Compose the eight `tillr*` binaries across the seven-step loop — 
 > **Known Gaps (verified 2026-11-12 at `32aed3dc31`).** `tillr` has landed a live
 > candidate on an unattended tick, but three parts are unfinished:
 > 1. **Item-state moves just landed** — queue item-state transitions are newly wired and have minimal production mileage.
-> 2. **Two-item seed** — the seed currently holds only two dispatchable items.
+> 2. **Document intake** — `tillr item sync` reads shared items from tracked Markdown;
+>    the old seed file and command are retired. `tillr item rank` records local priority.
 > 3. **Recording emitters unbuilt** — the recording/event schema exists in `tools/tillr`, but the binaries' event emitters are not yet wired (`events` faces see only what is currently emitted).
 >
 > **Do not wire `tillr` into another repository's gate while the emitters are unbuilt.**

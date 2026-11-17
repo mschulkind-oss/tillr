@@ -7,7 +7,7 @@
 // drawn as the store's: on 2026-11-14 a `tillr-view` built before the rank field made every
 // row unranked, and the board drew 55 rows in item-id order with nothing on screen saying
 // why. Both are the same screen, and they are not the same fact — the store's has a remedy
-// in the seed document, the server's has a remedy in the build.
+// through `tillr item rank`, the server's has a remedy in the build.
 //
 // The order itself is asserted here as well, because it is one rule the server, this client
 // and the drain planner share (design §4.1, ledger `D-OBS1`): ranked ascending as a plain
@@ -143,11 +143,11 @@ describe("the unranked heading", () => {
     expect(title).toContain("2 items");
     const note = container.querySelector(".queue-unranked__note")?.textContent ?? "";
     // How to rank them: the field and the one write face that owns it. "Correctable from
-    // the board" is the criterion — an operator who has to open the seed file first has a
+    // the board" is the criterion — an operator who has to discover the write command has a
     // state they cannot act on.
     expect(note).toContain("rank");
-    expect(note).toContain("tillr-item seed");
-    expect(note).toContain("config/tillr/seed-items.json");
+    expect(note).toContain("tillr item rank");
+    expect(note).toContain("--item <id> --rank <token>");
   });
 
   test("counts the whole board, not just the rows the filter leaves visible", () => {
@@ -204,7 +204,7 @@ describe("a store that has never been ranked", () => {
       "No priority recorded",
     );
     expect(container.textContent).toContain("never ranked an item");
-    expect(container.textContent).toContain("tillr-item seed");
+    expect(container.textContent).toContain("tillr item rank");
     // The build is not the diagnosis here, and naming it would blur the two.
     expect(container.textContent).not.toContain("f0a53cd7ce6d");
   });
