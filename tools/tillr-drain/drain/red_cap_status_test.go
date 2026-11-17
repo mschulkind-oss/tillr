@@ -21,8 +21,7 @@ func TestRedCapZeroStillReportsLandingsSinceGreen(t *testing.T) {
 	}
 	defer s.Close()
 	err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
-		_, err := tx.Exec(`CREATE TABLE landings(trunk_after TEXT,result TEXT); INSERT INTO landings VALUES (?,'landed')`, tip)
-		return err
+		return recordFixtureLanding(tx, "fixture", "fixture-run", tip, 0)
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,11 @@ import (
 
 func heldCandidateFixture(t *testing.T) (refusalLoopFixture, *Loop, Candidate) {
 	t.Helper()
+	return heldCandidateFixtureInLane(t, "lane-1")
+}
+
+func heldCandidateFixtureInLane(t *testing.T, lane string) (refusalLoopFixture, *Loop, Candidate) {
+	t.Helper()
 	f, l := passFixture(t, "item-a", "item-b")
 	l.cfg.Lanes = []string{"lane-1"}
 	l.cfg.Steps = &faultSteps{fault: "gate"}
@@ -22,6 +27,14 @@ func heldCandidateFixture(t *testing.T) (refusalLoopFixture, *Loop, Candidate) {
 		return err
 	})
 	p := mustPlan(t, l)[0]
+	p.decision.LaneID = lane
+	p.decision.RunRequest.LaneID = lane
+	if lane != "lane-1" {
+		l.cfg.Lanes = []string{lane}
+		if err := l.stageLanes(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now())
 	if err != nil || !ok {

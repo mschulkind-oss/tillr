@@ -248,7 +248,7 @@ type StageSpec struct {
 	Isolated       bool // parallel readers keep their own adapter metadata
 	Continue       bool
 	Node           *WorkflowStage
-	InputPaths     map[string]string
+	InputPaths     map[string][]NodeInput
 	PreviousReport string
 	BlockConflict  *item.Conflict
 	LaneID         string
@@ -500,7 +500,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 		}
 		for _, name := range sortedNames(spec.InputPaths) {
-			brief += "Input " + name + ": " + spec.InputPaths[name] + "\n"
+			for _, input := range spec.InputPaths[name] {
+				brief += "Input " + name + " from node " + input.Producer + ": " + input.Path + "\n"
+			}
 		}
 		// Preserve report-only workflows; explicit inputs receive only their wired files.
 		if len(spec.Node.Inputs) == 0 && spec.PreviousReport != "" {
@@ -724,13 +726,13 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 	if holder != "" {
 		return refuseBranchHeld(spec.LaneID, s.LaneRoot, branch, holder)
 	}
-	if err := s.clearWorktree(ctx, worktree); err != nil {
+	return withWorktreeRegistryLock(ctx, s.Root, func() error {
+		if err := s.clearWorktree(ctx, worktree); err != nil {
+			return err
+		}
+		_, err := s.git(ctx, s.Root, "worktree", "add", "--force", "-B", branch, worktree, spec.BaseSHA)
 		return err
-	}
-	if _, err := s.git(ctx, s.Root, "worktree", "add", "--force", "-B", branch, worktree, spec.BaseSHA); err != nil {
-		return err
-	}
-	return nil
+	})
 }
 
 // refuseUnlandedCommit refuses a lane that holds a commit neither the base nor trunk contains. It reads

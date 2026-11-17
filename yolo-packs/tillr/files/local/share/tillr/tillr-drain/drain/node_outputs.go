@@ -39,10 +39,11 @@ func sortedNames[V any](m map[string]V) []string {
 
 func validateOutputWiring(w *Workflow) error {
 	stages := map[string]WorkflowStage{}
-	fed := map[string]map[string]bool{}
+	fed := map[string]map[string]WorkflowEdge{}
+	seen := map[string]bool{}
 	for _, s := range w.Stages {
 		stages[s.ID] = s
-		fed[s.ID] = map[string]bool{}
+		fed[s.ID] = map[string]WorkflowEdge{}
 		for _, name := range sortedNames(s.Outputs) {
 			if !outputNameValid(name) || !outputTypeValid(s.Outputs[name]) {
 				return fmt.Errorf("workflow-output: %s: invalid name or type for %q", s.ID, name)
@@ -74,14 +75,18 @@ func validateOutputWiring(w *Workflow) error {
 		if !declared || inputType != typ {
 			return fmt.Errorf("workflow-input: %s: %s undeclared or type differs from %s.%s", e.To, e.ToInput, e.From, e.FromOutput)
 		}
-		if fed[e.To][e.ToInput] {
-			return fmt.Errorf("workflow-input: %s: input %s fed by two edges", e.To, e.ToInput)
+		key := e.To + "\x00" + e.ToInput + "\x00" + e.From
+		if previous, exists := fed[e.To][e.ToInput]; exists {
+			if producer.CopiesOf == "" || producer.CopiesOf != stages[previous.From].CopiesOf || e.FromOutput != previous.FromOutput || seen[key] {
+				return fmt.Errorf("workflow-input: %s: input %s fed by two edges", e.To, e.ToInput)
+			}
 		}
-		fed[e.To][e.ToInput] = true
+		seen[key] = true
+		fed[e.To][e.ToInput] = e
 	}
 	for _, s := range w.Stages {
 		for _, name := range sortedNames(s.Inputs) {
-			if !fed[s.ID][name] {
+			if _, exists := fed[s.ID][name]; !exists {
 				return fmt.Errorf("workflow-input: %s: input %s fed by no edge", s.ID, name)
 			}
 		}
@@ -104,8 +109,13 @@ func nodeOutputsDir(root, runID string) string {
 
 // Input paths come from the accepted producer row, not a guessed run id: a
 // restarted producer may have a different run id from its original dispatch.
-func (l *Loop) nodeInputPaths(ctx context.Context, d Decision) (map[string]string, error) {
-	paths := map[string]string{}
+type NodeInput struct {
+	Producer string `json:"producer"`
+	Path     string `json:"path"`
+}
+
+func (l *Loop) nodeInputPaths(ctx context.Context, d Decision) (map[string][]NodeInput, error) {
+	paths := map[string][]NodeInput{}
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return nil, err
@@ -120,7 +130,7 @@ func (l *Loop) nodeInputPaths(ctx context.Context, d Decision) (map[string]strin
 			if err := r.QueryRow(`SELECT a.location FROM node_artifacts a JOIN node_runs n ON n.item_id=a.item_id AND n.attempt=a.attempt AND n.node_id=a.node_id AND n.run_id=a.run_id WHERE a.item_id=? AND a.attempt=? AND a.node_id=? AND a.name=? AND n.outcome='passed'`, d.ItemID, d.Attempt, e.From, e.FromOutput).Scan(&path); err != nil {
 				return fmt.Errorf("node-input-missing: %s.%s from %s.%s: %w", e.To, e.ToInput, e.From, e.FromOutput, err)
 			}
-			paths[e.ToInput] = path
+			paths[e.ToInput] = append(paths[e.ToInput], NodeInput{Producer: e.From, Path: path})
 		}
 		return nil
 	})

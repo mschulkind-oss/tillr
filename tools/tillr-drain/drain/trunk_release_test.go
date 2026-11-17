@@ -20,10 +20,7 @@ func TestTrunkAcquittalWaitsUntilTheSelectedBaseContainsTheRepair(t *testing.T) 
 		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, fixer); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`CREATE TABLE landings(item_id TEXT,trunk_after TEXT,result TEXT,event_seq INTEGER)`); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO landings VALUES(?,?,'landed',1)`, fixer, repaired); err != nil {
+		if err := recordFixtureLanding(tx, fixer, "fixture-run", repaired, 1); err != nil {
 			return err
 		}
 		_, err := item.SetState(ctx, tx, "acquitted", StateBlocked, l.cfg.Now(), item.WaitingOn{

@@ -71,10 +71,10 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 }
 
 func commandNodeHold(r *store.Reader, id string) (string, error) {
-	var node, outcome string
-	err := r.QueryRow(`SELECT n.node_id,n.outcome FROM node_runs n JOIN runs r ON r.run_id=n.run_id
+	var node, outcome, runID string
+	err := r.QueryRow(`SELECT n.node_id,n.outcome,n.run_id FROM node_runs n JOIN runs r ON r.run_id=n.run_id
  WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
- AND n.outcome IN ('failed','fault','refused','unjudged') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome)
+ AND n.outcome IN ('failed','fault','refused','unjudged') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome, &runID)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -89,6 +89,16 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 	}
 	if outcome == "fault" {
 		return ReasonInfraExhausted, nil
+	}
+	// A successful harness with a missing declared file is not a failed task.
+	// Read the refusal for this producer, not the last sibling to finish.
+	var step string
+	err = r.QueryRow(`SELECT json_extract(payload,'$.step') FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&step)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	if step == RefusalNodeOutput {
+		return RefusalNodeOutput, nil
 	}
 	return fmt.Sprintf("%s: %s", ReasonNodeFailed, node), nil
 }

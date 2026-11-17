@@ -277,31 +277,40 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 		return false, err
 	}
 	defer s.Close()
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
-		if err != nil {
-			return err
-		}
-		if !owned {
-			return Externalf("candidate release lost its lane claim for %s", c.RunID)
-		}
-		// Keep the writer through the destructive Git operation and receipt:
-		// an operator cannot claim this checkout between validation and reset.
-		if released {
-			if err := l.resetLaneTo(ctx, c.LaneID, resetSHA); err != nil {
-				released, kept = false, "lane reset failed: "+err.Error()
-			}
-		}
-		if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence}, l.cfg.Now().UTC()); err != nil {
-			return err
-		}
-		if released || !examining {
-			if err := clearCandidateRelease(tx, c, l.cfg.Now()); err != nil {
+	writeRelease := func() error {
+		return s.WriteTx(ctx, func(tx *store.Tx) error {
+			owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
+			if err != nil {
 				return err
 			}
-		}
-		return nil
-	})
+			if !owned {
+				return Externalf("candidate release lost its lane claim for %s", c.RunID)
+			}
+			// Keep the writer through the destructive Git operation and receipt:
+			// an operator cannot claim this checkout between validation and reset.
+			if released {
+				if err := l.resetLaneToRegistryLocked(ctx, c.LaneID, resetSHA); err != nil {
+					released, kept = false, "lane reset failed: "+err.Error()
+				}
+			}
+			if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+			if released || !examining {
+				if err := clearCandidateRelease(tx, c, l.cfg.Now()); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if released && strings.HasPrefix(c.LaneID, "desk-") {
+		// Match landing's order: registry lock, then SQLite writer. Keep both
+		// through validation, checkout removal, and the atomic release receipt.
+		err = withWorktreeRegistryLock(ctx, l.cfg.Root, writeRelease)
+	} else {
+		err = writeRelease()
+	}
 	if err == nil && (released || !examining) {
 		claimed = false
 	}

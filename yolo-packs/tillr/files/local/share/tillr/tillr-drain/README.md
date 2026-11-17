@@ -516,6 +516,13 @@ small supervising process: losing the drain owner closes a pipe, so that process
 and reaps its judge before releasing ownership. A replacement can then safely recover
 the detached checkout left by a killed runner.
 
+Worktree creation, removal, pruning, and listing briefly share the lander's lock,
+including its guard for lock acquisition and recovery of a dead holder. This keeps
+Git from listing a registration whose files are still being written. A desk release
+that also writes the store takes this lock before its SQLite writer, matching landing's
+order. The lock is released before checks or judges run, so heavy judging and landing
+remain concurrent.
+
 Supervision requires Linux child adoption and stable kernel process handles. Adoption
 makes the supervisor the parent of abandoned grandchildren, including legacy commands
 in separate sessions; the handles prevent signaling a reused process ID. It waits for

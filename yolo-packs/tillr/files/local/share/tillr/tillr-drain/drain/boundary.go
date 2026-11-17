@@ -769,7 +769,12 @@ func compareStatus(before, after *Boundary) []Violation {
 // worktree half of a snapshot: a worktree appearing or disappearing, and a HEAD moving
 // anywhere, come from here with no per-worktree command.
 func listWorktrees(ctx context.Context, repo string) ([]Worktree, error) {
-	out, err := boundaryGit(ctx, repo, "worktree", "list", "--porcelain")
+	var out string
+	err := withWorktreeRegistryLock(ctx, repo, func() error {
+		var err error
+		out, err = boundaryGit(ctx, repo, "worktree", "list", "--porcelain")
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

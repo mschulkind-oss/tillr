@@ -497,10 +497,7 @@ func TestPlanHoldsAnItemBlockedByAnUnlandedItem(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
-			if _, err := tx.Exec(`CREATE TABLE landings(item_id TEXT, trunk_after TEXT, result TEXT, event_seq INTEGER)`); err != nil {
-				return err
-			}
-			_, err := tx.Exec(`INSERT INTO landings VALUES('item_007', ?, 'landed', 1)`, landed)
+			_, err := tx.Exec(`INSERT INTO landings(landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after,event_seq) VALUES('fixture-landing','item_007','fixture-run','fixture-verdict','landed','fixture-base',?,'fixture-before',?,1)`, landed, landed)
 			return err
 		})
 		closeErr := s.Close()

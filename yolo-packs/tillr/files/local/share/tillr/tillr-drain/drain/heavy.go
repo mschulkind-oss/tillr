@@ -184,11 +184,14 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 	}
 	// The shared lock proves no other heavy run owns this path. Recover a tree
 	// left by a killed runner without pruning any other worktree registrations.
-	_, _ = heavyGitOutput(ctx, r.Root, "worktree", "remove", "--force", r.Work)
-	if err := os.RemoveAll(r.Work); err != nil {
+	if err := withWorktreeRegistryLock(ctx, r.Root, func() error {
+		_, _ = heavyGitOutput(ctx, r.Root, "worktree", "remove", "--force", r.Work)
+		if err := os.RemoveAll(r.Work); err != nil {
+			return err
+		}
+		_, err := heavyGitOutput(ctx, r.Root, "worktree", "add", "--detach", r.Work, tip)
 		return err
-	}
-	if _, err := heavyGitOutput(ctx, r.Root, "worktree", "add", "--detach", r.Work, tip); err != nil {
+	}); err != nil {
 		return err
 	}
 	err = fn(r.Work)
@@ -196,7 +199,10 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 		return err
 	}
 	// Cancellation must not prevent cleanup after the judge's process group has ended.
-	_, cleanupErr := heavyGitOutput(context.Background(), r.Root, "worktree", "remove", "--force", r.Work)
+	cleanupErr := withWorktreeRegistryLock(context.Background(), r.Root, func() error {
+		_, err := heavyGitOutput(context.Background(), r.Root, "worktree", "remove", "--force", r.Work)
+		return err
+	})
 	if err != nil {
 		return err
 	}

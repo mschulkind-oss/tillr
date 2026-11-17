@@ -103,7 +103,7 @@ func scopeForLane(paths []string, lane string) []string {
 
 // The file check binds representative strings and commands and symbolic paths.
 // Actual calls validate every supplied value before expansion.
-func workflowCheckArguments(root, path string) (map[string]any, error) {
+func workflowCheckArguments(root, path string) ([]map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func workflowCheckArguments(root, path string) (map[string]any, error) {
 		Args map[string]WorkflowArgument `json:"args"`
 	}
 	if err := json.Unmarshal(raw, &header); err != nil {
-		return nil, nil
+		return []map[string]any{nil}, nil
 	}
 	args := map[string]any{}
 	for _, name := range sortedNames(header.Args) {
@@ -143,7 +143,22 @@ func workflowCheckArguments(root, path string) (map[string]any, error) {
 			args[name] = names[0]
 		}
 	}
-	return args, nil
+	// One copy can hide collisions and invalid output wiring. Exercise each
+	// string list separately at two values when its declared bound permits it.
+	cases := []map[string]any{args}
+	for _, name := range sortedNames(header.Args) {
+		def := header.Args[name]
+		if def.Type != "strings" || def.Most < 2 {
+			continue
+		}
+		variant := map[string]any{}
+		for key, value := range args {
+			variant[key] = value
+		}
+		variant[name] = []any{"check", "check-two"}
+		cases = append(cases, variant)
+	}
+	return cases, nil
 }
 
 func bindWorkflow(root string, raw []byte, supplied map[string]any) ([]byte, error) {

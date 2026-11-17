@@ -786,19 +786,29 @@ func (s *ProcessSteps) detachedWorktree(ctx context.Context, dir, rev string) (s
 	// A worktree a previous run left behind is removed rather than reused: a stale
 	// registration would refuse the add, and a reused directory is not provably the
 	// revision this run was asked to judge.
-	_ = exec.Command("git", "-C", s.Root, "worktree", "remove", "--force", dir).Run()
-	_ = os.RemoveAll(dir)
-	_ = exec.Command("git", "-C", s.Root, "worktree", "prune").Run()
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return "", func() {}, Externalf("creating the worktree directory %s: %v", filepath.Dir(dir), err)
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "worktree", "add", "--detach", "--force", dir, rev)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", func() {}, Externalf("checking out %s: %v: %s", shortSHA(rev), err, strings.TrimSpace(string(out)))
-	}
-	cleanup := func() {
+	err := withWorktreeRegistryLock(ctx, s.Root, func() error {
 		_ = exec.Command("git", "-C", s.Root, "worktree", "remove", "--force", dir).Run()
 		_ = os.RemoveAll(dir)
+		_ = exec.Command("git", "-C", s.Root, "worktree", "prune").Run()
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+			return Externalf("creating the worktree directory %s: %v", filepath.Dir(dir), err)
+		}
+		cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "worktree", "add", "--detach", "--force", dir, rev)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return Externalf("checking out %s: %v: %s", shortSHA(rev), err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() {
+		if err := withWorktreeRegistryLock(context.Background(), s.Root, func() error {
+			_ = exec.Command("git", "-C", s.Root, "worktree", "remove", "--force", dir).Run()
+			return os.RemoveAll(dir)
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "tillr-drain: cleaning detached worktree %s: %v\n", dir, err)
+		}
 	}
 	return dir, cleanup, nil
 }
