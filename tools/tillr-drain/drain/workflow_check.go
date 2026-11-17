@@ -22,7 +22,8 @@ workflow-access, workflow-max-parallel, workflow-write-scope, workflow-write-sco
 workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcome,
 workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
-workflow-exit, workflow-file, workflow-output-promise, workflow-write-scope,
+workflow-exit, workflow-evaluator-access, workflow-evaluator-order, workflow-evaluator-required,
+workflow-file, workflow-output-promise, workflow-write-scope,
 workflow-argument-missing, workflow-argument-type, workflow-argument-most,
 workflow-argument-unknown, workflow-repeat, workflow-proposal; command-registry, command-reference, command-flag,
 command-value, command-path. Graph size is reported, never refused.`
@@ -78,7 +79,7 @@ func workflowFields(raw []byte) []error {
 	}
 	var exit map[string]json.RawMessage
 	if json.Unmarshal(object["exit"], &exit) == nil {
-		check(exit, "requires_nodes requires_candidate outputs", "exit")
+		check(exit, "requires_nodes requires_candidate outputs evaluator_slot", "exit")
 		if raw, present := exit["requires_candidate"]; present {
 			var candidate string
 			if json.Unmarshal(raw, &candidate) != nil || (candidate != "commit_required" && candidate != "commit_optional" && candidate != "no_commit") {
@@ -154,6 +155,15 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 			if err != nil {
 				findings = append(findings, fmt.Errorf("stage=%s: %w", stage.ID, err))
 				continue
+			}
+			if innerEvaluator := evaluatorSlot(inner); innerEvaluator != "" {
+				if evaluatorSlot(w) != "" {
+					return nil, fmt.Errorf("workflow-evaluator-access: exit: graph must have one evaluator run")
+				}
+				if w.Exit == nil {
+					w.Exit = &WorkflowExit{RequiresNodes: requiredWorkflowNodes(w)}
+				}
+				w.Exit.EvaluatorSlot = stage.ID + "/" + innerEvaluator
 			}
 			if err := inheritWorkflowScope(inner, stage.WriteScope); err != nil {
 				return nil, err
@@ -342,7 +352,18 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 		}
 	}
 	candidate := workflowCandidatePolicy(w)
-	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate, Outputs: ports}
+	evaluator := evaluatorSlot(w)
+	if evaluator != "" {
+		if strings.Contains(evaluator, "/") {
+			// An inherited evaluator already names an expanded node.
+		} else {
+			if len(entries[evaluator]) != 1 {
+				return nil, fmt.Errorf("workflow-evaluator-access: exit: evaluator must name one read-only run")
+			}
+			evaluator = entries[evaluator][0]
+		}
+	}
+	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate, Outputs: ports, EvaluatorSlot: evaluator}
 	ids := map[string]bool{}
 	for _, s := range w.Stages {
 		if ids[s.ID] {

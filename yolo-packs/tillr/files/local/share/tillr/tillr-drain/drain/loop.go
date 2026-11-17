@@ -169,7 +169,11 @@ const ScopeEscape = "boundary-scope-escape"
 // carried here because the judgment events a step appends are correlated by run *and* tick,
 // and the step is handed nothing else that knows which tick it is serving.
 type Candidate struct {
-	Judge *JudgeReceipt `json:"judge,omitempty"`
+	Judge           *JudgeReceipt     `json:"judge,omitempty"`
+	Evaluator       *run.Request      `json:"-"`
+	Writers         []JudgeWriter     `json:"-"`
+	Producers       []JudgeWriter     `json:"-"`
+	EvaluatorInputs map[string]string `json:"-"`
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string         `json:"refusal_detail,omitempty"`
@@ -1064,6 +1068,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
 		request := decision.RunRequest
+		if evaluatorNode(decision) {
+			// The judge owns this node's staging, including the verdict location.
+			staged = append(staged, decision)
+			continue
+		}
 		spec := StageSpec{
 			LaneID: decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
@@ -1367,7 +1376,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if decision.Workflow != nil {
-		if ClassifyAttempt(record, log) == AttemptUnjudged && !commandStage(decision) {
+		if ClassifyAttempt(record, log) == AttemptUnjudged && !commandStage(decision) && !evaluatorNode(decision) {
 			// A prior node's commit is not this node's answer. Continue the
 			// interrupted node in place, or retain its unjudged hold; neither
 			// route may enter the single-run candidate admission path.
@@ -1605,6 +1614,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
 		Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
 		Request: &request, Seat: decision.Seat, BlockConflict: decision.BlockConflict,
+	}
+	if err := l.attachWorkflowJudge(ctx, decision, &candidate); err != nil {
+		return laneOutcome{err: err}
 	}
 	if deferJudge {
 		if err := appendJudgment(ctx, l.cfg.Store, candidateReadyKind, "run", request.RunID, candidate, at); err != nil {

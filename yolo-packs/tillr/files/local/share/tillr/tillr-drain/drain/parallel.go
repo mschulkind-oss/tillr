@@ -23,7 +23,7 @@ func parallelNodes(d Decision) []Decision {
 // claimParallel chooses the ready readers from the same store transaction as the
 // item's claim. A writer always keeps the lane to itself.
 func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
-	if d.Workflow == nil || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
+	if d.Workflow == nil || evaluatorNode(*d) || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
 		return nil
 	}
 	outcomes, err := workflowOutcomes(tx.Reader(), d.ItemID, d.Attempt)
@@ -41,7 +41,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 		return err
 	}
 	for i, s := range d.Workflow.Stages {
-		if i == d.NodeIndex || outcomes[s.ID] != "" || s.Access != "read_only" {
+		if i == d.NodeIndex || s.ID == evaluatorSlot(d.Workflow) || outcomes[s.ID] != "" || s.Access != "read_only" {
 			continue
 		}
 		ready, incoming, followed := true, false, false

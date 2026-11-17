@@ -37,7 +37,27 @@ An item directive with `judge="agent"` asks for an independent, read-only review
 of its committed candidate. Before dispatching the worker, planning requires one
 unexpired grant covering every criterion's claim class; otherwise the item waits
 as `judge-grant-absent`. The policy must map the `review` seat. Items without that
-attribute keep the existing mechanical retirement path and start no review run.
+attribute or a workflow evaluator keep the existing mechanical retirement path
+and start no review run.
+
+A workflow may set `exit.evaluator_slot` to the node that evaluates its candidate.
+That node must be read-only, required by the exit, and ordered after every writing
+node. The loader and workflow check report `workflow-evaluator-access`,
+`workflow-evaluator-required`, or `workflow-evaluator-order` when these guarantees
+are absent. The evaluator uses the same judge step, brief, verdict location, and
+intake as an opted-in item, using the evaluator node's configured route. An item
+that also asks for an agent judge still gets only this one evaluating run.
+Planning requires the same covering grant before the graph's first node starts.
+
+The evaluator's retained judgment records every writing node's run, session,
+backend, and route beside its own. The intake checks independence against all
+those writer identities. In a graph with only read-only producers, their actual
+run and session identities are retained instead; the evaluator never names itself
+as its producer. Evaluators run alone rather than sharing a parallel reader
+group, because the judge step owns the lane's brief and session inputs.
+A later read-only node carries the checked judgment to the graph's final candidate;
+it does not start another judge. The
+[evaluator-routing tests](./drain/workflow_evaluator_test.go) cover these guarantees.
 
 After the worker passes its fence check, the review runs in the same lane with
 its own run and session identities. Its brief includes the criteria, their hashes,

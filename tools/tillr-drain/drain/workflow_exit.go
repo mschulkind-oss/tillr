@@ -20,6 +20,9 @@ func workflowCandidatePolicy(w *Workflow) string {
 // Required producers must pass. Propagate reachability under that constraint to
 // reject required descendants whose only paths need one of those producers to fail.
 func validateWorkflowExit(w *Workflow) error {
+	if err := validateEvaluator(w); err != nil {
+		return err
+	}
 	required := map[string]bool{}
 	reachable := map[string]bool{}
 	for _, id := range requiredWorkflowNodes(w) {

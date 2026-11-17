@@ -19,19 +19,21 @@ import (
 
 type judgeRouteSteps struct {
 	*workflowSteps
-	order      []string
-	mode       string
-	workerHead string
-	mechanical int
-	afterLand  func()
-	afterGate  func()
-	entries    []item.JudgeEntry
+	order        []string
+	mode         string
+	workerHead   string
+	mechanical   int
+	afterLand    func()
+	afterGate    func()
+	entries      []item.JudgeEntry
+	afterJudge   func()
+	readOnlyRuns map[string]bool
 }
 
 func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	s.runs = append(s.runs, req)
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
-	if !strings.HasSuffix(req.RunID, "-judge") {
+	if !strings.HasSuffix(req.RunID, "-judge") && req.NodeID != "evaluate" && !strings.HasSuffix(req.NodeID, "/evaluate") {
 		s.order = append(s.order, "worker")
 		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 			return run.Record{}, "", err
@@ -41,8 +43,14 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 			content = "built{{literal}}\n"
 		}
 		writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), content)
-		runGit(s.t, target, "add", ".")
-		runGit(s.t, target, "commit", "-qm", "build")
+		if !s.readOnlyRuns[req.RunID] {
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", "build")
+		} else {
+			// A fixture reader leaves the checkout exactly as it found it.
+			runGit(s.t, target, "reset", "--hard", "HEAD")
+			runGit(s.t, target, "clean", "-fd")
+		}
 		s.workerHead = runGit(s.t, target, "rev-parse", "HEAD")
 	} else {
 		s.order = append(s.order, "judge")
@@ -89,8 +97,13 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 			raw, _ := json.Marshal(output)
 			writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), string(raw))
 		}
+		if s.afterJudge != nil {
+			s.afterJudge()
+		}
 	}
-	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{}}
+	reportPath := filepath.Join(s.f.laneRoot, req.LaneID, "report.md")
+	writeForkFile(s.t, reportPath, "RESULT: done\n")
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: reportPath}}}
 	st, err := store.Open(ctx, s.f.storePath, true)
 	if err != nil {
 		return rec, "", err

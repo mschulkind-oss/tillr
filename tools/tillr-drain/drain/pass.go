@@ -356,6 +356,17 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
+	if evaluatorNode(d) {
+		grant, err := judgeGrant(r, d.ItemID, at)
+		if err != nil {
+			return Decision{}, err
+		}
+		if grant == "" {
+			d.Reason = ReasonJudgeGrantAbsent
+			identifyDecision(&d)
+			return d, nil
+		}
+	}
 	if len(d.Parallel) > 0 && work.Orphaned && !work.BoundaryFailed {
 		leases, err := activeLeases(r, at, []string{d.LaneID})
 		if err != nil {
@@ -387,7 +398,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		if len(leases) == 0 && (rec == nil || rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0) {
 			workCopy := *work
 			request := *d.RunRequest
-			request.RunID += "-restart"
+			if !evaluatorNode(d) {
+				request.RunID += "-restart"
+			}
 			d.RunRequest = &request
 			d.WorkflowRestart = true
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
@@ -532,6 +545,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 		if finished {
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
+		} else if evaluatorNode(d) && rec == nil {
+			// Retry the judge's retained handoff, never allocate another evaluator id.
+			d.To, d.Action, d.Reason, d.WorkflowRestart = "running", ActionDispatch, "workflow-next-node", true
 		}
 	}
 	if d.Action != ActionHold {
@@ -1200,9 +1216,23 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		start := time.Now()
 		completion := runCompletion{id: id, itemID: d.ItemID, step: "run", timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
 		local := LoopResult{}
+		var evaluatorHold *Candidate
 		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
 		if err == nil {
-			if len(d.Parallel) > 0 {
+			if evaluatorNode(d) {
+				c, candidateErr := l.evaluatorCandidate(ctx, d)
+				err = candidateErr
+				if err == nil {
+					var accepted bool
+					_, accepted, err = l.judgeCandidate(ctx, c, &local)
+					if errors.Is(err, errJudgeGrantHeld) {
+						err = l.releaseExamination(ctx, d)
+					} else if err == nil && !accepted {
+						evaluatorHold = &c
+						completion.result = &local
+					}
+				}
+			} else if len(d.Parallel) > 0 {
 				err = l.runParallel(ctx, d)
 			} else {
 				_, _, err = l.cfg.Steps.Run(ctx, *d.RunRequest)
@@ -1210,6 +1240,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
 			}
+		}
+		if err == nil && evaluatorHold != nil {
+			err = l.finishEvaluatorHold(ctx, d, *evaluatorHold)
 		}
 		completion.outcome.err = err
 		completion.detail = local.Detail
