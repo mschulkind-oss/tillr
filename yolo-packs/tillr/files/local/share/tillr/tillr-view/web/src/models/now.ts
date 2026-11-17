@@ -24,7 +24,7 @@ export interface LiveRun {
    * an absence the screen says out loud rather than drawing as a zero. */
   startedAtMs: number | null;
   /** The lane's own expiry from `lanes[].leased_until_ms`; null when the store recorded
-   * none, which is not the same as a lease that has already lapsed. */
+   * no expiry for this leased lane, which is not a missing lease or an expired one. */
   leasedUntilMs: number | null;
 }
 
@@ -92,11 +92,10 @@ export function liveElapsedText(startedAtMs: number | null, now: number): string
   return durationText(now - startedAtMs);
 }
 
-/** leaseText is the lease's own clock in the same duration format. A lease the store did
- * not record says so; a lease that has already lapsed says how long ago, because "about to
- * be reaped" is the fact the operator is reading. */
-export function leaseText(leasedUntilMs: number | null, now: number): string {
-  if (leasedUntilMs === null) return "lease not recorded";
+/** leaseText is the lease's own clock. A leased lane with a null expiry is held
+ * indefinitely; without evidence of a lease, null instead names a missing record. */
+export function leaseText(leasedUntilMs: number | null, now: number, leased = false): string {
+  if (leasedUntilMs === null) return leased ? "lease has no expiry" : "lease not recorded";
   const left = leasedUntilMs - now;
   if (left < 0) return `lease expired ${durationText(-left)} ago`;
   return `lease ${durationText(left)} left`;

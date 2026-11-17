@@ -40,11 +40,12 @@ export function LoopSummary({ drain, passes, error, snapshot, now = Date.now() }
       <span>{ended ? drain?.last_stop_reason || "stop reason not recorded" : alive ? "The recorded heartbeat is current." : session ? "Loop heartbeat overdue." : drain?.session_note || "No session recorded."}</span>
       <span>{ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "inspect the recorded stop before deciding whether to restart" : alive ? "watch the next pass" : "inspect the loop session before restarting"}</span>
     </div>
-    {drain?.stop_note ? <p><EntityText value={drain.stop_note} snapshot={snapshot} passes={passes} /></p> : null}
+    {!alive && drain?.stop_note ? <p><EntityText value={drain.stop_note} snapshot={snapshot} passes={passes} /></p> : null}
     {error ? <p role="alert">Passes refused: {error.message}</p> : latest ? <>
       <p>{latest.stop || "stop not recorded"} · {latest.detail ? <q><EntityText value={latest.detail} snapshot={snapshot} passes={passes} /></q> : "stop detail not recorded"}</p>
       <p>last pass <EntityLink kind="pass" id={passStamp(latest.dispatched_at_ms)} /> → {passCounts(latest)}</p>
     </> : <p>{passes ? "No pass recorded." : "Reading passes…"}</p>}
+    {session ? <p>started {new Date(session.started_at_ms).toISOString()} · last heartbeat {new Date(session.refreshed_at_ms).toISOString()}</p> : null}
     <p>session {session ? <a className="session-link" href={`#/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
   </section>;
 }

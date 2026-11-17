@@ -28,6 +28,34 @@ func TestSnapshotCountsRecordedPassesAndKeepsUngatedPassesOutOfGateTrend(t *test
 	}
 }
 
+func TestSnapshotLiveSessionHidesHistoricalStop(t *testing.T) {
+	h := newServeHarness(t)
+	writeLoopResult(t, h.loopDir, "20261113T065219Z", "operator-stop", nil)
+	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
+	 refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
+	now := time.Now().UnixMilli()
+	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at)
+	 VALUES ('live', ?, ?, ?)`, now-30000, now, now+60000)
+	status, env, raw := h.get("/api/v1/snapshot")
+	if status != http.StatusOK {
+		t.Fatalf("snapshot: %d %s", status, raw)
+	}
+	summary := env["data"].(map[string]any)["drain_summary"].(map[string]any)
+	if summary["last_stop_reason"] != nil || summary["stop_note"] != "" {
+		t.Fatalf("live session exposes a historical stop: %s", raw)
+	}
+	session := summary["session"].(map[string]any)
+	if session["started_at_ms"] != float64(now-30000) || session["refreshed_at_ms"] != float64(now) {
+		t.Fatalf("session lost its clocks: %s", raw)
+	}
+	h.exec(`UPDATE drain_sessions SET ended_at = ?`, now)
+	_, env, raw = h.get("/api/v1/snapshot")
+	summary = env["data"].(map[string]any)["drain_summary"].(map[string]any)
+	if summary["last_stop_reason"] != "operator-stop" {
+		t.Fatalf("ended session lost stop: %s", raw)
+	}
+}
+
 func TestLoopLivenessNeverComesFromLeases(t *testing.T) {
 	h := newServeHarness(t)
 	status, env, raw := h.get("/api/v1/snapshot")

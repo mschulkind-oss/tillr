@@ -245,6 +245,77 @@ func TestRunningRefusesAStaleStopRecord(t *testing.T) {
 	}
 }
 
+func TestRunningLiveSessionSupersedesOldStop(t *testing.T) {
+	h := newRunningHarness(t)
+	h.now = time.Date(2026, 11, 13, 7, 1, 0, 0, time.UTC)
+	h.addEvent(h.now, "run.allocate", "run-later", `{}`)
+	db, err := sql.Open("sqlite", "file:"+h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER,
+	 refreshed_at INTEGER, next_pass_at INTEGER, ended_at INTEGER);
+	 INSERT INTO drain_sessions VALUES ('session-live', ?, ?, ?, NULL)`,
+		h.now.Add(-30*time.Second).UnixMilli(), h.now.Add(-time.Second).UnixMilli(), h.now.Add(time.Second).UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"live", "overdue", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			if state == "overdue" {
+				_, err = db.Exec(`UPDATE drain_sessions SET next_pass_at = ?`, h.now.Add(-6*time.Second).UnixMilli())
+			}
+			if state == "ended" {
+				_, err = db.Exec(`UPDATE drain_sessions SET next_pass_at = ?, ended_at = ?`, h.now.Add(time.Second).UnixMilli(), h.now.UnixMilli())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := readRunning(context.Background(), h.store, h.loopDir, h.laneRoot, h.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			renderRunning(&out, p)
+			text := out.String()
+			if state == "live" {
+				for _, want := range []string{"loop: live", "session-live", "2026-11-13T07:00:30Z", "2026-11-13T07:00:59Z"} {
+					if !strings.Contains(text, want) {
+						t.Errorf("missing %q:\n%s", want, text)
+					}
+				}
+				if p.Loop.Stale || p.Loop.StopReason != "" || strings.Contains(text, "queue-drained") || strings.Contains(text, "stale stop record") {
+					t.Errorf("live session shows old stop: %+v\n%s", p.Loop, text)
+				}
+			} else if !p.Loop.Stale || !strings.Contains(text, "stale stop record") {
+				t.Errorf("no live session lost stale stop: %+v\n%s", p.Loop, text)
+			}
+		})
+	}
+}
+
+func TestRunningLeaseWithoutExpiryIsStillRecorded(t *testing.T) {
+	h := newRunningHarness(t)
+	db, err := sql.Open("sqlite", "file:"+h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE lanes SET leased_until = NULL WHERE lane_id = 'lane-1'`); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readRunning(context.Background(), h.store, h.loopDir, h.laneRoot, h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	renderRunning(&out, p)
+	if strings.Contains(out.String(), "lease not recorded") || !strings.Contains(out.String(), "lease has no expiry") {
+		t.Fatalf("unbounded lease is mislabeled:\n%s", out.String())
+	}
+}
+
 // TestRunningTablePrintsThreeBlocks pins the table's shape: the header names the lane
 // lease and the stop reason, the live block lists the run, and the finished block carries
 // its outcome, duration and cost.

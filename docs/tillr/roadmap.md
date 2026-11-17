@@ -1385,11 +1385,7 @@ alive. A view that shows an old stop while a loop runs is worse than no view, be
 the person to start a loop that is already there. The running view should show the live loop's
 session and the leases of its runs.
 
-<!-- tillr: item id="item-view-running-shows-live-loop" paths="tools/tillr-view/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** While a loop's session is live, the running view shows that session (its start and its last heartbeat) and not an older stop record. A test stores a stop record and a newer live session and asserts the view shows the session.
-- **c2:** A run the live loop dispatched shows its lane lease and the time left on it. A test asserts a leased run never shows `lease not recorded`.
-- **c3:** The stale stop note appears only when no live session exists. A test asserts both cases, and the web view agrees with the text view.
 
 **Agent details:**
 

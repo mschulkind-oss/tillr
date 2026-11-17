@@ -1,12 +1,13 @@
-// running is the one-screen answer to "what is running right now": the loop's own stop
-// record and lane leases, the runs a lane is working, and the last five runs that
-// finished. It is a read of three sources because no two of them suffice:
+// running is the one-screen answer to "what is running right now": the loop's live
+// session and lane leases, the runs a lane is working, and the last five runs that
+// finished. It joins the store's sessions, leases and runs with stop result files:
 //
 //   - the lane rows and their `run.allocate` events, because `run.Exec` writes no `runs`
 //     row until its terminal write and `run.Apply` clears `lanes.run_id` on release, so
 //     a run that is going is a lease plus an allocation and nothing else;
 //   - the terminal `runs` rows, because a lease is cleared the moment a run ends;
-//   - the loop's `drain.loop` result files, because the store records no loop stop.
+//   - the loop's session heartbeat, with `drain.loop` result files as stop evidence
+//     only when no session is live.
 //
 // The view writes nothing: it opens the store through store.OpenRead, so pointing it at
 // the live store while a drain writes is the intended use.
@@ -57,24 +58,25 @@ type runningLanes struct {
 	Idle   []string `json:"idle"`
 }
 
-// runningLoop is the loop's own stop record as the view found it. Stale is the second
-// fact the header exists to say: when an event was appended after the newest loop result
-// was written, the stop record describes a loop that is no longer the latest thing to
-// have run.
+// runningLoop prefers the recorded live session over historical stop evidence.
+// Stale describes a stop file followed by newer events, only when no session is live.
 type runningLoop struct {
-	StopReason string     `json:"stop_reason"`
-	StopNote   string     `json:"stop_note"`
-	RecordPath string     `json:"record_path,omitempty"`
-	RecordedAt *time.Time `json:"recorded_at,omitempty"`
-	Stale      bool       `json:"stale"`
-	StaleSeq   int64      `json:"stale_seq,omitempty"`
-	StaleNote  string     `json:"stale_note,omitempty"`
+	Session     *loopSession `json:"session"`
+	Active      bool         `json:"active"`
+	SessionNote string       `json:"session_note"`
+	StopReason  string       `json:"stop_reason"`
+	StopNote    string       `json:"stop_note"`
+	RecordPath  string       `json:"record_path,omitempty"`
+	RecordedAt  *time.Time   `json:"recorded_at,omitempty"`
+	Stale       bool         `json:"stale"`
+	StaleSeq    int64        `json:"stale_seq,omitempty"`
+	StaleNote   string       `json:"stale_note,omitempty"`
 }
 
 // runningRun is one live run: the lane's lease, the run, the item it is for, and the two
 // clocks (elapsed from the run's start, and the lease's own expiry). ElapsedMS and
-// LeaseLeftMS are pointers because "the store recorded no start" and "the store recorded
-// no lease" are different answers from an elapsed or a lease of zero.
+// LeaseLeftMS are pointers because absent clocks differ from zero elapsed or expiry.
+// LeaseNoExpiry distinguishes a leased lane with no expiration from a missing lease.
 type runningRun struct {
 	LaneID        string `json:"lane_id"`
 	RunID         string `json:"run_id"`
@@ -85,6 +87,7 @@ type runningRun struct {
 	ElapsedMS     *int64 `json:"elapsed_ms"`
 	LeasedUntilMS *int64 `json:"leased_until_ms"`
 	LeaseLeftMS   *int64 `json:"lease_left_ms"`
+	LeaseNoExpiry bool   `json:"lease_no_expiry"`
 	LogPath       string `json:"log_path"`
 }
 
@@ -250,6 +253,16 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 			EventHeadSeq:  head,
 			Source:        sourceStore,
 		}, domain, verdicts, stop, staleSeq, laneRoot)
+		session, active, note, err := readLoopSession(r, now)
+		if err != nil {
+			return err
+		}
+		if active {
+			out.Loop = runningLoop{}
+		}
+		out.Loop.Session = session
+		out.Loop.Active = active
+		out.Loop.SessionNote = note
 		return nil
 	})
 	if err != nil {
@@ -304,9 +317,10 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 			row.ElapsedMS = &elapsed
 		}
 		for _, lane := range domain.lanes {
-			if lane.LaneID != live.LaneID {
+			if lane.LaneID != live.LaneID || lane.State != laneStateLeased || lane.RunID != live.RunID {
 				continue
 			}
+			row.LeaseNoExpiry = lane.LeasedUntilMS == nil
 			row.LeasedUntilMS = lane.LeasedUntilMS
 			if lane.LeasedUntilMS != nil {
 				left := *lane.LeasedUntilMS - now.UnixMilli()
@@ -478,9 +492,13 @@ func renderRunning(w io.Writer, p runningPayload) {
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "LANE\tITEM\tRANK\tTITLE\tELAPSED\tLEASE LEFT\tLOG")
 		for _, run := range p.Active {
+			lease := leaseLeftText(run.LeaseLeftMS)
+			if run.LeaseNoExpiry {
+				lease = "lease has no expiry"
+			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				orDash(run.LaneID), orDash(run.ItemID), orDash(run.Rank), orDash(run.Title),
-				elapsedText(run.ElapsedMS), leaseLeftText(run.LeaseLeftMS), orDash(run.LogPath))
+				elapsedText(run.ElapsedMS), lease, orDash(run.LogPath))
 		}
 		tw.Flush()
 	}
@@ -501,9 +519,14 @@ func renderRunning(w io.Writer, p runningPayload) {
 	tw.Flush()
 }
 
-// loopLine is the header's stop half: the loop's own reason and when it wrote it, or the
-// absence the loop result reader named.
+// loopLine names the live session's clocks, or the historical stop evidence.
 func loopLine(p runningPayload) string {
+	if p.Loop.Active && p.Loop.Session != nil {
+		s := p.Loop.Session
+		return fmt.Sprintf("loop: live session %s (started %s, last heartbeat %s)", s.SessionID,
+			time.UnixMilli(s.StartedAtMS).UTC().Format(time.RFC3339Nano),
+			time.UnixMilli(s.RefreshedAtMS).UTC().Format(time.RFC3339Nano))
+	}
 	if p.Loop.StopReason != "" {
 		if p.Loop.RecordedAt != nil {
 			return fmt.Sprintf("loop: %s (at %s)", p.Loop.StopReason, p.Loop.RecordedAt.UTC().Format(time.RFC3339))

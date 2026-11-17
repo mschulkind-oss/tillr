@@ -74,7 +74,7 @@ export function NowBand({ snapshot, now: pinned, onSelectItem }: NowBandProps) {
                   </span>
                 )}
                 <span className="now-band__lease">
-                  {leaseText(run.leasedUntilMs, now)}
+                  {leaseText(run.leasedUntilMs, now, true)}
                 </span>
               </span>
             </li>

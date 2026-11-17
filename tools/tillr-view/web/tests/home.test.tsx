@@ -75,6 +75,17 @@ test.each([
   expect(container.querySelector(".loop-summary__state")?.textContent).toContain(word);
 });
 
+test.each([true, false])("old stop note is hidden only with a live session: %s", (live) => {
+  const session = { ...drain.session, ended_at_ms: null, next_pass_at_ms: live ? now + 10000 : now - 6000 };
+  const { container } = render(<LoopSummary drain={{ ...drain, session, stop_note: "stale stop record — newer run exists" }} now={now} />);
+  expect(container.textContent?.includes("stale stop record")).toBe(!live);
+  if (live) {
+    expect(container.textContent).toContain(new Date(session.started_at_ms).toISOString());
+    expect(container.textContent).toContain(new Date(session.refreshed_at_ms).toISOString());
+    expect(container.textContent).not.toContain("queue-drained");
+  }
+});
+
 test("quoted stop detail links item identities instead of leaking plain-text IDs", () => {
   const row = { ...passes[0], detail: "nothing dispatchable: item_042 held behind item-missing", decisions: [{ item_id: "item_042", rank: "a", action: "hold", reason: "blocked" }] };
   const { container } = render(<LoopSummary drain={drain} passes={[row]} now={now} />);
