@@ -419,8 +419,26 @@ the four-line answering rule, and the document's changes since the preceding tur
 The loop records the last designer from the completed stream, plus the document's blob and
 the session's dispatch reason. Unreported provider measurements remain absent rather than
 being replaced by a configured lifetime. Run spend stays in the ordinary run record. This
-first slice supports the hand-driven new-session and resumed-session path; the full expiry,
-compaction, and automatic-intake policy remains in the design's subsequent build items.
+path chooses a session by the design's ordered
+[dispatch table](../../docs/design/tillr-designer-sessions.md#choosing-at-dispatch).
+Warm means the last request plus its reported cache lifetime; unknown retention is expired.
+Only an expired session over 40,000 tokens is compacted, and only when its adapter ships an
+executable compact step. Otherwise it resumes with `resumed-expired`. Nothing runs at expiry.
+Compaction receipts record before/after token measurements and reported cost against the item;
+missing cost stays unknown. Automatic intake remains a subsequent build item.
+
+A nonzero resumed run with no model response records `resume-failed` and dispatches once more
+to a new session in the same settlement pass. Partial answers are not replayed. A replacement
+brief names the previous transcript, and the replacement becomes the recorded designer.
+Each pass removes designer rows for deleted documents and stages Vantage maps to the `done`
+role, never their harness-owned transcript files. The stage index is shared with question
+reads and cached at the current repository revision.
+
+Compaction keeps a durable session/checkpoint journal, where a checkpoint is the previous
+run's last request. After interruption, a completed transcript checkpoint or saved receipt
+is reconciled without another model request. An ambiguous completion explicitly refuses
+another paid compaction. The receipt stays charged to the original comment run, even when
+another dispatch recovers it.
 
 A successful committed revision delivers replies only against its recorded landing, once
 the served document matches the landed blob. A reply-only `RESULT: done` records `answered`,

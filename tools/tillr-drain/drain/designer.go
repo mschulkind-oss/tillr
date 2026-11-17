@@ -1,0 +1,302 @@
+package drain
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+// chooseDesigner applies the dispatch table in tillr-designer-sessions.md, in order.
+// Unknown cache retention is expired, never an invented five-minute lifetime.
+func chooseDesigner(d *lastDesigner, req *run.Request, at time.Time, previousAdapter string) (string, string) {
+	if d == nil {
+		return "", "no-designer"
+	}
+	if previousAdapter != "" {
+		kind, err := os.ReadFile(filepath.Join(filepath.Dir(previousAdapter), "pause-kind"))
+		if err == nil && strings.TrimSpace(string(kind)) == run.PauseCannotResume {
+			return "", "cannot-resume"
+		}
+	}
+	if d.Backend != req.Backend || d.Model != req.Route() {
+		return "", "seat-changed"
+	}
+	if info, err := os.Stat(d.Transcript); err != nil || !info.Mode().IsRegular() {
+		return "", "transcript-missing"
+	}
+	last, err := time.Parse(time.RFC3339Nano, d.LastRequest)
+	if err == nil && d.CacheLifetimeSeconds != nil && *d.CacheLifetimeSeconds > 0 && at.Before(last.Add(time.Duration(*d.CacheLifetimeSeconds)*time.Second)) {
+		return d.SessionID, "resumed-warm"
+	}
+	if d.ContextTokens != nil && *d.ContextTokens > 40000 && compactStep(req) != "" {
+		return d.SessionID, "resumed-compacted"
+	}
+	return d.SessionID, "resumed-expired"
+}
+
+func compactStep(req *run.Request) string {
+	if len(req.Command) == 0 {
+		return ""
+	}
+	path := filepath.Join(filepath.Dir(req.Command[0]), "compact")
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
+		return path
+	}
+	return ""
+}
+
+type designerCompaction struct {
+	TokensBefore *int     `json:"tokens_before"`
+	TokensAfter  *int     `json:"tokens_after"`
+	Tokens       *int64   `json:"tokens"`
+	CostUSD      *float64 `json:"cost_usd"`
+}
+
+// Compaction is dispatch work, not a timer. Its session/checkpoint journal
+// reconciles interrupted completion before another dispatch can pay again.
+func (l *Loop) compactDesigner(ctx context.Context, d Decision) error {
+	if d.DesignerReason != "resumed-compacted" {
+		return nil
+	}
+	journal, err := l.ensureDesignerCompaction(ctx, d)
+	if err != nil {
+		return err
+	}
+	receipt := *journal.Receipt
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		var recorded bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_id=?)", designerCompactedKind, journal.RunID).Scan(&recorded); err != nil {
+			return err
+		}
+		if recorded {
+			return nil
+		}
+		return appendEffect(tx, designerCompactedKind, journal.RunID, struct {
+			ItemID    string `json:"item_id"`
+			SessionID string `json:"session_id"`
+			designerCompaction
+		}{journal.ItemID, d.DesignerSessionID, receipt}, l.cfg.Now().UTC())
+	})
+}
+
+// A partial model answer (including tool calls) is already a response. Never
+// replay it as though no work happened. Error-only assistant messages are not answers.
+func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
+	if !strings.HasPrefix(d.DesignerReason, "resumed-") || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
+		return false, nil
+	}
+	sawLog := false
+	for _, ref := range rec.ArtifactRefs {
+		if ref.Kind != "log" {
+			continue
+		}
+		sawLog = true
+		f, err := os.Open(ref.Ref)
+		if err != nil {
+			return false, err
+		}
+		scan := bufio.NewScanner(f)
+		scan.Buffer(make([]byte, 64<<10), 16<<20)
+		response := false
+		for scan.Scan() {
+			var e struct {
+				Type    string `json:"type"`
+				Message struct {
+					Role       string            `json:"role"`
+					StopReason string            `json:"stopReason"`
+					Content    []json.RawMessage `json:"content"`
+				} `json:"message"`
+				AssistantMessageEvent struct {
+					Type string `json:"type"`
+				} `json:"assistantMessageEvent"`
+			}
+			if json.Unmarshal(scan.Bytes(), &e) != nil {
+				continue
+			}
+			if e.Type == "message_update" {
+				switch e.AssistantMessageEvent.Type {
+				case "text_delta", "thinking_delta", "toolcall_delta", "text_end", "thinking_end", "toolcall_end":
+					response = true
+				}
+			}
+			if (e.Type == "turn_end" || e.Type == "message_end" || e.Type == "assistant") && e.Message.Role == "assistant" {
+				for _, raw := range e.Message.Content {
+					var content struct {
+						Type     string `json:"type"`
+						Text     string `json:"text"`
+						Thinking string `json:"thinking"`
+						Data     string `json:"data"`
+					}
+					if json.Unmarshal(raw, &content) != nil {
+						continue
+					}
+					if content.Text != "" || content.Thinking != "" || content.Data != "" || content.Type == "toolCall" || content.Type == "tool_use" {
+						response = true
+					}
+				}
+			}
+		}
+		err = scan.Err()
+		f.Close()
+		if err != nil {
+			return false, err
+		}
+		if response {
+			return false, nil
+		}
+	}
+	return sawLog, nil
+}
+
+// retireDesigners deletes only the loop's rows. Harness retention owns transcripts.
+func (l *Loop) retireDesigners(ctx context.Context) error {
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return err
+	}
+	docs := []string{}
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var exists bool
+		if err := r.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_designers')").Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		rows, err := r.Query("SELECT document FROM last_designers ORDER BY document")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var doc string
+			if err := rows.Scan(&doc); err != nil {
+				return err
+			}
+			docs = append(docs, doc)
+		}
+		return rows.Err()
+	})
+	s.Close()
+	if err != nil || len(docs) == 0 {
+		return err
+	}
+	if l.questions == nil {
+		l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+	}
+	retired := []string{}
+	for _, doc := range docs {
+		if _, err := os.Stat(filepath.Join(l.cfg.Root, doc)); os.IsNotExist(err) {
+			retired = append(retired, doc)
+			continue
+		} else if err != nil {
+			return err
+		}
+		done, err := l.questions.Done(doc)
+		if err != nil {
+			return err
+		}
+		if done {
+			retired = append(retired, doc)
+		}
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+	writable, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer writable.Close()
+	return writable.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, doc := range retired {
+			if _, err := tx.Exec("DELETE FROM last_designers WHERE document=?", doc); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+const designerCompactedKind = "drain.designer-compacted"
+
+func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.Record, mainSHA, tick string, at time.Time, result *LoopResult, timing *PassTiming, watched []string, deferJudge bool) laneOutcome {
+	next := old
+	next.Action = ActionDispatch
+	next.Attempt++
+	next.Reason = "resume-failed"
+	next.DesignerReason = "resume-failed"
+	next.DesignerSessionID = ""
+	req := *old.RunRequest
+	req.RunID = attemptRunID(old.ItemID, next.Attempt)
+	req.Resume = false
+	next.RunRequest = &req
+	identifyDecision(&next)
+	spec := StageSpec{Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS}
+	if err := l.stageComment(ctx, &next, &spec); err != nil {
+		return laneOutcome{err: err}
+	}
+	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
+		return laneOutcome{err: err}
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec("UPDATE comment_runs SET outcome='resume-failed' WHERE run_id=?", rec.RunID); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, examinationDoneKind, rec.RunID, struct{}{}, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		owner, err := currentLoopOwner()
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id=?", run.LaneStateIdle, next.LaneID, rec.RunID); err != nil {
+			return err
+		}
+		if _, err = run.ClaimLease(ctx, tx, req, next.LaneID, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		if err = recordPassDecision(tx, next, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
+	})
+	s.Close()
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	before, err := l.snapshot(ctx, []string{l.lanePath(next.LaneID)}, watched)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	l.mu.Lock()
+	result.Dispatched++
+	l.mu.Unlock()
+	l.reportf("loop: resume-failed %s -> new session %s on %s\n", rec.RunID, next.DesignerSessionID, next.LaneID)
+	replacement, log, err := l.cfg.Steps.Run(ctx, req)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	l.countSpend(result, replacement)
+	stop, err := l.closeRunBracket(ctx, l.lanePath(next.LaneID), req, tick, at, before, result, watched)
+	if err != nil || stop != "" {
+		return laneOutcome{stop: stop, err: err}
+	}
+	return l.settle(ctx, next, replacement, log, mainSHA, tick, at, result, timing, watched, deferJudge)
+}

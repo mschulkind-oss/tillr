@@ -11,6 +11,7 @@ sections 7 and 9.
 | :--- | :--- |
 | `run-pi` | The adapter. A `run.request`'s `Command[0]` names it. |
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
+| [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete event stream, ending in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer — the negative control. |
 
@@ -93,6 +94,23 @@ All of it is fail-open
 no run id, no shim, or a record directory that cannot be created means the emitter is
 silently absent. The run's exit code, its streams and its candidate are never a function
 of whether recording worked.
+
+## Compacting before an expired resume
+
+The executable compact step uses Pi's JSON-lines RPC protocol: verify the opened session id,
+then request compaction in the document desk's original working directory. It prints one JSON
+receipt containing `tokens_before`, `tokens_after`, `tokens`, and `cost_usd`. The after count is
+Pi's estimate of the rebuilt context, not a provider-exact count; unreported usage and cost
+are null. A missing session, failed request, mismatched id, or missing token measurements
+fails explicitly rather than creating a session or continuing without compaction.
+
+The drain invokes this step only at an expired, over-40,000-token dispatch. It records the
+receipt against that run's item before resuming. Before the model request, the adapter updates
+the drain's journal with the actual transcript path and append position. If the response is
+lost after Pi saves its checkpoint, the drain recovers its token and cost measurements from
+that checkpoint instead of compacting twice. An intent without an identifiable completed
+checkpoint is ambiguous and refuses another paid request. No process or request keeps a
+session warm.
 
 ## Pausing and continuing
 

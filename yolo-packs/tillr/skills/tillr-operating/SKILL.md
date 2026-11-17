@@ -126,7 +126,13 @@ This reads one document's pending review threads from Vantage and prints the new
 or nothing when none is pending. The loop runs that batch on the design seat at a fixed
 [document desk](../../../../docs/design/tillr-designer-sessions.md#the-desk), reusing its last
 recorded designer rather than a numbered lane's unrelated session. A desk has a worktree
-only during its run. Automatic intake and the full expiry policy are later build slices.
+only during its run. Session selection follows the ordered
+[dispatch table](../../../../docs/design/tillr-designer-sessions.md#choosing-at-dispatch):
+warm sessions resume unchanged; expired ones over 40,000 tokens compact only when the adapter
+provides that step. The compaction receipt records reported cost against the comment item.
+A resume that fails before any model response is dispatched once more to a new session,
+with the old transcript named in its brief. Deleted or done-role documents lose their rows,
+not their transcripts. Automatic intake remains a later build slice.
 
 A committed revision delivers replies after its recorded landing and after the served
 checkout matches it. An answer-only run records `answered`, skips gate and landing, delivers

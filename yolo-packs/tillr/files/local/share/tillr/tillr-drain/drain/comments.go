@@ -217,7 +217,7 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 	if err != nil {
 		return err
 	}
-	d := lastDesigner{Document: batch.Document, SessionID: session, Backend: rec.Backend, Model: rec.Route, Desk: rec.LaneID, RunID: rec.RunID}
+	d := lastDesigner{Document: batch.Document, SessionID: session, Backend: rec.Backend, Model: rec.Route, Desk: rec.LaneID, RunID: rec.RunID, Compacted: decision.DesignerReason == "resumed-compacted"}
 	if d.Model == "" && decision.RunRequest != nil {
 		d.Model = decision.RunRequest.Route()
 	}
@@ -272,7 +272,9 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 			if m.Timestamp > 0 {
 				d.LastRequest = time.UnixMilli(m.Timestamp).UTC().Format(time.RFC3339Nano)
 			}
-			if m.Model != "" {
+			// Compare policy routes to policy routes at dispatch: streams may name only
+			// the physical model id, not the provider-qualified route that selected it.
+			if d.Model == "" && m.Model != "" {
 				d.Model = m.Model
 			}
 			tokens := m.Usage.Input + m.Usage.Read + m.Usage.Write + m.Usage.Output
@@ -299,17 +301,24 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 		return err
 	}
 	d.BlobID = blob
-	raw, err := json.Marshal(d)
-	if err != nil {
-		return err
-	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", batch.Document, string(raw))
+		previous, err := readDesigner(tx.Reader(), batch.Document)
+		if err != nil {
+			return err
+		}
+		if previous != nil && previous.SessionID == d.SessionID {
+			d.Compacted = d.Compacted || previous.Compacted
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", batch.Document, string(raw))
 		return err
 	})
 }

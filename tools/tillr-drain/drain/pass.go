@@ -33,7 +33,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
+	for _, kind := range []string{designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -870,6 +870,9 @@ planned:
 	}
 	mainSHA, err := l.refreshDocuments(ctx, result)
 	if err != nil {
+		return "", err
+	}
+	if err := l.retireDesigners(ctx); err != nil {
 		return "", err
 	}
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
