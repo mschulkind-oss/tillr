@@ -468,7 +468,7 @@ report that detection is unavailable rather than implying that the check is bein
   control-group accounting, rather than partial process snapshots. Document the available
   sources and their precedence.
 
-<!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
 
 - **c1:** When the kernel counter is refused, the gate reads the check's CPU time from unprivileged process accounting that still counts exited children, and stall detection stays on.
 - **c2:** The check log and the verdict name the source that supplied CPU time, so a reader can tell the kernel counter from the fallback.
@@ -1079,7 +1079,7 @@ route to the next backend; it does not need a continuation handoff.
 **Agent Details**
 
 - **Ref:** [The restart design](../design/tillr-restart.md) for stopping a session;
-  [the quota probe item](#read-a-backends-remaining-quota-directly-and-keep-a-reserve) for backend windows;
+  [the quota probe item](#add-direct-quota-checks-with-a-reserve) for backend windows;
   the numbered criteria below for the continuation contract.
 - **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `yolo-packs/tillr/`, and `docs/`.
 - **Verify:** Cut a stub run after it writes two files and check that its replacement session
@@ -1215,7 +1215,7 @@ suspect in the failure above.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
 - **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express". Desk runs are shown as they are today and are counted in neither number.
-- **c5:** The loop ends a designer's session for a deleted document only when the document is absent from both the trunk commit the pass read and the main checkout. A test removes a committed document's file from the main checkout without committing the removal, runs the retirement, and asserts the designer's row is kept; it then commits the removal, runs the retirement again, and asserts the row is gone. `TestCommentPathTwice` and `TestRetireDesignerLeavesTranscript` pass unchanged.
+- **c5:** The loop ends a designer's session for a deleted document only when the document is absent from both the trunk commit the pass read and the main checkout. A test removes a committed document's file from the main checkout without committing the removal, runs the retirement, and asserts the designer's row is kept; it then commits the removal, runs the retirement again, and asserts the row is gone. `TestCommentPathTwice` passes unchanged. The existing test `TestRetireDesignerLeavesTranscript` may have its fixture changed to match the new behavior: its `deleted` case may commit the document's removal before the retirement runs, because a removal that is not committed no longer ends the session. The test must still assert that the transcript is left in place.
 
 ## Filed 2026-11-16: two decided designs are cut into build items
 
@@ -1526,7 +1526,7 @@ without a commit on a test failure that this item does not cause. Four points se
   Run alone, the test passed three times of three on the candidate. The failure appears under load
   with and without this item's change, at the same rate.
 - **This item does not repair it.** The repair is criterion c5 of
-  [Run owner-facing work on lanes outside the cap](#run-owner-facing-work-on-lanes-outside-the-cap),
+  [Run owner-facing work on lanes outside the cap](#add-dedicated-lanes-for-owner-facing-work),
   whose ruling names the cause as a race in designer retirement. Two items changing
   `retireDesigners` would conflict with each other, so this one leaves
   `tools/tillr-drain/drain/designer.go` and the comment tests as the trunk has them.
@@ -2773,7 +2773,7 @@ configured identity, and stop landing until the owner decides. Running work is n
 should continue. Only new landings wait, so that more commits do not pile onto a history the owner
 may want to rewrite.
 
-<!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-land/,yolo-packs/tillr/programs/tillr-land/,tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** At each tick the loop checks every trunk commit since the last one it checked, and finds any whose author or committer is not the identity the repository's git config names. A test lands a commit by another identity and asserts it is found on the next tick.
 - **c2:** The waiting view names the commit, its author and the documented remedy: re-author it, or accept it by recording the commit's id. A test asserts the text.
@@ -2879,7 +2879,7 @@ The measured gap on 2026-11-17 is large. `tillr drain why` listed six items held
 
 This item builds on landed work and does not wait on it. `item-view-no-unclassified` gave every held item a class and a next mover, and this item scopes itself to what is left: the summary still counts holds by reason, and a `conflict-owner` row names "the owner" with no place to answer. `item-qp-one-question-reader` makes the loop, the view and `tillr item show` read open questions through one reader, and this item relies on that reader and does not add a second. `item-jl-owner-criterion-hold` holds an item that owes an owner-only criterion verdict, which is a separate case from a question, and it keeps its own reason. `item-comments-design-items-at-the-desk` is about where a design session runs and is unrelated beyond sharing the document. The design on queue persistence already rules that questions are document state and never item rows (`D-UT4`), and this item applies that ruling to the one path that still breaks it.
 
-<!-- tillr: item id="item-owner-conflict-is-a-document-question" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-owner-conflict-is-a-document-question" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-qp-one-question-reader" prose="2" -->
 
 - **c1:** When the run that moves a conflict to the owner reports a decision for the owner, the loop's settle writes a numbered open question into the item's own document, directly under the item's block, in the `vantage: question` form the index reads. It carries the report's question and options, the run id and the date, and it lands through the same gate as a design ruling. The item is then held by the existing `question-open` rule, and no `conflict-owner` hold remains for it. A report that only says the lane's base is stale writes no question. A test covers both reports.
 - **c2:** The owner answers in the document, through the Vantage review path or an edit. When the answer lands, the next sync releases the item with no store command, and the conflict record is closed as answered. A test lands an answer and asserts the item is dispatched on the next pass.
