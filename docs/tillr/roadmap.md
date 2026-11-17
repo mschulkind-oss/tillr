@@ -936,8 +936,23 @@ criteria changes. The next run builds from this block as written. It needs no wi
 packs, the three configuration directories, `tests/` and `docs/` are all inside the item's paths
 already.
 
+**Ruling, 2026-11-17 (answers the third run's conflict):** the third run stopped because c2
+named a BMAD directory that the public repository no longer has. That was checked again on
+2026-11-17: `git ls-remote https://github.com/bmad-code-org/BMAD-METHOD.git HEAD` returned
+`e435a22574fe55722841086e5566420178b98df3`, and a clone at that commit has no `src/` directory.
+The same skill, still named `bmad-advanced-elicitation` in its own `SKILL.md`, now lives at
+`skills/core-tools/bmad-advanced-elicitation`. The owner asked for the skill, not for a
+directory, so c2 below now names the directory the skill is in today and the run builds against
+that. Do not reach back to an older commit to recover the old directory: that would freeze the
+skill at a version its authors have moved on from. The Superpowers directory, `skills/brainstorming`
+at `22f0b463e7a5e579904dd6211a520321035526f7`, is where c2 says it is and does not change. If
+either project moves its skill again, that is the unavailable source c5 already covers: the
+launch must fail visibly, and the repair is a one-line change to the directory named in the pack.
+Whether to name a fixed commit for either source is the builder's choice, within what the pack
+format offers; neither answer changes a criterion.
+
 - **c1:** The default selected packs expose BMAD Advanced Elicitation and Superpowers Brainstorming to their supported agents without a separate per-project installation.
-- **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting src/core-skills/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
+- **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting skills/core-tools/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
 - **c3:** Each selected skill keeps the supporting assets, scripts, and relative references it needs; unrelated upstream frameworks and startup hooks are not imported automatically.
 - **c4:** The existing house brainstorming skill remains unchanged and discoverable. Superpowers receives a distinct discoverable name if the source names collide; no silent replacement or ambiguous duplicate selection is accepted.
 - **c5:** Permanent pack-composition/render tests verify both default discoveries, supporting resources, and collision handling. Every edited pack passes yolo pack lint, and an unavailable Git source produces a visible failure rather than omitting a skill silently.
@@ -945,7 +960,7 @@ already.
 **Agent details:**
 
 - **Ref:** Owner request, 2026-11-16: add these two skills to the default pack-loaded set, using Git URLs.
-- **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/src/core-skills/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
+- **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/skills/core-tools/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
 - **Where:** Inspect the default pack list and existing skill contributions in `config/yolo-jail/`, scoped configuration under `tag-personal/` and `tag-work/`, and `yolo-packs/`. Preserve host-config-synced prose and skills under `yolo-packs/matt/`; do not edit deployed home directories.
 - **Verify:** Resolve the supported Git locator syntax, test the default composition for supported agent renders, validate all auxiliary references, and lint each changed pack. Name the actual render and binary tested; in-jail lint is not proof of host rendering.
 
