@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -143,20 +144,27 @@ func (s *server) streamInvalidations(ctx context.Context, conn *websocket.Conn, 
 	}()
 	ticker := time.NewTicker(detector.interval)
 	defer ticker.Stop()
+	window := newWSWindow(s.perf, time.Now)
+	defer window.close("client gone")
 	for {
+		pollStart := time.Now()
 		frame, changed, err := detector.poll(ctx)
+		window.poll(msSince(time.Now, pollStart))
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "tillr-view: /api/v1/ws: %v\n", err)
 			closeWithReason(conn, err.Error())
+			window.close("store unreadable: " + err.Error())
 			return
 		}
 		if changed {
 			if err := writeFrame(conn, frame); err != nil {
+				window.close("write failed")
 				return
 			}
+			window.frame(frame.Changed)
 		}
 		select {
 		case <-ctx.Done():
@@ -356,4 +364,89 @@ func sortedUnique(names []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// wsWindowEvery is how often one socket's activity becomes a `ws` line in the performance
+// log. A socket polls four times a second, so a line per poll — or per frame, which a running
+// lane's growing log sends up to four times a second — would be most of the log; a window
+// says how many frames went out and what they named, which is what the client paid for.
+const wsWindowEvery = 10 * time.Second
+
+// wsWindow accumulates one socket's polls and frames between log lines.
+type wsWindow struct {
+	log     *perfLog
+	now     func() time.Time
+	id      string
+	opened  time.Time
+	start   time.Time
+	polls   int
+	pollSum float64
+	pollMax float64
+	frames  int
+	changed map[string]int
+	closed  bool
+}
+
+func newWSWindow(log *perfLog, now func() time.Time) *wsWindow {
+	if log != nil {
+		now = log.now
+	}
+	t := now()
+	return &wsWindow{log: log, now: now, id: log.requestID(), opened: t, start: t, changed: map[string]int{}}
+}
+
+func (w *wsWindow) poll(ms float64) {
+	if w.log == nil {
+		return
+	}
+	w.polls++
+	w.pollSum += ms
+	if ms > w.pollMax {
+		w.pollMax = ms
+	}
+	if w.now().Sub(w.start) >= wsWindowEvery {
+		w.flush("")
+	}
+}
+
+// frame counts one frame by the kinds of resource it named: `runlog:<id>` and `runs:<id>`
+// are counted by their prefix, because the client's cost is per kind, not per id.
+func (w *wsWindow) frame(changed []string) {
+	if w.log == nil {
+		return
+	}
+	w.frames++
+	for _, name := range changed {
+		kind, _, found := strings.Cut(name, ":")
+		if !found {
+			kind = name
+		}
+		w.changed[kind]++
+	}
+}
+
+func (w *wsWindow) flush(closing string) {
+	if w.log == nil || (w.frames == 0 && closing == "") {
+		w.start, w.polls, w.pollSum, w.pollMax = w.now(), 0, 0, 0
+		return
+	}
+	fields := map[string]any{"conn": w.id, "window_ms": msSince(w.now, w.start), "polls": w.polls,
+		"poll_ms_max": round1(w.pollMax), "frames": w.frames, "changed": w.changed}
+	if w.polls > 0 {
+		fields["poll_ms_mean"] = round1(w.pollSum / float64(w.polls))
+	}
+	if closing != "" {
+		fields["closed"] = closing
+		fields["lifetime_ms"] = msSince(w.now, w.opened)
+	}
+	w.log.emit("ws", fields)
+	w.start, w.polls, w.pollSum, w.pollMax, w.frames, w.changed = w.now(), 0, 0, 0, 0, map[string]int{}
+}
+
+func (w *wsWindow) close(reason string) {
+	if w.closed {
+		return
+	}
+	w.closed = true
+	w.flush(reason)
 }

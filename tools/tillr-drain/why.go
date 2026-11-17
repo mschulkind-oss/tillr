@@ -6,11 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -22,6 +24,7 @@ func whyFace(args []string) int {
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop (default: all store lanes)")
 	root := fs.String("root", ".", questionsRootHelp)
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
+	questionsIndex := fs.String("questions-index", "", "an index document `vantage-check index --format json` already produced, read instead of running the index command; `-` reads it from stdin (the observatory hands one cached walk to every planner it asks)")
 	now := fs.String("now", "", "observation time in RFC 3339 (default: now)")
 	asJSON := fs.Bool("json", false, "print rows and summary as JSON")
 	// Go flags stop at the first positional. Accept the named item before or after flags.
@@ -62,9 +65,25 @@ func whyFace(args []string) int {
 		return fail(openFailure(err))
 	}
 	defer s.Close()
+	questions := &drain.VantageQuestions{Root: *root, Command: commandFields(*questionsCmd), Context: ctx}
+	if *questionsIndex != "" {
+		if *questionsCmd != "" {
+			return fail(drain.Usagef("why takes --questions-index or --questions-cmd, not both: the index document is the command's answer"))
+		}
+		var raw []byte
+		if *questionsIndex == "-" {
+			raw, err = io.ReadAll(os.Stdin)
+		} else {
+			raw, err = os.ReadFile(*questionsIndex)
+		}
+		if err != nil {
+			return fail(drain.Usagef("reading --questions-index %s: %v", *questionsIndex, err))
+		}
+		questions = vantage.Preloaded(*root, vantage.ParseIndex(raw, "--questions-index "+*questionsIndex))
+	}
 	var answer drain.WhyAnswer
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
-		answer, err = drain.Why(r, tick, policy, &drain.VantageQuestions{Root: *root, Command: commandFields(*questionsCmd), Context: ctx})
+		answer, err = drain.Why(r, tick, policy, questions)
 		return err
 	}); err != nil {
 		return fail(err)

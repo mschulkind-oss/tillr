@@ -224,7 +224,8 @@ type questionsData struct {
 }
 
 // questionsPayload answers the board's question list. It reads the index once per request —
-// VantageQuestions caches the index it ran — and asks each item's document in queue order.
+// the server's vantageCache (vantagecache.go), which reuses the last index while the tree's
+// Markdown is unchanged — and asks each item's document in queue order.
 // The store's own dispatch rows supply the planner's hold, so the list can say which items
 // the loop already holds and which questions opened after its last tick.
 func (s *server) questionsPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
@@ -237,7 +238,7 @@ func (s *server) questionsPayload(r *store.Reader, req *http.Request) (any, *api
 	})
 	dispatches, _ := readAllDispatches(r)
 	holds := questionHolds(dispatches)
-	source := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
+	source := s.vantage.source(req.Context())
 	out := questionsData{
 		Items:   []questionItem{},
 		Unknown: []questionItem{},

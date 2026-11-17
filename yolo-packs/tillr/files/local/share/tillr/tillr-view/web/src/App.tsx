@@ -11,6 +11,7 @@ import { EntityLink, ENTITY_KINDS, type EntityKind } from "./components/EntityLi
 import { RefusalState, refusalCode } from "./components/RefusalState";
 import { useLanesQuery, usePassesQuery, usePassHistoryQuery, useQuestionsQuery, useDesignsQuery, useRefreshAll, useSnapshotQuery, useWaitingQuery } from "./models/queries";
 import { useObservatorySocket } from "./models/socket";
+import { RenderTimer, usePagePerf } from "./models/perfHooks";
 import { URL_CHANGE_EVENT } from "./models/url";
 
 /** Replace old inspection links, preserving their artifact/tab selection. The older
@@ -30,6 +31,7 @@ export function canonicalRoute(hash: string, search: string): string | null {
 }
 export function App() {
   const hash = useScreenHash(), path = hash.split("?")[0];
+  usePagePerf(hash);
   const params = new URLSearchParams(hash.split("?")[1]);
   const home = !hash || path === "#/", items = path === "#/items", passesOpen = path === "#/passes", questionsOpen = path === "#/questions";
   const designsOpen = path === "#/designs" || path.startsWith("#/design/");
@@ -69,5 +71,5 @@ export function App() {
   else if (trunk) screen = <TrunkView route={trunk} paused={paused} live={live} />;
   else if (questionsOpen) screen = <QuestionsView data={questions.data} error={questions.error} pending={questions.isPending} refreshing={questions.isFetching && !questions.isPending} onRetry={() => void questions.refetch()} onClose={() => { window.location.hash = ""; }} baseUrl={snapshot.data?.snapshot.vantage_base_url ?? ""} items={snapshot.data?.data.items ?? []} onSelectItem={item => { window.location.hash = `#/item/${encodeURIComponent(item)}`; }} />;
   else screen = <main className="home"><h1>Page unavailable</h1><p role="alert">This page is not built yet: {ENTITY_KINDS.includes(kind as EntityKind) && id ? <EntityLink kind={kind as EntityKind} id={id} /> : hash}.</p><a href="#/">Return to Home</a></main>;
-  return <ObservatoryShell hash={hash} snapshot={snapshot.data} snapshotError={snapshot.error} passes={passes.data?.data} passesError={passes.error} live={live} paused={paused} onPause={onPause} onRefresh={refresh}>{screen}</ObservatoryShell>;
+  return <ObservatoryShell hash={hash} snapshot={snapshot.data} snapshotError={snapshot.error} passes={passes.data?.data} passesError={passes.error} live={live} paused={paused} onPause={onPause} onRefresh={refresh}><RenderTimer id="screen">{screen}</RenderTimer></ObservatoryShell>;
 }

@@ -112,6 +112,67 @@ the host opens `http://localhost:<port>`. For a port that is not listed, it bind
 API is reached through Vite's proxy. The jail cannot see whether it was relaunched after the
 line was added, so a listed port that does not answer from the host means it has not been.
 
+### The performance log
+
+`serve` writes its own account of how long things took, on by default under `just observatory`
+and `observatory-dev`, so "the board is slow" can be answered from a file rather than
+reproduced. It is a different subject from the [Performance API](#performance-api), which
+reads the drain's gate and item timings out of the store; this log times the requests the
+board itself answers.
+
+- **Where.** The recipe hands `serve` the directory
+  `<checkout>/.yolo/durable/tillr-observatory/logs/<hostname>-<port>/` and prints it at
+  startup. It is under the served checkout, not the jail's durable directory or `~/.cache`, so a
+  log the host's server wrote is the same directory a jail of that checkout reads. Each day
+  is one file, `server-YYYYMMDD.jsonl`, and the file `latest` holds the path of the one being
+  written (text, not a symlink, because a bind mount may not carry one).
+- **What.** One JSON line per record, each with `v` (the record shape, 1), `kind`, `ts` and
+  `rev` (the build revision):
+  - `start` — the root, store, build, planner, the recipe's phases (`npm_ci`, `web_build`,
+    `go_build_view`, `go_build_drain`, in milliseconds) and `listening_ms`, the time from the
+    recipe's start to the listening socket;
+  - `request` — one per HTTP request: request id (also the `X-Request-Id` response header),
+    route, status, body and wire bytes, total milliseconds and the handler's `phases`
+    (`payload_ms`, `encode_ms`, and where they apply `vantage`, `planner` and `lane_logs`).
+    Query values are never written, only their names;
+  - `ws` — per live connection, one line per ten-second window that sent frames: polls,
+    slowest poll, frames and which subjects changed;
+  - `client` — a batch of the browser's own timings, posted to `POST /api/v1/client-timing`
+    every ten seconds and with `sendBeacon` when the page is hidden: each page view's time to
+    first data and to settled, every API fetch as the browser waited for it (joined to the
+    server's line by request id), long main-thread tasks and renders over 50 ms. The route
+    accepts only this board's own origin;
+  - `summary` — every minute while requests arrive and at shutdown: per-route count, p50, p95
+    and maximum;
+  - `dropped` — how many lines were lost. A request never waits for the disk: one writer
+    drains a bounded queue, and a full queue drops and counts rather than blocking.
+- **Retention.** A day's file is capped at 32 MiB (it rolls to `server-YYYYMMDD.N.jsonl`),
+  files older than seven days are deleted, and the directory is capped at 128 MiB, oldest
+  first. Nothing but `server-*.jsonl` is ever deleted.
+- **Switching it off or moving it.** `OBSERVATORY_PERF_LOG=off just observatory` runs with
+  no log; `OBSERVATORY_PERF_LOG=<dir>` writes there instead. `tillr-view serve` on its own
+  logs only when given `--perf-log <dir>` (or `TILLR_VIEW_PERF_LOG`).
+- **Reading it.** `just observatory-perf` (that is, `tillr-view perf-log`) prints per-route
+  and per-page percentiles, the slowest requests with their phases, the browser-minus-server
+  gap, the live channel's traffic and each start's phases, for the last 24 hours of every
+  server's log; `--since 1h`, `--top 20`, `--json`, or a file or one server's directory
+  narrow it.
+
+**Vantage's index is cached.** `/why`, `/questions` and an item's `/doc` all need Vantage's
+index, and building it walks the whole tree: about 11 seconds on this checkout. The server
+keeps the last index and reuses it while a fingerprint of the tree's Markdown (each
+non-hidden `*.md` file's path, size and modification time, plus `.vantage.toml` and
+`.vantage/`) is unchanged and the index is under ten minutes old. Taking the fingerprint
+costs about 10 ms, so an answer written in Vantage still leaves the list on the next read.
+Concurrent requests share one build, and a failed build is never kept.
+
+**Nothing slow runs inside a read transaction.** The server's store handle has one
+connection, so a route that holds its read transaction makes every other route wait. The
+index lookup therefore happens before the transaction opens, and `/why` runs its planner after
+its transaction has closed (the planner reads the store in its own process). Measured against
+the live store on 2026-11-17, a snapshot requested during a cold `/why` waited 16.8 s before
+this change and 23 ms after it.
+
 ### What each refusal means
 
 Every refusal is one sentence on stderr, and it names the fix:

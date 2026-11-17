@@ -131,7 +131,10 @@ func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) 
 }
 
 func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	rows, err := assembleLanes(r, s.obs.loopDir, s.obs.laneRoot, time.Now())
+	stats := &laneReadStats{}
+	start := time.Now()
+	rows, err := assembleLanesCounted(r, s.obs.loopDir, s.obs.laneRoot, time.Now(), stats)
+	phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
 	}
@@ -139,6 +142,24 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 }
 
 func assembleLanes(r *store.Reader, loop, lanes string, now time.Time) ([]laneRow, error) {
+	return assembleLanesCounted(r, loop, lanes, now, nil)
+}
+
+// laneReadStats is what one lanes answer read from the lane directories: the performance
+// log's `lane_logs` phase. A nil one counts nothing.
+type laneReadStats struct {
+	files int
+	bytes int64
+}
+
+func (s *laneReadStats) add(n int) {
+	if s != nil {
+		s.files++
+		s.bytes += int64(n)
+	}
+}
+
+func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, stats *laneReadStats) ([]laneRow, error) {
 	d, err := readStoreDomain(r)
 	if err != nil {
 		return nil, err
@@ -165,7 +186,7 @@ func assembleLanes(r *store.Reader, loop, lanes string, now time.Time) ([]laneRo
 			return nil, err
 		}
 	}
-	rows := buildLaneRows(d, verdicts, seats, loop, lanes, now)
+	rows := buildLaneRowsCounted(d, verdicts, seats, loop, lanes, now, stats)
 	// The seat a run was dispatched for is on its decision row (tillr-drain's
 	// dispatches.seat), and it outranks the item's seat: an item's seat can change after the
 	// run started, and the lane is describing the run.
@@ -206,6 +227,10 @@ func dispatchSeats(r *store.Reader) (map[string]string, error) {
 }
 
 func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[string]string, loop, lanes string, now time.Time) []laneRow {
+	return buildLaneRowsCounted(d, verdicts, seats, loop, lanes, now, nil)
+}
+
+func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats map[string]string, loop, lanes string, now time.Time, stats *laneReadStats) []laneRow {
 	rows := []laneRow{}
 	runs := map[string]storeRun{}
 	for id, a := range d.allocations {
@@ -277,7 +302,7 @@ func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[st
 		row.StateSinceMS = clockPointer(since, since > 0)
 		if row.RunID != "" {
 			var note string
-			row.LatestAction, note, row.LogGrewAtMS = readLaneAction(runLogPath(lanes, lane.LaneID, row.RunID), row.Backend)
+			row.LatestAction, note, row.LogGrewAtMS = readLaneActionCounted(runLogPath(lanes, lane.LaneID, row.RunID), row.Backend, stats)
 			if note != "" {
 				if row.Note != "" {
 					row.Note += "; "
@@ -285,7 +310,7 @@ func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[st
 				row.Note += note
 			}
 			if row.State == "settling" {
-				row.LastStep, row.LastStepAtMS = lastFinishedLaneStep(filepath.Join(loop, row.RunID, "steps.jsonl"))
+				row.LastStep, row.LastStepAtMS = lastFinishedLaneStepCounted(filepath.Join(loop, row.RunID, "steps.jsonl"), stats)
 			}
 			if row.LatestAction.Kind == "liveness" && row.LogGrewAtMS != nil {
 				row.LatestAction.Text = "log grew " + laneAge(now.UnixMilli()-*row.LogGrewAtMS) + " ago"
@@ -348,7 +373,12 @@ func laneTail(path string) ([]byte, *int64, error) {
 }
 
 func lastFinishedLaneStep(path string) (string, *int64) {
+	return lastFinishedLaneStepCounted(path, nil)
+}
+
+func lastFinishedLaneStepCounted(path string, stats *laneReadStats) (string, *int64) {
 	raw, _, err := laneTail(path)
+	stats.add(len(raw))
 	if err != nil {
 		return "", nil
 	}
@@ -363,11 +393,16 @@ func lastFinishedLaneStep(path string) (string, *int64) {
 }
 
 func readLaneAction(path, backend string) (laneAction, string, *int64) {
+	return readLaneActionCounted(path, backend, nil)
+}
+
+func readLaneActionCounted(path, backend string, stats *laneReadStats) (laneAction, string, *int64) {
 	missing := laneAction{Kind: "unrecorded", Clock: stateNoneClock}
 	if path == "" {
 		return missing, "no lane root is configured, so this run's stream log has no path to read", nil
 	}
 	raw, mtime, err := laneTail(path)
+	stats.add(len(raw))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return missing, "no stream log at " + path + ": the run has written none there", nil

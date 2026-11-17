@@ -133,6 +133,7 @@ done
 {cat} > "$out" <<'PROG'
 #!/bin/sh
 printf '%s\\n' "$0" "$@" > {state}/"$({basename} "$0")".argv
+printf '%s\\n' "${{TILLR_VIEW_PERF_LOG-unset}}" "${{TILLR_VIEW_PERF_STARTUP-unset}}" > {state}/"$({basename} "$0")".perfenv
 n=0
 while [ -n "$OBSERVATORY_TEST_WAIT_UI" ] && [ ! -e {state}/ui.argv ] && [ $n -lt 300 ]; do
     sleep 0.1; n=$((n + 1))
@@ -161,10 +162,12 @@ exit 0
     return bindir
 
 
-def hermetic_run(root: Path, recipe: str, port: int, bindir: Path, durable: Path,
+def hermetic_run(root: Path, recipe: str, port: int, bindir: Path, durable: Path | None,
                  cwd: Path, extra_env: dict[str, str] | None = None,
                  timeout: float = 60) -> subprocess.CompletedProcess:
-    env = {"PATH": str(bindir), "HOME": str(cwd), "YOLO_DURABLE_DIR": str(durable)}
+    env = {"PATH": str(bindir), "HOME": str(cwd)}
+    if durable is not None:
+        env["YOLO_DURABLE_DIR"] = str(durable)
     env.update(extra_env or {})
     return subprocess.run([which("just"), "--justfile", str(root / ".justfile"), recipe, str(port)],
                           cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
@@ -332,6 +335,41 @@ def case_dev_hands_the_planner_and_a_strict_port_to_its_children(base: Path) -> 
     check("dev: the API is built without the embedded front end", "-tags" not in calls, calls)
 
 
+def case_the_perf_log_lives_under_the_checkout_it_serves(base: Path) -> None:
+    """The log is written under the served checkout's own durable scratch directory, whatever
+    YOLO_DURABLE_DIR says: the host runs with none, at /home/user/code/tillr, which a jail
+    mounts at /workspace, so <root>/.yolo/durable/... is one directory read from both sides.
+    The build directory may fall back to ~/.cache on the host; the log must not follow it."""
+    host = socket.gethostname()
+    for label, durable in (("no YOLO_DURABLE_DIR, as on the host", None), ("a jail's YOLO_DURABLE_DIR", base / "jail-durable")):
+        tag = "host" if durable is None else "jail"
+        state = base / f"state-perf-{tag}"
+        state.mkdir()
+        root = make_root(base / f"perf-{tag}", "home/matt/code/tillr")
+        bindir = make_path(base / f"path-perf-{tag}", state, node=False)
+        port = free_port_pair()
+        done = hermetic_run(root, "observatory", port, bindir, durable, base)
+        perfenv = (state / "tillr-view.perfenv").read_text().splitlines() if (state / "tillr-view.perfenv").exists() else []
+        want = f"{root.resolve()}/.yolo/durable/tillr-observatory/logs/{host}-{port}"
+        check(f"[{label}] the log is the served checkout's, one directory per host and port",
+              done.returncode == 0 and perfenv[:1] == [want], f"{perfenv}\n{done.stderr}")
+        check(f"[{label}] the recipe prints where the log is", f"performance log: {want}" in done.stderr, done.stderr)
+        startup = perfenv[1] if len(perfenv) > 1 else ""
+        check(f"[{label}] the startup record gets the recipe's phases and its start",
+              "go_build_view=" in startup and "go_build_drain=" in startup and "recipe_start_ms=" in startup, startup)
+    for value, label in (("off", "OBSERVATORY_PERF_LOG=off turns the log off"), (str(base / "elsewhere-logs"), "OBSERVATORY_PERF_LOG moves the log")):
+        state = base / f"state-perf-{'off' if value == 'off' else 'moved'}"
+        state.mkdir()
+        root = make_root(base / state.name, "checkout")
+        bindir = make_path(base / f"path-{state.name}", state, node=False)
+        done = hermetic_run(root, "observatory", free_port_pair(), bindir, None, base,
+                            extra_env={"OBSERVATORY_PERF_LOG": value})
+        perfenv = (state / "tillr-view.perfenv").read_text().splitlines() if (state / "tillr-view.perfenv").exists() else []
+        check(label, done.returncode == 0 and perfenv[:1] == [value]
+              and (("performance log: off" in done.stderr) if value == "off" else (f"performance log: {value}" in done.stderr)),
+              f"{perfenv}\n{done.stderr}")
+
+
 def hermetic_cases() -> None:
     with tempfile.TemporaryDirectory(prefix="observatory.") as tmp:
         base = Path(tmp)
@@ -343,6 +381,7 @@ def hermetic_cases() -> None:
             case_a_failed_install_is_refused_before_any_build,
             case_a_jail_binds_only_a_published_port,
             case_dev_hands_the_planner_and_a_strict_port_to_its_children,
+            case_the_perf_log_lives_under_the_checkout_it_serves,
         ), start=1):
             directory = base / f"h{index}"
             directory.mkdir()

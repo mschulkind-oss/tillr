@@ -133,7 +133,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if *history {
 		rows, err = readWaiting(ctx, *path, questions)
 	} else {
-		_, rows, err = askPlanner(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
+		_, rows, err = askPlanner(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd), nil)
 	}
 	if err == nil && !*history {
 		s, e := store.OpenRead(ctx, *path)
@@ -192,8 +192,7 @@ func readWaiting(ctx context.Context, path string, questions vantage.QuestionSou
 }
 
 func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	questions := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
-	rows, err := assembleWaiting(r, questions, s.storePath)
+	rows, err := assembleWaiting(r, s.vantage.source(req.Context()), s.storePath)
 	if err == nil {
 		rows, err = policyWaitingRows(s.root, rows)
 	}

@@ -1,9 +1,11 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -190,5 +192,63 @@ func TestWhyJSONNamesThePlannersBuild(t *testing.T) {
 	}
 	if answer.Build == nil || answer.Build.Executable != bin || answer.Build.Digest == "" {
 		t.Fatalf("the why answer must name its own build (executable %s): %s", bin, out)
+	}
+}
+
+// `--questions-index` answers exactly what `--questions-cmd` would, from a document the caller
+// already holds: the observatory walks the tree once and hands that walk to every planner it
+// asks, so a planner must read it the same way it reads its own command's output — from a
+// file or from stdin — and refuse being given both.
+func TestWhyReadsAPreloadedQuestionsIndex(t *testing.T) {
+	root := fixtureRepo(t, "docs/design/open.md")
+	path := fixture(t, itemRecordWithDoc("question", "in-queue", "docs/design/open.md"), itemRecordRanked("first", "in-queue", "a"), itemRecordRanked("second", "in-queue", "b"))
+	command := indexStub(t, map[string]any{"path": "docs/design/open.md", "questions": []map[string]any{{"id": "OQ-1", "state": "open"}}})
+	file := strings.TrimPrefix(command, "cat ")
+	common := []string{"--store", path, "--root", root, "--policy", policy(t, "true"), "--lanes", "lane-1", "--json"}
+	_, viaCommand := invoke(t, append([]string{"why", "--questions-cmd", command}, common...)...)
+	code, viaFile := invoke(t, append([]string{"why", "--questions-index", file}, common...)...)
+	if code != 0 {
+		t.Fatalf("why --questions-index: %d %s", code, viaFile)
+	}
+	rows := func(raw []byte) []drain.WhyRow {
+		var answer drain.WhyAnswer
+		if err := json.Unmarshal(raw, &answer); err != nil {
+			t.Fatalf("%v: %s", err, raw)
+		}
+		return answer.Rows
+	}
+	if got, want := rows(viaFile), rows(viaCommand); len(got) != len(want) || got[2].Reason != drain.ReasonQuestionOpen || got[2].Mover != "OQ-1" {
+		t.Fatalf("preloaded index rows %+v, command rows %+v", got, want)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, append([]string{"why", "--questions-index", "-"}, common...)...)
+	cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "state"))
+	cmd.Stdin = bytes.NewReader(raw)
+	viaStdin, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("why --questions-index -: %v %s", err, viaStdin)
+	}
+	if got := rows(viaStdin); got[2].Mover != "OQ-1" {
+		t.Fatalf("stdin index rows %+v", got)
+	}
+	code, out := invoke(t, append([]string{"why", "--questions-index", file, "--questions-cmd", command}, common...)...)
+	if code != 2 || !strings.Contains(string(out), "not both") {
+		t.Fatalf("both flags: %d %s", code, out)
+	}
+	// A document that is not an index is the same `questions-unknown` hold a failing command
+	// produces, never "no questions".
+	bad := filepath.Join(scratch(t, "bad-index"), "index.json")
+	if err := os.WriteFile(bad, []byte(`{"index":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = invoke(t, append([]string{"why", "--questions-index", bad}, common...)...)
+	if code != 0 {
+		t.Fatalf("bad index: %d %s", code, out)
+	}
+	if got := rows(out); got[2].Reason == drain.ReasonQuestionOpen || got[2].Reason == "" {
+		t.Fatalf("an unreadable index answered %+v", got[2])
 	}
 }
