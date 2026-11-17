@@ -61,6 +61,8 @@ func run(args []string) int {
 		return syncFace(rest)
 	case "comments":
 		return commentsFace(rest)
+	case "judge":
+		return judgeFace(rest)
 	case "list":
 		env, code = listFace(rest)
 	case "show":
@@ -752,7 +754,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, seed, sync, comments, list, show, state, close, reopen, decision, mail, grant or verdict"
+const faceList = "apply, seed, sync, comments, list, show, state, close, reopen, decision, mail, grant, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

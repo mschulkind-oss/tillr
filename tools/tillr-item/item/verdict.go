@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -205,12 +206,118 @@ func checkIndependence(v verdictPayload) error {
 	if v.ActorKind != ActorAgent {
 		return nil
 	}
-	if v.Actor == v.JudgedActor {
+	left, err := actorHandles(v.ItemID, v.Actor)
+	if err != nil {
+		return err
+	}
+	right, err := actorHandles(v.ItemID, v.JudgedActor)
+	if err != nil {
+		return err
+	}
+	shared := v.Actor == v.JudgedActor
+	for handle := range left {
+		shared = shared || right[handle]
+	}
+	if shared {
 		return Rejectionf("self-judging", v.ItemID,
 			"actor %q issued this verdict on its own work: a delegated verdict needs an actor other than the one whose work criterion %q judges",
 			v.Actor, v.CriterionID)
 	}
 	return nil
+}
+
+// actorHandles reads caller-owned run and session provenance, never route names.
+// The compact forms from the judge contract are node:run_ids:route and
+// run_ids:routes. A fourth field is allowed only for a named or UUID session:
+// node:run_ids:session:route. Tagged run=<id>;session=<id>;route=<route> removes
+// ambiguity when an opaque id or route needs colons. A bare identity is retained
+// for the existing verdict API as one opaque run (or a named/UUID session).
+var actorUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func actorHandles(itemID, identity string) (map[string]bool, error) {
+	found := map[string]bool{}
+	bad := func() (map[string]bool, error) {
+		return nil, Rejectionf("actor-provenance", itemID, "ambiguous identity %q: use run=<id>;session=<id>;route=<route>", identity)
+	}
+	add := func(kind, list string) bool {
+		for _, value := range strings.Split(list, ",") {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return false
+			}
+			if actorUUID.MatchString(value) {
+				value = strings.ToLower(value)
+			}
+			found[kind+"="+value] = true
+		}
+		return true
+	}
+	if strings.Contains(identity, "=") {
+		for _, part := range strings.Split(identity, ";") {
+			key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if !ok || strings.TrimSpace(value) == "" {
+				return bad()
+			}
+			switch key {
+			case "run", "session":
+				if !add(key, value) {
+					return bad()
+				}
+			case "node", "route": // Route equality is not a store-level refusal.
+			default:
+				return bad()
+			}
+		}
+		if len(found) == 0 {
+			return bad()
+		}
+		return found, nil
+	}
+	fields := strings.Split(identity, ":")
+	var runs string
+	switch len(fields) {
+	case 1:
+		value := strings.TrimSpace(fields[0])
+		if strings.HasPrefix(value, "session-") || actorUUID.MatchString(value) {
+			if !add("session", value) {
+				return bad()
+			}
+			return found, nil
+		}
+		runs = value
+	case 2:
+		runs = fields[0]
+	case 3:
+		runs = fields[1]
+	case 4:
+		session := strings.TrimSpace(fields[2])
+		if !strings.HasPrefix(session, "session-") && !actorUUID.MatchString(session) {
+			return bad()
+		}
+		if !add("session", session) {
+			return bad()
+		}
+		runs = fields[1]
+	default:
+		return bad()
+	}
+	for _, field := range fields {
+		if strings.TrimSpace(field) == "" {
+			return bad()
+		}
+	}
+	if !add("run", runs) {
+		return bad()
+	}
+	// Historical stamped identities put a UUID/session handle in the middle.
+	// Compare that session too, while preserving the opaque run binding.
+	for _, value := range strings.Split(runs, ",") {
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "session-") || actorUUID.MatchString(value) {
+			add("session", value)
+		}
+	}
+	return found, nil
 }
 
 // checkDelegation is the store-enforced sign-off grant. A mechanical verdict needs none,

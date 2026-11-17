@@ -141,6 +141,74 @@ produce no entries. An empty store or a filter matching nothing returns
 `payload.items: []` with exit 0. The command requires an existing store; a missing
 store is a usage error, not an empty queue. Run `tillr item list --help` for its flags.
 
+## Written judge verdicts
+
+`judge` is the shared intake for a judge's written verdict file, following
+[the judge output contract](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1).
+It checks every stored criterion before recording any, then writes one `item.verdict`
+per criterion in a single transaction. It never moves the item's own state; the caller
+routes the outcome. A refused file changes no criterion and appends no verdict event.
+
+```sh
+tillr item judge --store .tillr/state.db --item item-example --input eval.output --head <full-candidate-sha> --actor 'run=review-run;session=review-session' --judged-actor 'run=writer-run;session=writer-session' --grant <grant-id> --dry-run
+```
+
+The file is a JSON object, not a record envelope:
+
+```json
+{
+  "evaluated_head": "<full-candidate-sha>",
+  "evaluated_tree": "<candidate-tree-sha>",
+  "outcome": "pass",
+  "verdicts": [
+    {
+      "criterion_id": "c1",
+      "criterion_hash": "<sha256-of-stored-criterion-text>",
+      "verdict": "done",
+      "claim_class": "verification-only",
+      "reason": "The cited test proves the required behavior.",
+      "evidence": ["tests/example.test.go", "commit:<candidate-sha>"]
+    }
+  ]
+}
+```
+
+Include exactly one entry for every criterion. Each entry needs its stored text's
+SHA-256 hash, its stored claim class, a nonblank reason, and a nonempty list of
+single-token evidence locators (paths, commit references, URLs or record ids, not prose).
+Entries may also carry `waiting_on` for the caller's blocked-state routing; intake
+retains that payload in its checked result but does not route it. Unknown fields and
+duplicate JSON keys are refused. Any `actor` or `judged_actor` field, including an
+empty or null field anywhere in the file, is refused as `actor-in-output`.
+
+The caller supplies the identities and grant. Run and session identities can be
+written as `run=<id>;session=<id>` (optionally with `;route=<route>`). The compact
+forms `node:run_ids:route` and `run_ids:routes` locate comma-separated run ids by
+position, whatever their spelling. A compact identity can also use
+`node:run_ids:session:route` when the session is `session-` prefixed or a UUID.
+Use tagged identities for opaque session ids or routes containing colons. Ambiguous
+identities are refused as `actor-provenance`. Shared run or session handles are
+refused as `self-judging`; a shared model route is not. The
+candidate head must be a full commit SHA in the current Git repository; intake
+resolves its tree independently and compares both with the file. The recorded grant
+must exist, remain unexpired, and cover every entry's claim class. An agent cannot
+judge an `owner-only` criterion.
+
+`outcome` is `pass` only when every entry is `done`; otherwise write `fail`.
+The command prints `pass`, or the first applicable outcome in the order `defective`,
+`blocked`, `not-done`, with exit codes 0, 10, 11 and 12 respectively. A refused file
+prints an `item.rejection` record and exits 1. `--dry-run` performs the same checks
+through a read-only store transaction, without migration or writes. Without it,
+valid failing verdicts are recorded too. `--landed <full-sha>` adds that commit to
+both `landed` and `evidence` on each `done` verdict only. The optional `--now` clock
+lets tests inject a timestamp; otherwise the current UTC time is used.
+
+An item directive can opt in with `judge="agent"`. Sync stores this as `judge_mode`,
+and show prints it (empty means no agent judge requested). Any other directive value,
+including an explicitly empty one, produces `invalid-judge`, naming its block.
+This request alone does not start a judge: dispatch and outcome routing are separate
+steps in [the judge build order](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md#8-build-order).
+
 ## Hand-driven review comments
 
 ```sh

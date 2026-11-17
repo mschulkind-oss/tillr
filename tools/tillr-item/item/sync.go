@@ -661,6 +661,8 @@ func definitionDiff(block, stored itemPayload) string {
 		return "design_doc"
 	case block.Seat != stored.Seat:
 		return "seat"
+	case block.JudgeMode != stored.JudgeMode:
+		return "judge"
 	case block.Workflow != stored.Workflow:
 		return "workflow"
 	case block.Prose != stored.Prose:
@@ -839,6 +841,12 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		b.payload.ItemID = id
 		b.payload.Prose = attrs["prose"]
 		b.payload.Workflow = attrs["workflow"]
+		if judge, named := attrs["judge"]; named {
+			if judge != "agent" {
+				bad("invalid-judge", "judge %q is not agent: omit the attribute for mechanical retirement", judge)
+			}
+			b.payload.JudgeMode = judge
+		}
 		for _, f := range pending {
 			bad(f[0], "%s", f[1])
 		}

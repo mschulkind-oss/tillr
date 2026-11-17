@@ -74,6 +74,9 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 			return itemPayload{}, time.Time{}, Internalf("reading workflow metadata: %v", err)
 		}
 	}
+	if payload.JudgeMode, err = readJudgeMode(r, id); err != nil {
+		return itemPayload{}, time.Time{}, err
+	}
 	// Read-only opens do not migrate old stores. Absence means no close metadata
 	// was recorded; all other query failures remain explicit errors.
 	var hasClose bool
@@ -124,6 +127,23 @@ func readCriteria(r *store.Reader, id string) ([]criterion, error) {
 		return nil, Internalf("reading the criteria of %q: %v", id, err)
 	}
 	return criteria, nil
+}
+
+// readJudgeMode is shared by the show and definition readers. A legacy store
+// without the column requested no judge; reading it must not migrate that store.
+func readJudgeMode(r *store.Reader, id string) (string, error) {
+	var present bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'judge_mode')`).Scan(&present); err != nil {
+		return "", Internalf("checking judge metadata: %v", err)
+	}
+	if !present {
+		return "", nil
+	}
+	var mode string
+	if err := r.QueryRow(`SELECT judge_mode FROM items WHERE item_id=?`, id).Scan(&mode); err != nil {
+		return "", Internalf("reading judge metadata: %v", err)
+	}
+	return mode, nil
 }
 
 // readEdges answers the items this one is blocked by, in id order.

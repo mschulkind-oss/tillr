@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS items (
   seat       TEXT NOT NULL DEFAULT '',
   prose      TEXT NOT NULL DEFAULT '',
   workflow   TEXT NOT NULL DEFAULT '',
+  judge_mode TEXT NOT NULL DEFAULT '',
   waiting_on TEXT NOT NULL DEFAULT '',
   underlying_state TEXT NOT NULL DEFAULT '',
   close_reason TEXT NOT NULL DEFAULT '',
@@ -207,7 +208,7 @@ func init() {
 		panic(err)
 	}
 	// Blocked metadata is additive; older rows retain their unrecorded waiter.
-	for _, column := range []string{"workflow", "waiting_on", "underlying_state", "close_reason", "closed_at", "closed_by", "closed_from"} {
+	for _, column := range []string{"judge_mode", "workflow", "waiting_on", "underlying_state", "close_reason", "closed_at", "closed_by", "closed_from"} {
 		if err := store.RegisterColumn("item", "items", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			panic(err)
 		}

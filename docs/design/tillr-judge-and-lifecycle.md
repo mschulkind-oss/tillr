@@ -356,20 +356,13 @@ A verdict is only as good as whoever recorded it, and the observatory does not s
 
 A judge is an agent, and an agent's output is text that may be wrong, incomplete or about the wrong commit. Before any of it becomes a record, something has to check it: that it covers every criterion, that it read the text the store holds, that it looked at the candidate it claims to, and that it cites evidence. That check must be one piece of code, used by the loop, by a person judging a commit by hand and later by a workflow's evaluator, or the three will drift. This block builds that one intake as a command. It never trusts the file to say who the judge was; the caller states that.
 
-<!-- tillr: item id="item-jl-judge-intake" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item judge --item <id> --input <file> --head <sha> --actor <who> --judged-actor <who> --grant <id>` reads a file in the shape of the table in [Section 2.1](#21-topology-relative-to-gate-and-land-d-jl1) and records one `item.verdict` for each criterion in one transaction. Any refusal records none.
-- **c2:** The file is refused, each case under its own rule name, when its head or tree differs from `--head`, when a criterion of the item is missing or an unknown one is present, when a criterion hash differs from the stored text's, when a reason or the evidence list is empty, when a claim class differs from the stored one, and when it claims `pass` while an entry is not `done`. A test covers each.
-- **c3:** The actor and the judged actor come only from the flags. A file that carries either field is refused as `actor-in-output`, and the two flags naming the same run or the same session are refused by the independence check.
-- **c4:** `--dry-run` checks the file, writes nothing, and prints the outcome: `pass`, or the first that applies of `defective`, `blocked` and `not-done`. Each outcome has its own exit code, and the command's help lists them.
-- **c5:** `--landed <sha>` adds the landed commit to the evidence of each `done` verdict.
-- **c6:** An item block may set `judge="agent"` in its directive. `tillr item sync` stores it and `tillr item show` prints it; any other value is a finding that names the block.
 
 ### Route an opted-in item through a judge before the gate
 
 The gate proves the tree is healthy. It does not prove the change is what the item asked for, and for some items that is the question that matters. Such an item asks for a judge in its own block. The judge runs after the worker has committed and before the gate, so that work which misses the point costs neither the gate's time nor a landing. It reads and never writes. If it passes the work, the gate and the landing run as they do today, and only after the landing are the judge's rulings recorded, so the board never shows an item as judged done while its change is not on the trunk.
 
-<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-intake" prose="2" -->
+<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** For an item whose block sets `judge="agent"`, the loop starts one run on the review seat in the same lane after the worker's candidate passes the fence check and before the gate. Its brief carries the criteria and the candidate's diff and names the path where it must write its verdict file. A test with stub harnesses asserts the order: worker, judge, gate, landing.
 - **c2:** A judge run that commits or leaves the worktree changed is refused, and the worker's candidate is what it was. A test asserts the candidate's commit is unchanged.
