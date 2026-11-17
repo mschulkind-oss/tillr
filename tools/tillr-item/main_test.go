@@ -89,8 +89,7 @@ type itemInput struct {
 	Criteria  []criterion `json:"criteria"`
 	BlockedBy []string    `json:"blocked_by"`
 	DesignDoc string      `json:"design_doc,omitempty"`
-	// Rank is the queue's order (item/rank.go). A seed owns it, so a case about
-	// re-ranking states it here and the same struct carries it back out of the report.
+	// Rank is the queue's order (item/rank.go); the rank face changes it independently.
 	Rank string `json:"rank,omitempty"`
 }
 
@@ -458,7 +457,7 @@ func TestHelpIsTheFaceSurface(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--help exited %d, want 0: %s", code, out)
 	}
-	for _, face := range []string{"apply", "seed", "show", "state", "decision", "mail", "grant", "verdict"} {
+	for _, face := range []string{"apply", "rank", "show", "state", "decision", "mail", "grant", "verdict"} {
 		if !strings.Contains(string(out), face) {
 			t.Errorf("--help does not name the face %q: %s", face, out)
 		}

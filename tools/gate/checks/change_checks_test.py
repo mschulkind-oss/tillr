@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
-IDS = {"commit-identity", "seed-freeze", "citations", "documents", "file-size", "workflows"}
+IDS = {"commit-identity", "citations", "documents", "file-size", "workflows"}
 
 
 class Changes(unittest.TestCase):
@@ -37,10 +37,6 @@ class Changes(unittest.TestCase):
         self.env.update(GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="user.name", GIT_CONFIG_VALUE_0="Fixture",
                         GIT_CONFIG_KEY_1="user.email", GIT_CONFIG_VALUE_1="fixture@example.invalid")
         self.git("init", "-q")
-        (self.repo / "config/tillr").mkdir(parents=True)
-        self.seed = self.repo / "config/tillr/seed-items.json"
-        self.seed.write_text(json.dumps({"items": [{"item_id": "item-a", "title": "A"},
-                                                  {"item_id": "item-b", "title": "B"}]}))
         (self.repo / "README.md").write_text("# Fixture\n")
         shutil.copytree(ROOT / "tools/gate", self.repo / "tools/gate", ignore=shutil.ignore_patterns("__pycache__"))
         # These cases judge routing and findings, not whether a subprocess fits a
@@ -93,7 +89,7 @@ sys.exit(rc)
         return result.stdout.strip()
 
     def commit(self):
-        self.git("add", "config", "README.md", "tools")
+        self.git("add", "README.md", "tools")
         self.git("commit", "-qm", "chore: fixture")
         return self.git("rev-parse", "HEAD")
 
@@ -273,11 +269,6 @@ sys.exit(rc)
         self.assertEqual(second[0]["memory"], "remembered", second)
         self.assertEqual(marker.read_text(), compiles, "remembered build started a compiler")
 
-    def test_recorded_baseline_predating_seed_is_not_a_change_base(self):
-        result = subprocess.run(["python3", str(ROOT / "tools/gate/checks/change-checks.test.py")],
-                                cwd=self.repo, env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
     def test_runner_requires_base_and_ancestor(self):
         result = self.runner_check("--head", "HEAD")
         self.assertEqual(result.returncode, 4)
@@ -329,19 +320,6 @@ sys.exit(rc)
                 self.assertTrue(diagnostic.startswith("watchdog unavailable: "), diagnostic)
             expected_log = diagnostic + "\n" if diagnostic else ""
             self.assertEqual(next((self.repo / "logs").glob("*-" + kind + ".log")).read_text(), expected_log)
-
-    def test_seed_only_shrinks(self):
-        for entries, rc, needle in (([{"item_id": "item-a", "title": "A"}], 0, ""),
-                                   ([{"item_id": "item-c"}], 1, "net-new"),
-                                   ([{"item_id": "item-a", "title": "changed"}], 1, "title changed")):
-            self.seed.write_text(json.dumps({"items": entries}))
-            self.commit()
-            result = self.check("seed-freeze")
-            self.assertEqual(result.returncode, rc, result.stdout + result.stderr)
-            self.assertIn(needle, result.stdout)
-        self.seed.unlink()
-        self.commit()
-        self.assertEqual(self.check("seed-freeze").returncode, 0)
 
     def test_added_size_refusal_and_tree_debt(self):
         giant = self.repo / "tools/giant.ts"
@@ -470,7 +448,7 @@ sys.exit(rc)
         self.assertIn("2 document(s): 0 rendered, 2 remembered", again.stderr)
         # A later commit that touches neither document nor anything they name keeps both
         # remembered: the memory is per document, not per tree.
-        (self.repo / "config/tillr/unrelated.json").write_text("{}\n")
+        (self.repo / "tools/unrelated.json").write_text("{}\n")
         self.commit()
         self.assertEqual(self.check("documents").returncode, 0)
         self.assertEqual(len(self.renders()), 2, "an unrelated commit forgot a remembered pass")
@@ -634,7 +612,7 @@ sys.exit(rc)
         # Migrated change checks remain disjoint. The planner also schedules fast
         # whole-tree declarations, so its execution inventory includes those kinds
         # without reintroducing them as legacy implementations in the registry.
-        before = {"file-size", "commit-identity", "seed-freeze", "citations",
+        before = {"file-size", "commit-identity", "citations",
                   "documents", "pipeline-evidence", "self-suite", "workflows"}
         tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
         self.assertEqual(migrated | remaining, before | tree_ids)

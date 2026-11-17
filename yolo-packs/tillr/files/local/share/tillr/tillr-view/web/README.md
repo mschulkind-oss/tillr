@@ -42,6 +42,19 @@ timeline route supplies no transcript entry identifier, so the viewer does not g
 one from the observation ID. Check links carry the selected run and span to highlight
 that execution.
 
+## Recording queue priority
+
+The retained queue's unranked heading separates items with no recorded priority from
+ranked items. Use `tillr item rank` to record one item's priority in the store; the
+browser remains read-only. Rank is a string over `0123456789abcdefghijklmnopqrstuvwxyz`,
+compared lexically; unranked items follow all ranked items. For example:
+
+```sh
+tillr item rank --store .tillr/state.db --item item-042 --rank am
+```
+
+This changes no state, criteria, fence or runs. An empty `--rank ''` clears priority.
+
 ## Reading the spans
 
 Rows nest by recorded parent. Expand or collapse a row to control its subtree.

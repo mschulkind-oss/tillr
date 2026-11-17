@@ -4,8 +4,8 @@
 // state moves one item's own state (not its criteria's), the decision and mail nouns
 // record and read the two ledgers design §5.1 gives this utility, the grant and verdict
 // nouns record the delegation a verdict is recorded under and the one writer a
-// criterion's state moves on, seed writes a whole tillr.seed document's items in one
-// transaction, and sync materializes the item blocks of the repository's tracked documents.
+// criterion's state moves on, rank changes only an existing item's priority,
+// and sync materializes the item blocks of the repository's tracked documents.
 // main keeps the flags, the exit codes and the process lifecycle, and the item package
 // keeps the schema, the kinds and the record→row mapping.
 package main
@@ -16,7 +16,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"time"
 
@@ -56,7 +55,9 @@ func run(args []string) int {
 	case "apply":
 		env, code = applyFace(rest)
 	case "seed":
-		env, code = seedFace(rest)
+		return fail(item.Usagef("seed has been retired; use tillr item sync to read items from tracked documents"))
+	case "rank":
+		env, code = rankFace(rest)
 	case "sync":
 		return syncFace(rest)
 	case "comments":
@@ -126,23 +127,24 @@ func applyFace(args []string) (record.Envelope, int) {
 	})
 }
 
-// seedFace writes a tillr.seed document's items in one transaction, and --dry-run
-// validates the document and the store and answers the same report without writing.
-//
-// The clock is optional here where every other write face requires one: the seed's shape
-// is `--from` and `--store`, and a batch whose second run writes nothing does not need a
-// deterministic timestamp. --now is still accepted, so a test can pin updated_at.
-func seedFace(args []string) (record.Envelope, int) {
-	fs := newFlagSet("seed")
+// rankFace changes one existing item's priority without re-presenting its definition.
+func rankFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("rank")
 	path := fs.String("store", "", "the store to write")
-	from := fs.String("from", "", "the tillr.seed document to read")
-	dryRun := fs.Bool("dry-run", false, "validate and report, write nothing")
-	now := fs.String("now", "", "the injected clock, RFC 3339")
+	id := fs.String("item", "", "the item whose priority changes")
+	rank := fs.String("rank", "", "the lexical priority token; empty clears priority")
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: wall clock)")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	if *path == "" || *from == "" {
-		return record.Envelope{}, fail(item.Usagef("seed needs --store <path> and --from <document>"))
+	hasRank := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "rank" {
+			hasRank = true
+		}
+	})
+	if *path == "" || *id == "" || !hasRank {
+		return record.Envelope{}, fail(item.Usagef("rank needs --store <path>, --item <id> and --rank <token> (empty clears priority)"))
 	}
 	at := time.Now().UTC()
 	if *now != "" {
@@ -152,46 +154,9 @@ func seedFace(args []string) (record.Envelope, int) {
 		}
 		at = parsed.UTC()
 	}
-	doc, err := os.ReadFile(*from)
-	if err != nil {
-		return record.Envelope{}, fail(item.Usagef("reading %s: %v", *from, err))
-	}
-	if *dryRun {
-		return seedPreview(*path, *from, doc, at)
-	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.Seed(ctx, tx, *from, doc, at)
+		return item.SetRank(ctx, tx, *id, *rank, at)
 	})
-}
-
-// seedPreview answers what a seed run would write, writing nothing. A store that does
-// not exist yet holds no item, so it is previewed as empty rather than as an error: the
-// first use of a seed is against a store nobody has created.
-func seedPreview(path, from string, doc []byte, at time.Time) (record.Envelope, int) {
-	ctx := context.Background()
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		env, err := item.Preview(nil, from, doc, at)
-		if err != nil {
-			return record.Envelope{}, fail(err)
-		}
-		return env, record.ExitOK
-	}
-	s, err := store.OpenRead(ctx, path)
-	if err != nil {
-		return record.Envelope{}, fail(openFailure(err))
-	}
-	defer s.Close()
-
-	var stored record.Envelope
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		stored, err = item.Preview(r, from, doc, at)
-		return err
-	})
-	if err != nil {
-		return record.Envelope{}, fail(err)
-	}
-	return stored, record.ExitOK
 }
 
 // syncFace reads the item blocks of every tracked Markdown file under <root>/docs/ and writes
@@ -765,7 +730,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, seed, sync, comments, list, show, state, close, reopen, decision, mail, grant, verdict or judge"
+const faceList = "apply, rank, sync, comments, list, show, state, close, reopen, decision, mail, grant, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

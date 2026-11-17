@@ -14,7 +14,6 @@ from urllib.parse import unquote
 import roadmap_sections
 
 HEAD = "HEAD"
-LEGACY_SEED = "config/tillr/seed-items.json"
 TS_SIZE_WARN_LINES = 2000
 TS_SIZE_REFUSE_LINES = 3000
 GENERATED_COPIES = ()
@@ -238,69 +237,6 @@ def typescript_size_findings(root: Path, base: str | None) -> tuple[list[str], l
 
         )
     return warnings, refusals
-
-
-def legacy_seed_findings(root: Path, base: str | None) -> list[str]:
-    """What the intake freeze refuses about a change to the legacy seed.
-
-    `config/tillr/seed-items.json` is intake-frozen under `D-QP1`
-    (docs/design/tillr-queue-persistence.md Section 3.1): it may only shrink. A surviving
-    entry may not change a field, and a net-new `item_id` may not appear. Removal is the
-    one permitted edit, because the freeze exists so terminal rows leave as they land or
-    resolve. `base` is the commit the change is diffed against; with none nothing can be
-    called added, and the plan says so rather than reading silence as a pass.
-    """
-    if base is None:
-        return []
-    path = root / LEGACY_SEED
-    if not git(root, "ls-tree", "--name-only", HEAD, "--", LEGACY_SEED):
-        # The file is gone: every entry was removed, which is the one permitted edit.
-        return []
-    try:
-        current = json.loads(git(root, "show", f"{HEAD}:{LEGACY_SEED}"))
-    except OSError as error:
-        return [f"{LEGACY_SEED}: cannot read the intake-frozen seed: {error}"]
-    except json.JSONDecodeError as error:
-        return [f"{LEGACY_SEED}: the intake-frozen seed is not JSON: {error}"]
-    before_raw = git(root, "show", f"{base}:{LEGACY_SEED}", check=False)
-    if not before_raw.strip():
-        # The file did not exist at the base, so every entry it holds now is net-new.
-        before: dict = {"items": []}
-    else:
-        try:
-            before = json.loads(before_raw)
-        except json.JSONDecodeError as error:
-            return [f"{LEGACY_SEED}: the seed at {base[:12]} is not JSON: {error}"]
-
-    def entries(document: dict) -> dict[str, dict]:
-        items = document.get("items")
-        if not isinstance(items, list):
-            return {}
-        return {item["item_id"]: item for item in items
-                if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
-
-    old = entries(before)
-    new = entries(current)
-    remedy = ("file the item through the store and the owning document, not the legacy "
-              "seed")
-    findings: list[str] = []
-    for item_id in sorted(set(new) - set(old)):
-        findings.append(
-            f"{LEGACY_SEED}: {item_id} is a net-new item_id, and the file is "
-            f"intake-frozen under D-QP1 -- {remedy}")
-    for item_id in sorted(set(old) & set(new)):
-        if old[item_id] == new[item_id]:
-            continue
-        fields = sorted(
-            key for key in set(old[item_id]) | set(new[item_id])
-            if old[item_id].get(key) != new[item_id].get(key))
-        changed = ", ".join(fields) if fields else "fields"
-        findings.append(
-            f"{LEGACY_SEED}: {item_id} is a surviving entry and its {changed} changed; "
-            f"the file is intake-frozen under D-QP1 -- {remedy}")
-    return findings
-
-
 
 
 def identity_findings(root, base, head):
@@ -689,9 +625,7 @@ def run(kind, args):
         documents = [path for path in changed if path.endswith(".md")
                      and not any(part in (".forks", "node_modules", ".yolo") for part in Path(path).parts)
                      and git(root, "ls-tree", "--name-only", HEAD, "--", path)]
-        if kind == "seed-freeze":
-            findings = legacy_seed_findings(root, base) if LEGACY_SEED in changed else []
-        elif kind == "citations":
+        if kind == "citations":
             findings = unreachable_citations(root, base, documents)
         elif kind == "file-size":
             _, findings = typescript_size_findings(root, base)

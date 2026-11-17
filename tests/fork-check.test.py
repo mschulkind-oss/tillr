@@ -299,9 +299,8 @@ def build_repo(base: Path):
         "Jawfish/pi-background-tasks      yolo-packs/matt/patches/pi-background-tasks\n"
     )
     (repo / "tests" / "pi-patch-series.test.sh").write_text("#!/bin/sh\necho 'ok   stub structural'\n")
-    # The muse backend adapters' suite. A change under config/tillr/ plans it, and the
-    # seed-freeze cases change the intake-frozen seed there, so the fixture carries a
-    # stand-in that records being run.
+    # The muse backend adapters' suite. A change under config/tillr/ plans it;
+    # the fixture carries a stand-in that records being run.
     (repo / "tests" / "tillr-muse-backend.test.py").write_text(
         "from pathlib import Path\n"
         f"Path({str(base / 'tillr-backends-calls')!r}).open('a').write('backend\\n')\n"
@@ -466,31 +465,7 @@ def build_repo(base: Path):
     (repo / "docs").mkdir()
     (repo / "docs" / "guide.md").write_text("# Guide\n\nA document.\n")
     (repo / "README.md").write_text("# Synthetic fork-check repository\n")
-    # The legacy seed is intake-frozen under D-QP1, and the gate reads it against the
-    # diff base, so the fixture carries a small one a case can prune and edit. It is not
-    # the real seed; the check only reads the JSON.
     (repo / "config" / "tillr").mkdir(parents=True)
-    (repo / "config" / "tillr" / "seed-items.json").write_text(
-        json.dumps({
-            "kind": "tillr.seed",
-            "version": "0.1.0",
-            "generated": "2026-11-12",
-            "source": "fixture",
-            "triage": "fixture",
-            "note": "fixture",
-            "items": [
-                {"item_id": "item-seed-a", "title": "A", "state": "in-queue",
-                 "rank": "0", "blocked_by": [], "criteria": [],
-                 "allowed_paths": ["docs/"]},
-                {"item_id": "item-seed-b", "title": "B", "state": "in-queue",
-                 "rank": "1", "blocked_by": [], "criteria": [],
-                 "allowed_paths": ["docs/"]},
-                {"item_id": "item-seed-c", "title": "C", "state": "landed",
-                 "rank": "2", "blocked_by": [], "criteria": [],
-                 "allowed_paths": ["docs/"]},
-            ],
-        }, indent=1) + "\n"
-    )
     git_init(repo, "--initial-branch=main")
     commit(repo, "initial")
     return repo, releases, heads
@@ -7200,7 +7175,7 @@ assert "ratio=-" in efficiency.efficiency_line(
 # exists only for a positive recorded floor, and the printed line and the record agree:
 # before 2026-11-16 the line divided by the unrounded floor and printed a ratio that the
 # record, dividing by the rounded one, had as None.
-instant = [_floor_check("file-size", 0.0, 5.0), _floor_check("seed-freeze", 0.004, 5.0)]
+instant = [_floor_check("file-size", 0.0, 5.0), _floor_check("citations", 0.004, 5.0)]
 assert efficiency.s1_floor(instant) == 0.004, efficiency.s1_floor(instant)
 assert efficiency.efficiency_figures(7.0, efficiency.s1_floor(instant)) == (0.0, None)
 assert "ratio=-" in efficiency.efficiency_line(

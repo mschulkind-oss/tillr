@@ -21,7 +21,7 @@ import (
 )
 
 // SyncRecordKind is the record the sync face emits: what the documents declared and what the
-// store did about it. Like SeedRecordKind it is registered as neither an event kind nor a
+// store did about it. It is registered as neither an event kind nor a
 // materializer: every write sync makes is its own item.add or item.update, appended by Apply,
 // and a second record of the batch would claim a transition the log did not make.
 const SyncRecordKind = "item.sync"
@@ -646,7 +646,7 @@ func orderFileWrites(perFile map[string]*fileWrites, order []string) ([]fileWrit
 		if len(fw.payloads) == 0 {
 			continue
 		}
-		ordered, err := orderSeed(fw.payloads)
+		ordered, err := orderItems(fw.payloads)
 		if err != nil {
 			// A cycle inside one file is that file's to fix; Apply would refuse it edge by
 			// edge, so the payloads go in document order and the savepoint carries the refusal.

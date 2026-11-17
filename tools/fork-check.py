@@ -77,13 +77,6 @@ WHAT IT RUNS, and when. Only what the change can reach:
      tools/gate/checks/. It takes the caller's base and head, not the remembered baseline.
 
   8. RETIRED here: scratch and design citations are fast tree declarations in tools/gate/checks/.
-  8b. WHEN `config/tillr/seed-items.json` changes: the LEGACY-SEED INTAKE FREEZE --
-     `D-QP1` retires the file by attrition, so it may only shrink: a net-new `item_id`
-     or an edit to a surviving entry is refused, while a removal is the one permitted
-     edit. The refusal names the ruling and the remedy -- file the item through the store
-     and the owning document, not the legacy seed. The freeze is diff-scoped, so a run
-     with no base says it could not judge the change rather than reading silence as a
-     pass.
   9. WHEN the change can change what a storybook renders (the tool under
      tools/roster-storybook/ or tools/footer-storybook/, its own repository check, or
      the series it imports its widget from -- pi-subagents for the roster, pi-archimedes

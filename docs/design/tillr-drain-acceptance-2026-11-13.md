@@ -28,7 +28,7 @@ tillr drain loop --root /workspace --lanes 2 \
 ```
 
 - **Store**: `/workspace/.tillr/state.db`, schema 4, created for this run and seeded from
-  [`config/tillr/seed-items.json`](../../config/tillr/seed-items.json) (5 items, 2 `in-queue`).
+  `config/tillr/seed-items.json` (5 items, 2 `in-queue`).
 - **Outcome**: one tick. `dispatched 2, landed 1, rejected 0, infra failures 0`, then
   `queue-drained` — a full tick planned nothing dispatchable.
 - **Spend**: `$0.162990` over `38 744 131` tokens, from two `pi` runs

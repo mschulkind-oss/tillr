@@ -14,7 +14,7 @@ import (
 
 func TestApplyAcceptsOwnProducers(t *testing.T) {
 	ctx := context.Background()
-	for _, producer := range []string{"sync", "comments", "seed", "loop"} {
+	for _, producer := range []string{"sync", "comments", "loop"} {
 		t.Run(producer, func(t *testing.T) {
 			source := syncStore(t)
 			var payload json.RawMessage
@@ -36,15 +36,6 @@ func TestApplyAcceptsOwnProducers(t *testing.T) {
 					_, err := item.TakeComments(ctx, tx, root, "docs/example.md", []item.ReviewComment{{ID: "comment-1", Comment: "Why?", CreatedAt: 1}}, syncAt)
 					return err
 				}); err != nil {
-					t.Fatal(err)
-				}
-			case "seed":
-				items, err := item.ReadSeed([]byte(`{"kind":"tillr.seed","items":[{"item_id":"seed-item","title":"Seed item","state":"in-queue","criteria":[{"criterion_id":"c1","text":"Build it","state":"not-done"}],"blocked_by":[],"allowed_paths":["tools/thing/"],"rank":"m","seat":"build"}]}`))
-				if err != nil {
-					t.Fatal(err)
-				}
-				payload, err = json.Marshal(items[0])
-				if err != nil {
 					t.Fatal(err)
 				}
 			case "loop":
