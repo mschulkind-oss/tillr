@@ -1343,6 +1343,35 @@ to this item's paths. The work extends that one reader to take `orphan.limit`, a
 at least one that defaults to three, and adds no second reader of the settings file inside the
 loop or the view. The criteria below are unchanged.
 
+**Ruling, 2026-11-17 (answers the conflict two more failed attempts raised):** neither attempt found
+a fault in c1 to c4, so they stand as written. The item was built whole twice. Both landings were
+refused because the trunk had moved under the candidate, and the second conflict fix stopped
+without a commit on a test failure that this item does not cause. Four points settle it.
+
+- [unlanded] **Start from the built candidate.** Commit `907bb3a21`, the tip of `refs/tillr/preserved/run-item-drain-hold-repeatedly-orphaned-a5-cfix`, holds the implementation, its tests, the drain README section and the pack copy, already carried forward once onto the definition-driven planner, and it does not touch this file. Apply that one commit to the base and do not write the item again. Its message is a recovery record and not a commit message, so the new commit gets its own. On 2026-11-17 `git merge-tree --write-tree --name-only 0a14295b2 907bb3a21` reported one content conflict, in `tools/tillr-view/web/src/components/ItemsPasses.tsx`, and in its pack copy, which `just pack-sync` regenerates and nobody resolves by hand. Resolve it by keeping what the trunk added since and re-adding the orphan count beside it. A file that merges without a conflict can still be wrong against the newer trunk, so the full suites decide and not the merge. On the same day the candidate's own tree passed `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, 1467 tests, on a machine doing nothing else.
+- **The failing test is the trunk's, and the candidate does not cause it.** The conflict fix's full
+  drain suite failed `TestCommentPathTwice` once, at `comments_test.go:326: designer <nil>`, while
+  eight other suites, the web build and a review ran beside it. Measured on 2026-11-17 on a
+  32-processor machine at `0a14295b2` with no change applied: the compiled `drain` test binary run
+  as `-test.run '^TestCommentPathTwice$' -test.count=6` in 24 processes at once failed 8 of 144
+  runs, every one with that same line. The same command on the candidate's tree failed 9 of 144.
+  Run alone, the test passed three times of three on the candidate. The failure appears under load
+  with and without this item's change, at the same rate.
+- **This item does not repair it.** The repair is criterion c5 of
+  [Run owner-facing work on lanes outside the cap](#run-owner-facing-work-on-lanes-outside-the-cap),
+  whose ruling names the cause as a race in designer retirement. Two items changing
+  `retireDesigners` would conflict with each other, so this one leaves
+  `tools/tillr-drain/drain/designer.go` and the comment tests as the trunk has them.
+- **How the builder treats that one failure.** Run the full drain suite by itself, with no other
+  suite, build or review running beside it. If it fails and the only failing test is
+  `TestCommentPathTwice` with `designer <nil>`, run that test alone with
+  `go test ./drain -run '^TestCommentPathTwice$' -count=3`. If that passes, the failure is the
+  trunk's known race: commit, and state the failure and both commands' output in the report. Do not
+  report `trunk-broken` for it, because a replay on the base passes far more often than it fails
+  and would leave the failure with the candidate. Any other failing test, or this test failing
+  when run alone, is the candidate's to fix. Once the repair above is on the trunk this allowance
+  ends, and a failure of this test is treated like any other.
+
 - **c1:** The waiting face and the item's record show the number of orphaned attempts per item, and the loop's settings file takes `orphan.limit`, defaulting to three. A test asserts the count is shown for an item with two orphaned runs and for an item with none.
 - **c2:** When an item's orphaned attempts reach the limit, the planner holds it with the reason `orphan-limit`, which names each stopping loop's recorded fault, for example `fault: store: database is locked` or `gate-harness-error`. A test with three orphaned runs asserts the hold, the reason text and that nothing is dispatched.
 - **c3:** `tillr drain retry` for that item clears the hold and starts a new count, and a run that ends on its own merits (a verdict, a refusal or a report) also starts a new count. A test asserts both.
