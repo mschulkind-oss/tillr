@@ -29,7 +29,7 @@ next: "Cut the idea flow into build items once the observatory-actions design se
 
 **Needs your ruling:** None.
 
-**Reads with:** [observatory-design.md](./observatory-design.md) (the accepted four-region board and Vantage link contract), [board-item-state-model.md](./board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) (source launchers and board truth fixes this sequence builds on), and [tillr-day2.md](./tillr-day2.md) (loop failure classes).
+**Reads with:** [observatory-design.md](./observatory-design.md) (the accepted four-region board and Vantage link contract), [board-item-state-model.md](./board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) (source launchers and board truth fixes this sequence builds on), [tillr-day2.md](./tillr-day2.md) (loop failure classes), and [tillr-intake-paths.md](./tillr-intake-paths.md) (the other doors work enters by, and the one item shape every door must end in).
 
 ## 1. Item Kinds, States, and Edges
 
