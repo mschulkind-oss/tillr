@@ -61,7 +61,7 @@ var generalHolds = map[string]string{
 	ReasonVantageUnavailable: definition.PrerequisiteDesignQuestions,
 	ReasonItemUnstagleable:   "", ReasonDefinitionSyncFailed: "",
 	ReasonReadmissionExhausted: "", ReasonNodeScopeOutsideFence: "",
-	ReasonLaneUnlandedChange: "", ReasonLaneBranchHeld: "",
+	ReasonLaneUnlandedChange: "", ReasonLaneBranchHeld: "", ReasonLaneUncommittedWork: "",
 	StopHostBoundaryViolation: "",
 	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeOutputMissing: "",
 	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",

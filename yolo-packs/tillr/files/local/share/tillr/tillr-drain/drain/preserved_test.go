@@ -80,9 +80,10 @@ func TestAbandonPreservesUncommittedWork(t *testing.T) {
 		t.Fatal("no preservation settlement event")
 		return nil
 	})
-	// The snapshot never changed the real index, branch or working tree before reset.
-	if _, err := os.Stat(filepath.Join(lane, "inside/new.txt")); err != nil {
-		t.Fatal(err)
+	// The reset clears the untracked file, because the preserved ref above holds it
+	// (TestAbandonClearsTheUntrackedFilesItPreserved).
+	if _, err := os.Stat(filepath.Join(lane, "inside/new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("the preserved untracked file is still in the lane: %v", err)
 	}
 }
 

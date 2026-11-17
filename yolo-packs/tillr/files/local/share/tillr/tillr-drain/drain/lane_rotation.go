@@ -26,6 +26,10 @@ const (
 	// ReasonLaneBranchHeld is a lane whose branch another worktree has checked out
 	// (refuseBranchHeld).
 	ReasonLaneBranchHeld = "lane-branch-held"
+	// ReasonLaneUncommittedWork is a lane whose worktree holds uncommitted or untracked
+	// files when a pinned candidate is staged onto it (stagePinnedCandidate), which
+	// staging will not overwrite.
+	ReasonLaneUncommittedWork = "lane-holds-uncommitted-work"
 )
 
 const (
