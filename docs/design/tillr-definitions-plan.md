@@ -646,14 +646,7 @@ trunk history in [trunk_history.go](../../tools/tillr-drain/drain/trunk_history.
 tier, the startup sync, and the roll and push settings read by
 [settings.go](../../tools/tillr/settings/settings.go).
 
-<!-- tillr: item id="item-def-loop-start-without-git" paths="tools/tillr-drain/,tools/tillr/settings/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the store's definition does not complete on `landing`, the loop's start runs no Git command, no `tillr item sync`, no trunk history, no rolling tier and no roll or push.
-- **c2:** A test starts `tillr drain loop --exit-when-drained` on a root outside any Git repository, with `GIT_CEILING_DIRECTORIES` set so no parent repository is found, and asserts exit 0. A second test starts it on a subdirectory of a repository and asserts exit 0.
-- **c3:** The start line prints the definition's name and the steps it skipped.
-- **c4:** Roll or push settings in that root's `.tillr.toml` are refused at start, naming the keys, rather than ignored.
-- **c5:** No Git, file or process work runs inside a SQLite write transaction.
-- **c6:** Under the Git-landing definition the loop starts exactly as before; the existing loop suites pass unchanged, and a store created before this change drains as before.
 
 ### Add plain-directory staging for a definition that does not land
 
@@ -672,7 +665,7 @@ directory.
 template is the drain's `--brief-template` flag today, whose default is
 [brief-template.md](../../tools/tillr-run/backends/brief-template.md).
 
-<!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-def-loop-start-without-git" prose="2" -->
+<!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition does not complete on `landing`, staging creates the lane's working directory as a plain directory, with no worktree, no base sha and no fence file, and the run request names it.
 - **c2:** `tillr run exec` accepts that working directory for such a run, and still refuses any other directory for a run under Git landing.

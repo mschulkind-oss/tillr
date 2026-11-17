@@ -64,9 +64,15 @@ func trunkAncestor(ctx context.Context, root, old, tip string) (bool, error) {
 }
 
 // Every pass persists observation before it considers candidates. Landing workers
-// use the same transaction so replacing a loop cannot forget a candidate-free rewrite.
+// recheck the read snapshot in the write transaction so replacing a loop cannot
+// forget a candidate-free rewrite. Git work finishes before that transaction.
 // expected additionally preserves a rewrite the lander caught under its lock.
 func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory, error) {
+	if l.nonLanding {
+		return trunkHistory{}, nil
+	}
+	l.historyMu.Lock()
+	defer l.historyMu.Unlock()
 	l.mu.Lock()
 	ready := l.historyPinned
 	l.mu.Unlock()
@@ -92,21 +98,34 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 			return h, nil
 		}
 	}
+	// The lander also writes these refs and this row. Its existing repository
+	// lock serializes the whole observation across processes, without holding
+	// the SQLite writer during Git work. Keep the unchanged-tip path lock-free.
+	release, err := l.lockTrunkHistory(ctx)
+	if err != nil {
+		return trunkHistory{}, err
+	}
+	defer release()
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return trunkHistory{}, err
 	}
 	defer s.Close()
 	var h trunkHistory
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		var err error
-		h, err = readTrunkHistory(tx.Reader())
-		if err != nil {
+	for {
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			h, err = readTrunkHistory(r)
 			return err
+		})
+		if err != nil {
+			return h, err
 		}
-		tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		before := h
+		var tip string
+		tip, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
 		if err != nil {
-			return err
+			return h, err
 		}
 		if h.Lost == "" {
 			for _, old := range []string{h.Observed, expected} {
@@ -115,7 +134,7 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 				}
 				ancestor, err := trunkAncestor(ctx, l.cfg.Root, old, tip)
 				if err != nil {
-					return err
+					return h, err
 				}
 				if !ancestor {
 					h.Lost = old
@@ -126,7 +145,7 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 		if h.Lost != "" {
 			restored, err := trunkAncestor(ctx, l.cfg.Root, h.Lost, tip)
 			if err != nil {
-				return err
+				return h, err
 			}
 			if restored {
 				h.Lost = ""
@@ -138,20 +157,40 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 		// the new observed tip. A crash cannot leave a stored tip collectible.
 		if h.Lost != "" {
 			if _, err := l.git(ctx, l.cfg.Root, "update-ref", lostTrunkRef, h.Lost); err != nil {
-				return err
+				return h, err
 			}
 		}
 		if _, err := l.git(ctx, l.cfg.Root, "update-ref", observedTrunkRef, tip); err != nil {
-			return err
+			return h, err
 		}
 		if h.Lost == "" {
 			if _, err := l.git(ctx, l.cfg.Root, "update-ref", "-d", lostTrunkRef); err != nil {
-				return err
+				return h, err
 			}
 		}
-		_, err = tx.Exec(`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET observed_tip=excluded.observed_tip,lost_tip=excluded.lost_tip`, h.Observed, h.Lost)
-		return err
-	})
+		// Git and ref pins are complete before acquiring the SQLite writer.
+		// Recheck the read snapshot under that lock: a replacement observer
+		// must not have its history overwritten by this observation.
+		changed := false
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			current, err := readTrunkHistory(tx.Reader())
+			if err != nil {
+				return err
+			}
+			if current != before {
+				changed = true
+				return nil
+			}
+			_, err = tx.Exec(`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET observed_tip=excluded.observed_tip,lost_tip=excluded.lost_tip`, h.Observed, h.Lost)
+			return err
+		})
+		if err != nil || !changed {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return h, err
+		}
+	}
 	if err == nil {
 		l.mu.Lock()
 		l.historyPinned = true

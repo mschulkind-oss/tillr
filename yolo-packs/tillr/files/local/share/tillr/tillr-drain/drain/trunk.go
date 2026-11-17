@@ -770,6 +770,9 @@ func trunkFixerOpen(items []itemRow, declarations ...definition.Definition) stri
 // proved, and a red range proves nothing. An unknown run — the program was not there or
 // could not judge — likewise advances nothing.
 func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, result *LoopResult) error {
+	if l.nonLanding {
+		return nil
+	}
 	if l.gatePolicy.LandingStrategy == "after-merge" {
 		status, err := ReadHeavyStatus(ctx, l.cfg.Root, l.cfg.Store)
 		if err != nil {

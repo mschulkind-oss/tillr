@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -550,6 +551,8 @@ type Loop struct {
 	// keeperOpen lets tests shorten the checkpoint writer's SQLite lock wait.
 	keeperOpen func(context.Context, string) (*store.CheckpointOwner, error)
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
+	historyMu    sync.Mutex
+	nonLanding   bool
 	syncedSHA    string
 	syncClearSeq int64
 	questions    *VantageQuestions
@@ -723,6 +726,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// process never loaded. It is the answer to "is this the binary that carries the fix?",
 	// and it is printed even when the very first tick fails.
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
+	if err := l.startDefinition(ctx); err != nil {
+		return faultResult(result, err)
+	}
 	// The documents are synced before anything is planned: an item block committed since
 	// the last drain is work this drain should see, and the sync is the only way an item
 	// enters the store. A finding does not stop the loop — the documents without one were
@@ -740,7 +746,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// and a lane that does not exist yet cannot be watched. A stop that arrives during
 	// staging is the operator's stop, not a staging failure: the signal is why the git
 	// worktree add was abandoned.
-	if err := l.stageLanes(ctx); err != nil {
+	if err := l.stageLandingLanes(ctx); err != nil {
 		if operatorStopped(ctx) {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
@@ -793,10 +799,49 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 }
 
+// startDefinition reads the store before any Git work. Old stores resolve to
+// the embedded Git-landing definition through ForReader.
+func (l *Loop) startDefinition(ctx context.Context) error {
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return err
+	}
+	var d definition.Definition
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		declared, err := definition.ForReader(r)
+		if err == nil {
+			d = declared.Parsed
+		}
+		return err
+	})
+	s.Close()
+	if err != nil {
+		return err
+	}
+	l.nonLanding = d.Completes != "landing"
+	if l.nonLanding {
+		if _, err := settings.ReadWithoutLanding(l.cfg.Root, d.Name); err != nil {
+			return Usagef("%v", err)
+		}
+		l.reportf("loop: definition: %s; skipped Git, item sync, trunk history, Git lane staging, rolling tier, roll and push\n", d.Name)
+	}
+	return nil
+}
+
+func (l *Loop) stageLandingLanes(ctx context.Context) error {
+	if l.nonLanding {
+		return nil
+	}
+	return l.stageLanes(ctx)
+}
+
 // refreshDocuments syncs before planning at a new trunk commit and retains the lazy
 // question reader for all passes at that commit. A concurrent landing during the sync
 // invalidates that read: retry at the new tip rather than label mixed inputs as synced.
 func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string, error) {
+	if l.nonLanding {
+		return "", nil
+	}
 	for {
 		sha, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 		if err != nil {
