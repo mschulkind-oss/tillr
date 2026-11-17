@@ -7,11 +7,14 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// MoveReceipt is the reason and actor recorded when a finished item leaves its state.
-// It belongs to the event, not to the item's current disposition.
+// MoveReceipt records why a finished state is entered or left and who decided.
+// ResolvesVia points to the evidence for entering a finished state.
 type MoveReceipt struct {
-	Reason string
-	By     string
+	Reason      string
+	By          string
+	ResolvesVia string
+	// Flags preserves explicit empty CLI arguments for flag-not-stored refusals.
+	Flags []string
 }
 
 func itemDefinition(r *store.Reader) (definition.Definition, error) {

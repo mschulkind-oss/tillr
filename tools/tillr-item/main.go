@@ -352,8 +352,9 @@ func stateFace(args []string) (record.Envelope, int) {
 	id := fs.String("item", "", "the item whose state moves")
 	state := fs.String("state", "", "the state to move it to")
 	waiter := fs.String("waiter", "", "blocked waiter: owner, design, plan, or item:<id>")
-	reason := fs.String("reason", "", "why the item waits or leaves a finished state")
+	reason := fs.String("reason", "", "why the item waits or enters/leaves a finished state")
 	by := fs.String("by", "", "the actor authorizing a finished-state move")
+	resolvesVia := fs.String("resolves-via", "", "finished-state evidence: item:<id>, commit:<sha>, or doc:<path>")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -365,8 +366,15 @@ func stateFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
 	}
+	var flags []string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "reason", "by", "resolves-via", "waiter":
+			flags = append(flags, f.Name)
+		}
+	})
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.SetStateWithReceipt(ctx, tx, *id, *state, at.UTC(), item.MoveReceipt{Reason: *reason, By: *by}, item.WaitingOn{Waiter: *waiter, Reason: *reason})
+		return item.SetStateWithReceipt(ctx, tx, *id, *state, at.UTC(), item.MoveReceipt{Reason: *reason, By: *by, ResolvesVia: *resolvesVia, Flags: flags}, item.WaitingOn{Waiter: *waiter, Reason: *reason})
 	})
 }
 

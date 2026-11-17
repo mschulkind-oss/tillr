@@ -35,6 +35,9 @@ type itemPayload struct {
 	ClosedAt        string      `json:"closed_at,omitempty"`
 	ClosedBy        string      `json:"closed_by,omitempty"`
 	ClosedFrom      string      `json:"closed_from,omitempty"`
+	LifecycleReason string      `json:"lifecycle_reason,omitempty"`
+	LifecycleBy     string      `json:"lifecycle_by,omitempty"`
+	ResolvesVia     string      `json:"resolves_via,omitempty"`
 	Criteria        []criterion `json:"criteria"`
 	BlockedBy       []string    `json:"blocked_by"`
 	DesignDoc       string      `json:"design_doc,omitempty"`
@@ -145,6 +148,7 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 	}
 	from := ""
 	payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = "", "", "", ""
+	payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = "", "", ""
 	if existing {
 		stored, storedAt, err := readStoredItem(tx.Reader(), payload.ItemID)
 		if err != nil {
@@ -152,6 +156,7 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		}
 		from = stored.State
 		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
+		payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = stored.LifecycleReason, stored.LifecycleBy, stored.ResolvesVia
 		// carryCriteria runs first so its existing refusals keep their names,
 		// including when a record also tries to reopen or rename the item.
 		if d.IsFinished(from) && from != d.Closed && from == payload.State {

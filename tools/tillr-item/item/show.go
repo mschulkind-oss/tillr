@@ -91,6 +91,22 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 			return itemPayload{}, time.Time{}, Internalf("reading close metadata: %v", err)
 		}
 	}
+	// Read-only opens must also work before finished-state receipt columns exist.
+	for column, value := range map[string]*string{
+		"lifecycle_reason": &payload.LifecycleReason,
+		"lifecycle_by":     &payload.LifecycleBy,
+		"resolves_via":     &payload.ResolvesVia,
+	} {
+		var present bool
+		if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = ?)`, column).Scan(&present); err != nil {
+			return itemPayload{}, time.Time{}, Internalf("checking finished-state receipt: %v", err)
+		}
+		if present {
+			if err := r.QueryRow(`SELECT `+column+` FROM items WHERE item_id = ?`, id).Scan(value); err != nil {
+				return itemPayload{}, time.Time{}, Internalf("reading finished-state receipt: %v", err)
+			}
+		}
+	}
 	if payload.WaitingOn, payload.UnderlyingState, err = ReadWaitingOn(r, id); err != nil {
 		return itemPayload{}, time.Time{}, err
 	}

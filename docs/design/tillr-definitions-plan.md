@@ -334,15 +334,7 @@ no blocker.
 [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 uses in its c2, so that block's criterion is met by this one rather than contradicted.
 
-<!-- tillr: item id="item-def-finished-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A move into any finished state through `tillr item state` takes `--reason`, `--by` and `--resolves-via`. The pointer is `item:<id>` for an item the store holds, `commit:<sha>` or `doc:<path>`. All three are stored on the item, carried by the update event, and printed by `tillr item show`.
-- **c2:** A test moves an item to a finished state with all three and asserts what `show` prints and what the event carries.
-- **c3:** A flag the face would not store on a given move is refused as `flag-not-stored`, naming the flag, instead of being accepted and dropped. A test passes `--reason` on a move to the ready state.
-- **c4:** An `item:` pointer naming an item the store does not hold is refused as `pointer-unknown`.
-- **c5:** The loop's own move to `landed` still succeeds unchanged, and every existing test of the item utility passes.
-- **c6:** A store created before this change opens with its finished items readable as they were.
-- **c7:** The item utility's README documents the three flags.
 
 ### Route the planner's ready, finished and prerequisite tests through the definition
 
@@ -602,7 +594,7 @@ with the reason on the record.
 move goes through the existing `ItemState` step in [steps.go](../../tools/tillr-drain/drain/steps.go)
 with the flags the receipts item added.
 
-<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-stage-plain-directory,item-def-finished-state-receipts" prose="2" -->
+<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-stage-plain-directory" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
 - **c2:** When the hook exits 0 and prints a finished state, a reason and an optional pointer, the drain moves the item there with `--reason`, `--resolves-via` and `--by definition:<name>`.

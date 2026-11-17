@@ -32,7 +32,8 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 	return SetStateWithReceipt(ctx, tx, itemID, state, at, MoveReceipt{}, waiting...)
 }
 
-// SetStateWithReceipt also records the reason and actor for leaving a finished state.
+// SetStateWithReceipt records evidence and an actor for entering a finished state,
+// and the existing reason and actor event for leaving one.
 func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time, receipt MoveReceipt, waiting ...WaitingOn) (record.Envelope, error) {
 	if itemID == "" {
 		return record.Envelope{}, Usagef("an item state write needs an item_id")
@@ -62,6 +63,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		return record.Envelope{}, err
 	}
 	if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkStateReceipt(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
 	previousWaiting, previousUnderlying := payload.WaitingOn, payload.UnderlyingState
@@ -99,9 +103,12 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		}
 		waitingJSON = string(body)
 	}
+	if payload.State != state && d.IsFinished(state) {
+		payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = receipt.Reason, receipt.By, receipt.ResolvesVia
+	}
 	if _, err := tx.Exec(
-		`UPDATE items SET state = ?, waiting_on = ?, underlying_state = ?, updated_at = ? WHERE item_id = ?`,
-		state, waitingJSON, payload.UnderlyingState, at.UnixMilli(), itemID,
+		`UPDATE items SET state = ?, waiting_on = ?, underlying_state = ?, lifecycle_reason = ?, lifecycle_by = ?, resolves_via = ?, updated_at = ? WHERE item_id = ?`,
+		state, waitingJSON, payload.UnderlyingState, payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia, at.UnixMilli(), itemID,
 	); err != nil {
 		return record.Envelope{}, Internalf("moving item %q to %q: %v", itemID, state, err)
 	}
@@ -111,7 +118,7 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	// reads this event's payload for that field.
 	from := payload.State
 	payload.State = state
-	if from != state && d.IsFinished(from) {
+	if from != state && (d.IsFinished(from) || d.IsFinished(state)) {
 		return recordLifecycle(tx, payload, at, "state", receipt.Reason, receipt.By)
 	}
 	payload.UpdatedAt = at.UTC().Format(time.RFC3339)
