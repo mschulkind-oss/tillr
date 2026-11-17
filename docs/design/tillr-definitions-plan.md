@@ -188,11 +188,15 @@ planner should work on a store the drain never opened.
 `tillr-store` (a blank import of the package that calls `RegisterDDL`, through the modules' local
 `replace` lines) makes `init` create the same schema the loop does, with no read face changed. No
 module imports `tillr-store`, so this adds no import cycle. Another way that meets the criteria is
-fine.
+fine. `tillr run status` reports one run and has no empty answer: it needs `--run <id>`, and for a
+run the store does not hold it prints its record and exits 1 (`statusFace` in
+[main.go](../../tools/tillr-run/main.go)). That contract stays, which answers the conflict a worker
+raised on 2026-11-17 against a c1 that asked that face for exit 0; no file of the run utility
+changes.
 
 <!-- tillr: item id="item-def-tables-at-init" paths="tools/tillr-store/,tools/tillr/store/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** After `tillr store init` alone, `tillr drain why`, `tillr view waiting`, `tillr view status`, `tillr run lanes` and `tillr run status` each exit 0 with an empty answer. A test builds those binaries, runs each against a store only `init` created, and asserts the exit code and the empty answer.
+- **c1:** After `tillr store init` alone, `tillr drain why`, `tillr view waiting`, `tillr view status` and `tillr run lanes` each exit 0 with an empty answer, and `tillr run status --run <id>`, for an id the store does not hold, exits 1 with the record it prints for an absent run. None exits 3 or names a missing table. A test builds those binaries, runs each against a store only `init` created, and asserts each exit code and answer.
 - **c2:** `tillr store init` creates every table and column any utility registers. A test compares an init-only store's schema with the schema of a store the loop has opened, table by table and column by column.
 - **c3:** No read face creates or migrates a table.
 - **c4:** Every existing test of the store utility and the core library passes unchanged, and a store created before this change opens and drains as before. A test opens such a store.
