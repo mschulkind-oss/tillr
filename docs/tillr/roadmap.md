@@ -1504,12 +1504,7 @@ separate copier goroutine fills that buffer from the pipe, and under load it has
 test sees an empty capture and reports that the trace never reported its loss. The product code
 loses nothing, and the fix belongs in how the test waits for its own capture.
 
-<!-- tillr: item id="item-store-trace-queue-test-not-flaky" paths="tools/tillr/store/trace_queue_test.go,tools/tillr/store/trace.go" blocked_by="" prose="2" -->
 
-- **c1:** The commit message names the root cause: the test reads the captured stderr before the copier goroutine has moved the delivered loss report out of the pipe. The commit also says that the trace queue itself is unchanged.
-- **c2:** The test reads the capture only after everything written to the pipe has reached the buffer, for example by closing the write end and waiting for the copier to reach end of file. It uses no retry, no longer sleep, and no polling loop with a deadline.
-- **c3:** `go test -race -count=200 -run '^TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss$'` in `tools/tillr/store` passes. So does a run of the compiled test binary with `-test.count=100` in 24 processes at once, which failed in 14 of 24 processes before the fix. The report lists both commands, results and the date.
-- **c4:** The other tests that use the same capture helper, in `trace_exit_test.go`, still pass, and the whole `tools/tillr/store` package passes.
 
 **Agent details:**
 
@@ -1569,7 +1564,7 @@ took the same suite to 13.7 to 14.5 seconds with six shards. The drain's rolling
 repository gate both pay the 64 seconds today, and the cost estimate the gate plans with still
 says 30.9 seconds.
 
-<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="item-store-trace-queue-test-not-flaky" prose="2" -->
+<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
 - **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
