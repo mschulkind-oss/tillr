@@ -427,9 +427,46 @@ A change to the gate's own runner can break the gate for every lane, so the runn
 
 ## Filed 2026-11-17: stall detection where the kernel counter is refused
 
-### Watch for stalled checks without the kernel counter
+### Add stall detection without the kernel counter
 
-The gate ends a check only when it stalls, and it judges a stall by whether the check's CPU time or output grew during a sample. It reads that CPU time from a kernel task-clock counter. In a rootless Podman jail, where `/proc/sys/kernel/perf_event_paranoid` is 2, the kernel refuses the counter. The gate then prints `watchdog unavailable: kernel task-clock counter: permission denied` and runs every check with no stall detection at all. On 2026-11-17 this showed up in the gate logs of the drain's own runs in this jail, for example in the `00-gate_python3.log` of the run for `item-sync-hold-unshared-items-a4`, and also in the gate program's own checks. Gates still passed, so nobody saw that the drain, which runs here every day, had lost the protection the owner asked for: watch for stalls, but never let a loaded machine fail a check that would otherwise finish. The design records an unavailable counter as "disabled explicitly" and rejects guessing from partial process snapshots, so a fallback has to count CPU from a source that includes exited children, such as the check's control group, and has to say which source it used.
+**Theme:** Repo gate
+
+**Description:** The repo gate must distinguish a check that has stopped making progress from
+one that is simply taking longer on a busy machine. When the jail refuses access to the
+kernel's CPU counter, the gate currently loses stall detection but can still pass its checks.
+That leaves the drain's everyday runs without the protection the owner requested. Keep
+watching for stalls through an unprivileged source of CPU accounting, and make the source
+visible to the operator.
+
+A check can do useful work in child processes that exit between samples. Their CPU time must
+still count; otherwise, the gate could mistake active work for a stall. Continue allowing a
+check to run while it uses CPU or produces output. If neither accounting source is readable,
+report that detection is unavailable rather than implying that the check is being watched.
+
+**Outcomes:**
+
+- Detect stalled checks even when the jail refuses the kernel counter.
+- Keep active checks running, including checks that work through short-lived children.
+- Record the CPU accounting source, or explicitly report that detection is unavailable.
+
+**Agent Details:**
+
+- **Ref:** [Gate design](../design/gate-rework.md) (stall detection and unavailable CPU accounting).
+- **Where:** `tools/tillr-gate/cpu_linux.go`, `tools/tillr-gate/watchdog.go`,
+  `tools/tillr-gate/cpu_linux_test.go`, `tools/tillr-gate/watchdog_test.go`,
+  [`tools/fork-check.py`](../../tools/fork-check.py), `tests/fork-check.test.py`,
+  [gate README](../../tools/tillr-gate/README.md), and the gate design's stall section.
+- **Evidence:** On 2026-11-17, the drain's gate logs in a rootless Podman jail with
+  `/proc/sys/kernel/perf_event_paranoid` set to 2 recorded
+  `watchdog unavailable: kernel task-clock counter: permission denied`. This included
+  `00-gate_python3.log` for `item-sync-hold-unshared-items-a4` and the gate program's own
+  checks, even though gates passed.
+- **Verify:** Force the kernel task-clock counter unavailable in both the Go gate and Python
+  checker. Cover a silent, CPU-idle check for the full stall window; continued CPU use or
+  output; short-lived children; and failure to read either accounting source. Check that logs
+  and verdicts identify the source. Use accounting that includes exited children, such as
+  control-group accounting, rather than partial process snapshots. Document the available
+  sources and their precedence.
 
 <!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
 
