@@ -59,6 +59,10 @@ writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). None needs an answer before the
 second round of conversation with AutoQA's agent, which is the owner's stated order.
 
+[Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
+idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
+a ramble) runs its own small graph and ends in one item shape, and lists what is not yet settled.
+
 [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) carries eight more,
 [`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
 [`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16: whether models
