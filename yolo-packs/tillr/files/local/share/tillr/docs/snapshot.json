@@ -1,13 +1,13 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "3e13e0da808b86935b111e89af9faee6c26308aa",
-  "date": "2026-11-16",
+  "commit": "20c3847b83acf742d319a00efa69d0fd54a56bd6",
+  "date": "2026-11-17",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
   "documents": [
     {
       "source": "docs/tillr/design-status.md",
-      "blob": "617d2e3ef5fe31e2040470b944ebbebb0b369a88",
+      "blob": "f73c511901f5cc53d07a75af4b041cdabe57c4ad",
       "delivered": "docs/tillr/design-status.md"
     },
     {
@@ -17,22 +17,32 @@
     },
     {
       "source": "docs/design/tillr-core-and-git-landing.md",
-      "blob": "edfcdc66ee52acbfec717b7ba03d967014425a33",
+      "blob": "451c6c42968dbf11148525806a8c53b8bb6a107c",
       "delivered": "docs/design/tillr-core-and-git-landing.md"
     },
     {
+      "source": "docs/design/tillr-definitions-plan.md",
+      "blob": "bbb99bc3f9bf7b4f7aa88d361f237c5a4d8c8f7d",
+      "delivered": "docs/design/tillr-definitions-plan.md"
+    },
+    {
+      "source": "docs/design/tillr-product-qa-requests.md",
+      "blob": "cbfe0f0c6b2b94d7474b9252ccd8c512cb678a19",
+      "delivered": "docs/design/tillr-product-qa-requests.md"
+    },
+    {
       "source": "docs/design/tillr-intake-paths.md",
-      "blob": "9fb7abdf054ae4795d994899ee54a0149984f312",
+      "blob": "b16312b911ededb1715c2ef0ae0823536f05987d",
       "delivered": "docs/design/tillr-intake-paths.md"
     },
     {
       "source": "docs/design/tillr-separable-parts.md",
-      "blob": "d47e949640a83eb2fdd9008b5450dd995160e3e1",
+      "blob": "3164ee70150a438200bfb8050f1531e6d39c00b9",
       "delivered": "docs/design/tillr-separable-parts.md"
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "97c70e99203e3dffcd2df083d8f47076414792a5",
+      "blob": "4f0541dff7d56f3fcbe67146c6c295e4226c9ada",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
@@ -87,7 +97,7 @@
     },
     {
       "source": "docs/design/tillr-designer-sessions.md",
-      "blob": "2ba77fd6e128ec26cd8efbd408d5c7ed09a070e1",
+      "blob": "527fa65da1914fb7907ac4fca282647cad8bf27d",
       "delivered": "docs/design/tillr-designer-sessions.md"
     },
     {
@@ -97,7 +107,7 @@
     },
     {
       "source": "docs/design/tillr-restart.md",
-      "blob": "04361479901ca23163d0847a210720b706e7193d",
+      "blob": "dae56b6a5bc00235bfed0e71b606e4bb7a669c68",
       "delivered": "docs/design/tillr-restart.md"
     },
     {
@@ -107,12 +117,12 @@
     },
     {
       "source": "docs/design/gate-rework.md",
-      "blob": "d39f9427b875354c9005e40891bf0ba2b13fbc11",
+      "blob": "2459c4015efbf5623321ecc7a2d55fdb2da4bbae",
       "delivered": "docs/design/gate-rework.md"
     },
     {
       "source": "docs/design/landing-principles.md",
-      "blob": "c4a22bbbc6c0f1461390ba7c7bffbff8afc7fa63",
+      "blob": "8d454806cf901e78b888e1d2b12cebf611b744a2",
       "delivered": "docs/design/landing-principles.md"
     },
     {

@@ -9,12 +9,12 @@ covers:
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Thirteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-04, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
 
-> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 This is the library, not another ruling. Each entry is one durable principle, the measurement that
 produced it, the ruling that owns the detail, the column that matters — **what enforces it today** —
@@ -221,12 +221,22 @@ crashes, times out or produces no extractable verdict means the gate's own integ
 the batch fails closed; a suite that names failing assertions is a verdict about the tree it ran
 against, and must route like one.
 
+"Times out" means stopped making progress, never ran longer than expected. The owner ruled on
+2026-11-17 ([`D-GR15`](gate-rework.md#decision-ledger)): "target budgets, watch for stalls, but
+don't let 'load is high' cause failures that would otherwise finish just fine." A time limit on a
+check is a target that is measured and reported; a check still making progress is not stopped
+because a clock passed and is never "could not judge"; what ends one early is a stall seen by a
+watchdog, and a stall is named and leads to a named next step.
+
 *Measured 2026-11-02:* a single stale assertion in `tests/fork-check.test.py` was reported as "not
 verified" rather than as a verdict, so a whole batch refused and re-armed on a five-minute clock
 instead of the offender being isolated.
 
 *Enforced by:* `d78e05685` landed the split, with tests pinning both arms and the rule that a red
-self-suite still never passes the batch.
+self-suite still never passes the batch. The 2026-11-17 half is **not enforced yet**: on that date
+`tillr-gate` still stops a fast check at its ceiling and answers exit 4 (`fastCeilingMS` in
+[`run.go`](../../tillr-gate/run.go)), and the gate program and `tools/fork-check.py` still
+stop checks on fixed timeouts.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it: a gate
 verdict whose result is `error` is refused with `ReasonVerdictError`, never read as a failure of the
@@ -353,6 +363,36 @@ dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held sta
 cannot break this principle and is not bound by it. This is the held-state half of
 [Section 11](#11-a-failure-is-diagnosed-not-waited-out): where that section forbids waiting on time,
 this one forbids waiting on an actor that is not there.
+
+## 14. Convict a run on what it did, not on what happened while it ran
+
+A run is convicted only on evidence that the run itself made the change. A movement that merely
+happened inside the run's window can be the owner's or another agent's. Examples are a worktree
+added or removed, a branch, a tag, a fetch, a stash, a hand commit, a fork export, or an
+operator's pin. Such a movement is recorded as information, and it must never hold an item or
+stop the loop. The owner ruled on 2026-11-17: "why do we convict anyone for removing worktrees?
+that sounds stupid? we should be free to act with normal tools without breaking the drain, goes
+along with ad hoc commits". That ruling followed the one earlier the same day: "we're supposed
+to be able to ad hoc land stuff".
+
+*Measured 2026-11-17:* at five lanes, two runs that made no edits were held
+`host-boundary-violation`. The cause was "worktree `<lane root>/.rolling/worktree` appeared",
+which was the loop's own rolling checkout. Twenty-six stale registered worktrees from finished
+agents were also left unremoved, because removing them would have convicted every run in flight.
+
+*Enforced by:* `CompareRunObserved` in
+[`tools/tillr-drain/drain/boundary.go`](../../tillr-drain/drain/boundary.go). It splits a
+run's bracket into what it convicts and what it only observes. It convicts a write into a
+watched, idle sibling lane worktree, and the run's own lane worktree going away. It observes a
+rogue ref inside tillr's namespaces, any other worktree's registration, and a main-checkout
+branch switch. The observations go on the run's `boundary.check` event, and the check stays
+clean. The fence check still convicts a candidate whose committed change leaves its fence. The
+gate still judges what lands. `TestOrdinaryGitUseDuringARunNeverConvictsIt` pins the ruling.
+*Not enforced:* a worker whose only escape lies outside the lanes is no longer stopped. A rogue
+ref or a stray worktree is named for an operator, and nothing acts on it.
+
+*Scope:* **not lander-scoped.** The bracket is the dispatch side's, in `tillr-drain`. The lander
+holds landings on trunk movement through its own checks, and it never convicts a run.
 
 ---
 
