@@ -346,23 +346,47 @@ Built: this landed in commit `ed5cb51a2e`.
 
 ## Filed 2026-11-15: a check reads what the tree pins, never what a machine happens to hold
 
-On 2026-11-15 the gate's `structural` check failed on a fresh machine because seven local
-`patch/*` branches did not exist, and the after-merge check could not judge because the shared
-fork checkouts were absent. Both read a name on the machine (a branch, a directory) where the tree
-should pin content. [The gate rework](../design/gate-rework.md) already makes a missing input a
-named answer; this item removes the dependence.
+On 2026-11-15 the repo gate failed on a fresh machine because local delivery branches were
+missing. The check after merging also could not judge because shared fork checkouts were absent.
+Both checks depended on what that machine happened to hold rather than on the content recorded
+in the repository.
 
-### Fork checks resolve a commit the tree pins, through a cache that is filled on a miss
+### Isolate fork checks from local machine state
 
-Criteria c2 and c3 were restored on 2026-11-17. Commit `bf87a76d8b`, which settled the landing
-sequence around the owner's uncommitted edits, replaced them here with two criteria about the
-lander and the drain's boundary check, which this item's paths do not include, and a build stopped
-on them. Those two belong to
-[routing a landing around the owner's uncommitted edits](#route-a-landing-around-the-owners-uncommitted-edits),
-which carries its own c2 and c3. This item changes nothing under `tools/tillr-land/` or
-`tools/tillr-drain/`.
+**Theme:** Repo Gate
 
-<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="" -->
+Forks are upstream tools that we deliver with our own changes. A fork check should produce the
+same answer on a fresh machine as on one that has been building those tools for months. To make
+that possible, the repository must record the exact commit to check, and exporting a patch series
+must update that record along with the delivered changes. Checks can reuse a local cache of
+commits, but they must fetch the recorded commit when it is missing instead of choosing whatever
+version is already available. If the fetch cannot succeed, the gate must explain which input is
+missing rather than report that the change failed verification.
+
+**Outcomes:**
+
+- Record the exact fork commit with each delivery and use it on every machine.
+- Reuse cached commits and fetch only when the required commit is missing.
+- Report a missing input separately from a failed check, with enough detail to retrieve it.
+
+**Agent Details:**
+
+- **Ref:** [The gate rework](../design/gate-rework.md) defines the gate's response to missing
+  inputs. The 2026-11-15 `structural` failure involved seven absent local `patch/*` branches;
+  the after-merge check lacked shared fork checkouts.
+- **Where:** [Gate checks](../../tools/gate/), [fork checker](../../tools/fork-check.py),
+  [fork export command](../../bin/pi-forks), and [delivery packs](../../yolo-packs/).
+  Criteria c2 and c3 were restored on 2026-11-17 after commit `bf87a76d8b` replaced them with
+  landing and boundary-check requirements. Those requirements belong to
+  [routing a landing around the owner's uncommitted edits](#route-a-landing-around-the-owners-uncommitted-edits),
+  which carries its own c2 and c3. Do not change the lander or drain for this item.
+- **Verify:** Use [fork-check tests](../../tests/fork-check.test.py) and
+  [fork export tests](../../tests/pi-forks.test.sh) to check that exporting updates the recorded
+  commit, deleting all local `patch/*` branches changes no result, and empty, current, and
+  stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
+  that a fetch refusal names the missing commit and remote and returns `could not judge`.
+
+<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change.
 - **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
