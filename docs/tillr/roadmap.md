@@ -1911,6 +1911,38 @@ The eighth run's resolved tree is preserved under the ref
 `refs/tillr/preserved/run-item-whole-tree-checks-in-done-and-rolling-a8-cfix`. The next run starts
 from it and adds c9, and does not redo c1 to c8.
 
+**Ruling, 2026-11-17 (answers the eleventh and twelfth runs' conflict):** the twelfth run was right
+to stop, and c9 as it stood was wrong about the tree. Nothing in c1 to c8 changes. While this item
+waited, trunk commit `d0eb7b405` made both repairs that c9 asked for, and made the first one a
+different way. c9 then named a test that no longer exists and asked for an edit that the gate
+refuses.
+
+- The seed file is frozen. It is the historical queue and takes no more intake, and the gate's
+  `seed-freeze` check refuses a candidate that changes the criteria of an entry still in it. The
+  eleventh run followed the old c9, added the eleven labels to `config/tillr/seed-items.json`, and
+  was refused by the gate on that check alone. Its other work was not judged red.
+- `d0eb7b405` repaired the seed test without touching the seed. It replaced
+  `TestTheSeedFileDispatchesTheRuledItems` with two tests in `tools/tillr-drain/seed_test.go`.
+  `TestTypedFrozenSeedDispatchesTheRuledItems` adds the eleven labels to a copy of the seed inside
+  the test. `TestFrozenSeedRefusesUntypedOwnerCriteria` asserts that the unchanged file is refused.
+- The same commit gave the stand-in `tillr-item` in `step_argv_contract_test.go` its
+  `"claim_class": "verification-only"`.
+
+So the labels belong only in the test's copy, and the frozen-seed rule stands. This item now makes
+neither repair. c9 is restated below as a guard: the candidate leaves the seed file and both test
+files as the trunk has them, and the three tests pass. `config/tillr/` stays in the item's paths
+only because the directive is not edited here; no criterion asks for a change under it, and a
+change to the seed file there is refused by the gate.
+
+The preserved ref named above predates `d0eb7b405`. Its 27 files do not include the seed file,
+`seed_test.go` or `step_argv_contract_test.go`, so the next run applies its change onto today's
+trunk and keeps the trunk's version of those three files and of their delivered copies under
+`yolo-packs/tillr/`. The eleventh run also found and repaired one fault in the preserved work, and
+that repair was lost with its candidate. The next run makes it again, under c4: the edit fence of a
+trunk fixer filed for a red tree check must not include the scripts that judge the fixer, of which
+the eleventh run named `tests/pack-sync.test.py` and the structural check's script. A test asserts
+that no such script is in the fixer's fence.
+
 - **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
 - **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
 - **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
@@ -1919,7 +1951,7 @@ from it and adds c9, and does not redo c1 to c8.
 - **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
 - **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
 - **c8:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree.
-- **c9:** `go test ./... -run 'TestTheSeedFileDispatchesTheRuledItems|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` passes. Each of the eleven criteria in `config/tillr/seed-items.json` whose text begins "Owner decision recorded" states `"claim_class": "owner-only"`, and no other seed entry changes. The stand-in `tillr-item` in `step_argv_contract_test.go` prints `"claim_class": "verification-only"` for its criterion, as the real `tillr item show` does. The report gives the full `go test ./...` result for `tools/tillr-drain`, with the date.
+- **c9:** `go test ./... -run 'TestTypedFrozenSeedDispatchesTheRuledItems|TestFrozenSeedRefusesUntypedOwnerCriteria|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` passes. The candidate does not change `config/tillr/seed-items.json`, `tools/tillr-drain/seed_test.go`, or the criterion that the stand-in `tillr-item` prints in `step_argv_contract_test.go`; `git diff --stat <base> HEAD` over those three paths prints nothing. The report gives the full `go test ./...` result for `tools/tillr-drain`, with the date.
 
 **Agent details:**
 
@@ -1935,6 +1967,8 @@ from it and adds c9, and does not redo c1 to c8.
 - **Where (c4):** `acquitTrunkAlreadyRed` in `tools/tillr-drain/drain/trunk.go` writes the `blocked` state and the waiter. `isBlocked` and the `switch` in `decide`, in `tools/tillr-drain/drain/plan.go`, put the `blocked` rule before the `trunk-broken` rule. `mayBeARetry` in the same file is the rule that holds a second attempt for an owner. `ReadWaitingOn` in `tools/tillr-item/item/waiting.go` reads the waiter and the underlying state, and the drain already imports that package, so nothing outside the paths changes.
 - **Evidence:** 2026-11-17, in a lane worktree at trunk commit `eed8cffa8` with a clean `git status`, `go test ./... -run 'TestTheSeedFileDispatchesTheRuledItems|TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` exited 1. The seed test printed `seed entry "item-pile-507-allowlist-hunt": criterion "c1" records an owner decision but is verification-only: declare its claim class`. The argv test printed `the verdict program answered exit 4 for item-a (pass): tillr-loop verdict: criterion c1 has no valid stored claim_class`. The heavy test passed in that run and in three more runs with `-count=1 -run TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery`. The eighth run saw it fail once, inside the full suite, with `judge child did not start`.
 - **Where (c9):** `checkCriteria` in `tools/tillr-item/item/apply.go` holds the refusal, and `ownerCriterion` in `tools/tillr-item/item/claim.go` is the pattern it matches. `rg -n 'Owner decision recorded' config/tillr/seed-items.json` printed eleven lines at `eed8cffa8`, and `rg -n 'claim_class' config/tillr/seed-items.json` printed none. `adapterStubs` in `tools/tillr-drain/drain/step_argv_contract_test.go` writes the stand-in's `show` record. `compose_verdict` in `tools/tillr-loop/tillr-loop` is the reader that refuses a missing class. The loop's own suite, `tools/tillr-loop/test.py`, already gives its fixture criteria a `claim_class`.
+- **Evidence (c9, restated):** 2026-11-17, in a lane worktree at trunk commit `f19e7396c` with a clean `git status`: `rg -n '^func Test' tools/tillr-drain/seed_test.go` printed `TestTypedFrozenSeedDispatchesTheRuledItems` and `TestFrozenSeedRefusesUntypedOwnerCriteria` and no other test. `rg -c 'Owner decision recorded' config/tillr/seed-items.json` printed 11, and `rg -c claim_class config/tillr/seed-items.json` printed nothing. `rg -n claim_class tools/tillr-drain/drain/step_argv_contract_test.go` printed the stand-in's `show` record with `"claim_class":"verification-only"`. The c9 command, with those three test names, exited 0. The eleventh run's gate log for `seed-freeze` held eleven lines of the form `config/tillr/seed-items.json: item-pile-507-allowlist-hunt is a surviving entry and its criteria changed; the file is intake-frozen under D-QP1`. `git diff --name-only` from the preserved ref's merge base with the trunk, `45dd60fa0`, to the preserved ref listed none of the seed file, `seed_test.go` or `step_argv_contract_test.go`.
+- **Where (c9, restated):** `tools/gate/checks/seed-freeze.py` and its declaration `seed-freeze.json` beside it hold the freeze. The comment above `TestTypedFrozenSeedDispatchesTheRuledItems` in `tools/tillr-drain/seed_test.go` says why the frozen file is not rewritten.
 
 ## Filed 2026-11-17: what two lanes showed
 
