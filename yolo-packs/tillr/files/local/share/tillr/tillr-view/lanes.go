@@ -40,6 +40,10 @@ type laneRow struct {
 	LatestAction laneAction `json:"latest_action"`
 	LogGrewAtMS  *int64     `json:"log_grew_at_ms"`
 	Note         string     `json:"note,omitempty"`
+	// Condition is the lane's standing staging refusal, when the drain took it out of
+	// rotation (drain.lane-refused with no later drain.lane-restored). It is omitted for a
+	// lane in rotation.
+	Condition *laneCondition `json:"condition,omitempty"`
 }
 
 type laneAction struct {
@@ -104,6 +108,11 @@ func printLanes(w io.Writer, rows []laneRow) error {
 		}
 		if _, err := fmt.Fprintf(w, "%s · %s since %s · %s · %s · %s · attempt %d · %s · %s · last finished %s · %s (%s, %s) @ %s\n", row.LaneID, row.State, since, row.ItemID, row.Seat, row.Backend, row.Attempt, row.RunID, row.Outcome, step, action, row.LatestAction.Kind, row.LatestAction.Clock, at); err != nil {
 			return err
+		}
+		if c := row.Condition; c != nil {
+			if _, err := fmt.Fprintf(w, "  out of rotation since %s: %s: %s. Remedy: %s\n", time.UnixMilli(c.AtMS).UTC().Format(time.RFC3339), c.Reason, c.Detail, c.Remedy); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -197,6 +206,15 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 	for i := range rows {
 		if seat, ok := dispatched[rows[i].RunID]; ok && seat != "" {
 			rows[i].Seat, rows[i].SeatSource = seat, "dispatch"
+		}
+	}
+	conditions, err := readLaneConditions(r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if c, ok := conditions[rows[i].LaneID]; ok {
+			rows[i].Condition = &c
 		}
 	}
 	return rows, nil

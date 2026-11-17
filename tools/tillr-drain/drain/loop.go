@@ -443,6 +443,15 @@ type Loop struct {
 	// the pile is the only throttle.
 	infraStreak int
 	stageFault  bool
+	// laneConditions is each lane a lane-owned staging refusal took out of rotation this
+	// session (lane_rotation.go), and laneRefusedNow says the current staging refused its
+	// lane, so the pass offers the item another. Both are the pass goroutine's alone.
+	laneConditions       map[string]*laneCondition
+	laneConditionsLoaded bool
+	laneRefusedNow       bool
+	// infraLines is the last infrastructure-class staging line printed per item and lane,
+	// so a refusal that repeats unchanged on every pass is printed once.
+	infraLines map[string]string
 	// gateBudget is the resolved bound on a tick's gate wall time: cfg.GateBudget when it
 	// named one, DefaultGateBudget otherwise.
 	gateBudget time.Duration
@@ -582,7 +591,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
+	l := &Loop{cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -1065,6 +1074,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			err = l.compactDesigner(ctx, decision)
 		}
 		if err == nil {
+			if err := l.restoreLane(ctx, decision.LaneID); err != nil {
+				return nil, err
+			}
+			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
 				if decision.NodeIndex == 0 {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
@@ -1077,6 +1090,16 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			staged = append(staged, decision)
 			continue
 		}
+		if refusal := asLaneRefusal(err); refusal != nil {
+			// The lane's own state refused, not the item and not the machinery: the lane
+			// leaves rotation and the item is offered another lane. No infrastructure
+			// streak is counted, since nothing will change by waiting.
+			if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
+				return nil, err
+			}
+			l.laneRefusedNow = true
+			continue
+		}
 		if !IsItemContent(err) {
 			l.stageFault = true
 			l.mu.Lock()
@@ -1084,10 +1107,16 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			l.infraStreak++
 			streak := l.infraStreak
 			l.mu.Unlock()
-			l.reportf("loop: staging %s on %s failed in the infrastructure class (%d consecutive): %v\n",
-				request.ItemID, decision.LaneID, streak, err)
+			// The same refusal on every pass is printed once; the streak still counts.
+			key := request.ItemID + "\x00" + decision.LaneID
+			if l.infraLines[key] != err.Error() {
+				l.infraLines[key] = err.Error()
+				l.reportf("loop: staging %s on %s failed in the infrastructure class (%d consecutive): %v\n",
+					request.ItemID, decision.LaneID, streak, err)
+			}
 			continue
 		}
+		delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 		// The record itself refused: hold this item and keep the rest of the pass. The
 		// refusal is recorded before the hold, so a crash between the two still leaves the
 		// event a reader needs.

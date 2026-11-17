@@ -93,6 +93,11 @@ worktree going away. Every other movement it sees is recorded as an observation 
 run's `boundary.check`. Leave the lane root's own worktrees alone, because they belong to
 the loop.
 
+A lane whose own state refuses staging, such as a change nobody landed or a branch another
+worktree holds, leaves rotation for the session. The loop records it once and offers the
+item the next lane. `tillr view waiting` shows it as `lane:<id>` with its remedy. Reset such
+a lane only as the tillr-drain README's "Resetting a lane" describes.
+
 ## Exit codes, once
 
 Every binary answers with the same contract, so a caller reads a decision rather than a

@@ -475,7 +475,10 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		if err != nil {
 			return err
 		}
-		tick := Pass{Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}
+		// A lane a lane-owned staging refusal took out of rotation is offered to no item
+		// until a re-check puts it back (lane_rotation.go).
+		available := l.rotationLanes()
+		tick := Pass{Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -970,6 +973,9 @@ planned:
 			l.index(ctx)
 		}
 	}()
+	if err := l.recheckLanes(ctx); err != nil {
+		return "", err
+	}
 	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
 	if err != nil {
 		return "", err
@@ -1030,7 +1036,13 @@ planned:
 		}
 	}
 	stale := false
-	for _, p := range plans {
+	// A staging refusal that took its lane out of rotation re-plans the item in this same
+	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
+	// bounded by the lane count.
+	replans := 0
+plans:
+	for i := 0; i < len(plans); i++ {
+		p := plans[i]
 		d := p.decision
 		d.PassID = timing.TickID
 		p.decision = d
@@ -1074,6 +1086,7 @@ planned:
 			if work != nil {
 				d = work.Decision
 			}
+			l.laneRefusedNow = false
 			staged, err := l.stageDispatches(ctx, []Decision{d}, base, result)
 			if err != nil {
 				return "", err
@@ -1082,6 +1095,23 @@ planned:
 			if len(staged) == 0 {
 				if err := l.cancelStaging(ctx, d); err != nil {
 					return "", err
+				}
+				if l.laneRefusedNow && replans < len(l.cfg.Lanes) {
+					replans++
+					fresh, freshLeases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
+					if err != nil {
+						return "", err
+					}
+					leases = freshLeases
+					for _, next := range fresh {
+						if next.decision.ItemID == d.ItemID && (next.decision.Action == ActionDispatch || next.decision.Action == ActionRetry) {
+							// Offer it again, now, on the lane the fresh plan chose. The
+							// rest of this pass's plans stay as they were: one that
+							// conflicts with the re-plan is refused as stale when applied.
+							plans = append(plans[:i+1], append([]plannedApplication{next}, plans[i+1:]...)...)
+							continue plans
+						}
+					}
 				}
 				continue
 			}

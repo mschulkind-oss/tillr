@@ -45,6 +45,8 @@ var waitingRules = map[string]waitingRule{
 	"candidate-record-mismatch":      {"needs you", "lane", "restore the recorded candidate and clear the fault"},
 	"definition-sync-failed":         {"needs you", "queue", "correct the definition and clear the fault"},
 	"backend-window":                 {"waits on work", "backend", "the reset time"},
+	"lane-holds-unlanded-change":     {"needs you", "lane", "land the change, or reset the lane deliberately"},
+	"lane-branch-held":               {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
 	"conflict-design":                {"waits on work", "queue", "design"},
 	"design-under-comment":           {"waits on work", "queue", "the comment item"},
 	"conflict-owner":                 {"needs you", "queue", "owner"},
@@ -142,7 +144,12 @@ func waitingFace(args []string) (record.Envelope, int) {
 		} else {
 			err = s.ReadTx(ctx, func(r *store.Reader) error {
 				extra, e := waitingCommentIntake(r)
+				if e != nil {
+					return e
+				}
 				rows = append(rows, extra...)
+				lanes, e := waitingLaneConditions(r)
+				rows = append(rows, lanes...)
 				return e
 			})
 			s.Close()
@@ -404,7 +411,11 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
-	return append(append(out, windows...), extra...), nil
+	laneRows, err := waitingLaneConditions(r)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(out, windows...), extra...), laneRows...), nil
 }
 
 // Window rows are optional on old stores, and disappear at (not after) reset.

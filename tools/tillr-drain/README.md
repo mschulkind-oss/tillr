@@ -388,6 +388,53 @@ in one transaction. Its aborted staging remains in the append-only event history
 but a later plan may assign the same unstarted attempt to another lane without
 colliding with that row.
 
+## Lanes that staging refuses
+
+Some staging refusals are about the lane, not the item it was offered. The next item
+offered that lane would be refused the same way. There are two such conditions:
+
+| Reason | What the lane holds | Remedy |
+| :--- | :--- | :--- |
+| `lane-holds-unlanded-change` | a commit the base does not contain, which staging will not reset | land the change, or reset the lane as described below |
+| `lane-branch-held` | its branch, checked out by another worktree | remove the holding worktree, or stage a different lane |
+
+The loop takes such a lane **out of rotation** for the session. That means no plan offers
+it an item, and the item it was offered is offered the next free lane in the same pass.
+The loop writes one `drain.lane-refused` event, whose object is the lane, and prints one
+line naming the lane, the reason and the remedy. A lane-owned refusal does not count
+toward the infrastructure-failure streak that stops the loop.
+
+While the condition persists, the loop writes nothing per pass. It re-checks the lane on
+the next pass after the lane's HEAD, status or branch changes, and otherwise every ten
+minutes on its clock. A re-check is one staging attempt. If it is refused the same way,
+nothing is written. If it stages, the loop writes one `drain.lane-restored` event and
+prints one line. A restarted loop reads the recorded condition and does not record an
+unchanged one again. It prints the line once more for its own operator.
+
+`tillr view waiting` shows each lane out of rotation as a row named `lane:<id>`, with the
+remedy as its mover. `tillr view lanes` prints the condition under the lane's row.
+
+Item-owned staging failures keep their behavior: they count toward the streak. Each item
+and lane prints its line once per distinct error, not once per pass.
+
+### Resetting a lane
+
+Reset a lane only after you have decided its change should not land from that lane. The
+change must be kept somewhere: on the trunk, or at a pin under `refs/tillr/runs/<run>`.
+Then:
+
+1. Confirm the lane is idle. `tillr view lanes` must show no run on it.
+2. Confirm the commit is kept: `git merge-base --is-ancestor <sha> main`, or
+   `git for-each-ref refs/tillr/runs` lists a ref at it.
+3. Point the lane's worktree and branch at the trunk:
+   `git -C <lane root>/<lane>/worktree checkout --force -B <lane branch> main`.
+   The lane branch has the form `tillr/<scope>/<lane>`. Read it before the reset with
+   `git -C <lane root>/<lane>/worktree branch --show-current`.
+
+The next pass re-checks the lane, because its HEAD changed. A dedicated
+`tillr drain reset-lane --lane <lane>` command that runs these checks is queued work,
+not a command that exists today.
+
 ## Step-program argument contract
 
 A **step program** is the configured gate, fixer gate, land or verdict command that

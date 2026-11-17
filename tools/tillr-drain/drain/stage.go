@@ -626,8 +626,7 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 		if _, err := s.git(ctx, s.Root, "merge-base", "--is-ancestor", sha, spec.BaseSHA); err == nil {
 			continue
 		}
-		return Externalf("lane %s holds a change nobody landed: %s is not on the base %s, and staging does not reset a candidate. Land it, or reset the lane deliberately",
-			spec.LaneID, sha, spec.BaseSHA)
+		return unlandedLaneRefusal(spec.LaneID, sha, spec.BaseSHA)
 	}
 	return nil
 }
@@ -733,7 +732,8 @@ func refuseBranchHeld(lane, laneRoot, branch, holder string) error {
 	if filepath.Base(holder) == WorktreeDir {
 		owner = fmt.Sprintf(" in the lane root %s", filepath.Dir(filepath.Dir(holder)))
 	}
-	return Externalf("lane %s in %s cannot be staged: its branch %s is checked out by the worktree at %s%s, and a branch is checked out by one worktree at a time. A lane root scopes the branch, so this holder is a lane directory that was moved rather than deleted, or a registration an earlier layout left; staging does not delete a worktree it did not create. Remove it (git worktree remove %s) or stage a different lane id",
+	return laneRefusalf(lane, ReasonLaneBranchHeld, fmt.Sprintf("remove the holding worktree (git worktree remove %s), or stage a different lane id", holder),
+		"lane %s in %s cannot be staged: its branch %s is checked out by the worktree at %s%s, and a branch is checked out by one worktree at a time. A lane root scopes the branch, so this holder is a lane directory that was moved rather than deleted, or a registration an earlier layout left; staging does not delete a worktree it did not create. Remove it (git worktree remove %s) or stage a different lane id",
 		lane, laneRoot, branch, holder, owner, holder)
 }
 
