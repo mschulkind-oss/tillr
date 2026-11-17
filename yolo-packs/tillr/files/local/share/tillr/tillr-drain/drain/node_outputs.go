@@ -66,21 +66,21 @@ func validateOutputWiring(w *Workflow) error {
 		}
 		typ, declared := producer.Outputs[e.FromOutput]
 		if !declared {
-			return fmt.Errorf("workflow-output: %s does not declare %s", e.From, e.FromOutput)
+			return fmt.Errorf("workflow-output: %s: does not declare %s", e.From, e.FromOutput)
 		}
 		inputType, declared := consumer.Inputs[e.ToInput]
 		if !declared || inputType != typ {
 			return fmt.Errorf("workflow-input: %s: %s undeclared or type differs from %s.%s", e.To, e.ToInput, e.From, e.FromOutput)
 		}
 		if fed[e.To][e.ToInput] {
-			return fmt.Errorf("workflow-input: %s.%s fed by two edges", e.To, e.ToInput)
+			return fmt.Errorf("workflow-input: %s: input %s fed by two edges", e.To, e.ToInput)
 		}
 		fed[e.To][e.ToInput] = true
 	}
 	for _, s := range w.Stages {
 		for _, name := range sortedNames(s.Inputs) {
 			if !fed[s.ID][name] {
-				return fmt.Errorf("workflow-input: %s.%s fed by no edge", s.ID, name)
+				return fmt.Errorf("workflow-input: %s: input %s fed by no edge", s.ID, name)
 			}
 		}
 	}

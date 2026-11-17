@@ -40,6 +40,7 @@ type waitingRule struct{ class, where, mover string }
 // opening this face's store remains read-only. TestWaitingEveryDrainReasonHasARule enumerates the
 // upstream constants rather than maintaining a second hand-written checklist.
 var waitingRules = map[string]waitingRule{
+	"workflow-invalid":               {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
 	"node-failed":                    {"needs you", "lane", "inspect the named command node and authorize a retry"},
 	"gate-stall-rerun":               {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
 	"gate-stalled":                   {"needs you", "gate", "diagnose the stalled check and clear the fault"},
@@ -95,6 +96,9 @@ var waitingRules = map[string]waitingRule{
 }
 
 func waitingRuleFor(reason string) waitingRule {
+	if strings.HasPrefix(reason, "workflow-invalid: ") {
+		return waitingRules["workflow-invalid"]
+	}
 	if strings.HasPrefix(reason, "node-failed: ") {
 		return waitingRules["node-failed"]
 	}

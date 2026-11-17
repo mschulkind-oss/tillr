@@ -161,7 +161,7 @@ func pendingForTest(t *testing.T, f refusalLoopFixture, id string) *pendingWork 
 	return work
 }
 func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
-	for _, mode := range []string{"closed", "blocked", "definition", "workflow"} {
+	for _, mode := range []string{"closed", "blocked", "definition"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, steps := restartGraphFixture(t)
 			result := &LoopResult{}
@@ -170,13 +170,7 @@ func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
 			}
 			old := pendingForTest(t, f, "item-a")
 			head := runGit(t, l.laneTarget("lane-1"), "rev-parse", "HEAD")
-			if mode == "workflow" {
-				writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), workflowFixture)
-			}
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				if mode == "workflow" {
-					return nil
-				}
 				if mode == "definition" {
 					_, err := tx.Exec(`UPDATE items SET title='Changed definition' WHERE item_id='item-a'`)
 					return err
@@ -195,7 +189,7 @@ func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
 			if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+old.Decision.RunRequest.RunID); got != head {
 				t.Fatalf("head not pinned %s / %s", got, head)
 			}
-			if mode == "definition" || mode == "workflow" {
+			if mode == "definition" {
 				d := mustPlan(t, next)[0].decision
 				if d.Workflow == nil || d.NodeIndex != 0 || d.Attempt != 2 || d.Action != ActionDispatch {
 					t.Fatalf("changed item not replanned from start: %+v", d)

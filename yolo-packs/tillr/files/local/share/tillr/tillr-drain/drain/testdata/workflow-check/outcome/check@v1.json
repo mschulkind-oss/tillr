@@ -1,0 +1,25 @@
+{
+  "name": "check",
+  "version": 1,
+  "stages": [
+    {
+      "id": "one",
+      "kind": "agent",
+      "seat": "build",
+      "access": "write"
+    },
+    {
+      "id": "two",
+      "kind": "agent",
+      "seat": "build",
+      "access": "write"
+    }
+  ],
+  "edges": [
+    {
+      "from_node": "one",
+      "to_node": "two",
+      "when_outcome": "maybe"
+    }
+  ]
+}

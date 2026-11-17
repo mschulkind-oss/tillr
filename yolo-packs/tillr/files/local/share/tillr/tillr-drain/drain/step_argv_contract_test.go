@@ -57,7 +57,7 @@ func adapterStubs(t *testing.T) (log string) {
 	dir := scratchUnderDurable(t)
 	log = filepath.Join(dir, "calls.log")
 	show := filepath.Join(dir, "item-show.json")
-	writeForkFile(t, show, `{"record_version":1,"kind":"item.record","id":"item-a","producer":{"system":"tillr","utility":"tillr-item","version":"0.1.0"},"created_at":"2026-01-01T00:00:00Z","payload":{"item_id":"item-a","criteria":[{"criterion_id":"c1","text":"the criterion","state":"pending"}]}}`)
+	writeForkFile(t, show, `{"record_version":1,"kind":"item.record","id":"item-a","producer":{"system":"tillr","utility":"tillr-item","version":"0.1.0"},"created_at":"2026-01-01T00:00:00Z","payload":{"item_id":"item-a","criteria":[{"criterion_id":"c1","text":"the criterion","state":"pending","claim_class":"verification-only"}]}}`)
 	for _, name := range []string{"tillr-gate", "tillr-land", "tillr-item"} {
 		body := "#!/bin/sh\nprintf '%s\\n' \"" + name + " $*\" >> " + log + "\n"
 		if name == "tillr-item" {

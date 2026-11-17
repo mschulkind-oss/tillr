@@ -23,10 +23,11 @@ const ReasonReadmissionExhausted = "readmission-exhausted"
 // Hashes avoid duplicating document prose in the store. Queue rank, state, timestamps
 // and the base commit are not causes for an automatic second attempt.
 type RunInputs struct {
-	ItemBlock     string `json:"item_block"`
-	AllowedPaths  string `json:"allowed_paths"`
-	BackendPolicy string `json:"backend_policy"`
-	TillrBuild    string `json:"tillr_build"`
+	ItemBlock          string `json:"item_block"`
+	WorkflowDefinition string `json:"workflow_definition,omitempty"`
+	AllowedPaths       string `json:"allowed_paths"`
+	BackendPolicy      string `json:"backend_policy"`
+	TillrBuild         string `json:"tillr_build"`
 }
 
 func inputHash(v any) (string, error) {
@@ -73,7 +74,10 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 		}
 	}
 	result := &RunInputs{}
-	if result.ItemBlock, err = inputHash([]any{title, bodyRef, row.DesignDoc, row.Seat, row.Workflow, workflowBody, workflowError, criteria, body}); err != nil {
+	if result.WorkflowDefinition, err = inputHash([]any{workflowBody, workflowError}); err != nil {
+		return nil, err
+	}
+	if result.ItemBlock, err = inputHash([]any{title, bodyRef, row.DesignDoc, row.Seat, row.Workflow, criteria, body}); err != nil {
 		return nil, err
 	}
 	if result.AllowedPaths, err = inputHash(row.Allowed); err != nil {
@@ -145,6 +149,9 @@ func (p *planner) readmission(itemID string, now *RunInputs) (string, bool) {
 	if before != nil {
 		if before.ItemBlock != now.ItemBlock {
 			changes = append(changes, "item-block")
+		}
+		if before.WorkflowDefinition != now.WorkflowDefinition {
+			changes = append(changes, "workflow-definition")
 		}
 		if before.AllowedPaths != now.AllowedPaths {
 			changes = append(changes, "allowed-paths")
