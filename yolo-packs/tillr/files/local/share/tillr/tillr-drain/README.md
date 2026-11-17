@@ -168,6 +168,30 @@ on the next pass; `tip` does not apply this proof requirement. A fork blocker
 instead needs its judged landing retained by its delivered patch branch: fork
 commits are not part of main's history, so main's green pointer cannot prove them.
 
+A new lane must also carry the item's own block as sync read it, at the tip. When
+the green pointer holds another version of the block, or none, the claim cuts the
+lane from the oldest trunk commit after green that carries the tip's version, and
+reports `<item>'s block is newer than green <green>; cutting its lane from <commit>`.
+The item does not wait for a proof of its own block, and the lane takes only the
+part of the unproved range up to that commit. The decision is recorded in the
+dispatch's `base_sha`, as for any other base.
+
+A worker whose tree lacks what made its item ready stops and reports `blocked`, as
+its brief says. That report is about the staging, so it never becomes a design or
+owner conflict. Before raising one, the loop recomputes the run's recorded
+`item_block` input over the block at the run's base. It names a missing commit only
+on evidence: a trunk commit after the base that carries the dispatched version, or
+a blocker landing recorded before the dispatch that the base does not contain. Such
+a run gets a `drain.stale-base` event naming the base and what it lacks, and the
+planner treats it like an interrupted run. The next dispatch has the reason
+`restaged: the earlier run's base lacked what made the item ready`, and the claim
+selects its base by the rules above. A design run that reports `blocked` on a
+conflict raised from a stale base answers that conflict as a restage instead of
+sending it to the owner. At each pass, an existing owner conflict whose raising
+run's base lacked those commits is answered the same way, once per loop process,
+with the finding appended to the conflict's text. An owner conflict raised on a
+base that carried the block is left to the owner.
+
 With no pointer yet, dispatch uses the tip and the loop reports that choice once.
 An invalid pointer or one outside trunk history is an error, not that bootstrap
 case. Existing workflow stages retain their recorded base. An idle lane already
@@ -177,7 +201,9 @@ unlanded work.
 
 The [lane-base regression tests](./drain/lane_base_test.go) cover the selected
 worktree commit, recorded base, blocker proof wait, fixer exception, and bootstrap
-notice.
+notice. The [stale-base tests](./drain/stale_base_test.go) cover the lane cut from the
+commit carrying the block, the stale-base report, the design run on a stale-base
+conflict, and the release of an existing owner conflict.
 
 ## Node write scopes
 

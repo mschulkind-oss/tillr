@@ -21,6 +21,7 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 		"ready": true, "failover": true, "seat-degraded": true,
 		"harness-refused": true, "conflict-answered": true,
 		"inputs-changed": true, "item-already-terminal": true,
+		ReasonRestagedStaleBase: true,
 	}
 	packages, err := parser.ParseDir(token.NewFileSet(), ".", nil, 0)
 	if err != nil {

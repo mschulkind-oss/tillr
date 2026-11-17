@@ -37,7 +37,10 @@ those runs once, including ones that finished while it was absent.
 New lanes normally start at the last proved trunk commit, selected by the
 repository's `lane_base` gate setting. A `trunk-unproved` hold means a finished
 blocker's landing still needs proof from the heavy runner, not more work from
-the blocker. The `tip` setting opts out; a trunk fixer always starts at the tip.
+the blocker. A lane whose item's block is newer than that commit starts at the
+oldest trunk commit carrying the block instead, and a worker's `blocked` report
+from a base that lacked what made its item ready is restaged by the loop, never
+sent to the owner. The `tip` setting opts out; a trunk fixer always starts at the tip.
 With no proved pointer yet, the loop uses the tip and says so once. The
 [lane-base contract](../../../../tools/tillr-drain/README.md#the-commit-a-new-lane-starts-from)
 explains recorded bases and safe reuse of idle lanes.

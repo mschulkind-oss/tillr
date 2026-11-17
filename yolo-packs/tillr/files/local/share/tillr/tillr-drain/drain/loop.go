@@ -449,7 +449,10 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
-	laneBootstrapReported       bool
+	laneBootstrapReported bool
+	// staleBaseChecked holds the owner conflicts already read for a stale base in this
+	// process: a conflict's run base and dispatch record never change, so one read answers.
+	staleBaseChecked            map[string]bool
 	gatePolicy                  GatePolicy
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	heavyMu                     sync.Mutex
@@ -638,7 +641,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}}
+	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -1550,6 +1553,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// done as written: a spec conflict, not a failing candidate. The item is blocked for a
 	// person to decide, its criteria are left as they were, and nothing is judged.
 	if footer := reportFooter(log); (request.Backend != "command" && footer == "blocked") || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) {
+		// A report from a run staged on a base that lacked what made the item ready is
+		// about the staging, which neither the design seat nor the owner can change.
+		if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
+			return laneOutcome{err: err}
+		} else if stale {
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked on a stale base")}
+		}
 		l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
 		if err := l.reportedBlock(ctx, decision, log); err != nil {
 			return laneOutcome{err: err}

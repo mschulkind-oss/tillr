@@ -38,6 +38,20 @@ func inputHash(v any) (string, error) {
 	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }
 
+// blockFields are the stored item fields the item-block input hashes beside the
+// document's body. They are read from the store at dispatch, or from the item's
+// record as of a past dispatch when an earlier run's input is recomputed.
+type blockFields struct {
+	Title, BodyRef, DesignDoc, Seat, Workflow string
+	Criteria                                  [][2]string
+}
+
+// itemBlockHash is the one spelling of RunInputs.ItemBlock, so a hash recomputed over
+// another commit's body compares equal exactly when that commit carries the block.
+func itemBlockHash(f blockFields, body string) (string, error) {
+	return inputHash([]any{f.Title, f.BodyRef, f.DesignDoc, f.Seat, f.Workflow, f.Criteria, body})
+}
+
 func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
 	var title, bodyRef string
 	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id = ?`, row.ItemID).Scan(&title, &bodyRef); err != nil {
@@ -77,7 +91,7 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 	if result.WorkflowDefinition, err = inputHash([]any{workflowBody, workflowError}); err != nil {
 		return nil, err
 	}
-	if result.ItemBlock, err = inputHash([]any{title, bodyRef, row.DesignDoc, row.Seat, row.Workflow, criteria, body}); err != nil {
+	if result.ItemBlock, err = itemBlockHash(blockFields{Title: title, BodyRef: bodyRef, DesignDoc: row.DesignDoc, Seat: row.Seat, Workflow: row.Workflow, Criteria: criteria}, body); err != nil {
 		return nil, err
 	}
 	if result.AllowedPaths, err = inputHash(row.Allowed); err != nil {
