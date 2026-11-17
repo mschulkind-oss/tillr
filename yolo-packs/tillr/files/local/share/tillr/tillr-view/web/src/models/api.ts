@@ -41,6 +41,17 @@ export class ApiError extends Error {
   }
 }
 
+export async function saveIdea(words: string, place: { to?: string; after?: string; before?: string }): Promise<{ item_id: string; place: number }> {
+  const response = await fetch("/api/v1/ideas", {
+    method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ words, place }),
+  });
+  const body = await response.json() as ApiFailure & { data?: { item_id: string; place: number } };
+  if (!response.ok) throw new ApiError(body.error?.code ?? "http_error", body.error?.message ?? `${response.status} ${response.statusText}`, response.status);
+  if (!body.data || typeof body.data.item_id !== "string" || !body.data.item_id || !Number.isInteger(body.data.place) || body.data.place < 0) throw new Error("The server did not confirm a saved idea; the draft is kept.");
+  return body.data;
+}
+
 export type ItemPlacement = { to: "first" | "last" } | { before: string } | { after: string };
 
 export const moveItemToTop = (id: string) => placeItem(id, { to: "first" });

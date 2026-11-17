@@ -80,23 +80,37 @@ func resolveItemWriter(explicit string) (string, error) {
 	return exec.LookPath("tillr-item")
 }
 
-func (s *server) placeHandler(w http.ResponseWriter, req *http.Request) {
+// readWriteRequest is shared by both owner-write routes. The outer routes guard
+// enforces read-only first; keep it here too for direct handler callers.
+func (s *server) readWriteRequest(w http.ResponseWriter, req *http.Request) ([]byte, bool) {
+	if !s.writeEnabled {
+		s.writeFailure(w, codeReadOnly, "This server is read-only; restart with --write to save ideas or move items.")
+		return nil, false
+	}
 	if !wsOriginAllowed(req) {
 		s.writeFailure(w, codeOriginRefused, "The request's Origin is not allowed.")
-		return
+		return nil, false
 	}
 	typ, _, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
 	if err != nil || typ != "application/json" {
 		s.writeFailure(w, codeContentType, "Declare the body as application/json.")
-		return
+		return nil, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(req.Body, (1<<20)+1))
 	if err != nil {
 		s.writeFailure(w, codeBadRequest, err.Error())
-		return
+		return nil, false
 	}
 	if len(raw) > 1<<20 {
 		s.writeFailure(w, codeTooLarge, "The body exceeds 1 MiB.")
+		return nil, false
+	}
+	return raw, true
+}
+
+func (s *server) placeHandler(w http.ResponseWriter, req *http.Request) {
+	raw, ok := s.readWriteRequest(w, req)
+	if !ok {
 		return
 	}
 	flag, value, err := placementArg(raw)

@@ -64,6 +64,22 @@ type migrationsExec interface {
 // applied because the utility registered them and no central list is edited to add
 // one.
 func migrate(ctx context.Context, tx migrationsExec) error {
+	// The caller already holds the writer lock. Refuse a newer schema before
+	// applying even the first DDL; a separate preflight read would race another
+	// writer's migration. A fresh store has no version table yet.
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&exists); err != nil {
+		return fmt.Errorf("store: checking schema compatibility: %w", err)
+	}
+	if exists != 0 {
+		var version int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
+			return fmt.Errorf("store: reading schema compatibility: %w", err)
+		}
+		if version > SchemaVersion {
+			return fmt.Errorf("store: schema version %d is newer than supported version %d", version, SchemaVersion)
+		}
+	}
 	for _, ddl := range migrations() {
 		if _, err := tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("store: applying schema: %w", err)

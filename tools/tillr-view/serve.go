@@ -179,7 +179,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop for /why (default: all store lanes)")
 	perfDir := fs.String("perf-log", os.Getenv("TILLR_VIEW_PERF_LOG"), "a directory for the performance log: a JSON line per request, WebSocket window and browser report, a startup record and a periodic summary (`off` or empty: no log; default $TILLR_VIEW_PERF_LOG). `just observatory` names one under the checkout; `tillr-view perf-log` reads it")
 	perfStartup := fs.String("perf-startup", os.Getenv("TILLR_VIEW_PERF_STARTUP"), "the recipe's startup phases for the log's startup record, as name=milliseconds pairs separated by commas; `recipe_start_ms=<unix ms>` dates the recipe's start, so the record can say how long the recipe took to listen")
-	writeEnabled := fs.Bool("write", false, "allow item placement through tillr-item; the server's store handle stays read-only")
+	writeEnabled := fs.Bool("write", false, "allow idea saving and item placement through tillr-item; the server's store handle stays read-only")
 	itemFlag := fs.String("tillr-item", "", "the item writer (default: beside this executable, then PATH)")
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
@@ -337,6 +337,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/snapshot", s.get(s.snapshotPayload))
 	mux.HandleFunc("POST /api/v1/items/{id}/place", s.placeHandler)
+	mux.HandleFunc("POST /api/v1/ideas", s.ideaHandler)
 	mux.HandleFunc("GET /api/v1/why", s.vantage.prefetch(s.getOutsideTx(s.whyPayload)))
 	mux.HandleFunc("GET /api/v1/waiting", s.vantage.prefetch(s.get(s.waitingPayload)))
 	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
@@ -389,7 +390,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("GET /", s.webHandler())
 	return s.instrument(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v1/") && !s.writeEnabled {
-			s.writeFailure(w, codeReadOnly, "This server is read-only; restart tillr-view serve with --write to move items.")
+			s.writeFailure(w, codeReadOnly, "This server is read-only; restart tillr-view serve with --write to save ideas or move items.")
 			return
 		}
 		if (req.Method != http.MethodGet && req.Method != http.MethodHead) || !strings.HasPrefix(req.URL.Path, "/api/v1/") {
@@ -726,6 +727,7 @@ func summarizeRun(r storeRun) runSummary {
 // carried beside the order it produced: a client told the order and not the token could
 // not say where the next item goes.
 type itemView struct {
+	Kind           string         `json:"kind,omitempty"`
 	ItemID         string         `json:"item_id"`
 	Title          string         `json:"title"`
 	Rank           string         `json:"rank"`
@@ -837,6 +839,10 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 // snapshotPayload is the initial screen load: the whole board as one moment.
 func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFailure) {
 	out := snapshotData{Sources: s.sources()}
+	ideas, err := ideaIDs(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	items, err := readItems(r)
 	if err != nil {
 		return nil, unreadable(err)
@@ -974,6 +980,9 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		if latest != nil {
 			summary := summarizeRun(*latest)
 			view.LatestRun = &summary
+		}
+		if ideas[it.ItemID] {
+			view.Kind = "idea"
 		}
 		out.Items = append(out.Items, view)
 	}
@@ -1204,6 +1213,7 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
+	Idea           *ideaWords          `json:"idea,omitempty"`
 	GraphRevisions []graphRevisionView `json:"graph_revisions"`
 	Usage          usageSum            `json:"usage"`
 	Comments       *commentItemView    `json:"comments,omitempty"`
@@ -1287,6 +1297,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		Decisions:      []dispatchView{},
 		Attempts:       []attemptView{},
 		ClosedBlockers: []string{},
+	}
+	out.Idea, err = s.readIdeaWords(r, id)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	out.Item.SelectedWorkflow, out.Item.WorkflowSource, _, err = workflowmeta.ReadSelection(r, id)
 	if err != nil {
