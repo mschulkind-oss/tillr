@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-15
+updated: 2026-11-16
 tags:
   - tillr
   - gate
@@ -49,7 +49,14 @@ and its clock cadence are replaced.
 [Section 3](#3-what-exists-today-measured) and
 [Section 4](#4-where-the-gate-remembers-and-what-a-cold-machine-sees).
 
-**Needs your ruling:** None.
+**Needs your ruling:** Nothing blocks the build, but two decisions an implementer made on
+2026-11-16 are open for you to overturn. The owner has not ruled on either:
+
+- [`D-GR13`](#decision-ledger): a fast check that runs past its budget runs on to a ceiling and
+  keeps its verdict, so the fast tier's worst case is 99 seconds of checks instead of 9
+  ([Section 6.5](#65-ten-seconds-is-a-failing-test)).
+- [`D-GR14`](#decision-ledger): carrying a fast tree check to the heavy tier is suspended until a
+  heavy runner exists ([Section 6.5](#65-ten-seconds-is-a-failing-test)).
 
 **Reads with:** [`landing-principles.md`](landing-principles.md) (the rulings this is checked
 against in [Section 7](#7-checked-against-the-landing-principles)),
@@ -76,7 +83,8 @@ Build six things, in the order of [Section 11](#11-build-order):
 4. **A check is one file.** Adding one edits nothing another check shares.
 5. **Ten seconds is a test.** The fast tier's declared costs must sum inside the budget, and a
    check that overruns its own declared cost at run time is carried to the heavy tier instead of
-   holding the landing.
+   holding the landing. Until the heavy runner exists it runs on and keeps its verdict instead
+   ([`D-GR13` and `D-GR14`](#decision-ledger), open for the owner).
 6. **Heavy checks follow the merge, and deploys follow the heavy checks.** One runner proves the
    trunk after each landing and moves a pointer to the newest commit it proved. tillr builds from
    that pointer and from nowhere else.
@@ -398,14 +406,62 @@ the case that still holds on one core with twenty lanes. A change that adds a fa
 does not fit fails on that change, and its author has three moves: make room, make it faster, or
 declare it heavy.
 
-**At run time, by each check's own declaration.** The runner gives a fast tree check its
-`budget_ms` as a deadline. A fast tree check still running at its deadline is stopped and
-**carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs it
-with no deadline but its timeout. The landing proceeds. A fast change check cannot be carried (the
-first boundary below), so its budget is not where it is stopped: it runs on and its own answer is
-the verdict, with the overrun recorded against the check. So the gate's wall time is bounded by
-the sum the admission test already bounded, plus whatever a change check ran past its budget, and
-machine load makes the gate slower rather than failing the item.
+**At run time, by each check's own declaration.** As designed, the runner gives a fast tree
+check its `budget_ms` as a deadline. A fast tree check still running at its deadline is stopped
+and **carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs
+it with no deadline but its timeout. The landing proceeds. A fast change check cannot be carried
+(the first boundary below), so its budget is not where it is stopped: it runs on and its own
+answer is the verdict, with the overrun recorded against the check.
+
+**Carrying is suspended until the heavy tier exists** ([`D-GR14`](#decision-ledger)). No heavy
+runner exists yet (`item-gate-heavy-runner` is in the queue), so a carried check is not owed to
+anything: the verdict stays pass and nothing runs the check again. Carrying today means dropping
+the judgment, which is the "nothing is carried" situation of the second boundary below. The
+review of 2026-11-16 measured `go-build` at 5.6 to 5.7 seconds against its 2,700 millisecond
+budget at ten concurrent gates, so it was carried on almost every landing, and a candidate that
+did not compile could land in any Go module but `tools/tillr`. So until the heavy runner lands, a
+fast tree check is run like a change check: past its budget it runs on to its ceiling and keeps
+its verdict, and a failing one fails the gate. The switch is the runner's `--tree-overrun` option,
+`keep` by default, and the loop's gate program
+[`tools/gate/change-gate.py`](../../tools/gate/change-gate.py) states it in one constant,
+`TREE_OVERRUN`. The heavy runner's item turns that constant to `carry`, and nothing else changes.
+This is an implementer's decision, open for the owner to overturn; the owner has not ruled on it.
+
+So machine load makes the gate slower rather than failing the item, and the gate's wall time is
+no longer bounded by the sum the admission test bounded. **The worst case**, stated plainly:
+checks run serially, and every one of them may run to its ceiling. There are 11 fast checks
+(six change checks and five tree checks), none declares `timeout_ms`, so each ceiling is the
+9,000 millisecond cap, and 11 x 9,000 = 99,000 milliseconds, about 99 seconds of checks, against
+the 8,950 milliseconds the budgets declare. The runner's own work and the landing tier of
+`tools/fork-check.py`, which runs after the fast tier, come on top. Before 2026-11-16 the bound
+was the 8,950 milliseconds of budgets; with change checks alone running to the ceiling it was
+6 x 9,000 + 5,050 (the tree budgets) = 59,050.
+
+**Measured on 2026-11-16**, on a candidate that changes Go and Markdown, with nothing
+remembered, each gate in its own checkout, at a machine load of 44 to 72 on 32 cores (the same
+run is the source of every number in this paragraph):
+
+| Concurrent gates | Fast tier wall time (s) | Checks over budget |
+| ---: | ---: | :--- |
+| 1 | 3.9 to 4.2 | none |
+| 2 | 4.1 | none |
+| 10 | 8.3 to 8.6 | `go-build` in every gate, 5.1 to 5.2 s against 2.7 |
+| 10, first gate in a new checkout | 12.4 | `go-build` reached its 9 s ceiling in every gate: exit 4 |
+
+`go-build` dominates. It compiles every Go module, and its compiled packages are cached by
+absolute source path, so the first gate in a new checkout compiles from cold (2.8 seconds alone,
+over 9 seconds beside nine others). The next cost is about 1.1 seconds spent outside any check
+(the wall time less the checks' own durations: the runner's planning and fingerprinting), then
+`documents` at 0.8 to 1.1 seconds. The cheapest lever, not
+pulled here, is building with `-trimpath`, which makes the cache entries independent of the
+checkout's path: in the same measurement a new checkout built in 0.84 seconds with it, against
+2.85 without. The budgets and the cap are unchanged.
+
+The alternative the owner could choose is **one ceiling for the whole fast run** instead of one
+per check: a fast run still going when it has used 9,000 milliseconds stops the check it is
+running and answers "could not judge". That restores a bound of about 9 seconds of checks, at the
+cost of load faults returning: in the measurement above, every gate of the cold ten-gate row
+would have been held as `gate-harness-error` for the machine's load.
 
 **What happens to a check that outgrows its budget.** It stops holding landings the first time
 it overruns, and it is still judged, after the merge. The heavy runner then runs that check
@@ -413,30 +469,35 @@ alone, with nothing else of its run beside it. When it exceeds its declared budg
 heavy run is red on `gate-budget`, naming the check, with the measured and declared times. The
 repair is an edit to that check's own file: a larger budget if the sum still fits, or `tier:
 heavy`. A red here is handled like any other heavy red
-([Section 6.8](#68-a-red-heavy-check)). A change check that overruns is not re-measured by
-anything: its `over_budget_ms` on the landing's verdict is the record, and the repair is the same
-edit to its own file, or making it cheaper.
+([Section 6.8](#68-a-red-heavy-check)). A change check that overruns, and while carrying is
+suspended a tree check too, is not re-measured by anything: its `over_budget_ms` on the landing's
+verdict is the record, and the repair is the same edit to its own file, or making it cheaper.
 
 Two boundaries:
 
 - **Change checks are never carried**, because nothing after the merge has their base. A change
   check that runs past its `budget_ms` is not stopped there. It runs to its **ceiling** *(coined
-  here: the point a change check is stopped)*, which is its own `timeout_ms`, or the 9,000
-  millisecond fast-tier cap when it declares none. A check that answers by then keeps its verdict,
-  pass or fail. The verdict entry records `over_budget_ms`, how far past its budget it ran; its
-  log says so, and `tillr-gate` prints a line naming the check beside the run's summary. The
-  overrun is a defect against the check's declared cost. It is not "could not judge" for the
-  candidate, because the check did judge it
-  ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
+  here: the point a fast check that ran past its budget is finally stopped)*, which is its own
+  `timeout_ms`, or the 9,000 millisecond fast-tier cap when it declares none, clamped to lie
+  between its `budget_ms` and the cap; the admission check refuses a fast `timeout_ms` outside
+  that range. A check that answers by then keeps its verdict, pass or fail. The verdict entry
+  records `over_budget_ms`, how far past its budget it ran; its log says so, and `tillr-gate`
+  prints a line naming the check beside the run's summary. The overrun is a defect against the
+  check's declared cost. It is not "could not judge" for the candidate, because the check did
+  judge it ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
   Only a check still running at its ceiling makes the run "could not judge" (exit 4), naming the
-  check. *Ruled 2026-11-16* after `documents` ran 2,001 milliseconds against its 2,000 budget in
-  a drain pass at load 16, and the candidate was held as `gate-harness-error` until an operator
-  cleared it. The same four-document change measured 1.8 seconds alone and up to 2.4 seconds
-  beside nine other gates, so a fixed deadline was failing items for the machine's load, which
-  [`D-GR11`](#decision-ledger) rejects. Carrying the check instead was weighed and refused: no
-  heavy runner exists yet to judge a carried check, and a deferred change check would land a
-  change whose diff nobody judged.
-- **Under the before-merge strategy nothing is carried.** An overrun there is "could not judge".
+  check. *Decided 2026-11-16 by the implementer, open for the owner to overturn; the owner has not
+  ruled on it* ([`D-GR13`](#decision-ledger)). It was decided after `documents` ran 2,001
+  milliseconds against its 2,000 budget in a drain pass at load 16, and the candidate was held as
+  `gate-harness-error` until an operator cleared it. The same four-document change measured 1.8
+  seconds alone and up to 2.4 seconds beside nine other gates, so a fixed deadline was failing
+  items for the machine's load, which [`D-GR11`](#decision-ledger) rejects. Carrying the check
+  instead was weighed and refused: no heavy runner exists yet to judge a carried check, and a
+  deferred change check would land a change whose diff nobody judged. What it gives up is the
+  bound: the worst case above.
+- **Under the before-merge strategy nothing is carried.** An overrun there runs to its ceiling
+  and keeps its verdict, as every fast check does while carrying is suspended; only a check still
+  running at its ceiling is "could not judge".
 
 This is the one place the gate judges elapsed time, and it is a statement about the gate, which
 is the thing the ruling bounds. The existing rule that no check may assert elapsed time about the
@@ -642,9 +703,11 @@ base by a heavy tree check, which needs no network.
 ## Decision Ledger
 
 `D-GR1` to `D-GR6` are the owner's rulings of 2026-11-15. `D-GR7` to `D-GR12` are this design's
-own decisions, made to carry them out; each is the owner's to overturn by comment. The three
-rows of this document's former open questions were settled by the session's designer on recorded
-principle, as each row says.
+own decisions, made to carry them out; each is the owner's to overturn by comment. `D-GR13` and
+`D-GR14` are an implementer's decisions of 2026-11-16, made while building the fast tier; the
+owner has not ruled on them, and each is the owner's to overturn. The three rows of this
+document's former open questions were settled by the session's designer on recorded principle,
+as each row says.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -658,7 +721,9 @@ principle, as each row says.
 | `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | — |
 | `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | — |
 | `D-GR10` | A check is one declaration file with no verdict-changing default, read by `tillr-gate`; the gate program retires by attrition. **Rejected:** sharding the shared suite. Structural fix. | 2026-11-15 | [Section 6.4](#64-a-check-is-one-file) | — |
-| `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — |
+| `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
+| `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Alternative open to the owner:** one 9,000 millisecond ceiling for the whole fast run, which restores the 9 second bound and brings load faults back. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
+| `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |

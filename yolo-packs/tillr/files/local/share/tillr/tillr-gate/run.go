@@ -59,28 +59,73 @@ type VerdictCheck struct {
 	CheckID     string `json:"check_id"`
 	Result      string `json:"result"`
 	DurationMS  int64  `json:"duration_ms"`
-	// OverBudgetMS is how far a fast change check ran past its `budget_ms`. The check
-	// still answered, so its result is its verdict; the overrun is a defect against the
+	// OverBudgetMS is how far a fast check ran past its `budget_ms` and still answered
+	// before its ceiling. Its result is its verdict; the overrun is a defect against the
 	// check's declared cost, not a statement about the candidate (design §6.5).
 	OverBudgetMS int64  `json:"over_budget_ms,omitempty"`
 	LogRef       string `json:"log_ref"`
 }
 
 // FastTierCapMS is the fast tier's admission cap: the sum of every fast `budget_ms` may
-// not exceed it (`tools/gate/checks/gate-budget.py`, LIMIT_MS). It is also the default
-// ceiling of a fast change check that runs past its own budget: a check still running
-// when it alone has taken the whole tier's allowance is stopped, with no verdict.
+// not exceed it. `tools/gate/checks/gate-budget.py` declares the same number as LIMIT_MS,
+// and TestTheTierCapIsTheAdmissionTestsLimit fails when the two disagree. It is also the
+// most a fast check's ceiling can be: a check still running when it alone has taken the
+// whole tier's allowance is stopped, with no verdict.
 const FastTierCapMS = 9000
 
-// changeCeilingMS is where a fast change check is stopped. Its budget is not that point:
-// a change check is never carried (nothing after the merge has its base), so stopping it
-// at its budget would turn machine load into "could not judge" for the item. It runs on
-// to its declared `timeout_ms`, or to the tier cap when it declares none.
-func changeCeilingMS(check PlanCheck) int {
-	if check.TimeoutMS > 0 {
-		return check.TimeoutMS
+// Tree overrun policies: what a fast tree check that is still running at its budget
+// becomes. The caller chooses (`--tree-overrun` on the run and checks faces).
+const (
+	// TreeOverrunKeep runs it on to its ceiling and keeps its verdict, as every fast
+	// change check is run. It is the default, because nothing yet takes a carried check.
+	TreeOverrunKeep = "keep"
+	// TreeOverrunCarry stops it at its budget and records it over-budget, its judgment
+	// deferred to the heavy tier. That is design §6.5's carrying, and it is sound only
+	// once a heavy runner exists to judge what is carried (`item-gate-heavy-runner`).
+	TreeOverrunCarry = "carry"
+)
+
+// RunOptions are the caller's choices for a plan-driven run. The zero value is the safe
+// behavior today.
+type RunOptions struct {
+	// CarryTreeOverruns stops a fast tree check at its budget and defers it to the heavy
+	// tier (TreeOverrunCarry). Off, it runs to its ceiling and keeps its verdict.
+	CarryTreeOverruns bool
+}
+
+// treeOverrunFlag parses `--tree-overrun`.
+func treeOverrunFlag(value string) (RunOptions, error) {
+	switch value {
+	case TreeOverrunKeep:
+		return RunOptions{}, nil
+	case TreeOverrunCarry:
+		return RunOptions{CarryTreeOverruns: true}, nil
 	}
-	return FastTierCapMS
+	return RunOptions{}, usagef("--tree-overrun must be %q or %q, not %q", TreeOverrunKeep, TreeOverrunCarry, value)
+}
+
+// fastCeilingMS is where a fast check that ran past its budget is finally stopped, with
+// no verdict. Its budget is not that point: stopping a check that would have answered
+// turns machine load into "could not judge" for the item. It runs on to its declared
+// `timeout_ms`, or to the tier cap when it declares none -- clamped to [budget_ms,
+// FastTierCapMS], so no declaration gives a fast check a ceiling above the whole tier's
+// allowance or below its own budget.
+func fastCeilingMS(check PlanCheck) int {
+	ceiling := FastTierCapMS
+	if check.TimeoutMS > 0 && check.TimeoutMS < ceiling {
+		ceiling = check.TimeoutMS
+	}
+	if ceiling < check.BudgetMS {
+		ceiling = check.BudgetMS
+	}
+	return ceiling
+}
+
+// carried reports whether a check is stopped at its budget and deferred rather than run
+// to its ceiling: only a fast tree check, and only when the caller carries tree overruns.
+// A change check is never carried -- nothing after the merge has its base.
+func carried(check PlanCheck) bool {
+	return check.Tier == "fast" && check.Scope == "tree" && check.carryOverrun
 }
 
 // VerdictPayload is the `gate.verdict` payload: design §5.7's field list, verbatim.
@@ -119,6 +164,11 @@ type VerdictPayload struct {
 // one gate implementation's rather than the plan's commands, the face runs the named
 // program instead -- see `RunGate`.
 func Run(planRecord record.Envelope, worktree, logDir string) (record.Envelope, error) {
+	return RunWith(planRecord, worktree, logDir, RunOptions{})
+}
+
+// RunWith is Run with the caller's options.
+func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOptions) (record.Envelope, error) {
 	plan, root, logs, err := prepareRun(planRecord, worktree, logDir)
 	if err != nil {
 		return record.Envelope{}, err
@@ -154,6 +204,7 @@ func Run(planRecord record.Envelope, worktree, logDir string) (record.Envelope, 
 	}
 	var failure error
 	for index, check := range plan.Checks {
+		check.carryOverrun = options.CarryTreeOverruns
 		outcome, memoryErr := memory.run(check, root, logs, index)
 		if memoryErr != nil {
 			outcome.Result = ResultError
@@ -262,9 +313,9 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 			fmt.Fprintln(logFile, "fast check requires a positive budget_ms; no verdict")
 			return outcome
 		}
-		deadlineMS = check.BudgetMS
-		if check.Scope == "change" {
-			deadlineMS = changeCeilingMS(check)
+		deadlineMS = fastCeilingMS(check)
+		if carried(check) {
+			deadlineMS = check.BudgetMS
 		}
 	}
 	if deadlineMS > 0 {
@@ -291,7 +342,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.DurationMS = time.Since(started).Milliseconds()
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		if check.Tier == "fast" && check.Scope == "tree" {
+		if carried(check) {
 			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d; stopped and recorded over-budget, "+
 				"its judgment deferred to the heavy tier\n", check.CheckID, check.BudgetMS)
 			outcome.Result = ResultOverBudget
@@ -322,7 +373,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	default:
 		outcome.Result = ResultPass
 	}
-	if check.Tier == "fast" && check.Scope == "change" && outcome.Result != ResultError &&
+	if check.Tier == "fast" && (outcome.Result == ResultPass || outcome.Result == ResultFail) &&
 		outcome.DurationMS > int64(check.BudgetMS) {
 		outcome.OverBudgetMS = outcome.DurationMS - int64(check.BudgetMS)
 		fmt.Fprintf(logFile, "check %q ran %d ms, over its budget_ms %d by %d ms; its verdict (%s) stands, "+
@@ -334,7 +385,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 
 // budgetNotes are the lines a face prints for every fast check that ran past its budget,
 // so a slow check is visible on the gate's own output and not only inside its log: a tree
-// check that was stopped and carried, and a change check that ran long and still answered.
+// check that was stopped and carried, and a check that ran long and still answered.
 func budgetNotes(verdict VerdictPayload) []string {
 	var notes []string
 	for _, check := range verdict.Checks {

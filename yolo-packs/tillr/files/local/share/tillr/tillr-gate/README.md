@@ -75,19 +75,29 @@ declared timeout produces no judgment (exit 4), not a failed check.
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget-test.json) reads only the check
 directory. The fast total is 8,950 milliseconds, including the admission check.
-A fast tree check is stopped at its declared budget and records `over-budget`
-(meaning its judgment is deferred to the heavy run) without failing an otherwise
-passing run; that outcome is never stored as a remembered pass. No heavy runner
-exists yet, so today nothing judges a carried check until a later gate runs it
-again. A fast change check cannot be deferred, because no tree-only run has its
-base, so it is not stopped at its budget: it runs on to its ceiling, which is its
-`timeout_ms`, or the 9,000 millisecond tier cap when it declares none. One that
-answers by then keeps its verdict, and the verdict entry records
-`over_budget_ms`, how far past its budget it ran. Its log and the face's stderr
-name the check and the overrun; the `checks` face prefixes that line with
-`tillr-gate checks:`, so the run face's bounded triage of the gate program keeps
-it. Only a change check still running at its ceiling answers “could not judge”
-(exit 4). The rule and its measurement are in
+
+A fast check that is still running at its budget is not stopped there. It runs on
+to its *ceiling* (this README's word for the point where a fast check is finally
+stopped): its `timeout_ms`, or the 9,000 millisecond tier cap when it declares
+none, clamped so it is never below its own `budget_ms` and never above the cap.
+The admission check refuses a fast `timeout_ms` outside that range, and a test
+fails if the runner's cap (`FastTierCapMS`) and the admission check's
+(`LIMIT_MS`) disagree. A check that answers by its ceiling keeps its verdict --
+a failing one fails the gate -- and the verdict entry records `over_budget_ms`,
+how far past its budget it ran. Its log and the face's stderr name the check and
+the overrun; the `checks` face prefixes that line with `tillr-gate checks:`, so
+the run face's bounded triage of the gate program keeps it. Only a check still
+running at its ceiling answers “could not judge” (exit 4).
+
+Carrying -- stopping a fast tree check at its budget and recording `over-budget`,
+its judgment deferred to the heavy tier -- is available with `--tree-overrun
+carry` on the `run` and `checks` faces, and is off by default (`keep`). No heavy
+runner exists yet, so a carried check's judgment would be dropped: the verdict
+stays pass and nothing runs the check again. The loop's gate program,
+[`change-gate.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change-gate.py), states its choice in one
+constant, `TREE_OVERRUN`, which the heavy runner's item turns back to `carry`. A
+change check is never carried, because no tree-only run has its base. The rule
+and its measurement are in
 [design Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test).
 
 The `documents` change check remembers a pass for each changed document in the
@@ -95,7 +105,12 @@ same result store as tree checks, under a key over the document's blob and every
 input the renderer reads for it: the files and directories it links to, the names
 beside it, the `.vantage.toml` and `.vantageignore` files, and the check's own
 code. A pass recorded by another renderer version is judged again, and a key that
-ever recorded a fail is always judged again. The documents still to judge go to
+ever recorded a fail is always judged again. Because the renderer reads the
+working tree and the key reads the commit, no pass is remembered for a document
+whose inputs differ on disk from the commit (a link target that is ignored or
+untracked but present, an edited tracked input, a config the commit lacks), and a
+failing run remembers nothing unless every error finding names a document it was
+given. The documents still to judge go to
 one `uvx vantage-check` run. On 2026-11-16 the four-document change from the drain
 fault took 1.9 to 2.0 seconds with nothing remembered, about the same as before,
 and 0.42 to 0.52 seconds with all four remembered, at one, two and ten concurrent

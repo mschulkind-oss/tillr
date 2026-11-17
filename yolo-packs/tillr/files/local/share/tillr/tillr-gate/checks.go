@@ -23,8 +23,14 @@ func checksFace(args []string) int {
 	directory := flags.String("checks", "tools/gate/checks", "declaration directory")
 	fastTree := flags.Bool("fast-tree", false, "include fast tree declarations alongside change checks")
 	logs := flags.String("logs", "", "check log directory (required)")
+	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "what a fast tree check still running at its budget becomes: keep (run to its ceiling, keep its verdict) or carry (stop, defer to the heavy tier; only sound once a heavy runner exists)")
 	if code, answered := parseFlags(flags, args); answered {
 		return code
+	}
+	options, err := treeOverrunFlag(*treeOverrun)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tillr-gate checks:", err)
+		return record.ExitUsage
 	}
 	for _, arg := range []struct{ name, value string }{{"--base", *base}, {"--head", *head}, {"--logs", *logs}} {
 		if arg.value == "" {
@@ -73,7 +79,7 @@ func checksFace(args []string) int {
 		fmt.Fprintln(os.Stderr, "tillr-gate checks: could not judge:", err)
 		return exitCode(err)
 	}
-	verdict, runErr := Run(plan, *root, *logs)
+	verdict, runErr := RunWith(plan, *root, *logs, options)
 	if verdict.Kind != "" {
 		var payload VerdictPayload
 		if err := json.Unmarshal(verdict.Payload, &payload); err == nil {

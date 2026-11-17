@@ -58,6 +58,7 @@ class Changes(unittest.TestCase):
         # The renderer stub answers `vantage-check version` and `vantage-check check
         # --format json FILE...`, logging one line per file it was given. RENDER_FINDING is
         # an error finding on each file in RENDER_FAIL (every file when unset),
+        # RENDER_FINDING_FILE spells each finding's file (`./{}` adds a leading `./`),
         # RENDER_UNCHECKED names files the report could not check, and exit 127 prints no
         # report at all, as a missing tool does.
         uvx.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
@@ -74,8 +75,9 @@ sys.stderr.write(env("RENDER_ERR", ""))
 if rc == 127:
     sys.exit(rc)
 failing = env("RENDER_FAIL", "").split(",") if env("RENDER_FAIL") else files
+spell = env("RENDER_FINDING_FILE", "{}")
 findings = [{"rule": "stub/finding", "severity": "error", "message": env("RENDER_FINDING"),
-             "file": name, "line": 1, "column": 1} for name in failing if env("RENDER_FINDING")]
+             "file": spell.format(name), "line": 1, "column": 1} for name in failing if env("RENDER_FINDING")]
 failures = [{"file": name, "message": "stub"} for name in env("RENDER_UNCHECKED", "").split(",") if name]
 print(json.dumps({"tool": "vantage-check", "version": env("RENDER_VERSION", "0.0.0"),
                   "findings": findings, "failures": failures}))
@@ -381,6 +383,62 @@ sys.exit(rc)
         self.assertEqual(sorted(self.renders()[3:]), ["vantage-check README.md", "vantage-check other.md"])
         self.assertIn("documents: third.md: remembered pass at ", result.stderr)
 
+    def test_a_failing_run_attributes_its_findings_before_remembering(self):
+        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
+        self.commit()
+        # The reviewer's stub: the renderer exits 1 and spells the failing file `./README.md`.
+        # A different spelling of a pending document is still that document's finding;
+        # a finding on a file the run was not given makes the run's verdict unattributable.
+        for spelling, why in (("./{}", "a pending document spelled with ./"),
+                              ("elsewhere.md", "a file the run was not given")):
+            with self.subTest(why):
+                shutil.rmtree(self.repo / ".git/tillr-gate", ignore_errors=True)
+                self.env.update(RENDER_RC="1", RENDER_FINDING="finding", RENDER_FINDING_FILE=spelling)
+                before = len(self.renders())
+                for attempt in (1, 2):
+                    result = self.check("documents")
+                    self.assertEqual(result.returncode, 1, f"run {attempt}: " + result.stdout + result.stderr)
+                    self.assertNotIn("remembered pass", result.stderr)
+                self.assertEqual(self.renders()[before:], ["vantage-check README.md"] * 2)
+
+    def test_a_pass_that_rests_on_the_working_tree_is_not_remembered(self):
+        # The renderer reads the working tree; the memory key reads the commit. A pass
+        # whose input exists only on disk, or differs on disk from the commit, is not the
+        # commit's verdict, so it must not reach another checkout through the store.
+        (self.repo / ".gitignore").write_text("scratch/\n")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/b.md").write_text("# B\n\n## Yes\n")
+        self.git("add", ".gitignore", "docs")
+        base = self.commit()
+        (self.repo / "docs/a.md").write_text("# A\n\nSee [b](b.md#yes) and [n](../scratch/n.md).\n")
+        self.git("add", "docs")
+        self.commit()
+        cases = (
+            ("a linked file that is ignored but on disk",
+             lambda: ((self.repo / "scratch").mkdir(), (self.repo / "scratch/n.md").write_text("# N\n")),
+             lambda: shutil.rmtree(self.repo / "scratch")),
+            ("a linked tracked file edited on disk",
+             lambda: (self.repo / "docs/b.md").write_text("# B\n"),
+             lambda: self.git("checkout", "--", "docs/b.md")),
+            ("a renderer config on disk that the commit lacks",
+             lambda: (self.repo / "docs/.vantage.toml").write_text("[rules]\n"),
+             lambda: (self.repo / "docs/.vantage.toml").unlink()),
+        )
+        for why, make, undo in cases:
+            with self.subTest(why):
+                shutil.rmtree(self.repo / '.git/tillr-gate', ignore_errors=True)
+                make()
+                before = len(self.renders())
+                result = self.check("documents", base)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                undo()
+                result = self.check("documents", base)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("remembered pass", result.stderr)
+                self.assertEqual(self.renders()[before:], ["vantage-check docs/a.md"] * 2)
+                # The clean checkout's own pass is remembered as before.
+                self.assertIn("remembered pass", self.check("documents", base).stderr)
+
     def test_plan_union_preserves_the_old_fixture_kinds(self):
         shutil.copy(ROOT / "tools/fork-check.py", self.repo / "tools/fork-check.py")
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
@@ -488,6 +546,26 @@ sys.exit(rc)
         result = subprocess.run(common + ["--all", "--since", self.base], cwd=self.repo, env=self.env,
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_loop_program_keeps_the_verdict_of_a_slow_tree_check(self):
+        # The loop's gate is where carrying a fast tree check is switched: until a heavy
+        # runner takes what is carried (item-gate-heavy-runner), carrying would drop the
+        # check's judgment, so the program asks the runner to keep it. The stub runner
+        # records its arguments and fails, so nothing after it runs.
+        (self.repo / "README.md").write_text("# Changed\n")
+        head = self.commit()
+        runner = self.bin / "recording-runner"
+        runner.write_text(f"#!{sys.executable}\nimport json, sys\n"
+                          f"open({str(self.repo / 'runner-args.json')!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                          "sys.exit(1)\n")
+        runner.chmod(0o755)
+        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+                                 "--head", head, "--runner", str(runner), "--logs", str(self.repo / "logs")],
+                                cwd=self.repo, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        args = json.loads((self.repo / "runner-args.json").read_text())
+        self.assertEqual(args[:2], ["checks", "--fast-tree"])
+        self.assertEqual(args[args.index("--tree-overrun") + 1], "keep")
 
 
 if __name__ == "__main__":

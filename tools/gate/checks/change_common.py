@@ -347,10 +347,26 @@ def identity_findings(root, base, head):
 #   `src`, resolved against the document's directory and the repository root, files and
 #   directories alike, and any other word that resolves to a file. The target's object id
 #   is the input: a moved heading changes the target blob, so `link/dead-section-anchor`
-#   is judged again. A link whose target is absent fails the document, so a remembered
-#   pass never depends on an absence;
+#   is judged again;
 # * every `roadmap.md`, when a config turns on `planning/unrouted`, the one rule that
 #   reads documents a page does not name.
+#
+# The key reads the commit, but the renderer reads the working tree, so the two agree only
+# where the checkout matches the commit. A pass is therefore NOT remembered for a document
+# whose verdict may have read something the commit does not hold: a link destination that
+# is absent at HEAD but present on disk (an ignored or untracked file makes a link resolve
+# that the commit leaves dead), a tracked input -- a named entry, a sibling, a config --
+# that is modified or deleted on disk, or a `.vantage.toml` or `.vantageignore` on disk,
+# in the document's directory or above it, that HEAD lacks. Such a pass may be the
+# working tree's verdict rather than the commit's, and the store would carry it to every
+# checkout that shares the git common dir. An untracked sibling is not a reason: it can
+# only add a `ref/unlinked-file` finding, never remove one. The verdict itself is still
+# the run's, exactly as it was before memory.
+#
+# A failing run is remembered only when it is attributable: every error finding names,
+# after normalizing its path, a document the run was given. A finding on anything else --
+# a spelling the check cannot match, or a file it did not ask about -- means the check
+# cannot tell which documents passed, so that run remembers nothing.
 #
 # The renderer's version is not in the key, because asking for it costs a process start
 # (about 0.28 s): a run that renders anything reads the version from its own JSON report,
@@ -393,9 +409,11 @@ def tree_entries(root):
 
 
 def named_inputs(text, path, entries):
-    """The tree entries a document's text names, as `path -> object id`."""
+    """The tree entries a document's text names, as `path -> object id`, and the link
+    destinations it names that HEAD does not hold."""
     here = posixpath.dirname(path)
     named = {}
+    absent = set()
 
     def resolve(token, linked):
         if "://" in token or token.startswith(("mailto:", "#")):
@@ -410,17 +428,20 @@ def named_inputs(text, path, entries):
             entry = entries.get(candidate)
             if entry and (linked or entry[1] == "blob"):
                 named[candidate] = entry[2]
+            elif linked and not entry:
+                absent.add(candidate)
 
     for pattern in LINK_DESTINATIONS:
         for token in pattern.findall(text):
             resolve(token.strip(), True)
     for token in WORD.findall(text):
         resolve(token, False)
-    return named
+    return named, absent
 
 
 def document_keys(root, documents):
-    """Each document's memory key: a hash of every input its verdict reads."""
+    """Each document's memory key -- a hash of every input its verdict reads -- and the
+    documents whose inputs differ on disk from HEAD, whose pass must not be remembered."""
     entries = tree_entries(root)
     configs = {path: entry[2] for path, entry in entries.items()
                if posixpath.basename(path) in DOCUMENT_CONFIG_NAMES}
@@ -431,17 +452,46 @@ def document_keys(root, documents):
             break
     code = {path: entries.get(path, ("", "", "absent"))[2] for path in DOCUMENT_CHECK_FILES}
     keys = {}
+    watched = {}
+    unsettled = {}
     for path in documents:
         mode, _, blob = entries[path]
         here = posixpath.dirname(path)
         siblings = sorted(p for p in entries if posixpath.dirname(p) == here)
         text = git(root, "cat-file", "blob", blob)
+        named, absent = named_inputs(text, path, entries)
         identity = {"format": DOCUMENT_MEMORY_FORMAT, "check": "documents", "code": code,
                     "configs": configs, "roadmaps": roadmaps, "path": path, "mode": mode,
-                    "blob": blob, "siblings": siblings, "named": named_inputs(text, path, entries)}
+                    "blob": blob, "siblings": siblings, "named": named}
         raw = json.dumps(identity, sort_keys=True).encode()
         keys[path] = hashlib.sha256(raw).hexdigest()
-    return keys
+        watched[path] = set(named) | set(siblings) | set(configs) | set(roadmaps)
+        ancestors, step = [], here
+        while True:
+            ancestors.append(step)
+            if not step:
+                break
+            step = posixpath.dirname(step)
+        on_disk = sorted(candidate for candidate in absent | {
+            posixpath.join(directory, name) for directory in ancestors for name in DOCUMENT_CONFIG_NAMES}
+            if candidate not in entries and os.path.lexists(root / candidate))
+        if on_disk:
+            unsettled[path] = on_disk
+    changed = tracked_changes(root, set().union(*watched.values()))
+    for path in documents:
+        differ = sorted(p for p in changed if any(p == w or p.startswith(w + "/") for w in watched[path]))
+        if differ:
+            unsettled.setdefault(path, []).extend(differ)
+    return keys, unsettled
+
+
+def tracked_changes(root, paths):
+    """The tracked paths, among `paths` and below them, that differ on disk from HEAD."""
+    if not paths:
+        return set()
+    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=no",
+                 "--ignore-submodules=all", "--", *(":(literal)" + p for p in sorted(paths)))
+    return {entry[3:] for entry in status.split("\0") if len(entry) > 3}
 
 
 def result_store(root):
@@ -517,13 +567,15 @@ def judge_documents(root, documents):
     The run's exit is the check's, as it was before memory: 0 passes, 1 with a finding
     fails, anything else -- or a report that cannot be read -- could not judge. Memory only
     narrows which documents the run is given. From a passing run every document is
-    remembered as a pass; from a failing one, a document with an error finding is
-    remembered as a fail and one with no finding at all as a pass. Nothing is remembered
-    from a run that could not judge, nor for a document the report says it could not check.
+    remembered as a pass; from a failing one whose every error finding names a document it
+    was given, a document with an error finding is remembered as a fail and one with no
+    finding at all as a pass. Nothing is remembered from a run that could not judge or whose
+    failure is not attributable, nor for a document the report says it could not check, and
+    no pass is remembered for a document whose inputs differ on disk from the commit.
     """
     store = result_store(root)
     tree = git(root, "rev-parse", f"{HEAD}^{{tree}}").strip()
-    keys = document_keys(root, documents)
+    keys, unsettled = document_keys(root, documents)
     remembered = {}
     for path in documents:
         passed = stored_result(store, keys[path], "pass")
@@ -558,18 +610,39 @@ def judge_documents(root, documents):
     findings = report.get("findings", []) if report else []
     if report is None or code not in (0, 1) or code == 1 and not findings:
         raise RuntimeError(f"uvx vantage-check exited {code} without a document finding")
-    if version:
-        unchecked = {failure.get("file") for failure in report.get("failures") or [] if isinstance(failure, dict)}
-        flagged = {finding.get("file") for finding in findings}
-        errors = {finding.get("file") for finding in findings if finding.get("severity") == "error"}
-        for path in pending:
-            if path in unchecked:
-                continue
-            if code == 0 or path not in flagged:
-                store_result(store, keys[path], "pass", duration_ms, tree, version)
-            elif path in errors:
-                store_result(store, keys[path], "fail", duration_ms, tree, version)
+    if not version:
+        return code
+    unchecked = {reported(root, failure.get("file")) for failure in report.get("failures") or []
+                 if isinstance(failure, dict)}
+    flagged = {reported(root, finding.get("file")) for finding in findings if isinstance(finding, dict)}
+    errors = {reported(root, finding.get("file")) for finding in findings
+              if isinstance(finding, dict) and finding.get("severity") == "error"}
+    if code == 1 and (not errors or not errors <= set(pending)):
+        print("documents: the run failed on findings it does not attribute to a document it was given; "
+              "nothing is remembered from it", file=sys.stderr)
+        return code
+    for path in pending:
+        if path in unchecked:
+            continue
+        if path in errors:
+            store_result(store, keys[path], "fail", duration_ms, tree, version)
+        elif path in flagged:
+            continue
+        elif path in unsettled:
+            print(f"documents: {path}: pass not remembered; it read what differs on disk from the commit: "
+                  f"{', '.join(unsettled[path])}", file=sys.stderr)
+        else:
+            store_result(store, keys[path], "pass", duration_ms, tree, version)
     return code
+
+
+def reported(root, name):
+    """A file the renderer names, as a repository-relative path; None for no name."""
+    if not isinstance(name, str) or not name:
+        return None
+    if posixpath.isabs(name):
+        name = os.path.relpath(name, root)
+    return posixpath.normpath(name)
 
 
 def run(kind, args):

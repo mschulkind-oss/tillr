@@ -179,6 +179,37 @@ exit 1
 	}
 }
 
+// A fast check that ran past its budget is reported by the declaration face on a
+// `tillr-gate checks:` line, and that line must survive into the verdict's evidence: the
+// overrun is a defect against the check's declared cost, and the triage is where a reader
+// of the verdict looks. Negative control: the overrun line is followed by 200 lines of
+// other output and then a `fork-check:` line, so neither the tail fallback nor another
+// prefix can keep it -- only `tillr-gate checks:` being a gate prefix does.
+func TestTheTriageKeepsTheDeclarationFacesOverrunLines(t *testing.T) {
+	gate := fakeGate(t, `#!/bin/sh
+echo "tillr-gate checks: go-build: ran 5700 ms, 3000 ms over its budget_ms; its verdict (pass) stands"
+i=0
+while [ "$i" -lt 200 ]; do
+  echo "  step $i: running a check"
+  i=$((i + 1))
+done
+echo "fork-check: PASSED"
+exit 0
+`)
+	plan := planRecord(t, planIn{PlanID: "p-overrun-triage", BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "d-1"})
+	code, raw := runPlan(t, plan, tree(t), "--gate", gate)
+	if code != 0 {
+		t.Fatalf("the fake gate's pass exited %d, want 0: %s", code, raw)
+	}
+	triage, err := os.ReadFile(decodeVerdict(t, raw).Payload.Checks[0].LogRef)
+	if err != nil {
+		t.Fatalf("reading the verdict's evidence failed: %v", err)
+	}
+	if !strings.Contains(string(triage), "tillr-gate checks: go-build: ran 5700 ms") {
+		t.Fatalf("the verdict's evidence lost the overrun line:\n%s", triage)
+	}
+}
+
 // A gate is slow, so its run is bounded, and an expired bound must not hang and must not
 // pass: the process group is killed and the verdict is `error`/4, because a gate that did
 // not finish judged nothing -- a `pass` there would certify a tree nothing checked.
