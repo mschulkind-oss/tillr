@@ -853,6 +853,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return ReasonRunLinkMissing
 	}
 	switch p.history.refusals[latest] {
+	case RefusalNodeOutput:
+		return RefusalNodeOutput
 	case RefusalFence:
 		return ReasonBoundaryScopeEscape
 	case RefusalNoOp:

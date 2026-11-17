@@ -139,12 +139,12 @@ func testHeavyKilledOwner(t *testing.T, legacy bool) {
 			t.Fatal(err)
 		}
 		driver := filepath.Join(work, "legacy.py")
-		writeForkFile(t, driver, `import ast,os,pathlib,signal,subprocess,sys,threading,time
+		writeForkFile(t, driver, `import ast,ctypes,json,os,pathlib,platform,signal,struct,subprocess,sys,threading,time
 from pathlib import Path
 source=sys.argv[1]
 module=ast.parse(Path(source).read_text())
-names={'environ','Cancellation','_kill_process_group','_run_cancellable'}
-constants={'REUSE_ENV','GATE_ENV_DROP'}
+names={'environ','Cancellation','_kill_process_group','_run_cancellable','_start_cpu_sampler','progress'}
+constants={'REUSE_ENV','GATE_ENV_DROP','_CPU_SHIM','WATCHDOG_SAMPLE_INTERVAL','WATCHDOG_SILENT_SAMPLES','CHECK_STALLED_RC'}
 nodes=[node for node in module.body if (isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names) or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id in constants for target in node.targets))]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),source,'exec'),globals())
 _run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)

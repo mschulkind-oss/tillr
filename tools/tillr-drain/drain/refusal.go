@@ -22,6 +22,8 @@ const (
 	RefusalGate     = "gate"
 	RefusalLand     = "land"
 	RefusalConflict = "conflict"
+	// RefusalNodeOutput means a successful run did not supply a usable declared file.
+	RefusalNodeOutput = "node-output-missing"
 	// RefusalStaging is the step that refused before anything ran: the item's own record
 	// could not be rendered into a brief. It is the one refusal with no run to name, so its
 	// `drain.refusal` event is keyed by the item rather than by a run, and the loop holds
@@ -90,7 +92,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 		l.reportf("loop: repeated-refusal: %s\n", line)
 	}
 	switch step {
-	case RefusalLand, RefusalGate, RefusalFence, RefusalNoOp:
+	case RefusalLand, RefusalGate, RefusalFence, RefusalNoOp, RefusalNodeOutput:
 		return l.recordRefusal(ctx, candidate, step)
 	}
 	return nil
@@ -146,7 +148,7 @@ func RepeatedRefusalLine(result LoopResult) string {
 // refusalStepsWords is the steps breakdown as one phrase: `fence=2`, `gate=1, fence=1`.
 // The order is fixed rather than the map's, so the same report reads the same way twice.
 func refusalStepsWords(steps map[string]int) string {
-	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalLand, RefusalConflict}
+	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalLand, RefusalConflict, RefusalNodeOutput}
 	parts := make([]string, 0, len(order))
 	for _, step := range order {
 		if steps[step] > 0 {

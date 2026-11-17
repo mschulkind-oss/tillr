@@ -25,19 +25,23 @@ type Workflow struct {
 	Edges   []WorkflowEdge  `json:"edges"`
 }
 type WorkflowStage struct {
-	ID         string         `json:"id"`
-	Kind       string         `json:"kind"`
-	Seat       string         `json:"seat"`
-	Access     string         `json:"access"`
-	CommandRef string         `json:"command_ref,omitempty"`
-	Flags      map[string]any `json:"flags,omitempty"`
-	Command    []string       `json:"resolved_argv,omitempty"`
-	TimeoutMS  int            `json:"timeout_ms,omitempty"`
+	ID         string            `json:"id"`
+	Kind       string            `json:"kind"`
+	Seat       string            `json:"seat"`
+	Access     string            `json:"access"`
+	CommandRef string            `json:"command_ref,omitempty"`
+	Flags      map[string]any    `json:"flags,omitempty"`
+	Command    []string          `json:"resolved_argv,omitempty"`
+	TimeoutMS  int               `json:"timeout_ms,omitempty"`
+	Inputs     map[string]string `json:"inputs,omitempty"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
 }
 type WorkflowEdge struct {
 	From        string `json:"from_node"`
 	To          string `json:"to_node"`
 	WhenOutcome string `json:"when_outcome,omitempty"`
+	FromOutput  string `json:"from_output,omitempty"`
+	ToInput     string `json:"to_input,omitempty"`
 }
 
 func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
@@ -94,6 +98,9 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		if s.Access != "read_only" && s.Access != "write" {
 			return nil, fmt.Errorf("workflow-access: %s", s.ID)
 		}
+	}
+	if err := validateOutputWiring(&w); err != nil {
+		return nil, err
 	}
 	indegree := map[string]int{}
 	next := map[string][]string{}
@@ -370,7 +377,21 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		return true, l.markExamined(ctx, d)
 	}
-	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
+	artifacts, outputErr := checkNodeOutputs(l.cfg.Root, d)
+	if outputErr != nil {
+		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
+			return true, err
+		}
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: outputErr.Error()}
+		if err := l.refuse(ctx, c, result, RefusalNodeOutput); err != nil {
+			return true, err
+		}
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, outputErr.Error()); stop != "" {
+			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+		}
+		return true, l.markExamined(ctx, d)
+	}
+	if err := l.acceptNodeOutputs(ctx, d, artifacts); err != nil {
 		return true, err
 	}
 	next, err := l.nextWorkflowNode(ctx, d)

@@ -1064,6 +1064,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		if decision.Workflow != nil {
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
+			paths, err := l.nodeInputPaths(ctx, decision)
+			if err != nil {
+				return nil, err
+			}
+			spec.InputPaths = paths
 			spec.Continue = decision.NodeIndex > 0 || decision.WorkflowRestart
 			if decision.WorkflowRestart {
 				previous, stagedErr := l.stagedNodeRun(decision)
@@ -1099,7 +1104,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					}
 				}
 			}
-			spec.PreviousReport = decision.PreviousReport
+			// Report-only workflows retain their original handoff. Once a graph
+			// declares named files, only explicit producer edges carry inputs.
+			if !decision.Workflow.hasNamedFiles() {
+				spec.PreviousReport = decision.PreviousReport
+			}
 		}
 		var err error
 		if decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {

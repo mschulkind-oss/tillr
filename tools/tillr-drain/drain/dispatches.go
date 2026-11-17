@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS node_runs (
  outcome TEXT NOT NULL,
  PRIMARY KEY(item_id,attempt,node_id)
 );
+CREATE TABLE IF NOT EXISTS node_artifacts (
+ item_id TEXT NOT NULL,
+ attempt INTEGER NOT NULL,
+ node_id TEXT NOT NULL,
+ run_id TEXT NOT NULL,
+ name TEXT NOT NULL,
+ type TEXT NOT NULL,
+ sha256 TEXT NOT NULL,
+ location TEXT NOT NULL,
+ PRIMARY KEY(item_id,attempt,node_id,name)
+);
 `
 
 // recordPassDecision inserts an immutable decision in the tick's transaction. A replay
