@@ -174,12 +174,22 @@ func buildPair(t *testing.T) (view, drain string) {
 // The screenshot of 2026-11-17: a server whose PATH held no tillr-drain answered every
 // Waiting read with `exec: "tillr-drain": executable file not found in $PATH`. And the
 // other half of the same defect: a PATH whose stale copy came first ran that copy.
+// The planner now needs Git to read the proved lane base; PATH supplies Git but
+// deliberately no tillr-drain, so this still proves sibling resolution.
 func TestBuiltServerAsksItsOwnSiblingWhateverPATHHolds(t *testing.T) {
 	view, drain := buildPair(t)
 	dir, path := whyFixture(t, drain)
 	decoyDir := t.TempDir()
 	_, marker := decoyPlanner(t, decoyDir, `{"revision":"0000000000000000000000000000000000000000"}`)
-	for name, pathEnv := range map[string]string{"empty PATH": "", "decoy first on PATH": decoyDir + string(os.PathListSeparator) + os.Getenv("PATH")} {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(gitDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	for name, pathEnv := range map[string]string{"only Git on PATH": gitDir, "decoy first on PATH": decoyDir + string(os.PathListSeparator) + gitDir} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(view, "waiting", "--store", path, "--root", dir, "--json")
 			cmd.Env = []string{"PATH=" + pathEnv, "HOME=" + t.TempDir()}

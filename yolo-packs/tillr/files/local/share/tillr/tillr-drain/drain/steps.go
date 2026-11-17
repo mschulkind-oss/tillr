@@ -573,6 +573,41 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 			}
 		}
 	}
+	// The outer verdict judges the wrapper. Its fast verdict and remaining spans
+	// name the checks that actually failed, which are the ids replay understands.
+	if s.Root != "" {
+		fast, state := readFastGateSpans(filepath.Join(RunDir(s.Root, candidate.RunID), GateFastVerdictFile))
+		actual := []string{}
+		if state == GateSpansRead {
+			for _, check := range fast {
+				if check.Status == "fail" {
+					actual = append(actual, check.CheckID)
+				}
+			}
+		}
+		remaining, remainingWatches := readFailingSpans(filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile))
+		actual = append(actual, remaining...)
+		for id, paths := range remainingWatches {
+			watches[id] = paths
+		}
+		if len(actual) > 0 {
+			checks = actual
+		}
+		// Fast tree declarations own their read sets. A wrapper's generated plan
+		// need not hold their raw ids, so use that same declaration directory.
+		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, "tools/gate/checks/*.json"))
+		for _, path := range declarations {
+			body, err := os.ReadFile(path)
+			var decl struct {
+				ID     string   `json:"id"`
+				Reads  []string `json:"reads"`
+				Writes []string `json:"writes"`
+			}
+			if err == nil && json.Unmarshal(body, &decl) == nil {
+				watches[decl.ID] = append(decl.Reads, decl.Writes...)
+			}
+		}
+	}
 	return checks, s.changedPaths(candidate), watches
 }
 
@@ -620,31 +655,35 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		return ReplayOutcome{Rev: rev, Known: false}, err
 	}
 	defer cleanup()
-	program := strings.ReplaceAll(s.ReplayProgram, "{only}", strings.Join(checks, ","))
-	argv := strings.Fields(program)
-	if len(argv) == 0 {
-		return ReplayOutcome{Rev: rev, Known: false}, nil
+	out := ReplayOutcome{Rev: rev, Known: true}
+	// A grouped exit 1 says only that SOME check failed. Judge each id so a
+	// candidate's own red cannot hide behind a different red already on its base.
+	for _, check := range checks {
+		program := strings.ReplaceAll(s.ReplayProgram, "{only}", check)
+		argv := strings.Fields(program)
+		if len(argv) == 0 {
+			return ReplayOutcome{Rev: rev, Known: false}, nil
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), s.forkRootEnv()...)
+		var stderr stderrTail
+		cmd.Stderr = &stderr
+		runErr := runCheckGroup(cmd)
+		if cmd.ProcessState == nil {
+			return ReplayOutcome{Rev: rev, Known: false}, Externalf("replaying %s on %s: %v: %s",
+				check, shortSHA(rev), runErr, stderr.String())
+		}
+		switch cmd.ProcessState.ExitCode() {
+		case 0:
+		case 1:
+			out.Red = append(out.Red, check)
+		default:
+			// Unknown is never evidence for acquittal.
+			return ReplayOutcome{Rev: rev, Known: false}, nil
+		}
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), s.forkRootEnv()...)
-	var stderr stderrTail
-	cmd.Stderr = &stderr
-	runErr := runCheckGroup(cmd)
-	if cmd.ProcessState == nil {
-		return ReplayOutcome{Rev: rev, Known: false}, Externalf("replaying %s on %s: %v: %s",
-			strings.Join(checks, ", "), shortSHA(rev), runErr, stderr.String())
-	}
-	switch cmd.ProcessState.ExitCode() {
-	case 0:
-		return ReplayOutcome{Rev: rev, Known: true}, nil
-	case 1:
-		return ReplayOutcome{Rev: rev, Known: true, Red: append([]string{}, checks...)}, nil
-	default:
-		// Could not judge. Unknown is not green: the caller leaves the gate's refusal
-		// standing rather than acquitting a candidate nobody cleared.
-		return ReplayOutcome{Rev: rev, Known: false}, nil
-	}
+	return out, nil
 }
 
 // checkGroupGrace bounds how long runCheckGroup waits for a killed check's process group to

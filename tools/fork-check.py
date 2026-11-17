@@ -1604,6 +1604,8 @@ GATE_CODE = (
     "tools/fork-check.py",
     "tests/fork-check.test.py",
     ".justfile",
+    "tools/gate/",
+    "tests/fast-tree-in-done.test.py",
 )
 
 
@@ -4239,7 +4241,7 @@ def classify_change(root: Path, changed: list[str], series: list[Series]) -> Cha
     wall, floor and ratio, but claims no target it cannot defend.
     """
     paths = [path for path in changed if path]
-    gate = [path for path in paths if path in GATE_CODE]
+    gate = [path for path in paths if watched_path(path, set(GATE_CODE))]
     mechanism = [path for path in paths if path in MECHANISM]
     driver = [path for path in paths if path in ("bin/pi-forks", "bin/pi-forks.list")]
     driver_tests = [path for path in paths
@@ -5301,6 +5303,8 @@ class Check:
         """
         if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES:
             return False
+        if getattr(self, "fast_tree", False) and self.preflight_refused:
+            return False
         group = CHECK_KIND_GROUP.get(self.kind, KIND_VERDICT)
         if group == KIND_NAMED:
             return self.named_case
@@ -5989,7 +5993,7 @@ def waybar_skip_reason(check: Check) -> str:
 
 def watched_path(path: str, watched: set[str]) -> bool:
     """Is `path` one a check reads? A watch ending in `/` is a directory prefix."""
-    return any(path == watch or (watch.endswith("/") and path.startswith(watch))
+    return any(watch == "." or path == watch or (watch.endswith("/") and path.startswith(watch))
                for watch in watched)
 
 
@@ -6148,6 +6152,30 @@ def file_size_integrity() -> Check:
 INTEGRITY_BUILDERS = {
     "file-size": file_size_integrity,
 }
+
+
+def plan_fast_tree(plan: Plan, root: Path, base: str | None) -> None:
+    """Import the gate's declarations, never a second hand-maintained checklist.
+
+    Landing already runs these in change-gate.py. Done and rolling must also see a
+    red tree, even when the changed-path set is empty. Replay uses this full plan.
+    """
+    if plan.tier == TIER_LANDING:
+        return
+    for path in sorted((root / "tools/gate/checks").glob("*.json")):
+        declaration = json.loads(path.read_text())
+        if declaration.get("scope") != "tree" or declaration.get("tier") != "fast":
+            continue
+        check = Check(declaration["id"], declaration["label"],
+                      [sys.executable, "tools/gate/tree-check.py", "--only", declaration["id"],
+                       "--base", base or "HEAD", "--head", "HEAD"],
+                      "always: the landing gate's fast tree declaration",
+                      declaration.get("budget_ms", 0) / 1000,
+                      watches=tuple(declaration.get("reads", [])),
+                      writes=tuple(declaration.get("reads", []) + declaration.get("writes", [])),
+                      forced="fast-tree", reusable=False)
+        check.fast_tree = True
+        plan.checks.append(check)
 
 
 def plan_integrity(plan: Plan) -> None:
@@ -6765,7 +6793,7 @@ def build_plan(
     # The gate's own audit suite: nothing else executes it, so an edit to the checker or
     # to the suite that pins it is judged by that suite rather than only by the gate the
     # edit just changed.
-    self_suite = [path for path in changed if path in SELF_SUITE]
+    self_suite = [path for path in changed if watched_path(path, set(SELF_SUITE))]
     if self_suite:
         plan.checks.append(
             Check("self-suite", "the gate's own audit suite still passes",
@@ -6849,8 +6877,8 @@ def build_plan(
     # upstream carried every fork even for a gate-only diff. Documents ride along, as
     # they do in `classify_change`; a change that reaches any fork input is not
     # gate-only and keeps the drift reason.
-    gate_only = bool(changed) and any(path in GATE_CODE for path in changed) and all(
-        path in GATE_CODE or is_document(root, path) for path in changed)
+    gate_only = bool(changed) and any(watched_path(path,set(GATE_CODE)) for path in changed) and all(
+        watched_path(path,set(GATE_CODE)) or is_document(root, path) for path in changed)
 
     touched_series: set[str] = set()
     declaration_packs: set[str] = set()
@@ -7242,6 +7270,7 @@ def build_plan(
     # selection above is the one declaration of what a diff reaches, and a tier only
     # decides which half of it this run carries.
     apply_tier(plan, tier)
+    plan_fast_tree(plan, root, base)
     return plan
 
 
@@ -8126,6 +8155,11 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
     else:
         check.rc, check.output, seconds = run_command(
             root, check.argv, check.timeout, {**check.env, **(env or {})}, drop, cancel)
+    if getattr(check, "fast_tree", False):
+        if check.rc == 6:
+            check.rc = CHECK_STALLED_RC
+        elif check.rc not in (0, 1, CHECK_STALLED_RC):
+            check.preflight_refused = True
     # A stopped process is not a verdict. The caller marks the check not-run; setting rc
     # to 0 here keeps a kill signal out of the triage packet and out of the exit status.
     if cancel is not None and cancel.cancelled:
@@ -9773,7 +9807,8 @@ def preflight_selected(check: Check, selectors: list[str]) -> bool:
     names = [name.strip() for selector in selectors for name in selector.split(",") if name.strip()]
     if not names:
         return True
-    return any(preflight_names(name, check.kind, check.label) for name in names)
+    return any(preflight_names(name, check.kind, check.label) or
+               name == declaration_id(check.kind, check.label, Path.cwd()) for name in names)
 
 
 def show_triage(common_dir: Path, selector: str) -> int:
@@ -9856,6 +9891,9 @@ def run_replay(argv: list[str]) -> int:
     copies = [copy.copy(check) for check in checks]
     for check in copies:
         execute_attempt(root, check, gate.diff_base)
+    if any(check.unanswered or check.rc == CHECK_STALLED_RC for check in copies):
+        print("fork-check replay: a named check could not judge", file=sys.stderr)
+        return 2
     failed = []
     for check in copies:
         status = "PASS" if check.rc == 0 else "FAIL"

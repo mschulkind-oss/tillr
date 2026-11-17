@@ -1070,6 +1070,9 @@ planned:
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
 		return "", err
 	}
+	if err := l.releaseTrunkAcquittals(ctx); err != nil {
+		return "", err
+	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
 	defer func() {

@@ -35,6 +35,13 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 	if d.RunRequest == nil || d.BlockConflict != nil || (!d.Readmitted && d.Action != ActionRetry) {
 		return nil
 	}
+	attemptHistory, err := readRunHistory(tx.Reader())
+	if err != nil {
+		return err
+	}
+	if attemptHistory.refusals[outcomeRun] == RefusalTrunkAlreadyRed {
+		return nil
+	}
 	var state string
 	if err := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, d.ItemID).Scan(&state); err != nil {
 		return err
@@ -99,7 +106,7 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 			continue
 		}
 		pd := decisions[prior.RunID]
-		if pd.BlockConflict != nil || pd.Seat == "design" {
+		if attemptHistory.refusals[prior.RunID] == RefusalTrunkAlreadyRed || pd.BlockConflict != nil || pd.Seat == "design" {
 			continue
 		}
 		// An authorized predecessor can be a standalone terminal run. The
