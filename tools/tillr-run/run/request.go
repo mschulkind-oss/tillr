@@ -147,6 +147,9 @@ func (b Backend) command(name, model string) []string {
 // answers the empty string, and its record then carries no route rather than an invented
 // one.
 func (r Request) Route() string {
+	if r.Backend == "command" {
+		return ""
+	}
 	for i, element := range r.Command {
 		if element == "--model" && i+1 < len(r.Command) {
 			return r.Command[i+1]

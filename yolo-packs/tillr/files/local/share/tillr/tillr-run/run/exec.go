@@ -176,7 +176,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// With no backend directory this package can execute a raw fixture command.
 	// The CLI always supplies a directory and requires an adapter declaration.
 	pauseKind := ""
-	if opts.BackendsDir != "" {
+	if opts.BackendsDir != "" && req.Backend != "command" {
 		var err error
 		pauseKind, err = ReadPauseKind(opts.BackendsDir, req.Command[0])
 		if err != nil {
@@ -258,6 +258,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 			{Kind: "log", Ref: logPath},
 		},
 	}
+	if req.Backend == "command" {
+		payload.Route = ""
+	}
 	// The lane is claimed before the process exists: the lease has to be held for as
 	// long as the run can be doing anything, and it is the only thing that tells a
 	// planner or a reaper the lane is taken (design §5.6). Its clock is the injected
@@ -338,6 +341,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	monitor := &settledMonitor{log: logPath, stderr: filepath.Join(laneDir, "stream.err"), backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
 	if monitor.after == nil {
 		monitor.after = time.After
+	}
+	if req.Backend == "command" {
+		monitor.disabled = true
 	}
 	monitor.offset = streamOffset
 	monitor.startOffset = streamOffset
@@ -459,6 +465,9 @@ const SpendExtractorTimeout = 60 * time.Second
 // by itself a failure: exit 4 is "the report is incomplete", and an incomplete report
 // still carries the header and still writes the file.
 func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logPath string, exitCode *int) (*Usage, string) {
+	if backend == "command" {
+		return nil, ""
+	}
 	if backendsDir == "" {
 		return nil, "no backend extractor was configured"
 	}

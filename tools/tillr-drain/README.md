@@ -73,6 +73,45 @@ drain-4-6.json  -> record id loop-4-6
 drain-0-0.json  -> no applied generation
 ```
 
+## Registered command nodes
+
+A workflow stage with `kind: command` runs a registered program, not a model.
+Its `command_ref` names an entry in
+[`config/tillr/commands.json`](../../config/tillr/commands.json). Each entry supplies
+`argv`, the fixed list of program arguments (program first), and a `flags` map from
+accepted long flag names to `string`, `number`, or `path`. A path value is relative
+to the repository, cannot contain `..` components, and cannot escape through an
+existing symlink.
+For example, a registry entry and its stage can use these shapes:
+
+```json
+{"check": {"argv": ["python3", "tools/check.py"], "flags": {"--target": "path"}}}
+```
+
+```json
+{"id": "check", "kind": "command", "command_ref": "check", "access": "read_only", "flags": {"--target": "tools/result.json"}}
+```
+
+Flags become separate `--name=value` arguments in sorted flag-name order; no
+workflow value is interpreted by a shell. Direct shell programs are refused in
+the registry. The loader checks every command stage before staging any node,
+and holds an invalid workflow as `workflow-invalid` with the finding. Workflows
+without command stages do not need the registry file.
+
+The command runs through `tillr run exec` in the item's existing worktree with
+backend `command`, no model route, no model spend, and no backend quota window.
+Exit 0 passes and exit 1 fails, irrespective of any report footer. Other exits,
+a program that cannot start, and an explicit `timeout_ms` wall hold the item as
+`run-infra-exhausted`, without backend failover. An omitted wall imposes none.
+A failed command follows a matching `when_outcome: fail` edge if one is ready;
+otherwise the item is held as `node-failed: <node>`, later nodes and the gate do
+not run, and the work is preserved for inspection.
+
+A `read_only` command must leave both HEAD and the worktree unchanged. A writing
+command must commit its changes or leave the worktree clean. The final candidate
+includes the earlier builder's commits and any command commits; the item still
+gets one gate and one squashed landing.
+
 ## Settled harnesses
 
 A worker can answer and commit without its harness exiting. The

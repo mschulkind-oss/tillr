@@ -129,6 +129,7 @@ type Decision struct {
 type itemRow struct {
 	Designer *lastDesigner
 	Workflow string
+	Command  *WorkflowStage
 	ItemID   string
 	State    string
 	Rank     string
@@ -376,9 +377,22 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				w, loadErr = loadWorkflow(root, item.Workflow, policy)
 				if loadErr == nil {
 					routed.Seat = w.Stages[0].Seat
+					if w.Stages[0].Kind == "command" {
+						routed.Command = &w.Stages[0]
+					}
 				}
 			}
-			if loadErr != nil {
+			hold := ""
+			_, hasRetry := retries[item.ItemID]
+			if w != nil && hasNodes && !terminalStates[item.State] && !hasRetry {
+				hold, err = commandNodeHold(r, item.ItemID)
+				if err != nil {
+					return nil, readFailure(err)
+				}
+			}
+			if hold != "" {
+				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: hold, From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			} else if loadErr != nil {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + loadErr.Error(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
@@ -387,6 +401,11 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 					request := *decision.RunRequest
 					request.RunID += "-n1"
 					decision.RunRequest = &request
+					if routed.Command != nil {
+						decision.RunRequest = routed.Command.commandRequest(item.ItemID, decision.LaneID, request.RunID)
+					} else if w.Stages[0].TimeoutMS > 0 {
+						decision.RunRequest.TimeoutMS = w.Stages[0].TimeoutMS
+					}
 				}
 			}
 			identifyDecision(&decision)
@@ -501,7 +520,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.ConflictID = conflict.ConflictID
 	}
 	windowShut := false
-	if p.policy != nil {
+	if p.policy != nil && item.Command == nil {
 		if retry != nil {
 			attempt.backend = p.policy.firstBackend(item)
 		}

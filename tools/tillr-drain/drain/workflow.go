@@ -16,8 +16,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Workflow is a versioned, pre-approved sequence of agent invocations. Edges
-// order stages; this first slice executes ready stages serially on one lane.
+// Workflow is a versioned, pre-approved sequence of agent and command runs.
+// Edges order stages and select outcomes; ready stages run serially on one lane.
 type Workflow struct {
 	Name    string          `json:"name"`
 	Version int             `json:"version"`
@@ -25,19 +25,25 @@ type Workflow struct {
 	Edges   []WorkflowEdge  `json:"edges"`
 }
 type WorkflowStage struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	Seat   string `json:"seat"`
-	Access string `json:"access"`
+	ID         string         `json:"id"`
+	Kind       string         `json:"kind"`
+	Seat       string         `json:"seat"`
+	Access     string         `json:"access"`
+	CommandRef string         `json:"command_ref,omitempty"`
+	Flags      map[string]any `json:"flags,omitempty"`
+	Command    []string       `json:"resolved_argv,omitempty"`
+	TimeoutMS  int            `json:"timeout_ms,omitempty"`
 }
 type WorkflowEdge struct {
-	From string `json:"from_node"`
-	To   string `json:"to_node"`
+	From        string `json:"from_node"`
+	To          string `json:"to_node"`
+	WhenOutcome string `json:"when_outcome,omitempty"`
 }
 
 func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
+	d.UseNumber()
 	var w Workflow
 	if err := d.Decode(&w); err != nil {
 		rule := "workflow-json"
@@ -67,10 +73,22 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
 		}
 		ids[s.ID] = true
-		if s.Kind != "agent" {
-			return nil, fmt.Errorf("workflow-kind: %s: only agent is supported", s.ID)
+		if s.Kind != "agent" && s.Kind != "command" {
+			return nil, fmt.Errorf("workflow-kind: %s: expected agent or command", s.ID)
 		}
-		if !item.KnownSeat(s.Seat) {
+		if len(s.Command) != 0 {
+			return nil, fmt.Errorf("workflow-command: resolved_argv is internal, not workflow input")
+		}
+		if s.Kind == "command" && (s.CommandRef == "" || s.Seat != "") {
+			return nil, fmt.Errorf("workflow-kind: %s: command needs command_ref and no seat", s.ID)
+		}
+		if s.Kind == "agent" && (s.CommandRef != "" || s.Flags != nil) {
+			return nil, fmt.Errorf("workflow-command: agent cannot name command flags")
+		}
+		if s.TimeoutMS < 0 {
+			return nil, fmt.Errorf("workflow-timeout: %s", s.ID)
+		}
+		if s.Kind == "agent" && !item.KnownSeat(s.Seat) {
 			return nil, fmt.Errorf("workflow-unknown-seat: %s: %s", s.ID, s.Seat)
 		}
 		if s.Access != "read_only" && s.Access != "write" {
@@ -80,6 +98,9 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	indegree := map[string]int{}
 	next := map[string][]string{}
 	for _, e := range w.Edges {
+		if e.WhenOutcome != "" && e.WhenOutcome != "pass" && e.WhenOutcome != "fail" {
+			return nil, fmt.Errorf("workflow-outcome: %s", e.WhenOutcome)
+		}
 		if !ids[e.From] || !ids[e.To] {
 			return nil, fmt.Errorf("workflow-unknown-node: %s -> %s", e.From, e.To)
 		}
@@ -122,7 +143,14 @@ func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	for _, s := range w.Stages {
+	for i := range w.Stages {
+		s := &w.Stages[i]
+		if s.Kind == "command" {
+			if err := resolveCommand(root, s); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if policy == nil || policy.Seats[s.Seat] == "" {
 			return nil, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy", path, s.Seat)
 		}
@@ -213,7 +241,14 @@ func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) erro
 // examination lease. It never resets the worktree between nodes.
 func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string) error {
 	next := d
-	next.NodeIndex++
+	index, err := l.nextWorkflowNode(ctx, d)
+	if err != nil {
+		return err
+	}
+	if index < 0 {
+		return fmt.Errorf("workflow-next-node: no ready successor")
+	}
+	next.NodeIndex = index
 	next.PreviousReport = report
 	head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
 	if err != nil {
@@ -227,7 +262,13 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.Seat = stage.Seat
 	next.Action, next.Reason = ActionDispatch, "workflow-next-node"
 	next.From, next.To = "running", "running"
-	next.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, attemptRunID(d.ItemID, d.Attempt)+"-n"+strconv.Itoa(next.NodeIndex+1), l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}))
+	runID := attemptRunID(d.ItemID, d.Attempt) + "-n" + strconv.Itoa(next.NodeIndex+1)
+	if stage.Kind == "command" {
+		next.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, runID)
+	} else {
+		next.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, runID, l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}))
+		next.RunRequest.TimeoutMS = stage.TimeoutMS
+	}
 	if next.RunRequest == nil {
 		return fmt.Errorf("workflow seat %s cannot build a request", stage.Seat)
 	}
@@ -242,15 +283,17 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 		return err
 	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE run_id=?`, d.RunRequest.RunID); err != nil {
-			return err
-		}
 		return appendEffect(tx, nodeAdvancedKind, next.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: base, Ready: true, ParentRunID: d.RunRequest.RunID, Owner: owner, Examining: true}, l.cfg.Now().UTC())
 	})
 }
 
 func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult) (bool, error) {
 	stage := d.Workflow.Stages[d.NodeIndex]
+	if stage.Kind == "command" {
+		if handled, err := l.replayCommandHold(ctx, d); handled || err != nil {
+			return true, err
+		}
+	}
 	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
 		base = stagedBase
 	}
@@ -270,24 +313,54 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if err != nil {
 		return true, err
 	}
-	if stage.Access == "read_only" && (head != nodeBase || strings.TrimSpace(dirty) != "") {
+	if (stage.Access == "read_only" && head != nodeBase) || ((stage.Access == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
 		if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
 			return true, err
 		}
-		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "read-only node " + stage.ID + " changed its target or HEAD"}
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + stage.Access + " worktree boundary"}
 		if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
 			return true, err
 		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "read-only workflow node changed its target"); stop != "" {
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node violated its worktree boundary: "+stage.ID); stop != "" {
 			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
 		}
 		return true, l.markExamined(ctx, d)
 	}
-	if rec.ExitCode == nil || *rec.ExitCode != 0 || rec.State != run.StateExited || reportFooter(log) != "done" {
+	if stage.Kind == "command" && (rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1)) {
+		if err := l.nodeOutcome(ctx, d, "fault"); err != nil {
+			return true, err
+		}
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "command node machinery failed: "+stage.ID); stop != "" {
+			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+		}
+		return true, l.markExamined(ctx, d)
+	}
+	failedCommand := stage.Kind == "command" && *rec.ExitCode == 1
+	if failedCommand || (stage.Kind == "agent" && (rec.ExitCode == nil || *rec.ExitCode != 0 || rec.State != run.StateExited || reportFooter(log) != "done")) {
 		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
 			return true, err
 		}
-		if reportFooter(log) == "blocked" {
+		if failedCommand {
+			for _, edge := range d.Workflow.Edges {
+				if edge.From == stage.ID && edge.WhenOutcome == "fail" {
+					if err := l.nodeOutcome(ctx, d, "handled-fail"); err != nil {
+						return true, err
+					}
+					next, err := l.nextWorkflowNode(ctx, d)
+					if err != nil {
+						return true, err
+					}
+					if next >= 0 {
+						return true, l.advanceNode(ctx, d, base, "")
+					}
+					if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
+						return true, err
+					}
+					break
+				}
+			}
+		}
+		if stage.Kind == "agent" && reportFooter(log) == "blocked" {
 			if err := l.reportedBlock(ctx, d, log); err != nil {
 				return true, err
 			}
@@ -300,7 +373,11 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
 		return true, err
 	}
-	if d.NodeIndex+1 == len(d.Workflow.Stages) {
+	next, err := l.nextWorkflowNode(ctx, d)
+	if err != nil {
+		return true, err
+	}
+	if next < 0 {
 		return false, nil
 	}
 	// Preserve the full extracted report before staging overwrites the lane's report.
