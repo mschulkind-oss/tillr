@@ -22,6 +22,9 @@ const STOP_GUIDANCE: Record<string, string> = {
   "lanes-leased": "release the retained lane with tillr run release before restarting",
   "operator-stop": "restart only when the operator wants processing resumed",
   "host-boundary-violation": "inspect the boundary violation; do not retry the offending run",
+  "stalled": "inspect the stalled check and its watchdog observations",
+  "gate-stall-rerun": "same candidate reruns when fewer gates are in flight or none other are",
+  "gate-stalled": "diagnose the stalled check and clear the item fault",
   "gate-harness-error": "repair the gate harness before restarting",
   "fault": "diagnose the recorded fault before restarting",
 };

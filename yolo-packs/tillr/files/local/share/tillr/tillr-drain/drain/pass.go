@@ -46,21 +46,22 @@ func init() {
 }
 
 type pendingWork struct {
-	LoopID         string      `json:"loop_id,omitempty"`
-	Examining      bool        `json:"examining,omitempty"`
-	Ready          bool        `json:"ready,omitempty"`
-	Gated          bool        `json:"-"`
-	ParentRunID    string      `json:"parent_run_id,omitempty"`
-	DirtyHold      *dirtyHold  `json:"dirty_hold,omitempty"`
-	RepairHold     *repairHold `json:"repair_hold,omitempty"`
-	Decision       Decision    `json:"decision"`
-	Examiner       *LoopOwner  `json:"examination_owner,omitempty"`
-	Owner          *LoopOwner  `json:"loop_owner,omitempty"`
-	BaseSHA        string      `json:"base_sha"`
-	Candidate      *Candidate  `json:"candidate,omitempty"`
-	Done           bool        `json:"-"`
-	Orphaned       bool        `json:"-"`
-	BoundaryFailed bool        `json:"boundary_failed,omitempty"`
+	LoopID         string         `json:"loop_id,omitempty"`
+	Examining      bool           `json:"examining,omitempty"`
+	Ready          bool           `json:"ready,omitempty"`
+	Gated          bool           `json:"-"`
+	ParentRunID    string         `json:"parent_run_id,omitempty"`
+	GateStall      *gateStallHold `json:"gate_stall,omitempty"`
+	DirtyHold      *dirtyHold     `json:"dirty_hold,omitempty"`
+	RepairHold     *repairHold    `json:"repair_hold,omitempty"`
+	Decision       Decision       `json:"decision"`
+	Examiner       *LoopOwner     `json:"examination_owner,omitempty"`
+	Owner          *LoopOwner     `json:"loop_owner,omitempty"`
+	BaseSHA        string         `json:"base_sha"`
+	Candidate      *Candidate     `json:"candidate,omitempty"`
+	Done           bool           `json:"-"`
+	Orphaned       bool           `json:"-"`
+	BoundaryFailed bool           `json:"boundary_failed,omitempty"`
 }
 
 func readPending(r *store.Reader) (map[string]*pendingWork, error) {
@@ -94,6 +95,22 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case GateVerdictKind:
 			if e.ObjectType == "run" {
 				judged[*e.ObjectID] = true
+				if work := byRun[*e.ObjectID]; work != nil && work.GateStall != nil {
+					var verdict struct {
+						Result string             `json:"result"`
+						Checks []StallObservation `json:"checks"`
+					}
+					if err := json.Unmarshal(e.Payload, &verdict); err != nil {
+						return nil, nil, err
+					}
+					if verdict.Result == GateStalled {
+						for _, check := range verdict.Checks {
+							if check.Result == GateStalled {
+								work.GateStall.SecondObservations = append(work.GateStall.SecondObservations, check)
+							}
+						}
+					}
+				}
 			}
 		case "land.landing":
 			var landing struct {
@@ -133,7 +150,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				continue
 			}
 			work.Done, work.Orphaned, work.Examining = false, false, false
-			work.Owner, work.Candidate, work.DirtyHold, work.RepairHold = nil, nil, nil, nil
+			work.Owner, work.Candidate, work.DirtyHold, work.RepairHold, work.GateStall = nil, nil, nil, nil, nil
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
@@ -196,6 +213,15 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				work.DirtyHold = &hold
 				work.Candidate = &hold.Candidate
 			}
+		case gateStallHeldKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var hold gateStallHold
+				if err := json.Unmarshal(e.Payload, &hold); err != nil {
+					return nil, nil, err
+				}
+				hold.Candidate.Request, hold.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
+				work.GateStall, work.Candidate = &hold, &hold.Candidate
+			}
 		case repairHeldKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				var hold repairHold
@@ -211,6 +237,9 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			}
 			if work := byRun[fault.RunID]; work != nil && fault.Reason == StopHostBoundaryViolation {
 				work.BoundaryFailed = false
+			}
+			if work := byRun[fault.RunID]; work != nil && fault.Reason == ReasonGateStalled {
+				work.GateStall = nil
 			}
 		case examinationOwnerKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -254,7 +283,7 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 	return status.Run, nil
 }
 
-func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool) (Decision, error) {
+func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
@@ -276,7 +305,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			d.RunRequest = &request
 			d.WorkflowRestart = true
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
-			return pendingDecision(r, &workCopy, at, inputs, template, policy, shut)
+			return pendingDecision(r, &workCopy, at, inputs, template, policy, shut, gates)
 		}
 	}
 	if work.Ready {
@@ -331,6 +360,11 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			identifyDecision(&d)
 			return d, nil
 		}
+	}
+	if work.GateStall != nil && !work.GateStall.canRetry(gates) {
+		d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonGateStallRerun
+		identifyDecision(&d)
+		return d, nil
 	}
 	if work.DirtyHold != nil {
 		paths, err := work.DirtyHold.paths(context.Background())
@@ -479,7 +513,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		// A lane a lane-owned staging refusal took out of rotation is offered to no item
 		// until a re-check puts it back (lane_rotation.go).
 		available := l.rotationLanes()
-		tick := Pass{Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
+		tick := Pass{GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -1253,7 +1287,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				// The item went terminal by another route during this examination.
 				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 			} else {
-				retainLane := errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
+				retainLane := errors.Is(err, errGateStallHeld) || errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
 				if retainLane {
 					err = nil
 				}

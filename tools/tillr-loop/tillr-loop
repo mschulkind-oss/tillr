@@ -18,7 +18,7 @@ step's branches add), so the loop's argv carries no judgment: every value that d
 comes from a flag of this adapter's own, and every value that can be derived from the
 candidate is derived here rather than defaulted to something convenient.
 
-Exit codes: the loop reads gate as 0 pass / 1 fail / anything else could-not-judge, land
+Exit codes: the loop reads gate as 0 pass / 1 fail / 6 stalled / anything else could-not-judge, land
 as 0 landed / 1 not-landed, and verdict as 0 recorded / non-zero refused. Each adapter
 translates the underlying program's code onto that contract; see README.md for the table.
 """
@@ -47,6 +47,7 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
 EXIT_EXTERNAL = 4
+EXIT_STALLED = 6
 
 CANDIDATE_FIELDS = ("item", "lane", "run", "worktree", "base", "head")
 
@@ -566,6 +567,8 @@ def execute(kind: str, steps: list[Step]) -> int:
         code = invoke(step).returncode
         if code != EXIT_PASS:
             break
+    if kind == "gate" and code == EXIT_STALLED:
+        return EXIT_STALLED
     if kind == "verdict":
         # item's verdict face answers 0 recorded / non-zero refused, which is already the
         # loop's contract: a non-zero code is a step failure, never a recorded verdict.

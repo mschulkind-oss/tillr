@@ -134,6 +134,9 @@ type checkPerformance struct {
 	MaxMS       *float64 `json:"max_ms"`
 	WaitedMS    float64  `json:"waited_ms"`
 	Failures    int      `json:"failures"`
+	BudgetMS    *int64   `json:"budget_ms"`
+	Overruns    int      `json:"overruns"`
+	Stalls      int      `json:"stalls"`
 	samples     []float64
 }
 
@@ -187,8 +190,24 @@ func (s *server) performanceChecksPayload(r *store.Reader, req *http.Request) (a
 		if execution.DurationMS != nil {
 			group.samples = append(group.samples, *execution.DurationMS)
 		}
-		if execution.Status == "FAIL" || execution.Status == "REFUSED" {
+		if execution.Status == "FAIL" || execution.Status == "REFUSED" || execution.Status == "fail" {
 			group.Failures++
+		}
+		var attrs struct {
+			BudgetMS     *int64 `json:"budget_ms"`
+			OverBudgetMS int64  `json:"over_budget_ms"`
+		}
+		if err := json.Unmarshal([]byte(execution.AttributesJSON), &attrs); err != nil {
+			return nil, unreadable(fmt.Errorf("check span %s attributes: %w", execution.SpanID, err))
+		}
+		if attrs.BudgetMS != nil {
+			group.BudgetMS = attrs.BudgetMS
+		}
+		if attrs.OverBudgetMS > 0 {
+			group.Overruns++
+		}
+		if execution.Status == "stalled" {
+			group.Stalls++
 		}
 		waited, err := recordedWait(execution.WaitedMSJSON)
 		if err != nil {

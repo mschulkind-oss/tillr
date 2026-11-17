@@ -7,15 +7,13 @@ from pathlib import Path
 import sys
 
 # The fast tier's cap. `tools/tillr-gate/run.go` declares the same number as
-# FastTierCapMS, the most a fast check's ceiling can be, and its
+# FastTierCapMS, only an arithmetic admission cap, and its
 # TestTheTierCapIsTheAdmissionTestsLimit fails when the two disagree.
 LIMIT_MS = 9000
 
 
 def total_budget(directory, refusals=None):
-    """The sum of every fast `budget_ms`. A fast `timeout_ms` outside [budget_ms,
-    LIMIT_MS] is appended to `refusals`: the runner clamps a fast check's ceiling to that
-    range, so such a declaration states a ceiling the runner will not keep."""
+    """Sum fast targets, refusing any fast declaration that names timeout_ms."""
     total = 0
     for path in sorted(directory.glob("*.json")):
         try:
@@ -32,12 +30,8 @@ def total_budget(directory, refusals=None):
                     raise ValueError("budget_ms must be a positive integer for tier fast")
                 total += budget
                 if "timeout_ms" in declaration:
-                    ceiling = declaration["timeout_ms"]
-                    if type(ceiling) is not int or ceiling <= 0:
-                        raise ValueError("timeout_ms must be a positive integer when declared")
-                    if not budget <= ceiling <= LIMIT_MS and refusals is not None:
-                        refusals.append(f"{path}: timeout_ms {ceiling} is a fast check's ceiling and must lie "
-                                        f"between its budget_ms {budget} and the tier cap {LIMIT_MS} ms")
+                    if refusals is not None:
+                        refusals.append(f"{path}: timeout_ms is not allowed for tier fast; use budget_ms as the target")
         except (OSError, ValueError) as error:
             raise ValueError(f"{path}: {error}") from error
     return total

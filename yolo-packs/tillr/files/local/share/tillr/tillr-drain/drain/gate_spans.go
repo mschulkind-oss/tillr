@@ -16,6 +16,7 @@ import (
 // records the verdict. `skipped_checks` stays in the file: a landed gate skips ~22 steps,
 // and one not-run row per skip would make the table mostly silence.
 const GateSpansFile = "gate.spans.json"
+const GateFastVerdictFile = "gate.fast.verdict.json"
 
 // GateSpanDDL is drain's third table: one row per executed gate span, keyed by the
 // verdict it belongs to.
@@ -30,7 +31,9 @@ const GateSpansFile = "gate.spans.json"
 // The four identity columns are hashes so the chain tick → run → verdict → check is
 // complete without a second naming scheme: `span_id` is hash(verdict_id || '/' ||
 // check_id), `parent_span_id` is hash(verdict_id), and `trace_id` is
-// hash(COALESCE(tick_id, run_id)).
+// hash(COALESCE(tick_id, run_id)). An authorized rerun uses the verdict event's
+// gate_execution_id (verdict_id plus its transition epoch) in the span and parent
+// hashes so a deterministic verdict id cannot overwrite the earlier observation.
 const GateSpanDDL = `
 CREATE TABLE IF NOT EXISTS gate_spans (
   span_id          TEXT PRIMARY KEY,
@@ -237,19 +240,14 @@ func hexDigest(text string) string {
 // gate's own refusal into the loop's fault. An unparseable file is `unreadable` and is
 // likewise not an error, for the same reason — the verdict is the judgment.
 func readGateSpans(root, runID, verdictID, passID string) ([]gateSpanRow, string) {
-	path := filepath.Join(RunDir(root, runID), GateSpansFile)
-	body, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, GateSpansAbsent
-		}
-		fmt.Fprintf(os.Stderr, "drain: reading the gate spans %s: %v\n", path, err)
-		return nil, GateSpansUnreadable
+	file, state := readRemainingGateSpans(filepath.Join(RunDir(root, runID), GateSpansFile))
+	fast, fastState := readFastGateSpans(filepath.Join(RunDir(root, runID), GateFastVerdictFile))
+	file.CheckSpans = append(file.CheckSpans, fast...)
+	if state != GateSpansRead && fastState == GateSpansRead {
+		state = GateSpansRead
 	}
-	var file gateSpansFile
-	if err := json.Unmarshal(body, &file); err != nil {
-		fmt.Fprintf(os.Stderr, "drain: decoding the gate spans %s: %v\n", path, err)
-		return nil, GateSpansUnreadable
+	if state == GateSpansAbsent && fastState == GateSpansUnreadable {
+		state = GateSpansUnreadable
 	}
 	spans := make([]gateSpan, 0, len(file.CheckSpans)+1)
 	if file.PlanSpan != nil {
@@ -298,5 +296,48 @@ func readGateSpans(root, runID, verdictID, passID string) ([]gateSpanRow, string
 			WaitedMSJSON: waited, AttributesJSON: attributes,
 		})
 	}
-	return rows, GateSpansRead
+	return rows, state
+}
+
+func readRemainingGateSpans(path string) (gateSpansFile, string) {
+	var file gateSpansFile
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return file, GateSpansAbsent
+	}
+	if err != nil || json.Unmarshal(body, &file) != nil {
+		return file, GateSpansUnreadable
+	}
+	return file, GateSpansRead
+}
+
+// Fast entries retain their own ids and measurements beside, never in place of,
+// the remaining fork-check spans. The attributes preserve watchdog evidence.
+func readFastGateSpans(path string) ([]gateSpan, string) {
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, GateSpansAbsent
+	}
+	var file struct {
+		Payload struct {
+			Checks []json.RawMessage `json:"checks"`
+		} `json:"payload"`
+	}
+	if err != nil || json.Unmarshal(body, &file) != nil {
+		return nil, GateSpansUnreadable
+	}
+	spans := []gateSpan{}
+	for _, raw := range file.Payload.Checks {
+		var entry struct {
+			CheckID string `json:"check_id"`
+			Result  string `json:"result"`
+			Start   int64  `json:"start_unix_nano"`
+			End     int64  `json:"end_unix_nano"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			return nil, GateSpansUnreadable
+		}
+		spans = append(spans, gateSpan{CheckID: entry.CheckID, Kind: "fast", Label: entry.CheckID, Status: entry.Result, StartNS: entry.Start, EndNS: entry.End, WaitedMSJSON: "{}", AttributesJSON: string(raw)})
+	}
+	return spans, GateSpansRead
 }

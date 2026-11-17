@@ -21,6 +21,8 @@ import (
 // MaxDispatches optionally limits a simulation; the live loop never sets it.
 // Now optionally supplies observation metadata, never an identity.
 type Pass struct {
+	// GatesInFlight is the planning pass's observation, not a concurrency cap.
+	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
 	Build *BuildStamp `json:"-"`
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
@@ -335,7 +337,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				}
 			}
 			if !settled {
-				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut)
+				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
 				invalid := item.State != StateInQueue || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""

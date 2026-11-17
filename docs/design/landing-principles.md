@@ -239,10 +239,13 @@ verified" rather than as a verdict, so a whole batch refused and re-armed on a f
 instead of the offender being isolated.
 
 *Enforced by:* `d78e05685` landed the split, with tests pinning both arms and the rule that a red
-self-suite still never passes the batch. The 2026-11-17 half is **not enforced yet**: on that date
-`tillr-gate` still stops a fast check at its ceiling and answers exit 4 (`fastCeilingMS` in
-[`run.go`](../../tools/tillr-gate/run.go)), and the gate program and `tools/fork-check.py` still
-stop checks on fixed timeouts.
+self-suite still never passes the batch. The check runner now uses the progress observer in
+[`watchdog.go`](../../tools/tillr-gate/watchdog.go): sixty one-second samples without output
+or group CPU progress produce `stalled`, exit 6, with observations. The drain retains the
+first stall as `gate-stall-rerun` and holds a second on the same head tree as `gate-stalled`.
+The gate program wrapper and `tools/fork-check.py` still have fixed timeouts; their
+[separate watchdog slice](gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+is not built.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a gate
 verdict whose result is `error` is refused with `ReasonVerdictError`, never read as a failure of the

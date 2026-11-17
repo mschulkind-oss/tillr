@@ -66,47 +66,7 @@ func TestEmptyReadsSelectsTheWholeTree(t *testing.T) {
 	}
 }
 
-func TestHeavyDeclarationTimeoutIsNoJudgment(t *testing.T) {
-	dir := scratch(t, "heavy-timeout")
-	decl := map[string]any{
-		"id": "timed-out", "label": "heavy timeout", "command": []string{"sh", "-c", "exec sleep 10"},
-		"scope": "tree", "tier": "heavy", "timeout_ms": 100,
-	}
-	putDeclaration(t, dir, "timeout.json", decl)
-	root := gitRepo(t)
-	code, out := filePlan(t, dir, []string{"file"}, git(t, root, "rev-parse", "HEAD^{tree}"))
-	if code != 0 {
-		t.Fatalf("plan exit %d: %s", code, out)
-	}
-	plan := filepath.Join(scratch(t, "heavy-plan"), "plan.json")
-	if err := os.WriteFile(plan, out, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	code, raw := runPlan(t, plan, root)
-	verdict := decodeVerdict(t, raw)
-	if code != 4 || verdict.Payload.Result != "error" || len(verdict.Payload.Checks) != 1 || verdict.Payload.Checks[0].Result != "error" {
-		t.Fatalf("heavy timeout was judged as a candidate failure: exit %d: %s", code, raw)
-	}
-	log, err := os.ReadFile(verdict.Payload.Checks[0].LogRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(log), "timeout_ms") || !strings.Contains(string(log), "timed-out") {
-		t.Fatalf("timeout log did not name the check and bound: %s", log)
-	}
-}
-
-func TestLegacyRegistryTimeoutRemainsAFailedCheck(t *testing.T) {
-	plan := planRecord(t, planIn{
-		PlanID: "legacy-timeout", BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "registry",
-		Checks: []planCheck{{CheckID: "legacy", Command: []string{"sh", "-c", "exec sleep 10"}, TimeoutMS: 100, Tier: "landing"}},
-	})
-	code, raw := runPlan(t, plan, scratch(t, "legacy-root"))
-	verdict := decodeVerdict(t, raw)
-	if code != 1 || verdict.Payload.Result != "fail" || len(verdict.Payload.Checks) != 1 || verdict.Payload.Checks[0].Result != "fail" {
-		t.Fatalf("legacy timeout policy changed: exit %d: %s", code, raw)
-	}
-}
+// Heavy and generated targets are exercised with an injected clock in watchdog_test.go.
 
 func TestChangeDeclarationRefusesRecordWithoutHeadCommit(t *testing.T) {
 	dir := scratch(t, "change-checks")

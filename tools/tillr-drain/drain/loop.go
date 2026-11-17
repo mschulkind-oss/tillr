@@ -125,8 +125,8 @@ func StopExitCode(reason string) int {
 	return 5
 }
 
-// The gate's three outcomes, as the loop reads them from the gate step: `tillr-gate`'s
-// own exit contract (0 pass / 1 fail / 4 error) in three words.
+// The gate's candidate verdicts and harness error. A recorded stall is the
+// distinct exit 6 outcome declared with its retry handling in gate_stall.go.
 const (
 	GatePassed  = "pass"
 	GateFailed  = "fail"
@@ -169,6 +169,8 @@ const ScopeEscape = "boundary-scope-escape"
 // carried here because the judgment events a step appends are correlated by run *and* tick,
 // and the step is handed nothing else that knows which tick it is serving.
 type Candidate struct {
+	// Runtime-only observation, sampled when the gate records a stall.
+	gateCount     func() int
 	RefusalDetail string         `json:"refusal_detail,omitempty"`
 	BlockConflict *item.Conflict `json:"block_conflict,omitempty"`
 	ItemID        string         `json:"item_id"`
@@ -216,7 +218,10 @@ type Candidate struct {
 // include the step's own store write (the gate judgment), which is the loop's bookkeeping
 // and not the gate.
 type GateOutcome struct {
-	// Outcome is GatePassed, GateFailed or GateErrored.
+	StallHeld     bool // first-stall transition committed atomically with the judgment
+	StalledChecks []StallObservation
+
+	// Outcome is GatePassed, GateFailed, GateErrored or GateStalled.
 	Outcome string
 	// DurationMS is the gate program's wall time in milliseconds.
 	DurationMS int64
@@ -461,7 +466,8 @@ type Loop struct {
 	infraLines map[string]string
 	// gateBudget is the resolved bound on a tick's gate wall time: cfg.GateBudget when it
 	// named one, DefaultGateBudget otherwise.
-	gateBudget time.Duration
+	gateBudget    time.Duration
+	gatesInFlight int
 	// build is the binary this loop is running, read once when the loop is built. It is
 	// printed before the first tick and written into every result record, so a record names
 	// the build that made it (build.go).
@@ -1648,6 +1654,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
 	}
+	if err := l.recoverSecondGateStall(ctx, candidate); err != nil {
+		return "", false, err
+	}
 	if item.IsCommentItem(candidate.ItemID) {
 		if _, _, err := l.readCommentReplies(ctx, candidate); err != nil {
 			candidate.RefusalDetail = err.Error()
@@ -1760,7 +1769,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 	}
+	l.mu.Lock()
+	l.gatesInFlight++
+	l.mu.Unlock()
+	candidate.gateCount = l.gateCount
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
+	l.mu.Lock()
+	stalledGateCount := l.gatesInFlight
+	l.gatesInFlight--
+	l.mu.Unlock()
 	if err != nil {
 		if ExitCode(err) == record.ExitExternal {
 			return "", false, l.gateFault(ctx, candidate, err.Error())
@@ -1779,6 +1796,8 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		return "", false, err
 	}
 	switch gate.Outcome {
+	case GateStalled:
+		return "", false, l.holdGateStall(ctx, candidate, gate, stalledGateCount)
 	case GatePassed:
 	case GateFailed:
 		// A red gate is a suspect, not a conviction. Replay the failing checks on the base

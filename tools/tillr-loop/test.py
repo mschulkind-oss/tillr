@@ -242,7 +242,7 @@ def test_gate_exit_mapping(tmp):
     fixture = Fixture(tmp)
     registry = ["--registry", str(fixture.tmp / "registry.json")]
     for stub_code, expected in ((0, GATE_PASS), (1, GATE_FAIL), (4, GATE_COULD_NOT_JUDGE),
-                                (7, GATE_COULD_NOT_JUDGE)):
+                                (6, 6), (7, GATE_COULD_NOT_JUDGE)):
         result = fixture.run_adapter("gate", registry, stubs={"STUB_RUN": stub_code})
         assert result.returncode == expected, (stub_code, result.returncode, result.stderr)
     # A plan that could not be made is not a failing candidate either: no verdict exists.

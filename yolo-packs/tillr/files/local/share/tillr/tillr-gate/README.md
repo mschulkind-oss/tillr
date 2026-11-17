@@ -68,45 +68,49 @@ A change check receives the base and head as its final two command arguments. Su
 check needs a change record carrying `head_sha`, produced by `tillr-gate change`; an
 older record without that field is refused rather than substituting a tree hash for a
 commit. A tree check is selected by its declared read paths (directory paths end in `/`),
-with omitted or empty `reads` selecting the whole tree. A heavy check stopped at its
-declared timeout produces no judgment (exit 4), not a failed check.
+with omitted or empty `reads` selecting the whole tree. A heavy `timeout_ms` is a
+measured target, not a kill deadline. Generated declarations follow the same rule.
 
 [The budget declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget.json) runs arithmetic admission:
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget-test.json) reads only the check
 directory. The fast total is 8,950 milliseconds, including the admission check.
+Fast declarations may not name `timeout_ms`; `budget_ms` is their only target.
 
-A fast check that is still running at its budget is not stopped there. It runs on
-to its *ceiling* (this README's word for the point where a fast check is finally
-stopped): its `timeout_ms`, or the 9,000 millisecond tier cap when it declares
-none, clamped so it is never below its own `budget_ms` and never above the cap.
-The admission check refuses a fast `timeout_ms` outside that range, and a test
-fails if the runner's cap (`FastTierCapMS`) and the admission check's
-(`LIMIT_MS`) disagree. A check that answers by its ceiling keeps its verdict --
-a failing one fails the gate -- and the verdict entry records `over_budget_ms`,
-how far past its budget it ran. Its log and the face's stderr name the check and
-the overrun; the `checks` face prefixes that line with `tillr-gate checks:`, so
-the run face's bounded triage of the gate program keeps it. Only a check still
-running at its ceiling answers “could not judge” (exit 4).
+Checks keep their own verdict past their target. `budget_ms`, duration and
+`over_budget_ms` record each overrun in the verdict, log and summary. The cap is
+only the admission sum, never a deadline. `--tree-overrun keep` remains compatible;
+`carry` is refused because stopping at a budget would discard a working judgment.
 
-Carrying -- stopping a fast tree check at its budget and recording `over-budget`,
-its judgment deferred to the heavy tier -- is available with `--tree-overrun
-carry` on the `run` and `checks` faces, and is off by default (`keep`). No heavy
-runner exists yet, so a carried check's judgment would be dropped: the verdict
-stays pass and nothing runs the check again. The loop's gate program,
-[`change-gate.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change-gate.py), states its choice in one
-constant, `TREE_OVERRUN`, which the heavy runner's item turns back to `carry`. A
-change check is never carried, because no tree-only run has its base.
+The watchdog (the progress observer defined in
+[design Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test))
+samples every 1,000 milliseconds. A byte of log growth or an increase in process-group
+CPU time, including live and reaped children, resets its silent-sample count. Sixty
+consecutive samples with neither ends the group. The result is `stalled`, exit 6,
+not pass, fail, error or over-budget. The verdict entry, check log and summary carry
+the last output line, group CPU time, silent samples and duration. Unreadable CPU
+accounting disables stall detection explicitly: `watchdog unavailable` appears in
+the verdict and summary. Linux uses an
+[inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html):
+it counts the check and its descendants, retaining CPU when children exit even
+if their parent discards terminated-child status. The clock is attached while the
+check is paused before its first instruction; the check then resumes and can
+create children. A denied attachment or unreadable
+counter reports unavailability immediately in the live log; there is no fallback
+to incomplete `/proc` snapshots. Unrounded nanoseconds determine CPU progress. Exit 4 remains a program that could not start or crashed.
 
-The `go-build` check builds with `-trimpath`, in `GOFLAGS`, so a new checkout
-reuses the shared Go build cache instead of compiling cold past its ceiling;
-`change-gate.py` runs it once per Go version, unbounded and before the fast tier,
-to pay the first trimmed build on a machine (19.9 seconds measured) as time
-rather than as a fault. On 2026-11-16 the fast tier took 4.0 to 4.4 seconds for
-one gate and 7.9 to 9.0 seconds for each of ten concurrent gates, in stable or
-new checkouts, with no check reaching its ceiling. The rule and its measurement
-are in
-[design Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test).
+The real gate adapter preserves exit 6 and the check observations. The first stall
+retains the candidate with `gate-stall-rerun`; the drain waits for fewer gates in
+flight, or none other, before gating that same head. A second stall on its head tree
+holds the item as `gate-stalled`; diagnose it and use `tillr drain clear-fault`.
+Fast per-check measurements reach the observatory alongside remaining-check spans,
+including their budgets, overruns and stalls.
+
+The `go-build` check builds with `-trimpath`, in `GOFLAGS`, so new checkouts reuse
+the shared Go build cache. The adapter warms it once per Go version before the fast
+tier. The gate program wrapper still has its existing `--gate-timeout` bound;
+removing that clock and the remaining Python wrapper clocks is the separate
+[wrapper watchdog slice](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog).
 
 The `documents` change check remembers a pass for each changed document in the
 same result store as tree checks, under a key over the document's blob and every

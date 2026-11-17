@@ -226,7 +226,8 @@ func decodeRunRecord(out []byte) (run.Record, string, error) {
 }
 
 // Gate runs the gate program in the candidate's worktree and maps its exit onto the gate's
-// three outcomes: 0 is a pass, 1 is a failing verdict about the code, and every other exit
+// outcomes: 0 is a pass, 1 is a failing verdict about the code, 6 is a recorded stall,
+// and every other exit
 // — including a signal or a missing program — is "could not judge".
 //
 // The step's judgment is appended to the store before it is answered with: the plan and the
@@ -243,7 +244,13 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	// gate's own explicit spelling and the environment is the drain's hand-off.
 	env := s.forkRootEnv()
 	if s.Root != "" {
-		env = append(env, "TILLR_GATE_SPANS_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile))
+		for _, name := range []string{GateSpansFile, GateFastVerdictFile} {
+			if err := os.Remove(filepath.Join(RunDir(s.Root, candidate.RunID), name)); err != nil && !os.IsNotExist(err) {
+				return GateOutcome{}, Externalf("clearing preceding gate measurements: %v", err)
+			}
+		}
+		env = append(env, "TILLR_GATE_SPANS_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile),
+			"TILLR_FAST_VERDICT_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateFastVerdictFile))
 	}
 	program := s.GateProgram
 	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); fork != candidate.BaseRef {
@@ -263,6 +270,12 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	switch code {
 	case record.ExitOK:
 		outcome.Outcome = GatePassed
+	case GateStallExit:
+		outcome.Outcome = GateStalled
+		outcome.StalledChecks, err = s.gateStallContext(candidate)
+		if err != nil {
+			return GateOutcome{}, err
+		}
 	case record.ExitNegative:
 		outcome.Outcome = GateFailed
 		// A red gate carries the facts the trunk replay and the fixer need. Reading them
@@ -270,13 +283,22 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		// program's stdout to find out what it judged.
 		outcome.FailingChecks, outcome.SuspectPaths, outcome.CheckWatches = s.gateFailureContext(candidate)
 	}
+	var firstStall *gateStallHold
+	if outcome.Outcome == GateStalled {
+		firstStall, err = s.firstStallHold(ctx, candidate, outcome.StalledChecks)
+		if err != nil {
+			return GateOutcome{}, err
+		}
+	}
 	if err := s.recordGateJudgment(ctx, candidate, gateStepJudgment{
-		TickID: candidate.TickID, Run: runRef{RunID: candidate.RunID, ItemID: candidate.ItemID, LaneID: candidate.LaneID},
+		FirstStallHold: firstStall,
+		TickID:         candidate.TickID, Run: runRef{RunID: candidate.RunID, ItemID: candidate.ItemID, LaneID: candidate.LaneID},
 		Outcome: outcome.Outcome, Program: span.Argv, ExitCode: exitCode(span),
 		DurationMS: outcome.DurationMS,
 	}); err != nil {
 		return GateOutcome{}, err
 	}
+	outcome.StallHeld = firstStall != nil
 	return outcome, nil
 }
 
