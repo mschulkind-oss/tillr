@@ -2432,14 +2432,21 @@ problem to the next item.
 - **Verify:** Leave a process carrying the ended run's markers with its working directory under the lane directory: assert the lane is not offered until the process exits, and the waiting row names its process id and how to end it. Repeat with the process's working directory outside the lane and assert the lane is offered. Run a worker that starts a `sleep` child and exits normally: assert the child is gone or the lane is held, and record why if normal-exit cleanup is not implemented.
 - **Evidence:** 2026-11-17, `rg -n 'released anyway' tools/tillr-drain/drain/pass.go` finds the loop releasing the lane with the strays left running, and `rg -n 'cmd.Cancel' tools/tillr-run/run/exec.go` finds the group kill only on cancellation.
 
-### Take a lane out of rotation when its branch is held at loop start
+### Hold blocked lanes without stopping loop startup
 
-A lane whose branch is checked out by a worktree elsewhere is taken out of rotation when an item is
-staged on it, and the loop carries on with the other lanes. At loop start the same condition is
-handled differently: the check that creates the lane worktrees returns the refusal as a fault, and
-the loop does not start. The owner widens the loop from five lanes to ten, an old worktree that
-still holds one of the new lanes' branches stops it, and the keeper restarts it into the same
-fault. The lane that is blocked should wait and the rest should run.
+When the owner expands the drain loop to use more lanes, an old checkout may still be using
+one of the added lanes' branches. Today, that one unavailable lane prevents the entire loop
+from starting, and restarting the loop repeats the same failure. The loop already handles
+this condition when assigning work: it holds the unavailable lane and continues with the
+others. Startup should do the same so one occupied branch does not stop unrelated work.
+If every lane is unavailable, the loop must refuse to start and identify the checkouts
+that need to be removed.
+
+**Outcomes:**
+
+- Start the loop with the available lanes and hold only those whose branches are in use.
+- Show which checkout holds each blocked lane, and return the lane to service when it is free.
+- Refuse to start when no lane is available, and name every blocking checkout.
 
 <!-- tillr: item id="item-loop-start-holds-blocked-lane" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
@@ -2450,8 +2457,9 @@ fault. The lane that is blocked should wait and the rest should run.
 
 **Agent details:**
 
-- **Ref:** the review's precaution 2, and `ReasonLaneBranchHeld` in `tools/tillr-drain/drain/lane_rotation.go`.
-- **Where:** `stageLanes` in `tools/tillr-drain/drain/loop.go`, and `refuseBranchHeld` and `branchHolder` it calls.
+- **Ref:** the review's precaution 2; existing `lane-branch-held` condition (`ReasonLaneBranchHeld`).
+- **Where:** `stageLanes`, `refuseBranchHeld`, and `branchHolder` in `tools/tillr-drain/drain/loop.go`; lane rotation in `tools/tillr-drain/drain/lane_rotation.go`; held-lane rows in `tools/tillr-view/`.
+- **Verify:** c1: start with one branch held by another worktree; assert the loop runs and does not offer that lane. c2: assert `tillr view waiting` includes the held lane and its holder's worktree path. c3: remove the holder and assert the next re-check returns the lane to rotation. c4: hold every lane and assert startup refuses with a message naming each holder.
 - **Evidence:** 2026-11-17, `rg -n 'refuseBranchHeld' tools/tillr-drain/drain/loop.go` finds the refusal returned from `stageLanes`, and `rg -n 'stageLanes' tools/tillr-drain/drain/loop.go` finds the call at loop start returning its error.
 
 ### Add the failing check's own sources to a trunk fixer's fence
