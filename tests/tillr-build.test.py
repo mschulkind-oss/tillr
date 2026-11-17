@@ -85,7 +85,31 @@ class GreenBuild(unittest.TestCase):
         self.assertIn('refs/tillr/green', result.stdout)
         self.assertIn('heavy run', result.stdout)
         self.assertIn('tillr drain loop', result.stdout)
+        self.assertIn('TILLR_BUILD_UNPROVED=<commit>', result.stdout)
         self.assertFalse(self.out.exists(), result.stdout)
+
+    def test_unproved_bootstrap_builds_the_named_commit_and_says_so(self):
+        # The bootstrap for a loop that cannot prove the trunk: an explicit commit, an
+        # UNPROVED line, no green stamp, and the pointer left exactly as it was (absent).
+        result = subprocess.run(['just', 'tillr-build'], cwd=self.root, text=True,
+                                env=dict(self.env, TILLR_BUILD_UNPROVED=self.green),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('UNPROVED build of ' + self.green, result.stdout)
+        self.assertIn('refs/tillr/green is absent', result.stdout)
+        self.assertNotIn('tillr-build: green ', result.stdout)
+        missing = subprocess.run(['git', '-C', str(self.root), 'rev-parse', '--verify', '--quiet',
+                                  'refs/tillr/green'], stdout=subprocess.PIPE)
+        self.assertNotEqual(missing.returncode, 0, 'the bootstrap created the proof pointer')
+        first = subprocess.check_output([str(self.out / 'bin/tillr-drain'), 'loop'], text=True).splitlines()[0]
+        self.assertIn('green unknown', first)
+        info = subprocess.check_output(['go', 'version', '-m', str(self.out / 'bin/tillr-drain')], text=True)
+        self.assertIn('vcs.revision=' + self.green, info)
+        refused = subprocess.run(['just', 'tillr-build'], cwd=self.root, text=True,
+                                 env=dict(self.env, TILLR_BUILD_UNPROVED='no-such-commit'),
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn('TILLR_BUILD_UNPROVED=no-such-commit names no commit', refused.stdout)
 
     def test_failed_build_preserves_existing_programs(self):
         # Failure in the last module must not install the preceding seven builds.

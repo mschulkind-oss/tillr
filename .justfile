@@ -322,12 +322,33 @@ pack-sync:
 # Run it against a SCRATCH store, never the launched binaries' store: a newer binary migrates a
 # store, and the launched binaries then refuse it. docs/design/tillr-distribution.md Section 9
 # states the rule and OQ-TD4 is the ruling that would remove the constraint.
+#
+# Bootstrap, the one exception: when the deployed loop itself cannot prove the trunk (it
+# crashes, or predates the fix the heavy run needs), the pointer can never reach the fix
+# that would move it. An operator then names the commit explicitly:
+#
+#   TILLR_BUILD_UNPROVED=<commit> just tillr-build
+#
+# That build says UNPROVED on every run, never moves or reads the pointer as its proof, and
+# stamps no green commit, so the loop's `loop: build` line reads `green unknown` until the
+# next ordinary build from refs/tillr/green replaces it.
 tillr-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! green=$(git rev-parse --verify 'refs/tillr/green^{commit}'); then
-        printf 'tillr-build: no valid refs/tillr/green; the heavy run at `tillr drain loop` startup (with after-merge checks enabled) creates it after proving the trunk\n' >&2
+    proof="-X github.com/mschulkind-oss/tillr-drain/drain.greenRevision="
+    if [ -n "${TILLR_BUILD_UNPROVED:-}" ]; then
+        if ! green=$(git rev-parse --verify --quiet "${TILLR_BUILD_UNPROVED}^{commit}"); then
+            printf 'tillr-build: TILLR_BUILD_UNPROVED=%s names no commit\n' "$TILLR_BUILD_UNPROVED" >&2
+            exit 1
+        fi
+        proved=$(git rev-parse --verify --quiet 'refs/tillr/green^{commit}' || printf 'absent')
+        printf 'tillr-build: UNPROVED build of %s (TILLR_BUILD_UNPROVED); refs/tillr/green is %s and stays unchanged\n' "$green" "$proved" >&2
+        proof=""
+    elif ! green=$(git rev-parse --verify 'refs/tillr/green^{commit}'); then
+        printf 'tillr-build: no valid refs/tillr/green; the heavy run at `tillr drain loop` startup (with after-merge checks enabled) creates it after proving the trunk; TILLR_BUILD_UNPROVED=<commit> is the documented bootstrap\n' >&2
         exit 1
+    else
+        proof="$proof$green"
     fi
     durable="${YOLO_DURABLE_DIR:?tillr-build needs YOLO_DURABLE_DIR for build output and scratch}"
     mkdir -p "$durable"
@@ -343,7 +364,11 @@ tillr-build:
     git -C "$work/source" sparse-checkout set --cone tools
     git -C "$work/source" checkout --detach --quiet "$green"
     mkdir -p "$work/bin"
-    printf 'tillr-build: green %s\n' "$green"
+    if [ -n "$proof" ]; then
+        printf 'tillr-build: green %s\n' "$green"
+    else
+        printf 'tillr-build: UNPROVED %s\n' "$green"
+    fi
     # `tillr-cli` builds the dispatcher named `tillr`; the shared library module of that name is
     # not a program, so it is built through its dependents rather than emitted here.
     for module in tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view; do
@@ -361,7 +386,7 @@ tillr-build:
                 printf 'tillr-build: %s carries no front end in green %s; pass --web-dist to its serve face for external assets\n' "$name" "$green"
             fi
         fi
-        ( cd "$work/source/tools/$module" && CGO_ENABLED=0 go build -buildvcs=true $tags -ldflags "-X github.com/mschulkind-oss/tillr-drain/drain.greenRevision=$green" -o "$work/bin/$name" . )
+        ( cd "$work/source/tools/$module" && CGO_ENABLED=0 go build -buildvcs=true $tags -ldflags "$proof" -o "$work/bin/$name" . )
     done
     # Keep the existing install untouched until all eight builds succeed.
     mkdir -p "$out"
