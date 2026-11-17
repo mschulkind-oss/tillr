@@ -674,8 +674,9 @@ type gateTick struct {
 // wants it: the board shows the recent shape, not the archive.
 const gateTrendLimit = 20
 
-// laneView is one leased lane.
+// laneView preserves the lease state and separately reports active/settling work.
 type laneView struct {
+	WorkState     string `json:"work_state"`
 	LaneID        string `json:"lane_id"`
 	State         string `json:"state"`
 	RunID         string `json:"run_id"`
@@ -881,9 +882,16 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		actionCounts[d.Action]++
 	}
 
+	runsByID := map[string]storeRun{}
+	for _, run := range runs {
+		runsByID[run.RunID] = run
+	}
 	out.Lanes = make([]laneView, 0, len(laneRows))
 	for _, l := range laneRows {
-		out.Lanes = append(out.Lanes, laneView{l.LaneID, l.State, l.RunID, l.LeasedUntilMS})
+		out.Lanes = append(out.Lanes, laneView{
+			LaneID: l.LaneID, State: l.State, RunID: l.RunID, LeasedUntilMS: l.LeasedUntilMS,
+			WorkState: laneWorkState(l, runsByID[l.RunID]),
+		})
 	}
 	runsByItem := map[string][]storeRun{}
 	var totalCost float64

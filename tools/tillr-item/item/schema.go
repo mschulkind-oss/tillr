@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS items (
   prose      TEXT NOT NULL DEFAULT '',
   workflow   TEXT NOT NULL DEFAULT '',
   judge_mode TEXT NOT NULL DEFAULT '',
+  express INTEGER NOT NULL DEFAULT 0,
   waiting_on TEXT NOT NULL DEFAULT '',
   underlying_state TEXT NOT NULL DEFAULT '',
   close_reason TEXT NOT NULL DEFAULT '',
@@ -217,6 +218,9 @@ func init() {
 	}
 	// Older stores have no guide mark; preserve that as an empty value.
 	if err := store.RegisterColumn("item", "items", "prose", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn("item", "items", "express", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		panic(err)
 	}
 	// Blocked metadata is additive; older rows retain their unrecorded waiter.

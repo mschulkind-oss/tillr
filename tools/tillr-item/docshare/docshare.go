@@ -23,7 +23,7 @@ var Start = regexp.MustCompile(`^<!--\s*tillr:\s*item(?:\s|-->|$)`)
 
 // AttributePattern is the directive attribute grammar, also used by block retirement.
 var AttributePattern = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
-var supported = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true, "claims": true, "judge": true, "from": true}
+var supported = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true, "claims": true, "judge": true, "from": true, "express": true}
 var commentID = regexp.MustCompile(`^item-comments-[A-Za-z0-9._-]+-[1-9][0-9]*$`)
 
 func IsCommentItem(id string) bool { return commentID.MatchString(id) }
@@ -53,7 +53,7 @@ func Attributes(body string) (map[string]string, [][2]string) {
 		}
 		rest = rest[m[1]:]
 		if !supported[name] {
-			notes = append(notes, [2]string{"unknown-attribute", fmt.Sprintf("attribute %q is not one of id, paths, blocked_by, seat, prose, workflow, claims, judge or from: a block carries no state, rank or tombstone", name)})
+			notes = append(notes, [2]string{"unknown-attribute", fmt.Sprintf("attribute %q is not one of id, paths, blocked_by, seat, prose, workflow, claims, judge, from or express: a block carries no state, rank or tombstone", name)})
 			continue
 		}
 		if _, twice := attrs[name]; twice {

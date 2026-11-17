@@ -597,6 +597,16 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 func inputVersion(r *store.Reader, d Decision) (string, error) {
 	var itemState, rank, allowed, design, seat sql.NullString
 	var updated int64
+	var express bool
+	var hasExpress bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
+		return "", err
+	}
+	if hasExpress {
+		if err := r.QueryRow(`SELECT express FROM items WHERE item_id=?`, d.ItemID).Scan(&express); err != nil {
+			return "", err
+		}
+	}
 	if err := r.QueryRow(`SELECT state, rank, allowed_paths, design_doc, seat, updated_at FROM items WHERE item_id = ?`, d.ItemID).
 		Scan(&itemState, &rank, &allowed, &design, &seat, &updated); err != nil {
 		return "", err
@@ -629,7 +639,7 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 			return "", err
 		}
 	}
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion})
+	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion})
 	return string(raw), err
 }
 

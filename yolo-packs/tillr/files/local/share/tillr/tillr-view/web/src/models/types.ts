@@ -230,6 +230,8 @@ export interface LaneRow {
 }
 
 export interface LaneView {
+  /** Active versus settling work, separate from the raw lease state. Older servers omit it. */
+  work_state?: "running" | "settling" | "idle";
   lane_id: string;
   state: string;
   run_id: string;

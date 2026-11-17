@@ -839,7 +839,10 @@ func (l *Loop) stageLandingLanes(ctx context.Context) error {
 	if l.nonLanding {
 		return nil
 	}
-	return l.stageLanes(ctx)
+	if err := l.stageLanes(ctx); err != nil {
+		return err
+	}
+	return l.registerLanePools(ctx)
 }
 
 // refreshDocuments syncs before planning at a new trunk commit and retains the lazy
@@ -2600,6 +2603,25 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// registerLanePools records startup capacity separately from Git worktree staging.
+// Register unused lanes too, so views can show the configured pools before
+// their first dispatch. Never replace an existing lease or its holder.
+func (l *Loop) registerLanePools(ctx context.Context) error {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return Externalf("registering configured lanes in %s: %v", l.cfg.Store, err)
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, lane := range l.cfg.Lanes {
+			if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state) VALUES(?,?) ON CONFLICT(lane_id) DO NOTHING`, lane, run.LaneStateIdle); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // resetLane puts one lane's worktree back on the trunk: the branch is re-created at the

@@ -26,6 +26,7 @@ type Intake struct {
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
 	Intake   Intake
+	Lanes    Lanes
 	Roll     Roll
 	Push     Push
 	Comments *Comments
@@ -36,6 +37,9 @@ type Settings struct {
 
 // Prose enables automatic rewrite items; its zero value leaves findings advisory.
 type Prose struct{ Rewrite bool }
+
+// Lanes configures lanes reserved for owner-facing work, outside the ordinary cap.
+type Lanes struct{ Express int64 }
 
 // Comments configures automatic review intake. Seconds and hours are wall-clock units;
 // CompactOverTokens counts conversation tokens, and MaxRunning counts desk runs.
@@ -105,8 +109,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose or intake)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake or lanes)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -119,6 +123,12 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 			value := values[key]
 			full := table + "." + key
 			switch full {
+			case "lanes.express":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuse(full, "a nonnegative integer")
+				}
+				s.Lanes.Express = n
 			case "workflows.default":
 				defaults, ok := value.(map[string]any)
 				if !ok {
@@ -218,6 +228,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				if table == "prose" {
 					expected = "a known prose key (rewrite)"
 				}
+				if table == "lanes" {
+					expected = "a known lanes key (express)"
+				}
 				if table == "workflows" {
 					expected = "a known workflows key (default)"
 				}
@@ -293,7 +306,7 @@ func (s Settings) StartupLine() string {
 		ref = strconv.Quote(s.Push.Ref)
 	}
 	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.after_landing=%t push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.AfterLanding, remote, ref)
-	line += fmt.Sprintf(" prose.rewrite=%t", s.Prose.Rewrite)
+	line += fmt.Sprintf(" prose.rewrite=%t lanes.express=%d", s.Prose.Rewrite, s.Lanes.Express)
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
 		line += fmt.Sprintf(" comments.vantage_url=%s comments.repo=%s comments.paths=%s comments.quiet_seconds=%d comments.poll_seconds=%d comments.max_running=%d comments.compact_over_tokens=%d comments.refresh_hours=%d", strconv.Quote(c.VantageURL), strconv.Quote(c.Repo), paths, c.QuietSeconds, c.PollSeconds, c.MaxRunning, c.CompactOverTokens, c.RefreshHours)

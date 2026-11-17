@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/record"
@@ -97,7 +98,45 @@ func lanesFace(args []string) (record.Envelope, int) {
 	return record.Envelope{}, record.ExitOK
 }
 
+// laneCapacityLine counts ordinary and reserved express lanes independently;
+// document desks remain visible but belong to neither pool.
+func laneCapacityLine(rows []laneRow) string {
+	ordinary, running, express, expressRunning := 0, 0, 0, 0
+	for _, row := range rows {
+		if strings.HasPrefix(row.LaneID, "desk-") {
+			continue
+		}
+		if strings.HasPrefix(row.LaneID, "express-") {
+			express++
+			if row.State == "running" {
+				expressRunning++
+			}
+		} else {
+			ordinary++
+			if row.State == "running" {
+				running++
+			}
+		}
+	}
+	return fmt.Sprintf("%d of %d running, %d of %d express", running, ordinary, expressRunning, express)
+}
+
+// laneWorkState distinguishes active work from a terminal run whose lease is held
+// while it settles. Parallel readers remain active even if their representative ended.
+func laneWorkState(lane storeLane, run storeRun) string {
+	if lane.State != laneStateLeased {
+		return "idle"
+	}
+	if len(lane.ActiveNodes) == 0 && run.State != "" && run.State != liveRunState {
+		return "settling"
+	}
+	return "running"
+}
+
 func printLanes(w io.Writer, rows []laneRow) error {
+	if _, err := fmt.Fprintln(w, laneCapacityLine(rows)); err != nil {
+		return err
+	}
 	for _, row := range rows {
 		since := "—"
 		if row.StateSinceMS != nil {
@@ -318,14 +357,11 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 		run := last[lane.LaneID]
 		if lane.State == laneStateLeased {
 			run = runs[lane.RunID]
-			row.State = "running"
 			if row.RunningNodes > 0 {
 				run = runs[lane.ActiveNodes[0]]
 			}
-			if row.RunningNodes == 0 && run.State != "" && run.State != liveRunState {
-				row.State = "settling"
-			}
 		}
+		row.State = laneWorkState(lane, run)
 		for i := len(ordered) - 1; i >= 0; i-- {
 			r := ordered[i]
 			if r.LaneID == lane.LaneID {

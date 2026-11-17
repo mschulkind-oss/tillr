@@ -114,7 +114,10 @@ func TestFailedDesignerResumeStartsNewSessionOnce(t *testing.T) {
 	server := stubReview(t, &number)
 	defer server.Close()
 	takeFixtureComment(t, f, server.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Both loops exit when drained. A shared elapsed deadline can cancel the second
+	// loop between its replacement's terminal record and gate, before this test's
+	// settlement assertions; wait for the protocol's completion instead.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if _, err := l.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -180,7 +183,7 @@ func TestFailedDesignerResumeStartsNewSessionOnce(t *testing.T) {
 	if len(steps.sessions) != 3 || steps.sessions[1] != steps.sessions[0] || steps.sessions[2] == steps.sessions[0] {
 		t.Fatalf("sessions %v", steps.sessions)
 	}
-	if result.Dispatched != 2 || steps.gates != 2 {
+	if result.Stop != StopQueueDrained || result.Dispatched != 2 || steps.gates != 2 {
 		t.Fatalf("dispatch count %+v gates %d", result, steps.gates)
 	}
 	if !strings.Contains(steps.briefs[2], oldTranscript) {

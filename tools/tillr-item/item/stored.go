@@ -26,6 +26,9 @@ func storedItem(r *store.Reader, id string) (itemPayload, bool, error) {
 	if payload.AllowedPaths, err = decodeAllowedPaths(allowedPaths); err != nil {
 		return itemPayload{}, false, err
 	}
+	if payload.Express, err = readExpress(r, id); err != nil {
+		return itemPayload{}, false, err
+	}
 	if payload.JudgeMode, err = readJudgeMode(r, id); err != nil {
 		return itemPayload{}, false, err
 	}

@@ -197,12 +197,22 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 		l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
 	}
 	retired := []string{}
+	// refreshDocuments pins the trunk commit this pass read. Never consult the moving
+	// ref here: a concurrent landing may have advanced it after that observation.
+	trunkSHA := l.syncedSHA
 	for _, doc := range docs {
 		if _, err := os.Stat(filepath.Join(l.cfg.Root, doc)); os.IsNotExist(err) {
 			// A landing rewrites the document in place, and git unlinks a file before it
 			// writes the new one, so absence from the working tree is not a deletion. The
 			// trunk's tree is what says the document is gone.
-			listed, err := l.git(ctx, l.cfg.Root, "ls-tree", "--name-only", TrunkRef, "--", doc)
+			if trunkSHA == "" {
+				// Standalone retirement (outside a refreshed pass) still takes one snapshot.
+				trunkSHA, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+				if err != nil {
+					return err
+				}
+			}
+			listed, err := l.git(ctx, l.cfg.Root, "ls-tree", "--name-only", trunkSHA, "--", doc)
 			if err != nil {
 				return err
 			}

@@ -12,16 +12,18 @@ function age(ms: number): string {
 }
 
 export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[]; error?: Error | null; now?: number }) {
-  const count = (state: LaneRow["state"]) => lanes?.filter(row => row.state === state).length ?? 0;
+  const ordinary = lanes?.filter(row => !row.lane_id.startsWith("express-") && !row.lane_id.startsWith("desk-")) ?? [];
+  const express = lanes?.filter(row => row.lane_id.startsWith("express-")) ?? [];
+  const count = (state: LaneRow["state"]) => ordinary.filter(row => row.state === state).length;
   return <section className="lane-strip" aria-label="Lane work">
     <h2>Lanes</h2>
     {error ? <p role="alert">Lanes refused: {error.message}</p> : lanes === undefined ? <p role="status">Reading lanes…</p> : <>
-      <p>{count("running")} of {lanes.length} running · {count("settling")} settling · {count("idle")} idle</p>
+      <p>{count("running")} of {ordinary.length} running{express.length ? `, ${express.filter(row => row.state === "running").length} of ${express.length} express` : ""} · {count("settling")} settling · {count("idle")} idle</p>
       {lanes.length === 0 ? <p>No lanes recorded.</p> : <ul>{lanes.map(row => {
         const quiet = row.state === "running" && row.log_grew_at_ms !== null && now - row.log_grew_at_ms >= LANE_QUIET_MS;
         const action = row.latest_action;
         return <li key={row.lane_id} data-state={row.state}>
-          <div><EntityLink kind="lane" id={row.lane_id} state={row.state === "running" ? "moving" : "not known"} /> · {row.state}{row.running_nodes ? ` · ${row.running_nodes} nodes running` : ""}
+          <div><EntityLink kind="lane" id={row.lane_id} state={row.state === "running" ? "moving" : "not known"} /> · {row.lane_id.startsWith("express-") ? "express · " : ""}{row.state}{row.running_nodes ? ` · ${row.running_nodes} nodes running` : ""}
             {row.state_since_ms !== null ? <span title="Elapsed since the recorded state began"> · ~{age(now - row.state_since_ms)}</span> : " · since —"}
             {quiet ? <strong className="lane-strip__quiet"> · quiet {age(now - row.log_grew_at_ms!)}</strong> : null}</div>
           {row.run_id ? <div>{row.state === "idle" ? "last: " : ""}

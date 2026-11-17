@@ -318,6 +318,13 @@ uses this answer, links every lane, and computes its counts from those rows. The
 defines its three states: idle, running, and settling. A terminal run still held
 by a lease is settling, not evidence that a gate or landing is in progress.
 
+Snapshot lane rows preserve the raw lease `state` and add `work_state` using the
+same idle/running/settling projection. The header counts running work, not held
+leases. The header, lane strip, and waiting face count ordinary and
+[express lanes](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#express-lanes) separately; document desks
+stay visible but count in neither number. When an older server omits `work_state`,
+the header reports an unknown running count rather than treating every lease as work.
+
 Rows carry the item, seat, backend, attempt number, run id, state-start clock,
 and latest action with its clock. The seat is the one the dispatch decision recorded
 (`dispatches.seat`), else the item's requested seat, and `seat_source` says which

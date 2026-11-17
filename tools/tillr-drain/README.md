@@ -109,6 +109,45 @@ criterion intake and closure, the three failure pairs in both file orders, lane
 release, and an unchanged trunk. The
 [blocker tests](./drain/judge_blocker_test.go) cover unreadable blocked metadata.
 
+## Express lanes
+
+The [saved-idea rule](../../docs/design/observatory-actions.md#53-the-item-that-is-created)
+names **express work**: a saved idea, extended here to an item whose block sets `express="true"`.
+Express lanes are reserved for that work and do not consume the ordinary `--lanes` cap.
+Configure their count in the repository settings file (default: zero):
+
+```toml
+[lanes]
+express = 2
+```
+
+The loop names these lanes `express-1`, `express-2`, and so on. Express work prefers
+one of them, then an available ordinary lane; if neither is free it waits. Ordinary
+work never uses an express lane, and no running work is stopped to make room.
+Eligibility comes from the stored item definition, not its workflow's first seat.
+Saved ideas use the `item-idea-` ID convention from
+[idea intake](../../docs/design/observatory-actions.md#53-the-item-that-is-created);
+this allocation support does not implement the intake command itself.
+
+Review-comment work stays at its document's
+[desk](../../docs/design/tillr-designer-sessions.md#the-desk), a lane assigned to that
+document, and is not express work even if its block names the attribute. Waiting
+output and the observatory lane strip count ordinary and express lanes separately;
+desks remain visible but count in neither pool.
+
+Display backlog: lane rows are retained for run history. Lowering `lanes.express`
+can leave previously registered express lanes in the displayed total; allocation
+still uses only the currently configured pool. Reconcile that retained history
+with the offered-capacity display without deleting rows referenced by past runs.
+
+## Designer retirement
+
+The [keep-warm rule](../../docs/design/tillr-designer-sessions.md#the-keep-warm-rule)
+ends a designer's session when its document is deleted or its stage is done.
+Deletion requires absence from both the trunk commit captured by the pass and the
+main checkout. An uncommitted removal or a file briefly missing during landing
+therefore keeps the designer's row. Retirement deletes only that row, not its transcript.
+
 ## Pass observations and report identity
 
 The [successor design](../../docs/design/tillr-drain-successor.md#25-one-pass-what-it-advances-and-what-bounds-it)

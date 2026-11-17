@@ -109,7 +109,7 @@ export const liveSnapshotData: SnapshotData = {
   ...snapshotData,
   drain_summary: { ...snapshotData.drain_summary, active: true, running_runs: 1 },
   lanes: [
-    { lane_id: "lane-1", state: "leased", run_id: "run-live-1", leased_until_ms: 1762979580000 },
+    { lane_id: "lane-1", state: "leased", work_state: "running", run_id: "run-live-1", leased_until_ms: 1762979580000 },
     { lane_id: "lane-2", state: "idle", run_id: "", leased_until_ms: null },
   ],
   items: [

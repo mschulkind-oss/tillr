@@ -140,6 +140,8 @@ type Decision struct {
 // itemRow is the item state this face reads: the columns a decision turns on, and the
 // rank that decides the order the decisions come in.
 type itemRow struct {
+	// Express is read from the stored definition before workflow seat routing.
+	Express    bool
 	JudgeMode  string
 	JudgeGrant string
 	Designer   *lastDesigner
@@ -442,7 +444,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				identifyDecision(&decision)
 			}
 			if err == nil && work.LaneReleased && decision.Action != ActionHold {
-				lane, ok := p.freeLane()
+				lane, ok := p.freeLane(item.Express)
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
 				} else {
@@ -754,7 +756,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
-		lane, ok := p.freeLane()
+		lane, ok := p.freeLane(item.Express)
 		if itemIsComment(item.ItemID) {
 			lane = commentDesk(item.DesignDoc)
 			ok = !p.held[lane] && !p.assigned[lane]
@@ -1171,9 +1173,16 @@ func indexPriorRuns(priors map[string][]priorRun) (map[string]AttemptClass, map[
 // the choice is the caller's preference rather than the store's row order. A lane is
 // free when the store does not hold it under a lease that is still live and this tick has
 // not already assigned it.
-func (p *planner) freeLane() (string, bool) {
+func (p *planner) freeLane(express ...bool) (string, bool) {
+	if len(express) > 0 && express[0] {
+		for _, lane := range *p.tick.AvailableLanes {
+			if strings.HasPrefix(lane, "express-") && !p.assigned[lane] && !p.held[lane] {
+				return lane, true
+			}
+		}
+	}
 	for _, lane := range *p.tick.AvailableLanes {
-		if strings.HasPrefix(lane, "desk-") {
+		if strings.HasPrefix(lane, "desk-") || strings.HasPrefix(lane, "express-") {
 			continue
 		}
 		if p.assigned[lane] {
@@ -1334,6 +1343,14 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow')`).Scan(&hasWorkflow); err != nil {
 		return nil, readFailure(err)
 	}
+	var hasExpress bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
+		return nil, readFailure(err)
+	}
+	expressColumn := "0"
+	if hasExpress {
+		expressColumn = "COALESCE(express, 0)"
+	}
 	workflowColumn := "''"
 	if hasWorkflow {
 		workflowColumn = "COALESCE(workflow, '')"
@@ -1348,7 +1365,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	}
 	rows, err := r.Query(
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
-		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `
+		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `
 		   FROM items
 		  ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
 		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
@@ -1362,12 +1379,13 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 			item    itemRow
 			allowed string
 		)
-		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode, &item.Express); err != nil {
 			return nil, readFailure(err)
 		}
 		if item.Allowed, err = decodeFence(allowed); err != nil {
 			return nil, err
 		}
+		item.Express = !itemIsComment(item.ItemID) && (item.Express || strings.HasPrefix(item.ItemID, "item-idea-"))
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -1189,7 +1189,6 @@ designer's session.
 - Show the extra lanes separately and keep review comments at their document's dedicated lane.
 - Keep designer sessions alive while a landing rewrites their documents.
 
-<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Agent Details:**
 
@@ -1294,11 +1293,6 @@ was the mistake, so c5 no longer asks for that test to pass unchanged. Three poi
 - **`TestCommentPathTwice` still passes unchanged**, and nothing else in c1 to c5 moves. The rule
   for which document counts as deleted is the one the ruling above states.
 
-- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)) and any item whose block sets `express="true"`. An item that answers review comments is not express work in this sense: it runs at its document's desk, as it does today. Whether an item is express is decided from the item's own definition, and a test asserts that a saved idea whose first workflow node names another seat is still dispatched on an express lane.
-- **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
-- **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
-- **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express". Desk runs are shown as they are today and are counted in neither number.
-- **c5:** The loop ends a designer's session for a deleted document only when the document is absent from both the trunk commit the pass read and the main checkout. A test removes a committed document's file from the main checkout without committing the removal, runs the retirement, and asserts the designer's row is kept; it then commits the removal, runs the retirement again, and asserts the row is gone. `TestCommentPathTwice` passes unchanged. The existing test `TestRetireDesignerLeavesTranscript` may have its fixture changed to match the new behavior: its `deleted` case may commit the document's removal before the retirement runs, because a removal that is not committed no longer ends the session. The test must still assert that the transcript is left in place.
 
 ## Filed 2026-11-16: two decided designs are cut into build items
 
