@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -280,8 +281,8 @@ func refuseJudged(ctx context.Context, storePath, runID string) error {
 	return nil
 }
 
-// rederiveFence writes the fence the item is held to now, from its own allowed_paths, over
-// both the lane's and the run's copy, and answers it.
+// rederiveFence writes the current item fence and the saved node's narrower scope
+// to both the lane and run copies, and answers the resumed run's scope.
 //
 // The lane's `fence.txt` is the staged text; re-deriving it is what makes a fence edited
 // after the kill the one the continuation is judged by. The item is read from the store, so
@@ -301,14 +302,25 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	if err != nil {
 		return nil, err
 	}
+	var node *WorkflowStage
 	err = r.ReadTx(ctx, func(reader *store.Reader) error {
 		_, works, err := readPendingHistory(reader)
 		if err != nil {
 			return err
 		}
 		if work := works[runID]; work != nil && work.Decision.ItemID == row.ItemID {
-			if c := work.Decision.BlockConflict; c != nil && c.TriageVersion != "" {
+			d := work.Decision
+			if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
 				recorded.AllowedPaths = []string{triageDocument(c.BodyRef)}
+			}
+			if row.LaneID == "" {
+				row.LaneID = d.LaneID
+			}
+			if d.Workflow != nil {
+				if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
+					return Externalf("run %s has no saved workflow node", runID)
+				}
+				node = &d.Workflow.Stages[d.NodeIndex]
 			}
 		}
 		return nil
@@ -321,13 +333,31 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 		return nil, Externalf("item %s names no allowed_paths: a resume refuses to continue under a fence that admits nothing", recorded.ItemID)
 	}
 	fence := fencePaths(recorded.AllowedPaths)
-	body := fenceText(recorded.AllowedPaths)
+	if node != nil {
+		if err := (&Workflow{Stages: []WorkflowStage{*node}}).checkScopes(recorded.AllowedPaths); err != nil {
+			return nil, err
+		}
+		fence, err = node.scopePaths(recorded.AllowedPaths)
+		if err != nil {
+			return nil, err
+		}
+	}
+	itemFence := fencePaths(recorded.AllowedPaths)
+	for _, paths := range [][]string{fence, itemFence} {
+		for i, raw := range paths {
+			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
+				paths[i] = ".forks/lanes/" + row.LaneID + "/" + name + suffix
+			}
+		}
+	}
 	for _, dir := range []string{laneDir, RunDir(cfg.Root, runID)} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, Externalf("creating %s: %v", dir, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, FenceFile), []byte(body), 0o644); err != nil {
-			return nil, Externalf("writing %s: %v", filepath.Join(dir, FenceFile), err)
+		for name, paths := range map[string][]string{FenceFile: fence, ItemFenceFile: itemFence} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(fenceText(paths)), 0o644); err != nil {
+				return nil, Externalf("writing %s: %v", filepath.Join(dir, name), err)
+			}
 		}
 	}
 	return fence, nil

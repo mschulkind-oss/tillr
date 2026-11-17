@@ -2059,6 +2059,25 @@ func (l *Loop) pinQuietly(ctx context.Context, runID, sha string) {
 // path is a fence the path is outside of, and a lane whose fence is empty admits nothing —
 // staging refuses such an item, so an empty fence here is a lane someone edited by hand.
 func (l *Loop) fenceViolation(ctx context.Context, candidate Candidate) (string, error) {
+	fencePath, err := l.itemFencePath(candidate.LaneID)
+	if err != nil {
+		return "", err
+	}
+	return l.fenceViolationAt(ctx, candidate, fencePath)
+}
+
+func (l *Loop) itemFencePath(lane string) (string, error) {
+	fencePath := filepath.Join(l.laneDirPath(lane), ItemFenceFile)
+	if _, err := os.Stat(fencePath); errors.Is(err, os.ErrNotExist) {
+		// Legacy stages wrote only fence.txt, which was the full item fence.
+		fencePath = filepath.Join(l.laneDirPath(lane), FenceFile)
+	} else if err != nil {
+		return "", err
+	}
+	return fencePath, nil
+}
+
+func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fencePath string) (string, error) {
 	status, err := l.git(ctx, candidate.Worktree, "status", "--porcelain")
 	if err != nil {
 		return "", err
@@ -2067,11 +2086,12 @@ func (l *Loop) fenceViolation(ctx context.Context, candidate Candidate) (string,
 		return fmt.Sprintf("%s: the candidate worktree is not clean, so the commit is not the change that was judged: %s",
 			ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil
 	}
-	changed, err := l.git(ctx, candidate.Worktree, "diff", "--name-only", "-z", candidate.BaseSHA+".."+candidate.HeadSHA)
+	// Disable rename detection so both the removed source and added destination
+	// are checked; a rename into scope must not hide a deletion outside it.
+	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", candidate.BaseSHA+".."+candidate.HeadSHA)
 	if err != nil {
 		return "", err
 	}
-	fencePath := filepath.Join(l.laneDirPath(candidate.LaneID), FenceFile)
 	body, err := os.ReadFile(fencePath)
 	if errors.Is(err, os.ErrNotExist) {
 		// A lane with no fence is a lane whose candidate cannot be shown to be in scope.
@@ -2085,7 +2105,7 @@ func (l *Loop) fenceViolation(ctx context.Context, candidate Candidate) (string,
 	fence := fenceEntries(string(body))
 	prefix := l.fencePrefix(ctx, candidate.Worktree)
 	for _, path := range strings.Split(changed, "\x00") {
-		if path = strings.TrimSpace(path); path == "" {
+		if path == "" {
 			continue
 		}
 		// A fork checkout is a repository of its own, so its diff names paths relative
@@ -2299,6 +2319,9 @@ func (l *Loop) laneTarget(lane string) string {
 // laneBase is the sha staging pinned for the lane's candidate: the trunk for an ordinary
 // item, and the fork checkout's own HEAD for a fork-series item.
 func (l *Loop) laneBase(lane string) string {
+	if base := l.laneFile(lane, ItemBaseSHAFile); base != "" {
+		return base
+	}
 	return l.laneFile(lane, BaseSHAFile)
 }
 

@@ -469,6 +469,11 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 					return nil, readFailure(err)
 				}
 			}
+			if loadErr == nil && w != nil {
+				if scopeErr := w.checkScopes(item.Allowed); scopeErr != nil {
+					hold = scopeErr.Error()
+				}
+			}
 			if hold != "" {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: hold, From: "held", Attempt: p.nextAttempt(item.ItemID), Workflow: w}
 				if work := works[item.ItemID]; work != nil && work.Decision.Workflow != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ type WorkflowStage struct {
 	Kind       string            `json:"kind"`
 	Seat       string            `json:"seat"`
 	Access     string            `json:"access"`
+	WriteScope json.RawMessage   `json:"write_scope,omitempty"`
 	CommandRef string            `json:"command_ref,omitempty"`
 	Flags      map[string]any    `json:"flags,omitempty"`
 	Command    []string          `json:"resolved_argv,omitempty"`
@@ -86,7 +88,8 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		return nil, fmt.Errorf("workflow-empty-stages: %s", ref)
 	}
 	ids := map[string]bool{}
-	for _, s := range w.Stages {
+	for i := range w.Stages {
+		s := &w.Stages[i]
 		if s.ID == "" || strings.ContainsAny(s.ID, "/\r\n\t") {
 			return nil, fmt.Errorf("workflow-stage-id: %q: id must be nonempty and contain no slash or control whitespace", s.ID)
 		}
@@ -101,7 +104,7 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 			if !item.WorkflowRefValid(s.Workflow) {
 				return nil, fmt.Errorf("workflow-reference: %s: %q", s.ID, s.Workflow)
 			}
-			if s.Seat != "" || s.Access != "" || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 || len(s.Inputs) != 0 || len(s.Outputs) != 0 {
+			if s.Seat != "" || s.Access != "" || len(s.WriteScope) != 0 || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 || len(s.Inputs) != 0 || len(s.Outputs) != 0 {
 				return nil, fmt.Errorf("workflow-kind: %s: workflow stage cannot specify run fields or named inputs/outputs", s.ID)
 			}
 			continue
@@ -126,6 +129,17 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		}
 		if s.Access != "read_only" && s.Access != "write" {
 			return nil, fmt.Errorf("workflow-access: %s", s.ID)
+		}
+		if len(s.WriteScope) != 0 && s.Access == "read_only" {
+			return nil, fmt.Errorf("workflow-write-scope-read-only: %s", s.ID)
+		}
+		if s.Access == "write" {
+			if len(s.WriteScope) == 0 {
+				s.WriteScope = json.RawMessage(`"inherit"`)
+			}
+			if _, err := s.scopePaths(nil); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := validateOutputWiring(&w); err != nil {
@@ -188,6 +202,59 @@ func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
 	}
 	path := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
 	return readWorkflow(root, path, policy, map[string]bool{})
+}
+
+// scopePaths expands a node's explicit paths by the same rules as an item's fence.
+// An omitted scope also inherits for decisions recorded before scopes were supported.
+func (s WorkflowStage) scopePaths(allowed []string) ([]string, error) {
+	var inherit string
+	if len(s.WriteScope) == 0 || (json.Unmarshal(s.WriteScope, &inherit) == nil && inherit == "inherit") {
+		return fencePaths(allowed), nil
+	}
+	var paths []string
+	if json.Unmarshal(s.WriteScope, &paths) != nil || paths == nil {
+		return nil, fmt.Errorf("workflow-write-scope: %s: expected inherit or a path list", s.ID)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("workflow-write-scope-empty: %s", s.ID)
+	}
+	for i, p := range paths {
+		// A staged fence has one path per line; paths cannot inject entries
+		// or disappear under its whitespace-trimming parser.
+		if strings.TrimSpace(p) == "" || p != strings.TrimSpace(p) || strings.ContainsAny(p, "\r\n\x00") {
+			return nil, fmt.Errorf("workflow-write-scope: %s: expected nonempty single-line paths without surrounding whitespace", s.ID)
+		}
+		paths[i] = path.Clean(p)
+		if strings.HasSuffix(p, "/") {
+			paths[i] += "/"
+		}
+	}
+	return fencePaths(paths), nil
+}
+
+const ReasonNodeScopeOutsideFence = "node-scope-outside-fence"
+
+func (w *Workflow) checkScopes(allowed []string) error {
+	fence := fencePaths(allowed)
+	for i := range fence {
+		fence[i] = path.Clean(fence[i])
+	}
+	for _, stage := range w.Stages {
+		if stage.Access != "write" {
+			continue
+		}
+		scope, err := stage.scopePaths(allowed)
+		if err != nil {
+			return err
+		}
+		for _, p := range scope {
+			clean := path.Clean(p)
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || !insideFence(clean, fence) {
+				return fmt.Errorf("%s: node %s: %s is outside the item's fence", ReasonNodeScopeOutsideFence, stage.ID, p)
+			}
+		}
+	}
+	return nil
 }
 
 const nodeAdvancedKind = "drain.node-advanced"
@@ -367,6 +434,27 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
 		}
 		return true, l.markExamined(ctx, d)
+	}
+	if stage.Access == "write" {
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
+		escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
+		if err != nil {
+			return true, err
+		}
+		if escape != "" {
+			c.BaseSHA = base
+			c.RefusalDetail = "node " + stage.ID + ": " + escape
+			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+				return true, err
+			}
+			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+				return true, err
+			}
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
+				return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			}
+			return true, l.markExamined(ctx, d)
+		}
 	}
 	if stage.Kind == "command" && (rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1)) {
 		if err := l.nodeOutcome(ctx, d, "fault"); err != nil {

@@ -18,7 +18,8 @@ import (
 const WorkflowRules = `workflow-json, workflow-unknown-field, workflow-identity,
 workflow-edges, workflow-empty-stages, workflow-stage-id, workflow-duplicate-id,
 workflow-kind, workflow-command, workflow-timeout, workflow-unknown-seat,
-workflow-access, workflow-input, workflow-output, workflow-outcome,
+workflow-access, workflow-write-scope, workflow-write-scope-empty,
+workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcome,
 workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
 workflow-exit, workflow-file; command-registry, command-reference, command-flag,
@@ -54,7 +55,7 @@ func workflowFields(raw []byte) []error {
 			stage := "graph"
 			if field == "stages" {
 				json.Unmarshal(obj["id"], &stage)
-				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs", "stage="+stage)
+				check(obj, "id kind seat access write_scope command_ref flags resolved_argv timeout_ms workflow inputs outputs", "stage="+stage)
 			} else {
 				json.Unmarshal(obj["to_node"], &stage)
 				check(obj, "from_node to_node when_outcome from_output to_input", "stage="+stage)
@@ -241,7 +242,7 @@ func writeWorkflowFinding(out io.Writer, path, line string) {
 	detail := strings.TrimSpace(line[location[1]:])
 	if stage == "graph" {
 		switch rule {
-		case "workflow-kind", "workflow-access", "workflow-timeout", "workflow-unknown-seat", "workflow-input", "workflow-output", "workflow-outcome", "workflow-exit", "workflow-missing-reference", "workflow-unknown-field":
+		case "workflow-kind", "workflow-access", "workflow-write-scope", "workflow-write-scope-empty", "workflow-write-scope-read-only", "workflow-timeout", "workflow-unknown-seat", "workflow-input", "workflow-output", "workflow-outcome", "workflow-exit", "workflow-missing-reference", "workflow-unknown-field":
 			if parts := strings.SplitN(detail, ":", 2); len(parts) == 2 {
 				stage = strings.TrimPrefix(parts[0], "stage=")
 				detail = strings.TrimSpace(parts[1])

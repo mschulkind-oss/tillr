@@ -102,6 +102,31 @@ The [lane-base regression tests](./drain/lane_base_test.go) cover the selected
 worktree commit, recorded base, blocker proof wait, fixer exception, and bootstrap
 notice.
 
+## Node write scopes
+
+A writing workflow stage may set `write_scope` to `"inherit"` (also the default
+when omitted) or a nonempty list of repository-relative path prefixes. A list
+narrows the item's allowed paths; it cannot widen them. Both lists receive the
+same expansion to required pack copies and documentation companions. The loader
+refuses invalid values, empty lists, and any scope on a read-only stage under
+separate rules. A scope outside the expanded item fence holds the item as
+`node-scope-outside-fence`, naming the node and path before any node starts.
+
+Each node receives its own scope in its staged fence and brief. Writing nodes
+run serially in the item's single git target, including a fork checkout; the next
+node starts at the preceding node's final HEAD. At each writing node's exit, the
+drain checks only that node's changed paths, from its starting HEAD to its final
+HEAD. An escape is refused as `boundary-scope-escape`, naming the node and path;
+no successor starts. A dirty writing target is also refused. Passing every node
+does not waive the final check of the whole change against the item's fence.
+The staged node base and scope are kept separately from the item's original base
+and full fence so the final candidate includes all nodes and lands once.
+
+A resumed node keeps the scope in its saved workflow, checked against the item's
+current allowed paths; reloading an edited workflow cannot broaden its authority.
+A held candidate saves the full item fence when it releases a lane. Restaging it
+restores that fence and its original base, replacing metadata left by a later item.
+
 ## Registered command nodes
 
 A workflow stage with `kind: command` runs a registered program, not a model.
