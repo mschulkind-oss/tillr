@@ -97,21 +97,23 @@ func Reasons() []string {
 // tree whose gate it chose to skip, and it is recorded on the row rather than inferred so a
 // reader never has to reconstruct a skip from a missing verdict.
 type Landing struct {
-	LandingID         string       `json:"landing_id"`
-	ItemID            string       `json:"item_id"`
-	RunID             string       `json:"run_id"`
-	VerdictID         string       `json:"verdict_id"`
-	Result            string       `json:"result"`
-	Reason            string       `json:"reason"`
-	BaseSHA           string       `json:"base_sha"`
-	HeadSHA           string       `json:"head_sha"`
-	TrunkBefore       string       `json:"trunk_before"`
-	TrunkAfter        string       `json:"trunk_after"`
-	GatedTree         string       `json:"gated_tree"`
-	LandedTree        string       `json:"landed_tree"`
-	ConflictPaths     []string     `json:"conflict_paths"`
-	GateSkippedReason string       `json:"gate_skipped_reason"`
-	RedCap            *redcap.Hold `json:"red_cap,omitempty"`
+	// LockObservation is returned after release; it is not part of the receipt.
+	LockObservation   *LockObservation `json:"lock_observation,omitempty"`
+	LandingID         string           `json:"landing_id"`
+	ItemID            string           `json:"item_id"`
+	RunID             string           `json:"run_id"`
+	VerdictID         string           `json:"verdict_id"`
+	Result            string           `json:"result"`
+	Reason            string           `json:"reason"`
+	BaseSHA           string           `json:"base_sha"`
+	HeadSHA           string           `json:"head_sha"`
+	TrunkBefore       string           `json:"trunk_before"`
+	TrunkAfter        string           `json:"trunk_after"`
+	GatedTree         string           `json:"gated_tree"`
+	LandedTree        string           `json:"landed_tree"`
+	ConflictPaths     []string         `json:"conflict_paths"`
+	GateSkippedReason string           `json:"gate_skipped_reason"`
+	RedCap            *redcap.Hold     `json:"red_cap,omitempty"`
 }
 
 // Landed reports whether this landing moved the trunk ref.
@@ -166,10 +168,13 @@ func NextLandingID(r rowQueryer, itemID string) (string, error) {
 // landing can be filed, and the values it lands with are the ones the caller was handed —
 // nothing is read back out of a candidate row, which is what makes the squash stateless.
 type LandingRequest struct {
-	ItemID  string
-	RunID   string
-	BaseRef string
-	BaseSHA string
+	// ObserveLock adds live measurements to the returned record, never the receipt.
+	ObserveLock bool
+	observation *LockObservation
+	ItemID      string
+	RunID       string
+	BaseRef     string
+	BaseSHA     string
 	// ObservedTrunk is the loop's last observed trunk tip, not the candidate's base.
 	// Empty is a manual landing with no loop observation to compare.
 	ObservedTrunk string
@@ -197,8 +202,8 @@ type LandingRequest struct {
 // squashes the change onto the trunk, and moves the trunk. It is the whole landing
 // transaction, and both faces call it.
 //
-// The land lock is held for the swap and nothing else. The gate ran before this function
-// was called — in another process, in the drain's case — so no lock spans it, and a tick
+// The land lock is held for the whole landing transaction, including its receipt.
+// The gate ran before this function was called — in another process, in the drain's case — so no lock spans it, and a tick
 // that takes minutes to judge does not hold the trunk. Under the lock this function reads
 // the trunk tip, squashes onto it, refuses a clash in the trunk's worktree, records the
 // row, and moves the ref. A non-landing takes the same lock briefly to pin the head and
@@ -300,7 +305,16 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 	if _, err := lock.Acquire(ctx, req.LockWait); err != nil {
 		return Landing{}, err
 	}
-	defer lock.Release()
+	defer func() {
+		lock.Release()
+		if req.observation != nil {
+			req.observation.Events = append(req.observation.Events, LockEvent{Kind: "released", AtNS: lock.releasedNS})
+		}
+		answer.LockObservation = req.observation
+	}()
+	if req.ObserveLock {
+		req.observation = &LockObservation{RunID: req.RunID, Events: []LockEvent{{Kind: "acquired", AtNS: lock.acquiredNS}}}
+	}
 
 	prepared, err := prepareLanding(ctx, s, t, landing, req)
 	if err != nil {
@@ -316,6 +330,9 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		landing, err = finishLanding(ctx, tx, t, prepared, req)
 		return err
 	})
+	if err == nil {
+		req.observation.note("receipt")
+	}
 	return landing, err
 }
 
@@ -516,6 +533,7 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			// built head; ancestry and the guarded move still refuse a rewind.
 			p.squash = Squash{Commit: req.HeadSHA, Tree: p.landing.GatedTree}
 		} else {
+			req.observation.note("squash")
 			p.squash, err = t.SquashWithMessage(req.BaseSHA, trunkBefore, req.HeadSHA, req.MessageFrom, req.At)
 		}
 		if err != nil {
@@ -624,6 +642,7 @@ func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLandin
 	// A recovered landing's move already happened: its row is written and nothing moves,
 	// so the history keeps the tip read under the lock.
 	if landing.Landed() && !p.recovered {
+		req.observation.note("trunk-move")
 		if err := t.Move(req.BaseRef, p.squash.Commit, p.tip); err != nil {
 			return Landing{}, err
 		}

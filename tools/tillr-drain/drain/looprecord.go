@@ -63,6 +63,7 @@ func (l *Loop) recordResult(result *LoopResult) {
 	// spent: the tick that found the pile drained is not a dispatch, and only the final
 	// totals carry it.
 	l.finalizeRepeatedRefusal(result)
+	l.reportLandingMeasurements()
 	RecordLoopResult(l.cfg.Root, l.cfg.Now().UTC(), l.build, *result, l.cfg.Report)
 }
 

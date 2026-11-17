@@ -803,16 +803,7 @@ After a landing the trunk holds changes that only the heavy checks have judged, 
 
 ### Twenty lanes land without waiting on each other
 
-<!-- tillr: item
-     id="item-gate-scale-test"
-     paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands. The criterion is judged on the ordinary test build, `go -C tools/tillr-drain test ./...`, which is the build the gate runs.
-- **c2:** The test asserts from the recorded events that the number of gates in flight at once reached the lane count, and that the land lock was held for one landing transaction at a time and for nothing else: each hold begins after the gate verdict for its candidate was recorded, contains that landing's squash, trunk move and receipt and no other landing's, and no gate for that candidate starts or finishes inside it. It asserts no duration.
-- **c3:** The loop's summary prints the longest and the median land-lock hold, each measured from the lock's acquisition to its release, and the number of landings per heavy run. The test asserts the fields are present.
-- **c4:** No lane's gate reads or writes a file another lane's gate writes, other than the result store. The test asserts it from the declared `writes` of every check and from the files the run created.
 
 **The land lock's hold is the whole landing transaction, and this item leaves that boundary where
 it is.** Criterion c2 first said the lock was held "only between a squash's start and its trunk

@@ -31,11 +31,14 @@ import (
 // mq's lock documents — so a recorded pid that no longer exists is taken over, while a
 // live recorded pid is never preempted.
 type Lock struct {
-	path   string
-	file   *os.File
-	held   bool
-	pollBy time.Duration
-	now    func() time.Time
+	// Real-clock samples at successful ownership and immediately before Close.
+	// They include holder-record work, but never the acquisition wait.
+	acquiredNS, releasedNS int64
+	path                   string
+	file                   *os.File
+	held                   bool
+	pollBy                 time.Duration
+	now                    func() time.Time
 }
 
 // OpenLock answers the lock at path. The path is configuration, never derived here: a
@@ -213,6 +216,7 @@ func (l *Lock) Acquire(ctx context.Context, timeout time.Duration) (time.Duratio
 		}
 		file, stale, acquired, err := l.tryAcquire()
 		if err == nil && acquired {
+			l.acquiredNS = time.Now().UnixNano()
 			l.file = file
 			l.held = true
 			l.writeLockRecord(stale)
@@ -301,6 +305,7 @@ func (l *Lock) Release() {
 	if !l.held || l.file == nil {
 		return
 	}
+	l.releasedNS = time.Now().UnixNano()
 	_ = l.file.Close()
 	l.file = nil
 	l.held = false
