@@ -282,6 +282,10 @@ pack-sync:
             git -C "$root" ls-files -z "tools/$module"
             git -C "$root" ls-files -z --others --exclude-standard "tools/$module"
         } | while IFS= read -r -d '' file; do
+            # A tracked file deleted in the working tree is not part of the source being
+            # mirrored. Copying it would fail, and with `set -e` that leaves every module
+            # after this one half-deleted in a pack the host reads live.
+            [ -e "$root/$file" ] || continue
             rel="${file#tools/$module/}"
             mkdir -p "$dst/$(dirname "$rel")"
             cp -p "$root/$file" "$dst/$rel"
