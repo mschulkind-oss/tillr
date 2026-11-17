@@ -1820,10 +1820,43 @@ failure is the suite's, not the candidate's, and the suite's own header says it 
 this item, as c8. It is made in `tests/observatory-dev.test.py`, which is inside the paths;
 `tools/observatory/run.sh` is right about a real `npm ci` and is not changed.
 
+**Ruling, 2026-11-17 (answers the sixth run's conflict):** the run was right to stop, and c4 as
+it stood was wrong about the tree. It said the loop holds an acquitted item with the reason
+`trunk-broken` and gates it again after the fixer lands, "the same way a fork-check acquittal
+does". A fork-check acquittal does neither. It sets the item's state to `blocked`, with the fixer
+recorded as the waiter, and nothing ever takes the item out of that state: the planner answers the
+ordinary `blocked` reason for it, because that rule is read before the red-trunk rule, and it
+still answers `blocked` after the fixer has landed. An acquitted item is therefore stranded until
+a person moves it by hand. The run's reproduction is in the evidence below.
+
+The return path does not exist, so this item builds it, for every acquittal: the tree-check
+acquittal this item adds and the fork-check acquittal that is already there share one path. Four
+things are settled.
+
+- The acquittal is unchanged. It still records the `trunk-already-red` refusal, files the
+  deduplicated fixer, and sets the item to `blocked` with the waiter `item:<fixer id>`. The existing
+  test that asserts that state stays as it is.
+- While that fixer is not landed, the planner's reason for the item is `trunk-broken`, and the
+  decision names the fixer as what it waits on. A `blocked` item whose waiter is anything other
+  than a trunk fixer keeps the ordinary `blocked` reason.
+- Once that fixer is in the state `landed`, the next pass returns the item to the state it had
+  before the acquittal, which the item store already keeps as the underlying state, and clears the
+  waiter. Nobody runs a command. A fixer that ends in any other terminal state releases nothing:
+  the item stays `blocked` for the owner, because the trunk was never shown to be repaired.
+- The returned item is dispatched as a fresh run from the repaired trunk, and that run's candidate
+  is what the gate judges. The old candidate is not kept and gated again. Keeping it would hold a
+  lane for as long as the fixer takes, and with one lane the fixer could then never run. The cost is
+  one more model run for each acquitted item, which is accepted. That dispatch is not an owner's
+  retry: the rule that holds a second attempt until a person authorizes it does not apply to an
+  item the loop itself released, and the acquitted attempt is not counted as a failure when the
+  loop decides whether the item's attempts are exhausted.
+
+c4 is restated below to say this. No other criterion changes, and no new hold reason is added.
+
 - **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
 - **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
 - **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
-- **c4:** A candidate refused only because a tree check is already red at its base is not charged. The loop records the existing `trunk-already-red` refusal naming the red commit and the checks, holds the item behind the fixer with the existing reason `trunk-broken`, the same way a fork-check acquittal does, and gates it again after the fixer lands. A test asserts the hold names the fixer and carries no failing verdict and no design conflict.
+- **c4:** A candidate refused only because a tree check is already red at its base is not charged, and its item comes back by itself. The loop records the existing `trunk-already-red` refusal naming the red commit and the checks, files the fixer, and sets the item to `blocked` with the fixer as its waiter, as a fork-check acquittal does today. While the fixer is not landed, the planner's reason for the item is the existing `trunk-broken` and its decision names the fixer. After the fixer is `landed`, the next pass returns the item to the queue with no command from anyone and dispatches a fresh run from the repaired trunk without an authorized retry. Two tests. The first asserts that the hold has the reason `trunk-broken`, names the fixer, and carries no failing verdict and no design conflict. The second marks the fixer landed, runs the loop again with a green gate, and asserts that the item was dispatched and landed; it also asserts that an item whose fixer was closed without landing stays `blocked`.
 - **c5:** A candidate that is red on a tree check which passes on its base stays charged to the candidate. A test asserts the ordinary refusal.
 - **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
 - **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
@@ -1838,6 +1871,8 @@ this item, as c8. It is made in `tests/observatory-dev.test.py`, which is inside
 - **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
 - **Evidence:** 2026-11-17, `python3 tests/observatory-dev.test.py` in a lane worktree at trunk commit `1524cddc9`, with no change applied, exited 1 after 4 min 40 s with seven failed cases, all in the supervision half. Its output held `observatory-dev: npm ci (there are no node_modules)` and then `tools/observatory/run.sh: line 174: …/tools/tillr-view/web/node_modules/.tillr-platform: No such file or directory`. `ls tools/tillr-view/web` in that worktree shows no `node_modules`; the directory is ignored by `.gitignore` and exists in the main checkout. The fourth run's gate log shows the same seven cases and the same two lines, with the check selected `because: the dev recipe, Procfile, tool declaration or supervision suite changed`.
 - **Where (c8):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`, whose comment reads `` `ci` is a no-op ``; the supervision cases start the recipe with the repository as its working directory. `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
+- **Evidence:** 2026-11-17, the sixth run added a loop test that acquits an item on a red tree check, marks its fixer `landed` and runs the loop again with a green gate. `go test ./... -run TestAcquittedTreeCandidateIsGatedAfterItsFixerLands` in `tools/tillr-drain` failed with `stop=queue-drained, dispatched=0, landed=0` and the item still `blocked`. Read at trunk commit `f721f4e12`: `rg -n 'StateBlocked' tools/tillr-drain/drain --glob '!*_test.go'` printed five lines: the constant and its comment, the one write in `acquitTrunkAlreadyRed`, and two reads in the planner. None of them moves an item out of that state.
+- **Where (c4):** `acquitTrunkAlreadyRed` in `tools/tillr-drain/drain/trunk.go` writes the `blocked` state and the waiter. `isBlocked` and the `switch` in `decide`, in `tools/tillr-drain/drain/plan.go`, put the `blocked` rule before the `trunk-broken` rule. `mayBeARetry` in the same file is the rule that holds a second attempt for an owner. `ReadWaitingOn` in `tools/tillr-item/item/waiting.go` reads the waiter and the underlying state, and the drain already imports that package, so nothing outside the paths changes.
 
 ## Filed 2026-11-17: what two lanes showed
 
