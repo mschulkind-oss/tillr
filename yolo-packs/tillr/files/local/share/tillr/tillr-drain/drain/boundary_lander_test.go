@@ -104,7 +104,7 @@ func TestARealLandingDuringASiblingRunConvictsNothing(t *testing.T) {
 	if len(written) == 0 || after.Refs["refs/heads/main"] == before.Refs["refs/heads/main"] {
 		t.Fatalf("fixture: the lander wrote no tillr ref or did not move the trunk: %v", written)
 	}
-	violations, err := CompareRun(before, after)
+	violations, err := compareAll(before, after)
 	if err != nil {
 		t.Fatal(err)
 	}

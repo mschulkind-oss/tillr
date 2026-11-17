@@ -9,7 +9,7 @@ covers:
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Thirteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-04, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
@@ -361,6 +361,36 @@ dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held sta
 cannot break this principle and is not bound by it. This is the held-state half of
 [Section 11](#11-a-failure-is-diagnosed-not-waited-out): where that section forbids waiting on time,
 this one forbids waiting on an actor that is not there.
+
+## 14. Convict a run on what it did, not on what happened while it ran
+
+A run is convicted only on evidence that the run itself made the change. A movement that merely
+happened inside the run's window can be the owner's or another agent's. Examples are a worktree
+added or removed, a branch, a tag, a fetch, a stash, a hand commit, a fork export, or an
+operator's pin. Such a movement is recorded as information, and it must never hold an item or
+stop the loop. The owner ruled on 2026-11-17: "why do we convict anyone for removing worktrees?
+that sounds stupid? we should be free to act with normal tools without breaking the drain, goes
+along with ad hoc commits". That ruling followed the one earlier the same day: "we're supposed
+to be able to ad hoc land stuff".
+
+*Measured 2026-11-17:* at five lanes, two runs that made no edits were held
+`host-boundary-violation`. The cause was "worktree `<lane root>/.rolling/worktree` appeared",
+which was the loop's own rolling checkout. Twenty-six stale registered worktrees from finished
+agents were also left unremoved, because removing them would have convicted every run in flight.
+
+*Enforced by:* `CompareRunObserved` in
+[`tools/tillr-drain/drain/boundary.go`](../../tools/tillr-drain/drain/boundary.go). It splits a
+run's bracket into what it convicts and what it only observes. It convicts a write into a
+watched, idle sibling lane worktree, and the run's own lane worktree going away. It observes a
+rogue ref inside tillr's namespaces, any other worktree's registration, and a main-checkout
+branch switch. The observations go on the run's `boundary.check` event, and the check stays
+clean. The fence check still convicts a candidate whose committed change leaves its fence. The
+gate still judges what lands. `TestOrdinaryGitUseDuringARunNeverConvictsIt` pins the ruling.
+*Not enforced:* a worker whose only escape lies outside the lanes is no longer stopped. A rogue
+ref or a stray worktree is named for an operator, and nothing acts on it.
+
+*Scope:* **not lander-scoped.** The bracket is the dispatch side's, in `tillr-drain`. The lander
+holds landings on trunk movement through its own checks, and it never convicts a run.
 
 ---
 

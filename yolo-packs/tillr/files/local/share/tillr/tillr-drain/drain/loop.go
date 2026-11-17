@@ -1155,7 +1155,7 @@ func (l *Loop) closeRunBracket(ctx context.Context, worktree string, request run
 }
 
 func (l *Loop) finishRunBracket(ctx context.Context, worktree string, request run.Request, tick string, at time.Time, before, after *Boundary, result *LoopResult) (string, error) {
-	violations, err := CompareRun(before, after)
+	violations, observed, err := CompareRunObserved(before, after)
 	if err != nil {
 		return "", err
 	}
@@ -1164,8 +1164,15 @@ func (l *Loop) finishRunBracket(ctx context.Context, worktree string, request ru
 		scope = BoundaryScopeResume
 	}
 	if err := l.recordBoundaryCheck(ctx, scope, tick,
-		[]runRef{{RunID: request.RunID, ItemID: request.ItemID, LaneID: laneOfWorktree(worktree)}}, []string{worktree}, violations, at); err != nil {
+		[]runRef{{RunID: request.RunID, ItemID: request.ItemID, LaneID: laneOfWorktree(worktree)}}, []string{worktree}, violations, at, observed...); err != nil {
 		return "", err
+	}
+	if len(observed) > 0 {
+		more := ""
+		if len(observed) > 1 {
+			more = fmt.Sprintf(" (and %d more, on its boundary.check)", len(observed)-1)
+		}
+		l.reportf("loop: the repository changed outside lane %s during run %s: %s%s; recorded, not attributed to the run\n", laneOfWorktree(worktree), request.RunID, observed[0], more)
 	}
 	if len(violations) > 0 {
 		l.stopForViolations(violations, []string{request.ItemID}, []string{laneOfWorktree(worktree)}, result)

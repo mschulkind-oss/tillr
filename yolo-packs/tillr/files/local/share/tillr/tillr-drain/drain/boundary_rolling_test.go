@@ -83,7 +83,7 @@ func TestARealRollingRunDuringASiblingRunConvictsNothing(t *testing.T) {
 		{"a run that started inside the rolling window and ended after it", during, after},
 		{"a run that spanned the whole rolling run", before, after},
 	} {
-		violations, err := CompareRun(bracket.before, bracket.after)
+		violations, err := compareAll(bracket.before, bracket.after)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,8 +96,10 @@ func TestARealRollingRunDuringASiblingRunConvictsNothing(t *testing.T) {
 // The excuse is the loop's own reserved places and shapes, and nothing wider: a worktree
 // that appears anywhere else during a run — beside the reserved directories, under a
 // reserved directory at a path the loop never uses, on a branch where the loop only ever
-// checks out a detached HEAD, or outside the lane root entirely — still convicts.
-func TestAWorktreeOutsideTheLoopsReservedPlacesStillConvicts(t *testing.T) {
+// checks out a detached HEAD, or outside the lane root entirely — is still observed on
+// the run's bracket. Since the owner's 2026-11-17 ruling it is information, not a
+// conviction (CompareRunObserved); the loop's own places are not even observed.
+func TestAWorktreeOutsideTheLoopsReservedPlacesIsObserved(t *testing.T) {
 	mainWT := Worktree{Path: "/repo", Head: "aaa", Branch: "refs/heads/main"}
 	own := Worktree{Path: "/lanes/lane-1/worktree", Head: "aaa", Branch: "refs/heads/tillr/x/lane-1"}
 	for _, wt := range []Worktree{
@@ -117,19 +119,19 @@ func TestAWorktreeOutsideTheLoopsReservedPlacesStillConvicts(t *testing.T) {
 			return &Boundary{Repo: "/repo", Targets: []string{own.Path}, LaneRoot: "/lanes", LaneScope: "x",
 				Refs: map[string]string{}, Worktrees: worktrees}
 		}
-		appeared, err := CompareRun(snap(mainWT, own), snap(mainWT, own, wt))
+		convicted, appeared, err := CompareRunObserved(snap(mainWT, own), snap(mainWT, own, wt))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(appeared) != 1 || appeared[0].Kind != "worktree" || appeared[0].Where != wt.Path || appeared[0].Detail != "appeared" {
-			t.Errorf("a worktree appearing at %s (branch %q) answered %v, want the one violation naming it", wt.Path, wt.Branch, appeared)
+		if len(convicted) != 0 || len(appeared) != 1 || appeared[0].Kind != "worktree" || appeared[0].Where != wt.Path || appeared[0].Detail != "appeared" {
+			t.Errorf("a worktree appearing at %s (branch %q) answered %v / %v, want the one observation naming it", wt.Path, wt.Branch, convicted, appeared)
 		}
-		gone, err := CompareRun(snap(mainWT, own, wt), snap(mainWT, own))
+		convicted, gone, err := CompareRunObserved(snap(mainWT, own, wt), snap(mainWT, own))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(gone) != 1 || gone[0].Kind != "worktree" || gone[0].Where != wt.Path || gone[0].Detail != "went away" {
-			t.Errorf("a worktree going away at %s (branch %q) answered %v, want the one violation naming it", wt.Path, wt.Branch, gone)
+		if len(convicted) != 0 || len(gone) != 1 || gone[0].Kind != "worktree" || gone[0].Where != wt.Path || gone[0].Detail != "went away" {
+			t.Errorf("a worktree going away at %s (branch %q) answered %v / %v, want the one observation naming it", wt.Path, wt.Branch, convicted, gone)
 		}
 	}
 }
@@ -157,36 +159,36 @@ func TestTheLoopsReplayAndDeskWorktreesNeverConvict(t *testing.T) {
 		if wt.Branch != "" {
 			refs[wt.Branch] = wt.Head
 		}
-		appeared, err := CompareRun(snap(map[string]string{}, mainWT, own), snap(refs, mainWT, own, wt))
+		convicted, appeared, err := CompareRunObserved(snap(map[string]string{}, mainWT, own), snap(refs, mainWT, own, wt))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(appeared) != 0 {
+		if appeared = append(appeared, convicted...); len(appeared) != 0 {
 			t.Errorf("the loop's worktree %s appearing convicted the run: %v", wt.Path, appeared)
 		}
 		moved := map[string]string{}
 		for ref := range refs {
 			moved[ref] = "ccc"
 		}
-		gone, err := CompareRun(snap(refs, mainWT, own, wt), snap(moved, mainWT, own))
+		convicted, gone, err := CompareRunObserved(snap(refs, mainWT, own, wt), snap(moved, mainWT, own))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(gone) != 0 {
+		if gone = append(gone, convicted...); len(gone) != 0 {
 			t.Errorf("the loop's worktree %s going away (and its branch moving) convicted the run: %v", wt.Path, gone)
 		}
 	}
 	// A desk branch of another lane root's scope, or an ordinary lane-root branch nobody
-	// has checked out, is not the loop's desk lane and still convicts.
+	// has checked out, is not the loop's desk lane and is still observed.
 	for _, ref := range []string{"refs/heads/tillr/other/desk-doc", "refs/heads/tillr/x/rogue"} {
 		before := &Boundary{Repo: "/repo", Targets: []string{own.Path}, LaneRoot: "/lanes", LaneScope: "x", Refs: map[string]string{}, Worktrees: []Worktree{mainWT, own}}
 		after := &Boundary{Repo: "/repo", Targets: []string{own.Path}, LaneRoot: "/lanes", LaneScope: "x", Refs: map[string]string{ref: "ddd"}, Worktrees: []Worktree{mainWT, own}}
-		violations, err := CompareRun(before, after)
+		convicted, violations, err := CompareRunObserved(before, after)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(violations) != 1 || violations[0].Kind != "ref" || !strings.Contains(violations[0].Detail, ref) {
-			t.Errorf("the ref %s appearing answered %v, want the one ref violation", ref, violations)
+		if len(convicted) != 0 || len(violations) != 1 || violations[0].Kind != "ref" || !strings.Contains(violations[0].Detail, ref) {
+			t.Errorf("the ref %s appearing answered %v / %v, want the one ref observation", ref, convicted, violations)
 		}
 	}
 }
@@ -202,7 +204,7 @@ func TestAPrunableRegistrationPrunedDuringARunDoesNotConvict(t *testing.T) {
 	snap := func(worktrees ...Worktree) *Boundary {
 		return &Boundary{Repo: "/repo", Targets: []string{own.Path}, Refs: map[string]string{}, Worktrees: worktrees}
 	}
-	violations, err := CompareRun(snap(mainWT, own, stale), snap(mainWT, own))
+	violations, err := compareAll(snap(mainWT, own, stale), snap(mainWT, own))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +213,12 @@ func TestAPrunableRegistrationPrunedDuringARunDoesNotConvict(t *testing.T) {
 	}
 	live := stale
 	live.Prunable = false
-	violations, err = CompareRun(snap(mainWT, own, live), snap(mainWT, own))
+	_, observed, err := CompareRunObserved(snap(mainWT, own, live), snap(mainWT, own))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(violations) != 1 || violations[0].Detail != "went away" {
-		t.Fatalf("a live registration that went away answered %v, want the one violation", violations)
+	if len(observed) != 1 || observed[0].Detail != "went away" {
+		t.Fatalf("a live registration that went away answered %v, want the one observation", observed)
 	}
 }
 
@@ -232,25 +234,25 @@ func TestASiblingForkLandingsPatchBranchMoveDoesNotConvict(t *testing.T) {
 	}
 	before := snap(map[string]string{"refs/heads/patch/pi": "p1"})
 	landed := snap(map[string]string{"refs/heads/patch/pi": "p2", "refs/tillr/landed/run-item-f-a1": "p2", "refs/tillr/runs/run-item-f-a1": "h1"})
-	if violations, err := CompareRun(before, landed); err != nil || len(violations) != 0 {
+	if violations, err := compareAll(before, landed); err != nil || len(violations) != 0 {
 		t.Fatalf("a sibling's fork landing convicted the run: %v %v", violations, err)
 	}
 	rogue := snap(map[string]string{"refs/heads/patch/pi": "p3", "refs/tillr/landed/run-item-f-a1": "p2"})
-	violations, err := CompareRun(before, rogue)
+	_, violations, err := CompareRunObserved(before, rogue)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(violations) != 1 || !strings.Contains(violations[0].Detail, "refs/heads/patch/pi") {
-		t.Fatalf("a patch branch moved to an unmarked commit answered %v, want the one ref violation", violations)
+		t.Fatalf("a patch branch moved to an unmarked commit answered %v, want the one ref observation", violations)
 	}
 	// A marker that was already there before the bracket opened is not this bracket's landing.
 	old := snap(map[string]string{"refs/heads/patch/pi": "p1", "refs/tillr/landed/run-item-f-a1": "p2"})
-	violations, err = CompareRun(old, snap(map[string]string{"refs/heads/patch/pi": "p2", "refs/tillr/landed/run-item-f-a1": "p2"}))
+	_, violations, err = CompareRunObserved(old, snap(map[string]string{"refs/heads/patch/pi": "p2", "refs/tillr/landed/run-item-f-a1": "p2"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(violations) != 1 {
-		t.Fatalf("a patch branch moved to a marker older than the bracket answered %v, want the one ref violation", violations)
+		t.Fatalf("a patch branch moved to a marker older than the bracket answered %v, want the one ref observation", violations)
 	}
 }
 
@@ -315,4 +317,11 @@ func TestAPinSurvivesTheStopsCancellation(t *testing.T) {
 	if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/run-item-a-a1"); got != head {
 		t.Fatalf("the pin is at %q, want %s", got, head)
 	}
+}
+
+// compareAll answers everything a run's bracket reports, convicted or only observed: an
+// excuse for the loop's own work must keep that work out of both.
+func compareAll(before, after *Boundary) ([]Violation, error) {
+	violations, observed, err := CompareRunObserved(before, after)
+	return append(violations, observed...), err
 }
