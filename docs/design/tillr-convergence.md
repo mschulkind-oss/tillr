@@ -282,6 +282,26 @@ measurement ran `python3 tests/fork-check.test.py` to exit 0 on that commit, so 
 belongs to the candidate. That test keeps its gate records under the shared git directory by
 design, which is not an edit outside the fence.
 
+A third attempt stopped for a different reason, and criterion c9 names it. In `build_repo()` of
+`tests/fork-check.test.py` the seed fixture is written directly above the line that makes the
+fixture a repository, and a patch recovered from an earlier attempt removed that line with the
+fixture. The fixture's `git add -A` and `git commit` then ran in a directory that was not a
+repository. The test's scratch was under the main checkout, so git walked up and committed the
+main checkout's staged index to the trunk: the commit of 2026-11-17 at 08:45 -0500 with the
+subject `initial`, authored `fork-check test <test@example.invalid>`. Measured on 2026-11-17 in
+a directory under the main checkout that holds no repository of its own:
+`git rev-parse --show-toplevel` prints the main checkout, and with `GIT_CEILING_DIRECTORIES`
+set to that directory's parent it fails with `not a git repository`.
+
+That commit is the owner's to keep or rewrite, and no worker on this item repairs, reverts or
+re-authors it. What it carried was a guard against this fault: helpers named `git_init` and
+`require_own_repo`, and a `GIT_CEILING_DIRECTORIES` setting on every fixture git command, in the
+same test file. A worker staged from a base that has those helpers keeps them, and one staged
+from a base without them does not add them, because the guard is not this item's work. The
+earlier attempts' patches to `tests/fork-check.test.py` were cut from a tree without the
+helpers, so that file's edit is made by hand against the file as the lane has it and is not
+applied from a recovered patch.
+
 <!-- tillr: item
      id="item-seed-retire"
      blocked_by=""
@@ -296,6 +316,7 @@ design, which is not an edit outside the fence.
 - **c5:** The board's unranked heading in `tools/tillr-view/web/src/components/QueueRail.tsx`, its tests and `tools/tillr-view/web/README.md` name `tillr item rank` as the command that records a priority, and no file under `tools/tillr-view/` outside test fixture item ids names `config/tillr/seed-items.json` or `tillr-item seed`.
 - **c6:** The change leaves this section of `docs/design/tillr-convergence.md` byte for byte as it was, from its heading to the next heading, and leaves every other item block's directive as it was, including the `blocked_by` of `item-oa-move-to-top` in `docs/design/observatory-actions.md`. The change does not mark this item built: the loop retires the block after landing. Outside this section the document may be brought up to date, which covers its `next` line, the two tables in Sections 1 and 2 and the rows for this ruling and for sync in the [Decision Ledger](#decision-ledger). A Markdown link in any tracked document to a file this change deletes becomes inline code naming the former path, and `uvx vantage-check` passes on each changed Markdown file, named one by one.
 - **c7:** No test fixture depends on the deleted seed. `commit()` in `tools/gate/checks/change_checks_test.py` stages only paths its fixture still writes, so it no longer names `config`, and a fixture that needs an unrelated tracked file puts it under a directory the fixture already tracks. `python3 tools/gate/checks/change_checks_test.py`, `python3 tools/gate/checks/tree_checks_test.py` and `python3 tests/tillr-docs.test.py` each exit 0, and so does `go test ./item -run '^TestSyncOverThisRepositorysDocuments$'` in `tools/tillr-item`.
+- **c9:** Removing the seed fixture from `tests/fork-check.test.py` removes no repository setup. In `build_repo()` the deletion ends at the call that writes `config/tillr/seed-items.json`, and the line after it that initializes the fixture repository, followed by `commit(repo, "initial")`, stays as the lane's base has it. Every call that initializes a fixture repository in that file before the change is there after it: `rg -c 'git_init\(|"git", "init"' tests/fork-check.test.py` prints the number that `git show HEAD:tests/fork-check.test.py | rg -c 'git_init\(|"git", "init"'` printed before the first edit. That count is taken and matches before `python3 tests/fork-check.test.py` is first run, and the report states both numbers.
 
 ### Re-admit a held item when an input it failed on changes
 
