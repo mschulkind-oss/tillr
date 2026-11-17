@@ -1164,6 +1164,7 @@ type itemData struct {
 	Item           itemDetail          `json:"item"`
 	Criteria       []criterionView     `json:"criteria"`
 	BlockedBy      []string            `json:"blocked_by"`
+	Unblocks       []string            `json:"unblocks"`
 	Decisions      []dispatchView      `json:"decisions"`
 	Attempts       []attemptView       `json:"attempts"`
 	Verdicts       []verdictView       `json:"verdicts"`
@@ -1264,6 +1265,26 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	edges, _ := readEdges(r, id)
 	for _, e := range edges {
 		out.BlockedBy = append(out.BlockedBy, e.BlockedBy)
+	}
+	out.Unblocks = []string{}
+	rows, edgeErr := r.Query(`SELECT item_id FROM item_edges WHERE blocked_by = ? ORDER BY item_id`, id)
+	if edgeErr != nil && !isMissingTable(edgeErr) {
+		return nil, unreadable(edgeErr)
+	}
+	if edgeErr == nil {
+		for rows.Next() {
+			var dependent string
+			if err := rows.Scan(&dependent); err != nil {
+				rows.Close()
+				return nil, unreadable(err)
+			}
+			out.Unblocks = append(out.Unblocks, dependent)
+		}
+		err := rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, unreadable(err)
+		}
 	}
 	dispatchRows, _ := readItemDispatches(r, id)
 	out.Decisions = dispatchViews(dispatchRows)
@@ -1841,7 +1862,7 @@ func (s *server) transcriptEntryPayload(r *store.Reader, req *http.Request) (any
 		return nil, failure(codeBadQuery, "%q is not an entry of this run's transcript: ask for the entry's seq, a non-negative integer",
 			req.PathValue("seq"))
 	}
-	page := s.obs.transcript(run, transcriptQuery{Entry: &seq, Untruncated: true, Limit: 1})
+	page := s.obs.transcript(run, transcriptQuery{Entry: &seq, EntryID: req.URL.Query().Get("identity"), Untruncated: true, Limit: 1})
 	if len(page.Entries) == 0 {
 		return nil, failure(codeEntryNotFound,
 			"run %q has no transcript entry %d: read /api/v1/runs/%s/transcript for the entries it does have",

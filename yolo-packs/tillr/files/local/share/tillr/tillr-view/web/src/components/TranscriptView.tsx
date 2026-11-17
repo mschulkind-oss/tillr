@@ -14,7 +14,8 @@
 // bootstrap as well as on the agent's tools. The pane says so instead of leaving the reader
 // to wonder why the `proc` source is named and its rows are nowhere.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
 
 import { EpistemicBadge } from "./EpistemicBadge";
 import { RefusalState, refusalCode } from "./RefusalState";
@@ -63,6 +64,13 @@ function duration(ms: number | undefined): string | null {
 }
 
 /** body is the text of an entry, whichever field its kind keeps it in. */
+function identity(entry: TranscriptEntry): string { return entry.id ?? `${entry.source}:${entry.seq}`; }
+function mergeEntries(previous: TranscriptEntry[], next: TranscriptEntry[]): TranscriptEntry[] {
+  const entries = new Map(previous.map(entry => [identity(entry), entry]));
+  for (const entry of next) entries.set(identity(entry), entry);
+  return [...entries.values()].sort((a,b) => (a.at_ms ?? 0) - (b.at_ms ?? 0) || a.seq - b.seq);
+}
+
 function body(entry: TranscriptEntry): string {
   if (entry.kind === "tool_call") return entry.tool?.arguments ?? "";
   return entry.text ?? "";
@@ -74,27 +82,27 @@ function isCollapsible(entry: TranscriptEntry): boolean {
   return body(entry).length > PREVIEW_BYTES;
 }
 
-function EntryBody({ text }: { text: string }) {
-  return <pre className="transcript__body">{text}</pre>;
+function EntryBody({ text, markdown = false }: { text: string; markdown?: boolean }) {
+  return markdown ? <div className="transcript__markdown"><Markdown>{text}</Markdown></div> : <pre className="transcript__body">{text}</pre>;
 }
 
 interface CallProps {
   entry: TranscriptEntry;
   result: TranscriptEntry | undefined;
-  /** A body the operator asked to see whole, keyed by sequence number. */
-  expanded: Record<number, TranscriptEntry>;
+  /** A body the operator asked to see whole, keyed by its source identity. */
+  expanded: Record<string, TranscriptEntry>;
   onExpand: (entry: TranscriptEntry) => void;
   /** True for a call the run recorded and never answered. */
   unanswered: boolean;
 }
 
 function ToolCallBlock({ entry, result, expanded, onExpand, unanswered }: CallProps) {
-  const whole = body(expanded[entry.seq] ?? entry);
-  const text = whole.length <= PREVIEW_BYTES ? whole : `${whole.slice(0, PREVIEW_BYTES)}…`;
+  const whole = body(expanded[identity(entry)] ?? entry);
+  const text = whole;
   const failed = result?.is_error === true || (result?.exit_code ?? 0) !== 0;
   return (
-    <article className={failed ? "transcript-entry transcript-entry--failed" : "transcript-entry"}>
-      <header className="transcript-entry__head">
+    <details className={failed ? "transcript-entry transcript-entry--failed" : "transcript-entry"}>
+      <summary className="transcript-entry__head">
         <span className="transcript-entry__kind">tool</span>
         <strong className="transcript-entry__name">{entry.tool?.name ?? "a tool"}</strong>
         <span className="transcript-entry__clock">{clock(entry.at_ms)}</span>
@@ -102,24 +110,24 @@ function ToolCallBlock({ entry, result, expanded, onExpand, unanswered }: CallPr
           <span className="transcript-entry__meta">{duration(result.duration_ms)}</span>
         ) : null}
         {failed ? <span className="transcript-entry__meta">failed</span> : null}
-      </header>
+        <span className="transcript-entry__command">{whole.split("\n")[0].slice(0, 120)}</span>
+      </summary>
       <pre className="transcript__body transcript__body--args">{text}</pre>
-      {entry.truncated && !expanded[entry.seq] ? (
+      {entry.truncated && !expanded[identity(entry)] ? (
         <button type="button" className="btn btn--tiny" onClick={() => onExpand(entry)}>
           read all {entry.bytes} bytes
         </button>
       ) : null}
       {unanswered ? (
         <p className="transcript__note">
-          the run recorded no result for this call — it ended, or was killed, before the tool
-          answered
+          no result recorded yet — the tool may still be running, or the run ended before it answered
         </p>
       ) : (
         <div className="transcript-entry__result">
           <span className="transcript-entry__kind">result</span>
           {result === undefined ? (
             <p className="transcript__note">this page does not hold the call&apos;s result</p>
-          ) : result.truncated && !expanded[result.seq] ? (
+          ) : result.truncated && !expanded[identity(result)] ? (
             <>
               <pre className="transcript__body">{`${(result.text ?? "").slice(0, PREVIEW_BYTES)}…`}</pre>
               <button type="button" className="btn btn--tiny" onClick={() => onExpand(result)}>
@@ -127,28 +135,44 @@ function ToolCallBlock({ entry, result, expanded, onExpand, unanswered }: CallPr
               </button>
             </>
           ) : (
-            <pre className="transcript__body">{body(expanded[result.seq] ?? result)}</pre>
+            <pre className="transcript__body">{body(expanded[identity(result)] ?? result)}</pre>
           )}
         </div>
       )}
-    </article>
+    </details>
   );
 }
 
-export function TranscriptView({ runId, transcript, error }: TranscriptViewProps) {
+export function TranscriptView(props: TranscriptViewProps) {
+  return <TranscriptSession key={props.runId} {...props} />;
+}
+
+function TranscriptSession({ runId, transcript, error }: TranscriptViewProps) {
   // The pages loaded before the tail, oldest first, and the cursor the next one is asked
   // for. `undefined` means "not asked yet": the tail's own before cursor is the first.
   const [earlier, setEarlier] = useState<TranscriptEntry[]>([]);
+  const [following, setFollowing] = useState(true);
+  const [visible, setVisible] = useState(transcript);
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (following && transcript) setVisible(previous => ({...transcript, entries: mergeEntries(previous?.entries ?? [], transcript.entries)}));
+  }, [following, transcript]);
+  useEffect(() => {
+    if (following && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [following, visible]);
+  const visibleIDs = new Set((visible?.entries ?? []).map(identity));
+  const newEntries = (transcript?.entries ?? []).filter(entry => !visibleIDs.has(identity(entry))).length;
   const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   // A page or an expansion the server refused keeps the failure, not only its message:
   // the code is the fact the pane prints (`RefusalState`), and a string would lose it.
   const [pageError, setPageError] = useState<Error | null>(null);
-  const [expanded, setExpanded] = useState<Record<number, TranscriptEntry>>({});
+  const [expanded, setExpanded] = useState<Record<string, TranscriptEntry>>({});
 
-  const before = cursor === undefined ? (transcript?.before ?? null) : cursor;
+  const before = cursor === undefined ? (visible?.before ?? null) : cursor;
   const loadEarlier = useCallback(async () => {
     if (runId === null || before === null) return;
+    setFollowing(false);
     setLoading(true);
     setPageError(null);
     try {
@@ -166,9 +190,10 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
     async (entry: TranscriptEntry) => {
       if (runId === null) return;
       try {
-        const answer = await fetchRunTranscriptEntry(runId, entry.seq);
+        const answer = await fetchRunTranscriptEntry(runId, entry.seq, undefined, entry.id);
         const whole = answer.data.entries[0];
-        if (whole) setExpanded((previous) => ({ ...previous, [entry.seq]: whole }));
+        if (whole && identity(whole) === identity(entry)) setExpanded((previous) => ({ ...previous, [identity(entry)]: whole }));
+        else throw new Error("The transcript expansion did not return the requested identity.");
       } catch (failure) {
         setPageError(failure instanceof Error ? failure : new Error(String(failure)));
       }
@@ -177,8 +202,10 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
   );
 
   const entries = useMemo(
-    () => [...earlier, ...(transcript?.entries ?? [])],
-    [earlier, transcript],
+    () => {
+      return mergeEntries(earlier, visible?.entries ?? []);
+    },
+    [earlier, visible],
   );
 
   // The results are drawn under their calls, so a result is looked up rather than repeated:
@@ -251,6 +278,12 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
           sentences={TRANSCRIPT_REFUSALS}
         />
       ) : null}
+      <button type="button" className="btn btn--tiny" onClick={() => setFollowing(value => !value)} aria-pressed={following}>{following ? "Following" : "Follow paused"}</button>
+      {!following ? <button type="button" className="btn btn--tiny" onClick={() => setFollowing(true)}>{newEntries} new entries · resume follow</button> : null}
+      <div className="transcript__entries" ref={scroller} onScroll={event => {
+        const pane = event.currentTarget;
+        if (pane.scrollHeight - pane.scrollTop - pane.clientHeight > 32) setFollowing(false);
+      }}>
       {entries.length === 0 ? (
         <p className="empty">the run recorded no entry this pane can read</p>
       ) : null}
@@ -259,7 +292,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
           // drawn under its call; a result whose call is on a page not loaded stands alone
           if (entry.tool_call_id && answered.has(entry.tool_call_id)) return null;
           return (
-            <article key={entry.seq} className="transcript-entry">
+            <article key={identity(entry)} className="transcript-entry">
               <header className="transcript-entry__head">
                 <span className="transcript-entry__kind">result</span>
                 <strong className="transcript-entry__name">{entry.role ?? "a tool"}</strong>
@@ -272,7 +305,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
         if (entry.kind === "tool_call") {
           return (
             <ToolCallBlock
-              key={entry.seq}
+              key={identity(entry)}
               entry={entry}
               result={entry.tool_call_id ? results.get(entry.tool_call_id) : undefined}
               expanded={expanded}
@@ -283,7 +316,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
         }
         if (entry.kind === "proc") {
           return (
-            <article key={entry.seq} className="transcript-proc">
+            <article key={identity(entry)} className="transcript-proc">
               <span className="transcript-proc__clock">{clock(entry.at_ms)}</span>
               <code className="transcript-proc__cmd">{entry.text}</code>
               {entry.exit_code !== undefined ? (
@@ -296,7 +329,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
         }
         if (entry.kind === "notice" || entry.kind === "step") {
           return (
-            <article key={entry.seq} className="transcript-notice">
+            <article key={identity(entry)} className="transcript-notice">
               <span className="transcript-entry__kind">{entry.kind}</span>
               <span>{entry.text}</span>
               <span className="transcript-entry__clock">{clock(entry.at_ms)}</span>
@@ -307,7 +340,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
         const collapsible = isCollapsible(entry);
         return (
           <article
-            key={entry.seq}
+            key={identity(entry)}
             className={
               entry.kind === "thinking"
                 ? "transcript-entry transcript-entry--thinking"
@@ -322,9 +355,9 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
                 <EpistemicBadge state={entry.epistemic_state} />
               ) : null}
             </header>
-            {collapsible && !expanded[entry.seq] && !entry.truncated ? (
+            {collapsible && !expanded[identity(entry)] && !entry.truncated ? (
               <>
-                <EntryBody text={`${body(entry).slice(0, PREVIEW_BYTES)}…`} />
+                <EntryBody text={`${body(entry).slice(0, PREVIEW_BYTES)}…`} markdown={entry.role === "assistant" && entry.kind === "message"} />
                 <button
                   type="button"
                   className="btn btn--tiny"
@@ -334,9 +367,9 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
                 </button>
               </>
             ) : (
-              <EntryBody text={body(expanded[entry.seq] ?? entry)} />
+              <EntryBody text={body(expanded[identity(entry)] ?? entry)} markdown={entry.role === "assistant" && entry.kind === "message"} />
             )}
-            {entry.truncated && !expanded[entry.seq] ? (
+            {entry.truncated && !expanded[identity(entry)] ? (
               <button type="button" className="btn btn--tiny" onClick={() => void expand(entry)}>
                 read all {entry.bytes} bytes
               </button>
@@ -344,6 +377,7 @@ export function TranscriptView({ runId, transcript, error }: TranscriptViewProps
           </article>
         );
       })}
+      </div>
       <p className="transcript__note">
         The shim&apos;s record of every shell command is read and not listed: a shell command is
         not a message. It becomes the transcript when the agent&apos;s own stream is missing.

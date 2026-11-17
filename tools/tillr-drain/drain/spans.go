@@ -44,15 +44,19 @@ type StepSpan struct {
 // invocation, in the order the steps finished. The run's directory is created if the adapter
 // has not written a record there yet.
 func appendStepSpan(root, runID string, span StepSpan) error {
+	return appendRunLine(root, runID, StepsFile, span)
+}
+
+func appendRunLine(root, runID, name string, value any) error {
 	dir := RunDir(root, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Externalf("creating the run's record directory %s: %v", dir, err)
 	}
-	line, err := json.Marshal(span)
+	line, err := json.Marshal(value)
 	if err != nil {
 		return Internalf("encoding the step span for %s: %v", runID, err)
 	}
-	path := filepath.Join(dir, StepsFile)
+	path := filepath.Join(dir, name)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return Externalf("opening the run's step file %s: %v", path, err)

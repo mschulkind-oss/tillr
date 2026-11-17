@@ -177,6 +177,12 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return run.Record{}, "", Externalf("creating run error output: %v", err)
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	observation, observeErr := pipelineStart(s.Root, req.RunID, "graph")
+	if observeErr != nil {
+		stdout.Close()
+		stderr.Close()
+		return run.Record{}, "", observeErr
+	}
 	started := time.Now().UnixMilli()
 	err = s.startRunFace(cmd, req)
 	stdout.Close()
@@ -191,6 +197,9 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 			// output files and terminal bookkeeping for the replacement.
 			return run.Record{}, "", ctx.Err()
 		}
+	}
+	if observeErr := pipelineFinish(s.Root, req.RunID, observation); observeErr != nil {
+		return run.Record{}, "", observeErr
 	}
 	diagnostic, readErr := runOutputTail(dir)
 	if readErr != nil {
@@ -471,9 +480,22 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	cmd.Dir = dir
 	var stderr stderrTail
 	cmd.Stderr = &stderr
+	var observation pipelineObservation
+	if step == "gate" || step == "land" {
+		var err error
+		observation, err = pipelineStart(s.Root, candidate.RunID, step)
+		if err != nil {
+			return 0, "", StepSpan{}, err
+		}
+	}
 	started := time.Now().UnixMilli()
 	out, err := cmd.Output()
 	span := stepSpan(step, cmd.Args, cmd, started, stderr.String())
+	if observation.Step != "" {
+		if err := pipelineFinish(s.Root, candidate.RunID, observation); err != nil {
+			return 0, "", span, err
+		}
+	}
 	if spanErr := s.recordStep(candidate.RunID, span); spanErr != nil {
 		return 0, "", span, spanErr
 	}

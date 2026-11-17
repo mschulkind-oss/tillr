@@ -36,6 +36,9 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 		t.Fatal("test must use an unbounded run")
 	}
 	deadOwnerClaim(t, f, l, p)
+	if _, err := pipelineStart(f.root, p.decision.RunRequest.RunID, "graph"); err != nil {
+		t.Fatal(err)
+	}
 	next := f.loop(t, &recordingSteps{}, &itemContentStager{})
 	settlement := mustPlan(t, next)[0].decision
 	if settlement.Action != ActionSettle {
@@ -70,6 +73,10 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	raw, readErr := os.ReadFile(filepath.Join(RunDir(f.root, p.decision.RunRequest.RunID), "pipeline.jsonl"))
+	if readErr != nil || strings.Count(string(raw), "\n") != 2 || strings.Count(string(raw), `"finished_at_ms":null`) != 1 {
+		t.Fatalf("replacement did not close open graph: %s %v", raw, readErr)
 	}
 	var measured LoopResult
 	if err := next.snapshotSpend(&measured); err != nil {

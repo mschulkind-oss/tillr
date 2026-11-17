@@ -195,7 +195,22 @@ export interface ItemView {
   open_criteria?: number | null;
 }
 
+export interface PipelineStep {
+  step: string;
+  started_at_ms: number;
+  finished_at_ms: number | null;
+}
+export interface LaneHistoryRun {
+  run_id: string; item_id: string; lane_id: string; state: string;
+  started_at_ms: number; finished_at_ms: number;
+}
+export interface LaneNode { node_id: string; run_id: string; attempt: number; state: "running" | "passed" | "failed" | "skipped" }
 export interface LaneRow {
+  nodes?: LaneNode[] | null;
+  workflow_ref?: string;
+  pipeline?: PipelineStep[] | null;
+  pipeline_note?: string;
+  history?: LaneHistoryRun[] | null;
   usage?: UsageSum;
   lane_id: string;
   state: "idle" | "running" | "settling";
@@ -493,6 +508,7 @@ export interface ItemData {
   closed_blockers: string[];
   criteria: CriterionView[];
   blocked_by: string[];
+  unblocks?: string[];
   decisions: DispatchView[];
   attempts: AttemptView[];
   runs: ItemRunView[];
@@ -669,6 +685,8 @@ export interface ToolCallView {
  * `step`, `message`, `thinking`, `tool_call`, `tool_result`, `proc` and `notice`; a
  * `tool_result` answers the `tool_call` its `tool_call_id` names. */
 export interface TranscriptEntry {
+  /** Source, byte offset and entry position; independent of chronological sequence. */
+  id?: string;
   seq: number;
   source: string;
   kind: string;

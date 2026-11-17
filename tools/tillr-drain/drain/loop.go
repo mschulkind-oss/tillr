@@ -1128,7 +1128,14 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 		}
 		if err == nil {
+			observation, observeErr := pipelineStart(l.cfg.Root, spec.RunID, "stage")
+			if observeErr != nil {
+				return nil, observeErr
+			}
 			err = l.cfg.Stage.Stage(ctx, spec)
+			if observeErr := pipelineFinish(l.cfg.Root, spec.RunID, observation); observeErr != nil {
+				return nil, observeErr
+			}
 		}
 		if err == nil {
 			err = l.compactDesigner(ctx, decision)
@@ -1319,6 +1326,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// the continuing session until it answers. Keep pending work running.
 		prepared = true
 		return laneOutcome{}
+	}
+	if err := pipelineCloseGraph(l.cfg.Root, record.RunID); err != nil {
+		return laneOutcome{err: err}
 	}
 	if failed, err := failedDesignerResume(decision, record); err != nil {
 		return laneOutcome{err: err}

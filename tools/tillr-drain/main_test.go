@@ -478,7 +478,33 @@ func TestPlanHoldsAnItemBlockedByAnUnlandedItem(t *testing.T) {
 			itemRecord("item_007", "landed"),
 			itemRecord("item_042", "in-queue", "item_007"),
 		)
-		got := decisionFor(t, plan(t, storePath, tickPath), "item_042")
+		// A landed state is not proof that a shared repository's green pointer
+		// contains this fixture's blocker. Supply its landing and proof in an
+		// isolated repository instead of borrowing the live checkout's refs.
+		root := fixtureRepo(t)
+		git(t, root, "init", "-q", "-b", "main")
+		git(t, root, "commit", "--allow-empty", "-qm", "proved blocker landing")
+		landed := git(t, root, "rev-parse", "HEAD")
+		git(t, root, "update-ref", drain.GreenRef, landed)
+		s, err := store.Open(context.Background(), storePath, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			if _, err := tx.Exec(`CREATE TABLE landings(item_id TEXT, trunk_after TEXT, result TEXT, event_seq INTEGER)`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`INSERT INTO landings VALUES('item_007', ?, 'landed', 1)`, landed)
+			return err
+		})
+		closeErr := s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		got := decisionFor(t, planFrom(t, storePath, tickPath, root, indexStub(t)), "item_042")
 		if got.Action != drain.ActionDispatch {
 			t.Fatalf("the decision is %q / %q, want dispatch", got.Action, got.Reason)
 		}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { DesignsPage } from "./components/Designers";
-import { LaneStrip } from "./components/LaneStrip";
+import { LanePage } from "./components/LanePage";
 import { Home } from "./components/Home";
 import { ItemsView, PassesView } from "./components/ItemsPasses";
 import { ItemPage, RunPage } from "./components/ItemRunPages";
@@ -55,14 +55,14 @@ export function App() {
   const passHistory = usePassHistoryQuery(range, historyPages, passesOpen, paused);
   const waiting = useWaitingQuery(home || items, paused), questions = useQuestionsQuery(questionsOpen, paused);
   const designs = useDesignsQuery(designsOpen, paused);
-  const lanes = useLanesQuery(home || kind === "lane", paused);
+  const lanes = useLanesQuery(home || kind === "lane", paused, kind === "lane");
   const trunk = useTrunkRoute();
   const { refresh } = useRefreshAll();
   const onPause = () => { setPaused(!paused); if (paused) refresh(); };
   let screen;
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
   else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
-  else if (kind === "lane" && id) screen = <main className="entity-page" aria-label="Lane page"><h1>Lane <EntityLink kind="lane" id={id} /></h1>{lanes.data && !lanes.data.data.some(row => row.lane_id === id) ? <p role="alert">Lane {id} is not recorded.</p> : <LaneStrip lanes={lanes.data?.data.filter(row => row.lane_id === id)} error={lanes.error} />}</main>;
+  else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} />;
   else if (passesOpen) screen = <PassesView passes={passHistory.data?.data.rows} error={passHistory.error} more={passHistory.data?.data.more} loadingOlder={passHistory.isFetching} onOlder={() => setHistoryPages(value => value + 1)} />;

@@ -100,30 +100,29 @@ func runLogPath(laneRoot, laneID, runID string) string {
 	return filepath.Join(laneRoot, laneID, runID+".log")
 }
 
-// transcriptCursor is where a page resumes: one byte offset per source (the start of the
-// first line not yet emitted), and the sequence number of the next entry. The offsets are
-// the resume point rather than a time, because a source is append-only and a clock repeats.
-//
-// A cursor is produced by a walk of the same sources it resumes, so resuming is exact: the
-// offsets are the line boundaries a page stopped at, and the sequence number continues the
-// numbering rather than restarting it.
+// transcriptCursor resumes each append-only source at a byte offset and an entry index
+// within that value. Seq continues display numbering; it is not a record identity.
+// Boundary names the first entry excluded by a backward page, so newly merged records
+// cannot move that boundary. Forward cursors leave Boundary empty.
 type transcriptCursor struct {
-	Log   int64
-	Steps int64
-	Proc  int64
-	Seq   int
+	Log                             int64
+	Steps                           int64
+	Proc                            int64
+	Seq                             int
+	LogIndex, StepsIndex, ProcIndex int
+	Boundary                        string
 }
 
 // encode spells a cursor as one opaque token. It is opaque on purpose: a client that built
 // one from parts would be a second implementation of the resume rule.
 func (c transcriptCursor) encode() string {
-	raw := fmt.Sprintf("%d:%d:%d:%d", c.Log, c.Steps, c.Proc, c.Seq)
+	raw := fmt.Sprintf("2:%d:%d:%d:%d:%d:%d:%d:%s", c.Log, c.Steps, c.Proc, c.Seq, c.LogIndex, c.StepsIndex, c.ProcIndex, c.Boundary)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 // atHead answers whether this cursor is the run's own first page.
 func (c transcriptCursor) atHead() bool {
-	return c.Log == 0 && c.Steps == 0 && c.Proc == 0 && c.Seq == 0
+	return c.Log == 0 && c.Steps == 0 && c.Proc == 0 && c.Seq == 0 && c.LogIndex == 0 && c.StepsIndex == 0 && c.ProcIndex == 0
 }
 
 // decodeTranscriptCursor reads a token this face issued. A token that is not one is a
@@ -133,11 +132,28 @@ func decodeTranscriptCursor(token string) (transcriptCursor, bool) {
 	if err != nil {
 		return transcriptCursor{}, false
 	}
-	parts := strings.Split(string(raw), ":")
-	if len(parts) != 4 {
+	parts := strings.SplitN(string(raw), ":", 9)
+	boundary := ""
+	modern := len(parts) == 9 && parts[0] == "2"
+	if modern {
+		boundary = parts[8]
+		parts = parts[1:8]
+		if boundary != "" {
+			identity := strings.Split(boundary, ":")
+			if len(identity) != 3 || (identity[0] != transcriptSourceLog && identity[0] != transcriptSourceSteps && identity[0] != transcriptSourceProc) {
+				return transcriptCursor{}, false
+			}
+			for _, part := range identity[1:] {
+				n, err := strconv.ParseInt(part, 10, 64)
+				if err != nil || n < 0 {
+					return transcriptCursor{}, false
+				}
+			}
+		}
+	} else if len(parts) != 4 {
 		return transcriptCursor{}, false
 	}
-	values := make([]int64, 4)
+	values := make([]int64, len(parts))
 	for i, part := range parts {
 		n, err := strconv.ParseInt(part, 10, 64)
 		if err != nil || n < 0 {
@@ -145,7 +161,11 @@ func decodeTranscriptCursor(token string) (transcriptCursor, bool) {
 		}
 		values[i] = n
 	}
-	return transcriptCursor{Log: values[0], Steps: values[1], Proc: values[2], Seq: int(values[3])}, true
+	cursor := transcriptCursor{Log: values[0], Steps: values[1], Proc: values[2], Seq: int(values[3]), Boundary: boundary}
+	if modern {
+		cursor.LogIndex, cursor.StepsIndex, cursor.ProcIndex = int(values[4]), int(values[5]), int(values[6])
+	}
+	return cursor, true
 }
 
 // toolCallView is one tool call as the transcript carries it: the arguments the model
@@ -159,6 +179,7 @@ type toolCallView struct {
 // transcriptEntry is one line of the transcript. Every field is nullable where the record
 // can be missing one: an entry with no clock says null rather than 1970.
 type transcriptEntry struct {
+	ID     string `json:"id"`
 	Seq    int    `json:"seq"`
 	Source string `json:"source"`
 	Kind   string `json:"kind"`
@@ -219,6 +240,7 @@ type transcriptQuery struct {
 	Before      *transcriptCursor
 	After       *transcriptCursor
 	Entry       *int
+	EntryID     string
 	Untruncated bool
 }
 
@@ -229,6 +251,7 @@ type jsonStream struct {
 	file   *os.File
 	dec    *json.Decoder
 	offset int64
+	base   int64
 }
 
 func openJSONStream(path string, offset int64) (*jsonStream, error) {
@@ -244,6 +267,7 @@ func openJSONStream(path string, offset int64) (*jsonStream, error) {
 		file:   file,
 		dec:    json.NewDecoder(bufio.NewReaderSize(file, 1<<16)),
 		offset: offset,
+		base:   offset,
 	}, nil
 }
 
@@ -265,13 +289,13 @@ func (s *jsonStream) next() (json.RawMessage, int64, error) {
 		}
 		return nil, s.offset, err
 	}
-	s.offset = s.dec.InputOffset()
+	s.offset = s.base + s.dec.InputOffset()
 	return raw, s.offset, nil
 }
 
 // transcriptLine is one line of a source and the entries it produced, in order. A line is
-// held until every one of its entries has been emitted, because the cursor that resumes a
-// page has to be a line boundary: a page cut inside a line would lose that line's tail.
+// held until every entry has been emitted. A cursor cut inside this value carries its
+// next entry index as well as the value's byte offset.
 type transcriptLine struct {
 	start, end int64
 	clock      int64
@@ -291,7 +315,8 @@ type transcriptSource struct {
 	stream *jsonStream
 	// offset is the byte offset of the next line to read, and the resume point a page
 	// records when this source has nothing held.
-	offset int64
+	offset      int64
+	resumeIndex int
 	// held is the line whose entries are being emitted.
 	held *transcriptLine
 	// clock is the last clock this source recorded; a line without one inherits it.
@@ -324,6 +349,10 @@ func (s *transcriptSource) advance() bool {
 			continue
 		}
 		s.held = s.parse(raw, s.offset, end)
+		if s.resumeIndex != 0 {
+			s.held.next = s.resumeIndex
+			s.resumeIndex = 0
+		}
 	}
 }
 
@@ -774,6 +803,7 @@ type transcriptWalk struct {
 	// Both include the entry that reaches them and exclude what comes after.
 	stopAt  *transcriptCursor
 	stopSeq *int
+	stopID  string
 	// untruncated leaves every body whole, which only the single-entry route asks for.
 	untruncated bool
 	// shimRows answers whether the shim's subprocess rows are entries. They are only when
@@ -800,28 +830,21 @@ func (w *transcriptWalk) pick() *transcriptSource {
 	return best
 }
 
-// cursor is the resume point once the entry from `source` at `offset` has been emitted.
-// Every other source contributes the start of the line it is holding, because that line's
-// entries have not been emitted: resuming there re-reads the line, not the whole file.
-func (w *transcriptWalk) cursor(source *transcriptSource, offset int64, seq int) transcriptCursor {
+// cursor captures the next unconsumed entry of every source, including held values.
+func (w *transcriptWalk) cursor(seq int) transcriptCursor {
 	out := transcriptCursor{Seq: seq}
-	for _, other := range w.sources {
-		var at int64
-		switch {
-		case other == source:
-			at = offset
-		case other.held != nil:
-			at = other.held.start
-		default:
-			at = other.offset
+	for _, source := range w.sources {
+		at, index := source.offset, 0
+		if source.held != nil {
+			at, index = source.held.start, source.held.next
 		}
-		switch other.name {
+		switch source.name {
 		case transcriptSourceLog:
-			out.Log = at
+			out.Log, out.LogIndex = at, index
 		case transcriptSourceSteps:
-			out.Steps = at
+			out.Steps, out.StepsIndex = at, index
 		case transcriptSourceProc:
-			out.Proc = at
+			out.Proc, out.ProcIndex = at, index
 		}
 	}
 	return out
@@ -833,6 +856,7 @@ func (w *transcriptWalk) take(source *transcriptSource) (transcriptEntry, transc
 	line := source.held
 	entry := line.entries[line.next]
 	entry.Seq = w.seq
+	entry.ID = fmt.Sprintf("%s:%d:%d", source.name, line.start, line.next)
 	entry.start = w.prev
 	if !w.untruncated {
 		if len(entry.Text) > transcriptEntryBytes {
@@ -846,14 +870,12 @@ func (w *transcriptWalk) take(source *transcriptSource) (transcriptEntry, transc
 	}
 	line.next++
 	last := line.next >= len(line.entries)
-	offset := line.start
 	if last {
-		offset = line.end
 		source.offset = line.end
 		source.held = nil
 	}
 	w.seq++
-	after := w.cursor(source, offset, w.seq)
+	after := w.cursor(w.seq)
 	entry.end = after
 	w.prev = after
 	return entry, after
@@ -879,12 +901,20 @@ func (w *transcriptWalk) run() transcriptPage {
 		// The cursor a page was cut at is a point the walk passes through, and the walk passes
 		// through positions no entry has an end for — a skipped shim row's end among them. The
 		// check is here, at the top, so every step of the walk can reach it.
-		if w.stopAt != nil && w.prev == *w.stopAt {
+		if w.stopAt != nil && w.stopAt.Boundary == "" && w.prev == *w.stopAt {
 			page.hasMore = true
 			break
 		}
 		source := w.pick()
 		if source == nil {
+			// A missing backward anchor is not permission to return the tail.
+			if w.stopAt != nil && w.stopAt.Boundary != "" {
+				kept = nil
+			}
+			break
+		}
+		if w.stopAt != nil && w.stopAt.Boundary == fmt.Sprintf("%s:%d:%d", source.name, source.held.start, source.held.next) {
+			page.hasMore = true
 			break
 		}
 		entry, after := w.take(source)
@@ -897,7 +927,7 @@ func (w *transcriptWalk) run() transcriptPage {
 		kept = append(kept, entry)
 		body += len(entry.Text)
 		page.cursor = after
-		if w.stopSeq != nil && entry.Seq == *w.stopSeq {
+		if (w.stopID != "" && entry.ID == w.stopID) || (w.stopID == "" && w.stopSeq != nil && entry.Seq == *w.stopSeq) {
 			// the single-entry page is the entry itself, not the walk up to it
 			page.hasMore = true
 			kept = kept[len(kept)-1:]
@@ -916,9 +946,13 @@ func (w *transcriptWalk) run() transcriptPage {
 	}
 	if w.keepLast && len(kept) > 0 {
 		start := kept[0].start
+		start.Boundary = kept[0].ID
 		if !start.atHead() {
 			page.before = &start
 		}
+	}
+	if w.stopID != "" && (len(kept) != 1 || kept[0].ID != w.stopID) {
+		kept = nil
 	}
 	page.entries = kept
 	return page
@@ -952,6 +986,10 @@ func (obs *observations) transcript(run storeRun, query transcriptQuery) transcr
 	walk.untruncated = query.Untruncated
 	walk.shimRows = state != stateObserved
 	switch {
+	case query.EntryID != "":
+		walk.stopID = query.EntryID
+		walk.keepLast = true
+		walk.limit = 1
 	case query.Entry != nil:
 		// one entry, answered whole: the walk stops at its sequence number and keeps only
 		// that entry, because the page is the entry and not the road to it
@@ -987,14 +1025,17 @@ func (obs *observations) openTranscript(run storeRun, start transcriptCursor) (*
 		name   string
 		path   string
 		offset int64
+		index  int
 	}{
-		{transcriptSourceSteps, filepath.Join(runDir, "steps.jsonl"), start.Steps},
-		{transcriptSourceLog, runLogPath(obs.laneRoot, run.LaneID, run.RunID), start.Log},
-		{transcriptSourceProc, filepath.Join(runDir, "proc-exec.jsonl"), start.Proc},
+		{transcriptSourceSteps, filepath.Join(runDir, "steps.jsonl"), start.Steps, start.StepsIndex},
+		{transcriptSourceLog, runLogPath(obs.laneRoot, run.LaneID, run.RunID), start.Log, start.LogIndex},
+		{transcriptSourceProc, filepath.Join(runDir, "proc-exec.jsonl"), start.Proc, start.ProcIndex},
 	}
 	sources := make([]*transcriptSource, 0, len(paths))
 	for _, p := range paths {
-		sources = append(sources, openTranscriptSource(p.name, p.path, p.offset))
+		source := openTranscriptSource(p.name, p.path, p.offset)
+		source.resumeIndex = p.index
+		sources = append(sources, source)
 	}
 	walk := &transcriptWalk{sources: sources}
 

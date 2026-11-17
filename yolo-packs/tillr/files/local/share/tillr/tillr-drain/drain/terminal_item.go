@@ -136,6 +136,9 @@ func terminalSettlement(r *store.Reader, work *pendingWork, at time.Time) (Decis
 func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found *itemTerminalError) error {
 	d := work.Decision
 	runID := d.RunRequest.RunID
+	if err := pipelineCloseGraph(l.cfg.Root, runID); err != nil {
+		return err
+	}
 	head := ""
 	if work.Candidate != nil {
 		head = work.Candidate.HeadSHA
