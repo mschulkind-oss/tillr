@@ -1,12 +1,12 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +38,7 @@ const (
 	ResultPass        = "pass"
 	ResultFail        = "fail"
 	ResultError       = "error"
+	ResultStalled     = "stalled"
 	// ResultOverBudget means a fast tree check must be judged by the heavy run.
 	// It is neither a pass that can be remembered nor a candidate failure.
 	ResultOverBudget = "over-budget"
@@ -59,73 +60,35 @@ type VerdictCheck struct {
 	CheckID     string `json:"check_id"`
 	Result      string `json:"result"`
 	DurationMS  int64  `json:"duration_ms"`
-	// OverBudgetMS is how far a fast check ran past its `budget_ms` and still answered
-	// before its ceiling. Its result is its verdict; the overrun is a defect against the
-	// check's declared cost, not a statement about the candidate (design §6.5).
-	OverBudgetMS int64  `json:"over_budget_ms,omitempty"`
-	LogRef       string `json:"log_ref"`
+	// Targets are measurements, never kill deadlines.
+	BudgetMS            int    `json:"budget_ms,omitempty"`
+	OverBudgetMS        int64  `json:"over_budget_ms,omitempty"`
+	StartUnixNano       int64  `json:"start_unix_nano,omitempty"`
+	EndUnixNano         int64  `json:"end_unix_nano,omitempty"`
+	LastOutputLine      string `json:"last_output_line,omitempty"`
+	CPUTimeMS           int64  `json:"cpu_time_ms"`
+	SilentSamples       int    `json:"silent_samples,omitempty"`
+	WatchdogUnavailable string `json:"watchdog_unavailable,omitempty"`
+	LogRef              string `json:"log_ref"`
 }
 
 // FastTierCapMS is the fast tier's admission cap: the sum of every fast `budget_ms` may
 // not exceed it. `tools/gate/checks/gate-budget.py` declares the same number as LIMIT_MS,
-// and TestTheTierCapIsTheAdmissionTestsLimit fails when the two disagree. It is also the
-// most a fast check's ceiling can be: a check still running when it alone has taken the
-// whole tier's allowance is stopped, with no verdict.
+// and TestTheTierCapIsTheAdmissionTestsLimit fails when the two disagree.
+// It is only an arithmetic admission cap, never an execution deadline.
 const FastTierCapMS = 9000
 
-// Tree overrun policies: what a fast tree check that is still running at its budget
-// becomes. The caller chooses (`--tree-overrun` on the run and checks faces).
-const (
-	// TreeOverrunKeep runs it on to its ceiling and keeps its verdict, as every fast
-	// change check is run. It is the default, because nothing yet takes a carried check.
-	TreeOverrunKeep = "keep"
-	// TreeOverrunCarry stops it at its budget and records it over-budget, its judgment
-	// deferred to the heavy tier. That is design §6.5's carrying, and it is sound only
-	// once a heavy runner exists to judge what is carried (`item-gate-heavy-runner`).
-	TreeOverrunCarry = "carry"
-)
+const TreeOverrunKeep = "keep"
 
-// RunOptions are the caller's choices for a plan-driven run. The zero value is the safe
-// behavior today.
-type RunOptions struct {
-	// CarryTreeOverruns stops a fast tree check at its budget and defers it to the heavy
-	// tier (TreeOverrunCarry). Off, it runs to its ceiling and keeps its verdict.
-	CarryTreeOverruns bool
-}
+// RunOptions supplies observation sources. Nil uses the real clock and CPU sampler.
+type RunOptions struct{ watchdog *watchSources }
 
-// treeOverrunFlag parses `--tree-overrun`.
+// Carrying at a budget would drop a working check's judgment. Refuse it explicitly.
 func treeOverrunFlag(value string) (RunOptions, error) {
-	switch value {
-	case TreeOverrunKeep:
+	if value == TreeOverrunKeep {
 		return RunOptions{}, nil
-	case TreeOverrunCarry:
-		return RunOptions{CarryTreeOverruns: true}, nil
 	}
-	return RunOptions{}, usagef("--tree-overrun must be %q or %q, not %q", TreeOverrunKeep, TreeOverrunCarry, value)
-}
-
-// fastCeilingMS is where a fast check that ran past its budget is finally stopped, with
-// no verdict. Its budget is not that point: stopping a check that would have answered
-// turns machine load into "could not judge" for the item. It runs on to its declared
-// `timeout_ms`, or to the tier cap when it declares none -- clamped to [budget_ms,
-// FastTierCapMS], so no declaration gives a fast check a ceiling above the whole tier's
-// allowance or below its own budget.
-func fastCeilingMS(check PlanCheck) int {
-	ceiling := FastTierCapMS
-	if check.TimeoutMS > 0 && check.TimeoutMS < ceiling {
-		ceiling = check.TimeoutMS
-	}
-	if ceiling < check.BudgetMS {
-		ceiling = check.BudgetMS
-	}
-	return ceiling
-}
-
-// carried reports whether a check is stopped at its budget and deferred rather than run
-// to its ceiling: only a fast tree check, and only when the caller carries tree overruns.
-// A change check is never carried -- nothing after the merge has its base.
-func carried(check PlanCheck) bool {
-	return check.Tier == "fast" && check.Scope == "tree" && check.carryOverrun
+	return RunOptions{}, usagef("--tree-overrun must be %q; stopping at a budget is not supported", TreeOverrunKeep)
 }
 
 // VerdictPayload is the `gate.verdict` payload: design §5.7's field list, verbatim.
@@ -204,7 +167,7 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 	}
 	var failure error
 	for index, check := range plan.Checks {
-		check.carryOverrun = options.CarryTreeOverruns
+		check.watchdog = options.watchdog
 		outcome, memoryErr := memory.run(check, root, logs, index)
 		if memoryErr != nil {
 			outcome.Result = ResultError
@@ -212,8 +175,16 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 				failure = externalf("tree check %q result memory: %v", check.CheckID, memoryErr)
 			}
 		}
+		outcome.BudgetMS = checkTargetMS(check)
 		verdict.Checks = append(verdict.Checks, outcome)
 		switch outcome.Result {
+		case ResultStalled:
+			if verdict.Result != ResultError {
+				verdict.Result = ResultStalled
+			}
+			if failure == nil || exitCode(failure) != record.ExitExternal {
+				failure = &exitError{code: ExitStalled, err: fmt.Errorf("%s", stallNote(outcome))}
+			}
 		case ResultError:
 			verdict.Result = ResultError
 			if failure == nil || exitCode(failure) != record.ExitExternal {
@@ -306,66 +277,50 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	defer logFile.Close()
 	outcome.LogRef = logPath
 
-	ctx := context.Background()
-	deadlineMS := check.TimeoutMS
-	if check.Tier == "fast" {
-		if check.BudgetMS <= 0 {
-			fmt.Fprintln(logFile, "fast check requires a positive budget_ms; no verdict")
-			return outcome
-		}
-		deadlineMS = fastCeilingMS(check)
-		if carried(check) {
-			deadlineMS = check.BudgetMS
-		}
+	if check.Tier == "fast" && check.BudgetMS <= 0 {
+		fmt.Fprintln(logFile, "fast check requires a positive budget_ms; no verdict")
+		return outcome
 	}
-	if deadlineMS > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(deadlineMS)*time.Millisecond)
-		defer cancel()
-	}
-	cmd := exec.CommandContext(ctx, check.Command[0], check.Command[1:]...)
+	sources := sourcesFor(check)
+	cmd := sources.Command(check.Command)
 	cmd.Dir = root
 	cmd.Env = checkEnv(check)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	// The child leads its own process group and the bound kills the group: a bound that
-	// reached only the process would leave a check's children running past its verdict.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-
-	started := time.Now()
-	if err := cmd.Start(); err != nil {
-		outcome.DurationMS = time.Since(started).Milliseconds()
+	started := sources.Now()
+	outcome.StartUnixNano = started.UnixNano()
+	var cpu io.Closer
+	if sources.Sample == nil {
+		sources.Sample, cpu, err = startAccountedCommand(cmd)
+	} else {
+		err = cmd.Start()
+	}
+	if cpu != nil {
+		defer cpu.Close()
+	}
+	if err != nil {
+		fmt.Fprintf(logFile, "check %q could not start: %v\n", check.CheckID, err)
 		return outcome
 	}
-	waitErr := cmd.Wait()
-	outcome.DurationMS = time.Since(started).Milliseconds()
+	waitErr, state := watchCommand(cmd, logFile, sources)
+	ended := sources.Now()
+	outcome.EndUnixNano = ended.UnixNano()
+	outcome.DurationMS = ended.Sub(started).Milliseconds()
+	outcome.CPUTimeMS = state.previous.CPUTimeMS
+	outcome.LastOutputLine = state.previous.LastLine
+	outcome.SilentSamples = state.SilentSamples
+	outcome.WatchdogUnavailable = state.Unavailable
 	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		if carried(check) {
-			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d; stopped and recorded over-budget, "+
-				"its judgment deferred to the heavy tier\n", check.CheckID, check.BudgetMS)
-			outcome.Result = ResultOverBudget
-		} else if check.Tier == "fast" {
-			// Past its budget and then past its ceiling: the check never answered.
-			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d and was stopped at its ceiling of %d ms; "+
-				"no verdict\n", check.CheckID, check.BudgetMS, deadlineMS)
-			outcome.Result = ResultError
-		} else if check.Tier == "heavy" {
-			// A heavy declaration's timeout is a limit on the judge, not a
-			// completed negative judgment about the candidate.
-			fmt.Fprintf(logFile, "check %q exceeded timeout_ms %d; no verdict\n", check.CheckID, check.TimeoutMS)
-			outcome.Result = ResultError
-		} else {
-			// Generated registries retain their existing timeout behavior.
-			outcome.Result = ResultFail
-		}
+	case state.SilentSamples >= WatchdogSilentSamples:
+		outcome.Result = ResultStalled
+		fmt.Fprintln(logFile, stallNote(outcome))
 	case waitErr != nil:
 		var exitErr *exec.ExitError
 		if !errors.As(waitErr, &exitErr) {
 			return outcome
 		}
-		if (check.Scope == "change" || check.Scope == "tree") && exitErr.ExitCode() == record.ExitExternal {
+		if exitErr.ExitCode() < 0 || exitErr.ExitCode() == record.ExitExternal {
 			outcome.Result = ResultError
 		} else {
 			outcome.Result = ResultFail
@@ -373,14 +328,22 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	default:
 		outcome.Result = ResultPass
 	}
-	if check.Tier == "fast" && (outcome.Result == ResultPass || outcome.Result == ResultFail) &&
-		outcome.DurationMS > int64(check.BudgetMS) {
-		outcome.OverBudgetMS = outcome.DurationMS - int64(check.BudgetMS)
+	outcome.BudgetMS = checkTargetMS(check)
+	if outcome.BudgetMS > 0 && outcome.DurationMS > int64(outcome.BudgetMS) {
+		outcome.OverBudgetMS = outcome.DurationMS - int64(outcome.BudgetMS)
 		fmt.Fprintf(logFile, "check %q ran %d ms, over its budget_ms %d by %d ms; its verdict (%s) stands, "+
 			"and the overrun is a defect against the check's declared cost\n",
-			check.CheckID, outcome.DurationMS, check.BudgetMS, outcome.OverBudgetMS, outcome.Result)
+			check.CheckID, outcome.DurationMS, outcome.BudgetMS, outcome.OverBudgetMS, outcome.Result)
 	}
 	return outcome
+}
+
+// Non-fast timeout declarations are targets, never command deadlines.
+func checkTargetMS(check PlanCheck) int {
+	if check.Tier != "fast" && check.TimeoutMS > 0 {
+		return check.TimeoutMS
+	}
+	return check.BudgetMS
 }
 
 // budgetNotes are the lines a face prints for every fast check that ran past its budget,
@@ -389,7 +352,12 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 func budgetNotes(verdict VerdictPayload) []string {
 	var notes []string
 	for _, check := range verdict.Checks {
+		if check.WatchdogUnavailable != "" {
+			notes = append(notes, check.CheckID+": "+check.WatchdogUnavailable)
+		}
 		switch {
+		case check.Result == ResultStalled:
+			notes = append(notes, stallNote(check))
 		case check.Result == ResultOverBudget:
 			notes = append(notes, fmt.Sprintf("%s: over-budget after %d ms; stopped, judgment deferred to the heavy tier",
 				check.CheckID, check.DurationMS))

@@ -23,7 +23,7 @@ func checksFace(args []string) int {
 	directory := flags.String("checks", "tools/gate/checks", "declaration directory")
 	fastTree := flags.Bool("fast-tree", false, "include fast tree declarations alongside change checks")
 	logs := flags.String("logs", "", "check log directory (required)")
-	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "what a fast tree check still running at its budget becomes: keep (run to its ceiling, keep its verdict) or carry (stop, defer to the heavy tier; only sound once a heavy runner exists)")
+	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "keep a working check's own verdict; only keep is supported")
 	if code, answered := parseFlags(flags, args); answered {
 		return code
 	}

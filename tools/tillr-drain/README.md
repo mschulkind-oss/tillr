@@ -370,7 +370,17 @@ lane. A resumed segment is judged by the same run rule.
 
 ## Faults that hold one item
 
-A gate that cannot judge (`gate-harness-error`), a recorded boundary conviction
+A gate stall is not a candidate failure. The first `stalled` answer (gate exit 6)
+retains the head with `gate-stall-rerun`, naming the check and how many gates were
+in flight. The next planning pass with fewer gates, or no other gate, gates that
+same candidate: no worker run, charged attempt or failing verdict. A second stall
+on the same head tree holds the item as `gate-stalled`, with both observations;
+diagnose the check and use `tillr drain clear-fault`. Its retained evidence and
+rerun state survive restarts: the first-stall transition and observations commit
+with its judgment and measurements. Each gate starts with fresh measurement
+artifacts, so a fast-tier stall cannot import remaining checks from a prior run.
+
+A gate that could not start or crashed (`gate-harness-error`), a recorded boundary conviction
 (`host-boundary-violation`), a lane whose HEAD differs from the recorded candidate
 (`candidate-record-mismatch`), or an item definition that cannot be synced
 (`definition-sync-failed`) holds only the affected item. Other items keep running

@@ -116,7 +116,7 @@ not a verdict about the candidate.
 
 | Adapter | Underlying | Adapter answers | The loop does |
 |---|---|---|---|
-| `gate` | `tillr-gate run`: 0 pass, 1 fail, 2/3/4/5 no verdict | 0, 1, or 4 | 0 → `pass`; 1 → `fail` (candidate rejected, no retry); 4 → `gate-harness-error`, halt |
+| `gate` | `tillr-gate run`: 0 pass, 1 fail, 6 stalled, 2/3/4/5 no verdict | 0, 1, 4, or 6 | 0 → `pass`; 1 → `fail`; 6 → `stalled` (retained as `gate-stall-rerun`, or second stall `gate-stalled`); 4 → `gate-harness-error` |
 | `land` | `tillr-land pass`: 0 landed, 1 not landed, 2/3/4/5 no attempt | 0, 1, or 4 | 0 → `landed`; 1 → `refused` (isolated/declined candidate, a completed negative answer); 4 → step failure, halt |
 | `verdict` | `tillr-item verdict record`: 0 recorded, non-zero refused | 0, or the refused code | 0 → recorded; non-zero → step failure, halt (a landed candidate whose item was not retired is landed work the board cannot see) |
 | item state | `tillr-item state`: 0 moved or already there, 1 refused, 2/3/5 no answer | the code itself | 0 → the board moved; non-zero → step failure, halt (a landed candidate whose item is still queued is the board disagreeing with the trunk) |

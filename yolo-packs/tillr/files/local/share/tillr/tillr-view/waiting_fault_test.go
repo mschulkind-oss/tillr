@@ -7,7 +7,7 @@ import (
 )
 
 func TestWaitingFaultHasEvidenceAndOneClearCommand(t *testing.T) {
-	for _, reason := range []string{"gate-harness-error", "host-boundary-violation", "candidate-record-mismatch", "definition-sync-failed"} {
+	for _, reason := range []string{"gate-stalled", "gate-harness-error", "host-boundary-violation", "candidate-record-mismatch", "definition-sync-failed"} {
 		t.Run(reason, func(t *testing.T) {
 			h := newServeHarness(t)
 			h.exec(`DELETE FROM dispatches`)

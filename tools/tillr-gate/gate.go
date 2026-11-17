@@ -47,6 +47,8 @@ func gateResult(exit int) string {
 		return ResultPass
 	case gateExitFailed:
 		return ResultFail
+	case ExitStalled:
+		return ResultStalled
 	default:
 		// 2 is the gate's own "not a verdict" -- a refusal, or a check that reached no
 		// verdict -- and it lands here with every other code that is not 0 or 1.
@@ -82,7 +84,11 @@ func RunGate(planRecord record.Envelope, worktree, logDir string, program GatePr
 	verdict := newVerdict(plan)
 	outcome := runGateProgram(program, root, logs)
 	verdict.Checks = append(verdict.Checks, outcome.check)
+	verdict.Checks = append(verdict.Checks, outcome.checks...)
 	verdict.Result = outcome.check.Result
+	if len(outcome.checks) > 0 {
+		verdict.Result = ResultStalled
+	}
 	envelope, err := encodeVerdict(verdict, planRecord)
 	if err != nil {
 		return record.Envelope{}, err
@@ -94,6 +100,7 @@ func RunGate(planRecord record.Envelope, worktree, logDir string, program GatePr
 // exit this face answers with when the run did not pass.
 type gateRun struct {
 	check   VerdictCheck
+	checks  []VerdictCheck
 	failure error
 }
 
@@ -129,6 +136,15 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	}
 	cmd := exec.CommandContext(ctx, program.Command[0], program.Command[1:]...)
 	cmd.Dir = root
+	fastPath := os.Getenv("TILLR_FAST_VERDICT_OUT")
+	if fastPath == "" {
+		fastPath = filepath.Join(logDir, "fast.verdict.json")
+	}
+	if err := os.Remove(fastPath); err != nil && !os.IsNotExist(err) {
+		out.failure = externalf("clearing the preceding fast verdict: %v", err)
+		return out
+	}
+	cmd.Env = append(os.Environ(), "TILLR_FAST_VERDICT_OUT="+fastPath)
 	cmd.Stdout = io.MultiWriter(whole, triage)
 	cmd.Stderr = cmd.Stdout
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -167,6 +183,17 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	default:
 		out.check.Result = gateResult(exit)
 		switch out.check.Result {
+		case ResultStalled:
+			fast, err := readFastVerdict(fastPath)
+			if err != nil {
+				out.check.Result = ResultError
+				out.failure = externalf("gate exited stalled without check observations: %v", err)
+			} else {
+				out.checks = fast.Checks
+				out.failure = &exitError{code: ExitStalled, err: fmt.Errorf("gate stalled; observations in %s", fastPath)}
+				// The wrapper itself did not stall; the named check did.
+				out.check.Result = ResultUnavailable
+			}
 		case ResultFail:
 			out.failure = &exitError{code: record.ExitNegative,
 				err: fmt.Errorf("the gate program failed (exit %d); its triage is %s", exit, triagePath)}

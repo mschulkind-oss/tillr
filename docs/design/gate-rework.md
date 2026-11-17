@@ -393,191 +393,61 @@ The rules:
 
 ### 6.5 Ten seconds is a failing test
 
-The budget is 10,000 milliseconds from the start of the landing gate to the trunk ref moving.
-1,000 of it is reserved for planning, fingerprints and the squash, which leaves 9,000 for checks.
-It is enforced in two places, and neither is a remembered measurement.
+The landing target is 10,000 milliseconds: 1,000 for planning, fingerprints and the
+squash, leaving 9,000 for checks. A target measures cost; it never kills a working
+check or rejects a candidate for machine load. The governing rulings are
+[`D-GR15` and `D-GR16`](#decision-ledger).
 
-**At admission, by arithmetic.** One fast change check, `gate-budget`, reads every declaration
-and fails when the `budget_ms` values of the fast tier sum above 9,000. It reads no clock. The
-sum is over every fast check, as if all were selected and run one after another, because that is
-the case that still holds on one core with twenty lanes. A change that adds a fast check which
-does not fit fails on that change, and its author has three moves: make room, make it faster, or
-declare it heavy.
+**Admission is arithmetic.** The `gate-budget` change check sums every fast
+`budget_ms` against the unchanged 9,000 millisecond cap, as if all checks ran
+serially. A declaration that does not fit must make room, become cheaper or move to
+the heavy tier. Fast declarations may not name `timeout_ms`. A heavy declaration
+and a generated declaration use their timeout as a measured target, never a kill
+deadline.
 
-**The owner's ruling of 2026-11-17 on time limits ([`D-GR15`](#decision-ledger)).** Asked what
-"could not judge" meant for a check that was still running, the owner answered:
+**Only a stall ends a check early.** The watchdog (coined here: the observer of a
+running check’s progress, not an elapsed-time limit) samples every 1,000 milliseconds.
+Progress is at least one new log byte, including a heartbeat, or an increase in the
+process group’s user plus system CPU time over all live members and their reaped
+children. Sixty consecutive samples with neither is a stall. The runner kills the
+process group and records `stalled`, exit 6, distinct from pass, fail, error and
+over-budget. Its verdict entry, log and summary name the check, last output line,
+group CPU time, silent samples and run time. If CPU accounting cannot be read, no
+stall is declared; `watchdog unavailable` is recorded and printed. Linux groups
+use an [inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html)
+that retains child CPU independently of reaping or discarded child status.
+It is attached while the check is paused before its first instruction, before
+any children can be created; CPU
+progress compares unrounded nanoseconds. A denied attachment, unreadable counter,
+or decreasing counter reports unavailability immediately in the log. Incomplete
+`/proc` snapshots are never substituted. A check that
+could not start or crashed remains `error`, exit 4.
 
-> "what does 'could not judge' mean. isn't this directly opposed to our principles? target
-> budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise
-> finish just fine."
+**Overruns are observations, not verdicts.** Checks run as long as they make
+progress, retaining their own pass or fail. Their declared target, measured
+duration and `over_budget_ms` reach the store and observatory, whose per-check
+performance payload reports median, p95, maximum, budget, overrun count and stall
+count. Nothing is carried at its budget; `--tree-overrun carry` is refused.
+There is no finite worst-case duration derived from the budgets: the admission
+cap bounds declared cost, not running work.
 
-The same position reached this design the same day through another project's notes of a
-conversation with the owner, quoted as relayed: "The agent works until it is done, it has an
-event, we have a stall detector watchdog if we need something like that, but we don't just say,
-'Okay, 30 minutes,' and then have some gate given 20 seconds and on a loaded machine it fails."
-Those notes summarize it as "no clock whose only consequence is a kill". The ruling, as this
-design applies it:
+**A stall has a named next step.** The first stall retains the candidate without
+a worker run, attempt charge, failing verdict or design conflict. Its waiting
+reason is `gate-stall-rerun`, naming the check and the number of gates in flight
+at the stall. The first planning pass with fewer gates, or no other gate, judges
+that same head again. A second stall on the same head tree holds it as the item
+fault `gate-stalled`, retaining both observations. The operator diagnoses and
+clears it with `tillr drain clear-fault`. `gate-harness-error` stays for a check
+or gate program that could not start or crashed. The retained candidate, first
+stall and second-stall recovery survive a drain restart. The first-stall wait
+and observations commit in the same transaction as its judgment and spans.
 
-- **A budget is a target.** It is measured and reported. Exceeding one is never, by itself, a
-  failure, a fault or "could not judge".
-- **Only a stall ends a check early.** A stall is a check making no progress, seen by a watchdog;
-  elapsed time is not a liveness signal. A stall leads to a named next step, never to a silent
-  kill.
-- **Load must not fail work.** A check on a loaded machine that would have finished is let
-  finish.
-
-It **supersedes** two things built on 2026-11-16 under [`D-GR13`](#decision-ledger): the ceiling
-as a kill, and "could not judge" (exit 4) for a check that is still making progress. Neither the
-ceiling nor a heavy declaration's `timeout_ms` may stop a check that is making progress. Two
-parts of this design that are not built also act on a clock alone, and the ruling governs both
-where this section differs from it: carrying a fast tree check, which stops it at its budget
-(suspended by [`D-GR14`](#decision-ledger) and not to be turned on as designed), and a heavy run
-that is red on `gate-budget` only because a check overran there.
-
-It **keeps** the budgets and the admission test over their sum, the 9,000 millisecond cap as the
-sum the budgets must fit, the `over_budget_ms` record on every overrun, and the ten-second
-landing as a target whose measured distribution per check is visible, so a check that overruns
-chronically is fixed rather than tolerated. How a stall is detected and what follows it is this
-design's decision [`D-GR16`](#decision-ledger): a check shows progress when its output grows or its
-process group uses CPU time; one that shows neither for 60 consecutive one-second samples is
-stalled and ended; the first stall re-gates the same candidate once fewer gates are in flight or
-no other gate is, and a second stall on that candidate holds the item, naming the check.
-`item-gate-stall-watchdog` in [Section 11](#11-build-order) builds it. Until it lands, the runner
-behaves as the rest of this section describes.
-
-**At run time, by each check's own declaration.** As designed, the runner gives a fast tree
-check its `budget_ms` as a deadline. A fast tree check still running at its deadline is stopped
-and **carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs
-it with no deadline but its timeout. The landing proceeds. A fast change check cannot be carried
-(the first boundary below), so its budget is not where it is stopped: it runs on and its own
-answer is the verdict, with the overrun recorded against the check.
-
-**Carrying is suspended until the heavy tier exists** ([`D-GR14`](#decision-ledger)). No heavy
-runner exists yet (`item-gate-heavy-runner` is in the queue), so a carried check is not owed to
-anything: the verdict stays pass and nothing runs the check again. Carrying today means dropping
-the judgment, which is the "nothing is carried" situation of the second boundary below. The
-review of 2026-11-16 measured `go-build` at 5.6 to 5.7 seconds against its 2,700 millisecond
-budget at ten concurrent gates, so it was carried on almost every landing, and a candidate that
-did not compile could land in any Go module but `tools/tillr`. So until the heavy runner lands, a
-fast tree check is run like a change check: past its budget it runs on to its ceiling and keeps
-its verdict, and a failing one fails the gate. The switch is the runner's `--tree-overrun` option,
-`keep` by default, and the loop's gate program
-[`tools/gate/change-gate.py`](../../tools/gate/change-gate.py) states it in one constant,
-`TREE_OVERRUN`. The heavy runner's item was to turn that constant to `carry`. This was an
-implementer's decision; the owner ruled on 2026-11-17 ([`D-GR15`](#decision-ledger)) that only a
-stall ends a check early, so `keep` is the rule rather than a suspension.
-
-So machine load makes the gate slower rather than failing the item, and the gate's wall time is
-no longer bounded by the sum the admission test bounded. **The worst case**, stated plainly:
-checks run serially, and every one of them may run to its ceiling. There are 11 fast checks
-(six change checks and five tree checks), none declares `timeout_ms`, so each ceiling is the
-9,000 millisecond cap, and 11 x 9,000 = 99,000 milliseconds, about 99 seconds of checks, against
-the 8,950 milliseconds the budgets declare. The runner's own work and the landing tier of
-`tools/fork-check.py`, which runs after the fast tier, come on top, and so does one warm-up
-described below, once per Go version on each machine. Before 2026-11-16 the bound was the 8,950
-milliseconds of budgets; with change checks alone running to the ceiling it was 6 x 9,000 + 5,050
-(the tree budgets) = 59,050.
-
-**`go-build` builds with `-trimpath`.** Without it, Go caches compiled packages by their absolute
-source path, so the first gate in every new checkout compiled from cold: 2.85 seconds alone, and
-past the 9 second ceiling, with every item held, when ten new checkouts gated at once. Trimmed,
-a new checkout reuses what any other checkout compiled (0.84 seconds). The flag is the gate's
-compile check's alone, passed in `GOFLAGS` so the builds its test binaries start are trimmed too:
-that check throws its output away, so trimmed paths change nothing that is kept, and recipes that
-build binaries people run keep full paths. The first trimmed build on a machine still compiles
-the standard library and every module from cold, 19.9 seconds measured, which would fault the
-first gate after this change on each machine. So the loop's gate program
-[`tools/gate/change-gate.py`](../../tools/gate/change-gate.py) runs the check once, unbounded and
-before the fast tier, for each Go version, recording that it did in the git common directory's
-`tillr-gate` store, so the cost lands on that first gate as time rather than as a fault. A Go
-upgrade pays it once more.
-
-**Measured on 2026-11-16**, on a candidate that changes Go and Markdown, with nothing
-remembered, each gate in its own checkout, at a machine load of 32 to 83 on 32 cores (the same
-run is the source of every number in this table). "Stable" checkouts are ten fixed paths that
-have each built once, as the drain's lanes live at fixed paths; "new" checkouts are paths never
-built before:
-
-| Concurrent gates | Checkouts | Fast tier wall time (s) | Checks over budget |
-| ---: | :--- | ---: | :--- |
-| 1 | stable | 4.0 to 4.4 | none |
-| 1 | new | 4.1 to 4.2 | none |
-| 2 | stable | 4.2 to 4.3 | none |
-| 2 | new | 3.9 to 4.4 | none |
-| 10 | stable | 7.9 to 8.7 | `go-build` in every gate, up to 5.1 s against 2.7 |
-| 10 | new | 8.0 to 9.0 | `go-build` in every gate, up to 5.3 s against 2.7 |
-
-Before `-trimpath`, ten new checkouts took 12.4 seconds and every one stopped `go-build` at its
-ceiling: exit 4. Now no gate in any row reaches a ceiling. `go-build` still dominates at ten
-gates, now from contention for the processors rather than from a cold cache. The next costs are
-about 1.1 seconds spent outside any check (the wall time less the checks' own durations: the
-runner's planning and fingerprinting) and `documents` at 0.8 to 1.2 seconds. The budgets and the
-cap are unchanged.
-
-**Rejected by the owner's ruling of 2026-11-17** ([`D-GR15`](#decision-ledger)): **one ceiling
-for the whole fast run** instead of one per check, where a fast run still going when it has used
-9,000 milliseconds stops the check it is running and answers "could not judge". That would have
-restored a bound of about 9 seconds of checks, at the cost of load faults returning. In the
-measurement above the slowest gate's checks took about 7.9 seconds (its 9.0 seconds of wall time
-less about 1.1 outside the checks), so no item would have been held; before `-trimpath`, every
-gate of ten new checkouts would have been. The margin is under a second, so heavier load than
-measured brings `gate-harness-error` back.
-
-**Measured again on 2026-11-17**, on a five-lane drain at a load average of 18 to 24 on 32 cores,
-by the drain's operator: `go-build` took 7,317 milliseconds against its 2,700 budget and
-`documents` 5,006 against 2,000 when two gates overlapped, within about 1.7 seconds of the
-per-check ceiling. Of the fast-check logs the loop's run directories held that day, `go-build`
-had run 26 times and overrun 9 (2,916 to 7,317 milliseconds) and `documents` had run 59 times
-and overrun 12 (2,228 to 5,006 milliseconds); no log said a check was stopped at its ceiling.
-`documents` alone, over a change to the [tillr roadmap](../tillr/roadmap.md), takes over 2 seconds because that one
-document renders in a median of 2.16 seconds. At ten lanes, checks that would have finished
-would start to be stopped at the ceiling and their items held for an operator, which is the
-failure [`D-GR15`](#decision-ledger) rules out.
-
-**What happens to a check that outgrows its budget.** It stops holding landings the first time
-it overruns, and it is still judged, after the merge. The heavy runner then runs that check
-alone, with nothing else of its run beside it. When it exceeds its declared budget there too, the
-heavy run is red on `gate-budget`, naming the check, with the measured and declared times. The
-repair is an edit to that check's own file: a larger budget if the sum still fits, or `tier:
-heavy`. A red here is handled like any other heavy red
-([Section 6.8](#68-a-red-heavy-check)). That red is a failure made of an overrun alone, which
-[`D-GR15`](#decision-ledger) rules out: it is not built, and where the heavy runner's slice
-differs, the ruling governs. A change check that overruns, and while carrying is
-suspended a tree check too, is not re-measured by anything: its `over_budget_ms` on the landing's
-verdict is the record, and the repair is the same edit to its own file, or making it cheaper.
-
-Two boundaries:
-
-- **Change checks are never carried**, because nothing after the merge has their base. A change
-  check that runs past its `budget_ms` is not stopped there. It runs to its **ceiling** *(coined
-  here: the point a fast check that ran past its budget is finally stopped)*, which is its own
-  `timeout_ms`, or the 9,000 millisecond fast-tier cap when it declares none, clamped to lie
-  between its `budget_ms` and the cap; the admission check refuses a fast `timeout_ms` outside
-  that range. A check that answers by then keeps its verdict, pass or fail. The verdict entry
-  records `over_budget_ms`, how far past its budget it ran; its log says so, and `tillr-gate`
-  prints a line naming the check beside the run's summary. The overrun is a defect against the
-  check's declared cost. It is not "could not judge" for the candidate, because the check did
-  judge it ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
-  Only a check still running at its ceiling makes the run "could not judge" (exit 4), naming the
-  check. *Decided 2026-11-16 by the implementer* ([`D-GR13`](#decision-ledger)); *the owner's
-  ruling of 2026-11-17 ([`D-GR15`](#decision-ledger)) supersedes the ceiling as a kill.* It was
-  decided after `documents` ran 2,001
-  milliseconds against its 2,000 budget in a drain pass at load 16, and the candidate was held as
-  `gate-harness-error` until an operator cleared it. The same four-document change measured 1.8
-  seconds alone and up to 2.4 seconds beside nine other gates, so a fixed deadline was failing
-  items for the machine's load, which [`D-GR11`](#decision-ledger) rejects. Carrying the check
-  instead was weighed and refused: no heavy runner exists yet to judge a carried check, and a
-  deferred change check would land a change whose diff nobody judged. What it gives up is the
-  bound: the worst case above.
-- **Under the before-merge strategy nothing is carried.** An overrun there runs to its ceiling
-  and keeps its verdict, as every fast check does while carrying is suspended; only a check still
-  running at its ceiling is "could not judge".
-
-As built on 2026-11-16 this is the one place the gate acts on elapsed time, and it is a statement
-about the gate, which is the thing the ten-second ruling bounds. Under
-[`D-GR15`](#decision-ledger) the gate measures and reports elapsed time and acts only on a stall.
-The existing rule that no check may assert elapsed time about the
-product stands unchanged.
+The runner and drain implement this rule. The gate program’s `--gate-timeout` and
+the remaining Python gate clocks still have their old bounds; the
+[wrapper watchdog slice](#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+replaces those separately. `go-build` uses `-trimpath` and the standard shared Go
+cache to avoid rebuilding identical packages at every lane path. No product test
+may assert elapsed time; the timing audit’s existing rule remains unchanged.
 
 **The proposed fast tier**, with budgets set from [Section 3.2](#32-every-check):
 
@@ -979,16 +849,7 @@ is less busy, with no operator, and only a second stall on the same candidate ho
 naming the check. Budgets stay, and every overrun stays visible, so a check that is chronically
 slow is made faster rather than tolerated.
 
-<!-- tillr: item id="item-gate-stall-watchdog" paths="tools/tillr-gate/,tools/gate/,tools/tillr-drain/,tools/tillr-view/,tools/tillr-loop/,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** No check `tillr-gate` runs is stopped because a clock passed while it is making progress. The fast tier's ceiling, a heavy declaration's `timeout_ms` and a generated declaration's timeout stop being kill deadlines; a heavy `timeout_ms` becomes that check's target, recorded like a fast budget when exceeded, and the admission check refuses a fast declaration that names `timeout_ms`. A test runs a stub check that prints one line per sample of an injected clock for longer than its budget, its `timeout_ms` and the 9,000 ms cap, and asserts it finishes with its own verdict and its overrun recorded.
-- **c2:** The runner samples each running check every 1,000 ms of an injected clock. A sample shows progress when the check's log grew by at least one byte since the last sample, so a check may print a heartbeat line, or when the CPU time of its process group rose (user plus system over every live member, plus what reaped children added). 60 consecutive samples without progress is a stall. The interval and the count are one constant each, pinned by a test. Where the group's CPU time cannot be read, the runner declares no stall and records `watchdog unavailable` in the verdict entry and on the summary line. Readings come through an injected sampler, so no test sleeps or burns CPU. Tests: silent with rising CPU, and silent with a child whose CPU rises, are not ended; no output and no CPU for 60 samples is ended; 59 samples is not.
-- **c3:** On a stall the runner kills the check's process group and records the result `stalled`, distinct from pass, fail, error and over-budget, with the last output line, the group's CPU time, the number of silent samples and the run time, in the verdict entry, the check's log and a summary line. A stalled check passes and fails nothing about the candidate. The drain tells a stall from a harness error by what the gate records, through `tools/gate/change-gate.py` and `tillr-gate run --gate`. Whether that is an exit code of its own or a field of the verdict the drain already reads is the implementer's choice, and exit 4 keeps meaning a check that could not start or crashed. A test runs the drain's real gate adapter with a stalling stub check and asserts the drain reads a stall.
-- **c4:** The drain does not fault an item on a first stall. It keeps the candidate (no new worker run, no attempt charged, no failing verdict, no design conflict), records the waiting reason `gate-stall-rerun` naming the check and the number of gates in flight when it stalled, and gates the same head again on the first pass at which fewer gates are in flight than that number, or no other gate is. A test with a stub gate that stalls once and then passes asserts the item lands with one worker run, and that the second gate started only after the in-flight count dropped.
-- **c5:** A second stall on the same candidate, the same head tree, holds the item as an item fault with reason `gate-stalled`, naming the check and both stalls' observations, cleared by `tillr drain clear-fault` like any item fault. `gate-harness-error` remains only for a check or gate program that could not be started or crashed. A test asserts two stalls give `gate-stalled` and a check that cannot start gives `gate-harness-error`.
-- **c6:** Every `budget_ms` and the 9,000 ms cap are unchanged. The cap is only the sum the admission check holds the budgets to, and `rg -n FastTierCapMS tools/tillr-gate --glob '!*_test.go'` finds no use of it as a deadline. Every fast check's duration, budget, overrun and stall reaches the store the observatory reads, so its per-check performance payload (median, p95, max) covers the fast tier and adds each check's budget and how many of its recent runs overran. A test asserts the payload for a fast check carries both.
-- **c7:** Section 6.5 of this design replaces the ceiling and its worst-case arithmetic with the stall rule as built. The gate README, the drain README, the `tillr-operating` skill, the waiting view's rules for the two new reasons (`TestWaitingEveryDrainReasonHasARule` passes) and the observatory's stop-reason words name `stalled`, `gate-stall-rerun` and `gate-stalled`. `rg -n -i 'ceiling' tools/tillr-gate/README.md` finds no sentence saying a check is stopped there.
-- **c8:** No test asserts elapsed time: the timing audit, case 53 of `tests/fork-check.test.py`, passes unchanged. The report records, as command, result and date, one real fast-tier run beside nine concurrent gates, with each check's duration and whether any was stopped.
 
 **Agent details:**
 
@@ -1020,7 +881,7 @@ can pass its limit while still working. This item puts the same watchdog, with t
 what counts as progress, around both programs, so a working suite always finishes and a silent one
 is named as stalled.
 
-<!-- tillr: item id="item-gate-wrapper-clocks-stall" paths="tools/fork-check.py,tests/fork-check.test.py,tools/gate/,tools/tillr-gate/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-gate-stall-watchdog" prose="2" -->
+<!-- tillr: item id="item-gate-wrapper-clocks-stall" paths="tools/fork-check.py,tests/fork-check.test.py,tools/gate/,tools/tillr-gate/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** In `tools/fork-check.py`'s landing and rolling tiers, a check's timeout (the per-kind constants such as `DOCUMENTS_TIMEOUT` of 300 s, `TILLR_DOCS_TIMEOUT` of 600 s and `BUILD_TIMEOUT` of 3,600 s) no longer kills a check that is making progress. Progress is the rule of `item-gate-stall-watchdog`: output grew, or the process group's CPU time rose, in a sample, with the same interval and count. A test fails when the Python and Go constants differ.
 - **c2:** A stalled check there ends its process group and is reported as a stall naming the check, its last output line and how long it was silent, apart from the existing could-not-answer exits. `tools/gate/change-gate.py` carries it out as a stall, so the drain applies the stall handling of `item-gate-stall-watchdog` and not `gate-harness-error`. A test drives it with an injected sampler.

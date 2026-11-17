@@ -40,6 +40,8 @@ type waitingRule struct{ class, where, mover string }
 // opening this face's store remains read-only. TestWaitingEveryDrainReasonHasARule enumerates the
 // upstream constants rather than maintaining a second hand-written checklist.
 var waitingRules = map[string]waitingRule{
+	"gate-stall-rerun":               {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
+	"gate-stalled":                   {"needs you", "gate", "diagnose the stalled check and clear the fault"},
 	"gate-harness-error":             {"needs you", "gate", "diagnose the gate and clear the fault"},
 	"host-boundary-violation":        {"needs you", "fence", "inspect the recorded violation and clear the fault"},
 	"candidate-record-mismatch":      {"needs you", "lane", "restore the recorded candidate and clear the fault"},
@@ -336,6 +338,15 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				}
 			}
 		}
+		if found && last.Reason == "gate-stall-rerun" {
+			detail, err := waitingGateStall(r, item.ItemID)
+			if err != nil {
+				return nil, err
+			}
+			if detail != "" {
+				row.Why += ": " + detail
+			}
+		}
 		if c, ok := conflicts[item.ItemID]; ok && item.State == "blocked" && c.Status != "closed" && c.Status != "answered" {
 			row.Class, row.Mover, row.Why = "waits on work", c.WaitingOn, c.ConflictID+": "+c.Text
 			row.Since = time.UnixMilli(c.Since).UTC().Format(time.RFC3339Nano)
@@ -599,4 +610,25 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		}
 	}
 	return table.Flush()
+}
+
+// The durable wait carries the check's observations and the concurrency change
+// that will wake it; the face never supplies a clock-based retry of its own.
+func waitingGateStall(r *store.Reader, itemID string) (string, error) {
+	var raw string
+	err := r.QueryRow(`SELECT payload FROM events WHERE kind='drain.gate-stall' AND json_extract(payload,'$.candidate.item_id')=? ORDER BY seq DESC LIMIT 1`, itemID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var hold struct {
+		GatesInFlight int             `json:"gates_in_flight"`
+		Observations  json.RawMessage `json:"observations"`
+	}
+	if err := json.Unmarshal([]byte(raw), &hold); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s; %d gates in flight at stall", hold.Observations, hold.GatesInFlight), nil
 }

@@ -131,6 +131,9 @@ func (file checkFile) validate() error {
 	if file.Tier != "fast" && file.Tier != "heavy" {
 		return fmt.Errorf("tier must be fast or heavy")
 	}
+	if file.Tier == "fast" && file.TimeoutMS != nil {
+		return fmt.Errorf("timeout_ms is not allowed for tier fast; use budget_ms as the target")
+	}
 	if file.Tier == "fast" && file.BudgetMS == nil {
 		return fmt.Errorf("budget_ms is required for tier fast")
 	}

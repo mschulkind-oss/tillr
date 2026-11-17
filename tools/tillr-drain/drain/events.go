@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -130,6 +131,7 @@ const maxBoundaryObservations = 20
 // gateStepJudgment is what the loop observed of one gate step: which program it started, how
 // it exited, how long it took, and the outcome that exit maps onto.
 type gateStepJudgment struct {
+	FirstStallHold *gateStallHold
 	// TickID is the tick the judgment belongs to (plan's clock stamp and the run set).
 	TickID string
 	// Run is the candidate the gate judged.
@@ -271,13 +273,29 @@ func (s *ProcessSteps) recordGateJudgment(ctx context.Context, candidate Candida
 		return err
 	}
 	verdictID := payloadString(verdictPayload, "verdict_id")
+	epoch, err := s.gateJudgmentEpoch(ctx, candidate.RunID)
+	if err != nil {
+		return err
+	}
 	spans, spansState := readGateSpans(s.Root, candidate.RunID, verdictID, candidate.TickID)
+	executionID := verdictID
+	if epoch > 0 {
+		executionID = fmt.Sprintf("%s/after-%d", verdictID, epoch)
+		for i := range spans {
+			spans[i].SpanID = gateSpanID(executionID, spans[i].CheckID)
+			spans[i].ParentSpanID = gateParentSpanID(executionID)
+		}
+	}
+	verdictPayload, err = withPayloadField(verdictPayload, "gate_execution_id", executionID)
+	if err != nil {
+		return err
+	}
 	verdictPayload, err = withPayloadField(verdictPayload, "spans_state", spansState)
 	if err != nil {
 		return err
 	}
 	return appendJudgmentWithSpans(ctx, s.Store, GateVerdictKind, "run", candidate.RunID,
-		verdictPayload, at, spans)
+		verdictPayload, at, spans, judgment.FirstStallHold)
 }
 
 // payloadString answers one top-level string field of a payload, and "" when it is absent
@@ -443,7 +461,7 @@ func appendJudgment(ctx context.Context, storePath, kind, objectType, objectID s
 // the verdict and no spans is a half-record, and the replay is the one chance to complete
 // it. A failed insert fails the transaction, so the loop stops with both unrecorded rather
 // than carrying on as if the verdict's measurement were there.
-func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, objectID string, payload any, at time.Time, spans []gateSpanRow) error {
+func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, objectID string, payload any, at time.Time, spans []gateSpanRow, firstStall *gateStallHold) error {
 	if storePath == "" {
 		return Usagef("the loop cannot append %s: it was given no store", kind)
 	}
@@ -472,6 +490,11 @@ func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, o
 				return Internalf("appending the %s event: %v", kind, err)
 			}
 		}
+		if seen == 0 && firstStall != nil {
+			if err := recordGateStallHold(tx, *firstStall, at); err != nil {
+				return err
+			}
+		}
 		for _, span := range spans {
 			if _, err := tx.Exec(
 				`INSERT INTO gate_spans (span_id, trace_id, parent_span_id, verdict_id, run_id,
@@ -497,13 +520,15 @@ func appendJudgmentWithSpans(ctx context.Context, storePath, kind, objectType, o
 	})
 }
 
-// Gate judgments may be attempted again only after explicit fault clearance.
+// Gate judgments may be attempted again after a first stall or explicit fault clearance.
 // Other judgments remain idempotent by object; the old gate evidence survives.
 func judgmentSeen(tx *store.Tx, kind, objectType, id string) (int, error) {
 	var after int64
 	if kind == GatePlanKind || kind == GateVerdictKind {
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE kind=? AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason')=?`, itemFaultClearedKind, id, StopGateHarnessError).Scan(&after); err != nil {
-			return 0, readFailure(err)
+		var err error
+		after, err = gateJudgmentEpoch(tx.Reader(), id)
+		if err != nil {
+			return 0, err
 		}
 	}
 	var seen int
@@ -522,4 +547,25 @@ func runRefs(decisions []Decision) []runRef {
 		refs = append(refs, runRef{RunID: decision.RunRequest.RunID, ItemID: decision.ItemID, LaneID: decision.LaneID})
 	}
 	return refs
+}
+
+// A first stall or diagnosed fault authorizes a fresh examination of the same
+// run. Its transition sequence distinguishes measurements even when plan+tree
+// reproduces the gate's deterministic verdict id.
+func gateJudgmentEpoch(r *store.Reader, runID string) (int64, error) {
+	var seq int64
+	err := r.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE
+ (kind=? AND object_id=?) OR
+ (kind=? AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason') IN (?,?))`, gateStallHeldKind, runID, itemFaultClearedKind, runID, StopGateHarnessError, ReasonGateStalled).Scan(&seq)
+	return seq, err
+}
+func (s *ProcessSteps) gateJudgmentEpoch(ctx context.Context, runID string) (int64, error) {
+	st, err := store.OpenRead(ctx, s.Store)
+	if err != nil {
+		return 0, err
+	}
+	defer st.Close()
+	var seq int64
+	err = st.ReadTx(ctx, func(r *store.Reader) error { var err error; seq, err = gateJudgmentEpoch(r, runID); return err })
+	return seq, err
 }

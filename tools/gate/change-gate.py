@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Judge the caller's change, then the remaining repository checks."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
 
-# What a fast tree check still running at its budget becomes. `keep` runs it on to its
-# ceiling and keeps its verdict; `carry` stops it and defers it to the heavy tier. Carrying
-# is suspended until a heavy runner exists to judge what is carried: with none, a carried
-# check's judgment is dropped and the verdict stays pass (docs/design/gate-rework.md
-# Section 6.5). `item-gate-heavy-runner` turns carrying back on here, and only here.
+# Budgets are targets. Working checks keep their own verdict; only a sampled stall
+# ends one early. Carrying at a budget would discard its judgment.
 TREE_OVERRUN = "keep"
 
 
@@ -73,7 +71,14 @@ def main():
         warm_trimmed_go_cache()
         checked = subprocess.run([args.runner, "checks", "--fast-tree", "--base", args.base, "--head", args.head,
                                   "--tree-overrun", TREE_OVERRUN,
-                                  "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs])
+                                  "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs],
+                                 stdout=subprocess.PIPE)
+        # Preserve per-check timings and stall evidence beside the wrapper verdict.
+        # The drain hands over this path; the outer gate supplies one for direct runs.
+        if path := os.environ.get("TILLR_FAST_VERDICT_OUT"):
+            Path(path).write_bytes(checked.stdout)
+        sys.stdout.buffer.write(checked.stdout)
+        sys.stdout.buffer.flush()
         if checked.returncode:
             return checked.returncode
         scope = (["--all"] if args.all else ["--since", args.since] if args.since

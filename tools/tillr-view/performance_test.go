@@ -220,3 +220,17 @@ func TestPerformanceMissingAndUnreadableMeasurements(t *testing.T) {
 		}
 	})
 }
+
+func TestPerformanceFastChecksCarryBudgetOverrunsAndStalls(t *testing.T) {
+	h := newServeHarness(t)
+	perfExec(t, h, `DELETE FROM gate_spans`)
+	for i, status := range []string{"pass", "stalled", "pass", "fail", "pass"} {
+		perfExec(t, h, `INSERT INTO gate_spans VALUES (?, 'trace','parent',?,'run-1','tick','documents','fast','documents',?,1000000000,?, '{}', '{"budget_ms":2000,"over_budget_ms":100,"duration_ms":2100,"silent_samples":60}')`, fmt.Sprintf("fast-%d", i), fmt.Sprintf("v-%d", i), status, int64(3100)*1e6)
+	}
+	check := performanceData(t, h, "/api/v1/perf/checks")["checks"].([]any)[0].(map[string]any)
+	for key, want := range map[string]any{"budget_ms": float64(2000), "overruns": float64(5), "stalls": float64(1), "failures": float64(1), "median_ms": float64(2100), "p95_ms": float64(2100), "max_ms": float64(2100)} {
+		if check[key] != want {
+			t.Errorf("%s = %v want %v", key, check[key], want)
+		}
+	}
+}

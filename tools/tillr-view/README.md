@@ -449,7 +449,11 @@ store transaction. They do not migrate or write the store.
 
 `GET /api/v1/perf/checks` returns `data.checks`, ordered by `check_id`. Each row
 has `count` (all executions), `sample_count` (executions with valid start and end
-clocks), `median_ms`, `p95_ms`, `max_ms`, `waited_ms`, and `failures`. Durations
+clocks), `median_ms`, `p95_ms`, `max_ms`, `waited_ms`, and `failures`. Fast checks
+are included with `budget_ms`, `overruns` (runs beyond that target in the requested
+range), and `stalls`. A `stalled` check failed and passed nothing; the waiting
+reasons `gate-stall-rerun` and `gate-stalled` distinguish its automatic retained-head
+rerun from a second-stall item fault. Durations
 are in milliseconds and keep fractional precision. The median averages the two
 middle samples when the count is even. The 95th percentile uses the standard
 nearest-rank definition: sort the durations and select position `ceil(0.95 * n)`,

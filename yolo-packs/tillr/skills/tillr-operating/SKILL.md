@@ -113,6 +113,7 @@ failure:
 | `3` | store, schema or record version incompatible, or the store stayed locked past the bound |
 | `4` | an external dependency prevented a decision (distinct from a failed check) |
 | `5` | a bug, not an outcome; any write transaction was rolled back |
+| `6` | gate only: `stalled`, no verdict about the candidate |
 
 `1` and `4` are the pair that matters unattended: `1` is a verdict about the candidate,
 `4` is the tool saying it could not judge. Retrying a `1` is not a fix.
@@ -185,6 +186,16 @@ the landing gate (`just done`); the gate owns its landing lock.
 
 ## 4. Judge — evaluate the candidate against the gate
 `tillr gate run`
+
+A working check keeps its own verdict past its measured target. The gate samples
+output and process-group CPU every second; sixty samples with neither is `stalled`,
+not pass, fail or a harness error. The first stall retains the candidate as
+`gate-stall-rerun`, waiting for fewer gates in flight, or none other, then gates
+the same head without another worker or charged attempt. A second stall on the
+same head tree holds it as `gate-stalled`, naming both observations. Diagnose it
+and use `tillr drain clear-fault`. `gate-harness-error` remains a program that
+could not start or crashed. If group CPU cannot be read, `watchdog unavailable`
+is reported and no stall is declared.
 
 The verdict about the candidate. `tillr-gate dualrun` runs two gates and compares them,
 which is the evidence a disputed verdict is settled with.

@@ -292,7 +292,7 @@ func runFace(args []string) int {
 	gateTimeout := flags.Duration("gate-timeout", 30*time.Minute, "how long the --gate program may run before it is killed and the verdict is error (0 is no bound)")
 	var gateArgs stringList
 	flags.Var(&gateArgs, "gate-arg", "an argument to pass to the --gate program, in order (repeatable)")
-	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "what a fast tree check still running at its budget becomes: keep (run to its ceiling, keep its verdict) or carry (stop, defer to the heavy tier; only sound once a heavy runner exists)")
+	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "keep a working check's own verdict; only keep is supported")
 	if code, answered := parseFlags(flags, args); answered {
 		return code
 	}
