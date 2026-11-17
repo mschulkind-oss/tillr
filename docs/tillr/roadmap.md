@@ -1525,3 +1525,43 @@ candidate that happened to meet it.
 - **Evidence:** 2026-11-17, a hand commit on the trunk that put a documented build directory in a tracked README passed `just done`. `python3 tools/gate/checks/scratch.py` at the trunk then exited 1 with two findings, and the drain's gate refused the next candidate on the `scratch` check. A rolling run over the range holding that commit finished green and moved its watermark.
 - **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` is `python3 tools/fork-check.py --replay --only {only}`, and `{only}` is the failing check ids from the gate's verdict. The replay matches fork-check kinds, and the gate's tree-check ids are a separate set. `python3 tools/fork-check.py --replay --only scratch` in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that fork-check also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
 - **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
+
+## Filed 2026-11-17: what two lanes showed
+
+A drain pass the owner watched on 2026-11-17, with two lanes running, showed two ways the loop
+spends runs on work that is then lost or never needed. Each item below comes from one of them.
+
+### Prevent a settled run from discarding its uncommitted work
+
+When a worker ends a run and its lane still holds edits that were never committed, the loop
+throws them away. It settles the run, pins the lane's head, and resets the lane to the trunk. If
+the worker never committed, that head is the base commit, so the pin points at nothing the
+worker did, and only the report and the logs survive. The next attempt for the item, the design
+seat that answers its conflict, and the owner all start without the diff. A run that cost real
+money can therefore leave nothing behind but a sentence saying the work was incomplete. The
+fix is on the loop's side: when it settles a run, it saves what the lane holds before it resets
+the lane, on a ref that is never landed, never gated and never treated as the item's candidate,
+and it tells the next run and the owner where that ref is. The worker's side of the same problem
+is the queued item `item-run-commit-before-ending`; this item covers the work the worker still
+leaves behind when it ends, is killed, or is orphaned.
+
+<!-- tillr: item id="item-keep-settled-run-uncommitted-work" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When the loop settles a run that reported blocked, ended without a candidate, or was orphaned, and the lane holds uncommitted changes, it commits them on a ref under `refs/tillr/` before it resets the lane. The commit is not on the item's candidate ref, is never landed and is never gated. A test with a fixture lane that has a modified file asserts the ref holds the file's content after the reset.
+- **c2:** A lane with no uncommitted changes preserves nothing and creates no ref. A test asserts that a clean lane's settlement leaves the ref list as it was.
+- **c3:** Untracked files inside the item's fence are included in the preserved commit. Files outside the fence are preserved too and are flagged as outside it in the record. A test asserts both.
+- **c4:** The run's settlement event records the ref and a summary of the files and line counts. A test asserts the event carries both.
+- **c5:** The run-boundary check excuses the new ref the way it excuses `refs/tillr/runs/`. A test asserts a sibling run's preservation does not convict a run in flight.
+- **c6:** The brief for the next attempt of the same item, and the brief for the design-seat run that answers its conflict, name the ref, say that earlier work exists and say why that run stopped. The run view and the waiting view show the ref and its summary to the owner. A test asserts the brief text and the view output.
+- **c7:** A retention rule drops the ref when its item reaches a terminal state, and the README states it. A test asserts the ref is gone after the item lands and after it is dropped.
+- **c8:** The loop does the Git work for preservation outside any SQLite write transaction. A test asserts that no Git command runs while a write transaction is open.
+
+**Agent details:**
+
+- **Ref:** `tools/tillr-drain/README.md`, the boundary table of refs a run may move and the section on an interrupted run's pin; [the model-tiering design](../design/tillr-planning-node-model-tiering.md), which measures that runs which edited files and then ended uncommitted or were killed are $98 of $228 (43%) of Sol spend; `item-run-commit-before-ending`, the worker side.
+- **Where:** `abandon` and `pin` in `tools/tillr-drain/drain/loop.go`; the reported-blocked branch there; `resetLane`; the orphan release in `tools/tillr-drain/drain/pass.go`; `landerRef` in `tools/tillr-drain/drain/boundary.go`; the conflict-fix brief in `tools/tillr-drain/drain/stage.go`; the run view in `tools/tillr-view/`.
+- **Evidence:** 2026-11-17, `rg -n 'reset|clean -|checkout --|stash' tools/tillr-drain/drain/*.go`: `resetLane` runs `git checkout --force -B <lane branch> <trunk>` then `git reset --hard <trunk>`, which reverts tracked edits and does not remove untracked files, and `rg -n 'clean -' tools/tillr-drain/drain` finds no `git clean`. `abandon` pins `l.headOf(lane)` before the reset, and a lane with uncommitted edits has the base as its head.
+- **Evidence:** 2026-11-17, `rg -n 'refs/tillr/runs' tools/tillr-drain/drain/stage.go`: the only brief that names a pin is the conflict-fix brief, and it names the head of a committed candidate. No brief for a later attempt, a design-seat run or a continued session names uncommitted work, and nothing carries it.
+- **Evidence:** 2026-11-17, the drain operator's notes: run `run-item-conflict-transition-not-duplicate-a1` (Pi build seat, 7 min 41 s, 5,280,378 tokens, $1.02) reported blocked with about 19 files modified and nothing committed. When the loop settled it, `refs/tillr/runs/run-item-conflict-transition-not-duplicate-a1` pointed at the base commit, the lane was reset (reflog `reset: moving to HEAD`), and `git status` was empty. The diff was lost; the report and test logs remained.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` ($9.89) implemented the change and ended without committing; see `item-run-commit-before-ending`.
+- **Evidence:** 2026-11-17, `rg -n 'update-ref -d|prune' tools/tillr-drain/drain --glob '!*_test.go'` finds no ref deletion: nothing tillr keeps under `refs/tillr/` is ever dropped today, so this item states a retention rule instead of inheriting one.
