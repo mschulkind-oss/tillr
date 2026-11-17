@@ -1148,12 +1148,7 @@ awaiting an answer that could never come. A second design seat, on Bedrock, was 
 and idle the whole time. A conflict should go to a design seat that can take it, and a design run
 refused by a limit should leave the conflict free to be sent again rather than awaiting forever.
 
-<!-- tillr: item id="item-drain-design-seat-quota-failover" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the planner dispatches a conflict's design run, it skips every design seat whose quota window is recorded as shut and sends the run to the first one that is open. A test with two design seats, the first shut, asserts the run goes to the second.
-- **c2:** When every design seat's window is shut, the item is held as `backend-window`, the reason a build item gets when its seat is shut, naming the seat and the reset time, and no design run starts. A test asserts the hold and that nothing is dispatched.
-- **c3:** A design run that ends because its backend refused it for a usage limit records the seat's window as shut and returns its conflict to `raised`, so the next pass can send it to another seat. A test feeds a fixture run that exits on a weekly-limit message and asserts the conflict is `raised` and the window is shut.
-- **c4:** A conflict whose design run ended any other way without an answer keeps today's behavior. A test asserts that a design run that ends normally with no block change still moves the conflict to the owner.
 
 **Agent details:**
 

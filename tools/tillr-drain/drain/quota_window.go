@@ -109,22 +109,32 @@ func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, 
 }
 
 func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
-	rows, err := r.Query(`SELECT backend FROM backend_windows WHERE reset_at > ?`, at.UnixMilli())
+	windows, err := readBackendWindows(r, at)
+	shut := map[string]bool{}
+	for name := range windows {
+		shut[name] = true
+	}
+	return shut, err
+}
+
+func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, error) {
+	rows, err := r.Query(`SELECT backend, reset_at FROM backend_windows WHERE reset_at > ?`, at.UnixMilli())
 	// A read-only planner can inspect stores created before windows were added.
 	if err != nil && strings.Contains(err.Error(), "no such table: backend_windows") {
-		return map[string]bool{}, nil
+		return map[string]time.Time{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]bool{}
+	out := map[string]time.Time{}
 	for rows.Next() {
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		var reset int64
+		if err := rows.Scan(&name, &reset); err != nil {
 			return nil, err
 		}
-		out[name] = true
+		out[name] = time.UnixMilli(reset).UTC()
 	}
 	return out, rows.Err()
 }
