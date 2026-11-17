@@ -215,6 +215,22 @@ and use `tillr drain clear-fault`. `gate-harness-error` remains a program that
 could not start or crashed. If group CPU cannot be read, `watchdog unavailable`
 is reported and no stall is declared.
 
+The landing gate runs the change checks and every fast whole-tree declaration.
+`just done` also runs those tree declarations over the last verified commit through HEAD;
+rolling runs them over its watermark through the judged tip, alongside the slower suites
+that landings defer. All three use `tillr-gate checks` and the declarations under
+`tools/gate/checks/`, not separate checklists. A red rolling tree check files the same
+deduplicated trunk fixer as any other rolling failure and advances no watermark.
+
+A candidate refused only by checks already red at its base is acquitted, not charged:
+`trunk-already-red` records the red commit and check ids, and the item is blocked on the
+trunk fixer. Waiting reports `trunk-broken` and names that fixer. After the fixer lands
+and the selected lane base contains its repair, the next pass clears the waiter,
+restores the item's underlying state, and dispatches a fresh run from repaired trunk
+without an authorized retry. Under the `green` lane-base policy, an older verified
+pointer keeps the item blocked until the heavy runner proves the repair. Closing the fixer without
+landing releases nothing. A candidate's own red still takes the ordinary refusal.
+
 The verdict about the candidate. `tillr-gate dualrun` runs two gates and compares them,
 which is the evidence a disputed verdict is settled with.
 

@@ -205,6 +205,32 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		return nil, err
 	}
 	classes, latest := indexPriorRuns(priors)
+	// Acquitted executions still count toward run ids, but not the failure walk.
+	// Keep their ordinal history intact and remove them only from attempt policy.
+	attemptPriors := map[string][]priorRun{}
+	for id, runs := range priors {
+		for _, prior := range runs {
+			if history.refusals[prior.RunID] != RefusalTrunkAlreadyRed {
+				attemptPriors[id] = append(attemptPriors[id], prior)
+			}
+		}
+	}
+	trunkWaiters := map[string]string{}
+	for _, row := range items {
+		if row.State != StateBlocked {
+			continue
+		}
+		waiting, _, err := item.ReadWaitingOn(r, row.ItemID)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+		if waiting != nil {
+			fixer := strings.TrimPrefix(waiting.Waiter, "item:")
+			if strings.HasPrefix(waiting.Waiter, "item:") && IsTrunkFixer(fixer) {
+				trunkWaiters[row.ItemID] = fixer
+			}
+		}
+	}
 	inputDecisions, err := readInputDecisions(r)
 	if err != nil {
 		return nil, readFailure(err)
@@ -320,8 +346,9 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		shut:      shut,
 		forks:     forks,
 		tick:      tick, policy: policy, held: lanes, itemStates: states, history: history,
-		priors: priors, retries: retries, classes: classes, latest: latest, questions: questions,
-		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items), unproved: unproved,
+		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
+		trunkWaiters: trunkWaiters,
+		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items), unproved: unproved,
 		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
 	var hasNodes bool
@@ -494,6 +521,8 @@ type planner struct {
 	// base whose checks never passed is the defect the fixer exists to repair.
 	fixerOpen string
 	unproved  map[string]bool
+	// A blocked acquittal names its own fixer even after the fixer closed unlanded.
+	trunkWaiters map[string]string
 }
 
 // plannedFork is one dispatched item and the fork whose patch branch it delivers, when it
@@ -527,6 +556,15 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	changed, spent := "", false
 	if inputs := p.inputs[item.ItemID]; inputs != nil {
 		changed, spent = p.readmission(item.ItemID, inputs)
+	}
+	if p.history.refusals[p.latest[item.ItemID]] == RefusalTrunkAlreadyRed {
+		// A released acquittal starts fresh, including one whose dispatch had
+		// consumed an owner retry or the automatic input-change allowance.
+		retry, changed, spent = nil, "", false
+		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
+		if p.policy != nil {
+			attempt.backend = p.policy.firstBackend(item)
+		}
 	}
 	interrupted := false
 	if priors := p.priors[item.ItemID]; len(priors) > 0 {
@@ -575,6 +613,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// problem a ruling solves.
 	questions := p.questionState(item)
 	switch {
+	case p.trunkWaiters[item.ItemID] != "":
+		decision.Action, decision.Reason = ActionHold, ReasonTrunkBroken
+		decision.DeferredBy = p.trunkWaiters[item.ItemID]
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
 	case p.unproved[item.ItemID]:
@@ -868,6 +909,9 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 // operator authorized is applied before that too: the person's decision outranks the
 // automatic walk.
 func (p *planner) mayBeARetry(itemID string) bool {
+	if p.history.refusals[p.latest[itemID]] == RefusalTrunkAlreadyRed {
+		return false
+	}
 	return len(p.priors[itemID]) > 0 || !p.history.known[itemID] || p.history.ranBefore[itemID]
 }
 

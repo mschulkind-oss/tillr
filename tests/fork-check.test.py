@@ -2557,7 +2557,8 @@ with tempfile.TemporaryDirectory() as tmp:
         assert len(steps) == 1, [(c.kind, c.label) for c in planned.checks]
         assert steps[0].argv == [sys.executable, "tests/fork-check.test.py"], steps[0].argv
         assert steps[0].watches == ("tools/fork-check.py", "tests/fork-check.test.py",
-                                    ".justfile", "tools/preflight-declarations.json"), steps[0].watches
+                                    ".justfile", "tools/gate/", "tests/fast-tree-in-done.test.py",
+                                    "tools/preflight-declarations.json"), steps[0].watches
         # The step runs with nothing else of the gate beside it. It spawns real gates, and
         # on 2026-10-29 it errored with exit 2 inside a landing pass while other gate work
         # was in flight while passing standalone on the same tip -- which stranded item
@@ -2671,7 +2672,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert module.MECHANISM == ("bin/pi-forks", "bin/pi-forks.list",
                                 "tests/pi-patch-series.test.sh"), module.MECHANISM
     assert module.GATE_CODE == ("tools/fork-check.py", "tests/fork-check.test.py",
-                                ".justfile"), module.GATE_CODE
+                                ".justfile", "tools/gate/", "tests/fast-tree-in-done.test.py"), module.GATE_CODE
     assert not set(module.MECHANISM) & set(module.GATE_CODE), (module.MECHANISM, module.GATE_CODE)
     assert set(module.GATE_CODE) <= set(module.SELF_SUITE), (module.GATE_CODE, module.SELF_SUITE)
     series = module.read_series(repo)
@@ -7800,3 +7801,4 @@ with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as director
 print("wrapper watchdog: cadence parity, output/CPU progress, unavailable accounting, group kill and named stall handoff pass")
 # The runner exception is part of the legacy judge's permanent audit too.
 subprocess.run([sys.executable, str(ROOT / "tools/gate/runner-first.test.py")], check=True)
+subprocess.run([sys.executable, str(ROOT / "tests/fast-tree-in-done.test.py")], check=True)

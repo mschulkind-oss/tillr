@@ -413,6 +413,8 @@ observatory-dev port="4318" *args:
 # worktrees, and the approved point is kept per branch: a verified run advances only the
 # branch it ran on, and plans from the newest verified commit its history contains. A
 # small change is quick once all earlier pending work is verified.
+# This program also imports every fast whole-tree declaration from tools/gate/checks/,
+# using tillr-gate checks over the same last-verified..HEAD range as the remaining suites.
 done *args:
     @python3 tools/fork-check.py {{args}}
 

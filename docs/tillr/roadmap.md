@@ -1861,7 +1861,6 @@ answer a failure that was never in its design. This item makes the two verifying
 gate sees, files a fixer when the trunk is red, and stops a red trunk from being charged to the
 candidate that happened to meet it.
 
-<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/tillr-view/,tools/gate/,tools/fork-check.py,.justfile,tests/,config/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped before
 editing because c6 changes the waiting view, whose source is `tools/tillr-view/waiting.go`, and
@@ -1992,15 +1991,6 @@ trunk fixer filed for a red tree check must not include the scripts that judge t
 the eleventh run named `tests/pack-sync.test.py` and the structural check's script. A test asserts
 that no such script is in the fixer's fence.
 
-- **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
-- **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
-- **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
-- **c4:** A candidate refused only because a tree check is already red at its base is not charged, and its item comes back by itself. The loop records the existing `trunk-already-red` refusal naming the red commit and the checks, files the fixer, and sets the item to `blocked` with the fixer as its waiter, as a fork-check acquittal does today. While the fixer is not landed, the planner's reason for the item is the existing `trunk-broken` and its decision names the fixer. After the fixer is `landed`, the next pass returns the item to the queue with no command from anyone and dispatches a fresh run from the repaired trunk without an authorized retry. Two tests. The first asserts that the hold has the reason `trunk-broken`, names the fixer, and carries no failing verdict and no design conflict. The second marks the fixer landed, runs the loop again with a green gate, and asserts that the item was dispatched and landed; it also asserts that an item whose fixer was closed without landing stays `blocked`.
-- **c5:** A candidate that is red on a tree check which passes on its base stays charged to the candidate. A test asserts the ordinary refusal.
-- **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
-- **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
-- **c8:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree.
-- **c9:** `go test ./... -run 'TestTypedFrozenSeedDispatchesTheRuledItems|TestFrozenSeedRefusesUntypedOwnerCriteria|TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter'` in `tools/tillr-drain` passes. The candidate does not change `config/tillr/seed-items.json`, `tools/tillr-drain/seed_test.go`, or the criterion that the stand-in `tillr-item` prints in `step_argv_contract_test.go`; `git diff --stat <base> HEAD` over those three paths prints nothing. The report gives the full `go test ./...` result for `tools/tillr-drain`, with the date.
 
 **Agent details:**
 

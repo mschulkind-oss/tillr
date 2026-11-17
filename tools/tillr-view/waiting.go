@@ -39,6 +39,8 @@ type waitingRule struct{ class, where, mover string }
 // These are drain's exported reason spellings. Item faults use its shared reader;
 // opening this face's store remains read-only. TestWaitingEveryDrainReasonHasARule enumerates the
 // upstream constants rather than maintaining a second hand-written checklist.
+// Fast whole-tree declarations run at landing, in just done, and in rolling;
+// rolling also judges the deferred suites. Either red waits on the named fixer.
 var waitingRules = map[string]waitingRule{
 	"workflow-invalid":               {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
 	"node-failed":                    {"needs you", "lane", "inspect the named command node and authorize a retry"},
@@ -85,7 +87,8 @@ var waitingRules = map[string]waitingRule{
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
 	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
 	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
-	"trunk-broken":                   {"waits on work", "trunk", "cause not recorded"},
+	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land"},
+	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
 	"conflict-exhausted":             {"needs a cause", "land", "cause not recorded"},

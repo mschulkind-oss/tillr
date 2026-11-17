@@ -337,7 +337,12 @@ run audits every tracked path at the trunk tip with every applicable rolling-tie
 regardless of the repository gate's remembered baseline.
 The rolling tier is the group of slower checks deferred from individual landings;
 a matching cached verdict may answer a check without executing it again.
-Later runs select checks over the range since the watermark.
+Later runs select checks over the range since the watermark. Every rolling run also
+runs the gate's fast whole-tree declarations, even when the range selects no slower suite.
+The landing gate, `just done` (over the last verified commit through HEAD), and rolling
+(over its watermark through the judged tip) share those declarations and the same
+`tillr-gate checks` runner. The directory
+[`tools/gate/checks/`](https://github.com/mschulkind-oss/tillr/blob/main/gate/checks) owns the set; there is no separate allowlist.
 
 A green run advances the watermark, but that alone does not claim full coverage:
 `rolling_runs` binds the outcome to its base and tip, and `rolling_coverage`, joined
@@ -348,7 +353,21 @@ checks assigned to the other tier as well as unchanged or unavailable checks.
 no coverage row, and absent or unreadable evidence is not an empty audit.
 The loop's rolling line prints separate ran, cached, and skipped counts, or explicitly
 says counts are unavailable when the program supplies no readable evidence.
-Red or unknown runs do not advance the watermark.
+Red or unknown runs do not advance the watermark. A red tree check, like a red slower
+suite, files one deduplicated trunk fixer naming the failing check ids. A declaration's
+whole-tree read becomes the tracked file set at the red commit, excluding the gate's own
+code; it never grants an unrestricted root edit permission.
+
+A candidate refused only by checks that also fail on its base is acquitted: the loop
+records `trunk-already-red`, naming the red commit and checks, and blocks the item on
+`item:<fixer id>` without a failing item verdict or a design conflict. The planner reports
+`trunk-broken` and names that fixer. Once the fixer has landed and the selected lane base
+contains its repair, the next pass restores the item's underlying state and clears its
+waiter. With the `green` lane-base policy, an older verified pointer keeps the waiter
+until the heavy runner proves the repair. A fresh run starts from the repaired trunk,
+without an authorized retry; acquitted runs do not consume the failure walk. A fixer
+closed without landing releases nothing. A check green on the base, or a candidate with
+an additional failure of its own, keeps the ordinary refusal.
 
 ## Automatic second attempts after an input changes
 

@@ -91,6 +91,8 @@ var GateCodePaths = []string{
 	"tests/fork-check.test.py",
 	"tools/tillr-gate/",
 	"tools/tillr-loop/",
+	"tools/gate/",
+	"tests/fast-tree-in-done.test.py",
 	"tools/preflight-declarations.json",
 	"tools/gate-timing-declarations.json",
 }
@@ -457,14 +459,10 @@ func (l *Loop) rollingRuns(result *LoopResult) int {
 	return result.RollingGreen + result.RollingRed
 }
 
-// trunkAlreadyRed replays the gate's failing checks on the candidate's base and then on
-// the trunk head, and answers whether either reproduced the failure.
-//
-// The order is deliberate. The base is the candidate's own starting trunk, so a red there
-// names exactly the sha the candidate was staged from; the trunk head is the next best
-// answer when the candidate was staged from an older verified commit. A check that is red
-// on the base is the acquittal; a check that is green on the base and red on the head is
-// still a broken trunk, just one that moved after the candidate started.
+// trunkAlreadyRed replays the gate's failing checks on the candidate's own base.
+// Only an all-red base replay acquits. A newer trunk red does not erase the
+// candidate's failure on a check that passed where it started; rolling files that
+// newer trunk's independent fixer.
 //
 // A fixer item is never acquitted here: its whole purpose is to be red on the base, and
 // replaying its own failure would let it heal itself by doing nothing.
@@ -480,36 +478,26 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 	if base == "" {
 		base = l.laneBase(candidate.LaneID)
 	}
-	revs := make([]string, 0, 2)
-	if base != "" {
-		revs = append(revs, base)
+	if base == "" {
+		return "", nil, false, nil
 	}
-	head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	out, err := replay.Replay(ctx, candidate, base, gate.FailingChecks)
 	if err != nil {
 		return "", nil, false, err
 	}
-	if head != "" && head != base {
-		revs = append(revs, head)
+	if !out.Known || out.Rev != "" && out.Rev != base {
+		return "", nil, false, nil
 	}
-	for _, rev := range revs {
-		out, err := replay.Replay(ctx, candidate, rev, gate.FailingChecks)
-		if err != nil {
-			return "", nil, false, err
-		}
-		if !out.Known {
-			// The replay could not answer. Keep looking at the next revision, but never
-			// read "could not replay" as "green".
-			continue
-		}
-		if len(out.Red) > 0 {
-			red := out.Rev
-			if red == "" {
-				red = rev
-			}
-			return red, out.Red, true, nil
+	redSet := map[string]bool{}
+	for _, check := range out.Red {
+		redSet[check] = true
+	}
+	for _, check := range gate.FailingChecks {
+		if !redSet[check] {
+			return "", nil, false, nil
 		}
 	}
-	return "", nil, false, nil
+	return base, out.Red, true, nil
 }
 
 // acquitTrunkAlreadyRed is the gate-failure fork: it answers true when the failure was
@@ -561,7 +549,21 @@ func (l *Loop) recordTrunkRefusal(ctx context.Context, candidate Candidate, redS
 // fixer cannot be a state the item writer would refuse.
 func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []string, gate GateOutcome) (string, error) {
 	fixerID := TrunkFixerID(redSHA)
-	fence, dropped := trunkFixerPaths(gate.SuspectPaths, CheckWatches(gate.CheckWatches, failing))
+	watches := CheckWatches(gate.CheckWatches, failing)
+	for i, path := range watches {
+		if path != "." {
+			continue
+		}
+		// A declaration's whole-tree read is not a root edit permission. Bind
+		// it to tracked files at the red revision, then exclude the judge below.
+		tracked, err := l.git(ctx, l.cfg.Root, "ls-tree", "-r", "--name-only", "-z", redSHA)
+		if err != nil {
+			return "", err
+		}
+		watches = append(append(watches[:i:i], watches[i+1:]...), strings.Split(tracked, "\x00")...)
+		break
+	}
+	fence, dropped := trunkFixerPaths(gate.SuspectPaths, watches)
 	if len(fence) == 0 {
 		// A fixer with no reachable paths cannot repair anything and would be dispatchable
 		// forever. Refusing to file it is the honest answer; the trunk is still red and the

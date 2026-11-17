@@ -450,7 +450,7 @@ def wait_for(predicate, timeout: float, step: float = 0.1) -> bool:
     return predicate()
 
 
-def write_stubs(bindir: Path, state: Path) -> None:
+def write_stubs(bindir: Path, state: Path, root: Path) -> None:
     """`go build -o X .` writes the API stub to X; `npm … run dev` becomes the UI stub.
 
     Both stubs are real processes that stay alive, because the assertion is about who
@@ -459,6 +459,7 @@ def write_stubs(bindir: Path, state: Path) -> None:
     """
     bindir.mkdir(parents=True, exist_ok=True)
     (bindir / "state").write_text(str(state))
+    (bindir / "root").write_text(str(root))
 
     api_pid = state / "api.pid"
     api_die = state / "api.die"
@@ -490,12 +491,21 @@ chmod +x "$out"
     ui_pid = state / "ui.pid"
     ui_die = state / "ui.die"
     npm = f"""#!/bin/sh
-# stub npm: `ci` is a no-op, `run dev` is the UI process.
-for a in "$@"; do
-    case "$a" in
-        dev) dev=1 ;;
+# stub npm: `ci` creates the install directory; `run dev` is the UI process.
+prefix=""
+install=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --prefix) prefix="$2"; shift 2 ;;
+        ci) install=1; shift ;;
+        dev) dev=1; shift ;;
+        *) shift ;;
     esac
 done
+if [ -n "$install" ]; then
+    mkdir -p "$prefix/node_modules"
+    printf '%s\\n' '{{}}' > "$prefix/node_modules/.package-lock.json"
+fi
 [ -n "${{dev:-}}" ] || exit 0
 echo $$ > {ui_pid}
 while [ ! -e {ui_die} ]; do
@@ -514,6 +524,7 @@ def recipe_env(bindir: Path, durable: Path) -> dict[str, str]:
     env = dict(os.environ)
     env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
     env["YOLO_DURABLE_DIR"] = str(durable)
+    env["OBSERVATORY_TEST_ROOT"] = (bindir / "root").read_text()
     # A dev run must never reach the real store: the stubs ignore the flag, and this keeps
     # the intent explicit if one of them ever learns to read it.
     env.pop("TILLR_VIEW_API", None)
@@ -572,7 +583,7 @@ class Run:
             self.proc = subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve()), "--recipe-proxy",
                  str(reader), str(state), str(port)],
-                cwd=REPO, env=env, pass_fds=(reader,),
+                cwd=env["OBSERVATORY_TEST_ROOT"], env=env, pass_fds=(reader,),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True,
             )
@@ -770,7 +781,11 @@ def main() -> int:
             # exactly the staleness this suite is about.
             state = base / f"case{index}"
             state.mkdir()
-            write_stubs(bindir, state)
+            # Supervision still runs the real recipe and Procfile, but never in
+            # the source checkout. Stub installs and platform stamps must not
+            # leave fake node_modules behind or rewrite an existing real install.
+            root = make_root(base, f"supervision-{index}", modules=None if index % 2 else "linux-x64-gnu")
+            write_stubs(bindir, state, root)
             case(bindir, state, durable)
     if failures:
         print(f"\n{len(failures)} case(s) failed: {', '.join(failures)}", file=sys.stderr)
