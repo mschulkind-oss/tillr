@@ -42,9 +42,21 @@ func readPassSpend(r *store.Reader, decisions []passDecision) (*passSpend, *pass
 	if len(args) == 0 {
 		return nil, nil, nil
 	}
-	rows, err := r.Query(`SELECT carried_over,COALESCE(SUM(usage_cost_usd),0),COALESCE(SUM(usage_tokens),0),COUNT(*),
+	// A pass keeps a historical usage snapshot. Only an explicit correction of
+	// that run's exact pair invalidates it; later resumes or other changed usage
+	// must not reprice history. The event kind is owned by tillr-run.
+	rows, err := r.Query(`WITH attributed AS (
+ SELECT p.*, EXISTS (SELECT 1 FROM events e WHERE e.kind='run.usage.copied'
+  AND e.object_type='run' AND e.object_id=p.run_id
+  AND json_extract(e.payload,'$.tokens')=p.usage_tokens
+  AND json_extract(e.payload,'$.cost_usd')=p.usage_cost_usd) AS copied
+ FROM drain_pass_spend p WHERE pass_id IN (`+strings.Join(marks, ",")+`)
+ ), measured AS (
+ SELECT carried_over, CASE WHEN copied THEN NULL ELSE usage_tokens END AS usage_tokens,
+  CASE WHEN copied THEN NULL ELSE usage_cost_usd END AS usage_cost_usd FROM attributed
+ ) SELECT carried_over,COALESCE(SUM(usage_cost_usd),0),COALESCE(SUM(usage_tokens),0),COUNT(*),
  SUM(usage_cost_usd IS NULL AND usage_tokens IS NULL), SUM(usage_tokens IS NULL), SUM(usage_cost_usd IS NULL)
- FROM drain_pass_spend WHERE pass_id IN (`+strings.Join(marks, ",")+`) GROUP BY carried_over`, args...)
+ FROM measured GROUP BY carried_over`, args...)
 	if err != nil {
 		return nil, nil, err
 	}

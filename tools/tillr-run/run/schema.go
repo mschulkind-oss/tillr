@@ -26,6 +26,9 @@ const (
 	// record says "unknown" and the failure is in the log as its own event rather than
 	// folded into the finish. A failed extraction never changes the run's own outcome.
 	UsageKind = "run.usage"
+	// CopiedUsageKind preserves the old tokens, cost, source run and operator reason
+	// when a correction removes usage copied from an earlier run.
+	CopiedUsageKind = "run.usage.copied"
 	// ReleaseKind is the event a lane release appends, and the record `run release`
 	// answers with: a lane freed, by its run finishing (no event of its own) or by the
 	// reaper and the operator (this one), and the reason recorded either way.
@@ -132,7 +135,7 @@ func init() {
 	if err := store.RegisterColumn(Utility, "runs", "end_cause", "TEXT"); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, ReleaseKind, ResumeKind, PauseRequestKind} {
+	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, CopiedUsageKind, ReleaseKind, ResumeKind, PauseRequestKind} {
 		if err := event.Register(kind, "run"); err != nil {
 			panic(err)
 		}

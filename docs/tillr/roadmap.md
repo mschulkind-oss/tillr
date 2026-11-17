@@ -1984,15 +1984,7 @@ twice. This item adds a way to mark a run's usage as copied, with the old values
 log, a detector that finds such runs, and the operator's step that applies the correction to this
 repository's store. The detector stays as a check, so a new leak of the same kind shows at once.
 
-<!-- tillr: item id="item-pt-copied-usage" paths="tools/tillr-run/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A new face of the run program marks one run's recorded usage as copied from a named earlier run. Afterward the run's stored tokens and cost read as unknown, and one new event holds the old values, the run they match and the reason. A test asserts the row and the event.
-- **c2:** The face refuses, and writes nothing, when the run's tokens and cost are not both equal to the named run's, when the named run started after it, or when the named run is the same run continued. A test covers each refusal.
-- **c3:** A detector lists every run whose nonzero tokens and cost both equal those of an earlier run, each with the run it matches, and can apply the correction to all of them in one transaction. A test with a fixture store of three runs, two of which share their usage, asserts exactly one listed run.
-- **c4:** After the correction, the observatory's performance totals and each item's spend count a corrected run as a run that recorded no usage, and mark the sum as a lower bound the way they already mark one. A test asserts a fixture item's total before and after.
-- **c5:** On a store that holds no copied usage, the detector lists nothing, the correction writes nothing, and every view's totals are unchanged. A test asserts all three.
-- **c6:** `TestInterruptedRetryCannotReadPrecedingAttemptsReport` still passes, and the run program's README says how an operator runs the detector and the correction on a store, and that this repository's store needs it once after this item lands.
-- **c7:** The correction does no Git, file or process work inside a SQLite write transaction. The mark and its event are written in one transaction. A test asserts that no process starts while the write transaction is open.
 
 **Agent details:**
 
