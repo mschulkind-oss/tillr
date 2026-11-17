@@ -68,6 +68,8 @@ func dispatch(args []string) int {
 		return onceFace(rest)
 	case "clear-fault":
 		return clearFaultFace(rest)
+	case "acquit", "examine", "set-aside":
+		return recoveryFace(face, rest)
 	case "retry":
 		return retryFace(rest)
 	case "boundary":
@@ -528,7 +530,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "why, policy, plan, once, retry, clear-fault, boundary, resume, stop or loop"
+const faceList = "why, policy, plan, once, retry, clear-fault, acquit, examine, set-aside, boundary, resume, stop or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")

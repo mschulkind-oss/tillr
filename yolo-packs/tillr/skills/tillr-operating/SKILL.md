@@ -199,6 +199,24 @@ reason to reconstruct the history from memory.
 
 ## Recovery
 
+Use `tillr drain acquit` when a run's recorded fault was not its doing. It closes
+that conviction with the operator's explanation, keeps the evidence, and makes
+the retained candidate eligible for examination again. A run with no conviction
+is refused; acquittal does not erase a failing gate verdict.
+
+Use `tillr drain examine` to judge one retained candidate through the loop's own
+gate, landing and verdict steps. Supply the same step programs and backend policy
+as the loop. It refuses a lane that is held: stop its loop first, then examine the
+run. Nothing new is dispatched merely to choose the candidate.
+
+Use `tillr drain set-aside` when a committed candidate cannot land and needs
+rework. It retains the head at the run's named Git reference, releases the lane,
+and holds the original item with the operator's reason. The command prints the
+reference. Uncommitted lane work and patch-branch candidates are refused. After
+correcting the cause, clear the recorded hold with `tillr drain clear-fault` and
+authorize rework through `tillr drain retry`, still under the same item id.
+Learn each face's required inputs from its `--help`.
+
 Retry a failed item under its own id with `tillr drain retry`. Read the failed
 run's record, correct the cause, and authorize the retry through that face; learn
 its required inputs from `tillr drain retry --help`. Keep the original item so
