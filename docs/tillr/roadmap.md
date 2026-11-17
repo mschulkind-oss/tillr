@@ -785,22 +785,28 @@ it by which run the decision belongs to.
 - **Not this item:** changing what the planner answers, or adding the stop to the default face. The README section *Why each unlanded item is not moving* in `tools/tillr-view/README.md` already states the default face's contract; this item updates only its *Recorded-decision history* section.
 - **Evidence:** at `77fe7c39`, `rg -n 'unclassified' tools/tillr-view/waiting.go tools/tillr-drain/drain/why.go` returns two lines, both in `waiting.go`: the fallback rule and the fallback row. `whyPresentation` has no such branch, and its default returns `needs a cause` with a named mover.
 
-### Stop dispatching when the spend ceiling is reached
+### Add recent spend measurements without stopping dispatch
 
-<!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
+<a id="stop-dispatching-when-the-spend-ceiling-is-reached"></a>
 
-**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because every
-criterion here asked for a spend ceiling, and
-[the momentum principle](../design/momentum-principle.md#what-this-forbids) forbids one: "A budget
-that stops good work is a wall an operator has to debug at 3am." Two tests in `tools/tillr-drain`
-hold that line. `TestTheSpendLineNamesTheMeasurement` fails a spend line that names a ceiling, and
-`TestTheLoopCommandRefusesTheDeletedBudgets` refuses the deleted budget flags. The principle
-stands and this item does not reopen it. The ceiling is withdrawn, and what remains is the
-measurement an operator needs in order to decide for themselves whether to stop the loop or take
-work out of the pile. Those two acts are the only throttles the principle recognizes.
+Principle: [the momentum principle](../design/momentum-principle.md#what-this-forbids)
+forbids a budget that stops useful work. Operators still need to see recent spending so they can
+decide whether to stop the loop or remove work from the pile themselves. The drain loop and the
+waiting view should show the same recorded costs for runs started in the last 24 hours, without
+using those costs to decide whether work can start. Missing cost reports must remain visible,
+and retries that produce no new model output must not count earlier spending again.
 
-The heading and the item id are kept so that links and the queue still find this item. They name
-what was asked for, not what is built: this item builds no ceiling.
+The November 17, 2026 ruling withdrew the originally requested ceiling after the first run
+identified its conflict with that principle. This item adds measurement only; it does not
+reopen that ruling or introduce another way to throttle work.
+
+- **Theme:** Drain spending visibility
+- **Outcomes:**
+  - Show recent recorded spending at loop startup and in the waiting view.
+  - Count runs without reported costs separately and avoid counting earlier costs again on retries.
+  - Keep dispatch independent of spending and leave stopping decisions to the operator.
+
+<!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** This item adds no ceiling. It adds no setting, flag or environment variable that names an amount of spend, no hold whose reason is spend, and no comparison of a spend total against a number. Dispatch does not depend on spend in any way. `TestTheSpendLineNamesTheMeasurement` and `TestTheLoopCommandRefusesTheDeletedBudgets` pass with their assertions unchanged, and a new test dispatches a ready fixture item in a store whose recorded spend is far above any plausible limit.
 - **c2:** The loop's start line and the waiting face each show the recorded cost of runs started in the last 24 hours, labeled as a measurement with its window, such as `spend, last 24h: $41.20 over 37 runs`. The window is fixed at 24 hours and has no setting. A test builds a store with one run started inside the window and one started before it, and asserts that both places show only the first run's cost.
@@ -809,8 +815,9 @@ what was asked for, not what is built: this item builds no ceiling.
 
 **Agent details:**
 
-- **Ref:** the ruling is [the momentum principle](../design/momentum-principle.md), sections *What this forbids* and *The one legitimate stop*. The existing measurement is `spendLine` in `tools/tillr-drain/main.go`, which totals one loop's spend when the loop ends; this item adds a windowed total at the loop's start and in the view, and leaves that line as it is.
+- **Ref:** [What this forbids](../design/momentum-principle.md#what-this-forbids) and [The one legitimate stop](../design/momentum-principle.md#the-one-legitimate-stop) govern the withdrawn ceiling. Keep the existing end-of-loop `spendLine` in `tools/tillr-drain/main.go` unchanged.
 - **Where:** the loop's start line in `tools/tillr-drain/main.go`; the waiting face and its spend reads in `tools/tillr-view/` (`serve.go`, `serveread.go`); the pack's copy under `yolo-packs/tillr/`.
+- **Verify:** Keep `TestTheSpendLineNamesTheMeasurement` and `TestTheLoopCommandRefusesTheDeletedBudgets` unchanged. Test dispatch with very high recorded spend; test both displays with runs inside and outside the fixed 24-hour window; test missing-cost counts and retries without new model output. Criteria c1–c4 specify the assertions.
 - **Not this item:** how an ended or orphaned run's spend is recorded belongs to *Add the spend of killed runs to the record* (`item-drain-record-killed-run-spend`). This item reads whatever cost a run's record carries and does not wait on that one.
 - **Evidence:** at `2532d9b8`, `rg -n 'window_hours|ceiling_usd' tools/tillr-drain tools/tillr-view` returns nothing, so no part of the withdrawn ceiling is in the tree to remove.
 
