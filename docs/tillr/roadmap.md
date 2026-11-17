@@ -1418,3 +1418,37 @@ before it exits, on every path, and a check that keeps it true.
 - **Where:** the `TestMain` in the root test file of each tillr module, for example `tools/tillr-drain/main_test.go`, `tools/tillr-item/main_test.go` and `tools/tillr-land/main_test.go`; the drain trace directory is in the drain tests; a new check under `tests/`.
 - **Evidence:** 2026-11-17, `rg -n 'os.Exit|RemoveAll' tools/tillr*/main_test.go` shows `defer os.RemoveAll(dir)` followed by `os.Exit(...)` in the root test files of `tillr-drain`, `tillr-item`, `tillr-land`, `tillr-cli`, `tillr-view`, among others.
 - **Evidence:** 2026-11-17 re-count in the durable scratch directory: 1,555 `tillr-drain-bin-*`, 138 `tillr-item-bin-*`, 103 `tillr-run-bin-*`, 97 `tillr-land-bin-*`, 96 `tillr-gate-bin-*` and 145 `tillr-drain-trace-*` directories, 2,134 in all. One `tillr-drain-bin-*` sample measured 38 MB with `du -sh`. Earlier the same day the count was 1,439 drain directories, about 50 GB by `du`.
+
+## Filed 2026-11-17: keep a hand commit from leaving the trunk red unseen
+
+### Add the landing gate's whole-tree checks to just done and rolling
+
+A commit made on the trunk by hand, outside the drain, is verified by `just done`. The landing gate
+judges a candidate with a different and larger set of checks: eleven fast checks, five of which read
+the whole tree rather than the candidate's own change. `just done` does not run those five, and the
+drain's rolling run does not run them either. A hand commit can therefore leave the trunk red for
+every later candidate, with no check saying so. On 2026-11-17 that happened: a hand commit passed
+`just done`, the rolling run went green over the range that held it, and the drain's gate then
+refused the next candidate because a whole-tree check failed on the trunk itself. The candidate's
+own change was sound, yet its item was held as a design conflict and a design seat was sent to
+answer a failure that was never in its design. This item makes the two verifying tiers see what the
+gate sees, files a fixer when the trunk is red, and stops a red trunk from being charged to the
+candidate that happened to meet it.
+
+<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/gate/,tools/fork-check.py,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
+- **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
+- **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
+- **c4:** A candidate refused only because a tree check is already red at its base is not charged. The loop records a trunk refusal naming the red commit and the checks, holds the item behind the fixer the same way a fork-check acquittal does, and gates it again after the fixer lands. A test asserts the hold names the fixer and carries no failing verdict and no design conflict.
+- **c5:** A candidate that is red on a tree check which passes on its base stays charged to the candidate. A test asserts the ordinary refusal.
+- **c6:** The drain README, the `tillr-operating` skill and the waiting view's rule for the hold say which checks run where, and an rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
+- **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
+
+**Agent details:**
+
+- **Ref:** `docs/design/landing-principles.md`, the rule that a mechanism whose cost rises with trunk activity is pointed the wrong way: the tree checks are cheap (about 0.5 s each in the fast tier), so running them on every hand commit is the right direction. `tools/tillr-drain/README.md`, the section on broken-trunk detection.
+- **Where:** `tools/gate/change-gate.py` runs `tillr-gate checks --fast-tree --base --head`; the declarations are under `tools/gate/checks/`. `DefaultReplayProgram` and `DefaultRollingProgram` in `tools/tillr-drain/drain/trunk.go`; `trunkAlreadyRed` there and `gateFailureContext` in `tools/tillr-drain/drain/steps.go`; the `done` recipe in `.justfile`; the rolling tier in `tools/fork-check.py`.
+- **Evidence:** 2026-11-17, a hand commit on the trunk that put a documented build directory in a tracked README passed `just done`. `python3 tools/gate/checks/scratch.py` at the trunk then exited 1 with two findings, and the drain's gate refused the next candidate on the `scratch` check. A rolling run over the range holding that commit finished green and moved its watermark.
+- **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` is `python3 tools/fork-check.py --replay --only {only}`, and `{only}` is the failing check ids from the gate's verdict. The replay matches fork-check kinds, and the gate's tree-check ids are a separate set. `python3 tools/fork-check.py --replay --only scratch` in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that fork-check also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
+- **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
