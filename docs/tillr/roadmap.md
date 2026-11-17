@@ -2393,16 +2393,22 @@ turned back on.
   child stayed in that group. A copy whose child called `os.setsid()` failed with
   "the rolling check's child ... outlived the stopped rolling run".
 
-### Show a moved patch branch to the owner before a push publishes it
+### Hold unexpected patch branch moves for owner acknowledgment
 
-The drain no longer stops a run because `refs/heads/patch/<fork>` moved while it ran. That is
-deliberate: exporting a fork series is ordinary work, and stopping every other run for it was
-a fault of its own. But the run is now only told about the move, in one loop log line and in the
-run's `boundary.check` event, and nothing else reads either. A worker on an unrelated lane that
-moves a patch branch passes its fence and its gate, and the owner's next push then publishes the
-branch through the pre-push hook, after which the next launch builds pi from it. Nothing holds
-that move and nothing shows it on the waiting view. The owner should be shown it, and the push
-should wait for an answer.
+Exporting a fork's changes can move the branch that supplies the next build. The drain
+intentionally lets unrelated workers continue when that happens; stopping them for ordinary
+fork maintenance would create needless failures. But when a worker observes a move that is
+neither its own delivery nor a recorded landing, the drain only records it in the run's log
+and event history. The owner gets no notice in the waiting view, and the next push can publish
+that change before the owner has reviewed it. Show these unexpected moves to the owner and
+hold publication until the owner acknowledges them, without interrupting legitimate deliveries
+or landings.
+
+**Outcomes:**
+
+- Show unexpected patch branch moves in the owner's waiting view.
+- Hold publication until the owner acknowledges the move, and record that acknowledgment.
+- Let legitimate deliveries and recorded landings proceed without an extra hold.
 
 <!-- tillr: item id="item-patch-branch-move-held-visible" paths="tools/tillr-drain/,tools/tillr-view/,bin/patch-branches-publish,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
@@ -2415,6 +2421,7 @@ should wait for an answer.
 
 - **Ref:** the review's finding M2-3, and `item-drain-fork-lane-safety` c3 for who may move the branch.
 - **Where:** `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go`; the report at the `recorded, not attributed to the run` line in `tools/tillr-drain/drain/loop.go`; `tools/tillr-view/waiting.go`; `bin/patch-branches-publish`.
+- **Verify:** c1: record an unexpected observed move and assert that `tillr view waiting` names the fork, run, and old and new commits. c2: assert that publishing refuses an unacknowledged move with the fork and acknowledgment instructions, but publishes a branch with no observation. c3: acknowledge the move and assert that the row clears, publishing succeeds, and the record identifies who acknowledged it and when. c4: assert that a lander-marked move or the run's own delivery produces neither a waiting row nor a publishing refusal.
 - **Evidence:** 2026-11-17, `rg -n 'observed = append' tools/tillr-drain/drain/boundary.go` shows `compareRunRefs` feeding `observed`, not `violations`, and `rg -n 'patch/' tools/tillr-view/waiting.go` finds no waiting rule for an observation. Until this lands, before a push, check the loop log for `recorded, not attributed to the run` naming `refs/heads/patch/`.
 
 ### Hold lanes until their runs' background processes exit
