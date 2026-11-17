@@ -2727,3 +2727,24 @@ kbd {
 .transcript-entry__command { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transcript__markdown { overflow-wrap: anywhere; padding: 0.5rem; }
 .transcript__markdown pre { overflow-x: auto; }
+
+/* Keep label geometry at its measured size; deep queues scroll rather than shrink. */
+.dependency-scroll { overflow: auto; max-width: 100%; }
+.dependency-canvas { position: relative; }
+.dependency-edges { position: absolute; inset: 0; color: var(--ink-3); }
+.dependency-edges path:not(defs path) { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.dependency-edges text { fill: currentColor; font-size: 12px; }
+.dependency-node { position: absolute; box-sizing: border-box; padding: 12px; border: 1px solid var(--ink-3); border-radius: 6px; background: var(--surface-1); }
+.dependency-title { display: block; margin: 8px 0; font-family: monospace; font-size: 12px; line-height: 18px; }
+.dependency-title span { display: block; white-space: pre; }
+.dependency-node [data-class] { font-size: 12px; }
+.dependency-node > a:last-child:not(.dependency-title) { font-size: 12px; }
+.dependency-node[data-selected="true"] { outline: 2px solid var(--accent); }
+.dependency-node[data-class="moving"] { border-color: var(--state-moving); }
+.dependency-node[data-class="ready"] { border-color: var(--state-ready); }
+.dependency-node[data-class="needs you"] { border-color: var(--state-owner); }
+.dependency-node[data-class="waits on work"] { border-color: var(--state-work); }
+.dependency-node[data-class="needs a cause"], .dependency-node[data-cycle="true"] { border-color: var(--state-cause); }
+.dependency-cycle, .dependency-edges [data-cycle="true"] { color: var(--state-cause); }
+.dependency-cycle { margin-left: 8px; font-size: 12px; }
+.dependency-node[data-dimmed="true"], .dependency-edges [data-dimmed="true"] { opacity: 0.22; }

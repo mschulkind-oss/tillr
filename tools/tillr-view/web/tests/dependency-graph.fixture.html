@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dependency graph: 60 items, 80 edges</title></head>
+<body><div id="root"></div><script type="module">
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { DependencyGraph } from "../src/components/DependencyGraph.tsx";
+import { useScreenHash } from "../src/components/ObservatoryShell.tsx";
+import { sixtyItems, fixtureClasses, graphItem } from "./dependency-fixture.ts";
+import "../src/styles.css";
+import "../src/tokens.css";
+function Fixture() {
+  const hash = useScreenHash();
+  const cycle = new URLSearchParams(location.search).has("cycle");
+  const items = cycle ? [graphItem("cycle-a", ["cycle-b"]), graphItem("cycle-b", ["cycle-a"]), graphItem("after", ["cycle-b"])] : sixtyItems;
+  const waiting = cycle ? items.map(item => ({item_id:item.item_id, class:"waits on work"})) : fixtureClasses;
+  return React.createElement(DependencyGraph, {items, waiting, selected:new URLSearchParams(hash.split("?")[1]).get("item") ?? undefined});
+}
+createRoot(document.getElementById("root")).render(React.createElement(Fixture));
+</script></body></html>

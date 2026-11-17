@@ -719,6 +719,7 @@ type itemView struct {
 	CostUSD        *float64       `json:"cost_usd"`
 	LatestDecision *dispatchView  `json:"latest_decision"`
 	LatestRun      *runSummary    `json:"latest_run"`
+	BlockedBy      []string       `json:"blocked_by"`
 }
 
 // snapshotData is the two-item drain view: every item projected, with its runs and the
@@ -893,15 +894,23 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// handed to the projection: an item shown as blocked with nothing it waits on would
 	// be a state with no cause.
 	waiting := map[string][]string{}
-	if rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges ORDER BY item_id, blocked_by`); err == nil {
-		for rows.Next() {
-			var id, blockedBy string
-			if rows.Scan(&id, &blockedBy) == nil {
-				waiting[id] = append(waiting[id], blockedBy)
-			}
-		}
-		rows.Close()
+	rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges ORDER BY item_id, blocked_by`)
+	if err != nil {
+		return nil, unreadable(err)
 	}
+	for rows.Next() {
+		var id, blockedBy string
+		if err := rows.Scan(&id, &blockedBy); err != nil {
+			rows.Close()
+			return nil, unreadable(err)
+		}
+		waiting[id] = append(waiting[id], blockedBy)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, unreadable(err)
+	}
+	rows.Close()
 
 	// The store answers its rows by item_id; the board is ordered by the queue's rank.
 	sort.SliceStable(items, func(i, j int) bool {
@@ -932,7 +941,9 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		if c, ok := enqueued[it.ItemID]; ok {
 			enqueuedCandidate = &c
 		}
+		blockers := append([]string{}, waiting[it.ItemID]...)
 		view := itemView{
+			BlockedBy:   blockers,
 			ItemID:      it.ItemID,
 			Title:       it.Title,
 			Rank:        it.Rank,
