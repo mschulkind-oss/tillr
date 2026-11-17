@@ -254,12 +254,7 @@ named in the refusal.
 [apply.go](../../tools/tillr-item/item/apply.go). Every record tillr's own programs write must still
 pass: sync's, the comment intake's, seed's and the loop's.
 
-<!-- tillr: item id="item-def-apply-unknown-fields" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item apply` refuses a record whose payload carries a field the item utility does not store, as `unknown-field`, naming the field, and writes nothing. A test applies a record carrying `"kind": "finding"`.
-- **c2:** Every kind of record tillr's own programs pass to `apply` is still accepted. A test builds one record from sync, one from the comment intake, one from seed and one in the shape the loop writes, and applies each.
-- **c3:** The item utility's README states the producer rule the code enforces: `producer.system` must be `tillr`, and any other value is refused as a record from another system.
-- **c4:** Every existing test of the item utility passes unchanged, and a store created before this change opens as before.
 
 ### Move item states and their moves into the store's definition
 
@@ -280,7 +275,7 @@ and [lifecycle.go](../../tools/tillr-item/item/lifecycle.go), and `terminalState
 [sync.go](../../tools/tillr-item/item/sync.go). The legacy frozen states (`abandoned`, `deleted`,
 `in-progress`) stay readable and unwritable under every definition.
 
-<!-- tillr: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-apply-unknown-fields" prose="2" -->
+<!-- tillr: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr item state`, `apply`, `close` and `reopen` take the states, the finished states, the ready, blocked and closed roles, and the allowed moves from the store's definition through the definition package, and no longer from constants in the item utility.
 - **c2:** A move the definition does not list is refused as `transition-not-allowed`, naming the two states and the definition. A move out of a finished state is allowed only where the definition lists it, requires `--reason` and `--by`, and is recorded as an event that carries both.

@@ -1,10 +1,12 @@
 package item
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -96,6 +98,16 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 // apply shares the record writer with seed's validated rank-only updates. That
 // private path may change a finished item's rank, never its state or definition.
 func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool) (record.Envelope, error) {
+	var payload itemPayload
+	// Read the whole value to retain the item id even when an unknown field sorts
+	// before item_id. Only unknown fields must refuse a replay: ordinary typed
+	// decoding errors keep their existing behavior after a replay miss.
+	payloadErr := json.Unmarshal(env.Payload, &payload)
+	if field, unknown := unknownPayloadField(env.Payload, reflect.TypeOf(payload)); unknown {
+		return record.Envelope{}, Rejectionf("unknown-field", payload.ItemID,
+			"item payload carries unknown field %q: this field is not stored", field)
+	}
+
 	// A replayed request answers the original result and writes nothing: the key is
 	// the caller's statement that this is the same request, and a second write would
 	// make the log say the transition happened twice.
@@ -109,9 +121,8 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		}
 	}
 
-	var payload itemPayload
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		return record.Envelope{}, Usagef("reading the item payload: %v", err)
+	if payloadErr != nil {
+		return record.Envelope{}, Usagef("reading the item payload: %v", payloadErr)
 	}
 	if payload.ItemID == "" {
 		return record.Envelope{}, Usagef("an item.record needs an item_id")
@@ -244,6 +255,69 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		}
 	}
 	return env, nil
+}
+
+// unknownPayloadField checks names independently of value types: a type error in a
+// known field must not mask an unknown field later in the same replayed request.
+// The JSON tags on the payload type are the vocabulary, including nested structs;
+// a second hand-maintained field list would drift as producers gain fields.
+func unknownPayloadField(raw json.RawMessage, shape reflect.Type) (string, bool) {
+	for shape.Kind() == reflect.Pointer {
+		shape = shape.Elem()
+	}
+	switch shape.Kind() {
+	case reflect.Struct:
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+			return "", false // Typed decoding owns malformed values, after replay.
+		}
+		// Inspect every occurrence, not a map's last value for each key: a second
+		// criteria array must not erase an unknown field in the first one.
+		for dec.More() {
+			token, err := dec.Token()
+			if err != nil {
+				return "", false
+			}
+			key, ok := token.(string)
+			if !ok {
+				return "", false
+			}
+			var value json.RawMessage
+			if err := dec.Decode(&value); err != nil {
+				return "", false
+			}
+			var fieldType reflect.Type
+			for i := 0; i < shape.NumField(); i++ {
+				field := shape.Field(i)
+				name := strings.Split(field.Tag.Get("json"), ",")[0]
+				if name == "" {
+					name = field.Name
+				}
+				// Like encoding/json, accept case-insensitive spellings of known keys.
+				if field.IsExported() && name != "-" && strings.EqualFold(key, name) {
+					fieldType = field.Type
+					break
+				}
+			}
+			if fieldType == nil {
+				return key, true
+			}
+			if name, unknown := unknownPayloadField(value, fieldType); unknown {
+				return name, true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		var entries []json.RawMessage
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return "", false
+		}
+		for _, entry := range entries {
+			if name, unknown := unknownPayloadField(entry, shape.Elem()); unknown {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 // sameTerminalDefinition compares the fields Apply writes, not read-through questions or
