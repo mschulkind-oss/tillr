@@ -376,6 +376,16 @@ A judge can find more than "not yet done". It can find that a criterion cannot b
 - **c4:** The waiting face has a rule for each of the two outcomes. A test asserts neither shows as `unclassified`.
 - **c5:** [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) points from "Retirement in the end state" to `D-JL1` and `D-JL2` for where the judge runs and what its file must hold.
 
+**What this block builds on:** the judge step of the block before it in the build order, which is on the trunk. It landed on 2026-11-17 under the subject `feat(tillr): judge opted-in candidates before gating`. The first run of this block on the same day was staged from a base older than that landing, found no judge step in the loop, and stopped. It was right to stop, and the block stands as written: it does not build the judge step, and it is not built on a tree without one. The check is one command, `rg -n 'ReasonEvalFailed' tools/tillr-drain/drain/`. A tree where it prints nothing is staged too early. A run reports that as a staging fault, and the answer is a restage on the current trunk, not another change to this block.
+
+What that landing left for this block to extend, as read on the trunk on 2026-11-17:
+
+- The loop's judge step is `judgeCandidate` in `tools/tillr-drain/drain/judge.go`. It hands the judge's file to the intake and holds the item as `eval-failed` for every outcome that is not `pass`. This block replaces that one branch with three: `not-done` keeps the hold it has, and `blocked` and `defective` get the routes of c1 and c2. It adds no second judge run and no second read of the file.
+- The order of c3 is already the intake's. `tillr-item judge` answers one outcome for a file, and it picks defective before blocked before not-done (`tools/tillr-item/item/judge.go`). So c3 is met by the loop routing on the outcome the intake returns and never ranking the entries again. Its test hands the loop the three mixed files and asserts the route each takes.
+- The intake's answer keeps the judge's waiter for a blocked entry, for the caller's use. c1 moves the item to blocked through the store's existing move, which already requires a waiter and a reason and remembers the state the item was in. The reason is the blocked entry's own.
+- c2 closes the item through the existing close command's code path, so the closed item carries who closed it and the state it was in, and the lander's refusal of a closed item's candidate applies with no new rule.
+- The waiting face's rules are the table in `tools/tillr-view/waiting.go`, which the landing extended with `judge-grant-absent`, `judge-unreadable` and `eval-failed`. c4 adds its two rules to that table.
+
 ### Route a second failed attempt to the design seat
 
 The loop may try a failed item once more by itself when something it recorded has changed, and an operator may authorize one more run by name. What happens after that second failure is, today, nothing: the item sits in a hold until someone notices. The owner's ruling is that a failure the loop cannot resolve goes to a seat that can, and to the design seat before the owner. Two failures of the same item are evidence that the item is wrong, not the worker. This block sends the item, with what both runs reported, to the design seat in the way a run that reports blocked is already sent.
