@@ -22,7 +22,7 @@ vantage:
 
 # Tillr Observatory — First-Class Introspection and Web Front End Over a Drain
 
-> **Delivered copy.** This is `docs/design/tillr-observatory.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-observatory.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-observatory.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-observatory.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Draft (`in-review`) · **2026-11-15** · Owner: Matt Schulkind. Store crash recovery and failed-open retry amended; the remaining design scope is unchanged.
 

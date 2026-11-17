@@ -9,7 +9,7 @@ summary: "The one page to read first about tillr: every design and reference doc
 
 # tillr designs: what is built, what is queued, and what is only proposed
 
-> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. Every status below was checked against the tree at `424cc9db0` and the
 queue on this checkout's store that evening, not copied from the documents' own status lines;

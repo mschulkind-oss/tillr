@@ -22,7 +22,7 @@ vantage:
 
 # Why tillr keeps hitting walls: three causes, one target
 
-> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-15. Measured against `main` at `35a3dc9f1`, on a machine with no `.tillr/`
 directory. Since then the block reader and the trailer deletion are built (`D-TC1`, and `D-TC2`

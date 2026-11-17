@@ -15,7 +15,7 @@ next: "Rule the three open questions in Section 6.2 (process reload, pack mirror
 
 # Self-Hosted Tillr Building, Watchable in the Observatory
 
-> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-13. Nothing built. Every fact below was measured against the tree and the
 live store on 2026-11-13; the eight launchers still come from the pack, and the seven

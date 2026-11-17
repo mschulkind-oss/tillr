@@ -1,6 +1,6 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "20c3847b83acf742d319a00efa69d0fd54a56bd6",
+  "commit": "0cd258278938dded8a534229e1e2f475c763303e",
   "date": "2026-11-17",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
@@ -42,7 +42,7 @@
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "4f0541dff7d56f3fcbe67146c6c295e4226c9ada",
+      "blob": "699f4e83a288666a23e13cbf279c6bf061af9177",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
@@ -72,12 +72,12 @@
     },
     {
       "source": "docs/design/tillr-item-graphs.md",
-      "blob": "0925bd567a6ef6e420a9bfaa8f3d89d5bf1f2d24",
+      "blob": "887728c48a232ba4736e9d709d9c93f59ca36b12",
       "delivered": "docs/design/tillr-item-graphs.md"
     },
     {
       "source": "docs/design/tillr-planning-node-model-tiering.md",
-      "blob": "6367d28d4a3ba171c26bb6b46391a15074f370af",
+      "blob": "ce19dc7426b72f70462e384ff38b2230d6221df2",
       "delivered": "docs/design/tillr-planning-node-model-tiering.md"
     },
     {
