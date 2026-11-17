@@ -122,6 +122,29 @@ func TestDefaultsAndIndependentReads(t *testing.T) {
 	}
 }
 
+func TestGitLandingAcceptsTillrLoopHooksWithoutChangingDefault(t *testing.T) {
+	d, err := GitLanding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Hooks != nil {
+		t.Fatal("embedded definition must leave hooks unset")
+	}
+	d.Hooks = &Hooks{Argv: []string{"tillr-loop"}, Names: []string{"gate", "land", "verdict", "fixer-gate", "replay", "rolling"}}
+	body, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(strings.NewReader(string(body)))
+	if err != nil || !reflect.DeepEqual(got, d) {
+		t.Fatalf("Git landing with tillr-loop: %+v / %v", got, err)
+	}
+	fresh, err := GitLanding()
+	if err != nil || fresh.Hooks != nil {
+		t.Fatalf("hook opt-in changed embedded default: %+v / %v", fresh, err)
+	}
+}
+
 func TestGitLandingLiteralValues(t *testing.T) {
 	got, err := GitLanding()
 	if err != nil {

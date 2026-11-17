@@ -562,14 +562,7 @@ rest read.
 `DefaultFixerGateProgram` in [trunk.go](../../tools/tillr-drain/drain/trunk.go). The flag-form cases
 are [drain-argv.json](../../tools/tillr-loop/drain-argv.json).
 
-<!-- tillr: item id="item-def-tillr-loop-hooks" paths="tools/tillr-loop/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr-loop describe` prints the hooks it answers and their flags, in the contract's shape: `gate`, `land`, `verdict` and `fixer-gate` as today, and `replay` and `rolling` as faces that run the programs the drain defaults to today.
-- **c2:** A test takes the embedded Git-landing definition, sets its `hooks` to `tillr-loop` as the program and those six hooks, and asserts that the definition package accepts it. The embedded definition itself keeps `hooks` unset.
-- **c3:** A test asserts that, for every case in `drain-argv.json`, the step a drain started with no step flags would run through the hook program receives the same flags as the flag form does today.
-- **c4:** The keeper's loop command, with its step flags, keeps working unchanged.
-- **c5:** `tools/tillr-loop/test.py` and the drain's loop suites pass.
-- **c6:** tillr-loop's README says it is the Git-landing definition's hook program and links the contract.
 
 ### Add the item and node to every run's environment
 
@@ -739,7 +732,7 @@ to `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md` in any works
 pack. The test lives in the drain's suite because the drain module already links the item and run
 utilities.
 
-<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory,item-def-tillr-loop-hooks" prose="2" -->
+<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory" prose="2" -->
 
 - **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
 - **c2:** The README gives one fenced command sequence that a Product QA agent runs from an empty directory with no Git repository: `tillr store init --definition`, `tillr item apply` of three findings, `tillr drain loop --exit-when-drained`, then `tillr item list` and `tillr item show` to read the outcomes.
