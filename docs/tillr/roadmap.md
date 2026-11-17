@@ -855,12 +855,36 @@ needs two readers the fence left out. The settings file is read by `tools/tillr/
 refuses any table other than `roll` and `push`, so it refuses `[lanes]`. An item block is read by
 `tools/tillr-item/item/sync.go`, which refuses `express` as an unknown attribute. Both directories
 are added to this item's paths. The work extends those two readers and adds no second reader of
-either file inside the loop or the view. The criteria below are unchanged.
+either file inside the loop or the view.
 
-- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
+**Ruling, 2026-11-17 (answers the third run's conflict on designer sessions):** the third run moved
+review-comment work off its document's desk and onto the express lanes, and then stopped because a
+comment turn that changes lane cannot find its designer's session: the pi adapter opens a session
+by id in the lane's own directory (`pi --help`: "Use the current directory's existing session with
+the ID, creating it otherwise"), so the turn starts cold while the record says `resumed-warm`. That
+move was never asked for, and it is withdrawn. Three points settle it:
+
+1. **Review-comment work stays at its document's desk.** A desk, defined in
+   [the designer sessions design](../design/tillr-designer-sessions.md#the-desk), is the lane that
+   belongs to one design document. It is already outside the lane cap, a comment run already starts
+   without waiting for a numbered lane, and at most `comments.max_running` of them run at once.
+   That is the behavior this item's principle asks for, and the session is found again because the
+   desk never moves. This item changes nothing about desks, comment dispatch or session choice, and
+   a comment item never takes an express lane or counts against `lanes.express`.
+2. **The pi adapter is not changed, and `tools/tillr-run/` stays outside this item's paths.** With
+   comment work at its desk no item changes lane between turns, so no session lookup across lanes
+   is needed.
+3. **Whether an item is express is read from the item itself, before workflow routing.** The third
+   run's failing test showed that a saved idea lost its express lane once the first workflow node
+   replaced its seat with `scout`. The loop decides express from the item's own stored definition,
+   and a later change of seat by a workflow node does not change the answer.
+
+c1 and c4 are reworded below to say this. c2 and c3 are unchanged.
+
+- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)) and any item whose block sets `express="true"`. An item that answers review comments is not express work in this sense: it runs at its document's desk, as it does today. Whether an item is express is decided from the item's own definition, and a test asserts that a saved idea whose first workflow node names another seat is still dispatched on an express lane.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
-- **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express".
+- **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express". Desk runs are shown as they are today and are counted in neither number.
 
 ## Filed 2026-11-16: two decided designs are cut into build items
 
