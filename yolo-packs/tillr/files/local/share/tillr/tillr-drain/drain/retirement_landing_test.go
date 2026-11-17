@@ -46,6 +46,7 @@ func TestLoopRetiredBlockLandsUnderTheWorkerMessage(t *testing.T) {
 	tree := runGit(t, repo, "rev-parse", candidate.HeadSHA+"^{tree}")
 	runGit(t, repo, "checkout", "main")
 	bin := filepath.Join(root, "tillr-land")
+	declareSiblingInputs(t)
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Dir = filepath.Join("..", "..", "tillr-land")
 	if out, err := build.CombinedOutput(); err != nil {

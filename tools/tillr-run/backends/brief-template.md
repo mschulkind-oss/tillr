@@ -107,6 +107,12 @@ Run each of these and paste its output in your report. Never run the full gate
 
 {{VERIFICATION}}
 
+While working on Go code, use a targeted `-run` for the behavior being changed. Run the
+full suite once before committing. In the drain module, drop `-count=1` for the working
+loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
+sibling change reruns tests and an unchanged tree still caches. This is test verification,
+not permission to run the landing gate (`just done`).
+
 ## Report shape
 
 Your final message contains, in this order:

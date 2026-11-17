@@ -46,6 +46,7 @@ func TestARealLandingDuringASiblingRunConvictsNothing(t *testing.T) {
 	runGit(t, repo, "worktree", "add", "-q", "-b", "tillr/lane-1", running, base)
 
 	bin := filepath.Join(root, "tillr-land")
+	declareSiblingInputs(t)
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Dir = filepath.Join("..", "..", "tillr-land")
 	if out, err := build.CombinedOutput(); err != nil {

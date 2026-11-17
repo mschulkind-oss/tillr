@@ -48,6 +48,7 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	for _, module := range []string{"tillr-land", "tillr-item"} {
+		declareSiblingInputs(t)
 		cmd := exec.Command("go", "build", "-o", filepath.Join(root, module), ".")
 		cmd.Dir = filepath.Join("..", "..", module)
 		if out, err := cmd.CombinedOutput(); err != nil {
