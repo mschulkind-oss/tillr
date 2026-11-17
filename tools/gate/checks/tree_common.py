@@ -108,6 +108,12 @@ SCRATCH_EXCEPTIONS = (
     # `excused_as`, and the marker is that line's own text.
     ("tools/tillr-view/README.md",
      "`<checkout>/.yolo/durable/tillr-observatory/logs/<hostname>-<port>/` and prints it at"),
+    # Product QA's second-round reply, reproduced as received: one of its defect reports names
+    # the environment variable `run exec` overwrites. That is the name of the variable the
+    # defect is about, quoted in another project's text, never an artifact that proved a
+    # past claim, and the marker is that line's own text.
+    ("docs/design/tillr-product-qa-requests.md",
+     "**`run exec` sets `YOLO_DURABLE_DIR`** to `<lane>/durable/<run>`, undocumented"),
 )
 
 
