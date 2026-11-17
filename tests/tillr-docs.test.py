@@ -594,7 +594,16 @@ def case_recovery():
     ok("Recovery retries the failed item under its own id; cloned-id fixture refused")
 
 
+def case_comment_intake_documented():
+    expected = ("tillr", "item", "comments", "take")
+    for path in (ROOT / "tools/tillr-item/README.md", SKILL):
+        if expected not in invocations(path):
+            fail(f"{path.relative_to(ROOT)} omits the hand-driven comment intake command")
+    ok("hand-driven comment intake is documented in the item README and operating skill")
+
+
 def main():
+    case_comment_intake_documented()
     case_recovery()
     case_rolling_guard_fixtures()
     case_rolling_enabled()

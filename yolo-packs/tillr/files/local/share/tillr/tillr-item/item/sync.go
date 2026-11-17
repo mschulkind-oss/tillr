@@ -463,7 +463,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	var oldest int64
 	for _, id := range ids {
 		st := held[id]
-		if terminalStates[st.state] {
+		if terminalStates[st.state] || IsCommentItem(id) {
 			continue
 		}
 		if _, declared := byID[id]; declared {
