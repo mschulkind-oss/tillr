@@ -125,6 +125,10 @@ func decodeGrant(env record.Envelope) (grantPayload, time.Time, error) {
 			return grantPayload{}, time.Time{}, Rejectionf("grant-unbounded", payload.GrantID,
 				"grant %q names every claim (%q): a grant names the claim classes it covers, and one reading all claims is unbounded", payload.GrantID, class)
 		}
+		if class == ClaimOwnerOnly {
+			return grantPayload{}, time.Time{}, Rejectionf("grant-owner-only", payload.GrantID,
+				"grant %q names owner-only: an owner's criterion cannot be delegated", payload.GrantID)
+		}
 		if err := validateClaimClass(class, payload.GrantID); err != nil {
 			return grantPayload{}, time.Time{}, err
 		}

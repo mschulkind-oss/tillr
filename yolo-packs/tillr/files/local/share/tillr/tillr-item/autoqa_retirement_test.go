@@ -186,7 +186,7 @@ func TestLegacyAutoQARecordsRemainReadableAndUnchanged(t *testing.T) {
 	db := legacyAutoQAStore(t)
 	before := legacySnapshot(t, db)
 	ctx := context.Background()
-	s, err := store.Open(ctx, db, false)
+	s, err := store.Open(ctx, db, true)
 	if err != nil {
 		t.Fatal(err)
 	}

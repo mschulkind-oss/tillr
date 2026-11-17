@@ -72,10 +72,10 @@ func TestTerminalApplyChanges(t *testing.T) {
 		{"blockers", "state-terminal", func(p map[string]any) { p["blocked_by"] = []string{"item_other"} }},
 		{"fence", "state-terminal", func(p map[string]any) { p["allowed_paths"] = []string{"tools/"} }},
 		{"new criterion", "state-terminal", func(p map[string]any) {
-			p["criteria"] = []criterion{{"c1", "the first criterion", "open"}, {"c2", "new", ""}}
+			p["criteria"] = []criterion{{"c1", "the first criterion", "open", ""}, {"c2", "new", "", ""}}
 		}},
-		{"criterion state", "criterion-state", func(p map[string]any) { p["criteria"] = []criterion{{"c1", "the first criterion", "done"}} }},
-		{"criterion text", "criterion-frozen", func(p map[string]any) { p["criteria"] = []criterion{{"c1", "changed", "open"}} }},
+		{"criterion state", "criterion-state", func(p map[string]any) { p["criteria"] = []criterion{{"c1", "the first criterion", "done", ""}} }},
+		{"criterion text", "criterion-frozen", func(p map[string]any) { p["criteria"] = []criterion{{"c1", "changed", "open", ""}} }},
 		{"criterion removed", "criterion-frozen", func(p map[string]any) { p["criteria"] = []criterion{} }},
 	}
 	for _, from := range []string{"landed", "resolved-elsewhere"} {

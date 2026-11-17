@@ -260,6 +260,9 @@ func TestAnAgentVerdictUnderAnExpiredGrantIsRefused(t *testing.T) {
 // does not cover is out of scope, which is an escalation and not a sign-off.
 func TestAnAgentVerdictOutOfScopeIsRefused(t *testing.T) {
 	db := storedWithCriterion(t, "verdict-scope", "open")
+	if code, out := applyClass(t, db, "red-gate-triage", frozenText); code != 0 {
+		t.Fatalf("hardening the stored criterion exited %d: %s", code, out)
+	}
 	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
 		t.Fatalf("issuing the grant exited %d: %s", code, out)
 	}

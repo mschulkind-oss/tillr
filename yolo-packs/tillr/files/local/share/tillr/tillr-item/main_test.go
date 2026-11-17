@@ -98,6 +98,7 @@ type criterion struct {
 	CriterionID string `json:"criterion_id"`
 	Text        string `json:"text"`
 	State       string `json:"state"`
+	ClaimClass  string `json:"claim_class,omitempty"`
 }
 
 // base is the record every case starts from: one item, one criterion, no edges.

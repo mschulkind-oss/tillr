@@ -430,7 +430,7 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
 
 
 def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
-    """Record one mechanical item.verdict per frozen criterion of the item."""
+    """Record mechanical verdicts only for stored verification-only criteria."""
     if ctx.verdict != "pass":
         raise Refusal(
             EXIT_USAGE,
@@ -478,6 +478,12 @@ def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
         )
     steps = []
     for criterion in criteria:
+        claim_class = criterion.get("claim_class")
+        if claim_class not in {"verification-only", "red-gate-triage", "direction", "owner-only"}:
+            raise Refusal(EXIT_EXTERNAL, f"criterion {criterion['criterion_id']} has no valid stored claim_class")
+        if claim_class != "verification-only":
+            print(f"left criterion {criterion['criterion_id']}: stored claim class {claim_class} requires a non-mechanical verdict")
+            continue
         record = envelope(
             "item.verdict",
             f"verdict-{ctx.item}-{criterion['criterion_id']}",
