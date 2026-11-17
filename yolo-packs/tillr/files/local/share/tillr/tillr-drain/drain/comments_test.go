@@ -150,11 +150,7 @@ func (s *commentSteps) Land(ctx context.Context, c Candidate) (LandOutcome, erro
 	runGit(s.t, s.f.root, "commit", "-qm", "docs: land revision")
 	// The stub lander records its landing before returning, like the real land face.
 	fixtureWrite(s.t, s.f, func(tx *store.Tx) error {
-		if _, err := tx.Exec("CREATE TABLE IF NOT EXISTS landings(run_id TEXT PRIMARY KEY,item_id TEXT,result TEXT,trunk_after TEXT,event_seq INTEGER)"); err != nil {
-			return err
-		}
-		_, err := tx.Exec("INSERT INTO landings(run_id,item_id,result,trunk_after,event_seq) VALUES(?,?,'landed',?,1)", c.RunID, c.ItemID, runGit(s.t, s.f.root, "rev-parse", "HEAD"))
-		return err
+		return recordFixtureLanding(tx, c.ItemID, c.RunID, runGit(s.t, s.f.root, "rev-parse", "HEAD"), 1)
 	})
 	if s.mode == "owner-edit" {
 		writeForkFile(s.t, filepath.Join(s.f.root, "docs/design/example.md"), "Owner's unsaved text.\n")

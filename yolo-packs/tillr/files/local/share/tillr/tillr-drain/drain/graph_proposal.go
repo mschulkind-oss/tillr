@@ -263,6 +263,9 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 		inserted = true
 		for _, node := range inner.Stages {
 			node.ID = target + "/" + node.ID
+			if node.CopiesOf != "" {
+				node.CopiesOf = target + "/" + node.CopiesOf
+			}
 			if node.Parent == "" {
 				node.Parent = target
 			} else {

@@ -2559,7 +2559,10 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 		// registration is what makes `worktree add` refuse the branch the lane is on — the
 		// canary's second attempt died on exactly that message before a tick could run.
 		// Pruning first removes only registrations whose directory is already gone.
-		if _, err := l.git(ctx, l.cfg.Root, "worktree", "prune"); err != nil {
+		if err := withWorktreeRegistryLock(ctx, l.cfg.Root, func() error {
+			_, err := l.git(ctx, l.cfg.Root, "worktree", "prune")
+			return err
+		}); err != nil {
 			return err
 		}
 		// The branch is scoped by the lane root, so a holder is this lane's own directory
@@ -2574,7 +2577,10 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 		if holder != "" {
 			return refuseBranchHeld(lane, l.cfg.LaneRoot, branch, holder)
 		}
-		if _, err := l.git(ctx, l.cfg.Root, "worktree", "add", "--force", "-B", branch, path, TrunkRef); err != nil {
+		if err := withWorktreeRegistryLock(ctx, l.cfg.Root, func() error {
+			_, err := l.git(ctx, l.cfg.Root, "worktree", "add", "--force", "-B", branch, path, TrunkRef)
+			return err
+		}); err != nil {
 			return err
 		}
 	}
@@ -2590,6 +2596,17 @@ func (l *Loop) resetLane(ctx context.Context, lane string) error {
 }
 
 func (l *Loop) resetLaneTo(ctx context.Context, lane, revision string) error {
+	if strings.HasPrefix(lane, "desk-") {
+		return withWorktreeRegistryLock(ctx, l.cfg.Root, func() error {
+			return l.resetLaneToRegistryLocked(ctx, lane, revision)
+		})
+	}
+	return l.resetLaneToRegistryLocked(ctx, lane, revision)
+}
+
+// Desk removal requires the registry lock. Other lane resets do not change the
+// registry. Release callers acquire it before their SQLite writer, not within it.
+func (l *Loop) resetLaneToRegistryLocked(ctx context.Context, lane, revision string) error {
 	path := l.lanePath(lane)
 	if strings.HasPrefix(lane, "desk-") {
 		if _, err := os.Stat(path); os.IsNotExist(err) {

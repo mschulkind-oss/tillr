@@ -81,6 +81,20 @@ func validateEvaluator(w *Workflow) error {
 	return nil
 }
 
+// Evaluator receipts keep their existing string-valued input format. Repeated
+// inputs list every accepted producer's file on its own line in copy order.
+func evaluatorInputFiles(inputs map[string][]NodeInput) map[string]string {
+	files := make(map[string]string, len(inputs))
+	for name, copies := range inputs {
+		paths := make([]string, 0, len(copies))
+		for _, input := range copies {
+			paths = append(paths, input.Path)
+		}
+		files[name] = strings.Join(paths, "\n")
+	}
+	return files
+}
+
 func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, error) {
 	req := *d.RunRequest
 	req.NodeID = d.Workflow.Stages[d.NodeIndex].ID
@@ -93,10 +107,11 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 			return c, err
 		}
 	}
-	c.EvaluatorInputs, err = l.nodeInputPaths(ctx, d)
+	inputs, err := l.nodeInputPaths(ctx, d)
 	if err != nil {
 		return c, err
 	}
+	c.EvaluatorInputs = evaluatorInputFiles(inputs)
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return c, err

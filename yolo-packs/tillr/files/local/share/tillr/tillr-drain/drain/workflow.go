@@ -51,6 +51,9 @@ type WorkflowGroup struct {
 }
 
 type WorkflowStage struct {
+	// CopiesOf is expansion-owned provenance, persisted in graph snapshots but
+	// refused in tracked files. Only copies of one stage may share an input.
+	CopiesOf   string              `json:"copies_of,omitempty"`
 	MayReplace map[string][]string `json:"may_replace,omitempty"`
 	ID         string              `json:"id"`
 	Parent     string              `json:"parent,omitempty"`

@@ -86,11 +86,8 @@ func TestHeavyFilesOneFixerAgainstTheFirstRedLanding(t *testing.T) {
 	}
 	defer s.Close()
 	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-		if _, err := tx.Exec(`CREATE TABLE landings(trunk_after TEXT, result TEXT)`); err != nil {
-			return err
-		}
 		for _, sha := range []string{red, tip} {
-			_, err := tx.Exec(`INSERT INTO landings(trunk_after,result) VALUES(?,'landed')`, sha)
+			err := recordFixtureLanding(tx, "fixture", "fixture-run", sha, 0)
 			if err != nil {
 				return err
 			}

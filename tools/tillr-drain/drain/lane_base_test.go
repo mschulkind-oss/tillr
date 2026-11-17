@@ -161,14 +161,12 @@ func TestLaneBaseForkBlockerUsesDeliveredPatchHistory(t *testing.T) {
 		for _, q := range []string{
 			`UPDATE items SET state='landed', allowed_paths='[".forks/lanes/lane-1/pi/"]' WHERE item_id='blocker'`,
 			`INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`,
-			`CREATE TABLE landings(item_id TEXT,trunk_after TEXT,result TEXT,event_seq INTEGER)`,
 		} {
 			if _, err := tx.Exec(q); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(`INSERT INTO landings VALUES('blocker',?,'landed',1)`, forkHead)
-		return err
+		return recordFixtureLanding(tx, "blocker", "fixture-run", forkHead, 1)
 	})
 	dependent := func() Decision {
 		for _, plan := range mustPlan(t, l) {
@@ -214,13 +212,12 @@ func TestLaneBaseWaitsForBlockerLandingToBeProved(t *testing.T) {
 				l.gatePolicy.LaneBase = "tip"
 			}
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				for _, q := range []string{`UPDATE items SET state='landed' WHERE item_id='blocker'`, `INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`, `CREATE TABLE landings(item_id TEXT,trunk_after TEXT,result TEXT,event_seq INTEGER)`} {
+				for _, q := range []string{`UPDATE items SET state='landed' WHERE item_id='blocker'`, `INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`} {
 					if _, err := tx.Exec(q); err != nil {
 						return err
 					}
 				}
-				_, err := tx.Exec(`INSERT INTO landings VALUES('blocker',?,'landed',1)`, landed)
-				return err
+				return recordFixtureLanding(tx, "blocker", "fixture-run", landed, 1)
 			})
 			decision := func() Decision {
 				for _, p := range mustPlan(t, l) {
