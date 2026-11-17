@@ -29,6 +29,7 @@ Run: python3 tests/tillr-docs.test.py
 
 import ast
 import copy
+import importlib.util
 import os
 import re
 import shlex
@@ -39,6 +40,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# The tillr pack delivers copies of tracked files (the module mirror and the design
+# documentation snapshot). A path-keyed allowance follows a copy to its source by the one
+# rule, `source_of` in tools/pack-docs.py, so a copy is judged exactly as its source is.
+_spec = importlib.util.spec_from_file_location("pack_docs", ROOT / "tools" / "pack-docs.py")
+pack_docs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pack_docs)
 
 # The eight binaries and the module each is built from. `tillr` is the dispatcher and is
 # built from `tillr-cli`; the seven `tillr-<noun>` name their own module.
@@ -482,7 +490,7 @@ def rolling_policy_errors(files, history=ROLLING_HISTORY):
             for name, body in files.items()}
     errors = []
     for name, commands in hits.items():
-        if commands and name not in history:
+        if commands and pack_docs.source_of(name) not in history:
             errors.append(f"{name}: disables the after-merge check: {commands[0]}")
     for name, reason in history.items():
         if not name.startswith("docs/") or not name.endswith(".md") or "/skills/" in name:
@@ -540,6 +548,13 @@ def case_rolling_guard_fixtures():
         fail("rolling guard rejected a named historical run")
     if not rolling_policy_errors({historical: "tillr-drain loop"}, {historical: "Past run."}):
         fail("rolling guard accepted a stale historical exception")
+    # A delivered copy is judged as its source: excused where the source is, and only there.
+    copy_of = "yolo-packs/tillr/files/local/share/tillr/" + historical
+    if rolling_policy_errors({historical: body, copy_of: body}, {historical: "An already executed run."}):
+        fail("rolling guard refused the delivered copy of a named historical run")
+    other_copy = "yolo-packs/tillr/files/local/share/tillr/docs/design/other.md"
+    if not rolling_policy_errors({historical: body, other_copy: body}, {historical: "An already executed run."}):
+        fail("rolling guard excused the delivered copy of a document with no exception")
     for name in ("bin/keeper", "yolo-packs/tillr/skills/keeper/SKILL.md", ".justfile"):
         if not rolling_policy_errors({name: body}, {name: "Not a historical record."}):
             fail(f"rolling guard allowed an instruction exception: {name}")

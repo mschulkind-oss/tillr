@@ -98,11 +98,9 @@ SCRATCH_EXCEPTIONS = (
     # The observatory recipe's build directory: tools/observatory/run.sh builds the two
     # programs into that directory by design, and the README says where, so a reader can
     # find the binaries. It is a location, not an artifact that proved a past claim. The
-    # pack ships a mirror of the README, which carries the same line. Each marker is that
-    # line's own text so the exception cannot grow to cover a neighbouring line.
+    # pack's mirror of the README carries the same line and is excused by `excused_as`. The
+    # marker is that line's own text so the exception cannot grow to cover a neighbouring line.
     ("tools/tillr-view/README.md",
-     "tillr-observatory/<key>/`, where `<key>`"),
-    ("yolo-packs/tillr/files/local/share/tillr/tillr-view/README.md",
      "tillr-observatory/<key>/`, where `<key>`"),
 )
 
@@ -132,18 +130,21 @@ def tracked_markdown(root: Path) -> list[str]:
     return [path for path in git(root, "ls-files", "*.md").split("\n") if path]
 
 
-# The tillr pack delivers dated copies of the tillr design documents under this prefix
-# (tools/pack-docs.py, `just pack-docs`). A copy carries its source's lines, so it is
-# excused exactly where its source is: the copy of `docs/design/x.md` lives at
-# DELIVERED_DOCS + `design/x.md`.
-DELIVERED_DOCS = "yolo-packs/tillr/files/local/share/tillr/docs/"
+# The tillr pack delivers copies under this prefix: the module mirror (`just pack-sync`,
+# `tools/<module>/x` at `<module>/x`) and the design documentation snapshot (`just
+# pack-docs`, `docs/x` at `docs/x`). A copy carries its source's lines, so it is excused
+# exactly where its source is. This is `source_of` in tools/pack-docs.py, restated because a
+# gate check reads nothing outside its own directory; tests/pack-sync.test.py asserts the
+# two agree.
+DELIVERED_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
 
 
 def excused_as(path: str) -> str:
     """The path whose SCRATCH_EXCEPTIONS apply to `path`: its source, for a delivered copy."""
-    if path.startswith(DELIVERED_DOCS):
-        return "docs/" + path[len(DELIVERED_DOCS):]
-    return path
+    if not path.startswith(DELIVERED_PREFIX):
+        return path
+    rest = path[len(DELIVERED_PREFIX):]
+    return rest if rest.startswith("docs/") else "tools/" + rest
 
 
 def scratch_citations(root: Path) -> list[str]:

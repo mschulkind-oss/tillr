@@ -53,6 +53,13 @@ class TreeChecks(unittest.TestCase):
         other = "yolo-packs/tillr/files/local/share/tillr/docs/design/other.md"
         self.track(other, line)
         self.assertIn(other + ":1", tree_common.scratch_citations(self.root)[0])
+        (self.root / other).unlink()
+        subprocess.run(["git", "-C", str(self.root), "rm", "-q", "--cached", other], check=True)
+        # The module mirror is a copy too: `tools/<module>/x` lands at `<module>/x`.
+        mirror = "yolo-packs/tillr/files/local/share/tillr/tillr-view/README.md"
+        self.track(mirror, "under `tillr-observatory/<key>/`, where `<key>` names it. $YOLO_DURABLE_DIR\n")
+        self.assertEqual(tree_common.scratch_citations(self.root), [])
+        self.assertEqual(tree_common.excused_as(mirror), "tools/tillr-view/README.md")
 
     def test_design_document_and_anchor_resolution(self):
         self.track("docs/design/target.md", '# Target\n## 3. The section\n<a id="html"></a>\n<!-- vantage: question id=Q1 -->\n')

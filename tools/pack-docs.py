@@ -162,6 +162,26 @@ def destination(path):
     return path[len("tools/"):] if path.startswith("tools/") else path
 
 
+# The delivered root as a repository-relative prefix.
+DELIVERED_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
+
+
+def source_of(path):
+    """THE RULE every check that reads tracked files applies to a delivered copy: a file
+    under the delivered root is its source, so an allowance a check keys by path follows
+    a copy to the source it was copied from. `destination` inverted: a copy under `docs/`
+    is the same `docs/` path, and anything else (a module mirror file, the loop README) is
+    under `tools/`. A path outside the delivered root is its own source.
+
+    tools/gate/checks/tree_common.py carries the same rule as `excused_as`, because a gate
+    check reads nothing outside its own directory; tests/pack-sync.test.py asserts the two
+    agree."""
+    if not path.startswith(DELIVERED_PREFIX):
+        return path
+    rest = path[len(DELIVERED_PREFIX):]
+    return rest if rest.startswith("docs/") else "tools/" + rest
+
+
 # --- the transform ------------------------------------------------------------------
 
 
