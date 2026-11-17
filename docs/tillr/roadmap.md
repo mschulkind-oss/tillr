@@ -2839,19 +2839,29 @@ configured identity, and stop landing until the owner decides. Running work is n
 should continue. Only new landings wait, so that more commits do not pile onto a history the owner
 may want to rewrite.
 
+The loop's check alone leaves a gap, found on the first attempt at this work on 2026-11-17. The
+loop reads the trunk at the start of a tick, and the lander takes its lock later. A foreign commit
+that arrives in between is not seen, and the lander publishes on top of it. So the lander makes the
+same check itself, under its lock, as the last thing before it publishes. This work therefore
+changes the lander as well as the loop.
+
 <!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-land/,yolo-packs/tillr/programs/tillr-land/,tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** At each tick the loop checks every trunk commit since the last one it checked, and finds any whose author or committer is not the identity the repository's git config names. A test lands a commit by another identity and asserts it is found on the next tick.
 - **c2:** The waiting view names the commit, its author and the documented remedy: re-author it, or accept it by recording the commit's id. A test asserts the text.
 - **c3:** While such a commit is unanswered, the loop starts no landing. Runs already in progress continue, and their candidates wait to land. A test asserts a ready candidate is not landed and a running one is not stopped.
-- **c4:** Re-authoring the commit or recording its acceptance releases the hold at the next tick. A test asserts each path.
+- **c4:** Re-authoring the commit or recording its acceptance releases the hold at the next tick. A test asserts each path. Re-authoring rewrites the trunk, so it must not leave the loop held for lost history instead: a rewrite that changes only author and committer, with the same trees, messages and parent order, releases both holds, and any other rewrite still holds. A test asserts both.
 - **c5:** A `pre-commit` hook in `hooks/`, installed by `just hooks-install`, refuses a commit on `main` whose identity differs from the configured one. The item states in its report what the hook cannot cover.
 - **c6:** A commit made with `git commit-tree`, `update-ref` or a private index, which skips hooks, is still found by c1. A test asserts it.
+- **c7:** The lander repeats the c1 check while it holds its lock, over every commit between the trunk the loop observed and the tip it is about to publish onto. When it finds an unanswered foreign commit it refuses the landing with its own named reason, publishes nothing, and the loop holds that candidate as in c3. It reads the same acceptance record as the loop, so an accepted commit does not refuse. A test advances the trunk to a foreign commit after the loop's check and before the lander's lock, and asserts nothing is landed; a second test accepts that commit and asserts the landing proceeds.
 
 **Agent details:**
 
 - **Ref:** `tests/git-identity.test.py`, the check that reports after the fact; the authorship rule in `AGENTS.md`; `hooks/README.md`, how hooks are installed.
 - **Where:** `Trunk.LandingIdentity` in `tools/tillr-land/land/trunk.go`, which already reads the configured identity from scopes a lane cannot write and is the reader to reuse; the per-tick trunk reads in `tools/tillr-drain/drain/trunk.go`; the waiting rules in `tools/tillr-view/waiting.go`; `hooks/` and `bin/hooks-install`.
+- **Where, for c7:** `prepareHistory` in `tools/tillr-land/land/trunk_history.go`, called from the locked preparation in `tools/tillr-land/land/landing.go`. It already compares the loop's observed trunk with the tip under the lock, but only for ancestry, and refuses with `ReasonTrunkRewritten`. The identity check belongs beside it, over the same two commits, with a separate reason. The lost-history hold in c4 is the loop's `errTrunkRewritten`.
+- **Pack copy:** a change under `tools/tillr-land/`, `tools/tillr-drain/` or `tools/tillr-view/` needs `just pack-sync`, which writes each module's copy under `yolo-packs/tillr/files/local/share/tillr/`. Commit the copies with the change.
+- **First attempt, 2026-11-17:** the first run built c1 to c6 in the loop, the view and the hook, then stopped when its review found the gap c7 closes, because the lander was outside the paths it was given. It landed nothing. Its report says the focused tests for c1 to c6 passed and the full loop suite was not finished. Build the work again from these criteria.
 - **Hook limits, read 2026-11-17:** `hooks/` holds only `pre-push`, and `bin/hooks-install` copies each executable there into the shared hooks directory, so one hook covers the main checkout and every worktree. A hook runs only for `git commit`, `merge` and `am`. It does not run for `commit-tree` or `update-ref`, and `--no-verify` and a `core.hooksPath` override skip it, so the hook is a convenience and the loop's check in c1 is the guard.
 - **Evidence:** 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints `fork-check test <test@example.invalid> initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
 
