@@ -47,17 +47,20 @@ says so in its design and is the owner's to overturn.
 5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md#open-questions) carries
+[What tillr will change for AutoQA](../design/tillr-separable-parts.md) carries
 eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
 AutoQA's requests with that proposal, and which of its small changes are filed before the drain
-proof.
+proof. All eight wait for the reply from AutoQA's agent, and the proposal marks
+[`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) and
+[`OQ-SP6`](../design/tillr-separable-parts.md#OQ-SP6) as worth answering before the second round.
 
-[The core and the landing definition](../design/tillr-core-and-git-landing.md#open-questions)
+[The core and the landing definition](../design/tillr-core-and-git-landing.md)
 writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). None needs an answer before the
-second round of conversation with AutoQA's agent, which is the owner's stated order.
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5), the naming question, which is worth
+settling first. The other four wait for the reply from AutoQA's agent; none of them needs an answer before
+the second round of conversation with it, which is the owner's stated order.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
