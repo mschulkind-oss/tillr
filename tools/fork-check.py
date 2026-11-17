@@ -1869,7 +1869,14 @@ def git(root: Path, *args: str, check: bool = True) -> str:
 # refuse rather than judge. The Go suites strip it themselves; this is the boundary that
 # covers every other check, including the Python delivery tests that drive the board
 # binary directly.
-GATE_ENV_DROP = ("LAND_BATCH_LIMIT",)
+#
+# The git variables that choose which repository a command acts on are dropped for the same
+# reason. A check's fixtures `git init` a throwaway repository and commit to it; with a
+# GIT_DIR or GIT_WORK_TREE inherited from a hook or a harness, those commands act on the
+# real repository instead, and 6f2d9d938 landed a lane's dirty working tree on `main` as
+# `fork-check test` that way.
+GATE_ENV_DROP = ("LAND_BATCH_LIMIT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+                 "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
 
 
 def environ(env: dict[str, str] | None = None,
