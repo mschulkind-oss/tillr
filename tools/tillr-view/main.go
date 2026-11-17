@@ -58,7 +58,16 @@ func run(args []string) int {
 	)
 	switch face {
 	case "status":
-		env, code = statusFace(rest)
+		var asText bool
+		env, code = statusFaceFormat(rest, &asText)
+		if env.Kind == "view.status" && asText {
+			var p statusPayload
+			if err := json.Unmarshal(env.Payload, &p); err != nil {
+				return usagef("reading status: %v", err)
+			}
+			fmt.Print(statusText(p))
+			return code
+		}
 	case "events":
 		env, code = eventsFace(rest)
 	case "passes":
@@ -101,18 +110,26 @@ func run(args []string) int {
 // statusFace reports the moment the source describes, whether it names the subject the
 // caller asked about, and the assembled subject.
 func statusFace(args []string) (record.Envelope, int) {
+	return statusFaceFormat(args, nil)
+}
+
+func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 	fs := newFlagSet("status")
 	src := newSourceFlags(fs)
 	item := fs.String("item", "", "the item to report on; without it the report covers the whole board")
 	// root is where a relative design_doc resolves, the same flag and default item's
 	// show face uses: the index answers for the tree rooted here.
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
+	asJSON := fs.Bool("json", false, "print the view.status record (the default)")
+	text := fs.Bool("text", false, "print a human-readable status summary and sync residue counts")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
 
-	src.documentRoot = root
+	if asText != nil {
+		*asText = *text && !*asJSON
+	}
 	v, refusal, code := openSource(context.Background(), src, "view.status")
 	if code != record.ExitOK {
 		return refusal, code
@@ -203,10 +220,9 @@ func commandFields(line string) []string { return strings.Fields(line) }
 // sourceFlags are the two ways a face is given its input, plus the cursor both faces
 // read from. Exactly one source is required.
 type sourceFlags struct {
-	documentRoot *string
-	store        *string
-	records      *string
-	since        *int64
+	store   *string
+	records *string
+	since   *int64
 }
 
 func newSourceFlags(fs *flag.FlagSet) sourceFlags {
@@ -227,7 +243,7 @@ func (f sourceFlags) open(ctx context.Context) (view, error) {
 	case !hasStore && !hasRecords:
 		return view{}, usageErrorf("a source is required: --store <path> or --records <file>")
 	case hasStore:
-		return openStoreWithDocuments(ctx, *f.store, *f.since, f.documentRoot)
+		return openStore(ctx, *f.store, *f.since)
 	default:
 		return openRecords(*f.records, *f.since)
 	}
