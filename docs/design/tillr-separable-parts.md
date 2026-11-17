@@ -1,5 +1,5 @@
 ---
-title: "Which of tillr's parts can another program use without the whole loop, and which requests would turn it into a workflow engine"
+title: "What tillr will change for AutoQA, what it promises, and what it will not change"
 status: in-review
 stage: DESIGN
 updated: 2026-11-16
@@ -8,51 +8,82 @@ tags:
   - design
   - store
   - boundaries
-summary: "An assessment of the Product QA pipeline's thirteen requests to use tillr's parts separately. The store, the item face and the run face already work without git or the drain and should be made dependable. Five requests go against settled rulings. Four decisions are the owner's."
-next: "The owner rules OQ-SP1 to OQ-SP4; the first slice is filed as items only after OQ-SP3."
+  - autoqa
+summary: "tillr's proposal to AutoQA, the bug-finding pipeline the Product QA design conversation asked for. Five small changes now, four adjustments to items already queued, eight requests tillr will not take, and the command-and-record contract between the two projects. The assessment of the thirteen requests is kept below as the evidence."
+next: "The owner rules OQ-SP1 to OQ-SP8. The proposed items are filed only after the question that governs each; then AutoQA's agent reads this document and the second round of conversation starts from both sides."
 depends-on:
   - tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
   - tillr-idea-pipeline.md
+  - tillr-autoqa.md
 ---
 
-# Which of tillr's parts can another program use without the whole loop?
+# What tillr will change for AutoQA, and what it will not
 
-**Status:** 2026-11-16. This is an assessment, and nothing has been built for it. On 2026-11-16 I
-re-ran each fact the requests state about current behavior. I used the binaries built from this
-tree by `just tillr-build`, on throwaway stores, with commands and results in
-[Evidence](#evidence). The older copies on `PATH` were not run. Each claim is marked
-**[ran]**, **[read]** (file and section) or **[inferred]**.
+**Status:** 2026-11-16. A proposal, and nothing in it has been built or filed. It answers the owner's
+request of 2026-11-16: a proposal for what tillr changes because of AutoQA's requests, written so
+AutoQA's agent can read it alongside tillr's designs, after which both sides talk again. The facts
+under it were re-run on 2026-11-16 with the binaries `just tillr-build` produces, on throwaway
+stores, and the planner's holds were read from the live store through `tillr drain why`. Commands
+and results are in [Evidence](#evidence). Each claim is marked **[ran]**, **[read]** (file and
+section) or **[inferred]**.
 
-> **In short.** tillr's store, item face and run face already work without git or the drain, and
-> making them dependable costs hours. A general workflow engine for a bug-finding pipeline would
-> cost the drain proof weeks and undo rulings that the item-graph and lifecycle designs enforce
-> with checks.
+> **In short.** tillr's store, item face and run face already work without git or the drain. tillr
+> will fix the one defect that stops them on a fresh store, close the hole that lets a raw state
+> write move a finished item, and write down which commands and records another program may rely
+> on. Command nodes, node outputs and finishing with no commit are already queued, and four of
+> their criteria should be adjusted so they also serve AutoQA. New item states, reopening landed
+> items, open graph rewriting, clocks in the plan and a Go library stay out: AutoQA builds those on
+> its own side.
 
-**Why it matters.** The Product QA pipeline asks for thirteen changes. Built as asked, they would
-compete directly with the owner's current goal: land the whole existing queue through the drain
-unattended, then run 10 lanes.
+**Why it matters.** The owner's priority is to prove the drain by landing the existing queue
+unattended, then to run 10 lanes. Measured against that:
 
-**Start at [the judgment](#the-judgment).** The [request table](#1-the-thirteen-requests) gives the
-status of each request. [Section 2](#2-the-requests-that-cut-against-the-design) argues the five
-that go against the design.
+- [What changes now](#11-now-or-queued-at-once) is hours of work.
+- [What is on the existing design path](#12-on-the-existing-design-path) is already on the drain's
+  own path.
+- [What tillr will not change](#13-what-tillr-will-not-change) is the part that would cost the
+  proof weeks.
 
-**Needs your ruling:** [OQ-SP1](#OQ-SP1), [OQ-SP2](#OQ-SP2), [OQ-SP3](#OQ-SP3), [OQ-SP4](#OQ-SP4).
+**Start at [Section 1](#1-what-tillr-will-change).** [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now)
+is the contract AutoQA's agent builds against. [Section 4](#4-where-the-documents-disagree) lists
+where this document and the earlier AutoQA design say different things.
 
-**Reads with:** [tillr-item-graphs.md](./tillr-item-graphs.md) (graphs inside one item, and what a
-node may never be), [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) (item states
-and terminal-state rulings), [tillr-idea-pipeline.md](./tillr-idea-pipeline.md) (item kinds and
-child items), [board-utilities.md](./board-utilities.md) (the process-and-record seam).
+**Needs your ruling:** [OQ-SP1](#OQ-SP1), [OQ-SP2](#OQ-SP2), [OQ-SP3](#OQ-SP3), [OQ-SP4](#OQ-SP4),
+[OQ-SP5](#OQ-SP5), [OQ-SP6](#OQ-SP6), [OQ-SP7](#OQ-SP7), [OQ-SP8](#OQ-SP8).
+
+**Reads with:** [tillr-autoqa.md](./tillr-autoqa.md) (AutoQA's first design, aimed at tillr
+itself), [tillr-item-graphs.md](./tillr-item-graphs.md) (graphs inside one item, and what a node may
+never be), [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) (item states and the
+terminal-state rulings), [tillr-idea-pipeline.md](./tillr-idea-pipeline.md) (item kinds and child
+items), [board-utilities.md](./board-utilities.md) (the process-and-record seam).
+
+**Where AutoQA's agent reads tillr's designs.** A status index of every tillr design, implemented
+and planned, is being written under `docs/tillr/` and shipped to other agents through the
+`yolo-packs/tillr` pack. This document is one entry in it. Until that index lands, this document
+and the five it reads with are the set.
 
 ---
 
 ## The words this document uses
 
+- **AutoQA:** the owner's name for the bug-finding pipeline. Its first design,
+  [tillr-autoqa.md](./tillr-autoqa.md), aims it at tillr itself. The Product QA pipeline design
+  conversation of 2026-11-16 aims the same effort at the product, with a fuzzer called Mangle
+  as the prober. This document treats them as one project with two targets **[inferred]** from the
+  owner calling the requests "the AutoQA stuff".
+- **Consumer:** a program other than tillr's own loop that uses tillr's commands on a store. Here,
+  AutoQA.
 - **Store:** tillr's SQLite database of items, runs and events.
-- **Drain:** the loop that plans, runs, gates and lands items.
-- **Keeper:** the program that restarts the drain when it exits
-  ([tillr-keep](../../tools/tillr-roll/tillr-keep)).
-- **Lane:** a leased slot with its own directory, where one run executes.
+- **Face:** one subcommand of a tillr program, such as `tillr item apply`. **Record:** the JSON
+  document a face reads or writes, in the envelope
+  [board-utilities.md §5.1](./board-utilities.md#51-the-common-contract) defines.
+- **Drain:** the loop that plans, runs, gates and lands items. **Keeper:** the program that restarts
+  the drain when it exits ([tillr-keep](../../tools/tillr-roll/tillr-keep)).
+- **The drain proof:** this document's name for the owner's first goal, the existing queue landed
+  through the drain unattended.
+- **Lane:** a leased slot with its own directory, where one run executes. **Lease:** the claim on a
+  lane, which expires at the run's wall plus a grace.
 - **Fence:** the set of paths an item may change.
 - **Gate:** the check run on a candidate commit. **Lander:** the program that puts a gated commit
   on the trunk.
@@ -62,16 +93,391 @@ child items), [board-utilities.md](./board-utilities.md) (the process-and-record
   call.
 - **Criterion:** one testable condition on an item. **Verdict:** a ruling on one criterion.
 - **Hold:** the planner's named reason for not dispatching an item.
-- **Product QA pipeline:** a bug-finding pipeline around a fuzzer called Mangle. It wants two
-  stores. A *findings store* holds one item per finding, and each item's graph runs re-check,
-  replay, reduce, a bounded investigation, a verdict, an assessment, a report draft, the owner's
-  approval and the send. A *fuzzing-ideas store* holds ideas that a planner turns into fuzzer
-  runs.
+- **`no_commit` exit:** a workflow's declaration that its item finishes without a commit, so no
+  gate or landing runs ([the exit-condition block](./tillr-item-graphs.md#add-an-exit-condition-that-decides-when-an-items-graph-is-done)).
+- **Unshared item:** an item in a store that no tracked document declares. Sync is the only intake
+  ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)), so such an item cannot be
+  rebuilt by deleting the store and syncing.
 
-## The requests, restated
+---
 
-These were requested by the Product QA pipeline design conversation on 2026-11-16, written by
-another agent with the owner. Each request says it was "checked at the installed binaries".
+## 1. What tillr will change
+
+Each entry says what changes, why, its size, and where it sits against the drain proof. Each then
+says what AutoQA may rely on today, what is promised, and what is not promised.
+
+### 1.1 Now, or queued at once
+
+Five changes. Each is hours of work, and none waits on the drain proof. Whether they are filed now
+is [OQ-SP3](#OQ-SP3).
+
+**A1. Every read face and the planner answer on a store the drain never opened.**
+
+- **Why:** `tillr view waiting` and `tillr drain why` exit 3 with `no such table: lanes` on a store
+  built with `tillr-store init` and `tillr-item apply` **[ran]**. Each utility adds its tables when
+  it first opens a store for writing ([registry.go](../../tools/tillr/store/registry.go)), and the
+  planner reads the run utility's tables without checking. `Close` already guards a missing table
+  ([lifecycle.go](../../tools/tillr-item/item/lifecycle.go)) **[read]**. A fresh machine hits this
+  too.
+- **Size and place:** hours; at the bottom of the queue if filed now.
+- **Today:** `tillr view status`, `events`, `passes`, `lanes` and `running` work on such a store
+  **[ran]**. The workaround is the one [tillr-autoqa.md §2.2](./tillr-autoqa.md#22-two-stores-and-sandboxed-sut-snapshots)
+  uses: run one write face of each utility first.
+- **Promised:** once it lands, every read face exits 0 on a store holding only `init` and `apply`.
+- **Not promised:** that a write face creates another utility's tables.
+
+**A2. A raw `tillr item state` can no longer move a finished item.**
+
+- **Why:** a raw `tillr item state` moves an item to `landed` with an open criterion and no landing,
+  moves it back out to `in-queue`, and moves it to `resolved-elsewhere` with no pointer **[ran]**.
+  The queued [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
+  closes all three in its criteria c1 to c3, and it is held behind two other lifecycle items
+  **[ran]**. The move out of a finished state (its c3) needs neither of them **[inferred]**.
+- **Size and place:** hours; [OQ-SP6](#OQ-SP6) decides whether c3 goes ahead on its own.
+- **Today:** the face moves any item to any writable state. A consumer must not treat `landed` as
+  final against a raw writer, only against the drain, which records the landing first.
+- **Promised:** c1 to c3 of the queued block, when it lands.
+- **Not promised:** a check of *who* may write a state; actors are recorded, not authorized.
+
+**A3. The explicit-store route is written down.**
+
+- **Why:** every face takes `--store` **[read]**, and a plain command ran as a leased run with an
+  end cause on a store the drain never opened **[ran]**. Nobody outside this repository knows that.
+- **Size and place:** an hour; documentation only.
+- **Today:** it works, undocumented. A store has one dispatcher: the drain holds an item whose run
+  it did not dispatch as `run-link-missing`, and an item with no fence as `no-fence` **[ran]**.
+- **Promised:** a recipe whose every command is checked to answer `--help` by
+  [tests/tillr-docs.test.py](../../tests/tillr-docs.test.py).
+- **Not promised:** two dispatchers on one store, ever.
+
+**A4. A stock adapter for plain commands.**
+
+- **Why:** `tillr run exec` needs an adapter directory holding `pause-kind` and `extract-report`
+  beside the command, and refuses a working directory that is not relative to the lane **[ran]**.
+  Every caller writes the same stub today.
+- **Size and place:** hours. It is also a step toward the queued command-node block.
+- **Today:** works with a hand-written stub.
+- **Promised:** one tracked adapter that `--backends-dir` can name, which says `cannot-resume`.
+- **Not promised:** resuming a plain command.
+
+**A5. The contract is published, and each change to it is recorded.**
+
+- **Why:** no changelog or breaking-change record exists for tillr (`fd -i changelog tools docs`
+  finds nothing) **[ran]**. Each module README has a dated "Known Gaps" callout **[read]**.
+- **Size and place:** hours.
+- **Today:** [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now) of this document.
+- **Promised:** the contract in a tracked reference, a test that every face and record kind it
+  names exists, and a dated line in it for every change to the stable surface.
+- **Not promised:** that the surface stops changing; only that a change is announced.
+
+### 1.2 On the existing design path
+
+These are already designed, and most are queued. Each lands in queue order, so building it costs
+the drain proof nothing extra. For each, the adjustment says what should change so it also serves
+AutoQA, and which criterion; no item block is edited by this document. The adjustments are
+[OQ-SP1](#OQ-SP1)'s to accept.
+
+**B1. Command nodes.** Carried by the queued
+[command-node block](./tillr-item-graphs.md#add-command-nodes-that-run-a-registered-program),
+which is ready and waiting only for a free lane **[ran]**.
+
+- **Adjustment, its c1:** state that the command registry is read from under the drain's `--root`,
+  and test it with a root outside this checkout. AutoQA's `autoqa-replay` command lives in AutoQA's
+  root, not here.
+- **Today:** nothing. The loader accepts agent stages only
+  ([workflow.go](../../tools/tillr-drain/drain/workflow.go)) **[read]**.
+- **Promised:** the block's criteria. **Not promised:** skipping a node whose inputs did not
+  change.
+
+**B2. Node outputs.** Carried by the queued
+[named-outputs block](./tillr-item-graphs.md#add-named-outputs-that-a-later-node-reads-from-its-producer),
+also ready **[ran]**.
+
+- **Adjustment, its c4:** each accepted output is also an event in the log, and a read face prints a
+  node's outputs as records, so a consumer never reads the drain's table. This is also what
+  "complete events" (B6 below) needs for a node's inputs.
+- **Today:** nothing.
+- **Promised:** name, type, sha256 and location per output. **Not promised:** that the table is
+  readable by SQL.
+
+**B3. Finishing with no commit.** Carried by the queued
+[exit-condition block](./tillr-item-graphs.md#add-an-exit-condition-that-decides-when-an-items-graph-is-done),
+held behind B2 **[ran]**.
+
+- **Adjustment, its c3:** name the state such an item ends in and the receipt it ends on: `landed` on
+  a `no_commit` receipt, which the lifecycle design already accepts
+  ([§3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)), and
+  a read face that prints the receipt. c3 today says the item is settled "by the same step a landed
+  item's are", which leaves the end state for the builder to guess.
+- **Today:** a run that commits nothing is held as `candidate-no-op` **[read]**.
+- **Promised:** an investigation-only item that finishes. **Not promised:** an outcome word
+  ([OQ-SP2](#OQ-SP2)), or child items from it ([OQ-SP7](#OQ-SP7)).
+
+**B4. The evaluator slot.** Carried by the queued
+[evaluator block](./tillr-item-graphs.md#route-a-workflows-evaluator-node-through-the-judges-intake).
+
+- **Adjustment:** none on tillr's side. AutoQA's design names its judge by `role: "evaluator"`, and
+  an agent stage names a `seat` ([D-IG13](./tillr-item-graphs.md#71-decision-ledger)); AutoQA
+  changes its spelling.
+- **Promised:** the block's criteria. **Not promised:** a judge that is not the judge step.
+
+**B5 and B6. Leases without the drain, and complete events.**
+
+- **Leases** are carried by [board-utilities.md §5.6](./board-utilities.md#56-run-alone), and are
+  built: `tillr run exec` claims a lane, leases it until the run's wall plus a 300-second grace,
+  writes the end cause and releases it, and `tillr run release` frees a lane by hand **[read]**
+  **[ran]**. [§5.6](./board-utilities.md#56-run-alone) refuses a heartbeat on purpose, because `run` is one process with nothing resident
+  to renew it **[read]**.
+- **Events** are partly built: a throwaway store recorded `item.add`, `item.update`,
+  `run.allocate`, `run.usage` and `run.finish` **[ran]**. Node inputs and outputs arrive with B2 and
+  its adjustment.
+- **Today:** leases by wall and end causes; events as listed.
+- **Promised:** node output events, if B2's adjustment is accepted.
+- **Not promised:** a heartbeat; a "purpose" field on run events beyond the node a run belongs to;
+  telling a dead run from a live one without the drain. That last one is unexported drain code
+  ([orphan.go](../../tools/tillr-drain/drain/orphan.go)) **[read]**, no design carries it, and
+  [P6](#3-proposed-work) proposes it for after the drain proof.
+
+**B7. Dispatch policy.** Carried by three queued items on
+[the tillr roadmap](../tillr/roadmap.md): seat shares (ready **[ran]**), lanes outside the cap, and a
+spend ceiling. Lane count, backend policy, and pluggable gate, land and verdict programs exist
+**[ran]**.
+
+- **Adjustment:** none. A second dispatcher is A3's documented separate store.
+- **Not promised:** deadlines, which are [C5](#13-what-tillr-will-not-change).
+
+**B8. Items fed by `item apply` keep working once unshared items are held.** Carried by the queued
+[unshared-item hold](../tillr/roadmap.md#hold-an-item-that-has-no-document-block),
+which is ready **[ran]**.
+
+- **Adjustment, its c1:** the hold applies only to a store whose items come through sync. As
+  written, it holds every item no tracked document declares, which is every item AutoQA files into
+  its own store with `tillr item apply`, and AutoQA's design runs the drain on that store
+  ([tillr-autoqa.md §2.2](./tillr-autoqa.md#22-two-stores-and-sandboxed-sut-snapshots)). How the
+  hold tells the two kinds of store apart is [OQ-SP8](#OQ-SP8).
+- **Today:** apply works on any store, and only the sync report's `unshared_open` count notices.
+- **This one is urgent:** the item could land on any pass.
+
+**B9. An owner acknowledgment point.** No design carries it. `tillr view events --since` takes a
+cursor **[ran]**, and mail has an acknowledgment **[read]**; a stored "the owner has seen up to here"
+does not exist. It fits visibility first, so it is consistent, but it is not promised before the
+drain proof. AutoQA keeps its own cursor in its own ledger for now.
+
+### 1.3 What tillr will not change
+
+Each row names the ruling the request runs into and what AutoQA builds instead. The arguments from
+both sides are in [Section 6.3](#63-the-requests-that-cut-against-the-design).
+
+| | Request | Ruling it runs into | AutoQA builds instead |
+| :--- | :--- | :--- | :--- |
+| C1 | New item states per kind | The closed seven-state model ([D-IP1](./tillr-idea-pipeline.md#61-settled-decisions)) | Outcomes in its own ledger, and close reasons and pointers in tillr. A recorded outcome field is [OQ-SP2](#OQ-SP2) |
+| C2 | Reopening a landed or resolved-elsewhere item | Both are terminal ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | A new item that names the old one. Reopening a `closed` item works today **[ran]** |
+| C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | One item, one outcome (`D-IG2`); bounded replacement only (`D-IG3`); no model-written wiring (`D-IG5`, `D-IG9`) ([§2.2](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) | Its dispatcher's own graph, or one tillr item per finding |
+| C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([§5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) | Its send step and its uncertain state. Outside a graph, `blocked` with a waiter and a reason works today **[ran]** |
+| C5 | Deadlines and clocks in the plan | No timers ([§5](./tillr-item-graphs.md#5-what-a-node-may-never-be), [agent-runtime.md §6](./agent-runtime.md#6-the-task-graph)) | Its dispatcher's ordering and deadlines |
+| C6 | A Go library as the connection | Utilities meet through processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | Calls to the commands in Section 2. [OQ-SP4](#OQ-SP4) |
+| C7 | Completion by "an artifact recorded and judged" in general | Not refused, but it reaches the planner's assumptions the drain proof rests on | Nothing before the drain proof. A design round after it is [OQ-SP5](#OQ-SP5) |
+| C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root ([tillr-keep](../../tools/tillr-roll/tillr-keep), `find_loop`) | A loop with its own root directory, which gets its own keeper lock and lanes **[inferred]**, not run |
+
+---
+
+## 2. The contract between tillr and AutoQA, for now
+
+### 2.1 The stable surface
+
+AutoQA may rely on these. A change to any of them is announced as
+[Section 2.3](#23-how-a-consumer-learns-of-a-breaking-change) says.
+
+- **Commands:** each program as `tillr-<noun> <face>`, or through the umbrella as
+  `tillr <noun> <face>`.
+- **Faces a consumer may call** (all **[ran]** for `--help` on 2026-11-16):
+  - `tillr-store init`, `check`, `events`;
+  - `tillr-item apply`, `show`, `state`, `close`, `reopen`, `verdict`, `grant`, `decision`, `mail`;
+  - `tillr-run exec`, `status`, `lanes`, `release`;
+  - `tillr-view status`, `events`, `waiting`, `passes`, `lanes`, `running`;
+  - `tillr-drain why` and `plan`, which only read; and `tillr-drain once` and `loop` on the
+    consumer's own store and root.
+- **Flags:** `--store`, `--input`, `--now`, `--root`, `--item`, `--lane-root`, `--backends-dir`,
+  `--since`, `--format`. Store access is always explicit: no standalone face opens the live store
+  on its own ([board-utilities.md §5.1](./board-utilities.md#51-the-common-contract)).
+- **Exit codes** ([exit.go](../../tools/tillr/record/exit.go)): 0 done, 1 a negative decision, 2
+  usage, 3 store or record version incompatible, 4 an outside dependency prevented a decision,
+  5 an internal error.
+- **Record envelope:** `record_version`, `kind`, `id`, `producer`, `created_at`, `subject`,
+  `payload` and an optional `idempotency_key`. The version is 1 (`SupportedVersion` in
+  [envelope.go](../../tools/tillr/record/envelope.go)), and a reader refuses a version it does not
+  know.
+- **Record kinds a consumer writes:** `item.record` (to `apply`) and `run.request` (to `exec`).
+  **Kinds it reads:** `run.record`, the item and verdict records `show` prints, and the event kinds
+  in the log.
+
+### 2.2 What is internal, and may change daily
+
+- **Go packages.** Every package can be imported, because no module has an `internal/` directory
+  and siblings resolve by relative `replace` **[ran]**, but none is supported. From 2026-11-13 to
+  2026-11-16, 167 commits touched `tools/tillr*` **[ran]**.
+- **The store's schema:** table names, columns and migrations. Read through a face, never SQL.
+- **Hold reason names, view text, and file layout** under the drain's root.
+- **Anything a module README's "Known Gaps" callout names.**
+
+### 2.3 How a consumer learns of a breaking change
+
+Today there is no mechanism **[ran]**. Proposed, as [A5](#11-now-or-queued-at-once):
+
+- A change to a record's fields gets a new `record_version`, and readers of the old version are kept
+  for one round.
+- Every change to the stable surface adds a dated line to the published contract in the same
+  commit, so `git log` on that one file is the change feed.
+- The module READMEs' Known Gaps callouts keep saying what is unfinished.
+
+### 2.4 How requests and answers travel
+
+- **AutoQA's requests** arrive as a tracked document in this repository, written by AutoQA's agent
+  with the owner, one numbered request per entry, each with the behavior it checked and the date.
+  The first round arrived as an untracked draft; this document restates it in
+  [Section 5](#5-the-requests-restated). Where the next round's file lives is part of
+  [OQ-SP1](#OQ-SP1).
+- **tillr's answers** are this document: [Section 1](#1-what-tillr-will-change) for each request's
+  fate, [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now) for the contract, and the
+  [Open Questions](#open-questions) for what waits on the owner.
+- **tillr's designs** reach AutoQA's agent through the status index described under
+  [Where AutoQA's agent reads tillr's designs](#what-tillr-will-change-for-autoqa-and-what-it-will-not).
+- **AutoQA's own design** stays in [tillr-autoqa.md](./tillr-autoqa.md) and its owed build items.
+
+---
+
+## 3. Proposed work
+
+Proposed, not yet filed. Each is filed as an item only after the owner rules on the question it
+names. They are written in prose so that no item enters the queue from this document.
+
+**P1. Let every read face and the planner answer on a store the drain never opened.** *(A1.
+Proposed, not yet filed; filed when the owner rules on [OQ-SP3](#OQ-SP3).)*
+Why: a fresh store fails two faces that AutoQA and a new machine both call first.
+
+- A test builds a store with only `tillr-store init` and `tillr-item apply`, and asserts that
+  `tillr view waiting`, `tillr drain why` and every other read face exit 0.
+- A table a utility has not created reads as empty, the way `Close` already treats it.
+- No read face creates a table.
+
+**P2. Document how a program that is not the drain uses tillr on its own store.** *(A3. Proposed,
+not yet filed; filed when the owner rules on [OQ-SP3](#OQ-SP3).)*
+Why: the route works and nobody outside this repository can find it.
+
+- The tillr operating documentation gains a recipe: an explicit `--store`, a lane root outside the
+  checkout, `tillr run exec` for runs, and no drain or keeper on that store unless it is the only
+  dispatcher.
+- The recipe states that one store has one dispatcher, and names the two holds the drain gives a
+  store with a second one.
+- [tests/tillr-docs.test.py](../../tests/tillr-docs.test.py) checks each command in it.
+
+**P3. Ship a stock adapter for plain commands run through `tillr run exec`.** *(A4. Proposed, not
+yet filed; filed when the owner rules on [OQ-SP3](#OQ-SP3).)*
+Why: every caller of a plain command writes the same stub today.
+
+- A tracked adapter directory holds `pause-kind`, which says `cannot-resume`, and an
+  `extract-report` that writes an empty report.
+- A test runs `/bin/true` and a command that exits 1 through it, with no git and no drain, and
+  asserts both end causes and the three run events.
+
+**P4. Publish tillr's consumer contract and record each change to it.** *(A5. Proposed, not yet
+filed; filed when the owner rules on [OQ-SP3](#OQ-SP3) and [OQ-SP4](#OQ-SP4).)*
+Why: a consumer cannot tell a change from a defect without a stated contract.
+
+- A tracked reference holds [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now), and this
+  document links to it instead of carrying it.
+- A test fails when a face it names does not answer `--help`, or a record kind it names is not a
+  constant in the code.
+- A dated "Changes" list in it gains a line in the same commit as any change to the stable surface.
+
+**P5. Refuse a move out of `landed` or `resolved-elsewhere`, ahead of the rest of the
+terminal-state block.** *(A2. Proposed, not yet filed; filed when the owner rules on
+[OQ-SP6](#OQ-SP6).)*
+Why: the move out is the one that puts finished work back in the queue, and it needs nothing the
+block is waiting for.
+
+- The terminal-state block's c3, unchanged, as its own item with nothing in `blocked_by`.
+- The block's c3 is removed from it in the same commit, so the rule has one owner.
+
+**P6. Let `tillr run status` say when a run's process is gone.** *(B5. Proposed, not yet filed;
+filed after the drain proof, when the owner rules on [OQ-SP3](#OQ-SP3).)*
+Why: a consumer with no drain cannot tell a dead run from a slow one until its lease expires.
+
+- `tillr run status` reports a run whose recorded process no longer exists as interrupted, using
+  the same rule the drain uses.
+- The drain calls the run package for that rule instead of its own copy.
+- A test kills a stub run and asserts the status, with no drain running.
+
+**Adjustments to queued items.** *(Proposed, not yet filed; each is made by the owner or a design
+seat editing the item's own document when [OQ-SP1](#OQ-SP1) is ruled. If the item lands first, the
+adjustment becomes a follow-up item with the same criterion.)*
+
+- **Command nodes, c1:** the registry is read under the drain's `--root`; a test uses a root
+  outside this checkout. ([B1](#12-on-the-existing-design-path))
+- **Node outputs, c4:** each accepted output is also an event, and a read face prints a node's
+  outputs as records. ([B2](#12-on-the-existing-design-path))
+- **Exit condition, c3:** an item whose graph finishes with nothing committed ends `landed` on a
+  `no_commit` receipt, and a read face prints the receipt. ([B3](#12-on-the-existing-design-path))
+- **Unshared-item hold, c1:** the hold applies only to a store whose items come through sync, as
+  [OQ-SP8](#OQ-SP8) rules. ([B8](#12-on-the-existing-design-path))
+
+---
+
+## 4. Where the documents disagree
+
+Read on 2026-11-16 against the tree at the commit this document lands in. Nothing here was edited
+in the other documents: each disagreement sits in a document that holds a queued item, or is not a
+one-line fix.
+
+1. **[tillr-autoqa.md §1.1](./tillr-autoqa.md#11-what-already-exists-at-head)**, the fresh-store
+   row: "**Unchanged by design.** … read-only faces fail with missing-table errors". The code does
+   behave that way **[ran]**. This document calls it a defect and proposes [P1](#3-proposed-work);
+   if that lands, the row and the bootstrap in
+   [§2.2](./tillr-autoqa.md#22-two-stores-and-sandboxed-sut-snapshots) (`tillr-drain once` plus a
+   `/bin/true` run) become a workaround nobody needs.
+2. **[tillr-autoqa.md D-AQ2](./tillr-autoqa.md#61-decision-ledger)** crosses into the system under
+   test's store "solely via `item apply`". Sync is the only intake
+   ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)), and the queued unshared-item
+   hold would hold every such item. Today `apply` works and only the unshared count notices
+   **[ran]**. Which is right is [OQ-SP8](#OQ-SP8).
+3. **[tillr-autoqa.md D-AQ3](./tillr-autoqa.md#61-decision-ledger)** says its two graphs work
+   "immediately on W1 Slice-1 static flattening". Only agent stages load today
+   ([workflow.go](../../tools/tillr-drain/drain/workflow.go)) **[read]**; command nodes, outputs,
+   the `no_commit` exit and the evaluator are queued. The code is right: AutoQA's graphs wait for
+   [B1 to B4](#12-on-the-existing-design-path).
+4. **[tillr-autoqa.md §3.1](./tillr-autoqa.md#31-test-idea-items-and-the-two-graph-funnel)**:
+   `verify_repro` "spawn[s] a child `qa-confirm@v1` item linked via `derived_from`" from a
+   `no_commit` graph. `derived_from` edges are not built, and the drain writes child items only
+   after `tillr-land pass` succeeds ([D-IP6](./tillr-idea-pipeline.md#61-settled-decisions)), which a
+   `no_commit` graph never reaches **[read]**. Neither is queued. [OQ-SP7](#OQ-SP7).
+5. **[tillr-autoqa.md §3.1](./tillr-autoqa.md#31-test-idea-items-and-the-two-graph-funnel)**:
+   `triage_judge` names `role: "evaluator"`. An agent stage names a `seat`
+   ([D-IG13](./tillr-item-graphs.md#71-decision-ledger)). The item-graph design is right.
+6. **[tillr-autoqa.md](./tillr-autoqa.md)**, "In short" and its Cost paragraph: "Zero new states,
+   DAG primitives, or judge/grant rules inside `tillr` core". This document agrees on all three and
+   adds small changes that are not of those kinds ([A1 to A5](#11-now-or-queued-at-once)).
+7. **[tillr-distribution.md](./tillr-distribution.md)**, its status line "Pack unbuilt", and the
+   handoff skill text in [§5](./tillr-distribution.md#5-the-autoqa-handoff-through-the-pack):
+   "The recording layer's emitters … are unbuilt", face lists that omit `tillr-view waiting`,
+   `tillr-run pause` and `tillr-store recover`, and a step `tillr land enqueue`. The pack exists
+   under `yolo-packs/tillr`, run events are emitted **[ran]**, and `tillr land enqueue` answers
+   `unknown face "enqueue": want pass or one` **[ran]**. The code is right. Too much of that section
+   is stale for a one-line fix, and the status index replaces its role.
+
+The roadmap, [landing-principles.md](./landing-principles.md) and the lifecycle design agree with
+this proposal: the roadmap puts AutoQA's own build last, which this document leaves as it is;
+the landing principles bind only the lander, which a `no_commit` item never reaches. A design of
+planning nodes and model tiering was in the working tree but not committed when this was written.
+Read as it stood, it agrees: an agent stage names a seat and only the policy names a model, which
+is the spelling B4 asks of AutoQA, and its registered checks are entries of the same command
+registry B1 adjusts.
+
+---
+
+## 5. The requests, restated
+
+Requested by the Product QA pipeline design conversation, 2026-11-16, written by another agent with
+the owner. Each request said it was "checked at the installed binaries".
 
 1. A store that needs neither git nor the drain, where every view works.
 2. Several stores in one workspace, each addressed explicitly, each with its own loop and keeper.
@@ -97,16 +503,29 @@ Two questions came with them:
 - Is an item meant to hold the record, or to point at files that are the record?
 - Which requests cut against tillr's design, as opposed to being unbuilt?
 
+Where each went: 1 is [A1](#11-now-or-queued-at-once); 2 is [A3](#11-now-or-queued-at-once) and
+[C8](#13-what-tillr-will-not-change); 3 is [C1](#13-what-tillr-will-not-change); 4 is
+[A2](#11-now-or-queued-at-once) and [C2](#13-what-tillr-will-not-change); 5 is
+[C3](#13-what-tillr-will-not-change); 6 is [B1 and B2](#12-on-the-existing-design-path); 7 is
+[B3](#12-on-the-existing-design-path) and [C7](#13-what-tillr-will-not-change); 8 is
+[C4](#13-what-tillr-will-not-change); 9 is [B5](#12-on-the-existing-design-path) and
+[A4](#11-now-or-queued-at-once); 10 is [B7](#12-on-the-existing-design-path) and
+[C5](#13-what-tillr-will-not-change); 11 is [B9](#12-on-the-existing-design-path); 12 is
+[B6](#12-on-the-existing-design-path); 13 is [C6](#13-what-tillr-will-not-change).
+
 ---
 
-## The judgment
+## 6. The assessment behind the proposal
+
+This is the first round's assessment, kept as the evidence for Section 1.
+
+### 6.1 The judgment
 
 **Should tillr become separable parts?** Some of it already is, and that part should be made
 dependable. tillr's designed seam is processes and records. Each face reads a record and writes a
 record, and no utility calls another inside one process
 ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) **[read]**. The store,
-the item face and `tillr run exec` already work without git or the drain. A plain command ran as a
-run, with a lease and an end cause, on a store the drain never opened **[ran]**. Making those
+the item face and `tillr run exec` already work without git or the drain **[ran]**. Making those
 pieces reliable on their own also helps tillr: AutoQA, a fresh machine and tests all use them that
 way.
 
@@ -121,28 +540,14 @@ These come from [tillr-item-graphs.md §5](./tillr-item-graphs.md#5-what-a-node-
 [agent-runtime.md §6](./agent-runtime.md#6-the-task-graph) **[read]**. Five of the thirteen
 requests cross that line: requests 3, 4, 5, 8 and 13.
 
-**Cost to the current goal.** Most of what the pipeline would use is already queued on the drain's
-own path: the item-graph blocks, the lifecycle blocks, recovery commands, lanes outside the cap,
-and seat shares **[read]**. Building those costs nothing extra as long as they land in their
-existing order. The extra cost comes from a second loop per checkout, an outcome vocabulary, a
-stable library and a general graph algebra. Each needs a design round, and some reopen settled
-rulings **[inferred]**.
+**Cost to the current goal.** Most of what AutoQA would use is already queued on the drain's own
+path: the item-graph blocks, the lifecycle blocks, recovery commands, lanes outside the cap, and
+seat shares **[read]**. Building those costs nothing extra as long as they land in their existing
+order. The extra cost comes from a second loop per root, an outcome vocabulary, a stable library
+and a general graph algebra. Each needs a design round, and some reopen settled rulings
+**[inferred]**.
 
-**The recommended answer to the other agent** is [OQ-SP1](#OQ-SP1)'s leaning:
-
-> Build the pipeline's dispatcher and graph outside tillr for now. Use tillr for what is stable: an
-> item store addressed with an explicit `--store`, items whose prose and evidence are files you
-> point at, `tillr run exec` for leased runs with end causes, and the event log. The defect that
-> blocks you (views and the planner fail on a store the drain never touched) gets fixed, and a
-> second store gets documented. Command nodes, node outputs and a "finished with no commit" exit
-> are already queued. Outcomes per kind, reopening landed items, open graph rewriting and a Go
-> library go against settled rulings. Bring each back with a concrete case from your prototype.
-
----
-
-## 1. The thirteen requests
-
-**Buckets:**
+### 6.2 The thirteen requests
 
 | Bucket | Count | Requests |
 | :--- | :--- | :--- |
@@ -153,32 +558,29 @@ rulings **[inferred]**.
 
 Several requests are split cases, and the table says which part is which.
 
-| # | Status today | Size | What tillr gains | Recommendation |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | **Small defect.** `tillr view status`, `events`, `lanes`, `running` and `passes` work on a store built with `tillr-store init` and `tillr-item apply`. `tillr view waiting` and `tillr drain why` exit 3 with `no such table: lanes` **[ran]**. The cause: each utility adds its tables when it first opens the store ([registry.go](../../tools/tillr/store/registry.go)), and the planner reads the run utility's tables without checking that they exist. `Close` already guards a missing table this way ([lifecycle.go](../../tools/tillr-item/item/lifecycle.go)) **[read]**. | Hours | Fresh-machine and AutoQA stores stop failing | Fix it in the first slice ([OQ-SP3](#OQ-SP3)) |
-| 2 | **Unbuilt, partly works.** Every face takes `--store` **[read]**. The loop's other defaults, its lanes and its records sit under the checkout ([main.go](../../tools/tillr-drain/main.go), [looprecord.go](../../tools/tillr-drain/drain/looprecord.go)). The keeper finds a loop by process name `tillr-drain` and a working directory equal to the checkout, and takes one lock per checkout ([tillr-keep](../../tools/tillr-roll/tillr-keep), `find_loop`) **[read]**. Run ids are `run-<item>-a<N>`, so two stores in one checkout could collide on record directories **[inferred]**. | Days | Little for this repository | Document `--store` for use without the loop now. A second loop waits for the drain work |
-| 3 | **Cuts against** the closed seven-state model ([idea pipeline, D-IP1](./tillr-idea-pipeline.md#61-settled-decisions)). The four verdicts the request names belong to criteria, not items ([verdict.go](../../tools/tillr-item/item/verdict.go)) **[read]**. | Design round | A countable "why it ended" | [OQ-SP2](#OQ-SP2) |
-| 4 | **Cuts against** an accepted ruling: `landed` and `resolved-elsewhere` are terminal ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)), enforced by the queued terminal-state block. The defect the request found is real, and worse than it says. A raw `tillr item state` writes `landed` on an item with an open criterion and no landing, moves it back to `in-queue`, and writes `resolved-elsewhere` with no pointer **[ran]**. `reopen` refuses a landed item and reopens a closed one **[ran]**. | Defect: already queued | Finished items stop quietly re-entering the queue | Keep the ruling; see [Section 2.2](#22-reopening-a-finished-item) |
-| 5 | **Cuts against in its general form; the bounded parts are queued.** Replacing a later node that has not started is the queued proposal block, under `D-IG3` ([§2.2](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)). The drain writes child items from a manifest after landing ([D-IP6](./tillr-idea-pipeline.md#61-settled-decisions)). Folding is `resolved-elsewhere` with an item pointer **[read]**. None of the three is built **[ran]**. | Bounded: queued | Already wanted | Keep the rulings; see [Section 2.3](#23-steps-that-change-the-graph) |
-| 6 | **Unbuilt but consistent.** Command nodes and outputs bound to their producer with a sha256 are queued item-graph blocks ([command nodes](./tillr-item-graphs.md#add-command-nodes-that-run-a-registered-program), [named outputs](./tillr-item-graphs.md#add-named-outputs-that-a-later-node-reads-from-its-producer)). Today the loader accepts agent stages only ([workflow.go](../../tools/tillr-drain/drain/workflow.go)) **[read]**. Re-admitting an item only when a stored basis changed already exists ([lifecycle §4.2](./tillr-judge-and-lifecycle.md#42-inspected-rework-tillr-drain-rework-and-the--v2-cutover-d-jl6)). Skipping a node whose input digests did not change is not designed **[read]**. | Queued | Cheaper deterministic steps | Wait for the queued blocks |
-| 7 | **Unbuilt but consistent, in the narrow form.** A workflow exit of `no_commit` runs neither gate nor lander, and still settles the item ([exit condition](./tillr-item-graphs.md#add-an-exit-condition-that-decides-when-an-items-graph-is-done)). `landed` accepts a verified `no_commit` receipt (D-JL4). The two exit codes exist: 1 is negative, 4 is "an outside dependency prevented a decision" ([exit.go](../../tools/tillr/record/exit.go)) **[read]**. | Narrow form: queued | Investigation-only items stop being held as "did nothing" | Narrow form: wait for it. General form: [Section 2.1](#21-outcomes-per-kind-and-completion-that-is-not-a-landing) |
-| 8 | **Cuts against, inside a graph.** No node may change anything outside its worktree, and the landing is the one outward act, done once after the exit ([§5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) **[read]**. Outside a graph it works today as a `blocked` hold with a named waiter and reason **[ran]**. That is how tillr settles its own uncertain landing: by reading the trunk ([already_on_trunk.go](../../tools/tillr-drain/drain/already_on_trunk.go)) **[read]**. | Hours, as a convention | Little | Keep it in the pipeline's dispatcher |
-| 9 | **Unbuilt but consistent; mostly there.** The lease claim, reaper and end cause live in the run package ([lease.go](../../tools/tillr-run/run/lease.go)). `tillr run exec` ran a plain command with no git and no drain **[ran]**. It needs a lane directory, and an adapter directory holding `pause-kind` and `extract-report` **[ran]**. The heartbeat belongs to the loop. Detecting an interrupted run is unexported drain code ([orphan.go](../../tools/tillr-drain/drain/orphan.go)) **[read]**. | Days | A run face that can say "dead" without a loop | Wait for the drain work |
-| 10 | **Unbuilt but consistent, except deadlines.** Lane count, backend policy, and pluggable gate, land and verdict programs exist **[ran]**. Seat shares, lanes outside the cap and a spend ceiling are queued on [the tillr roadmap](../tillr/roadmap.md) **[read]**. A deadline puts a clock in the plan, which [§5](./tillr-item-graphs.md#5-what-a-node-may-never-be) refuses **[read]**. A second dispatcher cannot share a store with the drain: the planner holds an item whose run it did not dispatch as `run-link-missing`, and an item with no fence as `no-fence` **[ran]**. | Hooks: design round | Shares and caps are already wanted | Use the queued policy items; the pipeline's own dispatcher runs on its own store |
-| 11 | **Unbuilt but consistent** with visibility first. `tillr view events --since` exists **[ran]**, and mail has an acknowledgment **[read]**. No queued item covers an owner cursor **[read]**. | Hours | "New since you last looked" here too | Build it outside first |
-| 12 | **Partly works.** The "emitters unbuilt" claim traces to [tillr-distribution.md](./tillr-distribution.md) and is partly out of date. A throwaway store recorded `item.add`, `item.update`, `run.allocate`, `run.usage` and `run.finish` **[ran]**. A run event carries no purpose or inputs, and node inputs arrive with the named-outputs block **[read]**. | Days | Fuller reconstruction in the observatory | Wait for the drain work |
-| 13 | **Cuts against** the process-and-record seam, and against the rate of change. The packages can be imported: no module under `tools/` has an `internal/` directory, and each resolves its siblings with a relative `replace` **[ran]**. | Weeks, then ongoing | None now | [OQ-SP4](#OQ-SP4) |
+| # | Status today | Size | What tillr gains |
+| :--- | :--- | :--- | :--- |
+| 1 | **Small defect.** Two read faces fail on a store the drain never opened **[ran]**; see A1. | Hours | Fresh-machine and AutoQA stores stop failing |
+| 2 | **Unbuilt, partly works.** Every face takes `--store` **[read]**. The loop's other defaults, its lanes and its records sit under its root ([main.go](../../tools/tillr-drain/main.go), [looprecord.go](../../tools/tillr-drain/drain/looprecord.go)). The keeper finds a loop by process name and working directory, and locks per root **[read]**. Run ids are `run-<item>-a<N>`, so two stores under one root could collide on record directories **[inferred]**. | Days | Little for this repository |
+| 3 | **Cuts against** the closed seven-state model (D-IP1). The four verdicts the request names belong to criteria, not items ([verdict.go](../../tools/tillr-item/item/verdict.go)) **[read]**. | Design round | A countable "why it ended" |
+| 4 | **Cuts against** an accepted ruling: `landed` and `resolved-elsewhere` are terminal. The defect the request found is real, and worse than it says **[ran]**; see A2. `reopen` refuses a landed item and reopens a closed one **[ran]**. | Defect: already queued | Finished items stop quietly re-entering the queue |
+| 5 | **Cuts against in its general form; the bounded parts are designed.** Replacing a later node that has not started is a queued proposal block, under `D-IG3`. The drain writes child items from a manifest after landing (D-IP6). Folding is `resolved-elsewhere` with an item pointer **[read]**. None of the three is built **[ran]**. | Bounded: queued | Already wanted |
+| 6 | **Unbuilt but consistent.** Command nodes and outputs bound to their producer by sha256 are queued; see B1 and B2. Re-admitting an item only when a stored basis changed exists ([lifecycle §4.2](./tillr-judge-and-lifecycle.md#42-inspected-rework-tillr-drain-rework-and-the--v2-cutover-d-jl6)). Skipping a node whose input digests did not change is not designed **[read]**. | Queued | Cheaper deterministic steps |
+| 7 | **Unbuilt but consistent, in the narrow form.** A `no_commit` exit runs neither gate nor lander and still settles the item; see B3. The two exit codes exist: 1 is negative, 4 is "an outside dependency prevented a decision" **[read]**. | Narrow form: queued | Investigation-only items stop being held as "did nothing" |
+| 8 | **Cuts against, inside a graph** ([§5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) **[read]**. Outside a graph it works today as a `blocked` hold **[ran]**. That is how tillr settles its own uncertain landing: by reading the trunk ([already_on_trunk.go](../../tools/tillr-drain/drain/already_on_trunk.go)) **[read]**. | Hours, as a convention | Little |
+| 9 | **Unbuilt but consistent; mostly there.** See B5. `tillr run exec` needs a lane directory and an adapter directory **[ran]**. | Days | A run face that can say "dead" without a loop |
+| 10 | **Unbuilt but consistent, except deadlines.** See B7. A second dispatcher cannot share a store with the drain **[ran]**. | Hooks: design round | Shares and caps are already wanted |
+| 11 | **Unbuilt but consistent** with visibility first. See B9. | Hours | "New since you last looked" here too |
+| 12 | **Partly works.** The "emitters unbuilt" claim traces to [tillr-distribution.md](./tillr-distribution.md) and is out of date **[ran]**. A run event carries no purpose or inputs **[read]**. | Days | Fuller reconstruction in the observatory |
+| 13 | **Cuts against** the process-and-record seam, and against the rate of change. The packages can be imported **[ran]**. | Weeks, then ongoing | None now |
 
----
+### 6.3 The requests that cut against the design
 
-## 2. The requests that cut against the design
-
-### 2.1 Outcomes per kind, and completion that is not a landing
+#### 6.3.1 Outcomes per kind, and completion that is not a landing
 
 **For the request.** `landed` means a gated commit moved the trunk, and a finding never makes one.
-The pipeline needs "inconclusive" kept apart from both "failed step" and "rejected". If every
-ending must be one of seven states, the real outcome lives in free-text reasons that no view can
-count.
+AutoQA needs "inconclusive" kept apart from both "failed step" and "rejected". If every ending must
+be one of seven states, the real outcome lives in free-text reasons that no view can count.
 
 **For the design.** The seven states are not started, in queue, working, blocked, landed, resolved
 elsewhere and closed. The set is closed on purpose: one projector keeps the board, the counts and
@@ -210,18 +612,19 @@ things **[inferred]**:
   worktree reset to the trunk. This is the expensive part, and it is the code the drain proof
   depends on.
 
-The narrow choice, whether to record an outcome at all, is [OQ-SP2](#OQ-SP2).
+The narrow choice, whether to record an outcome at all, is [OQ-SP2](#OQ-SP2). The general one is
+[OQ-SP5](#OQ-SP5).
 
-### 2.2 Reopening a finished item
+#### 6.3.2 Reopening a finished item
 
 The accepted lifecycle ruling makes `landed` and `resolved-elsewhere` final so that a finished item
 never quietly returns to the queue **[read]**. The reason was this repository's `-v2` clones and
 the hand-written state moves the lifecycle design records. That ruling still holds. A finding that
 comes back after it was confirmed is a new item that names the old one. Reopening a closed item
-already works **[ran]**. This document proposes no change. The raw-state hole is the queued
-terminal-state block's to close.
+already works **[ran]**. The raw-state hole is the queued terminal-state block's to close, and
+[OQ-SP6](#OQ-SP6) asks whether part of it goes first.
 
-### 2.3 Steps that change the graph
+#### 6.3.3 Steps that change the graph
 
 **What the design already allows.** A node is fixed once its run is recorded. A planning node may
 propose replacing one later node that has not started with a tracked workflow, within that
@@ -230,8 +633,7 @@ read, and keeps the old definition in an append-only revisions table. A refused 
 recorded with its reason (`D-IG3`) **[read]**. That meets the request's own condition, "atomically
 with its event, one writer", for one bounded operation.
 
-**Where the two words are written down.** Both are in this repository's documents, not in the
-installed pack:
+**Where the two words are written down.** Both are in this repository's documents:
 
 - "In fog" is Guild's word for a node that has not started
   ([The Words](./tillr-item-graphs.md#the-words),
@@ -254,41 +656,38 @@ The Guild archive those documents cite is no longer in this checkout **[ran]**.
 
 **For the request.** The findings graph really does change shape as it runs. Four operations are
 already designed: replacement, the child manifest, fold as a pointer, and split as a parent
-resolved into its children. The pipeline should show a case those four cannot express before
-anything wider is considered.
+resolved into its children. AutoQA should show a case those four cannot express before anything
+wider is considered.
 
-### 2.4 Several stores in one workspace
+#### 6.3.4 Several stores in one workspace
 
-These parts assume one store per checkout **[read]**:
+These parts assume one store per root **[read]**:
 
 - the keeper's discovery and lock;
-- the loop's records and lanes under the checkout;
+- the loop's records and lanes under the root;
 - the default store path.
 
-There is one more. The queued unshared-item hold on [the tillr roadmap](../tillr/roadmap.md) would
-hold every item that no tracked document declares, which is every imported finding. The land lock
-is per git repository, so it does not matter to a store that never lands.
+There is one more. The queued unshared-item hold would hold every item that no tracked document
+declares, which is every imported finding ([B8](#12-on-the-existing-design-path)). The land lock is
+per git repository, so it does not matter to a store that never lands.
 
 **Does "state in documents" apply to a findings store?** The rule exists so that deleting the store
 and running sync rebuilds the same queue ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)).
-The pipeline leans toward keeping bug records and evidence as files reviewed in git. That meets the
-same invariant if each finding's record file can be re-imported **[inferred]**. So the principle
+AutoQA leans toward keeping bug records and evidence as files reviewed in git. That meets the same
+invariant if each finding's record file can be re-imported **[inferred]**. So the principle
 applies, but the mechanism does not, because the source documents are finding files and not
-roadmap blocks. That argues for keeping the importer outside tillr, not for adding a second sync
-dialect.
+roadmap blocks. That argues for keeping the importer in AutoQA, not for a second sync dialect.
 
-### 2.5 A Go library as the connection point
+#### 6.3.5 A Go library as the connection point
 
 Every package can be imported today. The designed seam, though, is the CLI and its JSON records,
 with exit codes as the contract, and that seam is what the conformance tests pin. A second
-consumer that links the Go types would freeze names that change daily. From 2026-11-13 to
-2026-11-16, 167 commits touched `tools/tillr*` and 37 touched the core store, item and run packages
+consumer that links the Go types would freeze names that change daily: 167 commits touched
+`tools/tillr*` from 2026-11-13 to 2026-11-16, and 37 touched the core store, item and run packages
 **[ran]**. Records carry a `record_version` and can be versioned. Go APIs here cannot be versioned
 cheaply. The choice is [OQ-SP4](#OQ-SP4).
 
----
-
-## 3. The two questions
+### 6.4 The two questions
 
 **Does an item hold the record, or point at files?** It does both, and today the split is
 consistent **[read]**:
@@ -300,50 +699,19 @@ consistent **[read]**:
   with name, type, sha256 and location. An artifact is "a digest plus a locator"
   ([agent-runtime.md §14](./agent-runtime.md#14-adopting-guilds-graph-algebra)).
 
-The pipeline's lean toward pointing is right. It needs one more rule: whatever a verdict relied on
-is bound by its digest, so an edited file cannot silently change what was judged.
+AutoQA's lean toward pointing is right. It needs one more rule: whatever a verdict relied on is
+bound by its digest, so an edited file cannot silently change what was judged.
 
 **Which requests cut against the design?** Requests 3, 4, 5 (in its general form), 8 and 13, for
-the reasons in [Section 2](#2-the-requests-that-cut-against-the-design). Requests 2, 6, 7 (in its
-narrow form), 9, 10 (apart from deadlines and hooks), 11 and 12 are unbuilt but consistent.
+the reasons in [Section 6.3](#63-the-requests-that-cut-against-the-design). Requests 2, 6, 7 (in
+its narrow form), 9, 10 (apart from deadlines and hooks), 11 and 12 are unbuilt but consistent.
 Request 1 is a small defect.
 
----
-
-## 4. A proposed first slice
-
-This is proposed work, not queued work. Whether to file it now is [OQ-SP3](#OQ-SP3). Three
-pieces, all small and within the design:
-
-1. **Views and the planner on a store the drain never opened.** `tillr view waiting` and
-   `tillr drain why` treat a missing utility table as empty, as `Close` already does. A test builds
-   a store with only `tillr-store init` and `tillr-item apply`. Hours.
-2. **A second store, documented.** Every face runs with an explicit `--store`, a lane root
-   outside the checkout, and no drain or keeper on that store. A store has one dispatcher, because
-   the drain holds items whose runs it did not dispatch **[ran]**. An hour.
-3. **Plain commands through `tillr run exec`, documented.** A plain command needs an adapter
-   directory with `pause-kind` and `extract-report`, and a working directory relative to its lane;
-   an absolute one is refused **[ran]**. A stock command adapter would save every caller the stub.
-   Hours, and it moves the queued command-node block a little closer.
-
-**What the pipeline builds outside tillr for now:**
-
-- its dispatcher, with its ordering and deadlines;
-- each finding's graph and its rewriting;
-- the importer from a fuzzer run directory to finding files plus `tillr item apply`;
-- the send step and its uncertain state;
-- the owner's acknowledgment cursor.
-
-As command nodes, node outputs, the `no_commit` exit and the child-item manifest land, pieces can
-move back in where the fit is real.
-
----
-
-## 5. Risks to tillr
+### 6.5 Risks to tillr
 
 - **Scope creep away from the owner's goals.** Each request is reasonable alone. Together they
-  redirect the coming weeks from landing the queue unattended to generalizing the item model. The
-  roadmap puts loop-stopping defects before any build
+  redirect the coming weeks from the drain proof to generalizing the item model. The roadmap puts
+  loop-stopping defects before any build
   ([roadmap, Ordering basis](../tillr/roadmap.md#ordering-basis)), and none of this work stops the
   loop by staying undone.
 - **A second consumer freezing interfaces too early.** Record schemas and exit codes are designed
@@ -354,16 +722,18 @@ move back in where the fit is real.
   inside a graph, outside effects and clocks. Each is refused there for a stated reason. Taking
   them would weaken the one-fence, one-gate, one-landing guarantee the drain proof depends on
   **[read]**.
-- **Two dispatchers on one store.** The planner would hold the pipeline's items **[ran]**. Keep the
+- **Two dispatchers on one store.** The planner would hold AutoQA's items **[ran]**. Keep the
   stores separate.
+- **A queued item landing against AutoQA before the ruling.** The unshared-item hold is ready
+  **[ran]**; if it lands as written, AutoQA's store is held whole ([OQ-SP8](#OQ-SP8)).
 
 ---
 
 ## Evidence
 
 Run on 2026-11-16 with the binaries `just tillr-build` produces, the environment's `BOARD_DB` and
-`XDG_STATE_HOME` cleared, and every store a new file outside this repository. `$S` names that
-store.
+`XDG_STATE_HOME` cleared, and every experimental store a new file outside this repository. `$S`
+names that store. The last two lines read the live store through read-only faces.
 
 ```text
 tillr-store init --store $S                                   exit 0; tables: events, meta, schema_migrations
@@ -382,11 +752,18 @@ tillr run exec --store $S --input <run.request> \
   (absolute working_dir)                                      refused: must be relative to the lane
   (no adapter directory)                                      exit 2: reading adapter pause-kind
 tillr drain why  (after that run; second item has no fence)   held run-link-missing; held no-fence
-ls scratch/board-guild-graph-material/                        no such directory
+ls <the Guild archive directory the item-graph design cites>  no such directory
 fd -t d internal tools/ (tillr modules)                       nothing
+fd -i changelog tools docs                                    nothing
+tillr land enqueue --help                                     unknown face "enqueue": want pass or one
 git log --oneline --since=2026-11-13 -- 'tools/tillr*' | wc -l          167
 git log --oneline --since=2026-11-13 -- tools/tillr \
   tools/tillr-item/item tools/tillr-run/run | wc -l                     37
+tillr drain why (live store, backend-policy.bedrock.json)     command-node, node-outputs, seat-shares,
+                                                              unshared-item hold: queued, waiting for a lane;
+                                                              exit-condition: blocked on node-outputs;
+                                                              terminal-state block: blocked on owner-criterion-hold
+tillr-item sync --dry-run (live store)                        created 0, unchanged 81, updated 0
 ```
 
 **Not determined:**
@@ -394,91 +771,181 @@ git log --oneline --since=2026-11-13 -- tools/tillr \
 - whether the older installed binaries behave differently on these checks, since only the current
   build was run;
 - whether the modules are published anywhere, since no network check was made;
-- whether two drain loops with different stores can run in one checkout, since no loop was started
+- whether two drain loops with different roots can run on one machine, since no loop was started
   next to the live one;
+- where the Product QA pipeline's code and requests live outside this repository;
 - what the Guild material contained.
 
 ---
 
 ## Open Questions
 
-1. 💬 **OQ-SP1: What should the Product QA pipeline be told to build on tillr now?**
+1. 💬 **OQ-SP1: Does tillr answer AutoQA with this proposal, shared documentation, and a second round of conversation from both sides?**
 
-   The pipeline's agent is about to prototype a findings store and its own dispatcher. They ask
-   whether to build on tillr, and today `tillr view waiting` on their store exits 3. Whatever we
-   answer, they will start building on it this week.
+   AutoQA's agent is about to build on tillr, and it builds on whatever we say this week. The
+   proposal is Section 1; the contract is Section 2; the documentation is the status index of
+   tillr's designs shipped through the tillr pack. Accepting this also accepts the four adjustments
+   to queued items in [Section 3](#3-proposed-work), and names where AutoQA writes its next round
+   of requests.
 
-   - **A — Use the stable parts, build the rest outside.** They use the item store with an
-     explicit `--store`, `tillr run exec` and the event log, and write their own dispatcher and
-     graph. tillr fixes one defect and documents two things.
-   - **B — Wait and build on tillr's graphs.** They wait for command nodes, outputs and child
+   - **A — Yes: this proposal, the index, then a second round.** AutoQA builds on the stable
+     surface and keeps its dispatcher and graph on its own side; its next requests go in a tracked
+     file beside its design, `docs/design/tillr-autoqa-requests.md`, and get answered here.
+   - **B — Wait and build on tillr's graphs.** AutoQA waits for command nodes, outputs and child
      manifests, which land behind the drain proof.
-   - **C — Don't use tillr.** They write their own store, and none of tillr's lease or event work
-     transfers.
+   - **C — AutoQA does not use tillr.** It writes its own store, and none of tillr's lease or event
+     work transfers.
 
-   <!-- vantage: question id=OQ-SP1 leaning="A — the stable parts work without git or the drain today, and nothing in it waits on the drain proof." -->
+   Waits on it: the four adjustments, and AutoQA's agent starting work.
 
-   _Leaning:_ A — the stable parts work without git or the drain today, and nothing in it waits on the drain proof.
+   <!-- vantage: question id=OQ-SP1 leaning="A — the stable parts work without git or the drain today, the adjustments cost nothing the queue is not already paying, and a second round is where AutoQA's prototype can show what the proposal missed." -->
+
+   _Leaning:_ A — the stable parts work without git or the drain today, the adjustments cost
+   nothing the queue is not already paying, and a second round is where AutoQA's prototype can show
+   what the proposal missed.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-2. 💬 **OQ-SP2: Should a finished item say how it ended, in words its kind defines?**
+2. 💬 **OQ-SP2: Should a finished item record how it ended, in words its kind defines?**
 
-   A finding ends as a repeat, rejected, inconclusive or confirmed. Today the owner sees `closed`
-   with a free-text reason, or `resolved-elsewhere` with a pointer. Nothing can count "how many
-   findings were inconclusive this week". The seven states are closed on purpose, and the question
-   is whether to add anything beside them.
+   A finding ends as a repeat, rejected, inconclusive or confirmed, and nothing in tillr can count
+   them; the seven states are closed on purpose ([Section 6.3.1](#631-outcomes-per-kind-and-completion-that-is-not-a-landing)).
 
-   - **A — An outcome field on the move to a finished state.** Its words are defined per kind,
-     the way a close reason is stored now. The seven states and the board stay as they are, and
-     views can count outcomes. It costs a design round after the drain proof.
-   - **B — No new field.** Outcomes stay in reasons and pointers. The pipeline counts them in its
-     own files.
-   - **C — New states per kind.** Every view, the planner and the landing rules learn each new
-     state.
+   - **A — An outcome field on the move to a finished state.** Words defined per kind, stored the
+     way a close reason is; the states and the board unchanged; a design round after the drain
+     proof.
+   - **B — No new field.** Outcomes stay in reasons and pointers, and AutoQA counts them in its own
+     ledger.
+   - **C — New states per kind.** Every view, the planner and the landing rules learn each one.
+
+   Waits on it: nothing now; B3's receipt is shaped either way.
 
    <!-- vantage: question id=OQ-SP2 leaning="B now and A later — A keeps the closed state set, but it is not worth a design round before the drain proof." -->
 
-   _Leaning:_ B now and A later — A keeps the closed state set, but it is not worth a design round before the drain proof.
+   _Leaning:_ B now and A later — A keeps the closed state set, but it is not worth a design round
+   before the drain proof.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-3. 💬 **OQ-SP3: Should the three small first-slice items be filed ahead of the drain proof?**
+3. 💬 **OQ-SP3: Are P1 to P4 filed now, at the bottom of the queue, and P6 after the drain proof?**
 
-   Three small pieces would unblock the pipeline: views and the planner working on a store the
-   drain never opened, a documented second store, and a documented plain-command run. Filed now,
-   they enter the queue the drain is working through, at whatever rank they get. Filed later, the
-   pipeline works around the failing views until the queue is landed.
+   P1 to P4 are hours each and unblock AutoQA; filed now, they join the queue the drain is working
+   through. P6 is days and touches the drain's own interrupted-run code.
 
-   - **A — File them now, at the bottom of the queue.** They land when the drain reaches them,
-     and the queue grows by three small items.
-   - **B — File them after the drain proof.** The proof's queue stays as it is, and the pipeline
-     waits.
+   - **A — P1 to P4 now, P6 after the drain proof.** The queue grows by four small items.
+   - **B — All of them after the drain proof.** The proof's queue stays as it is, and AutoQA works
+     around the failing faces.
+   - **C — P1 only now.** The defect is fixed; the documentation waits.
 
-   <!-- vantage: question id=OQ-SP3 leaning="A — they are hours of work, fix a defect fresh stores hit too, and the drain should prove it can take new work." -->
+   Waits on it: P1, P2, P3, P4 and P6.
 
-   _Leaning:_ A — they are hours of work, fix a defect fresh stores hit too, and the drain should prove it can take new work.
+   <!-- vantage: question id=OQ-SP3 leaning="A — four small items fix a defect fresh stores hit too, and the drain should prove it can take new work; P6 touches code the proof depends on." -->
+
+   _Leaning:_ A — four small items fix a defect fresh stores hit too, and the drain should prove it
+   can take new work; P6 touches code the proof depends on.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-SP4: Should another program connect to tillr through its commands and records, or link its Go packages?**
+4. 💬 **OQ-SP4: Are tillr's commands and records the only supported connection for another program?**
 
-   The pipeline asks to link tillr's Go packages into its own binary. Today they can, by pointing a
-   `replace` at this checkout, and the next day's commit may rename what they called. From
-   2026-11-13 to 2026-11-16, 167 commits touched the tillr tools.
+   AutoQA asked to link tillr's Go packages; it can today, and the next commit may rename what it
+   calls ([Section 6.3.5](#635-a-go-library-as-the-connection-point)).
 
-   - **A — Commands and records are the only supported connection.** A breaking record change gets
-     a new `record_version`. Linking Go code is allowed at the linker's own risk, pinned to a
-     commit.
+   - **A — Commands and records only.** A breaking record change gets a new `record_version` and a
+     line in the contract; linking Go code is at the linker's own risk, pinned to a commit.
    - **B — Support a Go library.** tillr keeps exported APIs stable, and every refactor checks a
      second consumer.
 
+   Waits on it: P4, and Section 2 becoming the contract.
+
    <!-- vantage: question id=OQ-SP4 leaning="A — records are already versioned and pinned by the conformance tests, and a stable Go API would slow a tool that changes daily." -->
 
-   _Leaning:_ A — records are already versioned and pinned by the conformance tests, and a stable Go API would slow a tool that changes daily.
+   _Leaning:_ A — records are already versioned and pinned by the conformance tests, and a stable
+   Go API would slow a tool that changes daily.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+5. 💬 **OQ-SP5: After the drain proof, does tillr hold a design round on "an artifact recorded and judged" as a second way an item completes?**
+
+   A landing is one case of an artifact judged and recorded, and the `no_commit` exit already ends
+   an item with no trunk move; generalizing it reaches the planner's rule that every item has a
+   fence and every lane is a worktree ([Section 6.3.1](#631-outcomes-per-kind-and-completion-that-is-not-a-landing)).
+
+   - **A — Yes, a design round after the drain proof**, starting from B3's receipt and the cases
+     AutoQA's prototype brings.
+   - **B — No.** `no_commit` is the only other ending, and anything wider stays in AutoQA.
+   - **C — Now.** The round runs beside the drain proof.
+
+   Waits on it: nothing queued; [C7](#13-what-tillr-will-not-change).
+
+   <!-- vantage: question id=OQ-SP5 leaning="A — the idea is sound and AutoQA will bring real cases, but it touches the planner the drain proof rests on." -->
+
+   _Leaning:_ A — the idea is sound and AutoQA will bring real cases, but it touches the planner
+   the drain proof rests on.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+6. 💬 **OQ-SP6: Should the raw `tillr item state` face stop moving items out of a finished state before the rest of the terminal-state block lands?**
+
+   The face moves anything anywhere today **[ran]**; the queued block fixes it, behind two other
+   lifecycle items, and its c3 (no move out of `landed` or `resolved-elsewhere`) needs neither.
+
+   - **A — Leave the block as queued.** The hole closes when the chain lands.
+   - **B — Split c3 out as P5, with nothing in `blocked_by`.** The block loses c3 in the same commit.
+   - **C — Restrict the raw face further:** only an operator flag may write `landed` at all.
+
+   Waits on it: P5, and an edit to the terminal-state block's criteria.
+
+   <!-- vantage: question id=OQ-SP6 leaning="B — the move out is the one that re-queues finished work, it waits on nothing, and C adds an authorization rule no design has." -->
+
+   _Leaning:_ B — the move out is the one that re-queues finished work, it waits on nothing, and C
+   adds an authorization rule no design has.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+7. 💬 **OQ-SP7: Should a graph that finishes with no commit be able to write child items?**
+
+   AutoQA's `verify_repro` turns a reproduced finding into a child item, from a graph that never
+   lands; D-IP6 writes child items only after a land pass, and no item queues it
+   ([Section 4, item 4](#4-where-the-documents-disagree)).
+
+   - **A — Yes: amend D-IP6 so the manifest also applies when a `no_commit` graph settles**, in the
+     idea pipeline's own next round.
+   - **B — No.** AutoQA's dispatcher files the child with `tillr item apply`.
+
+   Waits on it: AutoQA's two-graph funnel inside tillr; nothing queued.
+
+   <!-- vantage: question id=OQ-SP7 leaning="A — settling is the same one-writer moment a land pass is, and B gives AutoQA a second writer of tillr's lineage." -->
+
+   _Leaning:_ A — settling is the same one-writer moment a land pass is, and B gives AutoQA a
+   second writer of tillr's lineage.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+8. 💬 **OQ-SP8: When unshared items are held, how do AutoQA's items reach a store?**
+
+   The queued hold is ready and, as written, holds every item filed with `tillr item apply` — all
+   of AutoQA's own store, and every bug it files into tillr's ([B8](#12-on-the-existing-design-path)).
+
+   - **A — Two rules.** In AutoQA's own store, the hold does not apply, because that store is
+     never synced (the hold's c1 is adjusted to say so). Into tillr's own store, AutoQA writes a
+     tracked document block and sync imports it, so D-AQ2's `item apply` becomes a block.
+   - **B — A store-level setting** that turns the hold off, with `item apply` everywhere.
+   - **C — No change.** AutoQA does not run the drain on its own store.
+
+   Waits on it: the unshared-item hold's c1, and D-AQ2 in AutoQA's design.
+
+   <!-- vantage: question id=OQ-SP8 leaning="A — tillr's own queue keeps one intake, and a store nobody syncs has no documents to be missing from." -->
+
+   _Leaning:_ A — tillr's own queue keeps one intake, and a store nobody syncs has no documents to
+   be missing from.
 
    **Answer:**
    > _(empty — fill in when decided)_
