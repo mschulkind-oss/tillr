@@ -881,14 +881,7 @@ can pass its limit while still working. This item puts the same watchdog, with t
 what counts as progress, around both programs, so a working suite always finishes and a silent one
 is named as stalled.
 
-<!-- tillr: item id="item-gate-wrapper-clocks-stall" paths="tools/fork-check.py,tests/fork-check.test.py,tools/gate/,tools/tillr-gate/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** In `tools/fork-check.py`'s landing and rolling tiers, a check's timeout (the per-kind constants such as `DOCUMENTS_TIMEOUT` of 300 s, `TILLR_DOCS_TIMEOUT` of 600 s and `BUILD_TIMEOUT` of 3,600 s) no longer kills a check that is making progress. Progress is the rule of `item-gate-stall-watchdog`: output grew, or the process group's CPU time rose, in a sample, with the same interval and count. A test fails when the Python and Go constants differ.
-- **c2:** A stalled check there ends its process group and is reported as a stall naming the check, its last output line and how long it was silent, apart from the existing could-not-answer exits. `tools/gate/change-gate.py` carries it out as a stall, so the drain applies the stall handling of `item-gate-stall-watchdog` and not `gate-harness-error`. A test drives it with an injected sampler.
-- **c3:** `tillr-gate run --gate`'s `--gate-timeout` (30 minutes by default) no longer kills a gate program that is making progress. The same watchdog watches the program's process group. The flag is removed, or kept as a target reported on the summary line when exceeded; the choice is the implementer's, stated in the gate README. A test runs a stub program that makes progress past the flag's value on the injected clock and asserts it finishes with its verdict.
-- **c4:** A stalled rolling run advances no watermark and names the stalled check. A second consecutive stall of the same check over the same range files one deduplicated trunk fixer naming it, as a red rolling run does. A test asserts both.
-- **c5:** The callers stop passing `--lock-timeout 30`, which `tools/fork-check.py` accepts and ignores: `tools/gate/change-gate.py` and the drain's default rolling program. The drain comment that calls the flag "not decoration" is corrected, and the rolling test that requires the flag is inverted.
-- **c6:** The timing audit, case 53 of `tests/fork-check.test.py`, passes, and no new test asserts elapsed time. The fork-check docstring's statement that a timeout is an inability to answer, and the gate README, say what a stall is. The report lists every remaining wall-clock bound in `tools/fork-check.py`, `tools/gate/change-gate.py` and `tillr-gate`, with what its expiry now does.
 
 **Agent details:**
 

@@ -1857,7 +1857,9 @@ with tempfile.TemporaryDirectory() as tmp:
     commit(repo, "edit the guide")
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stderr.splitlines()[0].startswith("fork-check: planning"), result.stderr
+    # CPU accounting advisories may precede the first gate lifecycle status.
+    statuses = [line for line in result.stderr.splitlines() if line.startswith("fork-check:")]
+    assert statuses[0].startswith("fork-check: planning"), result.stderr
     assert "fork-check: plan ready" in result.stderr, result.stderr
     assert "fork-check: ok file-size" in result.stderr, result.stderr
     assert "fork-check: ok file-size" in result.stderr, result.stderr
@@ -7692,3 +7694,97 @@ with tempfile.TemporaryDirectory() as tmp:
     replay = run(repo, env, "--replay", "--only", "no-such-check")
     assert replay.returncode == 2, replay.stdout + replay.stderr
     assert "no planned check matches" in replay.stderr, replay.stderr
+
+# 66. Wrapper targets never kill progress; only complete silent samples stall.
+# The fake child supplies observations, not elapsed-time assertions.
+from unittest.mock import patch
+import types
+spec = importlib.util.spec_from_file_location("fork_check_watchdog", SCRIPT)
+watch = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(watch)
+assert watch.GO_TEST_TIMEOUT == "0", "Go's nested test deadline still kills working suites"
+go_watch = (ROOT / "tools/tillr-gate/watchdog.go").read_text()
+assert f"const WatchdogSampleInterval = {int(watch.WATCHDOG_SAMPLE_INTERVAL * 1000)} * time.Millisecond" in go_watch
+assert f"const WatchdogSilentSamples = {watch.WATCHDOG_SILENT_SAMPLES}" in go_watch
+
+class SampledChild:
+    pid = 12345
+    returncode = 0
+    def __init__(self, mode):
+        self.n = 0
+        self.mode = mode
+    def communicate(self, timeout=None):
+        self.n += 1
+        if self.n <= 70 or self.mode == "silent":
+            output = b"last line\n" + (b"x" * self.n if self.mode == "output" else b"")
+            raise subprocess.TimeoutExpired("stub", timeout, output=output)
+        return b"finished\n", b""
+    def poll(self):
+        return None
+
+for mode in ("output", "cpu", "silent", "unavailable"):
+    child = SampledChild(mode)
+    def sample(pid):
+        if mode == "unavailable":
+            raise OSError("CPU unavailable")
+        return child.n if mode == "cpu" else 12
+    def kill(proc):
+        proc.mode = "killed"
+        proc.n = 71
+        proc.returncode = -9
+    warnings = []
+    with patch.object(watch.subprocess, "Popen", return_value=child), \
+         patch.object(watch, "progress", side_effect=warnings.append), \
+         patch.object(watch.os, "write"), \
+         patch.object(watch, "_kill_process_group", side_effect=kill), \
+         patch.object(watch, "_start_cpu_sampler", return_value=(sample, lambda: None)):
+        rc, out, err, _ = watch._run_cancellable(ROOT, ["stub"], 0, None, (), watch.Cancellation(), False)
+    if mode == "silent":
+        assert rc == watch.CHECK_STALLED_RC and "last line" in err and "60000 ms" in err, (rc, err)
+    else:
+        assert rc == 0, (mode, rc, err)
+        if mode == "unavailable":
+            assert any("watchdog unavailable" in line for line in warnings), warnings
+stalled = watch.Check("documents", "blocked", ["stub"], "test", 1)
+stalled.rc = watch.CHECK_STALLED_RC
+stalled.output = "stalled: last line"
+assert not stalled.conflict
+assert watch.verdict_of([stalled]) == ("stalled", watch.EXIT_STALLED)
+assert watch.check_status(stalled) == "STALLED"
+progressed = watch.Check("documents", "working", ["stub"], "test", 1)
+# Inject the measured duration; never compare a real elapsed time to a budget.
+with patch.object(watch, "execute_attempt", side_effect=lambda root, check, *args, **kwargs: setattr(check, "seconds", 70)):
+    watch.execute_check(progressed, ROOT, None)
+assert progressed.rc == 0 and any("over target 1s" in line for line in progressed.warnings)
+progressed.rc = watch.EXIT_STALLED  # an ordinary command may itself exit 6
+assert progressed.conflict and watch.verdict_of([progressed]) == ("failed", 1)
+# The real group is killed even if its leader exited and a child holds the pipe.
+# Inject progress until its readiness marker exists; startup speed is never a verdict.
+with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
+    ready = Path(directory) / "ready"
+    cpu = 0
+    def ready_sample(pid):
+        global cpu
+        if not ready.exists():
+            cpu += 1
+        return cpu
+    with patch.object(watch, "WATCHDOG_SAMPLE_INTERVAL", 0.001), \
+         patch.object(watch, "_start_cpu_sampler", return_value=(ready_sample, lambda: None)):
+        rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c",
+            "import os,signal,sys\nfrom pathlib import Path\npid=os.fork()\nif pid: os._exit(0)\nprint('child holds pipe',flush=True)\nPath(sys.argv[1]).touch()\nsignal.pause()", str(ready)],
+            0, None, (), watch.Cancellation(), False)
+    assert rc == watch.CHECK_STALLED_RC and "child holds pipe" in err, (rc, out, err)
+    # Named observations are exported even when no rolling span file was requested.
+    path = Path(directory) / "stall.json"
+    nonexecutable = Path(directory) / "not-executable"
+    nonexecutable.write_text("#!/bin/sh\nexit 0\n")
+    rc, _, _ = watch.run_command(ROOT, [str(nonexecutable)], 1)
+    assert rc == 126, "an unexecutable runner became a content verdict"
+    stalled.output = out + err
+    with patch.dict(watch.os.environ, TILLR_FAST_VERDICT_OUT=str(path)):
+        watch.write_gate_spans("", types.SimpleNamespace(checks=[stalled]), ROOT, 0,
+                               "stalled", "head", "tree", [], 1, 1, 0)
+    observation = json.loads(path.read_text())["payload"]["checks"][0]
+    assert observation["check_id"] and observation["last_output_line"] == "child holds pipe", observation
+    assert observation["silent_samples"] == watch.WATCHDOG_SILENT_SAMPLES
+print("wrapper watchdog: cadence parity, output/CPU progress, unavailable accounting, group kill and named stall handoff pass")

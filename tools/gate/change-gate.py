@@ -83,10 +83,10 @@ def main():
             return checked.returncode
         scope = (["--all"] if args.all else ["--since", args.since] if args.since
                  else ["--since", args.base, "--tier", "landing"])
-        remaining = subprocess.run([sys.executable, "tools/fork-check.py", *scope, "--lock-timeout", "30"])
+        remaining = subprocess.run([sys.executable, "tools/fork-check.py", *scope])
         # The old program's usage/no-verdict exit is 2; RunGate reads 4 as
         # could-not-judge. A missing judgment must never become a rejected change.
-        return remaining.returncode if remaining.returncode in (0, 1) else 4
+        return remaining.returncode if remaining.returncode in (0, 1, 6) else 4
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"change-gate: could not judge: {error}", file=sys.stderr)
         return 4

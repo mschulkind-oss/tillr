@@ -789,6 +789,10 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	switch code {
 	case 0:
 		return RollingOutcome{Green: true, Known: true, ExitCode: code, Coverage: coverage}, nil
+	case 6:
+		stalled, watches := readSpansWithStatus(spans, "STALLED")
+		return RollingOutcome{Stalled: len(stalled) > 0, Known: false, ExitCode: code,
+			FailingChecks: stalled, CheckWatches: watches, Coverage: coverage, Detail: stderr.String()}, nil
 	case 1:
 		failing, watches := readFailingSpans(spans)
 		if len(failing) == 0 {

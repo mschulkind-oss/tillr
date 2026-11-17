@@ -62,7 +62,11 @@ WHAT IT RUNS, and when. Only what the change can reach:
      check` and `npm run test`, and pi-subagents' `npm run typecheck` and `npm run
      test:unit`, in the clean candidate checkout. A build only transpiles; these are
      the typecheck and the unit suite it cannot make. A failing one is a verdict; a
-     missing runner (exit 127) or a timeout (124) is an inability to answer. So are
+     missing runner (exit 127), or a runner's own timeout (124), is an inability to
+     answer. This wrapper's per-kind timeouts are reporting targets, never kills:
+     output growth or group CPU growth in a one-second sample is progress. Sixty
+     consecutive complete samples with neither end the group as a named stall,
+     exit 6, separate from content failures and could-not-answer exits. So are
      suite cases whose assertion is a real-time budget this machine meets on an idle run
      and misses beside the gate's other checks: they are QUARANTINED, named with their
      reason, their pile item and their expiry (`UNANSWERABLE_FORK_QUALITY`), counted apart
@@ -637,6 +641,9 @@ import argparse
 import concurrent.futures
 import contextlib
 import copy
+import ctypes
+import platform
+import struct
 import fcntl
 import hashlib
 import json
@@ -1720,7 +1727,7 @@ GO_TOOL_DIRS = (
 GO_LANDING_SUITE_DIRS = ("tools/tillr",)
 # Whole-suite wall seconds measured 2026-11-15, one module at a time with the shared
 # build cache warm and test-result caching disabled. Reproduce each entry with:
-#   cd <directory> && CGO_ENABLED=0 go test -count=1 -parallel 48 -timeout 3600s ./...
+#   cd <directory> && CGO_ENABLED=0 go test -count=1 -parallel 48 -timeout 0 ./...
 # These are module costs, not the deleted board monolith's build/integration price.
 # Drain also measured 30.87/30.94/30.98s with three concurrent independent copies of
 # the same command (three testing lanes, no source writers). Both the single-suite
@@ -1741,15 +1748,11 @@ GO_TOOL_COST_ESTIMATE = {
 # leaves the suite waiting: measured 2026-10-24 at 12 parallel 24s, 32 parallel 17s, and
 # 48 parallel 13s for the same cases. 48 is the oversubscription that fits the budget.
 GO_TOOL_PARALLEL = 48
-# The check's own budget, and the `go test` timeout it passes down. Both are stated
-# because Go's default (10m) is an accidental elapsed-time assertion: on a loaded box
-# this package's suite takes 601s of wall clock and Go kills it with a stack dump, so
-# the gate reports a timing failure as if the tests had failed. A timeout here is a
-# liveness guard, not a verdict -- the verdict is the test results.
+# The check's target is measured, never a deadline. Disable Go's nested default
+# deadline too: a working suite must not be killed inside the watched group.
+# The inherited task-clock watchdog is the suite's liveness observer.
 GO_TOOL_TIMEOUT = 3600
-GO_TEST_TIMEOUT = "3600s"
-# The build step's own liveness guard. A compile is minutes at worst, and this is a
-# liveness guard rather than a verdict, like the suite's timeout above.
+GO_TEST_TIMEOUT = "0"
 
 
 
@@ -1898,8 +1901,8 @@ class Cancellation:
 
 def _kill_process_group(proc: subprocess.Popen) -> None:
     """Kill `proc` and every child in the session it was started in, if it is alive."""
-    if proc.poll() is not None:
-        return
+    # The leader may have exited while descendants still hold its output pipe.
+    # Kill the group even then; polling only the leader would leave them alive.
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, AttributeError):
@@ -1909,6 +1912,57 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             pass
 
 
+WATCHDOG_SAMPLE_INTERVAL = 1
+WATCHDOG_SILENT_SAMPLES = 60
+EXIT_STALLED = 6
+# Outside subprocess exit/signal values: a command's own exit 6 is not our stall.
+CHECK_STALLED_RC = -1000
+
+
+def _start_cpu_sampler(pid: int):
+    """Attach an inherited kernel task clock before the waiting shim execs.
+
+    Like tillr-gate's task clock, this retains CPU from exited descendants. A
+    denied counter is explicitly unavailable; incomplete /proc snapshots are
+    never substituted. The shim's release pipe prevents an attachment race.
+    """
+    number = {"x86_64": 298, "aarch64": 241}.get(platform.machine())
+    if sys.platform != "linux" or number is None:
+        raise OSError("inherited kernel task clock is not supported here")
+    # perf_event_attr: software task clock, inherit, 72-byte v0 layout.
+    attr = ctypes.create_string_buffer(struct.pack("=IIQQQQQIIQQ", 1, 72, 1, 0, 0, 0, 2, 0, 0, 0, 0))
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = libc.syscall(number, ctypes.byref(attr), pid, -1, -1, 8)
+    if fd < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    previous = 0
+    def sample(_pid):
+        nonlocal previous
+        current = struct.unpack("=Q", os.read(fd, 8))[0]
+        if current < previous:
+            raise OSError("kernel CPU counter decreased")
+        previous = current
+        return current
+    return sample, lambda: os.close(fd)
+
+
+# No requested command runs until its counter is attached (or declared unavailable).
+_CPU_SHIM = '''import os, sys
+fd = int(sys.argv[1])
+os.read(fd, 1)
+os.close(fd)
+try:
+    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+except FileNotFoundError:
+    print(sys.argv[2] + ': not found on PATH', file=sys.stderr)
+    sys.exit(127)
+except OSError as error:
+    print(sys.argv[2] + ': could not execute: ' + str(error), file=sys.stderr)
+    sys.exit(126)
+'''
+
+
 def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
                      env: dict[str, str] | None, drop: tuple[str, ...],
                      cancel: Cancellation, split: bool) -> tuple[int, str, str, float]:
@@ -1916,31 +1970,75 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
 
     The command starts in its own session so cancellation reaches its whole process
     group rather than only the shell the gate happened to exec. A cancel returns 130,
-    which the caller records as a check that was stopped, never as a verdict.
+    which the caller records as a check that was stopped, never as a verdict. The
+    timeout is a target; sixty one-second samples without output or CPU growth
+    return CHECK_STALLED_RC, with the last line and silence duration. Missing CPU
+    accounting is reported immediately, disables detection, and never guesses.
     """
     started = time.monotonic()
+    release_r, release_w = os.pipe()
     try:
         proc = subprocess.Popen(
-            argv, cwd=str(cwd), stdout=subprocess.PIPE,
+            [sys.executable, "-c", _CPU_SHIM, str(release_r), *argv],
+            cwd=str(cwd), stdout=subprocess.PIPE,
             stderr=subprocess.PIPE if split else subprocess.STDOUT,
-            text=True, errors="replace", env=environ(env, drop),
-            start_new_session=True,
+            env=environ(env, drop), pass_fds=(release_r,), start_new_session=True,
         )
-    except FileNotFoundError:
-        return 127, "", f"{argv[0]}: not found on PATH", time.monotonic() - started
-    cancel.register(proc)
-    try:
-        try:
-            out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_process_group(proc)
-            out, err = proc.communicate()
-            return 124, out or "", err or f"{' '.join(argv)}: timed out after {timeout}s", \
-                time.monotonic() - started
-        if cancel.cancelled:
-            return 130, out or "", err or "", time.monotonic() - started
-        return proc.returncode, out or "", err or "", time.monotonic() - started
+    except OSError:
+        os.close(release_w)
+        raise
     finally:
+        os.close(release_r)
+    warning = ""
+    closer = lambda: None
+    sampler = None
+    try:
+        sampler, closer = _start_cpu_sampler(proc.pid)
+        previous_cpu = sampler(proc.pid)
+    except (OSError, ValueError, struct.error) as error:
+        warning = f"watchdog unavailable: {error}\n"
+        progress(f"{' '.join(argv)}: {warning.strip()}")
+    os.write(release_w, b"x")
+    os.close(release_w)
+    cancel.register(proc)
+    previous_bytes = 0
+    silent = 0
+    def decode(value):
+        return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=WATCHDOG_SAMPLE_INTERVAL)
+                code = 130 if cancel.cancelled else proc.returncode
+                return code, decode(out), decode(err), time.monotonic() - started
+            except subprocess.TimeoutExpired as pending:
+                out, err = decode(pending.output), decode(pending.stderr)
+                if warning:
+                    continue
+                try:
+                    cpu = sampler(proc.pid)
+                except (OSError, ValueError, struct.error) as error:
+                    warning = f"watchdog unavailable: {error}\n"
+                    progress(f"{' '.join(argv)}: {warning.strip()}")
+                    continue
+                size = len(pending.output or b"") + len(pending.stderr or b"")
+                silent = 0 if size > previous_bytes or cpu > previous_cpu else silent + 1
+                previous_bytes, previous_cpu = size, cpu
+                if silent >= WATCHDOG_SILENT_SAMPLES:
+                    last = (out + err).rstrip().splitlines()
+                    note = (f"stalled: {' '.join(argv)}; {silent * WATCHDOG_SAMPLE_INTERVAL * 1000} ms silent; "
+                            f"last output {last[-1] if last else '(none)'!r}; group CPU {cpu // 1000000} ms; "
+                            f"{silent} silent samples\n")
+                    note += "stall observations: " + json.dumps({
+                        "result": "stalled", "duration_ms": int((time.monotonic() - started) * 1000),
+                        "silent_samples": silent, "cpu_time_ms": cpu // 1000000,
+                        "last_output_line": last[-1] if last else "",
+                    }) + "\n"
+                    _kill_process_group(proc)
+                    out, err = proc.communicate()
+                    return CHECK_STALLED_RC, decode(out), decode(err) + note, time.monotonic() - started
+    finally:
+        closer()
         cancel.unregister(proc)
 
 
@@ -1957,25 +2055,8 @@ def run_command(cwd: Path, argv: list[str], timeout: int,
     variable set to the empty string is a different question to a store resolver than
     one that is not there at all.
     """
-    started = time.monotonic()
-    if cancel is not None:
-        rc, out, err, seconds = _run_cancellable(cwd, argv, timeout, env, drop, cancel, False)
-        # One stream, so a child's stderr keeps its place in the transcript rather
-        # than being appended after everything it wrote to stdout.
-        return rc, out + err, seconds
-    try:
-        # One stream, so a child's stderr keeps its place in the transcript rather
-        # than being appended after everything it wrote to stdout.
-        result = subprocess.run(
-            argv, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace", timeout=timeout,
-            env=environ(env, drop),
-        )
-        return result.returncode, result.stdout or "", time.monotonic() - started
-    except FileNotFoundError:
-        return 127, f"{argv[0]}: not found on PATH", time.monotonic() - started
-    except subprocess.TimeoutExpired:
-        return 124, f"{' '.join(argv)}: timed out after {timeout}s", time.monotonic() - started
+    rc, out, err, seconds = _run_cancellable(cwd, argv, timeout, env, drop, cancel or Cancellation(), False)
+    return rc, out + err, seconds
 
 
 def run_split(cwd: Path, argv: list[str], timeout: int,
@@ -1988,20 +2069,7 @@ def run_split(cwd: Path, argv: list[str], timeout: int,
     first fetch with no network, say -- writes to stderr, exits non-zero too, and must
     not be read as a finding. The caller joins the two again for the transcript.
     """
-    started = time.monotonic()
-    if cancel is not None:
-        return _run_cancellable(cwd, argv, timeout, env, drop, cancel, True)
-    try:
-        result = subprocess.run(
-            argv, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, errors="replace", timeout=timeout,
-            env=environ(env, drop),
-        )
-        return result.returncode, result.stdout or "", result.stderr or "", time.monotonic() - started
-    except FileNotFoundError:
-        return 127, "", f"{argv[0]}: not found on PATH", time.monotonic() - started
-    except subprocess.TimeoutExpired:
-        return 124, "", f"{' '.join(argv)}: timed out after {timeout}s", time.monotonic() - started
+    return _run_cancellable(cwd, argv, timeout, env, drop, cancel or Cancellation(), True)
 
 
 # ── reading a pack declaration, the way a launch does ───────────────────────────
@@ -5206,7 +5274,7 @@ class Check:
         however it failed. A kind the table does not name is a verdict, because a red that
         quietly becomes "not a verdict" is a red nobody fixes.
         """
-        if self.rc in COULD_NOT_ANSWER_CODES:
+        if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES:
             return False
         group = CHECK_KIND_GROUP.get(self.kind, KIND_VERDICT)
         if group == KIND_NAMED:
@@ -5715,6 +5783,9 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
     # check, so two checks that overlapped have two real spans on one axis.
     check.start_ns = time.time_ns()
     execute_attempt(root, check, diff_base, cancel=cancel, cache=cache, runtime=runtime)
+    if check.timeout > 0 and check.seconds > check.timeout:
+        check.warnings.append(f"ran {clock(check.seconds)}, over target {check.timeout}s; "
+                              "the check's own verdict stands")
     # A series whose patch-branch stamp is the host's is declared elsewhere here, not failed
     # and not skipped: the pack's other series still decide the check, and the unanswered
     # one is named in the report.
@@ -7362,6 +7433,8 @@ def check_status(check: Check) -> str:
         return "skip"
     if candidate_stale(check):
         return "STALE"
+    if check.rc == CHECK_STALLED_RC:
+        return "STALLED"
     return "ok" if check.rc == 0 else ("FAIL" if check.conflict else "ERR")
 
 
@@ -8042,6 +8115,8 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
 def verdict_of(checks: list[Check]) -> tuple[str, int]:
     """Classify tree checks: content conflict, unavailable judgment, or verified."""
     failed = [check for check in checks if check.failed]
+    if any(check.rc == CHECK_STALLED_RC for check in failed):
+        return "stalled", EXIT_STALLED
     if any(check.conflict for check in failed):
         return "failed", 1
     if failed:
@@ -8623,6 +8698,18 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
     set. The file is optional: a run that writes none still records its verdict, and the
     drain degrades to zero rows and says so.
     """
+    if outcome == "stalled" and (verdict_path := os.environ.get("TILLR_FAST_VERDICT_OUT")):
+        observations = []
+        for check in plan.checks:
+            if check.rc != CHECK_STALLED_RC:
+                continue
+            for line in reversed(check.output.splitlines()):
+                if line.startswith("stall observations: "):
+                    observation = json.loads(line.removeprefix("stall observations: "))
+                    observation["check_id"] = declaration_id(check.kind, check.label, root)
+                    observations.append(observation)
+                    break
+        Path(verdict_path).write_text(json.dumps({"payload": {"result": "stalled", "checks": observations}}) + "\n")
     if not path:
         return
 
@@ -8637,6 +8724,8 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
         attributes = {
             "rc": check.rc,
             "seconds": round(check.seconds, 3),
+            "target_seconds": check.timeout,
+            "over_target_seconds": max(0, check.seconds - check.timeout) if check.timeout > 0 else 0,
             "cached": check.cached,
             "exclusive": check.exclusive,
             "command": check.command_line(),
@@ -8725,8 +8814,8 @@ def run_gate(argv: list[str]) -> int:
                         help="print every check's duration, not only the slowest few")
     # Both record-lock flags are ACCEPTED AND IGNORED: the record is append-only, so
     # there is no lock to wait for. They stay because callers outside this file still
-    # pass them -- the rolling program and the fixer gate pass `--lock-timeout 30`, and
-    # the dual-run diagnostic passes `--no-wait` -- and a flag a caller passes that this
+    # may pass them -- the dual-run diagnostic passes `--no-wait` -- and a flag
+    # a caller passes that this
     # parser does not declare would refuse the run before it checked anything.
     parser.add_argument("--lock-timeout", metavar="SECS", type=float, default=DEFAULT_LOCK_TIMEOUT,
                         help="accepted and ignored: the record is append-only and takes no lock")

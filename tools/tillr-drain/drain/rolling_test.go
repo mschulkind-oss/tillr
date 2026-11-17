@@ -56,15 +56,14 @@ func TestARollingRunJudgesADetachedWorktreeOfTheTip(t *testing.T) {
 	}
 }
 
-// The default rolling argv waits for the store lock as long as an ordinary gate does. A
-// rolling run and a landing gate contend for the same record lock, so a zero wait would
-// report "could not judge" every time a lane was gating.
-func TestTheDefaultRollingProgramWaitsForTheStoreLock(t *testing.T) {
+// The gate record is append-only: callers must not pass an ignored lock flag. A
+// rolling run uses the rolling tier without pretending to wait for a record lock.
+func TestTheDefaultRollingProgramOmitsIgnoredLockTimeout(t *testing.T) {
 	if !strings.Contains(DefaultRollingProgram, "--tier rolling") {
 		t.Fatalf("the default rolling program is %q, want the rolling tier", DefaultRollingProgram)
 	}
-	if !strings.Contains(DefaultRollingProgram, "--lock-timeout 30") {
-		t.Fatalf("the default rolling program is %q, want it to carry --lock-timeout 30", DefaultRollingProgram)
+	if strings.Contains(DefaultRollingProgram, "--lock-timeout") {
+		t.Fatalf("the default rolling program passes an ignored flag: %q", DefaultRollingProgram)
 	}
 }
 

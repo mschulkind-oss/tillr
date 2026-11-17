@@ -151,6 +151,10 @@ func gateParentSpanID(verdictID string) string {
 // the caller treats no named check as unknown, because a failure with no failing span is a
 // run that could not say what was red rather than a run whose failure list is empty.
 func readFailingSpans(path string) ([]string, map[string][]string) {
+	return readSpansWithStatus(path, "FAIL")
+}
+
+func readSpansWithStatus(path, status string) ([]string, map[string][]string) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil
@@ -165,7 +169,7 @@ func readFailingSpans(path string) ([]string, map[string][]string) {
 		// `FAIL` is the gate's own spelling for a check that ran and failed its tree; the
 		// `ERR`, `STALE` and `not-run` statuses reach no verdict and exit the run 2, which
 		// the caller reads as unknown before it ever looks for failing checks.
-		if span.Status != "FAIL" || span.CheckID == "" {
+		if span.Status != status || span.CheckID == "" {
 			continue
 		}
 		checks = append(checks, span.CheckID)

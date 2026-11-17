@@ -108,9 +108,23 @@ including their budgets, overruns and stalls.
 
 The `go-build` check builds with `-trimpath`, in `GOFLAGS`, so new checkouts reuse
 the shared Go build cache. The adapter warms it once per Go version before the fast
-tier. The gate program wrapper still has its existing `--gate-timeout` bound;
-removing that clock and the remaining Python wrapper clocks is the separate
-[wrapper watchdog slice](../../docs/design/gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog).
+tier. The gate program wrapper and the remaining Python checks use the same
+stall rule: output grew or the group's CPU time rose in a one-second sample;
+sixty consecutive samples with neither end the group as `stalled`, exit 6.
+The compatibility flag `--gate-timeout` remains, with a 30-minute default, as a
+reporting target only. An overrun is recorded in the verdict and summary; the
+program keeps its own verdict. The Python per-kind timeout values likewise no
+longer kill checks; Go test commands disable Go's nested deadline with
+`-timeout 0` so it cannot kill progress inside the watched group. A Python stall
+records its check name, last output line, group CPU time and silence duration, and the adapter carries its observations
+instead of mapping it to a harness error.
+
+A rolling stall advances no watermark. The next rolling observation on the same
+range is compared with the preceding recorded run, across drain restarts. A second
+consecutive stall of the same check files one deduplicated trunk fixer naming that
+check; an intervening different range, check or non-stall does not qualify. The
+append-only gate record needs no lock wait, so callers omit its ignored lock flags.
+See the [wrapper watchdog slice](../../docs/design/gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog).
 
 The `documents` change check remembers a pass for each changed document in the
 same result store as tree checks, under a key over the document's blob and every

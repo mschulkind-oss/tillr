@@ -190,6 +190,62 @@ func TestProgressingCheckOutlivesEveryTarget(t *testing.T) {
 	}
 }
 
+func TestGateProgramUsesWatchdogNotTarget(t *testing.T) {
+	for _, mode := range []string{"progress", "silent"} {
+		t.Run(mode, func(t *testing.T) {
+			var clock atomic.Int64
+			inputR, inputW, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer inputR.Close()
+			defer inputW.Close()
+			ticks := make(chan time.Time)
+			stop := make(chan struct{})
+			sources := &watchSources{
+				Now: func() time.Time { return time.Unix(100+clock.Load(), 0) },
+				Command: func(args []string) *exec.Cmd {
+					cmd := exec.Command(args[0], args[1:]...)
+					cmd.Stdin = inputR
+					return cmd
+				},
+				Ticks: func() (<-chan time.Time, func()) {
+					go func() {
+						for {
+							select {
+							case <-stop:
+								return
+							case ticks <- time.Time{}:
+							}
+						}
+					}()
+					return ticks, func() { close(stop) }
+				},
+				Sample: func(pid int, log *os.File) (watchSample, error) {
+					n := clock.Add(1)
+					cpu := int64(12)
+					if mode == "progress" {
+						cpu += n
+						if n == 70 {
+							inputW.Close()
+						}
+					}
+					return watchSample{CPUTimeMS: cpu, LastLine: "last line"}, nil
+				},
+			}
+			dir := scratch(t, "wrapper-clock")
+			out := runGateProgram(GateProgram{Command: []string{"python3", "-c", "import sys; sys.stdin.read(); print('verdict')"}, Timeout: time.Millisecond, watchdog: sources}, dir, dir)
+			if mode == "progress" {
+				if out.check.Result != ResultPass || out.check.OverBudgetMS == 0 || out.failure != nil {
+					t.Fatalf("target killed progress: %+v", out)
+				}
+			} else if out.check.Result != ResultStalled || out.check.SilentSamples != WatchdogSilentSamples || out.check.LastOutputLine != "last line" || exitCode(out.failure) != ExitStalled {
+				t.Fatalf("wrapper lost stall: %+v", out)
+			}
+		})
+	}
+}
+
 func TestStalledCheckIsKilledAndRecorded(t *testing.T) {
 	var clock atomic.Int64
 	ticks := make(chan time.Time)

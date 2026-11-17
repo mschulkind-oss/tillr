@@ -64,12 +64,9 @@ const (
 	RollingEvery         = 20 * time.Minute
 )
 
-// DefaultRollingProgram is the rolling tier's default program: the gate's rolling tier over
-// the range since the watermark, waiting as long as an ordinary landing gate for the record
-// lock. `--lock-timeout 30` is not decoration: a rolling run and a gate contend for the same
-// lock, and a rolling run that refused at once would report "could not judge" every time a
-// lane was gating. It matches `tillr-loop`'s gate argv for the same reason.
-const DefaultRollingProgram = "python3 tools/fork-check.py --tier rolling {since} --lock-timeout 30"
+// DefaultRollingProgram judges the rolling range since the watermark. The gate's
+// record is append-only, so its compatibility lock flags are ignored and omitted.
+const DefaultRollingProgram = "python3 tools/fork-check.py --tier rolling {since}"
 
 // DefaultFixerGateProgram is the full, untiered gate a trunk fixer runs instead of the
 // ordinary gate. It is the repository's gate adapter, not fork-check itself, for two
@@ -219,6 +216,8 @@ type RollingOutcome struct {
 	Coverage RollingCoverage
 	// Green reports that every rolling check passed on the trunk range.
 	Green bool
+	// Stalled reports named checks with no output or CPU growth for sixty samples.
+	Stalled bool
 	// Known reports whether the rolling program reached a judgment. Unknown advances nothing.
 	Known bool
 	// ExitCode is the rolling program's exit code, or -1 when it could not start.
@@ -364,6 +363,8 @@ func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out Rolli
 	outcome := "red"
 	if out.Green {
 		outcome = "green"
+	} else if out.Stalled {
+		outcome = "stalled"
 	} else if !out.Known {
 		outcome = "unknown"
 	}
@@ -685,6 +686,28 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	state.LastRunAt = now
 	state.LastTipSHA = mainSHA
 	state.LastOutcome = "red"
+	fixerChecks := out.FailingChecks
+	if out.Stalled {
+		repeated, err := l.repeatedRollingStalls(ctx, base, mainSHA, out.FailingChecks)
+		if err != nil {
+			return err
+		}
+		l.reportf("loop: rolling run stalled over %s..%s (%s); watermark stays at %s; %s\n",
+			shortSHA(base), shortSHA(mainSHA), strings.Join(out.FailingChecks, ", "), shortSHA(base), strings.TrimSpace(out.Detail))
+		if len(repeated) == 0 {
+			state.LastOutcome = "stalled"
+			if err := l.recordRollingRun(ctx, base, mainSHA, out); err != nil {
+				return err
+			}
+			return l.saveRollingState(ctx, state)
+		}
+		// Keep every observed check in the rolling record, including newly stalled
+		// checks that can qualify on the next run. Only the fixer uses the intersection.
+		fixerChecks = repeated
+		// A repeated stall files the same deduplicated fixer as a red check, but
+		// the rolling evidence remains stalled, never a content-failure verdict.
+		out.Known = true
+	}
 	if !out.Known || (!out.Green && len(out.FailingChecks) == 0) {
 		out.Known = false
 		state.LastOutcome = "unknown"
@@ -736,12 +759,12 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	// whole tree is the fence — and that is a broad fence deliberately, because a narrower
 	// guess would leave the actual breakage outside the one item allowed to repair it.
 	suspect := out.SuspectPaths
-	watch := CheckWatches(out.CheckWatches, out.FailingChecks)
+	watch := CheckWatches(out.CheckWatches, fixerChecks)
 	if len(suspect) == 0 && len(watch) == 0 {
 		suspect = l.rangePaths(ctx, base, mainSHA)
 	}
-	fixerGate := GateOutcome{SuspectPaths: suspect, FailingChecks: out.FailingChecks, CheckWatches: out.CheckWatches}
-	fixerID, fixerErr := l.fileTrunkFixer(ctx, mainSHA, out.FailingChecks, fixerGate)
+	fixerGate := GateOutcome{SuspectPaths: suspect, FailingChecks: fixerChecks, CheckWatches: out.CheckWatches}
+	fixerID, fixerErr := l.fileTrunkFixer(ctx, mainSHA, fixerChecks, fixerGate)
 	if fixerErr != nil {
 		l.reportf("loop: could not file %s: %v; continuing dispatch\n", TrunkFixerID(mainSHA), fixerErr)
 		// There is no fixer holding the queue. Remember the red judgment and the
@@ -759,10 +782,47 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	l.mu.Unlock()
 	if fixerErr == nil {
 		l.reportf("loop: rolling run RED over %s..%s (%s); watermark stays at %s and the queue is held behind %s; %s\n",
-			shortSHA(base), shortSHA(mainSHA), strings.Join(out.FailingChecks, ", "),
+			shortSHA(base), shortSHA(mainSHA), strings.Join(fixerChecks, ", "),
 			shortSHA(state.WatermarkSHA), fixerID, out.Coverage.line())
 	}
 	return nil
+}
+
+// repeatedRollingStalls reads the last observation, so consecutive stalls survive
+// a restart and only the same check on the same range files a fixer.
+func (l *Loop) repeatedRollingStalls(ctx context.Context, base, tip string, checks []string) ([]string, error) {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	var oldBase, oldTip, outcome, raw string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT base_sha, tip_sha, outcome, failing_checks FROM rolling_runs ORDER BY at DESC, rowid DESC LIMIT 1`).Scan(&oldBase, &oldTip, &outcome, &raw)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	if oldBase != base || oldTip != tip || outcome != "stalled" {
+		return nil, nil
+	}
+	var previous []string
+	if err := json.Unmarshal([]byte(raw), &previous); err != nil {
+		return nil, err
+	}
+	var repeated []string
+	for _, check := range checks {
+		for _, old := range previous {
+			if check == old {
+				repeated = append(repeated, check)
+				break
+			}
+		}
+	}
+	return repeated, nil
 }
 
 // rangePaths is the changed-path list between two revisions, used as the rolling run's

@@ -243,9 +243,13 @@ self-suite still never passes the batch. The check runner now uses the progress 
 [`watchdog.go`](../../tools/tillr-gate/watchdog.go): sixty one-second samples without output
 or group CPU progress produce `stalled`, exit 6, with observations. The drain retains the
 first stall as `gate-stall-rerun` and holds a second on the same head tree as `gate-stalled`.
-The gate program wrapper and `tools/fork-check.py` still have fixed timeouts; their
-[separate watchdog slice](gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
-is not built.
+The gate program wrapper and [`tools/fork-check.py`](../../tools/fork-check.py)
+now apply the same progress rule; their old time limits are reporting targets.
+A rolling stall advances no watermark, and a second consecutive stall of the
+same check on the same range files one deduplicated trunk fixer. The
+[wrapper watchdog slice](gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+is covered by injected-observation tests, including cadence parity between Python
+and Go.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a gate
 verdict whose result is `error` is refused with `ReasonVerdictError`, never read as a failure of the

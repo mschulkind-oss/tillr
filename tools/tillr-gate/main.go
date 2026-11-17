@@ -289,7 +289,7 @@ func runFace(args []string) int {
 	outputPath := flags.String("output", "", "where to write the gate.verdict record (default: stdout)")
 	logDir := flags.String("logs", "", "where to write each check's log (default: <verdict_id>.logs beside the output)")
 	gateProgram := flags.String("gate", "", "a gate program to run instead of the plan's checks, e.g. tools/fork-check.py")
-	gateTimeout := flags.Duration("gate-timeout", 30*time.Minute, "how long the --gate program may run before it is killed and the verdict is error (0 is no bound)")
+	gateTimeout := flags.Duration("gate-timeout", 30*time.Minute, "reporting target for the --gate program; only sampled stalls kill it (0 disables target reporting)")
 	var gateArgs stringList
 	flags.Var(&gateArgs, "gate-arg", "an argument to pass to the --gate program, in order (repeatable)")
 	treeOverrun := flags.String("tree-overrun", TreeOverrunKeep, "keep a working check's own verdict; only keep is supported")
