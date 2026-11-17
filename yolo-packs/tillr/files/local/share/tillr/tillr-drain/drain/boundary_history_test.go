@@ -13,9 +13,11 @@ func TestOnlyLoopHistoryPinsAreExcused(t *testing.T) {
 		}
 	}
 	after.Refs["refs/tillr/trunk-history/unauthorized"] = "rogue"
-	for _, compare := range []func(*Boundary, *Boundary) ([]Violation, error){Compare, CompareRun} {
-		if violations, err := compare(before, after); err != nil || len(violations) != 1 {
-			t.Fatalf("unassigned history ref excused: %v / %v", violations, err)
-		}
+	if violations, err := Compare(before, after); err != nil || len(violations) != 1 {
+		t.Fatalf("unassigned history ref excused by the standalone check: %v / %v", violations, err)
+	}
+	// A run's bracket observes it rather than convicting: it cannot be attributed.
+	if violations, observed, err := CompareRunObserved(before, after); err != nil || len(violations) != 0 || len(observed) != 1 {
+		t.Fatalf("unassigned history ref in a run bracket: violations %v, observed %v / %v", violations, observed, err)
 	}
 }

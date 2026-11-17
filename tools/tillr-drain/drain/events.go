@@ -115,7 +115,17 @@ type boundaryCheckPayload struct {
 	Runs           []runRef           `json:"runs"`
 	Violations     int                `json:"violations"`
 	FirstViolation *boundaryViolation `json:"first_violation,omitempty"`
+	// Observed counts the movements outside the run's lane the bracket saw but cannot
+	// attribute to the run (CompareRunObserved), and Observations names the first of them
+	// (at most maxBoundaryObservations). They are information, never a conviction: Clean
+	// reads only Violations.
+	Observed     int                 `json:"observed,omitempty"`
+	Observations []boundaryViolation `json:"observations,omitempty"`
 }
+
+// maxBoundaryObservations bounds how many observations one boundary.check names: a gc or
+// a bulk branch deletion moves hundreds of refs, and the count says how many there were.
+const maxBoundaryObservations = 20
 
 // gateStepJudgment is what the loop observed of one gate step: which program it started, how
 // it exited, how long it took, and the outcome that exit maps onto.
@@ -136,7 +146,7 @@ type gateStepJudgment struct {
 // nothing appends the clean event too: the design's whole point is that a passing check
 // leaves a record, and a stream that only logged violations could not distinguish a clean
 // tick from one whose check never ran.
-func (l *Loop) recordBoundaryCheck(ctx context.Context, scope, passID string, runs []runRef, targets []string, violations []Violation, at time.Time) error {
+func (l *Loop) recordBoundaryCheck(ctx context.Context, scope, passID string, runs []runRef, targets []string, violations []Violation, at time.Time, observed ...Violation) error {
 	objectID := passID
 	if len(runs) == 1 {
 		if scope == BoundaryScopeRun {
@@ -146,20 +156,20 @@ func (l *Loop) recordBoundaryCheck(ctx context.Context, scope, passID string, ru
 			objectID = runs[0].RunID + "-resume"
 		}
 	}
-	return appendJudgment(ctx, l.cfg.Store, BoundaryCheckKind, scope, objectID, boundaryCheckPayloadOf(scope, passID, runs, targets, violations), at)
+	return appendJudgment(ctx, l.cfg.Store, BoundaryCheckKind, scope, objectID, boundaryCheckPayloadOf(scope, passID, runs, targets, violations, observed), at)
 }
 
 // appendBoundaryCheck appends one closed bracket whose owner is not the loop: a resume's
 // bracket, keyed by the segment it covers (<run-id>@<stamp>) so two real resumes of one run
 // are two events and a replayed append of one is still one.
-func appendBoundaryCheck(ctx context.Context, storePath, scope, segmentID, runID string, row resumeRun, targets []string, violations []Violation, at time.Time) error {
+func appendBoundaryCheck(ctx context.Context, storePath, scope, segmentID, runID string, row resumeRun, targets []string, violations []Violation, at time.Time, observed ...Violation) error {
 	refs := []runRef{{RunID: runID, ItemID: row.ItemID, LaneID: row.LaneID}}
-	return appendJudgment(ctx, storePath, BoundaryCheckKind, scope, segmentID, boundaryCheckPayloadOf(scope, segmentID, refs, targets, violations), at)
+	return appendJudgment(ctx, storePath, BoundaryCheckKind, scope, segmentID, boundaryCheckPayloadOf(scope, segmentID, refs, targets, violations, observed), at)
 }
 
 // boundaryCheckPayloadOf is the payload both bracket writers share, so a resume's event and
 // a tick's cannot disagree about its shape.
-func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []string, violations []Violation) boundaryCheckPayload {
+func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []string, violations, observed []Violation) boundaryCheckPayload {
 	payload := boundaryCheckPayload{
 		TickID: passID, Scope: scope, Clean: len(violations) == 0,
 		Targets: targets, Runs: runs, Violations: len(violations),
@@ -168,6 +178,13 @@ func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []strin
 		payload.FirstViolation = &boundaryViolation{
 			Kind: violations[0].Kind, Target: violations[0].Where, Detail: violations[0].Detail,
 		}
+	}
+	payload.Observed = len(observed)
+	for i, o := range observed {
+		if i == maxBoundaryObservations {
+			break
+		}
+		payload.Observations = append(payload.Observations, boundaryViolation{Kind: o.Kind, Target: o.Where, Detail: o.Detail})
 	}
 	return payload
 }

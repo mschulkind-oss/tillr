@@ -314,24 +314,42 @@ the current durable observation and lost tip inside its locked store transaction
 a request that was already waiting for the lock cannot bypass a hold a later pass
 recorded. This covers movement between the pass's observation and the landing transaction.
 
-The run bracket compares snapshots from before and after execution. Its remaining
-convictions and attribution limits are:
+The run bracket compares snapshots from before and after execution. It convicts a run
+on attribution, never on correlation in time. The owner ruled on 2026-11-17: "why do we
+convict anyone for removing worktrees? that sounds stupid? we should be free to act with
+normal tools without breaking the drain, goes along with ad hoc commits". So the owner and
+other agents use ordinary Git on this repository while the drain runs, and none of it
+convicts a run or holds an item: commit, pull, branch, tag, stash, fetch, gc, `git
+worktree add` and `remove`, a fork export, or an operator's hand-written pin. Two snapshots
+cannot tell that use from an escaping worker. A movement that the bracket cannot attribute
+to the run is therefore *observed*. It is counted and named (up to 20) on the run's
+`boundary.check` event as `observed` and `observations`, and the loop prints one `loop:
+the repository changed outside lane ...` line for it. The check stays clean. Each movement
+lands in one of three outcomes:
 
-| Movement | Run conviction? | Why |
+| Movement | Outcome | Why |
 | :--- | :--- | :--- |
-| Remote-tracking refs, tags, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | No | Ordinary Git users can move them while a run is active. |
-| Trunk commits or rewritten trunk history | No | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | No | These are deliveries or concurrent loop work. |
-| An unassigned ref inside tillr's namespaces | Yes | No run or loop delivery owns that ref. |
-| Main-checkout uncommitted content | No | Content belongs to the owner, regardless of when it appeared. |
-| Changed status of a path in a watched, idle sibling worktree | Yes | The run was not assigned that worktree. Siblings that became active are removed from the comparison. |
-| The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | No | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. The excuse is that exact place and shape: a worker that registered a detached checkout there gains no ref and no content the bracket does not otherwise read, and the loop removes the path before its own next use. A run's own target worktree is never excused. |
-| A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | No | The loop's own `git worktree prune` removes it; the directory was gone before the run began. |
-| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | No | That is a sibling's fork-series landing: the lander marks the squash commit before it moves the patch branch. Any other patch-branch move still convicts. |
-| A worktree appearing or disappearing anywhere else outside a sibling's own lane directory | Yes | The run does not own worktree lifecycle. |
-| Main checkout's checked-out branch changes | Yes | This changes which checkout the loop supervises, rather than advancing its history. |
-| Candidate changes outside its fence, or uncommitted work past its candidate | Yes, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
-| A named store file changing in an adapter-only bracket | Yes, in the standalone boundary check | The adapter does not own the store; run execution brackets omit it because the run face writes its own records. |
+| Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
+| Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
+| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | Ignored | These are deliveries or concurrent loop work. |
+| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the squash commit before it moves the patch branch. |
+| The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
+| A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |
+| Main-checkout uncommitted content, and hand commits on the trunk | Ignored | Content belongs to the owner, regardless of when it appeared. |
+| Any other ref inside tillr's namespaces appearing, moving or going away (an operator's `refs/tillr/held/` pin, a fork export moving `refs/heads/patch/<fork>`, a hand-made `tillr/` branch, or a worker's rogue ref) | Observed | Snapshots cannot say who wrote it. |
+| Any other worktree appearing or going away, anywhere outside a sibling's own lane directory | Observed | Agents and the owner add and remove worktrees at will. |
+| The main checkout's checked-out branch changing | Observed | Checking out another branch in the main checkout is ordinary owner use. |
+| Changed status of a path in a watched, idle sibling lane worktree | Convicted | That worktree is another item's candidate under the drain's own lane root, where ordinary use of the repository does not write. Siblings that became active are removed from the comparison. |
+| The run's own lane worktree going away | Convicted | The lane is the drain's, and the run was its only assigned user. |
+| Candidate changes outside its fence, or uncommitted work past its candidate | Convicted, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
+| A named store file changing in an adapter-only bracket | Convicted, in the standalone boundary check | The adapter does not own the store. Run brackets omit it because the run face writes its own records. |
+
+What this gives up is the stop of a worker whose only escape lies outside the lanes, such
+as a rogue ref or a stray worktree. That escape no longer holds its item, and the
+observation names it for an operator. What still catches an escape that matters is the
+fence check: it judges what lands, and the deliverable must be the committed change inside
+the fence. The gate runs after it, and so does the conviction of any write into another
+lane. A resumed segment is judged by the same run rule.
 
 ## Faults that hold one item
 

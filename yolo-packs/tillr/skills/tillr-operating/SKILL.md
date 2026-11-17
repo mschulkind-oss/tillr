@@ -85,6 +85,14 @@ The keeper's per-checkout lock prevents two keepers from starting duplicate loop
 on the keeper does the same. Stopping the loop itself is a separate operator
 action: stop the keeper first if the loop must stay stopped.
 
+Use ordinary Git on the repository while the loop runs. That covers commits, pulls,
+branches, tags, stashes, fetches, `git worktree add` and `remove`, fork exports, and
+hand-written pins. None of it convicts a run. A run's boundary check convicts only what it
+can attribute to the run: a write into another lane's worktree, or the run's own lane
+worktree going away. Every other movement it sees is recorded as an observation on the
+run's `boundary.check`. Leave the lane root's own worktrees alone, because they belong to
+the loop.
+
 ## Exit codes, once
 
 Every binary answers with the same contract, so a caller reads a decision rather than a

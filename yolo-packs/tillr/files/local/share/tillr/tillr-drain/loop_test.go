@@ -1003,27 +1003,31 @@ printf 'RESULT: done\n'
 
 // An unassigned ref in tillr's namespace remains a boundary violation even when
 // it is created inside the target worktree. Ordinary tags are not attributable.
-func TestARefMovedInsideATargetsWorktreeIsCaught(t *testing.T) {
+// A ref written during a run is observed, not convicted: two snapshots cannot tell a
+// worker's `git update-ref` from an operator's hand-written pin or a fork export, and the
+// owner ruled on 2026-11-17 that ordinary Git use must never break the drain
+// (CompareRunObserved). The candidate is still gated and landed on its own merits, and the
+// movement is named on the run's boundary.check and in one report line.
+func TestARefWrittenDuringARunIsObservedNotConvicted(t *testing.T) {
 	tagging := stub(t, "tagging-adapter", counting+committingAdapterBody+`git update-ref refs/tillr/unauthorized HEAD
 printf 'RESULT: done\n'
 `)
 	f := newLoopFixture(t, tagging)
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
-
-	loop := f.newLoop(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)))
+	report := &strings.Builder{}
+	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, report)
 	result, err := loop.Run(context.Background())
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	fault := faultOf(t, f.store, "item_041")
-	if result.Stop != drain.StopQueueDrained || fault.Reason != drain.StopHostBoundaryViolation {
-		t.Fatalf("the boundary fault stopped siblings: %+v", result)
+	if fault := faultOf(t, f.store, "item_041"); fault.Reason != "" {
+		t.Fatalf("a ref written during the run held the item: %+v", fault)
 	}
-	if !strings.Contains(fault.Detail, "refs/tillr/unauthorized") {
-		t.Fatalf("the hold does not name the ref: %+v", fault)
+	if result.Stop != drain.StopQueueDrained || result.Landed != 1 {
+		t.Fatalf("the run was not landed on its merits: %+v", result)
 	}
-	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {
-		t.Fatalf("the loop gated a candidate after a boundary violation: %v", gates)
+	if !strings.Contains(report.String(), "refs/tillr/unauthorized") || !strings.Contains(report.String(), "not attributed to the run") {
+		t.Fatalf("the observation was not reported: %q", report.String())
 	}
 }
 

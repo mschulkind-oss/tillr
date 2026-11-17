@@ -325,23 +325,47 @@ func sameSpan(before, after *Boundary) error {
 	return nil
 }
 
-// CompareRun answers the differences one run's bracket convicts. A run is one lane's
-// pipeline now, so the movements a batch bracket had to convict are the loop's own work:
-// the trunk moves when a coordinator lands, a lane branch is reset by the next stage, and a
-// tillr pin is written by a non-landing. A bracket that convicted those would stop the loop
-// on its own deliverable, so it excuses them and convicts only what a run may not do: a
-// rogue ref, a write into a sibling worktree, and — checked before this function
-// by fenceViolation — a change outside the item's fence. Main-checkout content
-// belongs to the owner; snapshots cannot attribute those edits to a run.
+// CompareRun answers the differences one run's bracket convicts: CompareRunObserved's
+// violations alone.
 func CompareRun(before, after *Boundary) ([]Violation, error) {
+	violations, _, err := CompareRunObserved(before, after)
+	return violations, err
+}
+
+// CompareRunObserved answers what one run's bracket convicts, and, apart, what it only
+// observed: movements in the repository outside the run's lane that two snapshots can place
+// in the run's window but cannot attribute to the run.
+//
+// A run is convicted on attribution, never on correlation. The owner ruled on 2026-11-17:
+// "why do we convict anyone for removing worktrees? that sounds stupid? we should be free
+// to act with normal tools without breaking the drain, goes along with ad hoc commits". The
+// owner and other agents use ordinary Git here while the drain runs — commit, pull, branch,
+// tag, stash, fetch, gc, `git worktree add` and `remove`, a fork export moving
+// refs/heads/patch/<fork>, an operator's hand-written refs/tillr/held/ pin — and every one
+// of those moves a ref or a worktree registration exactly as an escaping worker would. A
+// snapshot pair cannot tell them apart, so none of them convicts: each is observed, and the
+// loop records it on the bracket's boundary.check as information.
+//
+// What still convicts is what only the drain's own lanes hold, where ordinary use of the
+// repository does not reach: a path whose status changed in a watched, idle sibling lane
+// worktree (another item's candidate, under the lane root), and the run's own lane worktree
+// going away. The fence check (fenceViolation) still convicts a candidate whose committed
+// change leaves its allowed paths or that leaves uncommitted work behind, and the gate
+// still judges the candidate, so an escape that would reach the trunk is caught by the
+// checks that judge what lands. What is given up is the stop of a worker that writes only
+// outside the repository's lanes — a rogue ref, a stray worktree — which no longer holds
+// its item; the observation names it for an operator.
+func CompareRunObserved(before, after *Boundary) (violations, observed []Violation, err error) {
 	if err := sameSpan(before, after); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	violations := make([]Violation, 0)
-	violations = append(violations, compareRunRefs(before, after)...)
-	violations = append(violations, compareRunWorktrees(before, after)...)
+	violations, observed = make([]Violation, 0), make([]Violation, 0)
+	observed = append(observed, compareRunRefs(before, after)...)
+	lanes, elsewhere := compareRunWorktrees(before, after)
+	violations = append(violations, lanes...)
+	observed = append(observed, elsewhere...)
 	violations = append(violations, compareRunStatus(before, after)...)
-	return violations, nil
+	return violations, observed, nil
 }
 
 // tillrRef names the namespaces the loop owns. Ordinary Git activity outside
@@ -381,8 +405,9 @@ func runRefExcused(ref string, before *Boundary) bool {
 	return false
 }
 
-// Ordinary refs are outside the comparison's attribution scope.
-// Only a delta in an unassigned tillr ref is a ref conviction.
+// compareRunRefs answers a delta in an unassigned ref inside tillr's namespaces, which a
+// run's bracket observes and does not convict (CompareRunObserved). Ordinary refs are
+// outside even the observation: they move all day.
 func compareRunRefs(before, after *Boundary) []Violation {
 	excused := excusedRefs(before, after)
 	landed := landedDuring(before, after)
@@ -435,11 +460,14 @@ func landedPatchMove(ref string, after *Boundary, landed map[string]bool) bool {
 	return ok && landed[sha]
 }
 
-// compareRunWorktrees answers a worktree that appeared or went away and a main
-// checkout branch switch. Main HEAD movement can be a coordinator's landing even
-// while owner content remains dirty; dirt cannot turn that movement into guilt.
-func compareRunWorktrees(before, after *Boundary) []Violation {
+// compareRunWorktrees answers, apart, the run's own lane worktree going away (a violation)
+// and every other worktree that appeared or went away or a main checkout branch switch
+// (observed only: ordinary Git use by anyone does each of these). Main HEAD movement can
+// be a coordinator's landing even while owner content remains dirty; dirt cannot turn that
+// movement into guilt.
+func compareRunWorktrees(before, after *Boundary) (lanes, observed []Violation) {
 	violations := make([]Violation, 0)
+	lanes = make([]Violation, 0)
 	main := mainWorktreePath(after)
 	places := loopPlacesOf(before, after)
 	for _, wt := range after.Worktrees {
@@ -477,10 +505,15 @@ func compareRunWorktrees(before, after *Boundary) []Violation {
 			if insideSiblingDir(after.SiblingDirs, was.Path) || places.worktree(was) || was.Prunable {
 				continue
 			}
+			if isTarget(before.Targets, was.Path) {
+				// The run's own lane worktree is the drain's, under the lane root.
+				lanes = append(lanes, Violation{Kind: "worktree", Where: was.Path, Detail: "went away"})
+				continue
+			}
 			violations = append(violations, Violation{Kind: "worktree", Where: was.Path, Detail: "went away"})
 		}
 	}
-	return violations
+	return lanes, violations
 }
 
 // worktree answers whether a worktree is one the loop itself creates and removes as part

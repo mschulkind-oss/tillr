@@ -165,7 +165,9 @@ func Resume(ctx context.Context, cfg ResumeConfig, spec ResumeSpec) (ResumeResul
 	if err != nil {
 		return ResumeResult{}, err
 	}
-	violations, err := Compare(before, after)
+	// A resumed segment is a run, judged by the run rule: convicted on what it can be
+	// shown to have done, with the rest of the repository's movement observed only.
+	violations, observed, err := CompareRunObserved(before, after)
 	if err != nil {
 		return ResumeResult{}, err
 	}
@@ -178,7 +180,7 @@ func Resume(ctx context.Context, cfg ResumeConfig, spec ResumeSpec) (ResumeResul
 	// The object id is the run plus this segment's stamp rather than the run alone, because
 	// appendJudgment is idempotent per object and two real resumes of one run are two
 	// brackets, not a replay of one.
-	if err := appendBoundaryCheck(ctx, cfg.Store, BoundaryScopeResume, spec.RunID+"@"+stamp(at), spec.RunID, row, targets, violations, at); err != nil {
+	if err := appendBoundaryCheck(ctx, cfg.Store, BoundaryScopeResume, spec.RunID+"@"+stamp(at), spec.RunID, row, targets, violations, at, observed...); err != nil {
 		return result, err
 	}
 	return result, runErr

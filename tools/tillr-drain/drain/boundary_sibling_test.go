@@ -21,14 +21,14 @@ func TestARunIsNotConvictedOfAWorktreeInsideASiblingLanesDirectory(t *testing.T)
 		}
 	}
 
-	appeared, err := CompareRun(snap(mainWT, own, sibling), snap(mainWT, own, sibling, scratch))
+	appeared, err := compareAll(snap(mainWT, own, sibling), snap(mainWT, own, sibling, scratch))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(appeared) != 0 {
 		t.Fatalf("a worktree that appeared inside a sibling lane's directory convicted this run: %v", appeared)
 	}
-	gone, err := CompareRun(snap(mainWT, own, sibling, scratch), snap(mainWT, own, sibling))
+	gone, err := compareAll(snap(mainWT, own, sibling, scratch), snap(mainWT, own, sibling))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,8 +38,10 @@ func TestARunIsNotConvictedOfAWorktreeInsideASiblingLanesDirectory(t *testing.T)
 }
 
 // The excuse is the sibling's directory and nothing wider: a worktree that appears in the
-// run's own lane directory, or anywhere else, is still this run's to answer for.
-func TestARunIsStillConvictedOfAWorktreeOutsideASiblingLanesDirectory(t *testing.T) {
+// run's own lane directory, or anywhere else, is still observed on this run's bracket — as
+// information, since a worktree registration cannot be attributed to the run
+// (CompareRunObserved).
+func TestAWorktreeOutsideASiblingLanesDirectoryIsObserved(t *testing.T) {
 	mainWT := Worktree{Path: "/repo", Head: "aaa", Branch: "refs/heads/main"}
 	own := Worktree{Path: "/repo/.tillr/lanes/lane-1/worktree", Head: "aaa", Branch: "refs/heads/tillr/x/lane-1"}
 	for _, path := range []string{
@@ -51,12 +53,12 @@ func TestARunIsStillConvictedOfAWorktreeOutsideASiblingLanesDirectory(t *testing
 			Refs: map[string]string{}, Worktrees: []Worktree{mainWT, own}}
 		after := &Boundary{Repo: "/repo", Targets: []string{own.Path}, SiblingDirs: []string{"/repo/.tillr/lanes/lane-5"},
 			Refs: map[string]string{}, Worktrees: []Worktree{mainWT, own, {Path: path, Head: "aaa"}}}
-		violations, err := CompareRun(before, after)
+		violations, observed, err := CompareRunObserved(before, after)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(violations) != 1 || violations[0].Kind != "worktree" || violations[0].Where != path {
-			t.Fatalf("a worktree appearing at %s answered %v, want the one worktree violation naming it", path, violations)
+		if len(violations) != 0 || len(observed) != 1 || observed[0].Kind != "worktree" || observed[0].Where != path {
+			t.Fatalf("a worktree appearing at %s answered violations %v, observed %v, want the one observation naming it", path, violations, observed)
 		}
 	}
 }
