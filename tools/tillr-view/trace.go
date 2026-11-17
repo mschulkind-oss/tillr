@@ -389,19 +389,20 @@ func (s *server) exportTrace(r *store.Reader, runs []storeRun, format string) (a
 				}
 				otlp = append(otlp, row)
 			} else {
+				chromeTS, chromeDur := chromeWindow(sp.Start, sp.End)
 				sp.Attr["trace_id"] = traceID
 				sp.Attr["span_id"] = id
 				sp.Attr["parent_span_id"] = parent
 				// Each span has its own track: overlapping siblings must never become
 				// false children through Chrome's interval-containment inference.
 				events = append(events, map[string]any{"name": sp.Name, "cat": sp.Category, "ph": "X", "pid": n + 1, "tid": tracks[sp.ID],
-					"ts": float64(sp.Start) / 1e3, "dur": float64(sp.End-sp.Start) / 1e3, "args": sp.Attr})
+					"ts": chromeTS, "dur": chromeDur, "args": sp.Attr})
 				if sp.Parent != "" {
 					// Standard flow start/finish events link the enclosing parent slice
 					// to this child. They are links, not additional duration spans.
 					events = append(events,
-						map[string]any{"name": "parent", "cat": "tillr.parent", "ph": "s", "id": id, "pid": n + 1, "tid": tracks[sp.Parent], "ts": float64(sp.Start) / 1e3},
-						map[string]any{"name": "parent", "cat": "tillr.parent", "ph": "f", "id": id, "pid": n + 1, "tid": tracks[sp.ID], "ts": float64(sp.Start) / 1e3, "bp": "e"},
+						map[string]any{"name": "parent", "cat": "tillr.parent", "ph": "s", "id": id, "pid": n + 1, "tid": tracks[sp.Parent], "ts": chromeTS},
+						map[string]any{"name": "parent", "cat": "tillr.parent", "ph": "f", "id": id, "pid": n + 1, "tid": tracks[sp.ID], "ts": chromeTS, "bp": "e"},
 					)
 				}
 			}
@@ -415,6 +416,27 @@ func (s *server) exportTrace(r *store.Reader, runs []storeRun, format string) (a
 		return map[string]any{"resourceSpans": resources}, nil
 	}
 	return map[string]any{"traceEvents": events, "displayTimeUnit": "ms"}, nil
+}
+
+// chromeWindow converts a nanosecond interval to the Chrome trace's microsecond
+// clock as whole microseconds: the start rounds down and the end rounds up. Both
+// roundings are monotonic, so a child inside its parent in nanoseconds is still
+// inside it in microseconds. Fractional microseconds are not used: at Unix-epoch
+// scale (about 1.8e15 us) a float64 has only 0.25 us of resolution, so a fractional
+// ts and dur do not add back to the end they were computed from, and a child could
+// end a few nanoseconds after its parent. Whole microseconds below 2^53 are exact.
+func chromeWindow(startNS, endNS int64) (ts, dur float64) {
+	startUS := floorDiv(startNS, 1000)
+	endUS := -floorDiv(-endNS, 1000)
+	return float64(startUS), float64(endUS - startUS)
+}
+
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
 }
 
 func otlpAttributes(attrs map[string]any) []any {

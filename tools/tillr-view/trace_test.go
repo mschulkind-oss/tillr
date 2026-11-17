@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -82,8 +83,13 @@ func parseTrace(t *testing.T, raw []byte, format string) []parsedTraceSpan {
 			usedTracks[track] = true
 			tracks[id] = row["tid"].(float64)
 			parents[id] = attrs["parent_span_id"].(string)
-			start := int64(row["ts"].(float64) * 1e3)
-			end := start + int64(row["dur"].(float64)*1e3)
+			// Whole microseconds: the producer must not rely on fractional ones.
+			tsUS, durUS := row["ts"].(float64), row["dur"].(float64)
+			if tsUS != math.Trunc(tsUS) || durUS != math.Trunc(durUS) {
+				t.Fatalf("chrome ts/dur must be whole microseconds: %v", row)
+			}
+			start := int64(tsUS) * 1000
+			end := start + int64(durUS)*1000
 			out = append(out, parsedTraceSpan{ID: attrs["span_id"].(string), Parent: attrs["parent_span_id"].(string), Trace: attrs["trace_id"].(string), Start: start, End: end, Attributes: attrs})
 		}
 		links := 0
@@ -315,6 +321,36 @@ INSERT INTO obs_events VALUES ('turn','llm.turn','1970-01-01T00:00:01.123456789Z
 	}
 	if !found {
 		t.Fatal("indexed observation was not exported")
+	}
+}
+
+// A fractional-microsecond ts and dur at Unix-epoch scale do not add back to the end
+// they came from (float64 has 0.25 us there), so a child could end after its parent.
+// The values are the epoch-scale ones measured failing under load. Fixed inputs, no
+// clock: equal and rounding-reversed times are listed outright.
+func TestChromeWindowKeepsChildInsideParent(t *testing.T) {
+	const base = 1794880672995000064
+	for _, parentEnd := range []int64{base + 1000000000 - 64, base + 1000000000, base + 1000000000 + 1} {
+		for _, childEnd := range []int64{parentEnd, parentEnd - 1, parentEnd - 64} {
+			for _, childStart := range []int64{base, base + 1, base + 999} {
+				pts, pdur := chromeWindow(base-1, parentEnd)
+				cts, cdur := chromeWindow(childStart, childEnd)
+				for _, v := range []float64{pts, pdur, cts, cdur} {
+					if v != math.Trunc(v) {
+						t.Fatalf("fractional microseconds are not exact at epoch scale: %v %v %v %v", pts, pdur, cts, cdur)
+					}
+				}
+				if cts < pts || cts+cdur > pts+pdur {
+					t.Fatalf("child [%v,+%v] escapes parent [%v,+%v] for ns child [%d,%d] parent end %d", cts, cdur, pts, pdur, childStart, childEnd, parentEnd)
+				}
+			}
+		}
+	}
+	if ts, dur := chromeWindow(1500, 2500); ts != 1 || dur != 2 {
+		t.Fatalf("round down start and up end: %v %v", ts, dur)
+	}
+	if ts, dur := chromeWindow(1000, 1000); ts != 1 || dur != 0 {
+		t.Fatalf("instant: %v %v", ts, dur)
 	}
 }
 
