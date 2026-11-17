@@ -1058,9 +1058,37 @@ history used to keep those proportions.
 - **c4:** The policy check refuses a share that is not a positive number and a list that mixes a share on some entries with none on others, naming the seat.
 - **c5:** A seat may set `pick` to `in-order` (today's behavior and the default), `round-robin` (each open backend in turn, which is equal shares) or `random` (one open backend drawn at random per dispatch, weighted by share when shares are given). The draw is recorded on the dispatch, so a run's backend is a fact and never re-derived. A test asserts round-robin over three backends visits each in turn and that 300 random draws over two equal backends land between 120 and 180 on each.
 
-### Move a run to the next backend when its backend runs out, and keep its work
+### Move unfinished runs when backend quota runs out
 
-<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-policy-quota-probe" -->
+When a backend runs out of its usage allowance partway through a run, the work already
+completed should not be lost or counted as a failed attempt. The drain loop needs to stop
+the current session safely and let the next backend assigned to that role continue from
+the same files, with enough context to understand where the earlier session left off.
+If no other backend is available for that role, keep the run paused until its original
+backend can accept work again. A refusal before any work begins still follows the existing
+route to the next backend; it does not need a continuation handoff.
+
+- **Theme:** Model Policy
+- **Outcomes:**
+  - Continue unfinished work on the next assigned backend without discarding progress.
+  - Pause runs that have no alternative backend and show when they can resume.
+  - Keep each continuation within the original attempt and judge its result once.
+
+<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-policy-quota-probe" prose="2" -->
+
+**Agent Details**
+
+- **Ref:** [The restart design](../design/tillr-restart.md) for stopping a session;
+  [the quota probe item](#read-a-backends-remaining-quota-directly-and-keep-a-reserve) for backend windows;
+  the numbered criteria below for the continuation contract.
+- **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `yolo-packs/tillr/`, and `docs/`.
+- **Verify:** Cut a stub run after it writes two files and check that its replacement session
+  finds both in the same lane and worktree, within the same attempt. Check that the first
+  message identifies the quota interruption, old transcript, any report, and uncommitted
+  work; that the loop does not reset or repeat work, spend a retry, or judge the candidate
+  twice; that a run with no alternative pauses and resumes on the original backend with its
+  reopening time visible; and that an initial refusal routes onward without a continuation
+  message.
 
 - **c1:** When a backend's window shuts while runs are on it, each of those runs is stopped as [the restart design](../design/tillr-restart.md) stops a session, and continued on the next backend in its seat's list: a fresh session in the same lane and worktree, as the same attempt, whose first message says the earlier session ran out of quota and names the old transcript, the report if any, and the uncommitted work in the worktree.
 - **c2:** Nothing the first session did is repeated by the loop: the worktree is not reset, no retry is spent, and the candidate is judged once. A test cuts a stub run after it has written two files and asserts the continuing session finds both.
