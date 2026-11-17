@@ -1104,3 +1104,108 @@ attempt, so the next dispatch picks the session up instead of restaging the lane
 - **Ref:** the `pause` face and `pause-kind` in `tools/tillr-run/README.md`; the `candidate-no-op` reason in `tools/tillr-drain/drain/schema.go`.
 - **Where:** the run face in `tools/tillr-run/` (exit handling and the pi adapter), the candidate settle in `tools/tillr-drain/drain/`, and the worker brief the drain writes.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` on `amazon-bedrock/global.openai.gpt-6.1-sol`, every one refused at step `no-op`, $9.89 in total, run a7 alone $7.61. The a7 run report recorded `complete: no` and ended with the worker's sentence quoted above.
+
+## Filed 2026-11-16: defects the second observed drain pass turned up
+
+The second drain pass the owner watched, early on 2026-11-17 UTC, stopped at its first landing on
+an argument the land adapter did not accept; that fault is fixed in the same change that files
+these items. The pass turned up four more defects. None of them stops the drain, so they go
+through the queue. Each is a place where the record or the screen tells a person something other
+than what happened.
+
+### Prevent the rolling watermark from advancing past unaudited trunk
+
+The rolling run is the drain's audit of the trunk itself: it runs the checks that are too slow
+for each landing, and when it passes, the drain moves its watermark to the trunk tip, meaning
+"everything up to here has been checked". The drain's own Go suite is one of those slow checks.
+With no watermark yet, the drain asks for the whole tree, but the repo gate reads that request as
+"everything since the gate's own last verified baseline". That baseline already held the trunk's
+tree, so nothing counted as changed. The first rolling run ever to pass, on 2026-11-17, went green
+in about 12 seconds having run 6 checks, 4 of them answered from cache, and skipped 54 as "no
+change". The watermark still advanced to the tip. Nothing in the record says the audit was a near
+no-op, so a person reading "green" believes the trunk was checked when it was not. A run with no
+watermark should audit the whole tree, or the watermark should record only what was proven, and
+the loop's line should say how much actually ran.
+
+<!-- tillr: item id="item-drain-rolling-watermark-proves-what-ran" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A rolling run with no watermark runs every check in the rolling tier against the trunk tip, whatever baseline the repo gate last verified. A test seeds a gate baseline equal to the tip, runs the first rolling run, and asserts no rolling check is skipped as unchanged.
+- **c2:** A green rolling run that skipped checks advances the watermark only over what those checks cover, or records the skipped checks with the watermark, so a reader can tell a full audit from a partial one. A test asserts the record names the skipped checks.
+- **c3:** The loop's rolling line states how many checks ran, how many were answered from cache and how many were skipped. A test asserts the three counts on a fixture run.
+- **c4:** The drain's README states what a rolling run with no watermark audits, in one sentence a reader can check against the record.
+
+**Agent details:**
+
+- **Ref:** the rolling tier and its watermark in `tools/tillr-drain/README.md`; `{since}` in `DefaultRollingProgram`, which becomes `--all` when there is no watermark.
+- **Where:** `maybeRolling` in `tools/tillr-drain/drain/trunk.go` and `Rolling` in `tools/tillr-drain/drain/steps.go`; the `--all` planning in `tools/fork-check.py`.
+- **Evidence:** 2026-11-17 02:06:27 to 02:06:39 UTC, `tillr drain loop` printed `rolling run green over ..01142982834a; watermark advances to 01142982834a`. The rolling span file it wrote, `.tillr/lanes/.rolling/gate.spans.json`, showed the plan `tier rolling, changed 0`, 6 checks executed (4 cached) and 54 skipped with "no ... changed" reasons, wall time 4.4 s.
+
+### Prevent a conflict's routing change from reading as a duplicate
+
+When a run reports that its item's definition is in conflict, the item tool records the conflict,
+and it records it again each time the conflict moves: sent to a design seat, answered, closed.
+Each of those records repeats the whole conflict, including the full run report. On 2026-11-17 the
+conflict on the BMAD skills item was recorded at 02:06:39 as raised and again at 02:06:45 when the
+loop sent it to a design run. The two records differ only in their status and the design run they
+name, so anyone reading the event list sees the same conflict written twice and cannot tell a
+routing change from a bug that wrote it twice. Nothing refuses a record that repeats the last one
+exactly, so a real double write would look the same. A conflict should read as one conflict with
+its transitions, and a repeat that changes nothing should not be written.
+
+<!-- tillr: item id="item-conflict-transition-not-duplicate" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** Recording a conflict transition whose status, design run and answer equal the conflict's last recorded transition writes no event. A test records the same transition twice and asserts one event.
+- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, naming the status change and the design run, not as a second conflict. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
+- **c3:** The item tool's documentation states that a conflict is recorded once per transition.
+
+**Agent details:**
+
+- **Ref:** `ConflictKind` and `RecordConflict` in `tools/tillr-item/item/conflict.go`, whose comment already says each routing change is recorded.
+- **Where:** `tools/tillr-item/item/conflict.go`, the drain's conflict routing in `tools/tillr-drain/drain/blocked.go`, and the events and waiting faces in `tools/tillr-view/`.
+- **Evidence:** 2026-11-17, `tillr view events --since 4243`: events 4269 (02:06:39.497 UTC) and 4275 (02:06:45.327 UTC) are both `item.conflict` with id `conflict-run-item-agent-default-bmad-superpowers-skills-a1`; the first has status `raised`, the second `awaiting` with design run `run-item-agent-default-bmad-superpowers-skills-a2`, and every other field is equal.
+
+### Add the live loop's session and leases to the running view
+
+The running view is where an operator looks to see whether a loop is alive and what it is doing.
+While a loop was running on 2026-11-17, the view showed the stop record of the loop before it, an
+operator stop from 00:57 UTC marked as stale, and printed "lease not recorded" for the run that
+loop had just started. The operator watching had to read the process list to learn the loop was
+alive. A view that shows an old stop while a loop runs is worse than no view, because it tells
+the person to start a loop that is already there. The running view should show the live loop's
+session and the leases of its runs.
+
+<!-- tillr: item id="item-view-running-shows-live-loop" paths="tools/tillr-view/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** While a loop's session is live, the running view shows that session (its start and its last heartbeat) and not an older stop record. A test stores a stop record and a newer live session and asserts the view shows the session.
+- **c2:** A run the live loop dispatched shows its lane lease and the time left on it. A test asserts a leased run never shows `lease not recorded`.
+- **c3:** The stale stop note appears only when no live session exists. A test asserts both cases, and the web view agrees with the text view.
+
+**Agent details:**
+
+- **Ref:** the loop session records the drain writes (`refreshSession`, `endSession`) and the stop records under `.tillr/loop/`.
+- **Where:** `tools/tillr-view/running.go` (the `StaleNote` and `leaseLeftText` paths) and `tools/tillr-view/web/src/models/now.ts`.
+- **Evidence:** 2026-11-17 02:07:59 UTC, during a live loop, `tillr view running` printed `loop: operator-stop (at 00:57:09Z)` with `stale stop record — newer run exists at seq 4222`, and `lease not recorded` for run `run-item-agent-default-bmad-superpowers-skills-a2`.
+
+### Add a startup check that step programs accept the loop's flags
+
+The loop hands each candidate to programs it is given on its command line: a gate, a lander and a
+verdict program. It adds flags to their command lines as its features grow, and a program that
+has not learned a new flag refuses the whole command. On 2026-11-17 the land adapter refused a
+flag the loop had been sending for a day, and the loop found out only after a model had spent 91
+seconds and $1.41 on a run and its candidate had passed the gate. Stopping the loop on that
+refusal is right, because every landing would fail the same way. Finding out at the first landing
+is late. The loop's existing start-up check reads its settings, policies and store, but never asks
+the step programs whether they accept what it will send. It should, before any run starts.
+
+<!-- tillr: item id="item-drain-check-step-program-flags" paths="tools/tillr-drain/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** `tillr drain loop --check`, and the loop's own start-up, hand each configured gate, fixer gate, land and verdict program the argument list the loop would send, with every optional flag present, in a mode that judges nothing. A program that refuses it stops the start with a usage fault naming the program and the flag.
+- **c2:** The mode that judges nothing is defined once in the drain's README as part of the step-program contract, and the tillr-loop adapter implements it. A test starts a loop with an adapter that lacks one flag and asserts the start is refused before any run is dispatched.
+- **c3:** A step program that does not implement the mode is reported once at start-up as unchecked, and the loop still starts. A test asserts the warning.
+- **c4:** A step program's usage refusal at run time is reported as a configuration fault naming the program, not as an external failure. A test asserts the stop's class.
+
+**Agent details:**
+
+- **Ref:** the step-program exit codes in `tools/tillr-loop/README.md`; the loop's `--check` face in `tools/tillr-drain/main.go`; the argument lists pinned in `tools/tillr-loop/drain-argv.json`.
+- **Where:** `loopFace` in `tools/tillr-drain/main.go`, `ProcessSteps` in `tools/tillr-drain/drain/steps.go`, and the adapter's `self-check` face in `tools/tillr-loop/tillr-loop`.
+- **Evidence:** 2026-11-17 02:08:40 UTC, `tillr drain loop` stopped with exit 4 and `the land program answered exit 2 for item-agent-default-bmad-superpowers-skills: ... unrecognized arguments: --observed-trunk 01142982834a72e786616b25458aac140be0bd6d`, after design run `run-item-agent-default-bmad-superpowers-skills-a2` (91 s, $1.413319) and a passing gate at 02:08:36 UTC.
