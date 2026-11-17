@@ -62,8 +62,9 @@ timeout <wall> claude -p --output-format stream-json --verbose \
   are exported exactly as [`run-pi`](../pi/README.md) exports them, so a hook can tell a
   lane's worker from a person's session.
 - **The recording seam** is the same as `run-pi`'s: with a run id in the environment,
-  `BASH_ENV`, `GIT_TRACE2_EVENT`, `GIT_TRACE2_PARENT_SID`, `TILLR_TRACE_DIR` and
-  `TILLR_REPO_ROOT` are exported, all fail-open. The table is in
+  `BASH_ENV`, `TILLR_TRACE_DIR` and `TILLR_REPO_ROOT` are exported, all fail-open. No
+  `GIT_TRACE2_*` variable is exported, and any the loop carries are unset (git trace2
+  recording was removed on 2026-11-17). The table is in
   [the pi README](../pi/README.md#the-recording-seam).
 
 Refusals (exit 2, nothing started): the `backend` field names neither `claude` nor a seat

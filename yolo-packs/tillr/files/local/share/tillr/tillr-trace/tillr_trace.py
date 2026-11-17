@@ -2,8 +2,8 @@
 """tillr-trace: a derived read model over recorded run artifacts.
 
 Nothing here is a source of truth. `.tillr/state.db` owns workflow state, the
-`<run-id>.log` owns what the model saw and spent, and `proc-exec.jsonl` /
-`git-trace2.jsonl` own what ran. This module parses those into a rebuildable
+`<run-id>.log` owns what the model saw and spent, and `proc-exec.jsonl` owns
+what ran. This module parses those into a rebuildable
 `index.db` and answers four questions over it. If the index and a source disagree,
 the source is right; see README.md.
 
@@ -36,7 +36,12 @@ EXCERPT_MAX = 200
 # The index's own layout. The index is derived, so a version that does not match is
 # dropped and rebuilt rather than migrated: a migration would be a second spelling of
 # the build, and the one thing this tool must never do is answer from a half-built one.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# `runs_index` still carries `git_path` / `git_state` because `tillr-view` selects them by
+# name. Git trace2 recording was removed on 2026-11-17 (docs/design/session-recording.md,
+# the owner ruling in §2.2), so the path is always NULL and the state says why.
+GIT_RETIRED = "retired"
 
 # The page cache one ingest may hold, in KiB (SQLite reads a negative `cache_size` as
 # KiB). The default is 2 MiB, and an index of tens of millions of rows then re-reads its
@@ -660,70 +665,6 @@ def _proc_row(rows, trace, event):
     )
 
 
-def parse_git_trace2(path, trace, start=0, ordinal=0, carry=None):
-    """GIT_TRACE2_EVENT start/exit pairs to §4.3 `git.trace2` rows.
-
-    A `start` and its `exit` are two lines, and a build can land between them. The
-    commands still open when the parse stops travel in `carry`, so the line that closes
-    one in a later build still pairs with it instead of reading as an exit with no
-    command.
-    """
-    carry = dict(carry or {})
-    rows = Rows("git", source=str(path or ""), ordinal=ordinal)
-    if not path:
-        return Parsed(rows, "missing", "no git-trace2.jsonl recorded", start, carry)
-    open_sids = dict(carry.get("open") or {})
-    stream = Stream(start)
-    try:
-        for line_start, line_end, event, parsed, complete in _jsonl_lines(
-                path, start, wanted=GIT_EVENTS_READ):
-            if not stream.feed(line_start, line_end, parsed, complete):
-                break
-            if not parsed or not isinstance(event, dict):
-                continue
-            sid = event.get("sid")
-            name = event.get("event")
-            if name == "start":
-                open_sids[sid] = event
-            elif name == "exit":
-                _git_row(rows, trace, open_sids.pop(sid, {}), event)
-    except FileNotFoundError:
-        return Parsed(rows, "missing", f"no file at {path}", start, carry)
-    except OSError as error:
-        return Parsed(rows, "unreadable", f"{error.__class__.__name__}: {error}",
-                      stream.consumed, carry)
-    carry["open"] = open_sids
-    state, detail = stream.state(rows.ordinal)
-    return Parsed(rows, state, detail, stream.consumed, carry)
-
-
-# The two trace2 events a `git.trace2` row is made from. Every event line names its kind
-# as a JSON string, so a line holding neither string is not one of them.
-GIT_EVENTS_READ = (b'"start"', b'"exit"')
-
-
-def _git_row(rows, trace, started, event):
-    sid = event.get("sid")
-    argv = started.get("argv") or []
-    rows.add(
-        "git.trace2", trace,
-        ts_start=_iso_from_text(started.get("time")),
-        ts_end=_iso_from_text(event.get("time")),
-        duration_ms=int(round(float(event.get("t_abs") or 0) * 1000)) or None,
-        seam="git-trace2",
-        span_id=sid,
-        summary=scrub(" ".join(str(part) for part in argv), 120),
-        payload={
-            "git_sid": sid,
-            "command": _git_command(argv),
-            "argv": [scrub(str(part), 512) for part in argv],
-            "repo_rel_cwd": None,
-            "exit_code": event.get("code"),
-            "elapsed_ms": int(round(float(event.get("t_abs") or 0) * 1000)) or None,
-        },
-    )
-
-
 def parse_gate_record(path, trace, start=0, ordinal=0, carry=None):
     """One `.tillr/loop/<run-id>/gate.{plan,verdict}.json` to a §4.3 row.
 
@@ -812,15 +753,6 @@ def _existing(dirs, name):
     """The path of `name` when one of a run's directories holds it, else None."""
     path = run_artifact(dirs, name) if dirs else None
     return str(path) if path is not None and path.exists() else None
-
-
-def _git_command(argv):
-    for part in argv:
-        if part in ("-c",):
-            continue
-        if not str(part).startswith("-") and not str(part).startswith("/"):
-            return str(part)
-    return None
 
 
 # ---------------------------------------------------------------- store
@@ -925,7 +857,7 @@ class Index:
         # A run's records live in two places: `<trace-root>/runs/<run-id>/` (the
         # recorder's own directory, §3.2) and `<root>/.tillr/loop/<run-id>/` (the drain's
         # per-run record directory, where staging keeps the brief, fence and base sha,
-        # where `run-pi`'s emitters append `proc-exec.jsonl` and `git-trace2.jsonl`, and
+        # where `run-pi`'s emitters append `proc-exec.jsonl`, and
         # where the gate leaves `gate.plan.json` / `gate.verdict.json`). `.tillr/loop` is
         # derived from the store path, which is the one path the caller already names.
         self.loop_root = self.store_path.parent / "loop"
@@ -980,7 +912,6 @@ class Index:
         return {
             "log": self._log_path(run_id, dirs, store_row),
             "proc": run_artifact(dirs, "proc-exec.jsonl") if dirs else None,
-            "git": run_artifact(dirs, "git-trace2.jsonl") if dirs else None,
             "manifest": run_artifact(dirs, "manifest.json") if dirs else None,
             "base_sha": run_artifact(dirs, "base_sha") if dirs else None,
             "brief": run_artifact(dirs, "brief.md") if dirs else None,
@@ -1249,8 +1180,6 @@ class Index:
                                parse_run_log, updates)
         proc = self._parse_file(conn, trace, sources.get("proc"), wanted, stored,
                                 parse_proc_exec, updates)
-        git = self._parse_file(conn, trace, sources.get("git"), wanted, stored,
-                               parse_git_trace2, updates)
         for name in ("gate_plan", "gate_verdict"):
             self._parse_file(conn, trace, sources.get(name), wanted, stored,
                              parse_gate_record, updates, force_full=True)
@@ -1267,9 +1196,6 @@ class Index:
         if proc.state in ("unreadable", "corrupt"):
             self._unreadable(conn, run_id, trace, "proc-exec.jsonl",
                              sources.get("proc"), proc.state)
-        if git.state in ("unreadable", "corrupt"):
-            self._unreadable(conn, run_id, trace, "git-trace2.jsonl",
-                             sources.get("git"), git.state)
 
         base_sha = None
         base_path = sources.get("base_sha")
@@ -1291,7 +1217,7 @@ class Index:
             dict_row.get("finished_at"),
             str(sources["log"]) if sources.get("log") else None, log.state,
             str(sources["proc"]) if sources.get("proc") else None, proc.state,
-            str(sources["git"]) if sources.get("git") else None, git.state,
+            None, GIT_RETIRED,
             _existing(dirs, "brief.md"), _existing(dirs, "fence.txt"),
             base_sha, manifest.get("head_sha"), manifest.get("tree_sha"),
             "; ".join(detail_bits),
@@ -1828,8 +1754,7 @@ def render_audit(result):
     lines = [
         f"run {run['run_id']}  lane={run['lane_id']} item={run['item_id']}"
         f" store_state={run['store_state']} exit={run['exit_code']}",
-        f"  log {run['log_path']} [{run['log_state']}]  proc [{run['proc_state']}]"
-        f"  git [{run['git_state']}]",
+        f"  log {run['log_path']} [{run['log_state']}]  proc [{run['proc_state']}]",
         f"  base_sha={run['base_sha']} head_sha={run['head_sha']}"
         f" tree_sha={run['tree_sha']}",
     ]

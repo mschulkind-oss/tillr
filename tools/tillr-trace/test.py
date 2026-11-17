@@ -372,7 +372,7 @@ def test_store_is_opened_read_only(work):
     return "a chmod-555 store answers every query and refuses every write"
 
 
-def test_loop_directory_supplies_proc_git_and_gate_records(work):
+def test_loop_directory_supplies_proc_and_gate_records(work):
     """A run recorded under `.tillr/loop/<run-id>/` reads observed, not missing.
 
     This is the seam `run-pi`'s emitters write into: the run's own loop directory, beside
@@ -419,7 +419,7 @@ def test_loop_directory_supplies_proc_git_and_gate_records(work):
     audit = cli("--trace-root", str(trace_root), "--store", str(store), "audit", run_id)
     assert audit.returncode == 0, audit.stderr
     assert "proc [ok]" in audit.stdout, audit.stdout
-    assert "git [ok]" in audit.stdout, audit.stdout
+    assert "git [" not in audit.stdout, audit.stdout
 
     conn = sqlite3.connect(str(trace_root / "index.db"))
     try:
@@ -430,9 +430,9 @@ def test_loop_directory_supplies_proc_git_and_gate_records(work):
         proc_rows = [json.loads(payload) for (payload,) in conn.execute(
             "SELECT payload FROM obs_events WHERE run_id = ? AND kind = 'proc.exec'",
             (run_id,))]
-        git_rows = [json.loads(payload) for (payload,) in conn.execute(
-            "SELECT payload FROM obs_events WHERE run_id = ? AND kind = 'git.trace2'",
-            (run_id,))]
+        git_rows = conn.execute(
+            "SELECT kind FROM obs_events WHERE run_id = ? AND kind = 'git.trace2'",
+            (run_id,)).fetchall()
         brief_path = conn.execute(
             "SELECT brief_path FROM runs_index WHERE run_id = ?", (run_id,)).fetchone()[0]
     finally:
@@ -446,8 +446,9 @@ def test_loop_directory_supplies_proc_git_and_gate_records(work):
     assert gate_rows["gate.verdict"]["check_timings_ms"] == {
         "store-test": 1200, "trace-test": 800}, gate_rows["gate.verdict"]
     assert [row["exit_code"] for row in proc_rows] == [0], proc_rows
-    assert [row["command"] for row in git_rows] == ["commit"], git_rows
-    return "loop-directory proc/git read ok and the gate's plan and verdict indexed"
+    # A `git-trace2.jsonl` left on disk by the recorder removed on 2026-11-17 is not read.
+    assert git_rows == [], git_rows
+    return "loop-directory proc read ok, a stale git trace2 stream ignored, gate indexed"
 
 
 def test_bash_shim_records_a_command_and_keeps_the_exit_code(work):
@@ -489,23 +490,6 @@ def test_bash_shim_records_a_command_and_keeps_the_exit_code(work):
     assert failed["run_id"] == run_id and failed["lane_id"] == "lane-1", failed
     assert failed["span_id"].startswith("sh-"), failed
 
-    # The git half of the same seam: the environment `run-pi` exports for
-    # GIT_TRACE2_EVENT, over a real git invocation.
-    git_env = dict(env, GIT_TRACE2_EVENT=str(loop_dir / "git-trace2.jsonl"),
-                   GIT_TRACE2_PARENT_SID=run_id)
-    subprocess.run(["git", "status", "--porcelain"], cwd=str(ROOT), env=git_env,
-                   capture_output=True, text=True, check=True)
-
-    audit = cli("--trace-root", str(trace_root), "--store", str(store), "audit", run_id)
-    assert audit.returncode == 0, audit.stderr
-    assert "proc [ok]" in audit.stdout, audit.stdout
-    assert "git [ok]" in audit.stdout, audit.stdout
-    git_rows = [json.loads(line) for line in
-                (loop_dir / "git-trace2.jsonl").read_text().splitlines()]
-    exits = [row for row in git_rows if row.get("event") == "exit"]
-    assert [row.get("code") for row in exits] == [0], git_rows
-    assert all(str(row.get("sid", "")).startswith(run_id) for row in exits), exits
-
     # Fail-open (§7.1 guarantees 1 and 2): a trace directory that cannot be written
     # leaves the command's exit code, stdout and stderr exactly as they were.
     broken_env = dict(env, TILLR_TRACE_DIR=str(work / "not-a-directory"))
@@ -516,7 +500,7 @@ def test_bash_shim_records_a_command_and_keeps_the_exit_code(work):
     assert broken.returncode == 5, (broken.returncode, broken.stderr)
     assert broken.stdout == "still-ok\n", broken.stdout
     assert broken.stderr == "", broken.stderr
-    return ("the shim wrote 3 proc.exec rows, git trace2 wrote its stream, and the"
+    return ("the shim wrote 3 proc.exec rows and the"
             " shell's own exit code survived")
 
 
@@ -795,7 +779,7 @@ def test_ingest_keeps_a_pair_split_across_builds(work):
     """A call whose start and end land in different builds keeps its arguments.
 
     The live index is appended to while a run is still writing, so a build can land
-    between a `tool_execution_start` and its end, or between a git command's start and
+    between a `tool_execution_start` and its end, or between a command's start and
     exit. What crosses that boundary travels in the source's carry; without it the second
     build sees an end with no start and the row loses the path the claim join reads.
     """
@@ -810,9 +794,6 @@ def test_ingest_keeps_a_pair_split_across_builds(work):
         {"type": "tool_execution_start", "toolCallId": "call-edit-1", "toolName": "edit",
          "args": {"path": "/w/lane-1/worktree/tools/tillr-store/read.go"}},
     ]) + "\n")
-    (run_dir / "git-trace2.jsonl").write_text(json.dumps(
-        {"event": "start", "sid": "sid-1", "time": "2026-11-12T19:00:01.000Z",
-         "argv": ["/bin/git", "commit", "-m", "the fix"]}) + "\n")
     (run_dir / "base_sha").write_text("a" * 40 + "\n")
     store = work / "split-store" / ".tillr" / "state.db"
     make_store(store, [{"run_id": "run-split", "item_id": "574", "lane_id": "lane-1"}])
@@ -826,25 +807,18 @@ def test_ingest_keeps_a_pair_split_across_builds(work):
              "result": {"content": [{"type": "text", "text": "ok"}]},
              "isError": False, "durationMs": 3, "timestamp": 1794510840000}) + "\n")
         handle.write(json.dumps(turn_end(1, "edited", ts_ms=1794510845000)) + "\n")
-    with open(run_dir / "git-trace2.jsonl", "a") as handle:
-        handle.write(json.dumps(
-            {"event": "exit", "sid": "sid-1", "time": "2026-11-12T19:00:01.100Z",
-             "t_abs": 0.1, "code": 0}) + "\n")
     assert index.sync() == "rebuilt"
 
     conn = sqlite3.connect(str(root / "index.db"))
     try:
         tool = [json.loads(payload) for (payload,) in conn.execute(
             "SELECT payload FROM obs_events WHERE kind = 'tool.call'")]
-        git = [json.loads(payload) for (payload,) in conn.execute(
-            "SELECT payload FROM obs_events WHERE kind = 'git.trace2'")]
     finally:
         conn.close()
     assert len(tool) == 1, tool
     assert tool[0]["target_path"] == "/w/lane-1/worktree/tools/tillr-store/read.go", tool
     assert tool[0]["ts_source"] == "derived_from_preceding_clock", tool
-    assert len(git) == 1 and git[0]["exit_code"] == 0, git
-    return "a tool call and a git command split across two builds kept their arguments"
+    return "a tool call split across two builds kept its arguments"
 
 
 def test_ingest_streams_a_large_source(work):
@@ -936,13 +910,6 @@ def loop_corpus(work, name, run_ids):
             turn_end(1, "Ran the suite.\nRESULT: done", ts_ms=1794510845000 + number)])
         (loop_dir / "proc-exec.jsonl").write_text(json.dumps(proc(
             "2026-11-12T19:20:02.000Z", ["go", "test", "./..."], "tools/tillr-store")) + "\n")
-        (loop_dir / "git-trace2.jsonl").write_text("\n".join(json.dumps(row) for row in [
-            {"event": "start", "sid": f"{run_id}/1", "time": "2026-11-12T19:20:03.000Z",
-             "argv": ["/bin/git", "commit", "-m", "the fix"]},
-            {"event": "region_enter", "sid": f"{run_id}/1", "label": "noise"},
-            {"event": "exit", "sid": f"{run_id}/1", "time": "2026-11-12T19:20:03.100Z",
-             "t_abs": 0.1, "code": 0},
-        ]) + "\n")
         (loop_dir / "base_sha").write_text("a" * 40 + "\n")
         (loop_dir / "gate.plan.json").write_text(json.dumps({
             "record_version": 1, "kind": "gate.plan", "id": f"gate-plan-{number}",
@@ -1058,7 +1025,7 @@ def test_an_ingest_killed_mid_write_is_resumed_not_rebuilt(work):
 
     calls = []
     parsers = {name: getattr(tillr_trace, name) for name in (
-        "parse_run_log", "parse_proc_exec", "parse_git_trace2", "parse_gate_record")}
+        "parse_run_log", "parse_proc_exec", "parse_gate_record")}
     for name, parser in parsers.items():
         setattr(tillr_trace, name, lambda *args, _parser=parser, **kwargs: calls.append(
             args[0]) or _parser(*args, **kwargs))
@@ -1178,6 +1145,38 @@ def test_a_second_ingest_does_not_wait_for_a_running_one(work):
 
 
 
+def test_an_index_of_the_git_trace2_layout_is_rebuilt(work):
+    """An index built before git trace2 recording was removed is deleted, not read.
+
+    Layout 3 held `git.trace2` rows. The ruling of 2026-11-17 removed them, so the layout
+    number moved and the existing derived index must come back without them.
+    """
+    root = work / "retired-trace"
+    run_dir = root / "runs" / "run-old"
+    run_dir.mkdir(parents=True)
+    write_log(run_dir / "run-old.log", "run-old", [turn_end(1, "done", ts_ms=1794510845000)])
+    (run_dir / "proc-exec.jsonl").write_text(json.dumps(proc(
+        "2026-11-12T19:20:02.000Z", ["ls"], "tools")) + "\n")
+    store = work / "retired-store" / ".tillr" / "state.db"
+    make_store(store, [{"run_id": "run-old", "item_id": "1", "lane_id": "lane-1"}])
+    assert tillr_trace.Index(root, store).sync() == "rebuilt"
+    conn = sqlite3.connect(str(root / "index.db"))
+    conn.execute("UPDATE obs_events SET kind = 'git.trace2' WHERE kind = 'proc.exec'")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+    assert tillr_trace.Index(root, store).sync() == "rebuilt"
+    conn = sqlite3.connect(str(root / "index.db"))
+    try:
+        kinds = {kind for (kind,) in conn.execute("SELECT kind FROM obs_events")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    assert "git.trace2" not in kinds, kinds
+    assert version == tillr_trace.SCHEMA_VERSION, version
+    return "a layout-3 index holding git.trace2 rows was deleted and rebuilt without them"
+
+
 def main():
     if not DURABLE.is_dir():
         DURABLE.mkdir(parents=True, exist_ok=True)
@@ -1196,7 +1195,8 @@ def main():
             ("fresh", lambda: test_discrepancies_does_not_flag_a_suite_that_ran_after_the_last_edit(work)),
             ("unreadable", lambda: test_missing_artifact_is_unreadable_not_a_crash(work)),
             ("readonly", lambda: test_store_is_opened_read_only(work)),
-            ("loopdir", lambda: test_loop_directory_supplies_proc_git_and_gate_records(work)),
+            ("retired-layout", lambda: test_an_index_of_the_git_trace2_layout_is_rebuilt(work)),
+            ("loopdir", lambda: test_loop_directory_supplies_proc_and_gate_records(work)),
             ("shim", lambda: test_bash_shim_records_a_command_and_keeps_the_exit_code(work)),
             ("tz", lambda: test_shim_stamps_utc_in_any_host_zone(work)),
             ("tzboundary", lambda: test_shim_stamp_is_utc_across_the_date_boundaries(work)),
