@@ -18,6 +18,10 @@ const (
 	itemFaultClearedKind       = faults.ClearedKind
 	ReasonCandidateMismatch    = "candidate-record-mismatch"
 	ReasonDefinitionSyncFailed = "definition-sync-failed"
+	// ReasonLandHarnessError holds an item whose land step could not deliver it. Like a
+	// gate that cannot judge, it is a fault about this candidate's delivery, not a verdict
+	// on its code, and it must not end the loop for every other lane.
+	ReasonLandHarnessError = "land-harness-error"
 )
 
 func init() {
@@ -91,6 +95,12 @@ func ClearItemFault(tx *store.Tx, itemID string, seq int64, at time.Time) error 
 
 func (l *Loop) candidateFault(ctx context.Context, c Candidate, detail string) error {
 	if err := l.holdItemFault(ctx, c, ReasonCandidateMismatch, detail); err != nil {
+		return err
+	}
+	return errItemFaultHeld
+}
+func (l *Loop) landFault(ctx context.Context, c Candidate, detail string) error {
+	if err := l.holdItemFault(ctx, c, ReasonLandHarnessError, detail); err != nil {
 		return err
 	}
 	return errItemFaultHeld

@@ -1970,6 +1970,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		l.mu.Unlock()
 	}
 	if err != nil {
+		if ExitCode(err) == record.ExitExternal {
+			return "", false, l.landFault(ctx, candidate, err.Error())
+		}
 		return "", false, err
 	}
 	if landed.Result == LandRefused && landed.Reason == ReasonRedCap {
