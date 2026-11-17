@@ -211,6 +211,10 @@ func liveRunProcessIDs(storePath string) (live, faces map[string]bool, err error
 type reapEvidence struct {
 	dead map[LoopOwner]bool
 	live map[string]bool
+	// faces is every run ID whose run face itself is alive (isRunFaceArgv), from the same
+	// scan as live. Only a face keeps a dead examiner's lease: a stray child that merely
+	// carries the run's markers is not the run.
+	faces map[string]bool
 	// stuck is each examined run whose lane is still leased to it with no expiry and
 	// whose run face is gone (stuckExaminationLease), keyed by run ID to its lane. The
 	// write re-verifies every one before it reclaims it.
@@ -228,7 +232,7 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, stuck: map[string]string{}, reclaimed: &[]string{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, reclaimed: &[]string{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
@@ -280,12 +284,11 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		anyDead = anyDead || dead
 	}
 	if anyDead || len(stuck) > 0 {
-		var faces map[string]bool
-		if ev.live, faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
+		if ev.live, ev.faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
 		}
 		for id, work := range stuck {
-			if stuckExaminationLease(work, faces[id], here, ev) {
+			if stuckExaminationLease(work, ev.faces[id], here, ev) {
 				ev.stuck[id] = work.Decision.LaneID
 			}
 		}
@@ -367,12 +370,25 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		}
 		if work.Examiner != nil {
 			if ev.ownerDead(work.Examiner) {
-				if !ev.live[work.Decision.RunRequest.RunID] {
-					if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, work.Decision.LaneID, work.Decision.RunRequest.RunID); err != nil {
+				// An examination is claimed only for a run that has ended, so the run face
+				// is the one process that can still own this lease (a continuation resuming
+				// the run). A stray child carrying the run's markers does not: on 2026-11-17
+				// one kept a dead examiner's lane leased, and its candidate unjudged, for
+				// hours (TestADeadExaminersCandidateIsJudgedInItsOwnLaneDespiteAStrayChild).
+				if !ev.faces[work.Decision.RunRequest.RunID] {
+					res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, work.Decision.LaneID, work.Decision.RunRequest.RunID)
+					if err != nil {
 						return err
 					}
 					if err := appendEffect(tx, examinationOwnerKind, work.Decision.RunRequest.RunID, (*LoopOwner)(nil), at); err != nil {
 						return err
+					}
+					if n, err := res.RowsAffected(); err != nil {
+						return err
+					} else if n > 0 {
+						if err := appendEffect(tx, laneReleasedKind, work.Decision.RunRequest.RunID, laneReleased{LaneID: work.Decision.LaneID, Cause: laneReleaseReap}, at); err != nil {
+							return err
+						}
 					}
 				}
 			}
