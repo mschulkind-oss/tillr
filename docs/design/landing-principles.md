@@ -379,6 +379,54 @@ held-candidate mover; and `board land why`'s `moverLive` and `standing` fields, 
 the named mover can act rather than only its name. The board CLI that carried those mechanisms was
 deleted; the surviving surface is `tillr view`, which reports a hold and its reason.
 
+*Measured 2026-11-17:* five of seven design conflicts sat `awaiting` a design run that had already
+ended, and every view said "waits on work: design" with nobody working. Seven items held a claim
+whose run never launched. Eight items then held `conflict-owner` with no command that could raise
+the conflict again, three of them only because a hand commit had fixed the trunk-side cause of the
+gate refusal, and two of them over a committed design answer the settlement had misread.
+
+*Enforced by (2026-11-17):* in `tillr-drain`, each of these holds now names a mover that can act:
+
+- **A claim whose run never launched** is released, and its item is dispatched again
+  (`releaseUnlaunchedClaims` in
+  [`unlaunched_claim.go`](../../tools/tillr-drain/drain/unlaunched_claim.go), commit `b1fb121d5`;
+  pinned by `TestACancelledClaimsRecordsAreRecognizedAndTheItemIsDispatchedAgain` in
+  [`unlaunched_claim_test.go`](../../tools/tillr-drain/drain/unlaunched_claim_test.go)).
+- **A design conflict awaiting an ended design run** is raised again once when an input changed,
+  and is otherwise handed to the owner naming the run (`settleUnansweredDesignRuns` in
+  [`design_unanswered.go`](../../tools/tillr-drain/drain/design_unanswered.go), commit `09b171416`;
+  pinned in [`design_unanswered_test.go`](../../tools/tillr-drain/drain/design_unanswered_test.go)).
+- **An interrupted triage run** is triaged again rather than sent to the owner (commit `15b3502b7`;
+  `TestAnInterruptedTriageRunIsTriagedAgainNotSentToTheOwner` in
+  [`triage_interrupted_test.go`](../../tools/tillr-drain/drain/triage_interrupted_test.go)).
+- **A lane with uncommitted files** under a pinned candidate is refused for that lane alone as
+  `lane-holds-uncommitted-work` instead of stopping the loop (`ReasonLaneUncommittedWork` in
+  [`lane_rotation.go`](../../tools/tillr-drain/drain/lane_rotation.go), commit `5ad8aaaa8`;
+  `TestPinnedCandidateOnALaneWithUncommittedFilesLeavesTheLoopRunning` in
+  [`lane_dirty_test.go`](../../tools/tillr-drain/drain/lane_dirty_test.go)).
+- **A design run refused at the gate, or reporting `trunk-broken`,** is a trunk suspect: it is no
+  attempt, and the conflict is raised again once a trunk commit the heavy proof has proven changes
+  a file the run's candidate touched. A hand commit counts. A second identical refusal is an
+  attempt, so the re-raise cannot loop (`trunkChangeSince` in
+  [`design_unanswered.go`](../../tools/tillr-drain/drain/design_unanswered.go), commit `41790b724`;
+  pinned in [`design_trunk_test.go`](../../tools/tillr-drain/drain/design_trunk_test.go)).
+- **A committed design answer** is read by its block's id and section. A hold written by the old
+  reading is raised again naming the commit (`designBlockAnswer` and `settleMisreadDesignAnswers`
+  in [`design_answer.go`](../../tools/tillr-drain/drain/design_answer.go), commit `9d106bb9d`;
+  pinned in [`design_answer_test.go`](../../tools/tillr-drain/drain/design_answer_test.go)).
+- **An owner hold over an unanswered design run** has an owner's command:
+  `tillr drain retry --item <id> --run <design run>` raises the conflict for one more design run.
+  Every retry refusal names the command the face would accept, or says that none exists and who
+  moves (`authorizeDesignRetry` in
+  [`design_retry.go`](../../tools/tillr-drain/drain/design_retry.go), commit `c95791410`; pinned
+  in [`design_retry_test.go`](../../tools/tillr-drain/drain/design_retry_test.go) and by
+  `TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover` in
+  [`main_test.go`](../../tools/tillr-drain/main_test.go)).
+
+What is not enforced yet: the gate's trunk-already-red replay cannot judge a fast-gate check id
+such as `documents`, so it never acquits a refusal the trunk caused. The trunk-suspect rule above
+works around that from the drain side; it does not fix the gate.
+
 *Scope:* **not lander-scoped.** The dispatch side holds candidates in repair states and items out of
 dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held state of its own, so it
 cannot break this principle and is not bound by it. This is the held-state half of
