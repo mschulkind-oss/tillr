@@ -77,6 +77,9 @@ type designUnanswered struct {
 	// TrunkReraised records the conflict raised again because the proof passed the base a
 	// trunk-suspect refusal blamed. It does not spend the input-change allowance.
 	TrunkReraised bool `json:"trunk_reraised,omitempty"`
+	// Misread records a committed design answer the settlement read, before 2026-11-17,
+	// as no amendment or a removed block (settleMisreadDesignAnswers). It spends nothing.
+	Misread bool `json:"misread,omitempty"`
 }
 
 type designFinding struct {
