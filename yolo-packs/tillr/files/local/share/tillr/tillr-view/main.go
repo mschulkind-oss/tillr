@@ -135,10 +135,11 @@ func statusFace(args []string) (record.Envelope, int) {
 // eventsPayload is the payload of view.events: the moment, the cursor the caller gave,
 // the events after it, and the cursor to advance to.
 type eventsPayload struct {
-	GeneratedAt time.Time     `json:"generated_at"`
-	Snapshot    snapshot      `json:"snapshot"`
-	Since       int64         `json:"since"`
-	Events      []eventRecord `json:"events"`
+	GeneratedAt time.Time         `json:"generated_at"`
+	Snapshot    snapshot          `json:"snapshot"`
+	Since       int64             `json:"since"`
+	Events      []eventRecord     `json:"events"`
+	Conflicts   []conflictHistory `json:"conflicts"`
 	// NextSince is the cursor the caller advances to: the last seq in the record, or
 	// the unchanged since when there are none. It is never event_head_seq — the head is
 	// the store's, and a caller that advanced to it would skip every event appended
@@ -173,6 +174,7 @@ func eventsFace(args []string) (record.Envelope, int) {
 		Snapshot:    v.snapshot,
 		Since:       *src.since,
 		Events:      events,
+		Conflicts:   v.conflicts,
 		NextSince:   next,
 	}), record.ExitOK
 }

@@ -382,6 +382,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		}
 		out = append(out, row)
 	}
+	addConflictHistory(out, conflicts)
 	windows, err := waitingBackendWindows(r, time.Now())
 	if err != nil {
 		return nil, err

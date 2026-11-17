@@ -47,15 +47,19 @@ type eventRecord struct {
 	Revision   *int64          `json:"revision,omitempty"`
 	Payload    json.RawMessage `json:"payload"`
 	At         time.Time       `json:"at"`
+	ConflictID string          `json:"conflict_id,omitempty"`
+	FirstSeq   int64           `json:"first_seq,omitempty"`
+	Transition string          `json:"transition,omitempty"`
 }
 
 // view is one consistent read of a source: the moment it describes, the events it
 // holds, and, in records mode, the records themselves. Both faces assemble from a
 // view, so the store path and the records path cannot drift.
 type view struct {
-	snapshot snapshot
-	events   []eventRecord
-	records  []record.Envelope
+	snapshot  snapshot
+	events    []eventRecord
+	conflicts []conflictHistory
+	records   []record.Envelope
 	// domain is the store's own rows, present when the source is a store: it is what
 	// `status --store` assembles from, so the report's components are store rows rather
 	// than null (VIEW-2).
@@ -97,6 +101,11 @@ func openStore(ctx context.Context, path string, since int64) (view, error) {
 		v.snapshot = snapshot{SchemaVersion: version, EventHeadSeq: head, Source: sourceStore}
 		v.events = eventRecords(events)
 		v.domain = domain
+		groups, err := readConflictHistories(r)
+		if err != nil {
+			return err
+		}
+		v.conflicts = annotateConflictEvents(v.events, groups, since)
 		return nil
 	})
 	if err != nil {
@@ -139,9 +148,6 @@ func openRecords(path string, since int64) (view, error) {
 	}
 	for i, env := range records {
 		seq := int64(i + 1)
-		if seq <= since {
-			continue
-		}
 		// The record's subject is the event's object, so a subject lookup answers the
 		// same way over a stream as over a store.
 		v.events = append(v.events, eventRecord{
@@ -153,6 +159,18 @@ func openRecords(path string, since int64) (view, error) {
 			At:         env.CreatedAt.UTC(),
 		})
 	}
+	groups, err := conflictHistories(v.events)
+	if err != nil {
+		return view{}, err
+	}
+	v.conflicts = annotateConflictEvents(v.events, groups, since)
+	filtered := v.events[:0]
+	for _, e := range v.events {
+		if e.Seq > since {
+			filtered = append(filtered, e)
+		}
+	}
+	v.events = filtered
 	return v, nil
 }
 

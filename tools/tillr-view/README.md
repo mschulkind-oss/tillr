@@ -54,6 +54,17 @@ An external caller points these at a store snapshot and reads the same JSON the 
 round decided, `lanes` lists every configured lane and its current or last run, and
 `running` answers what is in flight.
 
+### Conflict transitions in the event list
+
+`events` preserves its raw event list and cursor for consumers of the recorded stream.
+Conflict events also carry `conflict_id`, `first_seq` (the first record's sequence),
+and `transition` (what changed). Its `conflicts` list groups those records as one
+conflict with named, dated transitions. A status or design-run change names that
+change; new report evidence names the run that supplied it. Only a changed report
+appears again in the grouped transitions, not the report repeated by a routing move.
+With `--since`, the grouped list includes only later transitions but still names the
+original sequence and compares against the previous record before the cursor.
+
 ## Starting the observatory
 
 From any directory, with any `PATH` that holds the toolchain (`go` and `git`, plus `node` and
@@ -274,6 +285,10 @@ presentation rows; the API also carries the summary and full decisions.
 `since` reads `current plan`, not an invented historical start time.
 See [the drain's why guide](../tillr-drain/README.md#ask-the-planner-why) for
 summary accounting and the per-item command.
+
+A conflict's dated transitions are appended to its item's reason line in both the
+current-planner and recorded-history waiting faces. A later fault or retained repair
+may supply the reason and recovery command, but does not hide the conflict's transitions.
 
 ### Recorded-decision history
 

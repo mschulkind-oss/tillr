@@ -53,6 +53,11 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   Both commands accept an optional `--now` clock, defaulting to the wall clock.
 - **A verdict is the only writer of a criterion's state.** No other face moves one, which
   is what makes a recorded judgment the answer to "why is this criterion where it is".
+- **A conflict is recorded once per transition.** A transition is a changed record of
+  the same conflict: its routing, answer, report, origin run, document, or blocked
+  criteria may change. A record equal in every field to that conflict's last record
+  is not written and does not change the item's disposition. A longer report from a
+  second failed run is new evidence, even when the status and design run stay the same.
 - **A decision is superseded, never edited.** The superseded record stays and the new one
   names it, so the ledger reads in order.
 - **A seat is a role, not a model.** An item names at most one of `design`, `build`,

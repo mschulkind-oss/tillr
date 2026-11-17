@@ -1,7 +1,10 @@
 package item
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -57,7 +60,8 @@ func ReadConflicts(r *store.Reader) (map[string]Conflict, error) {
 }
 
 // RecordConflict appends a transition and changes the item's disposition in the
-// same transaction. Criteria and verdicts are never written by this operation.
+// same transaction. A record equal in every field to this conflict's last record
+// writes nothing. Criteria and verdicts are never written by this operation.
 func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 	if c.ConflictID == "" || c.ItemID == "" || c.RunID == "" || c.Text == "" || c.WaitingOn == "" {
 		return Usagef("a conflict needs its identity, item, run, report, and waiting seat")
@@ -66,6 +70,21 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 	case "raised", "awaiting", "owner", "answered", "closed":
 	default:
 		return Usagef("unknown conflict status %q", c.Status)
+	}
+	var previous []byte
+	err := tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind = ?
+ AND json_extract(payload, '$.conflict_id') = ? AND json_extract(payload, '$.item_id') = ?
+ ORDER BY seq DESC LIMIT 1`, ConflictKind, c.ConflictID, c.ItemID).Scan(&previous)
+	if err == nil {
+		var last Conflict
+		if err := json.Unmarshal(previous, &last); err != nil {
+			return err
+		}
+		if reflect.DeepEqual(last, c) {
+			return nil
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	state := "blocked"
 	if c.Status == "answered" || c.Status == "closed" {

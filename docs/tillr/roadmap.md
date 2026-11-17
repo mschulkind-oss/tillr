@@ -1263,12 +1263,7 @@ answer but a longer report and the newer run's id. That record carries evidence 
 lacks, so it is kept, and the views show it as evidence added to the same conflict. A repeat is
 therefore a record equal to the last one in every field, not only in the three routing fields.
 
-<!-- tillr: item id="item-conflict-transition-not-duplicate" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Recording a conflict whose every field equals the last record of the same conflict writes no conflict event. A test records the same conflict twice and asserts one event. A second test records it again with only the report and run id changed, as the drain's second-failure route does, and asserts a second event that holds the longer report.
-- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, not as a second conflict. A record that changes the status or the design run is named by that change; a record that changes only the report is named as added evidence, with the run it came from. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
-- **c3:** The item tool's documentation states that a conflict is recorded once per transition, and that a record equal to the last one is not written.
-- **c4:** The waiting face keeps a conflict's transitions when another hold on the same item, a fault or a repair, supplies the reason line. A test renders an item with a conflict that has two transitions and a later fault hold, and asserts both the fault's reason and the transitions.
 
 **Agent details:**
 
