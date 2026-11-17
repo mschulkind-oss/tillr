@@ -86,6 +86,9 @@ type ExecOptions struct {
 	// time.After. A test supplies one to observe the bound the runner chose and to decide
 	// when it elapses, so "the runner waited for the bound" is an ordering, not a duration.
 	PauseAfter func(time.Duration) <-chan time.Time
+	// SettledAfter supplies sample instants after a settled report is observed.
+	// Nil uses time.After; natural immediate exits never arm it.
+	SettledAfter func(time.Duration) <-chan time.Time
 }
 
 // SessionIDFile is the lane layout's harness session handle: one UUID, in the lane directory
@@ -311,6 +314,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// stop that left no row and no release would be the orphan the operator cannot see.
 	writeCtx := context.WithoutCancel(ctx)
 
+	streamOffset := int64(0)
+	if req.Resume {
+		if info, err := logFile.Stat(); err == nil {
+			streamOffset = info.Size()
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		// There was no process, so the injected clock is the only clock there is.
@@ -326,7 +335,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	var note string
 	startedAt := time.Now().UTC()
-	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter)
+	monitor := &settledMonitor{log: logPath, stderr: filepath.Join(laneDir, "stream.err"), backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
+	if monitor.after == nil {
+		monitor.after = time.After
+	}
+	monitor.offset = streamOffset
+	monitor.startOffset = streamOffset
+	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter, monitor)
 	if pauseErr != nil {
 		logFile.Close()
 		return record.Envelope{}, pauseErr
@@ -352,6 +367,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		// A timed-out run is a completed run: the utility ran and observed the bound.
 		payload.State = StateTimedOut
 		payload.EndCause = EndTimeLimit
+	case monitor.end != nil:
+		code := cmd.ProcessState.ExitCode()
+		payload.State = StateExited
+		payload.ExitCode = &code
+		payload.EndCause = EndSettledIdle
+		payload.SettledAt = monitor.end.settledAt
+		payload.HarnessEndedAt = monitor.end.endedAt
 	case waitErr != nil:
 		var exitErr *exec.ExitError
 		if !errors.As(waitErr, &exitErr) {

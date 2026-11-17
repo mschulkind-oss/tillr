@@ -197,7 +197,7 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			payload.Usage.CostUSD = &value
 		}
 	}
-	if payload.Usage == nil && payload.EventSeq > 0 {
+	if payload.EventSeq > 0 {
 		var body []byte
 		err := r.QueryRow(`SELECT payload FROM events WHERE seq = ? AND kind = ?`, payload.EventSeq, FinishKind).Scan(&body)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -209,6 +209,8 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 				return record.Envelope{}, false, Internalf("reading spend reason: %v", err)
 			}
 			payload.SpendNote = finish.SpendNote
+			payload.SettledAt = finish.SettledAt
+			payload.HarnessEndedAt = finish.HarnessEndedAt
 		}
 	}
 	DescribeSpend(&payload)

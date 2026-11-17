@@ -92,10 +92,10 @@ func pendingPause(ctx context.Context, s *store.Store, id string) (*pauseRequest
 	return p, err
 }
 
-// waitForPause leaves the harness alone until a durable pause request arrives.
-// At-gap adapters watch TILLR_PAUSE_REQUEST and exit at a tool-call gap. The
-// runner enforces the straggler bound; other adapters receive TERM immediately.
-func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, path string, after func(time.Duration) <-chan time.Time) (error, bool, bool, error) {
+// waitForPause observes natural exits, durable pause requests and settled idle
+// sessions. At-gap adapters watch TILLR_PAUSE_REQUEST and exit at a tool-call gap;
+// the runner enforces the straggler bound. Other adapters receive TERM immediately.
+func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, path string, after func(time.Duration) <-chan time.Time, monitor *settledMonitor) (error, bool, bool, error) {
 	if after == nil {
 		after = time.After
 	}
@@ -103,11 +103,49 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, 
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	var sample <-chan time.Time
 	for {
+		// Prefer a natural exit to a pending observation.
 		select {
 		case err := <-done:
 			return err, false, false, nil
+		default:
+		}
+		select {
+		case err := <-done:
+			return err, false, false, nil
+		case at := <-sample:
+			if monitor.sample(ctx, cmd.Process.Pid) {
+				select {
+				case err := <-done:
+					return err, false, false, nil
+				default:
+				}
+				if ctx.Err() == nil {
+					killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					if killErr != nil && killErr != syscall.ESRCH {
+						// A failed signal is not evidence of termination.
+						monitor.idle = 0
+						sample = monitor.after(SettledSampleInterval)
+						continue
+					}
+					waitErr := <-done
+					// The parent can exit naturally between the channel check and
+					// the signal. Preserve that exit rather than claiming we ended it.
+					if exitErr, ok := waitErr.(*exec.ExitError); ok && killErr == nil {
+						if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() == syscall.SIGKILL {
+							monitor.end = &settledEnd{monitor.settledAt, at.UTC().Format(time.RFC3339Nano)}
+						}
+					}
+					return waitErr, false, false, nil
+				}
+			}
+			sample = monitor.after(SettledSampleInterval)
 		case <-ticker.C:
+			if sample == nil && monitor.observe() == nil && monitor.reportReady(ctx) {
+				monitor.sample(ctx, cmd.Process.Pid) // Baseline, not an idle sample.
+				sample = monitor.after(SettledSampleInterval)
+			}
 			request, err := pendingPause(ctx, s, id)
 			if err != nil {
 				if ctx.Err() != nil {

@@ -22,6 +22,7 @@ const (
 // A normal exit includes nonzero exit codes; lease reclamation means the process
 // left no terminal record, not that the runner observed its time limit.
 const (
+	EndSettledIdle    = "settled-idle"
 	EndNormalExit     = "normal-exit"
 	EndRestart        = "restart"
 	EndTimeLimit      = "time-limit"
@@ -76,6 +77,10 @@ type Record struct {
 	// EndCause is optional on legacy input records. Readers explicitly report its
 	// absence rather than inferring it from the less specific state or exit code.
 	EndCause string `json:"end_cause,omitempty"`
+	// Only settled-idle carries these observations. The finish event preserves
+	// them, and status reads that same event rather than inferring timestamps.
+	SettledAt      string `json:"settled_at,omitempty"`
+	HarnessEndedAt string `json:"harness_ended_at,omitempty"`
 	// Resumed says this record is a segment of a run that was continued rather than a first
 	// execution. It is the terminal record's half of the run.resume event: the event says a
 	// resume happened, and this says how the resumed segment ended. It is not a column — the
@@ -222,9 +227,21 @@ func checkRecord(payload Record) error {
 		return Usagef("a run.record needs a backend: the adapter program that produced the run")
 	}
 	switch payload.EndCause {
-	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart:
+	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart, EndSettledIdle:
 	default:
 		return Usagef("%q is not a run end cause", payload.EndCause)
+	}
+	if payload.EndCause == EndSettledIdle {
+		if payload.State != StateExited {
+			return Usagef("settled-idle requires an exited run")
+		}
+		for _, field := range []struct{ name, value string }{{"settled_at", payload.SettledAt}, {"harness_ended_at", payload.HarnessEndedAt}} {
+			if _, err := time.Parse(time.RFC3339Nano, field.value); err != nil {
+				return Usagef("settled-idle needs a valid %s: %v", field.name, err)
+			}
+		}
+	} else if payload.SettledAt != "" || payload.HarnessEndedAt != "" {
+		return Usagef("settlement observations require settled-idle")
 	}
 	switch payload.State {
 	case StateExited:
