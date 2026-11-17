@@ -1006,9 +1006,33 @@ Five points settle it:
 - **c3:** A backend row may set `reserve`, a fraction of the window the loop leaves unused. With `reserve = 0.2` the loop sends no new work to that backend once a window is 80 percent used, so the owner's own sessions keep room. The default is 0.
 - **c4:** The waiting face shows each backend with a quota: the fraction used, the reserve, and when it reopens.
 
-### Split a seat's work between backends by a simple share
+### Add backend shares to distribute seat work
 
-<!-- tillr: item id="item-policy-seat-shares" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" -->
+A seat is a role in the workflow, such as implementation or review, and it can use several
+execution services, called backends. Always choosing the first available backend concentrates
+that role's work on one service. The owner needs a way to spread work evenly or give one
+service a larger share, while keeping the existing ordered choice for policies that do not
+request a split. When a service runs out of quota, the others should take its share until it
+reopens. Restarting the loop or running two loops against the same store must not erase the
+history used to keep those proportions.
+
+**Outcomes**
+
+- Distribute a seat's work by chosen shares or selection mode without changing existing policies.
+- Keep dispatch history across loop restarts and share work among available backends.
+- Reject invalid shares and record each backend choice so the owner can inspect what ran.
+
+**Agent Details**
+
+- **Where:** [Drain planner and model policy](../../tools/tillr-drain/),
+  [delivery pack](../../yolo-packs/tillr/), and [documentation](../).
+- **Verify:** Preserve ordered selection for lists without shares; check equal and 3:1 shares,
+  persisted dispatch counts across two loops and a restart, quota/reserve redistribution,
+  ordered refusal fail-over, and seat-named validation errors. The count fixture dispatches
+  40 items; selection fixtures check a three-backend round-robin and 300 equal-weight random
+  draws with 120–180 dispatches per backend. Check that each dispatch records its draw.
+
+<!-- tillr: item id="item-policy-seat-shares" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A seat's list entry may be a backend name, as today, or a backend with a `share`. With `[{"backend": "claude", "share": 1}, {"backend": "pi", "share": 1}]` the seat's dispatches alternate between the two; shares of 3 and 1 send three of every four to the first. A list with no shares behaves exactly as today: first backend that is open, in order.
 - **c2:** The split is by count of dispatches recorded in the store, so two loops on one store, or one loop restarted, keep the same proportion. A test dispatches 40 fixture items and asserts the counts.
