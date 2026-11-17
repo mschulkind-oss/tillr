@@ -2182,16 +2182,7 @@ markers, a limit on the provider's side, or something early in the context that 
 invalidates everything after it. This item finds the cause, and fixes it when the fix is small and
 lies in how tillr runs pi. It is the second-largest saving that the model-tiering design measured.
 
-<!-- tillr: item id="item-pt-cache-rewrites" paths="docs/,tools/tillr-run/,yolo-packs/tillr/" blocked_by="" prose="2" -->
 
-- **c1:** A finding in `docs/research/` names the cause of each pattern, shown on at least three run logs per pattern, with the turn numbers and the token counts that show it.
-- **c2:** The finding prices the repeated writes for the Sol build seat and for the Fable design seat separately, from the run logs, as command, result and date.
-- **c3:** The finding reproduces the first pattern with the smallest pi session outside the loop that shows it, or says why it cannot be reproduced, and records that session's model, turns, tokens and cost.
-- **c4:** When the fix lies in the pi adapter or in how tillr starts pi, the item makes it. A test asserts the changed arguments or environment, and one measured run after the fix shows the pattern gone, as command, result and date.
-- **c5:** When the fix belongs in pi itself, in its patch series, on the provider's side or in a yolo pack's settings, the item does not make it. The finding states the change, where it belongs and its expected saving.
-- **c6:** The finding says whether the one-hour cache retention that every pi session runs with is still worth it for runs that are never resumed, given that resumed designer sessions depend on it, and the item changes nothing about that retention.
-- **c7:** Without a fix, nothing outside `docs/` changes. With one, `tools/tillr-run`'s tests pass, and a run that never reaches the pattern gets the same arguments and environment as before, which a test asserts.
-- **c8:** The item writes nothing to the store, and no measurement in it is a test that asserts elapsed time.
 
 **Agent details:**
 
