@@ -47,6 +47,12 @@ says so in its design and is the owner's to overturn.
 5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
+[What tillr will change for AutoQA](../design/tillr-separable-parts.md#open-questions) carries
+eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
+[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
+AutoQA's requests with that proposal, and which of its small changes are filed before the drain
+proof.
+
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
 it carried is a row of its ledger, and on 2026-11-16 it was cut into
 [thirteen build items](../design/tillr-judge-and-lifecycle.md#8-build-order) that live in the
