@@ -423,6 +423,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	if item.ProseRewriteOriginal(spec.ItemID) != "" {
+		task, err := s.proseRewriteTask(ctx, spec.ItemID)
+		if err != nil {
+			return err
+		}
+		for i := range values {
+			if values[i].placeholder == "TASK" {
+				values[i].text = task
+			}
+		}
+	}
 	if item.IsCommentItem(spec.ItemID) {
 		task, err := s.commentTask(ctx, spec, durableDir)
 		if err != nil {

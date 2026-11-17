@@ -22,9 +22,13 @@ type Settings struct {
 	Roll     Roll
 	Push     Push
 	Comments *Comments
+	Prose    Prose
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
 }
+
+// Prose enables automatic rewrite items; its zero value leaves findings advisory.
+type Prose struct{ Rewrite bool }
 
 // Comments configures automatic review intake. Seconds and hours are wall-clock units;
 // CompactOverTokens counts conversation tokens, and MaxRunning counts desk runs.
@@ -71,8 +75,8 @@ func Read(root string) (Settings, error) {
 	}
 	refuse := func(key, expected string) error { return fmt.Errorf("%s: %s: expected %s", path, key, expected) }
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments or workflows)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows or prose)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -160,6 +164,12 @@ func Read(root string) (Settings, error) {
 					return Settings{}, refuse(full, "a positive integer number of seconds")
 				}
 				s.Roll.PauseTimeoutSeconds = seconds
+			case "prose.rewrite":
+				flag, ok := value.(bool)
+				if !ok {
+					return Settings{}, refuse(full, "a boolean")
+				}
+				s.Prose.Rewrite = flag
 			case "push.after_landing":
 				flag, ok := value.(bool)
 				if !ok {
@@ -168,6 +178,9 @@ func Read(root string) (Settings, error) {
 				s.Push.AfterLanding = flag
 			default:
 				expected := "a known push key (after_landing, remote or ref)"
+				if table == "prose" {
+					expected = "a known prose key (rewrite)"
+				}
 				if table == "workflows" {
 					expected = "a known workflows key (default)"
 				}
@@ -233,6 +246,7 @@ func (s Settings) StartupLine() string {
 		ref = strconv.Quote(s.Push.Ref)
 	}
 	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.after_landing=%t push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.AfterLanding, remote, ref)
+	line += fmt.Sprintf(" prose.rewrite=%t", s.Prose.Rewrite)
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
 		line += fmt.Sprintf(" comments.vantage_url=%s comments.repo=%s comments.paths=%s comments.quiet_seconds=%d comments.poll_seconds=%d comments.max_running=%d comments.compact_over_tokens=%d comments.refresh_hours=%d", strconv.Quote(c.VantageURL), strconv.Quote(c.Repo), paths, c.QuietSeconds, c.PollSeconds, c.MaxRunning, c.CompactOverTokens, c.RefreshHours)

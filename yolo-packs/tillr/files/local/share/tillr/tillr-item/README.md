@@ -155,6 +155,28 @@ The following rules describe Git-landing, including its established refusal name
 - **A mail delivery is acknowledged once, by a named session.** A second acknowledgement is
   a refusal and not a second row.
 
+## Automatic prose rewrites
+
+Sync keeps prose findings advisory by default. When the shared settings reader finds
+`prose.rewrite = true` in the repository settings, each non-landed item with a
+`prose-unmarked` or `prose-shape` finding gets one stored `rewrite-<item id>` item.
+A repeated sync leaves that rewrite's identity, state and criteria alone. The rewrite
+uses the build seat, fences only the source document and carries four fixed criteria:
+rewrite its title and section prose to the guide; preserve the protected directive
+fields; preserve every criterion's meaning and number; and pass the prose check.
+These generated items are not missing document declarations in sync's residue count.
+
+```toml
+# .tillr.toml; absent file or key means false
+[prose]
+rewrite = true
+```
+
+The common reader refuses non-boolean values and unknown keys in this table. Sync's
+dry run reports proposed rewrites without writing them. The
+[drain's rewrite lifecycle](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#prose-rewrites-before-build)
+holds the original and checks the candidate before the gate.
+
 ## Standalone invocation
 
 ```sh

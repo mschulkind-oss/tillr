@@ -534,7 +534,6 @@ goes to the cheap seat with the guide in its brief, and the original waits until
 
 ### File a rewrite for an item that fails the prose check, ahead of the item itself
 
-<!-- tillr: item id="item-prose-rewrite-before-build" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,.tillr.toml,docs/" blocked_by="" -->
 
 **Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c5
 needs a reader the fence left out. The settings file is read by `tools/tillr/settings/`, which
@@ -546,11 +545,6 @@ other tables, and adds no second reader of the settings file inside the sync, th
 view. This repository has no settings file yet, so the work creates `.tillr.toml` at the
 repository root holding only that table and key. The criteria below are unchanged.
 
-- **c1:** When sync records a `prose-unmarked` or `prose-shape` finding for an item that is not landed, it creates one rewrite item for it, `rewrite-<item id>`, on the cheap seat, fenced to the document that holds the block, ranked ahead of every item that is not itself a rewrite or a trunk fixer. A second sync creates no second rewrite.
-- **c2:** The original item is held with the reason `awaits-rewrite` and its mover is the rewrite item, until the rewrite lands or the block passes the check on its own. The waiting face shows both.
-- **c3:** The rewrite's brief carries the whole text of the prose guide and the findings, and its criteria are fixed: the title and the section's prose are rewritten to the guide; the directive's `id`, `paths`, `blocked_by` and `seat` are unchanged; no criterion's meaning changes, and a criterion whose wording changes keeps its number; the `prose` mark is added.
-- **c4:** The loop refuses a rewrite candidate that changed an `id`, `paths`, `blocked_by` or `seat`, or that added or removed a criterion, before the gate, naming what changed.
-- **c5:** Rewrite items are created only when the repository's settings file sets `prose.rewrite = true`. The default is false, as every default in that file is, and this repository's file sets it. A repository without it gets the findings and no rewrite items.
 
 ## Filed 2026-11-15: a design on the roadmap always has an item in the queue
 
