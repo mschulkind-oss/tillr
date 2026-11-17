@@ -46,6 +46,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 from shutil import which
 
@@ -110,7 +112,8 @@ def make_root(base: Path, name: str, *, dist: bool = True, modules: str | None =
 
 
 def make_path(base: Path, state: Path, *, go: bool = True, node: bool = True, git: bool = True,
-              hivemind: bool = False, platform: str = "linux-x64-gnu", npm_fails: bool = False) -> Path:
+              hivemind: bool = False, platform: str = "linux-x64-gnu", npm_fails: bool = False,
+              slow_ui: bool = False) -> Path:
     """A PATH of a few real coreutils and stub toolchain programs, each recording its call."""
     bindir = base / "bin"
     bindir.mkdir(parents=True)
@@ -147,11 +150,17 @@ PROG
     if node:
         stubs["node"] = f"#!/bin/sh\necho {platform}\n"
         fail = "exit 1" if npm_fails else ":"
+        record_ui = "printf '%s\\n' \"$@\""
+        if slow_ui:
+            # Split the write so startup can observe an incomplete argument file.
+            record_ui = "{ printf '%s\\n' \"$1\"; sleep 0.5; shift; printf '%s\\n' \"$@\"; }"
         stubs["npm"] = f"""#!/bin/sh
 echo "$*" >> {state}/npm.calls
 case " $* " in
     *" ci "*) echo "npm error stub" >&2; {fail} ;;
-    *" run dev "*) printf '%s\\n' "$@" > {state}/ui.argv; while :; do sleep 0.2; done ;;
+    # The API waits for ui.argv before exiting. Publish only the complete file,
+    # or hivemind can stop this writer before all arguments have been recorded.
+    *" run dev "*) {record_ui} > {state}/ui.argv.writing; mv {state}/ui.argv.writing {state}/ui.argv; while :; do sleep 0.2; done ;;
 esac
 exit 0
 """
@@ -309,11 +318,12 @@ def case_a_jail_binds_only_a_published_port(base: Path) -> None:
                   and "yolo stop" in done.stderr, done.stderr)
 
 
-def case_dev_hands_the_planner_and_a_strict_port_to_its_children(base: Path) -> None:
+def case_dev_hands_the_planner_and_a_strict_port_to_its_children(base: Path,
+                                                               *, slow_ui: bool = False) -> None:
     state = base / "state-dev"
     state.mkdir()
     root = make_root(base, "root-dev")
-    bindir = make_path(base / "path-dev", state, hivemind=True)
+    bindir = make_path(base / "path-dev", state, hivemind=True, slow_ui=slow_ui)
     port = free_port_pair()
     try:
         done = hermetic_run(root, "observatory-dev", port, bindir, base / "durable", base,
@@ -333,6 +343,11 @@ def case_dev_hands_the_planner_and_a_strict_port_to_its_children(base: Path) -> 
           and flag(ui, "--port") == str(port) and flag(ui, "--host") == "127.0.0.1", f"{ui}\n{err}")
     calls = (state / "go.calls").read_text() if (state / "go.calls").exists() else ""
     check("dev: the API is built without the embedded front end", "-tags" not in calls, calls)
+
+
+def case_dev_waits_for_complete_ui_arguments(base: Path) -> None:
+    """A partial UI argument write must not release the API's startup barrier."""
+    case_dev_hands_the_planner_and_a_strict_port_to_its_children(base, slow_ui=True)
 
 
 def case_the_perf_log_lives_under_the_checkout_it_serves(base: Path) -> None:
@@ -381,6 +396,7 @@ def hermetic_cases() -> None:
             case_a_failed_install_is_refused_before_any_build,
             case_a_jail_binds_only_a_published_port,
             case_dev_hands_the_planner_and_a_strict_port_to_its_children,
+            case_dev_waits_for_complete_ui_arguments,
             case_the_perf_log_lives_under_the_checkout_it_serves,
         ), start=1):
             directory = base / f"h{index}"
@@ -631,8 +647,36 @@ class Run:
             pass
 
 
-def wait_for_both(api_pid: Path, ui_pid: Path, timeout: float = 90.0) -> bool:
-    return wait_for(lambda: api_pid.exists() and ui_pid.exists(), timeout)
+def wait_for_both(api_pid: Path, ui_pid: Path, timeout: float = 90.0,
+                  *, process: subprocess.Popen | None = None) -> bool:
+    """Wait for startup while it is possible, not after the recipe has exited.
+
+    Keep the full allowance for a live recipe; a terminal process is an observed
+    startup failure, not a reason to spend the rest of that allowance sleeping.
+    """
+    ready = lambda: api_pid.exists() and ui_pid.exists()
+    wait_for(lambda: ready() or (process is not None and process.poll() is not None), timeout)
+    return ready()
+
+
+class StartupWaitTests(unittest.TestCase):
+    def test_exited_recipe_does_not_spend_the_startup_allowance(self):
+        process = Mock()
+        process.poll.return_value = 1
+        with tempfile.TemporaryDirectory(prefix="observatory-wait.") as tmp:
+            state = Path(tmp)
+            with patch.object(time, "sleep", side_effect=AssertionError("slept after recipe exit")):
+                self.assertFalse(wait_for_both(state / "api.pid", state / "ui.pid", process=process))
+
+    def test_live_recipe_keeps_waiting_for_both_children(self):
+        process = Mock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory(prefix="observatory-wait.") as tmp:
+            state = Path(tmp)
+            (state / "api.pid").write_text("123\n")
+            with patch.object(time, "sleep", side_effect=lambda _: (state / "ui.pid").write_text("456\n")) as sleep:
+                self.assertTrue(wait_for_both(state / "api.pid", state / "ui.pid", process=process))
+                sleep.assert_called_once()
 
 
 def case_both_come_up_and_ctrl_c_clears_them(bindir: Path, state: Path, durable: Path) -> None:
@@ -640,8 +684,12 @@ def case_both_come_up_and_ctrl_c_clears_them(bindir: Path, state: Path, durable:
     run = Run(port, recipe_env(bindir, durable))
     api_pid, ui_pid = state / "api.pid", state / "ui.pid"
     try:
-        check("both processes start", wait_for_both(api_pid, ui_pid),
-              "the recipe never started both stubs; stdout/stderr above")
+        up = wait_for_both(api_pid, ui_pid, process=run.proc)
+        check("both processes start", up, "the recipe never started both stubs")
+        if not up:
+            code, out, err = run.finish()
+            print(f"startup failed: exit={code}\n{out}\n{err}", file=sys.stderr)
+            return
         api, ui = read_pid(api_pid), read_pid(ui_pid)
         check("both are alive while the recipe runs", alive(api) and alive(ui),
               f"api={api} alive={alive(api)}, ui={ui} alive={alive(ui)}")
@@ -663,7 +711,7 @@ def case_a_dead_api_takes_the_ui(bindir: Path, state: Path, durable: Path) -> No
     run = Run(port, recipe_env(bindir, durable))
     api_pid, ui_pid = state / "api.pid", state / "ui.pid"
     try:
-        up = wait_for_both(api_pid, ui_pid)
+        up = wait_for_both(api_pid, ui_pid, process=run.proc)
         check("both processes start (api dies on its own)", up, "the recipe never started both stubs")
         if not up:
             return
@@ -685,7 +733,7 @@ def case_a_dead_ui_takes_the_api(bindir: Path, state: Path, durable: Path) -> No
     run = Run(port, recipe_env(bindir, durable))
     api_pid, ui_pid = state / "api.pid", state / "ui.pid"
     try:
-        up = wait_for_both(api_pid, ui_pid)
+        up = wait_for_both(api_pid, ui_pid, process=run.proc)
         check("both processes start (ui dies on its own)", up, "the recipe never started both stubs")
         if not up:
             return
@@ -738,7 +786,7 @@ def case_gate_cancellation_cleans_detached_recipe(bindir: Path, state: Path, dur
     try:
         check("the cancellation probe stays in the suite's process group",
               os.getpgid(probe.pid) == os.getpgrp())
-        up = wait_for_both(state / "api.pid", state / "ui.pid", timeout=10)
+        up = wait_for_both(state / "api.pid", state / "ui.pid", timeout=10, process=probe)
         check("the cancellation probe starts both processes", up)
         recipe_pid = read_pid(state / "recipe.pid")
         api, ui = read_pid(state / "api.pid"), read_pid(state / "ui.pid")
@@ -766,6 +814,9 @@ def main() -> int:
         print("SKIP: just and hivemind are both required; this suite tests their wiring",
               file=sys.stderr)
         return 2
+    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(StartupWaitTests))
+    if not result.wasSuccessful():
+        return 1
     hermetic_cases()
     with tempfile.TemporaryDirectory(prefix="observatory-dev.") as tmp:
         base = Path(tmp)
