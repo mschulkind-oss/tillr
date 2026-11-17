@@ -407,6 +407,23 @@ A change to the gate's own runner can break the gate for every lane, so the runn
 
 
 
+## Filed 2026-11-17: stall detection where the kernel counter is refused
+
+### Watch for stalled checks without the kernel counter
+
+The gate ends a check only when it stalls, and it judges a stall by whether the check's CPU time or output grew during a sample. It reads that CPU time from a kernel task-clock counter. In a rootless Podman jail, where `/proc/sys/kernel/perf_event_paranoid` is 2, the kernel refuses the counter. The gate then prints `watchdog unavailable: kernel task-clock counter: permission denied` and runs every check with no stall detection at all. On 2026-11-17 this showed up in the gate logs of the drain's own runs in this jail, for example in the `00-gate_python3.log` of the run for `item-sync-hold-unshared-items-a4`, and also in the gate program's own checks. Gates still passed, so nobody saw that the drain, which runs here every day, had lost the protection the owner asked for: watch for stalls, but never let a loaded machine fail a check that would otherwise finish. The design records an unavailable counter as "disabled explicitly" and rejects guessing from partial process snapshots, so a fallback has to count CPU from a source that includes exited children, such as the check's control group, and has to say which source it used.
+
+<!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
+
+- **c1:** When the kernel counter is refused, the gate reads the check's CPU time from unprivileged process accounting that still counts exited children, and stall detection stays on.
+- **c2:** The check log and the verdict name the source that supplied CPU time, so a reader can tell the kernel counter from the fallback.
+- **c3:** A check that prints nothing and burns no CPU for the whole stall window is reported as `stalled` in an environment that refuses the counter.
+- **c4:** A check that keeps using CPU, or keeps writing output, is never stopped, including one whose work happens in short-lived child processes.
+- **c5:** When neither source can be read, `watchdog unavailable` is still printed and detection is off, as the design states today.
+- **c6:** `tools/fork-check.py` applies the same fallback and the same source line to the commands it runs.
+- **c7:** Regression tests force the counter unavailable for both the Go gate and the Python checker, and cover c3, c4 and c5.
+- **c8:** The gate README and the stall section of the gate design say which sources exist and which one wins.
+
 ## Filed 2026-11-15: a gate test that fails only under load
 
 On 2026-11-15, with nine lanes running, `go test ./...` in `tools/tillr-gate` failed once in
