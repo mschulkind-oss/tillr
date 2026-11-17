@@ -817,7 +817,7 @@ After a landing the trunk holds changes that only the heavy checks have judged, 
      blocked_by=""
 -->
 
-- **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands.
+- **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands. The criterion is judged on the ordinary test build, `go -C tools/tillr-drain test ./...`, which is the build the gate runs.
 - **c2:** The test asserts from the recorded events that the number of gates in flight at once reached the lane count, and that the land lock was held for one landing transaction at a time and for nothing else: each hold begins after the gate verdict for its candidate was recorded, contains that landing's squash, trunk move and receipt and no other landing's, and no gate for that candidate starts or finishes inside it. It asserts no duration.
 - **c3:** The loop's summary prints the longest and the median land-lock hold, each measured from the lock's acquisition to its release, and the number of landings per heavy run. The test asserts the fields are present.
 - **c4:** No lane's gate reads or writes a file another lane's gate writes, other than the result store. The test asserts it from the declared `writes` of every check and from the files the run created.
@@ -841,6 +841,52 @@ slice that is a measurement; and keeping the first wording with a test that trea
 as outside the hold, which asserts something the tree does not do. Whether the hold should be
 shorter is a question for the numbers c3 prints, not for this slice. Settled by this design's
 seat on 2026-11-17; the owner may overturn it.
+
+**The store's lock wait under the race detector is a finding this item reports, and the repair
+is not this item's.** A second run stopped on 2026-11-17 with its work complete and uncommitted.
+The ordinary build passed, and the twenty-lane case under `go test -race` ended with
+`store: beginning the migration: database is locked (5) (SQLITE_BUSY)`. The store is
+`tools/tillr/store/`, outside this item's paths. Measured that day on that run's tree, with the
+store's trace (`TILLR_SQLITE_TRACE=1`) read from the test's output:
+
+| Twenty-lane case | Runs | Result | Longest wait for the store's write lock at an open | Median hold of that lock by an open |
+| :--- | :--- | :--- | :--- | :--- |
+| Ordinary build | 4 | 4 passed, 100 landings each | 2.03 s (one run traced) | 1.2 ms |
+| `-race` | 4 | 4 failed, none reaching 100 landings | 5.29 s, the failed open (one run traced) | 34 ms |
+
+The cause is in `Open` in `tools/tillr/store/open.go`: an open that may create the store runs the
+migration, and the migration begins with `BEGIN IMMEDIATE`, so every such open takes the store's
+write lock, whether or not the schema is already current. In the traced ordinary run the loop's
+own process did that 1,956 times for 100 landings. The race detector makes the test process
+slower, each hold became about 28 times longer, and one open waited out SQLite's 5,000 ms busy
+timeout. The ordinary build's longest wait was already two fifths of that timeout. This is the
+kind of fact the scale test was written to find, and it is a fact about the store rather than
+about the gate: c4 already names the store as the one thing the lanes share.
+
+So the item is finished as follows.
+
+- The criteria are judged on the ordinary build, as c1 now says. No gate step runs the race
+  detector: `rg -n -e '-race' .justfile tools/gate` returned nothing on 2026-11-17.
+- The scale test skips under the race detector, and the skip's message names this finding and the
+  store's open as the cause, so `go test -race ./...` in the module is not red for a reason
+  outside the module and nobody reads the skip as a pass. The skip is removed by the store
+  repair, which then runs the twenty-lane case under `-race` as its own evidence.
+- The item's report states the table above, or its own re-measurement of it.
+- If the ordinary build fails the same way, that is this same finding: the run stops and reports
+  it, and does not change the test to get past it.
+
+The repair belongs to an item whose paths include `tools/tillr/store/`, and none is filed yet;
+this amendment may edit only this block. Its shape is for that item to design. The direction this
+design already states is "keeping work out from under the store's locks", so the open of a store
+whose schema is current should not take the write lock at all.
+**Rejected:** raising the busy timeout, which
+[the contention repair plan](../recovery/sqlite-contention/plan.md#constraints) refused and which
+lengthens the wait without shortening the queue; retrying a busy open in the loop or in the test,
+which hides the number the test exists to show; widening this item's paths to the store, which
+turns a measurement into a change to the one file every program shares; lowering the lane count
+under the race detector, which keeps a test that proves less than its name; and leaving the test
+red under `-race` with no skip, which makes the next reader rediscover this. Settled by this
+design's seat on 2026-11-17; the owner may overturn it.
 
 ### Prevent a gate check from being stopped while it makes progress
 
