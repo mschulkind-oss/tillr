@@ -356,7 +356,7 @@ func resumeRequest(cfg ResumeConfig, row resumeRun, spec ResumeSpec) (*run.Reque
 // boundaryFor takes one side of the resume's bracket: the lane worktree the segment owns, and
 // the sibling lanes the loop holds (snapshot's own rule, applied to a resume's target set).
 func boundaryFor(ctx context.Context, cfg ResumeConfig, laneID string, targets []string) (*Boundary, error) {
-	spec := BoundarySpec{Repo: cfg.Root, Targets: targets}
+	spec := BoundarySpec{Repo: cfg.Root, Targets: targets, LaneRoot: cfg.LaneRoot}
 	for _, lane := range cfg.Lanes {
 		// A lane is watched at its worktree, which is the directory a run writes in:
 		// the lane directory beside it holds the brief and the log, and is not a

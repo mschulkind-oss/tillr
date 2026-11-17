@@ -48,6 +48,12 @@ type BoundarySpec struct {
 	// A worktree a sibling's run registers or removes inside its own lane directory is
 	// the sibling's doing, and the sibling's bracket is the one that answers for it.
 	SiblingDirs []string
+	// LaneRoot is the loop's lane root. Under it the loop itself creates and removes
+	// worktrees as part of its own designed work — the rolling tier's detached checkout,
+	// the trunk-already-red replay's, and the review-comment desk lanes — and a run whose
+	// bracket straddles one of those is not convicted of it (loopPlaces.worktree). Empty names no
+	// lane root, and then nothing is excused by it.
+	LaneRoot string
 }
 
 // StoreState is the store file's identity in one snapshot: what a file stat can see of
@@ -66,6 +72,10 @@ type Worktree struct {
 	Head   string        `json:"head"`
 	Branch string        `json:"branch,omitempty"`
 	Status []StatusEntry `json:"status,omitempty"`
+	// Prunable is git's own mark on a registration whose directory is already gone. Its
+	// pruning during a bracket is not a run's doing: the directory was gone before the
+	// bracket opened.
+	Prunable bool `json:"prunable,omitempty"`
 }
 
 // StatusEntry is one `git status --porcelain` entry: the two-letter code, the path, and
@@ -89,10 +99,15 @@ type Boundary struct {
 	PatchRefs []string `json:"patch_refs,omitempty"`
 	// SiblingDirs are the other lanes' directories. CompareRun does not convict this
 	// bracket's run of a worktree that appeared or went away inside one of them.
-	SiblingDirs []string          `json:"sibling_dirs,omitempty"`
-	Store       *StoreState       `json:"store,omitempty"`
-	Refs        map[string]string `json:"refs"`
-	Worktrees   []Worktree        `json:"worktrees"`
+	SiblingDirs []string `json:"sibling_dirs,omitempty"`
+	// LaneRoot is the loop's lane root, canonical, and LaneScope is the component its lane
+	// branches carry (LaneBranch). Together they name the places only the loop writes: see
+	// loopPlaces.
+	LaneRoot  string            `json:"lane_root,omitempty"`
+	LaneScope string            `json:"lane_scope,omitempty"`
+	Store     *StoreState       `json:"store,omitempty"`
+	Refs      map[string]string `json:"refs"`
+	Worktrees []Worktree        `json:"worktrees"`
 }
 
 // Violation is one difference between a before and an after snapshot: state outside the
@@ -195,6 +210,14 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 	}
 	sort.Strings(siblingDirs)
 	siblingDirs = dedupe(siblingDirs)
+	// A lane root that is not there yet holds no worktree to excuse, so it names nothing
+	// rather than refusing the snapshot, exactly as a sibling directory does.
+	laneRoot, laneScope := "", ""
+	if spec.LaneRoot != "" {
+		if path, err := canonicalDir(spec.LaneRoot); err == nil {
+			laneRoot, laneScope = path, laneRootScope(spec.LaneRoot)
+		}
+	}
 
 	refs, err := listRefs(ctx, repo)
 	if err != nil {
@@ -226,6 +249,8 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 		Lanes:       lanes,
 		PatchRefs:   patchRefs,
 		SiblingDirs: siblingDirs,
+		LaneRoot:    laneRoot,
+		LaneScope:   laneScope,
 		Refs:        refs,
 		Worktrees:   worktrees,
 	}
@@ -287,6 +312,12 @@ func sameSpan(before, after *Boundary) error {
 	}
 	if strings.Join(before.SiblingDirs, "\x00") != strings.Join(after.SiblingDirs, "\x00") {
 		return Usagef("the snapshots name different sibling lane directories: %v before, %v after", before.SiblingDirs, after.SiblingDirs)
+	}
+	// A snapshot recorded before the lane root was named (an older loop's dispatch bracket,
+	// which a resume or a settle closes) names none; the other side's is then the bracket's.
+	// Two different lane roots are not one bracket.
+	if before.LaneRoot != "" && after.LaneRoot != "" && (before.LaneRoot != after.LaneRoot || before.LaneScope != after.LaneScope) {
+		return Usagef("the snapshots name different lane roots: %q before, %q after", before.LaneRoot, after.LaneRoot)
 	}
 	if (before.Store == nil) != (after.Store == nil) || (before.Store != nil && before.Store.Path != after.Store.Path) {
 		return Usagef("the snapshots name different stores: the store stat of one bracket must be the stat of one file")
@@ -354,9 +385,54 @@ func runRefExcused(ref string, before *Boundary) bool {
 // Only a delta in an unassigned tillr ref is a ref conviction.
 func compareRunRefs(before, after *Boundary) []Violation {
 	excused := excusedRefs(before, after)
+	landed := landedDuring(before, after)
+	places := loopPlacesOf(before, after)
 	return refViolations(before, after, func(name string) bool {
-		return excused[name] || runRefExcused(name, before)
+		return excused[name] || runRefExcused(name, before) || places.deskBranch(name) || landedPatchMove(name, after, landed)
 	})
+}
+
+// loopPlaces is the lane root a bracket names and its lane-branch scope: the places only the
+// loop itself writes (worktree, deskBranch).
+type loopPlaces struct {
+	root, scope string
+	targets     []string
+}
+
+// loopPlacesOf answers the bracket's lane root: either side's, since sameSpan admits a
+// side that names none only beside one that does.
+func loopPlacesOf(before, after *Boundary) loopPlaces {
+	places := loopPlaces{root: before.LaneRoot, scope: before.LaneScope, targets: before.Targets}
+	if places.root == "" {
+		places.root, places.scope = after.LaneRoot, after.LaneScope
+	}
+	return places
+}
+
+// landedDuring answers the commits the lander marked during this bracket: every
+// refs/tillr/landed/<run> that appeared or moved between the two snapshots. The lander
+// writes that marker at the squash commit before it moves the ref it lands onto, so the
+// marker is its own record of exactly which commit a landing published.
+func landedDuring(before, after *Boundary) map[string]bool {
+	landed := map[string]bool{}
+	for ref, sha := range after.Refs {
+		if strings.HasPrefix(ref, "refs/tillr/landed/") && before.Refs[ref] != sha {
+			landed[sha] = true
+		}
+	}
+	return landed
+}
+
+// landedPatchMove answers whether a patch branch's move is a sibling's fork-series landing:
+// refs/heads/patch/<fork> now points at a commit the lander marked during this bracket. A
+// patch branch moved to anything else is not excused here — a run's own patch branch is
+// excused by PatchRefs, and any other move is an escape.
+func landedPatchMove(ref string, after *Boundary, landed map[string]bool) bool {
+	if !strings.HasPrefix(ref, "refs/heads/patch/") {
+		return false
+	}
+	sha, ok := after.Refs[ref]
+	return ok && landed[sha]
 }
 
 // compareRunWorktrees answers a worktree that appeared or went away and a main
@@ -365,12 +441,17 @@ func compareRunRefs(before, after *Boundary) []Violation {
 func compareRunWorktrees(before, after *Boundary) []Violation {
 	violations := make([]Violation, 0)
 	main := mainWorktreePath(after)
+	places := loopPlacesOf(before, after)
 	for _, wt := range after.Worktrees {
 		was := worktreeFor(before.Worktrees, wt.Path)
 		if was == nil {
 			if insideSiblingDir(after.SiblingDirs, wt.Path) {
 				// A sibling's run made it inside the sibling's own lane directory. The
 				// sibling's bracket convicts it if it is still there when that run ends.
+				continue
+			}
+			if places.worktree(wt) {
+				// The loop made it, at a place and in a shape only the loop uses.
 				continue
 			}
 			violations = append(violations, Violation{Kind: "worktree", Where: wt.Path, Detail: "appeared"})
@@ -393,13 +474,61 @@ func compareRunWorktrees(before, after *Boundary) []Violation {
 	}
 	for _, was := range before.Worktrees {
 		if worktreeFor(after.Worktrees, was.Path) == nil {
-			if insideSiblingDir(after.SiblingDirs, was.Path) {
+			if insideSiblingDir(after.SiblingDirs, was.Path) || places.worktree(was) || was.Prunable {
 				continue
 			}
 			violations = append(violations, Violation{Kind: "worktree", Where: was.Path, Detail: "went away"})
 		}
 	}
 	return violations
+}
+
+// worktree answers whether a worktree is one the loop itself creates and removes as part
+// of its own designed work, which no run's bracket answers for. Each is a reserved place
+// under the lane root AND a reserved shape, and nothing else matches:
+//
+//   - <lane root>/.rolling/worktree, detached: the rolling tier's checkout of the tip
+//     (ProcessSteps.rollingWorktree);
+//   - <lane root>/.replay/<sha>, detached: the trunk-already-red replay's checkout of one
+//     revision (ProcessSteps.replayWorktree);
+//   - <lane root>/desk-<doc>/worktree, on that desk's own lane branch: a review-comment
+//     desk lane, which staging creates and its reset removes (commentDesk, resetLane).
+//
+// The rule is a reserved location rather than a recorded fact because the location is
+// already exact: the loop writes nowhere else under these names, and a run is confined to
+// its own lane worktree, where its fence and the bracket's other comparisons still read
+// every write. What the excuse cannot hide is bounded by the shape: a worker that registers
+// a detached checkout at one of these exact paths gains a checkout of objects with no ref,
+// at a path the loop's next rolling run or replay removes before it adds its own, and a
+// branch at a desk path is excused only when it is that desk's lane branch.
+func (p loopPlaces) worktree(wt Worktree) bool {
+	if p.root == "" || isTarget(p.targets, wt.Path) {
+		// A run's own worktree is never excused: its going away is the run's to answer for.
+		return false
+	}
+	root := strings.TrimSuffix(p.root, "/")
+	dir, base := filepath.Dir(wt.Path), filepath.Base(wt.Path)
+	switch {
+	case wt.Path == filepath.Join(root, ".rolling", "worktree"):
+		return wt.Branch == ""
+	case dir == filepath.Join(root, ".replay"):
+		return wt.Branch == ""
+	case base == WorktreeDir && filepath.Dir(dir) == root && strings.HasPrefix(filepath.Base(dir), "desk-"):
+		return p.scope != "" && wt.Branch == "refs/heads/tillr/"+p.scope+"/"+filepath.Base(dir)
+	}
+	return false
+}
+
+// deskBranch answers whether ref is the lane branch of a review-comment desk lane in
+// this bracket's lane root. The desk's first staging creates it and every later staging
+// re-points it; neither is registered as a sibling lane, so without this a desk staged
+// during a run convicted that run of a ref it never touched.
+func (p loopPlaces) deskBranch(ref string) bool {
+	if p.scope == "" {
+		return false
+	}
+	lane, ok := strings.CutPrefix(ref, "refs/heads/tillr/"+p.scope+"/")
+	return ok && strings.HasPrefix(lane, "desk-") && !strings.Contains(lane, "/")
 }
 
 // insideSiblingDir answers whether a worktree path lies strictly inside one of the sibling
@@ -636,7 +765,9 @@ func listWorktrees(ctx context.Context, repo string) ([]Worktree, error) {
 			current.Head = rest
 		case "branch":
 			current.Branch = rest
-		case "detached", "bare", "locked", "prunable":
+		case "prunable":
+			current.Prunable = true
+		case "detached", "bare", "locked":
 			// Nothing in the boundary turns on these, and a bare or locked worktree is
 			// still a worktree this snapshot names.
 		}
