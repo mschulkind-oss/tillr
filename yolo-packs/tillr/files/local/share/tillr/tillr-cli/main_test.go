@@ -13,18 +13,30 @@ import (
 var wrapperBin string
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "tillr-cli-test-")
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
+	root := os.Getenv("YOLO_DURABLE_DIR")
+	if root == "" {
+		root = filepath.Join("..", "..", ".yolo", "durable")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 1
+	}
+	dir, err := os.MkdirTemp(root, "tillr-cli-bin-")
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 	wrapperBin = filepath.Join(dir, "tillr")
 	build := exec.Command("go", "build", "-o", wrapperBin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 // nouns is the dispatch set under test, spelled here rather than imported so a wrapper

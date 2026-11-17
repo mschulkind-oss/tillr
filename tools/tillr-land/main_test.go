@@ -42,22 +42,27 @@ func scratch(t *testing.T, prefix string) string {
 }
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
 	root := scratchRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		os.Exit(1)
+		return 1
 	}
 	dir, err := os.MkdirTemp(root, "tillr-land-bin-")
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 	bin = filepath.Join(dir, "tillr-land")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 // The identity a fixture repository deploys. It is the value every fixture commit is made

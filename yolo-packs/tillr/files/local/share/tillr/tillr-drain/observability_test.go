@@ -40,19 +40,19 @@ import (
 //
 // TestMain calls this because the environment is not a per-test thing: a case that has to
 // name its own root still must not be ABLE to reach the live one.
-func isolateTraceRoot() func() {
+func isolateTraceRoot() (func(), error) {
 	root := scratchRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return func() {}
+		return nil, err
 	}
 	dir, err := os.MkdirTemp(root, "tillr-drain-trace-")
 	if err != nil {
-		return func() {}
+		return nil, err
 	}
 	previous, had := os.LookupEnv("TILLR_TRACE_ROOT")
 	if err := os.Setenv("TILLR_TRACE_ROOT", dir); err != nil {
 		os.RemoveAll(dir)
-		return func() {}
+		return nil, err
 	}
 	return func() {
 		if had {
@@ -61,6 +61,62 @@ func isolateTraceRoot() func() {
 			os.Unsetenv("TILLR_TRACE_ROOT")
 		}
 		os.RemoveAll(dir)
+	}, nil
+}
+
+func TestIsolateTraceRootFailsClosed(t *testing.T) {
+	root := scratch(t, "trace-isolation")
+	blocked := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YOLO_DURABLE_DIR", blocked)
+	previous := os.Getenv("TILLR_TRACE_ROOT")
+	cleanup, err := isolateTraceRoot()
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || cleanup != nil {
+		t.Fatal("trace isolation failure must return an error, not a no-op cleanup")
+	}
+	if got := os.Getenv("TILLR_TRACE_ROOT"); got != previous {
+		t.Fatalf("failed isolation changed trace root to %q, want %q", got, previous)
+	}
+}
+
+func TestIsolateTraceRootRemovesScratchAndRestoresEnvironment(t *testing.T) {
+	for _, had := range []bool{false, true} {
+		name := "unset"
+		if had {
+			name = "set"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := scratch(t, "trace-isolation")
+			t.Setenv("YOLO_DURABLE_DIR", root)
+			t.Setenv("TILLR_TRACE_ROOT", "previous-trace-root")
+			if !had {
+				if err := os.Unsetenv("TILLR_TRACE_ROOT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cleanup, err := isolateTraceRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			dir := os.Getenv("TILLR_TRACE_ROOT")
+			if filepath.Dir(dir) != root {
+				t.Fatalf("trace directory %q is outside scratch root %q", dir, root)
+			}
+			cleanup()
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("trace directory remains after cleanup: %v", err)
+			}
+			value, exists := os.LookupEnv("TILLR_TRACE_ROOT")
+			if exists != had || (had && value != "previous-trace-root") {
+				t.Fatalf("cleanup restored trace environment to (%q, %v), want set=%v", value, exists, had)
+			}
+		})
 	}
 }
 

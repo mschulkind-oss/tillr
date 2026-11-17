@@ -45,13 +45,24 @@ func scratch(t *testing.T, prefix string) string {
 }
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
+	// This helper is deliberately killed by TestRunOutputSurvivesLoopProcessExit.
+	// It inherits the parent's binaries and trace root; allocating its own would
+	// leave scratch behind because a killed process cannot run deferred cleanup.
+	if os.Getenv("RUN_OUTPUT_HELPER") == "1" {
+		return m.Run()
+	}
 	root := scratchRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		os.Exit(1)
+		return 1
 	}
 	dir, err := os.MkdirTemp(root, "tillr-drain-bin-")
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 	binDir = dir
@@ -59,14 +70,17 @@ func TestMain(m *testing.M) {
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Stderr.Write(out)
-		os.Exit(1)
+		return 1
 	}
 	// The suite's trace root is a scratch directory, not the live one: the loop runs the
 	// real indexer after every tick, and one case runs the loop without naming a root.
-	restoreTraceRoot := isolateTraceRoot()
-	code := m.Run()
-	restoreTraceRoot()
-	os.Exit(code)
+	restoreTraceRoot, err := isolateTraceRoot()
+	if err != nil {
+		os.Stderr.WriteString("cannot isolate the suite trace root: " + err.Error() + "\n")
+		return 1
+	}
+	defer restoreTraceRoot()
+	return m.Run()
 }
 
 // invoke drives the binary with the state home scrubbed, so a face that derives a store
