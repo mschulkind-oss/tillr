@@ -845,7 +845,14 @@ arrives, such as review comments on a design, it starts at once.
 
 ### Run owner-facing work on lanes outside the cap
 
-<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
+<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
+needs two readers the fence left out. The settings file is read by `tools/tillr/settings/`, which
+refuses any table other than `roll` and `push`, so it refuses `[lanes]`. An item block is read by
+`tools/tillr-item/item/sync.go`, which refuses `express` as an unknown attribute. Both directories
+are added to this item's paths. The work extends those two readers and adds no second reader of
+either file inside the loop or the view. The criteria below are unchanged.
 
 - **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
