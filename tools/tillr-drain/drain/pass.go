@@ -13,6 +13,8 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
+	"os"
+	"strconv"
 )
 
 // These events record effects, not a second stored item state: the request handed to
@@ -28,12 +30,15 @@ const (
 	examinationDoneKind     = "drain.examined"
 	examinationOwnerKind    = "drain.examination.owner"
 	loopOrphanedKind        = "drain.orphaned"
-	ActionSettle            = "settle"
-	ActionJudge             = "judge"
+	// laneReleasedKind records a lane released after its run was examined, for every run,
+	// not only a workflow node (whose drain.examination-released also clears its claim).
+	laneReleasedKind = "drain.lane-released"
+	ActionSettle     = "settle"
+	ActionJudge      = "judge"
 )
 
 func init() {
-	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, nodeAdvancedKind, candidateGatedKind} {
+	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -433,6 +438,11 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		if err != nil {
 			return err
 		}
+		defer func() {
+			for _, line := range *ev.reclaimed {
+				l.reportf("%s", line)
+			}
+		}()
 		return s.WriteTx(ctx, func(tx *store.Tx) error {
 			var before, after int64
 			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
@@ -738,31 +748,81 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 	return applied, work, err
 }
 
+// laneReleased is drain.lane-released's payload: the lane and why it was released.
+type laneReleased struct {
+	LaneID string `json:"lane_id"`
+	Cause  string `json:"cause"`
+}
+
+// The causes a drain.lane-released names.
+const (
+	laneReleaseExamined = "examined"          // in the write that recorded the examination
+	laneReleaseEnded    = "examination-ended" // by the examination's end, examined or not
+	laneReleaseReap     = "reap"              // by a pass's reap: a stranded lease (stuckExaminationLease)
+)
+
+// releaseExamination releases the examination's lane once it has ended, on every path,
+// unless the run's own face is alive: a canceled examination may have handed off a live
+// continuation, and that face releases the lease when it actually finishes.
+//
+// Only the face keeps the lease. A process that merely carries the run's markers — an MCP
+// server or other child the adapter left behind — is not the run, and on 2026-11-17 one
+// kept a finished run's lane leased with no expiry indefinitely. Such strays are reported,
+// not signaled: EndRuns is the drain's only run-signaling function.
+//
+// The process table is read once, before the write transaction opens.
 func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
-	// A canceled examination may have handed off a live continuation. Its
-	// face, not this caller, releases that lease when it actually finishes.
-	live, err := liveRunProcess(l.cfg.Store, d.RunRequest.RunID)
+	here, err := currentLoopOwner()
 	if err != nil {
 		return err
 	}
-	if live {
-		return nil
+	marked, err := liveRunWorkers(l.cfg.Store, d.RunRequest.RunID, here)
+	if err != nil {
+		return err
+	}
+	var strays []string
+	for _, p := range marked {
+		face, err := processIsRunFace(p.PID)
+		if err != nil {
+			return err
+		}
+		if face {
+			return nil
+		}
+		strays = append(strays, strconv.Itoa(p.PID))
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, d.LaneID, d.RunRequest.RunID)
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, d.LaneID, d.RunRequest.RunID)
 		if err != nil {
 			return err
 		}
-		if d.Workflow == nil {
-			return nil
+		if d.Workflow != nil {
+			return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
 		}
-		return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		return appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseEnded}, l.cfg.Now().UTC())
 	})
+	if err == nil && len(strays) > 0 {
+		l.reportf("loop: run %s ended, but process(es) %s still carry its markers; its lane %s was released anyway, and the processes were left running (end them with `tillr drain stop --end-runs`, or by hand)\n", d.RunRequest.RunID, strings.Join(strays, ", "), d.LaneID)
+	}
+	return err
+}
+
+// processIsRunFace answers whether pid's cmdline is a run face's (isRunFaceArgv). A
+// process that is already gone is not one.
+func processIsRunFace(pid int) (bool, error) {
+	argv, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if processGone(err) {
+		return false, nil
+	}
+	return err == nil && isRunFaceArgv(argv), err
 }
 
 func (l *Loop) markExamined(ctx context.Context, d Decision) error {
@@ -775,6 +835,20 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		at := l.cfg.Now().UTC()
 		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, at); err != nil {
 			return err
+		}
+		// The examination's own lease — the claim's, with no expiry — is released in the
+		// write that records the examination, so no path can record it examined and leave
+		// its lane leased. A run's own lease (with an expiry) is the run face's to release.
+		res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ? AND state = ? AND leased_until IS NULL`, run.LaneStateIdle, d.LaneID, d.RunRequest.RunID, run.LaneStateLeased)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n > 0 {
+			if err := appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseExamined}, at); err != nil {
+				return err
+			}
 		}
 		return routeSecondFailure(tx, d, at)
 	})

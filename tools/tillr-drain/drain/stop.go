@@ -103,6 +103,19 @@ func liveRunWorkers(path, id string, here *LoopOwner) ([]*runFaceOwner, error) {
 	return markedRunProcesses(path, id, here, false)
 }
 
+// isRunFaceArgv answers whether a process's raw cmdline is a run face's: `tillr-run exec`
+// with the --input and --lane-root flags ProcessSteps.Run passes. An adapter and its
+// children inherit the run's markers but never this argv, which is how a face is told
+// from what it started.
+func isRunFaceArgv(cmdline []byte) bool {
+	args := bytes.Split(cmdline, []byte{0})
+	if len(args) < 3 || string(args[1]) != "exec" {
+		return false
+	}
+	flags := string(bytes.Join(args[2:], []byte{' '}))
+	return strings.Contains(flags, "--input ") && strings.Contains(flags, "--lane-root ")
+}
+
 func markedRunProcesses(path, id string, here *LoopOwner, facesOnly bool) ([]*runFaceOwner, error) {
 	path, err := processStoreIdentity(path)
 	if err != nil {
@@ -152,18 +165,7 @@ func markedRunProcesses(path, id string, here *LoopOwner, facesOnly bool) ([]*ru
 		if err != nil {
 			return nil, err
 		}
-		args := bytes.Split(argv, []byte{0})
-		if !facesOnly {
-			owner := *here
-			owner.PID, owner.Start = pid, start
-			owners = append(owners, &runFaceOwner{owner, resume})
-			continue
-		}
-		if len(args) < 3 || string(args[1]) != "exec" {
-			continue
-		}
-		flags := string(bytes.Join(args[2:], []byte{' '}))
-		if !strings.Contains(flags, "--input ") || !strings.Contains(flags, "--lane-root ") {
+		if facesOnly && !isRunFaceArgv(argv) {
 			continue
 		}
 		owner := *here
