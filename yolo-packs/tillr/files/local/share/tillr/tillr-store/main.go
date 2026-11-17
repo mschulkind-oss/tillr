@@ -65,6 +65,8 @@ func run(args []string) int {
 		code int
 	)
 	switch face {
+	case "inventory":
+		env, code = inventoryFace(rest)
 	case "init":
 		env, code = initFace(rest)
 	case "definition":
@@ -101,7 +103,7 @@ func run(args []string) int {
 	return code
 }
 
-// report is the payload of store.report. Except for definition, each
+// report is the payload of store.report. Except for definition and inventory, each
 // face emits the same shape describing the store as it stands after the face ran,
 // and action says which face produced it: a consumer that reads schema_version does
 // not have to know which face wrote the record.
@@ -624,7 +626,7 @@ func newID() string {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "init, definition, seed, check, recover, checkpoint or events"
+const faceList = "init, definition, seed, check, recover, checkpoint, inventory or events"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
