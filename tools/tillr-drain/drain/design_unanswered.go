@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -34,6 +35,10 @@ import (
 //     more. That is the readmission rule's one automatic attempt per input
 //     change (README, "Automatic second attempts after an input changes"). Otherwise the
 //     conflict goes to the owner, naming the design run and its outcome.
+//   - A gate refusal or a trunk-broken report is a trunk suspect and no attempt yet: it
+//     goes to the owner, and is raised again (spending nothing) once a trunk commit that
+//     changes a file the run's candidate touched is in the heavy proof's green commit
+//     (trunkChangeSince). A second identical refusal after that is an attempt.
 //   - An owner hold this rule wrote is read again when the trunk moves, so an input change
 //     that lands later still earns the one automatic attempt, if it was not spent.
 //   - A second unanswered design run after an automatic re-raise goes to the owner,
@@ -60,6 +65,18 @@ type designUnanswered struct {
 	Outcome    string   `json:"outcome"`
 	Changes    []string `json:"changes"`
 	Reraised   bool     `json:"reraised"`
+	// BaseSHA is the design run's base. A record written before the trunk-suspect rule
+	// names none.
+	BaseSHA string `json:"base_sha,omitempty"`
+	// FailingChecks are the fast-gate checks that refused the run's candidate, when the
+	// gate refused it.
+	FailingChecks []string `json:"failing_checks,omitempty"`
+	// TrunkSuspect records a refusal on a base the heavy proof had not proven green: the
+	// conflict waits for the proof to pass BaseSHA, and the refusal is no attempt.
+	TrunkSuspect bool `json:"trunk_suspect,omitempty"`
+	// TrunkReraised records the conflict raised again because the proof passed the base a
+	// trunk-suspect refusal blamed. It does not spend the input-change allowance.
+	TrunkReraised bool `json:"trunk_reraised,omitempty"`
 }
 
 type designFinding struct {
@@ -69,6 +86,13 @@ type designFinding struct {
 	outcome     string
 	changes     []string
 	spent       bool
+	// base and checks are the run's base and the fast-gate checks that refused it.
+	base   string
+	checks []string
+	// suspect is a refusal the trunk may have caused; trunkRaise is a suspect whose blamed
+	// trunk has since changed, by trunkFix, a commit the heavy proof has proven.
+	suspect, trunkRaise bool
+	trunkFix            string
 }
 
 // settleUnansweredDesignRuns applies the rule above to every blocked item whose conflict
@@ -86,6 +110,11 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	green, err := heavyGreen(ctx, l.cfg.Root)
+	if err != nil {
+		return err
+	}
+	green = strings.TrimSpace(green)
 	found := []designFinding{}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		conflicts, err := item.ReadConflicts(r)
@@ -156,9 +185,24 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 				if f.changes, err = l.designInputChanges(ctx, r, row, c.DesignRunID, w.BaseSHA); err != nil {
 					return err
 				}
+				f.base = w.BaseSHA
+				f.checks = l.designFailingChecks(c.DesignRunID, f.outcome)
+				if f.base != "" && designBlamesTrunk(rec, f.outcome) && !repeatsTrunkReraise(marks[c.ConflictID], f.outcome, f.checks) {
+					f.suspect = true
+					if f.trunkFix, err = l.trunkChangeSince(ctx, c.DesignRunID, f.base, green); err != nil {
+						return err
+					}
+					f.trunkRaise = f.trunkFix != ""
+				}
 				found = append(found, f)
 			case c.Status == "owner" && c.TriageVersion == "":
 				m := marks[c.ConflictID]
+				if f, ok, err := l.trunkProvedPast(ctx, r, c, m, byRun, green); err != nil {
+					return err
+				} else if ok {
+					found = append(found, f)
+					continue
+				}
 				if len(m) == 0 || m[len(m)-1].RunID != c.DesignRunID || m[len(m)-1].Reraised || spent || l.designUnansweredChecked[c.ConflictID] == trunk {
 					continue
 				}
@@ -197,12 +241,20 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 			if err := refuseTerminalItem(tx.Reader(), c.ItemID, "design-unanswered"); err != nil {
 				continue
 			}
-			mark := designUnanswered{ConflictID: c.ConflictID, ItemID: c.ItemID, RunID: f.runID, Outcome: f.outcome, Changes: f.changes}
+			mark := designUnanswered{ConflictID: c.ConflictID, ItemID: c.ItemID, RunID: f.runID, Outcome: f.outcome, Changes: f.changes, BaseSHA: f.base, FailingChecks: f.checks}
 			switch {
 			case f.interrupted:
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
 				c.Text += "\n\nDesign run " + f.runID + " was interrupted by a loop stop before it answered. An interrupted run is no attempt, so the design seat is dispatched again."
 				l.reportf("loop: %s design run %s was interrupted; conflict %s is raised again\n", c.ItemID, f.runID, c.ConflictID)
+			case f.trunkRaise:
+				mark.TrunkReraised = true
+				if c.Status == "awaiting" {
+					c.Text += "\n\nDesign run " + f.runID + " ended without answering this conflict (" + f.outcome + ") on base " + shortSHA(f.base) + "."
+				}
+				c.Text += "\n\nTrunk commit " + shortSHA(f.trunkFix) + ", which the heavy proof has proven green, changed what design run " + f.runID + " was refused on since its base " + shortSHA(f.base) + ". A refusal the trunk may have caused is no attempt, so the loop raises the conflict again for the design seat."
+				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+				l.reportf("loop: %s conflict %s is raised again for the design seat: trunk commit %s changed what design run %s was refused on\n", c.ItemID, c.ConflictID, shortSHA(f.trunkFix), f.runID)
 			case len(f.changes) > 0 && !f.spent:
 				mark.Reraised = true
 				if c.Status == "awaiting" {
@@ -211,6 +263,11 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 				c.Text += "\n\nChanged since design run " + f.runID + " was dispatched: " + strings.Join(f.changes, ", ") + ". The loop raises the conflict once more for the design seat; if that design run also ends without answering, the owner decides."
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
 				l.reportf("loop: %s conflict %s is raised again for the design seat: %s changed since design run %s\n", c.ItemID, c.ConflictID, strings.Join(f.changes, ", "), f.runID)
+			case f.suspect:
+				mark.TrunkSuspect = true
+				c.Text += "\n\nDesign run " + f.runID + " ended without answering this conflict (" + f.outcome + ") on base " + shortSHA(f.base) + ". The trunk may have caused it, so it is no attempt yet: the loop raises the conflict again once a trunk commit that changes the files the run touched (any trunk commit, when it touched none) is proven green by the heavy proof. Until then the owner decides: amend the block, or release or close the item."
+				c.Status, c.WaitingOn = "owner", "owner"
+				l.reportf("loop: %s conflict %s waits for a proven trunk change: design run %s was refused on %s (%s)\n", c.ItemID, c.ConflictID, f.runID, shortSHA(f.base), f.outcome)
 			default:
 				c.Text += "\n\nDesign run " + f.runID + " ended without answering this conflict (" + f.outcome + "). "
 				if f.spent {
@@ -349,4 +406,127 @@ func (l *Loop) designInputChanges(ctx context.Context, r *store.Reader, row item
 		}
 	}
 	return changes, rows.Err()
+}
+
+// designBlamesTrunk answers whether a design run's unanswered end can be the trunk's: its
+// candidate was refused at the gate, or its report answered trunk-broken. Whether it is
+// the trunk's then depends on the heavy proof at the run's base (provenAt).
+//
+// The gate's own trunk-already-red replay cannot judge this: the fast-gate check ids
+// (documents, citations, and the rest) are not ids the replay program plans, so a replay
+// of them answers unknown, and unknown never acquits (2026-11-17: `fork-check --replay
+// --only documents` answered "no planned check matches --only").
+func designBlamesTrunk(rec *run.Record, outcome string) bool {
+	if outcome == "refused at "+RefusalGate {
+		return true
+	}
+	return rec != nil && reportFooter(logTail(rec.ArtifactRefs)) == ReasonTrunkBroken
+}
+
+// repeatsTrunkReraise answers whether this conflict was already raised again for the
+// trunk after a refusal with the same outcome and failing checks. A second identical
+// refusal after the trunk changed and was proven is the candidate's: an attempt.
+func repeatsTrunkReraise(marks []designUnanswered, outcome string, checks []string) bool {
+	suspected := map[string]designUnanswered{}
+	for _, m := range marks {
+		if !m.TrunkReraised {
+			suspected[m.RunID] = m
+			continue
+		}
+		before, ok := suspected[m.RunID]
+		if !ok {
+			before = m
+		}
+		if before.Outcome == outcome && strings.Join(before.FailingChecks, ",") == strings.Join(checks, ",") {
+			return true
+		}
+	}
+	return false
+}
+
+// trunkChangeSince answers the oldest trunk commit since a refused design run's base that
+// changed the files the run's candidate touched (any commit, when it touched none) and
+// that the heavy proof's green commit contains, or "" when there is none. A hand commit
+// counts like a recorded fixer: the evidence is the proven trunk, not who changed it.
+func (l *Loop) trunkChangeSince(ctx context.Context, runID, base, green string) (string, error) {
+	if green == "" || base == "" || green == base {
+		return "", nil
+	}
+	if ok, err := containsCommit(ctx, l.cfg.Root, base, green); err != nil || !ok {
+		return "", err
+	}
+	args := []string{"rev-list", "--reverse", base + ".." + green}
+	if pin, err := l.git(ctx, l.cfg.Root, "rev-parse", "--verify", "--quiet", "refs/tillr/runs/"+runID+"^{commit}"); err == nil {
+		if pin = strings.TrimSpace(pin); pin != "" && pin != base {
+			names, err := l.git(ctx, l.cfg.Root, "diff", "--name-only", base, pin)
+			if err != nil {
+				return "", err
+			}
+			if paths := strings.Fields(names); len(paths) > 0 {
+				args = append(append(args, "--"), paths...)
+			}
+		}
+	}
+	out, err := l.git(ctx, l.cfg.Root, args...)
+	if err != nil {
+		return "", err
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(first), nil
+}
+
+// designFailingChecks names the fast-gate checks that refused a design run's candidate,
+// read from the run's fast verdict, or nil when the gate did not refuse it.
+func (l *Loop) designFailingChecks(runID, outcome string) []string {
+	if outcome != "refused at "+RefusalGate {
+		return nil
+	}
+	spans, state := readFastGateSpans(filepath.Join(RunDir(l.cfg.Root, runID), GateFastVerdictFile))
+	if state != GateSpansRead {
+		return nil
+	}
+	checks := []string{}
+	for _, span := range spans {
+		if span.Status == "fail" {
+			checks = append(checks, span.CheckID)
+		}
+	}
+	sort.Strings(checks)
+	return checks
+}
+
+// trunkProvedPast answers a trunk-suspect owner hold whose blamed trunk has since changed
+// (trunkChangeSince). Records written before this rule name no base and carry no
+// suspicion; they are read as suspect when their outcome blames the trunk, which is how
+// the holds recorded before the rule recover.
+func (l *Loop) trunkProvedPast(ctx context.Context, r *store.Reader, c item.Conflict, marks []designUnanswered, byRun map[string]*pendingWork, green string) (designFinding, bool, error) {
+	if len(marks) == 0 || green == "" {
+		return designFinding{}, false, nil
+	}
+	last := marks[len(marks)-1]
+	if last.RunID != c.DesignRunID || last.Reraised || last.TrunkReraised {
+		return designFinding{}, false, nil
+	}
+	base := last.BaseSHA
+	if base == "" {
+		w := byRun[c.DesignRunID]
+		if w == nil || w.BaseSHA == "" {
+			return designFinding{}, false, nil
+		}
+		base = w.BaseSHA
+		rec, err := terminalRecord(r, c.DesignRunID)
+		if err != nil {
+			return designFinding{}, false, err
+		}
+		if !designBlamesTrunk(rec, last.Outcome) || repeatsTrunkReraise(marks[:len(marks)-1], last.Outcome, nil) {
+			return designFinding{}, false, nil
+		}
+	} else if !last.TrunkSuspect {
+		return designFinding{}, false, nil
+	}
+	fix, err := l.trunkChangeSince(ctx, c.DesignRunID, base, green)
+	if err != nil || fix == "" {
+		return designFinding{}, false, err
+	}
+	return designFinding{conflict: c, runID: c.DesignRunID, outcome: last.Outcome, changes: []string{}, base: base, checks: last.FailingChecks, suspect: true, trunkRaise: true, trunkFix: fix}, true, nil
 }

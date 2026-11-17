@@ -2,6 +2,8 @@ package drain
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,13 @@ func designConflictFixture(t *testing.T) (refusalLoopFixture, *Loop) {
 // It answers the design run's id.
 func endDesignRun(t *testing.T, f refusalLoopFixture, l *Loop, step string) string {
 	t.Helper()
+	return endDesignRunReporting(t, f, l, step, "")
+}
+
+// endDesignRunReporting is endDesignRun with the run's report: when report is not empty,
+// the terminal record carries it as the run's report artifact.
+func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, report string) string {
+	t.Helper()
 	p := decisionFor(t, l, "item-a")
 	if p.decision.Action != ActionDispatch || p.decision.BlockConflict == nil {
 		t.Fatalf("fixture: the design seat is not dispatched: %+v", p.decision)
@@ -45,6 +54,13 @@ func endDesignRun(t *testing.T, f refusalLoopFixture, l *Loop, step string) stri
 		state, cause, exit = run.StateTimedOut, run.EndLeaseReclaimed, nil
 	}
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: state, ExitCode: exit, StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: cause, ArtifactRefs: []run.ArtifactRef{}}
+	if report != "" {
+		path := filepath.Join(t.TempDir(), "report.md")
+		if err := os.WriteFile(path, []byte(report), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rec.ArtifactRefs = []run.ArtifactRef{{Kind: "report", Ref: path}}
+	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		if err := applyTerminal(tx, rec); err != nil {
 			return err

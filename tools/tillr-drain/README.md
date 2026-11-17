@@ -729,22 +729,42 @@ now applies this rule to every blocked item whose conflict awaits an ended desig
    trunk fixer that landed after its dispatch. When one of them changed, the conflict is
    raised once more. That is the one automatic attempt per input change, as for a build
    run above.
-3. Otherwise the conflict goes to the owner (`conflict-owner`, "needs you"). Its text
+3. A design run whose candidate the gate refused, or whose report answered
+   `RESULT: trunk-broken`, may have been refused for the trunk's sake rather than its own.
+   On 2026-11-17 two design runs were refused at the gate only for two dead anchors already
+   in the roadmap at their base, and a hand commit then fixed the anchors. The gate's own
+   trunk-already-red replay could not tell, because it does not know the fast-gate check
+   ids and answers unknown. So such a refusal is a **trunk suspect**: no attempt yet. The
+   conflict goes to the owner with text that says so, and the loop raises it again, without
+   spending the input-change attempt, once a trunk commit that changes a file the run's
+   candidate touched is contained in the heavy proof's green commit (`refs/tillr/green`).
+   For a run with no candidate, any trunk commit after its base counts. A hand commit
+   counts like a recorded fixer: the evidence is the proven trunk, not who changed it.
+   A second refusal with the same outcome and the same failing checks after such a re-raise
+   is the candidate's, and is an attempt.
+4. Otherwise the conflict goes to the owner (`conflict-owner`, "needs you"). Its text
    names the design run and how it ended, such as `refused at gate`, and `tillr drain why`
    names the run beside the conflict.
-4. An owner hold that rule 3 wrote is compared again when the trunk moves. An input change
-   that lands later still earns the one automatic attempt if it was not spent.
-5. A design run that also ends without answering after that automatic attempt goes to the
+5. An owner hold that rule 3 or 4 wrote is compared again when the trunk moves. An input
+   change that lands later still earns the one automatic attempt if it was not spent, and a
+   proven trunk change raises a trunk suspect. A record written before rule 3 existed names
+   no base; one whose outcome blames the trunk is read as a trunk suspect.
+6. A design run that also ends without answering after that automatic attempt goes to the
    owner, whatever changed since. There is no further automatic run and no timer.
 
 Each unanswered design run except an interrupted one writes one `drain.design-unanswered`
 event naming the conflict, the run, its outcome, what changed, and whether the conflict was
-raised again. A record with `reraised` true spends the conflict's automatic attempt. The
+raised again. A record with `reraised` true spends the conflict's automatic attempt. A
+trunk suspect's record also names the run's base and failing checks (`base_sha`,
+`failing_checks`) and carries `trunk_suspect`; the re-raise it later earns carries
+`trunk_reraised`, which spends nothing. The
 owner's remedy is to amend the item block or the design document, which raises the conflict
 once more if the attempt is unspent, or to release or close the item. A triage conflict
 keeps its own rule, one triage run per request version. The
 [unanswered-design tests](./drain/design_unanswered_test.go) cover the owner hand-off, the
-re-raise after an input change, the later re-raise from the owner, and the interrupted run.
+re-raise after an input change, the later re-raise from the owner, and the interrupted run;
+the [trunk-suspect tests](./drain/design_trunk_test.go) cover rule 3, including the records
+written before it.
 
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
 no expiry while it works, and releases that lease once it ends, on every path. The write
