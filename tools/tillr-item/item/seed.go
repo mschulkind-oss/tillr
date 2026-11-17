@@ -139,7 +139,7 @@ func Seed(ctx context.Context, tx *store.Tx, from string, doc []byte, at time.Ti
 		if err != nil {
 			return record.Envelope{}, err
 		}
-		if _, err := Apply(ctx, tx, env); err != nil {
+		if _, err := apply(ctx, tx, env, true); err != nil {
 			return record.Envelope{}, annotate(err, payload.ItemID)
 		}
 		ranked = append(ranked, payload.ItemID)

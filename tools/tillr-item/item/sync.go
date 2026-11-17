@@ -495,6 +495,11 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		if bad[b.file] {
 			continue
 		}
+		// A landed block is stale document residue, not a definition to apply.
+		// Skipping just this block lets its file's other items sync normally.
+		if st, ok := held[b.payload.ItemID]; ok && st.state == "landed" {
+			continue
+		}
 		desired := b.payload
 		var stored itemPayload
 		found := false
@@ -529,6 +534,11 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		if judged := judgedCriterion(stored); judged != "" {
 			report.Frozen = append(report.Frozen, note(b, "definition-frozen",
 				fmt.Sprintf("the block's %s differs from the store's, and criterion %q already carries the state %q, so the stored definition stands: a presented criterion is not rewritten", field, judged, criterionState(stored, judged))))
+			continue
+		}
+		if terminalState(stored.State) {
+			report.Frozen = append(report.Frozen, note(b, "state-terminal",
+				fmt.Sprintf("item %q is %q; its stored definition stands", stored.ItemID, stored.State)))
 			continue
 		}
 		// The definition is the document's; everything the store learned is the store's.

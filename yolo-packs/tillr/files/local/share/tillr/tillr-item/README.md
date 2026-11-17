@@ -34,6 +34,20 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
 - **An item's state and its criteria's states are different writes.** An item's state says
   where the work stands; a criterion's state says what a judge found. One face moving both
   would make a criterion's freeze depend on a caller's care.
+- **Landed and resolved items stay finished.** Once an item is `landed` or
+  `resolved-elsewhere`, raw `state` writes cannot move it elsewhere, and `apply`
+  cannot change its stored definition, including its title, criteria, blockers or
+  fence. These changes are refused as `state-terminal`, naming the item and its
+  current state. The existing `criterion-state` and `criterion-frozen` rules are
+  checked first and keep their names even when a record changes other fields too.
+  Writing the same state or applying the same definition succeeds without changing
+  the item or appending an event. Verdicts followed by the move to `landed` still
+  finish the item; the explicit close and reopen commands are unchanged. Seed
+  retains its existing authority to change rank alone, preserving the finished
+  item's state and definition; raw `apply` cannot change that rank. Sync
+  reports a landed item's remaining document block as stale and a resolved item's
+  changed definition as frozen. It writes neither change and still syncs the
+  file's other blocks.
 - **A new blocked state move names who must act and why.** `state --state blocked`
   requires `--waiter` and `--reason`; either missing or blank is refused as
   `blocked-waiter-missing`. The waiter is `owner`, `design`, `plan`, or `item:<id>` for
