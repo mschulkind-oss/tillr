@@ -1782,6 +1782,26 @@ none. None is needed: `trunk-already-red` is the step name on the refusal record
 that the waiting view shows is the existing reason `trunk-broken`. c4 and c6 are restated below
 to say so, and no new exported hold reason is added. The other criteria are unchanged.
 
+**Ruling, 2026-11-17 (answers the third and fourth runs' refusals):** neither refusal was about
+the design in c1 to c7, which stands as written. Two things stopped the work.
+
+The third run was refused at the fence because its commit edited this block. The item's paths
+include `docs/`, and this file is under it, but a worker never edits `docs/tillr/roadmap.md`:
+the block is the design seat's, and the lander retires it. No criterion asks for a change to this
+file. The documents c6 names are the only ones the change must touch.
+
+The fourth run's candidate was refused by the gate on one check, `observatory-dev`, which is
+`python3 tests/observatory-dev.test.py`. The gate selects that suite whenever `.justfile`
+changes, and c1 requires a `.justfile` change, so every candidate for this item meets it. The
+suite is red in a lane worktree with no change at all: its supervision cases run the real recipe
+in the checkout the suite is in, with a stub `npm` whose `ci` does nothing, and the recipe then
+writes a platform stamp into a `node_modules` directory that the stub never made. The main
+checkout has that directory, so the suite passes there and fails in any fresh worktree. The
+failure is the suite's, not the candidate's, and the suite's own header says it needs no
+`node_modules`. Because this item cannot land without passing that suite, the repair is part of
+this item, as c8. It is made in `tests/observatory-dev.test.py`, which is inside the paths;
+`tools/observatory/run.sh` is right about a real `npm ci` and is not changed.
+
 - **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
 - **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
 - **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
@@ -1789,6 +1809,7 @@ to say so, and no new exported hold reason is added. The other criteria are unch
 - **c5:** A candidate that is red on a tree check which passes on its base stays charged to the candidate. A test asserts the ordinary refusal.
 - **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
 - **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
+- **c8:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree.
 
 **Agent details:**
 
@@ -1797,6 +1818,8 @@ to say so, and no new exported hold reason is added. The other criteria are unch
 - **Evidence:** 2026-11-17, a hand commit on the trunk that put a documented build directory in a tracked README passed `just done`. `python3 tools/gate/checks/scratch.py` at the trunk then exited 1 with two findings, and the drain's gate refused the next candidate on the `scratch` check. A rolling run over the range holding that commit finished green and moved its watermark.
 - **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` is `python3 tools/fork-check.py --replay --only {only}`, and `{only}` is the failing check ids from the gate's verdict. The replay matches fork-check kinds, and the gate's tree-check ids are a separate set. `python3 tools/fork-check.py --replay --only scratch` in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that fork-check also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
 - **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
+- **Evidence:** 2026-11-17, `python3 tests/observatory-dev.test.py` in a lane worktree at trunk commit `1524cddc9`, with no change applied, exited 1 after 4 min 40 s with seven failed cases, all in the supervision half. Its output held `observatory-dev: npm ci (there are no node_modules)` and then `tools/observatory/run.sh: line 174: …/tools/tillr-view/web/node_modules/.tillr-platform: No such file or directory`. `ls tools/tillr-view/web` in that worktree shows no `node_modules`; the directory is ignored by `.gitignore` and exists in the main checkout. The fourth run's gate log shows the same seven cases and the same two lines, with the check selected `because: the dev recipe, Procfile, tool declaration or supervision suite changed`.
+- **Where (c8):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`, whose comment reads `` `ci` is a no-op ``; the supervision cases start the recipe with the repository as its working directory. `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
 
 ## Filed 2026-11-17: what two lanes showed
 
