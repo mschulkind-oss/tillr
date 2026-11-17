@@ -32,6 +32,8 @@ type waitingRow struct {
 	Since       string `json:"since"`
 	Waited      string `json:"waited"`
 	ClassSource string `json:"class_source"`
+	LaneStatus  string `json:"lane_status,omitempty"`
+	LaneReason  string `json:"lane_reason,omitempty"`
 }
 
 type waitingRule struct{ class, where, mover string }
@@ -464,6 +466,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		out = append(out, row)
 	}
 	addConflictHistory(out, conflicts)
+	if err := addHeldLaneHistory(r, out); err != nil {
+		return nil, err
+	}
 	if err := addPreservedHistory(r, out); err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -58,13 +59,15 @@ func recoveryWork(r *store.Reader, runID string) (*pendingWork, error) {
 	if w == nil || w.Done || works[w.Decision.ItemID] != w || w.Decision.RunRequest == nil {
 		return nil, Usagef("run %q has no pending candidate in its lane", runID)
 	}
-	var state string
-	var leasedRun *string
-	if err := r.QueryRow(`SELECT state,run_id FROM lanes WHERE lane_id=?`, w.Decision.LaneID).Scan(&state, &leasedRun); err != nil {
-		return nil, err
-	}
-	if state != run.LaneStateIdle || leasedRun != nil {
-		return nil, Usagef("lane %q is held; stop its loop before recovery", w.Decision.LaneID)
+	if !w.LaneReleased {
+		var state string
+		var leasedRun *string
+		if err := r.QueryRow(`SELECT state,run_id FROM lanes WHERE lane_id=?`, w.Decision.LaneID).Scan(&state, &leasedRun); err != nil {
+			return nil, err
+		}
+		if state != run.LaneStateIdle || leasedRun != nil {
+			return nil, Usagef("lane %q is held; stop its loop before recovery", w.Decision.LaneID)
+		}
 	}
 	rec, err := terminalRecord(r, runID)
 	if err != nil {
@@ -83,6 +86,9 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 	result := LoopResult{}
 	if strings.TrimSpace(runID) == "" {
 		return result, Usagef("examine needs --run")
+	}
+	if err := l.finishReleaseIntent(ctx, runID); err != nil {
+		return result, err
 	}
 	owner, err := currentLoopOwner()
 	if err != nil {
@@ -116,7 +122,10 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 		// current repair inputs and invalidates changed workflows. Planning
 		// does not apply other items or reap other lanes for this command.
 		lanes := []string{w.Decision.LaneID}
-		tick := Pass{Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &lanes}
+		if w.LaneReleased {
+			lanes = l.cfg.Lanes
+		}
+		tick := Pass{examineItem: w.Decision.ItemID, Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &lanes}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -150,6 +159,16 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 		request.CorrelationID = generation
 		d.RunRequest = &request
 		result.FirstGeneration, result.LastGeneration = generation, generation
+		var state string
+		var leasedRun *string
+		if err := tx.QueryRow(`SELECT state,run_id FROM lanes WHERE lane_id=?`, d.LaneID).Scan(&state, &leasedRun); err != nil && err != sql.ErrNoRows {
+			return err
+		} else if err == nil && (state != run.LaneStateIdle || leasedRun != nil) {
+			return Usagef("lane %q is held; stop its loop before recovery", d.LaneID)
+		}
+		if err := l.assignPinnedCandidate(tx, w, &d, at); err != nil {
+			return err
+		}
 		kind := examinationOwnerKind
 		if d.Workflow != nil {
 			kind = examinationClaimedKind
@@ -157,7 +176,7 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 		if err := appendEffect(tx, kind, runID, owner, at); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=?,leased_until=NULL WHERE lane_id=?`, run.LaneStateLeased, runID, d.LaneID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state,run_id,leased_until) VALUES(?,?,?,NULL) ON CONFLICT(lane_id) DO UPDATE SET state=excluded.state,run_id=excluded.run_id,leased_until=NULL`, d.LaneID, run.LaneStateLeased, runID); err != nil {
 			return err
 		}
 		return recordPassDecision(tx, d, at)
@@ -194,6 +213,22 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 	mergeExamination(&result, &next)
 	result.LastGeneration, result.Stop, result.Detail = next.LastGeneration, next.Stop, next.Detail
 	return result, err
+}
+
+func recordSetAside(tx *store.Tx, c Candidate, ref, why string, at time.Time) error {
+	body := struct {
+		Candidate Candidate `json:"candidate"`
+		Ref       string    `json:"ref"`
+		Why       string    `json:"why"`
+	}{c, ref, why}
+	if err := appendEffect(tx, setAsideKind, c.RunID, body, at); err != nil {
+		return err
+	}
+	if err := appendEffect(tx, examinationDoneKind, c.RunID, struct{}{}, at); err != nil {
+		return err
+	}
+	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: ReasonLandRefused, Detail: fmt.Sprintf("candidate set aside at %s for rework: %s", ref, why)}
+	return appendEffect(tx, itemFaultKind, c.ItemID, f, at)
 }
 
 // SetAside preserves a committed candidate at the run's named retention ref and
@@ -233,6 +268,13 @@ func (l *Loop) SetAside(ctx context.Context, itemID, why string) (string, error)
 		c := *w.Candidate
 		if c.BaseRef != "" {
 			return Usagef("set-aside does not release patch-branch candidates")
+		}
+		if w.LaneReleased {
+			ref = "refs/tillr/runs/" + c.RunID
+			if err := l.pinnedCandidate(ctx, c); err != nil {
+				return err
+			}
+			return recordSetAside(tx, c, ref, why, l.cfg.Now().UTC())
 		}
 		worktree = c.Worktree
 		head = c.HeadSHA
@@ -287,19 +329,7 @@ func (l *Loop) SetAside(ctx context.Context, itemID, why string) (string, error)
 		}
 		moved = true
 		at := l.cfg.Now().UTC()
-		body := struct {
-			Candidate Candidate `json:"candidate"`
-			Ref       string    `json:"ref"`
-			Why       string    `json:"why"`
-		}{c, ref, why}
-		if err := appendEffect(tx, setAsideKind, c.RunID, body, at); err != nil {
-			return err
-		}
-		if err := appendEffect(tx, examinationDoneKind, c.RunID, struct{}{}, at); err != nil {
-			return err
-		}
-		f := ItemFault{ItemID: itemID, RunID: c.RunID, LaneID: c.LaneID, Reason: ReasonLandRefused, Detail: fmt.Sprintf("candidate set aside at %s for rework: %s", ref, why)}
-		if err := appendEffect(tx, itemFaultKind, itemID, f, at); err != nil {
+		if err := recordSetAside(tx, c, ref, why, at); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=?`, run.LaneStateIdle, c.LaneID)

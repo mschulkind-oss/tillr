@@ -63,6 +63,11 @@ type pendingWork struct {
 	Done           bool           `json:"-"`
 	Orphaned       bool           `json:"-"`
 	BoundaryFailed bool           `json:"boundary_failed,omitempty"`
+	LaneReleased   bool           `json:"lane_released,omitempty"`
+	LaneKeepReason string         `json:"lane_keep_reason,omitempty"`
+	HeldFence      string         `json:"held_fence,omitempty"`
+	NeedsStage     bool           `json:"needs_stage,omitempty"`
+	ReleasePending string         `json:"release_pending,omitempty"`
 }
 
 func readPending(r *store.Reader) (map[string]*pendingWork, error) {
@@ -257,6 +262,34 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 					return nil, nil, err
 				}
 			}
+		case candidateReleaseStartedKind, candidateLaneKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var lane candidateLane
+				if err := json.Unmarshal(e.Payload, &lane); err != nil {
+					return nil, nil, err
+				}
+				lane.Candidate.Request, lane.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
+				work.Candidate = &lane.Candidate
+				work.LaneReleased, work.LaneKeepReason, work.HeldFence = lane.Released, lane.Reason, lane.Fence
+				if e.Kind == candidateReleaseStartedKind {
+					work.ReleasePending = lane.ResetSHA
+				} else if lane.Released {
+					work.ReleasePending = ""
+				}
+			}
+		case candidateAssignedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				if err := json.Unmarshal(e.Payload, work); err != nil {
+					return nil, nil, err
+				}
+				if work.Candidate != nil {
+					work.Candidate.Request, work.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
+				}
+			}
+		case candidateStagedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				work.NeedsStage = false
+			}
 		case examinationDoneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Done = true
@@ -420,12 +453,14 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if d.Action != ActionHold {
-		leases, err := activeLeases(r, at, []string{d.LaneID})
-		if err != nil {
-			return Decision{}, err
-		}
-		if len(leases) != 0 {
-			d.Action, d.Reason, d.To = ActionHold, ReasonNoLane, ""
+		if !work.LaneReleased {
+			leases, err := activeLeases(r, at, []string{d.LaneID})
+			if err != nil {
+				return Decision{}, err
+			}
+			if len(leases) != 0 {
+				d.Action, d.Reason, d.To = ActionHold, ReasonNoLane, ""
+			}
 		}
 	}
 	identifyDecision(&d)
@@ -542,6 +577,9 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		return nil, nil, err
 	}
 	*generation = nextGeneration
+	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
+		return nil, nil, err
+	}
 	var plans []plannedApplication
 	var leases []LaneLease
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
@@ -719,7 +757,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		switch d.Action {
 		case ActionDispatch, ActionRetry:
 			for _, owner := range works {
-				if !owner.Done && owner.Decision.LaneID == d.LaneID && !(owner.Decision.ItemID == d.ItemID && (owner.Ready || d.WorkflowRestart)) {
+				if !owner.Done && !owner.LaneReleased && owner.Decision.LaneID == d.LaneID && !(owner.Decision.ItemID == d.ItemID && (owner.Ready || d.WorkflowRestart)) {
 					return nil
 				}
 			}
@@ -835,7 +873,17 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if len(leases) > 0 {
 				return nil
 			}
+			if work.LaneReleased {
+				for _, other := range works {
+					if other != work && !other.Done && !other.LaneReleased && other.Decision.LaneID == d.LaneID {
+						return nil
+					}
+				}
+			}
 			if err := correlate(tx, &d); err != nil {
+				return err
+			}
+			if err := l.assignPinnedCandidate(tx, work, &d, at); err != nil {
 				return err
 			}
 			owner, err := currentLoopOwner()
@@ -852,7 +900,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			}
 			// Settlement must retain the candidate's worktree too. A terminal record
 			// released the run's lease, so reclaim it before inspecting or gating it.
-			if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, d.RunRequest.RunID, d.LaneID); err != nil {
+			if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state,run_id,leased_until) VALUES(?,?,?,NULL) ON CONFLICT(lane_id) DO UPDATE SET state=excluded.state,run_id=excluded.run_id,leased_until=NULL`, d.LaneID, run.LaneStateLeased, d.RunRequest.RunID); err != nil {
 				return err
 			}
 		}
@@ -917,6 +965,15 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 	}
 	defer s.Close()
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, byRun, err := readPendingHistory(tx.Reader())
+		if err != nil {
+			return err
+		}
+		if w := byRun[d.RunRequest.RunID]; w != nil && w.Examiner != nil && *w.Examiner != *here {
+			// A released candidate may already have been claimed by an operator.
+			// The old examiner must not clear that same-run successor's lease.
+			return nil
+		}
 		res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, d.LaneID, d.RunRequest.RunID)
 		if err != nil {
 			return err
@@ -1297,7 +1354,14 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 		defer l.examinations.Done()
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
-		if d.Reason == ReasonItemAlreadyTerminal {
+		if work.NeedsStage {
+			if err := l.stagePinnedCandidate(ctx, work); err != nil {
+				completion.outcome.err = err
+			}
+		}
+		if completion.outcome.err != nil {
+			// The claimed lane remains pending so a replacement retries staging.
+		} else if d.Reason == ReasonItemAlreadyTerminal {
 			// The plan read the terminal state and the claim's version check rebound it;
 			// the settling write rereads it for the record.
 			completion.outcome.err = l.settleTerminalItem(ctx, work, &itemTerminalError{ItemID: d.ItemID, Step: "plan"})
@@ -1388,14 +1452,31 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				// The item went terminal by another route during this examination.
 				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 			} else {
-				retainLane := errors.Is(err, errGateStallHeld) || errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errRedCapHeld) || errors.Is(err, errTrunkRewritten)
-				if retainLane {
+				held, keep := retainLane(err)
+				itemFault := errors.Is(err, errItemFaultHeld)
+				repairHeld := errors.Is(err, errRepairHeld)
+				if held {
 					err = nil
+					if !keep {
+						copy := *work
+						copy.Candidate = &c
+						reason := ""
+						if repairHeld {
+							reason = ReasonRepairStagingFailed
+						}
+						// A candidate mismatch must retain the unexpected checkout.
+						if itemFault {
+							if head, headErr := l.revParse(ctx, c.Worktree, "HEAD"); headErr != nil || head != c.HeadSHA {
+								reason = ReasonCandidateMismatch
+							}
+						}
+						_, err = l.releaseCandidate(ctx, &copy, reason, true)
+					}
 				}
 				if err != nil || stop != "" {
 					l.pinQuietly(ctx, c.RunID, c.HeadSHA)
 				}
-				if err == nil && stop == "" && !retainLane {
+				if err == nil && stop == "" && !held {
 					if landed {
 						stop = l.abandon(ctx, c.LaneID, "", "")
 						err = l.prunePreservedWork(ctx)

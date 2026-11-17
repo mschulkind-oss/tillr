@@ -22,6 +22,10 @@ import (
 // MaxDispatches optionally limits a simulation; the live loop never sets it.
 // Now optionally supplies observation metadata, never an identity.
 type Pass struct {
+	// Operator examination considers one item's next step while still reading
+	// every existing lane reservation and readiness dependency. It must not
+	// allocate free lanes to sibling plans that this command will not execute.
+	examineItem string
 	// GatesInFlight is the planning pass's observation, not a concurrency cap.
 	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
@@ -309,7 +313,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	// A terminal run released its lease, but its candidate still occupies the
 	// worktree until settlement and judgment have accounted for it.
 	for _, work := range works {
-		if !work.Done {
+		if !work.Done && !work.LaneReleased {
 			lanes[work.Decision.LaneID] = true
 		}
 	}
@@ -378,6 +382,9 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	}
 	decisions := make([]record.Envelope, 0, len(items))
 	for _, item := range items {
+		if tick.examineItem != "" && item.ItemID != tick.examineItem {
+			continue
+		}
 		var decision Decision
 		if fault, held := faults[item.ItemID]; held && !terminalStates[item.State] {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
@@ -396,6 +403,19 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			}
 			if !settled {
 				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
+			}
+			if err == nil && work.LaneReleased && decision.Action != ActionHold {
+				lane, ok := p.freeLane()
+				if !ok {
+					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
+				} else {
+					decision.LaneID = lane
+					req := *decision.RunRequest
+					req.LaneID = lane
+					decision.RunRequest = &req
+					p.assigned[lane] = true
+				}
+				identifyDecision(&decision)
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
 				invalid := item.State != StateInQueue || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
@@ -762,6 +782,11 @@ func identifyDecision(decision *Decision) {
 		decision.TransitionID += "-" + decision.To
 	}
 	decision.DecisionID = "decision-" + strings.TrimPrefix(decision.TransitionID, "transition-")
+	// One candidate can be examined on several lanes without starting another
+	// attempt. The decision identity must distinguish those resource claims.
+	if decision.From == "candidate" && decision.Action != ActionHold {
+		decision.DecisionID += "-lane-" + decision.LaneID
+	}
 	if decision.Action == ActionHold {
 		// A hold is not a transition. Its reason and the names explaining that reason
 		// distinguish it from other holds at this position. Hash the JSON array so

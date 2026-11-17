@@ -36,6 +36,17 @@ projections of events; the view neither creates nor deletes refs. The
 [drain's preservation and retention rule](../tillr-drain/README.md#earlier-uncommitted-work)
 explains how the loop saves this work and when it removes the ref.
 
+## Held lanes
+
+The current-planner and recorded-history waiting views include `lane_status`
+(`released` or `kept`) and `lane_reason` for pending held work. The same words
+appear in the reason column of terminal and browser tables. A kept lane names
+why its checkout is still needed or why safe release failed; a released lane
+holds no candidate reservation even if another item now runs there. These are
+read-only projections of drain events, not inferences from the item's old lane
+number. See the [drain's held candidate capacity rule](../tillr-drain/README.md#held-candidate-capacity)
+for the kept classes and pinned-commit retry behavior.
+
 ## State invariants
 
 - **It writes nothing, ever.** No store is opened read-write and no migration runs; a view

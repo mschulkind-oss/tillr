@@ -449,8 +449,9 @@ made while runs are in flight. Boundary snapshots do not attribute that content
 to any run. Writes into another lane's worktree still convict the writing run.
 
 When the lander reports uncommitted content on a path its change touches, the
-drain retains the already-gated candidate and its lane without a live worker
-lease. It records `trunk-path-dirty: ` followed by the sorted dirty paths as an
+drain retains the already-gated candidate and verdict, and releases an ordinary
+lane after verifying its run pin, following [held candidate capacity](#held-candidate-capacity).
+It records `trunk-path-dirty: ` followed by the sorted dirty paths as an
 ordinary item decision. Unrelated dirty paths do not delay a landing.
 
 Commit or restore the named paths. The next pass retries only the landing with
@@ -500,7 +501,8 @@ are persisted even when no candidate is waiting, so replacing the loop cannot er
 rewrite. The loop retains those commits under `refs/tillr/trunk-history/observed`
 and `refs/tillr/trunk-history/lost`, so reflog expiration and Git garbage collection
 cannot erase the ancestry evidence. A rewrite holds only landings. Runs continue, candidates can be gated,
-and already-gated candidates retain their lanes and verdicts. The hold decision is
+and already-gated candidates retain their commits and verdicts, not ordinary lanes
+whose run pins have been verified. The hold decision is
 `trunk-rewritten: <lost-tip> -> <current-tip>`, using full commit identifiers. The
 waiting face names both tips and the mover `restore the trunk's history`.
 
@@ -570,8 +572,9 @@ A gate that could not start or crashed (`gate-harness-error`), a recorded bounda
 and landing. A sync finding skips its entire document, so every stored item whose
 definition comes from that file is held, not just the item named by the finding.
 These holds survive a supervisor restart and do not record a failing
-criterion verdict or spend a new model attempt. A retained candidate keeps its lane
-reserved without a live worker lease.
+criterion verdict or spend a new model attempt. A retained candidate releases its
+ordinary lane once its pinned commit is read back; worktree-dependent holds keep
+the lane, as listed under [held candidate capacity](#held-candidate-capacity).
 
 The waiting face shows the fault, its evidence, any run and lane involved, and one
 complete command to clear it. Diagnose and correct the cause first: fix the gate,
@@ -688,13 +691,65 @@ An item-local fault is not one of these stops. Operator cancellation and the exp
 `--exit-when-drained` setting remain normal ways to end the loop; an indefinite foreign
 lane lease is still reported separately as `lanes-leased`, not a drained queue.
 
+## Held candidate capacity
+
+A held candidate is retained under `refs/tillr/runs/<run>`, independently of its
+lane. Gate stalls, ordinary item faults, held conflict-repair staging, dirty-trunk
+waits, red-cap waits for green proof, and rewritten-trunk waits release an ordinary
+lane only after the drain
+writes that pin and reads it back as the exact candidate commit. It saves the
+original fence, preserves uncommitted work, and records
+`drain.candidate-release-started` with the exact reset destination before resetting
+the lane. `drain.candidate-lane` records completed release. A restart finishes an
+interrupted reset from that intent even if the hold was cleared in the meantime.
+A failed pin, readback, preservation, fence read, or reset
+keeps the lane and records the reason. Before changing a checkout, idle-hold
+reconciliation revalidates its reservation under the store writer and claims a
+no-expiry examination lease with the releasing process's identity. Operator
+examination cannot take that lease. The reset and release receipt run under the
+same writer transaction; interrupted releases use the existing dead-examiner
+recovery before finishing their saved reset intent. Older idle holds are
+reconciled before planning, so a ready sibling can take the released lane in that
+same pass.
+
+Clearing the hold claims any free offered lane. `drain.candidate-assigned`
+records that claim before staging the pinned commit there; `drain.candidate-staged`
+records completed staging. Restart recovery finishes incomplete staging, including
+a checkout materialized before its event. The candidate's head, base, run identity,
+original fence, and any passing verdict survive lane reuse. This starts no new worker
+and spends no new model attempt. A retained passing verdict retries landing, not gating.
+Staging checks cleanliness even when the checkout already matches the pin, so
+inspection edits cannot be discarded by a landing. Operator examination uses the
+same assignment and staging protocol, without requiring the released old lane;
+setting aside a released candidate records its pin and does not touch a sibling
+now occupying that lane.
+
+These classes still keep their lanes:
+
+| Class | Why the worktree is needed |
+| :--- | :--- |
+| Conflict repair owning the pending transition | The repair request owns the staged checkout; settlement must finish that request, not release the original candidate's lane. |
+| Fork-delivery candidate | Its lane-specific fork checkout and patch branch are delivery state outside the ordinary repository checkout. |
+| Workflow candidate or unfinished settlement/continuation | Staged node inputs, working files, brief, and session belong to that lane. |
+| Host-boundary violation | The original checkout remains available for operator inspection. |
+| Candidate-record mismatch | The unexpected HEAD must remain available for diagnosis rather than being reset to the recorded commit. |
+| Unverified pin or unsuccessful preservation/reset | Release cannot yet prove the candidate and remaining work survive lane reuse; the recorded error names the remedy. |
+
+`tillr drain why` and both waiting views say `lane released` or `lane kept`, with
+the reason for a kept lane. The summary distinguishes `reserved` idle lanes,
+`workers` with live finite worker leases, and `examining` lanes claimed for
+settlement or judgment. The existing `running` count describes planner positions,
+not a count of worker processes.
+
 ## Conflict repair that cannot be staged
 
 A conflict-repair staging failure holds only its affected item as
 `conflict-repair-staging-failed`; it does not cancel sibling workers. The candidate
 commit is pinned before the lane is reset. A `drain.repair-held` event retains the
 candidate, original conflict reports, exact staging error, input comparison, and next
-action. The lane remains reserved for that candidate, without a live worker lease.
+action. An ordinary lane is released after the candidate's run pin is read back;
+corrected inputs retry repair on any free lane. Worktree-dependent candidates
+follow [held candidate capacity](#held-candidate-capacity).
 
 Unchanged item definition, fence, backend policy, brief template, and running build
 keep that repair held across passes and supervisor restarts. Queue rank, timestamps,

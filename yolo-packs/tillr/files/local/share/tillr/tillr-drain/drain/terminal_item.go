@@ -114,9 +114,11 @@ func terminalSettlement(r *store.Reader, work *pendingWork, at time.Time) (Decis
 			return Decision{}, false, err
 		}
 	}
-	leases, err := activeLeases(r, at, []string{work.Decision.LaneID})
-	if err != nil || len(leases) != 0 {
-		return Decision{}, false, err
+	if !work.LaneReleased {
+		leases, err := activeLeases(r, at, []string{work.Decision.LaneID})
+		if err != nil || len(leases) != 0 {
+			return Decision{}, false, err
+		}
 	}
 	settled := work.Decision
 	settled.From = "running"
