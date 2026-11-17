@@ -23,7 +23,8 @@ candidate examinations proceed independently, without waiting for a batch to fin
 `plan` computes one pass's positions and transitions and writes them to the file the caller named, and writes nothing else anywhere;
 `once` does the same planning and records the decisions in the store's own dispatch table,
 handing each dispatch's run request to a caller-named runner; `retry` records one
-operator's authorization to re-dispatch a run the harness refused; `clear-fault`
+operator's authorization to re-dispatch a run the harness refused, or to raise an item's
+conflict again for one more design run; `clear-fault`
 acknowledges a diagnosed item-local fault so its retained work may advance; `boundary` records the
 write boundary before and after a run and compares the pair; `resume` continues a run that
 died without a verdict from its own harness session; `loop` is the unattended supervisor.
@@ -759,7 +760,18 @@ trunk suspect's record also names the run's base and failing checks (`base_sha`,
 `failing_checks`) and carries `trunk_suspect`; the re-raise it later earns carries
 `trunk_reraised`, which spends nothing. The
 owner's remedy is to amend the item block or the design document, which raises the conflict
-once more if the attempt is unspent, or to release or close the item. A triage conflict
+once more if the attempt is unspent, or to release or close the item, or to raise the
+conflict for one more design run with `tillr drain retry --item <id> --run <design run>
+--by <who> --why <reason>`, naming the design run the hold names. That design retry records a
+`drain.retry.design` event with who asked and why, adds both to the conflict's text, and
+writes no `retries` row, so the plan does not read it as a build retry. If the design run it
+earns also ends without answering, the conflict returns to the owner by the rules above. A
+design run the conflict no longer names is refused, and the refusal names the current one;
+a conflict the loop is still settling, or has already raised, is refused as the loop's. The
+[design retry tests](./drain/design_retry_test.go) cover the re-raise and both refusals.
+Every `tillr drain retry` refusal names the exact command the face would accept, or says
+that none exists and who moves instead (`TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover`
+in [`main_test.go`](./main_test.go)). A triage conflict
 keeps its own rule, one triage run per request version. The
 [unanswered-design tests](./drain/design_unanswered_test.go) cover the owner hand-off, the
 re-raise after an input change, the later re-raise from the owner, and the interrupted run;

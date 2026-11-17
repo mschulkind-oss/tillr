@@ -356,6 +356,14 @@ its run history and other items' dependencies remain attached to the same id.
 Do not file a replacement item to escape a hold or mark the original resolved
 elsewhere when its intent has not been satisfied.
 
+An item held `conflict-owner` names the design run that ended without answering its
+conflict. When the cause is gone (a fixed trunk, a corrected brief), name the item and
+that design run to the same face: `tillr drain retry --item <id> --run <design run>
+--by <who> --why <reason>`. The conflict is raised for one more design run, and the face
+records who asked and why. A design run the conflict no longer names is refused, naming
+the current one. Every retry refusal names the exact command the face would accept, or
+says that none exists and who moves, so read the refusal before trying another spelling.
+
 Sync reports `clone-of-held-item` when a new id appends a numeric version suffix
 to an unfinished item already in the store. The finding names both ids and the
 retry command, and that document writes nothing. Final items and ids already in

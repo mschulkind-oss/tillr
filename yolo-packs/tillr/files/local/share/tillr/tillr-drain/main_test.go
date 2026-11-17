@@ -1908,6 +1908,99 @@ func TestRetryFaceRefusesWhatItCannotLink(t *testing.T) {
 	})
 }
 
+// On 2026-11-17 an operator facing eight owner holds could not learn from any retry
+// refusal which spelling the face would accept. Every refusal names the exact command it
+// would accept, or says that none exists and who moves (docs/design/landing-principles.md,
+// section 13).
+func TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover(t *testing.T) {
+	const r = "run-item_042-20261109T000000Z"
+	accepted := func(item, ack string) string {
+		cmd := "tillr drain retry --item " + item + " --run " + r + " --by <who> --why <reason>"
+		if ack != "" {
+			cmd += " --acknowledge " + ack
+		}
+		return cmd
+	}
+	cases := map[string]struct {
+		item, state, runState, ack string
+		code                       *int
+		judged                     bool
+		want                       string
+	}{
+		"a judged run":                     {item: "item_042", state: "in-queue", runState: run.StateExited, code: exitCode(0), judged: true, want: accepted("item_042", drain.RetryAckGateFailed)},
+		"a run a wall cut short":           {item: "item_042", state: "in-queue", runState: run.StateTimedOut, want: accepted("item_042", drain.RetryAckUnjudged)},
+		"the wall's ack on a judged run":   {item: "item_042", state: "in-queue", runState: run.StateTimedOut, judged: true, ack: drain.RetryAckUnjudged, want: accepted("item_042", drain.RetryAckGateFailed)},
+		"the gate's ack on a harness fail": {item: "item_042", state: "in-queue", runState: run.StateExited, code: exitCode(2), ack: drain.RetryAckGateFailed, want: accepted("item_042", "") + "\n"},
+		"an unknown acknowledgment":        {item: "item_042", state: "in-queue", runState: run.StateTimedOut, ack: "maybe", want: accepted("item_042", drain.RetryAckUnjudged)},
+		"another item's run":               {item: "item_043", state: "in-queue", runState: run.StateExited, code: exitCode(2), want: accepted("item_042", "")},
+		"a paused run":                     {item: "item_042", state: "in-queue", runState: run.StatePaused, want: "No retry command is accepted: the loop moves"},
+		"a terminal item":                  {item: "item_042", state: "landed", runState: run.StateExited, code: exitCode(2), want: "No retry command is accepted: the owner moves: tillr item reopen"},
+		"an item the store does not hold":  {item: "item_999", state: "in-queue", runState: run.StateExited, code: exitCode(2), want: "No retry command is accepted: the owner moves: tillr item apply"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			state42 := "in-queue"
+			if c.item == "item_042" {
+				state42 = c.state
+			}
+			storePath := fixture(t,
+				itemRecord("item_042", state42),
+				itemRecord("item_043", "in-queue"),
+				runRecord(r, "item_042", "lane-9", "fixture", c.runState, c.code, ""),
+			)
+			if c.judged {
+				seedGateVerdict(t, storePath, r)
+			}
+			code, output := authorizeRetryWith(t, storePath, c.item, r, "the owner", "a reason", "2026-11-10T00:00:00Z", c.ack)
+			if code != 2 {
+				t.Fatalf("retry exited %d, want 2: %s", code, output)
+			}
+			if !strings.Contains(string(output), c.want) {
+				t.Fatalf("the refusal does not name %q:\n%s", c.want, output)
+			}
+		})
+	}
+
+	t.Run("a run the store does not hold", func(t *testing.T) {
+		storePath := fixture(t,
+			itemRecord("item_042", "in-queue"),
+			runRecord(r, "item_042", "lane-9", "fixture", run.StateExited, exitCode(2), ""),
+		)
+		code, output := authorizeRetry(t, storePath, "item_042", "run-item_042-20260101T000000Z", "the owner", "a reason", "2026-11-10T00:00:00Z")
+		if code != 2 || !strings.Contains(string(output), "latest finished run is "+r) || !strings.Contains(string(output), accepted("item_042", "")) {
+			t.Fatalf("the refusal does not name the item's latest finished run (exit %d):\n%s", code, output)
+		}
+	})
+
+	t.Run("a duplicate authorization", func(t *testing.T) {
+		storePath := fixture(t,
+			itemRecord("item_042", "in-queue"),
+			runRecord(r, "item_042", "lane-9", "fixture", run.StateExited, exitCode(2), ""),
+		)
+		if code, output := authorizeRetry(t, storePath, "item_042", r, "the owner", "a reason", "2026-11-10T00:00:00Z"); code != 0 {
+			t.Fatalf("the first retry exited %d: %s", code, output)
+		}
+		code, output := authorizeRetry(t, storePath, "item_042", r, "the owner", "again", "2026-11-10T00:01:00Z")
+		if code != 2 || !strings.Contains(string(output), "No retry command is accepted: the loop moves") {
+			t.Fatalf("the duplicate refusal does not name the loop (exit %d):\n%s", code, output)
+		}
+	})
+}
+
+// The retry face's help names both forms — a build retry and a design run's re-raise — and
+// that every refusal names the command it would accept.
+func TestRetryHelpNamesTheDesignRunForm(t *testing.T) {
+	code, out := invoke(t, "retry", "--help")
+	if code != 0 {
+		t.Fatalf("retry --help exited %d: %s", code, out)
+	}
+	for _, want := range []string{"design run", "raises the item's conflict again", "names the exact command it would accept"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("retry --help does not say %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
 // Section 3): `--help` names the faces and a face's `--help` names that face's flags, both
 // on stdout and both exit 0.

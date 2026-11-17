@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -35,6 +34,14 @@ const RetryKind = "drain.retry"
 // on the retries row would be a second copy of that evidence. Its object is the retry, so
 // a reader follows one id from the row to the event.
 const RetryAckKind = "drain.retry.ack"
+
+// DesignRetryKind is the event a retry appends when it names an item and the design run
+// that ended without answering the item's conflict, now with the owner: the operator's
+// authorization to raise that conflict for one more design run. It is an event and not a
+// `retries` row, because a row is a build retry the plan reads as one; this authorization
+// moves the conflict instead, and the conflict transition it writes beside the event is
+// what the plan reads. Its object is the design run, and its payload is the Retry.
+const DesignRetryKind = "drain.retry.design"
 
 // The two outcomes a retry may acknowledge. They are the two the face refuses without an
 // acknowledgment: a run the gate judged, and a run a wall cut short. The empty string is
@@ -83,6 +90,9 @@ type Retry struct {
 	RequestedBy     string    `json:"requested_by"`
 	Reason          string    `json:"reason"`
 	RequestedAt     time.Time `json:"requested_at"`
+	// ReraisesConflict is the conflict a design retry raised again, and "" for a build
+	// retry. A design retry writes no `retries` row (DesignRetryKind).
+	ReraisesConflict string `json:"reraises_conflict,omitempty"`
 }
 
 // RetryRequest is one operator's authorization to re-dispatch a run, before it is written.
@@ -149,7 +159,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	var state string
 	if err := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, req.ItemID).Scan(&state); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Retry{}, Usagef("the store holds no item %q", req.ItemID)
+			return Retry{}, Usagef("the store holds no item %q. %s", req.ItemID, noRetryCommand("the owner moves: tillr item apply records the item from its document block"))
 		}
 		return Retry{}, readFailure(err)
 	}
@@ -158,7 +168,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		return Retry{}, readFailure(err)
 	}
 	if finishedState(declared.Parsed, state) {
-		return Retry{}, Usagef("item %q is %q: a retry does not re-open a terminal item", req.ItemID, state)
+		return Retry{}, Usagef("item %q is %q: a retry does not re-open a terminal item. %s", req.ItemID, state, noRetryCommand("the owner moves: tillr item reopen puts the item back first"))
 	}
 
 	var (
@@ -172,19 +182,24 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		   FROM runs WHERE run_id = ?`, req.RunID,
 	).Scan(&runItemID, &rec.RunID, &rec.Backend, &rec.State, &exitCode, &refs); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Retry{}, Usagef("the store holds no run %q", req.RunID)
+			return Retry{}, Usagef("the store holds no run %q. %s", req.RunID, latestRunCommand(tx.Reader(), req.ItemID))
 		}
 		return Retry{}, readFailure(err)
 	}
 	if !runItemID.Valid || runItemID.String != req.ItemID {
-		belongs := "no item at all"
 		if runItemID.Valid {
-			belongs = fmt.Sprintf("item %q", runItemID.String)
+			return Retry{}, Usagef("run %q belongs to item %q, not %q. The accepted command names its item: %s", req.RunID, runItemID.String, req.ItemID, retryCommand(runItemID.String, req.RunID, ""))
 		}
-		return Retry{}, Usagef("run %q belongs to %s, not %q", req.RunID, belongs, req.ItemID)
+		return Retry{}, Usagef("run %q belongs to no item at all, not %q. %s", req.RunID, req.ItemID, latestRunCommand(tx.Reader(), req.ItemID))
 	}
 	if !terminalRunStates[rec.State] {
-		return Retry{}, Usagef("run %q is %q: a retry supersedes a finished run", req.RunID, rec.State)
+		return Retry{}, Usagef("run %q is %q: a retry supersedes a finished run. %s", req.RunID, rec.State, noRetryCommand("the loop moves: the run ends first, and a retry is accepted then"))
+	}
+	if design, err := authorizeDesignRetry(ctx, tx, req, at); err != nil || design != nil {
+		if design == nil {
+			return Retry{}, err
+		}
+		return *design, nil
 	}
 	if exitCode.Valid {
 		code := int(exitCode.Int64)
@@ -207,24 +222,24 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	case "":
 	case RetryAckGateFailed:
 		if !judged {
-			return Retry{}, Usagef("--acknowledge %s names a run the gate did not judge: %q", RetryAckGateFailed, req.RunID)
+			return Retry{}, Usagef("--acknowledge %s names a run the gate did not judge: %q. The accepted command: %s", RetryAckGateFailed, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
 		}
 	case RetryAckUnjudged:
 		if judged || class != AttemptUnjudged {
-			return Retry{}, Usagef("--acknowledge %s names a run a wall did not cut short: %q", RetryAckUnjudged, req.RunID)
+			return Retry{}, Usagef("--acknowledge %s names a run a wall did not cut short: %q. The accepted command: %s", RetryAckUnjudged, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
 		}
 	default:
-		return Retry{}, Usagef("--acknowledge %q is not an outcome: want %q or %q", req.Acknowledge, RetryAckGateFailed, RetryAckUnjudged)
+		return Retry{}, Usagef("--acknowledge %q is not an outcome: want %q or %q. The accepted command: %s", req.Acknowledge, RetryAckGateFailed, RetryAckUnjudged, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
 	}
 	if judged && req.Acknowledge != RetryAckGateFailed {
-		return Retry{}, Usagef("run %q was judged by the gate: a judged candidate is not retryable by link", req.RunID)
+		return Retry{}, Usagef("run %q was judged by the gate: a judged candidate is not retryable by link. An operator who has read the verdict acknowledges it: %s", req.RunID, retryCommand(req.ItemID, req.RunID, RetryAckGateFailed))
 	}
 	// Guarded by `!judged`: a walled run can also have committed and reached the gate, and
 	// once a `gate.verdict` exists the gate's word is the one a retry acknowledges (design
 	// D-RW2). Without the guard both branches demand an acknowledgment and neither accepts
 	// the other's.
 	if !judged && class == AttemptUnjudged && req.Acknowledge != RetryAckUnjudged {
-		return Retry{}, Usagef("run %q was cut short by a wall: an unjudged run is inspected, not retried", req.RunID)
+		return Retry{}, Usagef("run %q was cut short by a wall: an unjudged run is inspected, not retried. An operator who has inspected the tree acknowledges it: %s", req.RunID, retryCommand(req.ItemID, req.RunID, RetryAckUnjudged))
 	}
 
 	retry := Retry{
@@ -240,7 +255,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		return Retry{}, readFailure(err)
 	}
 	if seen > 0 {
-		return Retry{}, Usagef("run %q is already authorized for retry: the authorization %q survives in the store", req.RunID, retry.RetryID)
+		return Retry{}, Usagef("run %q is already authorized for retry: the authorization %q survives in the store. %s", req.RunID, retry.RetryID, noRetryCommand("the loop moves: its next pass dispatches the retry, or holds it naming why (tillr drain why)"))
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO retries (retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at)
@@ -279,15 +294,19 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 
 // RetryEnvelope wraps one authorization in design §5.1's envelope, so the face echoes a
 // record a reader can store beside the store's own row. The subject is the item, as a
-// decision's is.
+// decision's is. A design retry is echoed as DesignRetryKind, the event it wrote.
 func RetryEnvelope(retry Retry) (record.Envelope, error) {
 	body, err := json.Marshal(retry)
 	if err != nil {
 		return record.Envelope{}, Internalf("encoding the retry for %q: %v", retry.ItemID, err)
 	}
+	kind := RetryKind
+	if retry.ReraisesConflict != "" {
+		kind = DesignRetryKind
+	}
 	return record.Envelope{
 		RecordVersion: record.SupportedVersion,
-		Kind:          RetryKind,
+		Kind:          kind,
 		ID:            retry.RetryID,
 		Producer:      record.Producer{System: record.System, Utility: Utility, Version: Version},
 		CreatedAt:     retry.RequestedAt,
