@@ -71,6 +71,20 @@ const (
 // lane was gating. It matches `tillr-loop`'s gate argv for the same reason.
 const DefaultRollingProgram = "python3 tools/fork-check.py --tier rolling {since} --lock-timeout 30"
 
+// DefaultFixerGateProgram is the full, untiered gate a trunk fixer runs instead of the
+// ordinary gate. It is the repository's gate adapter, not fork-check itself, for two
+// reasons the drain's own contract imposes: the loop appends the candidate's flags to every
+// gate program, which fork-check refuses as unrecognized arguments, and the land step after
+// it needs the `gate.verdict` record only `tillr-gate` writes. `{green}` becomes `--since
+// <last green>` or `--all`, which the adapter hands to its judge as the untiered range. The
+// path is relative because a gate runs in the candidate's worktree, whose copy of the
+// adapter a fixer cannot edit (GateCodePaths).
+const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop gate {green}"
+
+// DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
+// comma-separated check ids. It is handed no candidate flags: it judges a revision.
+const DefaultReplayProgram = "python3 tools/fork-check.py --replay --only {only}"
+
 // GateCodePaths is the gate's own code. A fixer's fence is the union of the suspect
 // change and the failing checks' watched paths, with these removed: a fixer that could
 // edit the gate could make the red disappear by weakening the judge, which is the one

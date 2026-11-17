@@ -11,6 +11,12 @@ def main():
     parser.add_argument("--head", required=True)
     parser.add_argument("--runner", default="tillr-gate")
     parser.add_argument("--logs", required=True)
+    # A trunk fixer's full gate: the remaining checks run untiered over the range since the
+    # last green trunk, or over the whole tree, instead of the candidate's landing tier. The
+    # change checks above still judge the candidate's own base..head.
+    full = parser.add_mutually_exclusive_group()
+    full.add_argument("--since", default=None, metavar="SHA")
+    full.add_argument("--all", action="store_true")
     args = parser.parse_args()
     try:
         # The remaining program judges HEAD. Do not certify a different head with
@@ -24,8 +30,9 @@ def main():
                                   "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs])
         if checked.returncode:
             return checked.returncode
-        remaining = subprocess.run([sys.executable, "tools/fork-check.py", "--since", args.base,
-                                    "--tier", "landing", "--lock-timeout", "30"])
+        scope = (["--all"] if args.all else ["--since", args.since] if args.since
+                 else ["--since", args.base, "--tier", "landing"])
+        remaining = subprocess.run([sys.executable, "tools/fork-check.py", *scope, "--lock-timeout", "30"])
         # The old program's usage/no-verdict exit is 2; RunGate reads 4 as
         # could-not-judge. A missing judgment must never become a rejected change.
         return remaining.returncode if remaining.returncode in (0, 1) else 4

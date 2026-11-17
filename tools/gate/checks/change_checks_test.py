@@ -336,6 +336,26 @@ class Changes(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertNotIn("remaining program ran", result.stdout)
 
+    def test_a_fixer_range_runs_the_remaining_program_untiered(self):
+        # A trunk fixer's gate is `tillr-loop gate --since <green>` or `--all`, which the
+        # adapter hands to this judge. The change checks still take the candidate's range;
+        # the remaining program takes the fixer's, with no landing tier.
+        self.stub_tree_commands()
+        (self.repo / "tools/fork-check.py").write_text('import sys\nprint(" ".join(sys.argv[1:]))\n')
+        (self.repo / "README.md").write_text("# Fixture\n\nFixed.\n")
+        head = self.commit()
+        common = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
+                  "--runner", str(self.runner), "--logs", str(self.repo / "logs")]
+        for extra, want in (([], f"--since {self.base} --tier landing --lock-timeout 30"),
+                            (["--since", self.base], f"--since {self.base} --lock-timeout 30"),
+                            (["--all"], "--all --lock-timeout 30")):
+            result = subprocess.run(common + extra, cwd=self.repo, env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.splitlines()[-1], want)
+        result = subprocess.run(common + ["--all", "--since", self.base], cwd=self.repo, env=self.env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
