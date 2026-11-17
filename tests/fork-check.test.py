@@ -7061,6 +7061,17 @@ assert "class=docs-only" in line and "wall=7.0s" in line and "floor=5.0s" in lin
 assert "ratio=1.40" in line and "target=15.0s" in line, line
 assert "ratio=-" in efficiency.efficiency_line(
     efficiency.ChangeClass("other", None, "mixed"), 7.0, 0.0)
+# A check that ran in no measurable time -- an in-process check over a small tree takes
+# microseconds -- gives a floor the record keeps as 0.0 (it is kept to 10 ms). The ratio
+# exists only for a positive recorded floor, and the printed line and the record agree:
+# before 2026-11-16 the line divided by the unrounded floor and printed a ratio that the
+# record, dividing by the rounded one, had as None.
+instant = [_floor_check("file-size", 0.0, 5.0), _floor_check("seed-freeze", 0.004, 5.0)]
+assert efficiency.s1_floor(instant) == 0.004, efficiency.s1_floor(instant)
+assert efficiency.efficiency_figures(7.0, efficiency.s1_floor(instant)) == (0.0, None)
+assert "ratio=-" in efficiency.efficiency_line(
+    efficiency.ChangeClass("docs-only", 15.0, "only Markdown"), 7.0, efficiency.s1_floor(instant))
+assert efficiency.efficiency_figures(7.0, 5.0) == (5.0, 1.4)
 
 # The cause travels with the check into both records. A fork-quality step carried by
 # drift says so; a step of any other kind carries no cause.
@@ -7103,8 +7114,15 @@ with tempfile.TemporaryDirectory() as tmp:
     last = record(repo)["runs"][-1]
     assert last["change_class"] == "docs-only", last
     assert last["change_class_target"] == 15.0, last
-    assert last["floor_seconds"] > 0, last
-    assert isinstance(last["efficiency"], float), last
+    # The fixture's one check is in-process and may take no measurable time, so the floor
+    # may be 0.0: what this pass proves is that the record carries the floor and that the
+    # ratio is there exactly when the floor is -- never a measured duration being nonzero,
+    # which would be an elapsed-time assertion (case 53's rule). The zero-duration case is
+    # proven deterministically above, with injected durations.
+    assert isinstance(last["floor_seconds"], float) and last["floor_seconds"] >= 0, last
+    assert (last["efficiency"] is None) == (last["floor_seconds"] == 0), last
+    assert last["efficiency"] is None or isinstance(last["efficiency"], float), last
+    assert ("ratio=-" in result.stdout) == (last["efficiency"] is None), result.stdout
     timeline = json.loads(
         (repo / ".git" / "yolo-fork-check" / "timings.jsonl").read_text().splitlines()[-1])
     assert timeline["change_class"] == "docs-only", timeline

@@ -4265,6 +4265,18 @@ def s1_floor(checks: list[Check]) -> float:
     return cheap_phase + exclusive_seconds + max(chains.values(), default=0.0)
 
 
+def efficiency_figures(wall: float, floor: float) -> tuple[float, float | None]:
+    """The floor as the record keeps it (to 10 ms) and the ratio of wall to that floor.
+
+    The ratio exists only when the KEPT floor is positive. A floor under 5 ms -- a run of
+    in-process checks over a small tree -- is kept as 0.0, and a ratio against it would be
+    noise against a wall clock kept to 0.1 s. The printed line and the record both use
+    this, so the two never disagree about whether a pass had a ratio.
+    """
+    kept = round(floor, 2)
+    return kept, (round(wall / kept, 2) if kept > 0 else None)
+
+
 def efficiency_line(change: ChangeClass, wall: float, floor: float) -> str:
     """The one line every pass prints: class, wall, floor, ratio and target.
 
@@ -4273,7 +4285,8 @@ def efficiency_line(change: ChangeClass, wall: float, floor: float) -> str:
     target says the suites themselves grew. A run with no checks has no floor and no
     ratio, and prints `-` rather than a division by zero.
     """
-    ratio = f"{wall / floor:.2f}" if floor > 0 else "-"
+    _, ratio_value = efficiency_figures(wall, floor)
+    ratio = f"{ratio_value:.2f}" if ratio_value is not None else "-"
     target = clock(change.target) if change.target is not None else "-"
     return (f"fork-check: efficiency -- class={change.name} wall={clock(wall)} "
             f"floor={clock(floor)} ratio={ratio} target={target} ({change.detail})")
@@ -8982,8 +8995,8 @@ def run_gate(argv: list[str]) -> int:
             recorded["cause"] = check.cause
         recorded_checks.append(recorded)
     change = classify_change(root, changed, series)
-    floor = round(s1_floor(plan.checks), 2)
     wall = round(time.monotonic() - started, 1)
+    floor, efficiency = efficiency_figures(wall, s1_floor(plan.checks))
     entry = {
         "at": at, "commit": head, "tree": tree, "changed": len(changed), "outcome": outcome,
         "scope": "targeted" if since is not None else "audit", "since": since,
@@ -9010,7 +9023,7 @@ def run_gate(argv: list[str]) -> int:
         "change_class": change.name,
         "change_class_target": change.target,
         "floor_seconds": floor,
-        "efficiency": round(wall / floor, 2) if floor > 0 else None,
+        "efficiency": efficiency,
         "checks": recorded_checks,
         # Every step the run did not put a verdict on, with the reason it did not run and
         # whether the change gave it a reason this machine could not answer. The counts
