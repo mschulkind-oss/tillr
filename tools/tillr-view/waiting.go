@@ -84,6 +84,8 @@ var waitingRules = map[string]waitingRule{
 	"no-lane":                        {"waits on work", "queue", "a free lane"},
 	"no-fence":                       {"needs you", "queue", "the owner"},
 	"run-live":                       {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
+	"prose-criteria-count":           {"needs you", "queue", "the owner; reconcile the original criteria"},
+	"awaits-rewrite":                 {"waits on work", "queue", "the prose rewrite to land"},
 	"fork-held":                      {"waits on work", "queue", "cause not recorded"},
 	"failover":                       {"ready", "queue", "the next pass"},
 	"seat-degraded":                  {"ready", "queue", "the next pass"},
@@ -113,7 +115,7 @@ func waitingRuleFor(reason string) waitingRule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return waitingRules["workflow-invalid"]
 	}
-	for _, named := range []string{"node-failed", "node-scope-outside-fence", "boundary-scope-escape"} {
+	for _, named := range []string{"node-failed", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
 		if strings.HasPrefix(reason, named+": ") {
 			return waitingRules[named]
 		}

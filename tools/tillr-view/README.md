@@ -360,6 +360,13 @@ refuse the read explicitly instead of inventing a stop.
 
 ## Why each unlanded item is not moving
 
+For a [prose rewrite hold](../tillr-drain/README.md#prose-rewrites-before-build),
+the waiting face shows `awaits-rewrite` as the reason and `rewrite-<item id>` as
+the mover, classified as waiting on work rather than needing the owner. A rewrite
+held by `prose-criteria-count` instead names the owner and the incompatible criteria
+limit, rather than pretending that another worker can resolve it.
+
+
 `waiting` reads the current planner through `tillr-drain why`, as does
 `GET /api/v1/why`. The observatory's Home and Items screens use that route for
 class, reason, and mover, including items no loop pass has ever considered.

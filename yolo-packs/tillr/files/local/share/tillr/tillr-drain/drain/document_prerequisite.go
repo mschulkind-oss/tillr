@@ -19,25 +19,46 @@ import (
 // not of the queue: an undeclared request must be shaped before it can be built.
 const ReasonTriageNoBlock = "triage-no-block"
 
-func documentPrerequisites(r *store.Reader, root string) (map[string]bool, error) {
+func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[string]string, map[string]string, error) {
 	missing := map[string]bool{}
+	rewrites := map[string]string{}
+	owners := map[string]string{}
 	if root == "" {
-		return missing, nil
+		return missing, rewrites, owners, nil
 	}
 	docs, err := docshare.ReadQueue(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	report, err := item.Sync(context.Background(), r, nil, item.SyncInput{Root: root, Documents: docs})
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if report.DocumentFed {
 		for _, id := range report.UnsharedOpenIDs {
 			missing[id] = true
 		}
 	}
-	return missing, nil
+	for id, notes := range item.ProseRewriteFindings(report) {
+		var state string
+		rewrite := "rewrite-" + id
+		err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, rewrite).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if state != StateLanded {
+			rewrites[id] = rewrite
+			for _, note := range notes {
+				if strings.HasPrefix(note.Message, "criteria-count:") {
+					owners[rewrite] = "prose-criteria-count: the original has more than eight criteria; preserving them cannot pass the guide. The owner must reconcile the original criteria before a rewrite can run."
+				}
+			}
+		}
+	}
+	return missing, rewrites, owners, nil
 }
 
 // requestVersion reads only the request's three fields, never its execution state.

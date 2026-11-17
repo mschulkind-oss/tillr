@@ -16,6 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/docshare"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -122,10 +123,11 @@ type SyncReport struct {
 
 // syncBlock is one parsed directive with the item it declares.
 type syncBlock struct {
-	file    string
-	heading string
-	line    int
-	payload itemPayload
+	file       string
+	heading    string
+	line       int
+	payload    itemPayload
+	attributes map[string]string
 	// Line ranges, with an exclusive end, retain the exact source bytes retirement removes.
 	directiveEnd   int
 	criterionLines []int
@@ -483,7 +485,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	oldestSet := false
 	for _, id := range ids {
 		st := held[id]
-		if !unshared[id] {
+		if !unshared[id] || ProseRewriteOriginal(id) != "" {
 			continue
 		}
 		report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
@@ -583,6 +585,15 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	writes, err := orderFileWrites(perFile, fileOrder)
 	if err != nil {
 		return syncPlan{}, err
+	}
+	if in.Root != "" {
+		config, err := settings.Read(in.Root)
+		if err != nil {
+			return syncPlan{}, err
+		}
+		if config.Prose.Rewrite {
+			writes = append(writes, proseRewriteWrites(&report, blocks, held, d.Ready)...)
+		}
 	}
 	return syncPlan{report: report, writes: writes}, nil
 }
@@ -863,6 +874,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		body = strings.TrimPrefix(body, "item")
 
 		attrs, pending := docshare.Attributes(body)
+		b.attributes = attrs
 
 		id := strings.TrimSpace(attrs["id"])
 		b.payload.ItemID = id

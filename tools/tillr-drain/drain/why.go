@@ -193,7 +193,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		switch {
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
-		case (d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
+		case (d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
@@ -318,6 +318,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 }
 
 func whyPresentation(d Decision) (class, where, mover string) {
+	if strings.HasPrefix(d.Reason, "prose-criteria-count: ") {
+		return "needs you", "queue", "the owner; reconcile the original criteria"
+	}
 	if strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 		return "waits on work", "land", "the heavy runner; prove trunk or file its fixer"
 	}
@@ -342,6 +345,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", "lane", "inspect the named node and authorize a retry"
 	}
 	switch d.Reason {
+	case "awaits-rewrite":
+		return "waits on work", where, "the prose rewrite to land"
 	case ReasonBlocked:
 		return "waits on work", where, "the owner; clear the item's blocked state"
 	case ReasonNoLane, ReasonForkHeld:

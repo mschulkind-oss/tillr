@@ -1814,11 +1814,25 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if err != nil {
 		return "", false, err
 	}
+	if item.ProseRewriteOriginal(candidate.ItemID) != "" {
+		detail, err := l.validateProseRewrite(ctx, worker, ref)
+		if err != nil {
+			return "", false, err
+		}
+		if detail != "" {
+			candidate.RefusalDetail = detail
+			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+			if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+	}
 	changed, err := l.definitionChanged(ctx, worker, ref)
 	if err != nil {
 		return "", false, err
 	}
-	if candidate.BlockConflict == nil && changed {
+	if candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == "" && changed {
 		l.reportf("loop: refusing %s before the gate: worker edited its own item block %s\n", candidate.ItemID, ref)
 		candidate.RefusalDetail = "worker edited its own item block " + ref
 		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
@@ -1875,7 +1889,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	// A design answer amends the block for the next worker; only a completed
 	// worker candidate retires it. Recovery checks the original worker above,
 	// not the loop-owned retirement commit.
-	if candidate.BlockConflict == nil {
+	if candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == "" {
 		candidate, err = l.retireDocumentBlock(ctx, candidate)
 		if err != nil {
 			return "", false, err

@@ -264,7 +264,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	if source, ok := questions.(*VantageQuestions); ok {
 		root = source.Root
 	}
-	unshared, err := documentPrerequisites(r, root)
+	unshared, rewriteHolds, rewriteOwnerHolds, err := documentPrerequisites(r, root)
 	if err != nil {
 		return nil, err
 	}
@@ -461,6 +461,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			if err != nil {
 				return nil, readFailure(err)
 			}
+		} else if rewriteOwnerHolds[item.ItemID] != "" && !terminalStates[item.State] {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: rewriteOwnerHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
+		} else if rewriteHolds[item.ItemID] != "" && !terminalStates[item.State] {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "awaits-rewrite", DeferredBy: rewriteHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
 		} else if unshared[item.ItemID] {
 			decision, err = p.triageDecision(r, item)
 			if err != nil {
@@ -1295,7 +1301,8 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
 		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `
 		   FROM items
-		  ORDER BY COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
+		  ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
+		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
 	if err != nil {
 		return nil, readFailure(err)
 	}

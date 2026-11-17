@@ -446,6 +446,31 @@ those fields permits one new run; changing rank or state does not. Waiting outpu
 names the design seat while triage is due or running, then the owner and the
 question or conflict. Startup sync output includes the `unshared_open` count.
 
+## Prose rewrites before build
+
+[Opt-in sync rewrites](../tillr-item/README.md#automatic-prose-rewrites) run on the
+build seat rather than the design seat. Queue planning places trunk fixers first,
+then rewrites, then ordinary items, retaining rank order within each group. This
+keeps a rewrite ahead even when an ordinary item's rank is already the smallest
+possible token; it does not renumber the owner's queue.
+
+The original waits with `awaits-rewrite`, naming its rewrite as the next mover,
+until the rewrite lands or the current document block passes the prose check.
+When the original has more than eight criteria, its rewrite waits on the owner with
+`prose-criteria-count`: the guide's limit cannot be met while preserving every
+criterion. The owner must reconcile those original criteria first; planning reads
+the current block again and releases the rewrite when the contradiction is gone.
+Generated rewrite items bypass the missing-document triage prerequisite. Their
+brief includes the entire [prose guide](../../.agents/skills/tillr-prose-style/SKILL.md)
+and the source block's findings; an unreadable guide refuses staging.
+
+Before the gate, the loop compares the original block in the pinned base and
+candidate blobs using sync's parser. A changed `id`, `paths`, `blocked_by` or `seat`,
+or added, removed or renumbered criterion, refuses the rewrite and names the change.
+A missing block or a remaining prose finding also refuses it. Rewording a criterion
+may not change its meaning; that obligation still requires review. A valid rewrite
+lands without retiring the original block, so the original can be built afterward.
+
 ## After-merge heavy runs
 
 With `landing_strategy` set to `after-merge`, each landing and loop startup trigger
