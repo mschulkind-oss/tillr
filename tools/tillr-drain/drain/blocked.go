@@ -159,7 +159,7 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 	if filepath.IsAbs(file) || strings.HasPrefix(filepath.Clean(file), "..") {
 		return false, Usagef("item block %s is not repository-relative", ref)
 	}
-	bodies := []string{}
+	bodies, raws := []string{}, []string{}
 	for _, sha := range []string{c.BaseSHA, c.HeadSHA} {
 		// A deleted/new blob is an explicit input; other git failures are errors.
 		files, err := l.git(ctx, c.Worktree, "ls-tree", "--name-only", sha, "--", file)
@@ -167,16 +167,34 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 			return false, err
 		}
 		if strings.TrimSpace(files) == "" {
-			bodies = append(bodies, "document missing")
+			bodies, raws = append(bodies, "document missing"), append(raws, "")
 			continue
 		}
 		raw, err := l.git(ctx, c.Worktree, "show", sha+":"+file)
 		if err != nil {
 			return false, err
 		}
-		bodies = append(bodies, item.DefinitionBodyContent(ref, c.ItemID, []byte(raw)))
+		bodies, raws = append(bodies, item.DefinitionBodyContent(ref, c.ItemID, []byte(raw))), append(raws, raw)
 	}
-	return bodies[0] != bodies[1], nil
+	if bodies[0] == bodies[1] {
+		return false, nil
+	}
+	// A conflict-fix run of a candidate the loop retired may carry that retirement: the
+	// prepared head it re-applies holds the loop's own commit removing this block. That
+	// removal is the loop's, not the worker's, so the head is compared against exactly what
+	// the loop's retirement makes of this base — never excused as any edit to the block.
+	if raws[0] != "" && raws[1] != "" && isConflictFixRun(c.RunID) {
+		retired, err := l.retiredOriginal(ctx, strings.TrimSuffix(c.RunID, ConflictFixSuffix))
+		if err != nil {
+			return false, err
+		}
+		if retired {
+			if text, found := item.RetireItemBlock(raws[0], c.ItemID); found && item.DefinitionBodyContent(ref, c.ItemID, []byte(text)) == bodies[1] {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 func (l *Loop) answerBlock(ctx context.Context, candidate Candidate) error {

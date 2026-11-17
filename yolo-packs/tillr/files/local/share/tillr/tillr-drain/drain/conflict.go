@@ -74,10 +74,6 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	fix.RunID = fixRunID
 	fix.Resume = false
 	fix.CorrelationID = candidate.TickID
-	markers, err := l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, candidate.HeadSHA)
-	if err != nil {
-		return "", false, l.holdRepair(ctx, basis, err)
-	}
 	// Pin before resetting: the repair brief is not yet staged and its failure
 	// must leave the original candidate reachable even after garbage collection.
 	if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
@@ -92,9 +88,15 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// Reapply only the worker's change. The pinned prepared head above retains
 	// the gate evidence, but its loop-owned retirement must be regenerated after
 	// repair, not attributed to the worker as an edit of its own item block.
-	reapplyHead := candidate.HeadSHA
+	reapplyHead, preparedHead := candidate.HeadSHA, ""
 	if candidate.WorkerHeadSHA != "" {
-		reapplyHead = candidate.WorkerHeadSHA
+		reapplyHead, preparedHead = candidate.WorkerHeadSHA, candidate.HeadSHA
+	}
+	// The markers are the worker's change against the moved trunk, so the brief never
+	// shows the worker a conflict the loop's own retirement made.
+	markers, err := l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, reapplyHead)
+	if err != nil {
+		return "", false, l.holdRepair(ctx, basis, err)
 	}
 	spec := StageSpec{
 		LaneID: candidate.LaneID, ItemID: candidate.ItemID, RunID: fixRunID,
@@ -107,6 +109,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			HeadSHA:       reapplyHead,
 			TrunkSHA:      mainSHA,
 			OriginalRunID: candidate.RunID,
+			PreparedHead:  preparedHead,
 		},
 	}
 	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {

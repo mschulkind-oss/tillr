@@ -278,6 +278,9 @@ type ConflictBrief struct {
 	HeadSHA       string
 	TrunkSHA      string
 	OriginalRunID string
+	// PreparedHead is the pinned head when the loop retired the candidate's item block on
+	// top of HeadSHA. The brief tells the worker not to re-apply that loop-owned commit.
+	PreparedHead string
 }
 
 // Stager produces the lane directory one run needs: its worktree, its brief, its fence and
@@ -1022,8 +1025,13 @@ func taskSection(recorded stagedItem) string {
 // own, and the fact the run must act on is that the candidate's change no longer squashes
 // onto the trunk it has to land on.
 func conflictTask(recorded stagedItem, conflict ConflictBrief) string {
-	return fmt.Sprintf("%s\n\nThis is the item's one conflict-fix run. The candidate's change (head %s) does not squash onto the moved trunk (%s): re-apply it, resolve the conflicts below, and commit the resolution. Its first run was %s, and its head is pinned at refs/tillr/runs/%s so nothing is lost when this lane was reset.",
+	task := fmt.Sprintf("%s\n\nThis is the item's one conflict-fix run. The candidate's change (head %s) does not squash onto the moved trunk (%s): re-apply it, resolve the conflicts below, and commit the resolution. Its first run was %s, and its head is pinned at refs/tillr/runs/%s so nothing is lost when this lane was reset.",
 		recorded.Title, conflict.HeadSHA, conflict.TrunkSHA, conflict.OriginalRunID, conflict.OriginalRunID)
+	if conflict.PreparedHead != "" && conflict.PreparedHead != conflict.HeadSHA {
+		task += fmt.Sprintf(" That pinned ref is %s: the change above plus the loop's own commit retiring this item's block. Re-apply %s only, not the pinned ref; the loop retires the block again after your fix.",
+			conflict.PreparedHead, conflict.HeadSHA)
+	}
+	return task
 }
 
 // conflictFacts is the brief's Facts section for a conflict-fix run: the conflicting paths,
