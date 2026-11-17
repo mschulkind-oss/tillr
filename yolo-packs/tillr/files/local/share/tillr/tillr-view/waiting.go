@@ -51,6 +51,7 @@ var waitingRules = map[string]waitingRule{
 	"gate-stall-rerun":               {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
 	"gate-stalled":                   {"needs you", "gate", "diagnose the stalled check and clear the fault"},
 	"gate-harness-error":             {"needs you", "gate", "diagnose the gate and clear the fault"},
+	"land-harness-error":             {"needs you", "land", "repair what the lander refused and clear the fault"},
 	"host-boundary-violation":        {"needs you", "fence", "inspect the recorded violation and clear the fault"},
 	"candidate-record-mismatch":      {"needs you", "lane", "restore the recorded candidate and clear the fault"},
 	"definition-sync-failed":         {"needs you", "queue", "correct the definition and clear the fault"},

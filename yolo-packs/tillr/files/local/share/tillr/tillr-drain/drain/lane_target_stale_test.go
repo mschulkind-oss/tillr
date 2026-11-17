@@ -132,3 +132,31 @@ func TestARecordedCandidateOutsideItsLaneTargetIsHeldNotFatal(t *testing.T) {
 		t.Fatalf("the misplaced candidate was not held as a mismatch: %+v", d)
 	}
 }
+
+// landExternalSteps is a lander that cannot deliver, as tillr-land cannot when a fork
+// cache holds commits the patch branch does not (.forks/pi, 2026-11-17).
+type landExternalSteps struct{ dirtyPathSteps }
+
+func (s *landExternalSteps) Land(context.Context, Candidate) (LandOutcome, error) {
+	s.lands++
+	return LandOutcome{}, Externalf("the land program answered exit 4 for item-a: fork cache has unlanded or divergent commits")
+}
+
+// A land step that cannot deliver one candidate is that item's fault, as a gate that
+// cannot judge one is: recorded 2026-11-17, item-pi-fork-stop-at-gap's land exited 4 on
+// every restart and took the whole loop, and its nine other lanes, down with it.
+func TestALandHarnessErrorHoldsTheItemNotTheLoop(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	steps := &landExternalSteps{dirtyPathSteps{t: t, root: f.root, store: f.storePath}}
+	l.cfg.Steps = steps
+	historyCandidate(t, f, l, runGit(t, f.root, "rev-parse", "HEAD"))
+	var result LoopResult
+	historyPass(t, l, &result)
+	if steps.lands != 1 {
+		t.Fatalf("the land ran %d times, want once", steps.lands)
+	}
+	if d := mustPlan(t, l)[0].decision; d.Reason != ReasonLandHarnessError {
+		t.Fatalf("the undeliverable candidate was not held as a land fault: %+v", d)
+	}
+}
