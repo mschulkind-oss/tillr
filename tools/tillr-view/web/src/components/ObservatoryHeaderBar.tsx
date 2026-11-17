@@ -107,13 +107,13 @@ export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["dra
   </span>;
 }
 
-/** LanePill is the header's always-visible lane state: how many of the store's lanes hold
- * a live lease, out of how many the store knows. It is drawn even when the answer is zero,
+/** LanePill is the header's always-visible lane state: how many of the store's lanes have
+ * running work, out of how many the store knows. Settling leases are not running work. It is drawn even when the answer is zero,
  * which is the whole point: a stopped board says `0/1 lanes running · idle` instead of
  * leaving the operator to infer an idle drain from a `working` glyph over no live run. It
  * sits beside the R37 projection fix rather than replacing the NowBand, which stays absent
  * when there is no live run (design §4.4, ledger `D-OBS12`). */
-function LanePill({ lanes, runsLive }: { lanes?: LaneView[]; runsLive?: number }) {
+function LanePill({ lanes }: { lanes?: LaneView[] }) {
   if (lanes === undefined) {
     return (
       <span
@@ -124,21 +124,28 @@ function LanePill({ lanes, runsLive }: { lanes?: LaneView[]; runsLive?: number }
       </span>
     );
   }
-  const total = lanes.length;
-  const leased = lanes.filter((lane) => lane.state === "leased").length;
-  const running = runsLive ?? leased;
-  const idle = running === 0;
+  const ordinary = lanes.filter(lane => !lane.lane_id.startsWith("express-") && !lane.lane_id.startsWith("desk-"));
+  const express = lanes.filter(lane => lane.lane_id.startsWith("express-"));
+  const total = ordinary.length;
+  if ([...ordinary, ...express].some(lane => lane.work_state === undefined && lane.state === "leased")) {
+    return <span className="lane-pill lane-pill--unknown" title="this server records leases but not whether their runs are still running or settling">
+      <span className="lane-pill__dot" />—/— lanes running · work state unrecorded
+    </span>;
+  }
+  const running = ordinary.filter(lane => lane.work_state === "running").length;
+  const expressRunning = express.filter(lane => lane.work_state === "running").length;
+  const idle = running + expressRunning === 0;
   return (
     <span
       className={idle ? "lane-pill lane-pill--idle" : "lane-pill lane-pill--running"}
       title={
         idle
-          ? `no lane is holding a lease — the drain is idle (${total} lane${total === 1 ? "" : "s"} in this store)`
-          : `${running} of ${total} lane${total === 1 ? "" : "s"} hold a live lease`
+          ? `ordinary and express pools are idle (${total} ordinary, ${express.length} express); settling work and document desks are counted separately`
+          : `${running} of ${total} ordinary lanes, ${expressRunning} of ${express.length} express lanes have running work`
       }
     >
       <span className="lane-pill__dot" />
-      {running}/{total} lanes running{idle ? " · idle" : ""}
+      {express.length ? `${running} of ${total} running, ${expressRunning} of ${express.length} express` : `${running}/${total} lanes running`}{idle ? " · idle" : ""}
     </span>
   );
 }
@@ -670,7 +677,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row">
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
-          <LanePill lanes={snapshot.data.lanes} runsLive={snapshot.data.counts?.runs_live} />
+          <LanePill lanes={snapshot.data.lanes} />
           <PauseControl
             paused={paused}
             onPause={onPause}

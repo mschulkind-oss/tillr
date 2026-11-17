@@ -32,6 +32,41 @@ function header(data: SnapshotData) {
 }
 
 describe("the lane pill is drawn at zero as well as at work", () => {
+  test("express and desk leases never inflate the ordinary cap", () => {
+    const data: SnapshotData = { ...liveSnapshotData,
+      counts: { by_state: {}, dispatchable: 0, blocked: 0, runs_live: 9 },
+      lanes: [
+        ...Array.from({ length: 10 }, (_, i) => ({ lane_id: `lane-${i+1}`, state: i < 7 ? "leased" : "idle", work_state: i < 7 ? "running" as const : "idle" as const, run_id: "", leased_until_ms: null })),
+        { lane_id: "express-1", state: "leased", work_state: "running", run_id: "", leased_until_ms: null },
+        { lane_id: "express-2", state: "idle", work_state: "idle", run_id: "", leased_until_ms: null },
+        { lane_id: "desk-doc", state: "leased", work_state: "running", run_id: "", leased_until_ms: null },
+      ] };
+    expect(header(data).container.querySelector(".lane-pill")?.textContent).toContain("7 of 10 running, 1 of 2 express");
+  });
+  test("settling leases are not counted as running in either pool", () => {
+    const data: SnapshotData = { ...liveSnapshotData, lanes: [
+      { lane_id: "lane-1", state: "leased", work_state: "settling", run_id: "finished-1", leased_until_ms: null },
+      { lane_id: "express-1", state: "leased", work_state: "settling", run_id: "finished-2", leased_until_ms: null },
+      { lane_id: "express-2", state: "leased", work_state: "running", run_id: "live-1", leased_until_ms: null },
+    ] };
+    expect(header(data).container.querySelector(".lane-pill")?.textContent).toContain("0 of 1 running, 1 of 2 express");
+  });
+  test("desk-only work does not claim the whole drain is idle", () => {
+    const data: SnapshotData = { ...liveSnapshotData, lanes: [
+      { lane_id: "lane-1", state: "idle", work_state: "idle", run_id: "", leased_until_ms: null },
+      { lane_id: "desk-doc", state: "leased", work_state: "running", run_id: "desk-live", leased_until_ms: null },
+    ] };
+    const pill = header(data).container.querySelector(".lane-pill");
+    expect(pill?.textContent).toContain("0/1 lanes running · idle");
+    expect(pill?.getAttribute("title")).toContain("ordinary and express pools are idle");
+    expect(pill?.getAttribute("title")).not.toContain("the drain is idle");
+  });
+  test("an older server's leases do not invent running counts", () => {
+    const data: SnapshotData = { ...liveSnapshotData, lanes: [
+      { lane_id: "lane-1", state: "leased", run_id: "old-run", leased_until_ms: null },
+    ] };
+    expect(header(data).container.querySelector(".lane-pill")?.textContent).toContain("work state unrecorded");
+  });
   test("a stopped board says 0/1 lanes running · idle", () => {
     const stopped: SnapshotData = {
       ...snapshotData,
@@ -55,8 +90,8 @@ describe("the lane pill is drawn at zero as well as at work", () => {
       ...liveSnapshotData,
       counts: { by_state: {}, dispatchable: 0, blocked: 0, runs_live: 2 },
       lanes: [
-        { lane_id: "lane-1", state: "leased", run_id: "run-live-1", leased_until_ms: 1762979580000 },
-        { lane_id: "lane-2", state: "leased", run_id: "run-live-2", leased_until_ms: 1762979580000 },
+        { lane_id: "lane-1", state: "leased", work_state: "running", run_id: "run-live-1", leased_until_ms: 1762979580000 },
+        { lane_id: "lane-2", state: "leased", work_state: "running", run_id: "run-live-2", leased_until_ms: 1762979580000 },
       ],
     };
     const { container } = header(busy);

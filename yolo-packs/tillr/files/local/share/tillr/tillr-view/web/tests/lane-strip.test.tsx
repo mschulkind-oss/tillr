@@ -15,6 +15,16 @@ const lanes: LaneRow[] = Array.from({ length: 10 }, (_, i) => ({
 }));
 afterEach(cleanup);
 
+test("express lanes sit outside the cap and desks count in neither pool", () => {
+  const rows = [...lanes.map((row, i) => ({ ...row, state: i < 7 ? "running" as const : "idle" as const })),
+    { ...lanes[0], lane_id: "express-1" },
+    { ...lanes[0], lane_id: "express-2", state: "idle" as const },
+    { ...lanes[0], lane_id: "desk-design" }];
+  const { container } = render(<Home lanes={rows} now={now} />);
+  expect(container.textContent).toContain("7 of 10 running, 1 of 2 express");
+  expect(container.querySelectorAll(".lane-strip li")).toHaveLength(13);
+});
+
 test("Home keeps parallel readers on one lane and names the running node count", () => {
   const { container } = render(<Home lanes={[{ ...lanes[0], running_nodes: 4 }]} now={now} />);
   expect(container.textContent).toContain("1 of 1 running");

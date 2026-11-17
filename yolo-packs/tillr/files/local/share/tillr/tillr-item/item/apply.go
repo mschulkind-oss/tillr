@@ -64,6 +64,7 @@ type itemPayload struct {
 	SelectedWorkflow string `json:"selected_workflow,omitempty"`
 	WorkflowSource   string `json:"workflow_source,omitempty"`
 	JudgeMode        string `json:"judge_mode"`
+	Express          bool   `json:"express"`
 	UpdatedAt        string `json:"updated_at,omitempty"`
 	EventSeq         int64  `json:"event_seq,omitempty"`
 	// Questions and QuestionsSource are show's read-through of the design document
@@ -195,16 +196,16 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		return record.Envelope{}, err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, judge_mode)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, judge_mode, express)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(item_id) DO UPDATE SET
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
-		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, judge_mode = excluded.judge_mode,
+		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, judge_mode = excluded.judge_mode, express = excluded.express,
 		   waiting_on = CASE WHEN excluded.state IN (?, ?) THEN items.waiting_on ELSE '' END,
 		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
-		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, payload.JudgeMode,
+		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, payload.JudgeMode, payload.Express,
 		d.Blocked, d.Closed, d.Blocked, d.Closed,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the item: %v", err)
@@ -345,7 +346,7 @@ func sameTerminalDefinition(a, b itemPayload) bool {
 	slices.Sort(bb)
 	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef &&
 		a.DesignDoc == b.DesignDoc && a.Rank == b.Rank && a.Seat == b.Seat &&
-		a.Prose == b.Prose && a.Workflow == b.Workflow && a.JudgeMode == b.JudgeMode && slices.Equal(ac, bc) &&
+		a.Prose == b.Prose && a.Workflow == b.Workflow && a.JudgeMode == b.JudgeMode && a.Express == b.Express && slices.Equal(ac, bc) &&
 		slices.Equal(ab, bb) && slices.Equal(a.AllowedPaths, b.AllowedPaths)
 }
 

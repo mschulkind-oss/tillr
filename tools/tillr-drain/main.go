@@ -693,7 +693,7 @@ func loopFace(args []string) int {
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
-	laneCount := fs.Int("lanes", 2, "how many lanes the loop may dispatch onto")
+	laneCount := fs.Int("lanes", 2, "ordinary lane cap (reserved express lanes are configured separately)")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
 	policyPath := fs.String("policy", "", "the backend policy (default <root>/config/tillr/backend-policy.json)")
@@ -798,7 +798,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot,
-		Lanes: laneIDs(*laneCount), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
+		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
@@ -944,6 +944,15 @@ func resolveTraceBin(root, named string, given bool) string {
 		return path
 	}
 	return "tillr-trace"
+}
+
+// expressLaneIDs names the reserved pool separately from the ordinary cap.
+func expressLaneIDs(n int64) []string {
+	var lanes []string
+	for i := int64(1); i <= n; i++ {
+		lanes = append(lanes, fmt.Sprintf("express-%d", i))
+	}
+	return lanes
 }
 
 // laneIDs answers the lane ids a loop with n lanes offers: lane-1 .. lane-n, in that order,

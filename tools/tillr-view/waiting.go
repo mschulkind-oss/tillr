@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -228,7 +229,15 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
 	} else {
-		if _, err = fmt.Fprintf(os.Stdout, "definition: %s\n", declared.Name); err == nil {
+		_, err = fmt.Fprintf(os.Stdout, "definition: %s\n", declared.Name)
+		var laneRows []laneRow
+		if err == nil {
+			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), time.Now())
+		}
+		if err == nil {
+			_, err = fmt.Fprintln(os.Stdout, laneCapacityLine(laneRows))
+		}
+		if err == nil {
 			err = printWaiting(os.Stdout, rows)
 		}
 	}

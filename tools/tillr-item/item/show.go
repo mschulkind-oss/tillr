@@ -63,6 +63,9 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 	if err != nil {
 		return itemPayload{}, time.Time{}, Internalf("reading item %q: %v", id, err)
 	}
+	if payload.Express, err = readExpress(r, id); err != nil {
+		return itemPayload{}, time.Time{}, err
+	}
 	// A read-only open cannot add the workflow column to a pre-workflow store.
 	// Such items named no workflow; return the empty value without mutating them.
 	var hasWorkflow bool
@@ -146,6 +149,20 @@ func readCriteria(r *store.Reader, id string) ([]criterion, error) {
 		return nil, Internalf("reading the criteria of %q: %v", id, err)
 	}
 	return criteria, nil
+}
+
+// readExpress preserves the default for a read-only, pre-express store.
+func readExpress(r *store.Reader, id string) (bool, error) {
+	var present, express bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'express')`).Scan(&present); err != nil {
+		return false, Internalf("checking express metadata: %v", err)
+	}
+	if present {
+		if err := r.QueryRow(`SELECT express FROM items WHERE item_id=?`, id).Scan(&express); err != nil {
+			return false, Internalf("reading express metadata: %v", err)
+		}
+	}
+	return express, nil
 }
 
 // readJudgeMode is shared by the show and definition readers. A legacy store

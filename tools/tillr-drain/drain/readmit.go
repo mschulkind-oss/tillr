@@ -91,6 +91,8 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 	if result.WorkflowDefinition, err = inputHash([]any{workflowBody, workflowError}); err != nil {
 		return nil, err
 	}
+	// Express eligibility affects allocation, not execution inputs. Keep this encoding
+	// stable so upgrading cannot invalidate an unchanged in-flight workflow.
 	if result.ItemBlock, err = itemBlockHash(blockFields{Title: title, BodyRef: bodyRef, DesignDoc: row.DesignDoc, Seat: row.Seat, Workflow: row.Workflow, Criteria: criteria}, body); err != nil {
 		return nil, err
 	}
