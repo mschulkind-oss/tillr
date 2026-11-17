@@ -1309,12 +1309,7 @@ lane when the worker exits and continue the same session with a message to finis
 the run could end with a pause-kind continuation, the way a paused run is resumed on the same
 attempt, so the next dispatch picks the session up instead of restaging the lane.
 
-<!-- tillr: item id="item-run-commit-before-ending" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A build run whose worker exits while its lane has uncommitted changes inside the fence is not settled as a no-commit refusal until the worker has been given a chance to commit them. A test with a fixture worker that edits a fenced file and exits without committing asserts the run does not end as `no-op` on that exit.
-- **c2:** When the worker then commits, the run is settled from that commit like any other candidate. A test asserts the candidate is the commit made after the first exit.
-- **c3:** When the worker still does not commit, the run ends as a refusal whose record names the uncommitted paths, so an operator can tell lost work from a run that did nothing. A test asserts the paths appear in the record.
-- **c4:** The design note for this item records which of the options in this section was chosen and why.
 
 **Agent details:**
 
@@ -1994,7 +1989,7 @@ must never end a harness that has not settled, because a stall in unsettled work
 problem that a stall watchdog owns. The Pi adapter in print mode is worth fixing at its own end
 too, so that it exits once its session settles.
 
-<!-- tillr: item id="item-run-end-settled-harness" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-run-commit-before-ending" prose="2" -->
+<!-- tillr: item id="item-run-end-settled-harness" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A harness whose stream shows the session settled, whose report ends in a `RESULT:` footer, and that has produced no output and used no CPU for a stated number of consecutive samples of an injected clock is ended by the run face. The sample interval and the count are one constant each, pinned by a test. A test with a stub harness that settles and then lingers asserts the run ends after that many samples and not before.
 - **c2:** The run face ends the harness process and its helper children, and no other process of the lane. A test starts a sibling process in the lane that is not a child of the harness and asserts it is still alive afterward, and that a child of the harness is gone.

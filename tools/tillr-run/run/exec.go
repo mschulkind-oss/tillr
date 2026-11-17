@@ -57,6 +57,9 @@ type Request struct {
 	// wrong name: it would pay for the whole transcript again and record itself as a
 	// continuation.
 	Resume bool `json:"resume,omitempty"`
+	// ResumePrompt supplies a continuation-specific instruction. Empty uses the
+	// restart notice or the default interrupted-session prompt. Only read on resume.
+	ResumePrompt string `json:"resume_prompt,omitempty"`
 }
 
 // ExecOptions is what the face supplies that the request does not: where the lane root

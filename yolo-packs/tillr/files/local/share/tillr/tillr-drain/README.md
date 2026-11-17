@@ -664,6 +664,14 @@ re-derives the fence from the item's `allowed_paths`, because the killed segment
 committed before it died. It refuses a run the gate judged: continuing judged work is a
 retry, which a person authorizes.
 
+A normal build exit with no commit and uncommitted fenced work gets one automatic
+continuation before a `no-op` refusal. It preserves the worktree and asks the worker to
+finish verification and commit, using the same attempt and the existing resume bracket.
+A committed continuation is settled normally; a still-dirty refusal names the remaining
+paths. Clean exits, design/comment work and outside-fence-only edits do not trigger it.
+Missing brief/session state is named rather than replaced by a cold build. See the
+[design choice and limits](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-build-commit.md).
+
 Interrupting `resume` or `once` (Ctrl-C, SIGTERM) stops that command, not its worker:
 the run face is started in its own process group, outside the command's context, so
 it finishes and writes its terminal record, and the next loop settles it.

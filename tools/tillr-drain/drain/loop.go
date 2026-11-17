@@ -1434,6 +1434,33 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if headSHA == baseSHA {
+		paths, err := l.uncommittedPaths(ctx, target)
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+		if len(paths) > 0 && !record.Resumed {
+			record.Resumed, err = l.continuationStarted(ctx, request)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+		}
+		if len(paths) > 0 && !item.IsCommentItem(request.ItemID) && (decision.Seat == "" || decision.Seat == "build") && class == AttemptAnswered && record.State == run.StateExited && record.EndCause == run.EndNormalExit && !record.Resumed {
+			fenced, err := l.fencedUncommittedPaths(ctx, lane, target, paths)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			if len(fenced) > 0 {
+				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted fenced paths: " + strings.Join(fenced, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or commit outside the fence. If you cannot finish, report the blocker explicitly."
+				resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, request, worktree, record, tick, at, result, watched)
+				if err != nil || stop != "" {
+					return laneOutcome{err: err, stop: stop}
+				}
+				if resumed.RunID != "" {
+					prepared = deferJudge
+					return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+				}
+			}
+		}
 		if item.IsCommentItem(request.ItemID) && reportFooter(log) == "done" && record.ExitCode != nil && *record.ExitCode == 0 {
 			candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: target, BaseSHA: baseSHA, HeadSHA: headSHA}
 			if err := l.answerCommentWithoutCommit(ctx, candidate, result); err != nil {
@@ -1468,6 +1495,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// keeps its criteria and stays in the queue.
 		l.reportf("loop: %s produced no commit: recording a refusal\n", request.ItemID)
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick, Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA}
+		if len(paths) > 0 {
+			candidate.RefusalDetail = "No commit; uncommitted paths: " + strings.Join(paths, ", ")
+			if record.Resumed {
+				candidate.RefusalDetail += "; a continuation was already started, but no commit was produced"
+			} else {
+				candidate.RefusalDetail += "; no commit continuation was available (requires an eligible build exit, brief and session, and no operator stop)"
+			}
+		}
 		if err := l.refuse(ctx, candidate, result, RefusalNoOp); err != nil {
 			return laneOutcome{err: err}
 		}
@@ -1503,9 +1538,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
 }
 
-// resumeAfterWall continues one run a wall cut short, in place, when the lane still holds
-// everything the continuation needs: the brief, the harness session staging pinned, and the
-// worktree the killed segment was working in. It is one attempt's second segment, not a
+// resumeAfterWall continues a time-limited, paused, or uncommitted build run in place,
+// when the lane still holds everything the continuation needs: the brief, the harness
+// session staging pinned, and the worktree the previous segment was working in. It is one attempt's second segment, not a
 // second attempt — the same run id, no retry authorization, and no failover hop — so it
 // spends nothing the retry budget tracks (design D-RW3).
 //
@@ -1552,6 +1587,8 @@ func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Req
 	l.mu.Unlock()
 	if record.State == run.StatePaused {
 		l.reportf("loop: continuing paused run %s on %s as the same attempt\n", request.RunID, lane)
+	} else if request.ResumePrompt != "" {
+		l.reportf("loop: %s exited with uncommitted fenced work; continuing its session once on %s to finish and commit\n", request.ItemID, lane)
 	} else {
 		l.reportf("loop: %s hit the wall before committing; continuing its session once on %s\n", request.ItemID, lane)
 	}
