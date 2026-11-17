@@ -71,6 +71,8 @@ func dispatch(args []string) int {
 		return onceFace(rest)
 	case "clear-fault":
 		return clearFaultFace(rest)
+	case "accept-rewrite":
+		return acceptRewriteFace(rest)
 	case "acquit", "examine", "set-aside":
 		return recoveryFace(face, rest)
 	case "retry":
@@ -111,6 +113,46 @@ func clearFaultFace(args []string) int {
 	defer s.Close()
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error { return drain.ClearItemFault(tx, *itemID, *seq, time.Now().UTC()) }); err != nil {
 		return fail(err)
+	}
+	return record.ExitOK
+}
+
+// acceptRewriteFace accepts a trunk rewrite that preserved the content, clearing the
+// trunk-rewritten hold. drain.AcceptRewrite holds the condition; anything else is refused.
+func acceptRewriteFace(args []string) int {
+	fs := newFlagSet("accept-rewrite")
+	root := fs.String("root", "", "the repository whose trunk was rewritten")
+	path := fs.String("store", "", "the store holding the trunk history (default <root>/.tillr/state.db)")
+	lost := fs.String("lost", "", "the lost tip the hold names (trunk-rewritten: <lost> -> <current>)")
+	current := fs.String("current", "", "the commit on the trunk that replaces the lost tip with the same tree")
+	by := fs.String("by", "", "who accepts the rewrite")
+	why := fs.String("why", "", "why the rewrite was made")
+	now := fs.String("now", "", "the injected clock, RFC 3339")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *root == "" || *lost == "" || *current == "" || *by == "" || *why == "" || *now == "" {
+		return fail(drain.Usagef("accept-rewrite needs --root <repository>, --lost <sha>, --current <sha>, --by <who>, --why <reason> and --now <RFC3339>"))
+	}
+	at, err := time.Parse(time.RFC3339, *now)
+	if err != nil {
+		return fail(drain.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+	}
+	if *path == "" {
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	a, err := drain.AcceptRewrite(context.Background(), drain.AcceptRewriteRequest{
+		Root: *root, Store: *path, Lost: *lost, Current: *current, By: *by, Why: *why, At: at.UTC(),
+	})
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("accepted the rewrite %s -> %s: same tree %s, %d commits replaced one for one; lost tip pinned at %s\n", a.Lost, a.Current, a.Tree, a.Commits, a.Pin)
+	if a.GreenTo != "" {
+		fmt.Printf("moved %s from %s to the commit that replaced it, %s (same tree)\n", drain.GreenRef, a.GreenFrom, a.GreenTo)
 	}
 	return record.ExitOK
 }
@@ -543,7 +585,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "workflow, why, policy, plan, once, retry, clear-fault, acquit, examine, set-aside, boundary, resume, stop or loop"
+const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acquit, examine, set-aside, boundary, resume, stop or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")
