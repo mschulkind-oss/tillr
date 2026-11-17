@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-16
+updated: 2026-11-17
 tags:
   - tillr
   - gate
@@ -24,7 +24,8 @@ vantage:
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger). Its three open
 questions were settled the same day by the session's designer on recorded principle, at the
-owner's request; the owner may overturn any of them.
+owner's request; the owner may overturn any of them. On 2026-11-17 the owner ruled on time limits
+in the gate ([`D-GR15`](#decision-ledger)): a budget is a target, and only a stall ends a check.
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -49,14 +50,10 @@ and its clock cadence are replaced.
 [Section 3](#3-what-exists-today-measured) and
 [Section 4](#4-where-the-gate-remembers-and-what-a-cold-machine-sees).
 
-**Needs your ruling:** Nothing blocks the build, but two decisions an implementer made on
-2026-11-16 are open for you to overturn. The owner has not ruled on either:
-
-- [`D-GR13`](#decision-ledger): a fast check that runs past its budget runs on to a ceiling and
-  keeps its verdict, so the fast tier's worst case is 99 seconds of checks instead of 9
-  ([Section 6.5](#65-ten-seconds-is-a-failing-test)).
-- [`D-GR14`](#decision-ledger): carrying a fast tree check to the heavy tier is suspended until a
-  heavy runner exists ([Section 6.5](#65-ten-seconds-is-a-failing-test)).
+**Needs your ruling:** None. The two implementer's decisions of 2026-11-16 that were open,
+[`D-GR13`](#decision-ledger) and [`D-GR14`](#decision-ledger), were ruled on by the owner on
+2026-11-17 as [`D-GR15`](#decision-ledger)
+([Section 6.5](#65-ten-seconds-is-a-failing-test)).
 
 **Reads with:** [`landing-principles.md`](landing-principles.md) (the rulings this is checked
 against in [Section 7](#7-checked-against-the-landing-principles)),
@@ -81,10 +78,11 @@ Build six things, in the order of [Section 11](#11-build-order):
 3. **A missing machine resource is named, not failed.** A check that needs a fork checkout or a
    local branch says it is unavailable and gives the command that provides it.
 4. **A check is one file.** Adding one edits nothing another check shares.
-5. **Ten seconds is a test.** The fast tier's declared costs must sum inside the budget, and a
-   check that overruns its own declared cost at run time is carried to the heavy tier instead of
-   holding the landing. Until the heavy runner exists it runs on and keeps its verdict instead
-   ([`D-GR13` and `D-GR14`](#decision-ledger), open for the owner).
+5. **Ten seconds is a target and a test.** The fast tier's declared costs must sum inside the
+   budget. A check that runs past its own declared cost at run time keeps running, keeps its
+   verdict and has the overrun recorded; only a stall, a check making no progress, ends it early,
+   and a stall leads to a named next step (the owner's ruling
+   [`D-GR15`](#decision-ledger), 2026-11-17).
 6. **Heavy checks follow the merge, and deploys follow the heavy checks.** One runner proves the
    trunk after each landing and moves a pointer to the newest commit it proved. tillr builds from
    that pointer and from nowhere else.
@@ -406,6 +404,46 @@ the case that still holds on one core with twenty lanes. A change that adds a fa
 does not fit fails on that change, and its author has three moves: make room, make it faster, or
 declare it heavy.
 
+**The owner's ruling of 2026-11-17 on time limits ([`D-GR15`](#decision-ledger)).** Asked what
+"could not judge" meant for a check that was still running, the owner answered:
+
+> "what does 'could not judge' mean. isn't this directly opposed to our principles? target
+> budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise
+> finish just fine."
+
+The same position reached this design the same day through another project's notes of a
+conversation with the owner, quoted as relayed: "The agent works until it is done, it has an
+event, we have a stall detector watchdog if we need something like that, but we don't just say,
+'Okay, 30 minutes,' and then have some gate given 20 seconds and on a loaded machine it fails."
+Those notes summarize it as "no clock whose only consequence is a kill". The ruling, as this
+design applies it:
+
+- **A budget is a target.** It is measured and reported. Exceeding one is never, by itself, a
+  failure, a fault or "could not judge".
+- **Only a stall ends a check early.** A stall is a check making no progress, seen by a watchdog;
+  elapsed time is not a liveness signal. A stall leads to a named next step, never to a silent
+  kill.
+- **Load must not fail work.** A check on a loaded machine that would have finished is let
+  finish.
+
+It **supersedes** two things built on 2026-11-16 under [`D-GR13`](#decision-ledger): the ceiling
+as a kill, and "could not judge" (exit 4) for a check that is still making progress. Neither the
+ceiling nor a heavy declaration's `timeout_ms` may stop a check that is making progress. Two
+parts of this design that are not built also act on a clock alone, and the ruling governs both
+where this section differs from it: carrying a fast tree check, which stops it at its budget
+(suspended by [`D-GR14`](#decision-ledger) and not to be turned on as designed), and a heavy run
+that is red on `gate-budget` only because a check overran there.
+
+It **keeps** the budgets and the admission test over their sum, the 9,000 millisecond cap as the
+sum the budgets must fit, the `over_budget_ms` record on every overrun, and the ten-second
+landing as a target whose measured distribution per check is visible, so a check that overruns
+chronically is fixed rather than tolerated. How a stall is detected and what follows it is this
+design's decision [`D-GR16`](#decision-ledger): a check shows progress when its output grows or its
+process group uses CPU time; one that shows neither for 60 consecutive one-second samples is
+stalled and ended; the first stall re-gates the same candidate once fewer gates are in flight or
+no other gate is, and a second stall on that candidate holds the item, naming the check. Until
+that is built, the runner behaves as the rest of this section describes.
+
 **At run time, by each check's own declaration.** As designed, the runner gives a fast tree
 check its `budget_ms` as a deadline. A fast tree check still running at its deadline is stopped
 and **carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs
@@ -424,8 +462,9 @@ fast tree check is run like a change check: past its budget it runs on to its ce
 its verdict, and a failing one fails the gate. The switch is the runner's `--tree-overrun` option,
 `keep` by default, and the loop's gate program
 [`tools/gate/change-gate.py`](../../tools/gate/change-gate.py) states it in one constant,
-`TREE_OVERRUN`. The heavy runner's item turns that constant to `carry`, and nothing else changes.
-This is an implementer's decision, open for the owner to overturn; the owner has not ruled on it.
+`TREE_OVERRUN`. The heavy runner's item was to turn that constant to `carry`. This was an
+implementer's decision; the owner ruled on 2026-11-17 ([`D-GR15`](#decision-ledger)) that only a
+stall ends a check early, so `keep` is the rule rather than a suspension.
 
 So machine load makes the gate slower rather than failing the item, and the gate's wall time is
 no longer bounded by the sum the admission test bounded. **The worst case**, stated plainly:
@@ -474,13 +513,25 @@ about 1.1 seconds spent outside any check (the wall time less the checks' own du
 runner's planning and fingerprinting) and `documents` at 0.8 to 1.2 seconds. The budgets and the
 cap are unchanged.
 
-The alternative the owner could choose is **one ceiling for the whole fast run** instead of one
-per check: a fast run still going when it has used 9,000 milliseconds stops the check it is
-running and answers "could not judge". That restores a bound of about 9 seconds of checks, at the
-cost of load faults returning. In the measurement above the slowest gate's checks took about 7.9
-seconds (its 9.0 seconds of wall time less about 1.1 outside the checks), so no item would have
-been held; before `-trimpath`, every gate of ten new checkouts would have been. The margin is
-under a second, so heavier load than measured brings `gate-harness-error` back.
+**Rejected by the owner's ruling of 2026-11-17** ([`D-GR15`](#decision-ledger)): **one ceiling
+for the whole fast run** instead of one per check, where a fast run still going when it has used
+9,000 milliseconds stops the check it is running and answers "could not judge". That would have
+restored a bound of about 9 seconds of checks, at the cost of load faults returning. In the
+measurement above the slowest gate's checks took about 7.9 seconds (its 9.0 seconds of wall time
+less about 1.1 outside the checks), so no item would have been held; before `-trimpath`, every
+gate of ten new checkouts would have been. The margin is under a second, so heavier load than
+measured brings `gate-harness-error` back.
+
+**Measured again on 2026-11-17**, on a five-lane drain at a load average of 18 to 24 on 32 cores,
+by the drain's operator: `go-build` took 7,317 milliseconds against its 2,700 budget and
+`documents` 5,006 against 2,000 when two gates overlapped, within about 1.7 seconds of the
+per-check ceiling. Of the fast-check logs the loop's run directories held that day, `go-build`
+had run 26 times and overrun 9 (2,916 to 7,317 milliseconds) and `documents` had run 59 times
+and overrun 12 (2,228 to 5,006 milliseconds); no log said a check was stopped at its ceiling.
+`documents` alone, over a change to the [tillr roadmap](../tillr/roadmap.md), takes over 2 seconds because that one
+document renders in a median of 2.16 seconds. At ten lanes, checks that would have finished
+would start to be stopped at the ceiling and their items held for an operator, which is the
+failure [`D-GR15`](#decision-ledger) rules out.
 
 **What happens to a check that outgrows its budget.** It stops holding landings the first time
 it overruns, and it is still judged, after the merge. The heavy runner then runs that check
@@ -488,7 +539,9 @@ alone, with nothing else of its run beside it. When it exceeds its declared budg
 heavy run is red on `gate-budget`, naming the check, with the measured and declared times. The
 repair is an edit to that check's own file: a larger budget if the sum still fits, or `tier:
 heavy`. A red here is handled like any other heavy red
-([Section 6.8](#68-a-red-heavy-check)). A change check that overruns, and while carrying is
+([Section 6.8](#68-a-red-heavy-check)). That red is a failure made of an overrun alone, which
+[`D-GR15`](#decision-ledger) rules out: it is not built, and where the heavy runner's slice
+differs, the ruling governs. A change check that overruns, and while carrying is
 suspended a tree check too, is not re-measured by anything: its `over_budget_ms` on the landing's
 verdict is the record, and the repair is the same edit to its own file, or making it cheaper.
 
@@ -505,8 +558,9 @@ Two boundaries:
   check's declared cost. It is not "could not judge" for the candidate, because the check did
   judge it ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
   Only a check still running at its ceiling makes the run "could not judge" (exit 4), naming the
-  check. *Decided 2026-11-16 by the implementer, open for the owner to overturn; the owner has not
-  ruled on it* ([`D-GR13`](#decision-ledger)). It was decided after `documents` ran 2,001
+  check. *Decided 2026-11-16 by the implementer* ([`D-GR13`](#decision-ledger)); *the owner's
+  ruling of 2026-11-17 ([`D-GR15`](#decision-ledger)) supersedes the ceiling as a kill.* It was
+  decided after `documents` ran 2,001
   milliseconds against its 2,000 budget in a drain pass at load 16, and the candidate was held as
   `gate-harness-error` until an operator cleared it. The same four-document change measured 1.8
   seconds alone and up to 2.4 seconds beside nine other gates, so a fixed deadline was failing
@@ -518,8 +572,10 @@ Two boundaries:
   and keeps its verdict, as every fast check does while carrying is suspended; only a check still
   running at its ceiling is "could not judge".
 
-This is the one place the gate judges elapsed time, and it is a statement about the gate, which
-is the thing the ruling bounds. The existing rule that no check may assert elapsed time about the
+As built on 2026-11-16 this is the one place the gate acts on elapsed time, and it is a statement
+about the gate, which is the thing the ten-second ruling bounds. Under
+[`D-GR15`](#decision-ledger) the gate measures and reports elapsed time and acts only on a stall.
+The existing rule that no check may assert elapsed time about the
 product stands unchanged.
 
 **The proposed fast tier**, with budgets set from [Section 3.2](#32-every-check):
@@ -663,10 +719,10 @@ base by a heavy tree check, which needs no network.
 
 | Principle | How this design meets it |
 | :--- | :--- |
-| [1, a refusal must be a verdict](landing-principles.md#1-a-refusal-must-be-a-verdict) | A change is refused only by a check that ran on it. Unavailable, over-budget and timeout are named and are not refusals. |
+| [1, a refusal must be a verdict](landing-principles.md#1-a-refusal-must-be-a-verdict) | A change is refused only by a check that ran on it. Unavailable, over-budget and timeout are named and are not refusals; under [`D-GR15`](#decision-ledger) a check that is making progress is never timed out, and a stall is named. |
 | [3, gate what will be the tip, once](landing-principles.md#3-gate-what-will-be-the-tip-once) | The fast gate runs once, on the candidate. A moved trunk is squashed onto, not re-gated. |
 | [6, a budget escalates, it does not loop](landing-principles.md#6-a-budget-escalates-it-does-not-loop) | An overrun carries the check forward once; nothing is retried. |
-| [8, a gate that cannot answer must say which](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which) | Unavailable names the need and its command; "could not judge" names the check. |
+| [8, a gate that cannot answer must say which](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which) | Unavailable names the need and its command; "could not judge" names the check, and is never the answer for a check still making progress ([`D-GR15`](#decision-ledger)). |
 | [13, a held state names a mover](landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act) | A pointer that is not moving shows the failing check and either a landing with a fixer, or a gate fault with the missing resource. |
 
 ## 8. Failure, concurrency and existing state
@@ -699,8 +755,9 @@ base by a heavy tree check, which needs no network.
 - **It does not** change the squash, the land lock, the fence check, the judge, or the item
   model. It does not make a slow suite faster; it stops a slow suite from deciding when a change
   lands.
-- **It does not** publish verdicts between machines, and it adds no retry, no cooldown and no
-  attempt count.
+- **It does not** publish verdicts between machines, and it adds no retry on a clock, no cooldown
+  and no attempt count. The one re-gate after a stall ([`D-GR16`](#decision-ledger)) waits on a
+  named change, fewer gates in flight, and does not spend a worker's run.
 
 ## 10. Alternatives and risks
 
@@ -724,7 +781,8 @@ base by a heavy tree check, which needs no network.
 `D-GR1` to `D-GR6` are the owner's rulings of 2026-11-15. `D-GR7` to `D-GR12` are this design's
 own decisions, made to carry them out; each is the owner's to overturn by comment. `D-GR13` and
 `D-GR14` are an implementer's decisions of 2026-11-16, made while building the fast tier; the
-owner has not ruled on them, and each is the owner's to overturn. The three rows of this
+owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this design's own
+decision carrying `D-GR15` out, and is the owner's to overturn. The three rows of this
 document's former open questions were settled by the session's designer on recorded principle,
 as each row says.
 
@@ -740,9 +798,11 @@ as each row says.
 | `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | — |
 | `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | — |
 | `D-GR10` | A check is one declaration file with no verdict-changing default, read by `tillr-gate`; the gate program retires by attrition. **Rejected:** sharding the shared suite. Structural fix. | 2026-11-15 | [Section 6.4](#64-a-check-is-one-file) | — |
-| `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
-| `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Alternative open to the owner:** one 9,000 millisecond ceiling for the whole fast run, which restores the 9 second bound and brings load faults back. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
-| `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
+| `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. **Superseded in part 2026-11-17** by the owner's ruling `D-GR15`: no deadline stops a check that is making progress, so the per-check deadline and carrying at it go, and an overrun alone never turns a run red; the arithmetic test stays. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
+| `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Superseded 2026-11-17** by the owner's ruling `D-GR15`: the ceiling is no longer a kill, and a check still making progress is never "could not judge"; the `over_budget_ms` record stays. The alternative of one ceiling for the whole fast run is rejected by the same ruling. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built; the superseded part is not yet replaced |
+| `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. **Ruled on 2026-11-17** by the owner's ruling `D-GR15`: only a stall ends a check early, so `keep` is the rule rather than a suspension, and carrying, which stops a check at its budget, is not turned on as designed. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
+| `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — |
+| `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
