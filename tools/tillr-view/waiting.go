@@ -410,6 +410,24 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		} else if item.State == "blocked" && !found && row.Why == "not yet planned" {
 			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
 		}
+		fixer := ""
+		if found && last.Reason == "trunk-broken" {
+			fixer = deferredBy
+		}
+		if strings.HasPrefix(item.Waiter, "item:fixer-main-") {
+			fixer = strings.TrimPrefix(item.Waiter, "item:")
+		}
+		if fixer != "" {
+			detail, owner, err := waitingTrunkFixer(r, fixer, conflicts)
+			if err != nil {
+				return nil, err
+			}
+			row.Why += ": " + detail
+			row.Mover = detail
+			if owner {
+				row.Class = "needs you"
+			}
+		}
 		if found && last.Action == "hold" && latestRun != nil && active == nil {
 			cause, err := waitingEndCause(r, latestRun.RunID)
 			if err != nil {

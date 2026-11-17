@@ -27,7 +27,7 @@ func storeFingerprint(t *testing.T, path string) string {
 }
 
 func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
-	dir := t.TempDir()
+	dir := plannerFixtureDir(t)
 	gitRoot(t, dir)
 	drainBin := filepath.Join(dir, "tillr-drain")
 	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", drainBin, ".").CombinedOutput(); err != nil {

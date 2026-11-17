@@ -132,7 +132,10 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	if len(c.BlockedCriteria) == 0 {
 		c.BlockedCriteria = []string{"not stated in report"}
 	}
-	if c.BodyRef == "" {
+	if c.BodyRef == "" || IsTrunkFixer(d.ItemID) {
+		// A generated repair has no design decision to dispatch. In particular a
+		// fence refusal goes straight to the owner with the needed paths in the
+		// pinned report, rather than waiting behind its own broken-trunk hold.
 		c.WaitingOn, c.Status = "owner", "owner"
 	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)

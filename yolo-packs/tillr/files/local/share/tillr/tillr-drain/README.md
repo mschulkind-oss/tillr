@@ -339,10 +339,20 @@ A failing check holds the pointer and is run alone at the pointer and by bisecti
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID
 with a selector. Red at the pointer is a gate fault, naming the check's needs and tools;
-otherwise the first red landing receives one commit-deduplicated fixer containing every
-check attributed to it and the union of their repair paths. With no pointer yet the
-report says there is no proved baseline to accuse a landing; it does not claim that a
-nonexistent pointer was judged red. Automatic revert
+otherwise the first red landing receives a fixer: an item that repairs the broken trunk,
+containing every check attributed to it. Its fence (the paths it may change) combines the
+checks' declared sources and tests with the paths touched by every commit since the last
+green through the current tip, even paths later reverted. Legacy checks obtain their read
+paths from the gate's declaration export, not their recorded output writes. The gate's own
+code is excluded, including directories that would admit it indirectly.
+
+A later red tip for the same check attaches to an unresolved fixer rather than filing a
+second repair. The attachment records the new observation and combines its paths without
+clearing an existing owner hold. A blocked fixer report goes directly to the owner; a
+worker whose fix needs paths outside its fence must name those paths in its report. The
+waiting face names the fixer, its failing checks and whether it is waiting on the owner.
+With no pointer yet the report says there is no proved baseline to accuse a landing; it
+does not claim that a nonexistent pointer was judged red. Automatic revert
 is not implemented: selecting `auto_revert` reports that limitation and holds the pointer
 instead of silently filing a fixer in its place.
 

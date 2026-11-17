@@ -140,7 +140,7 @@ func gitRoot(t *testing.T, dir string) {
 
 func whyFixture(t *testing.T, drainBin string) (dir, path string) {
 	t.Helper()
-	dir = t.TempDir()
+	dir = plannerFixtureDir(t)
 	gitRoot(t, dir)
 	path = filepath.Join(dir, "state.db")
 	input := filepath.Join(dir, "pass.json")

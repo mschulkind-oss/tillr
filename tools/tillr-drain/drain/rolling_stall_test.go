@@ -55,7 +55,7 @@ func TestRollingStallPreservesNewlyObservedChecks(t *testing.T) {
 		}
 	}
 	criteria := fixerCriteria(t, storePath, TrunkFixerID(tip))
-	if len(criteria) != 1 || !strings.Contains(criteria[0], "red: B") {
+	if len(criteria) != 1 || !strings.Contains(criteria[0], "red: A, B") {
 		t.Fatalf("B's consecutive stall lost: %v; %s", criteria, report.String())
 	}
 }

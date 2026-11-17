@@ -91,7 +91,7 @@ func TestARedRollingRunNamesTheChecksItRecorded(t *testing.T) {
 	// The stub is the rolling program: it records one failing span, the way the gate's own
 	// `--spans-out` does, and exits 1.
 	program := executable(t, `cat > "$TILLR_GATE_SPANS_OUT" <<'JSON'
-{"check_spans":[{"check_id":"unit","status":"FAIL","attributes_json":"{\"writes\":[\"src/\",\"/durable/roster-storybook\",\"../outside\",\"src/../../escape\"]}"}]}
+{"check_spans":[{"check_id":"unit","status":"FAIL","attributes_json":"{\"reads\":[\"tests/untouched_test.go\"],\"watches\":[\"lib/\"],\"writes\":[\"src/\",\"/durable/roster-storybook\",\"../outside\",\"src/../../escape\"]}"}]}
 JSON
 exit 1`)
 
@@ -113,8 +113,8 @@ exit 1`)
 	}
 	fixer := TrunkFixerID(tip)
 	paths := fixerPaths(t, storePath, fixer)
-	if !reflect.DeepEqual(paths, []string{"src/"}) {
-		t.Fatalf("the fixer's fence is %v, want the failing check's watched path [src/]", paths)
+	if want := []string{"README.md", "lib/", "src/", "tests/untouched_test.go"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("the fixer's fence is %v, want range paths and declared reads/watches/writes %v", paths, want)
 	}
 	if got := rollingChecks(t, storePath); !reflect.DeepEqual(got, []string{"unit"}) {
 		t.Fatalf("the rolling row names %v, want [unit]", got)
