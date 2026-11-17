@@ -64,6 +64,23 @@ drain-4-6.json  -> record id loop-4-6
 drain-0-0.json  -> no applied generation
 ```
 
+## Settled harnesses
+
+A worker can answer and commit without its harness exiting. The
+[run face's completed-session rule](https://github.com/mschulkind-oss/tillr/blob/main/tillr-run/README.md#ending-a-settled-harness-that-lingers)
+ends only the harness's private process group after a settlement event, a final
+`RESULT:` report footer, and five consecutive one-second samples with neither
+output nor CPU activity. Output or CPU activity restarts that count. Silence alone
+never ends unfinished work, and unrelated processes in the lane remain alive.
+
+The terminal record remains `exited`, with `end_cause: settled-idle`, the observed
+signal exit code, `settled_at`, and `harness_ended_at`. The finish event preserves
+both observation timestamps and the run's status exposes them. Because the report
+answered, the attempt is classed as `answered`: the normal candidate examination
+and gate follow, not backend failover or an infrastructure retry. A `blocked` or
+`failed` footer still follows the ordinary handling for that answer. Self-exiting
+harnesses keep their existing records.
+
 ## Backend policy changes
 
 At the start of each pass, `loop` reads its `--policy` file and compares its

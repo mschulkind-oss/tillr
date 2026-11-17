@@ -1998,16 +1998,7 @@ must never end a harness that has not settled, because a stall in unsettled work
 problem that a stall watchdog owns. The Pi adapter in print mode is worth fixing at its own end
 too, so that it exits once its session settles.
 
-<!-- tillr: item id="item-run-end-settled-harness" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A harness whose stream shows the session settled, whose report ends in a `RESULT:` footer, and that has produced no output and used no CPU for a stated number of consecutive samples of an injected clock is ended by the run face. The sample interval and the count are one constant each, pinned by a test. A test with a stub harness that settles and then lingers asserts the run ends after that many samples and not before.
-- **c2:** The run face ends the harness process and its helper children, and no other process of the lane. A test starts a sibling process in the lane that is not a child of the harness and asserts it is still alive afterward, and that a child of the harness is gone.
-- **c3:** A harness that has not settled is never ended this way, however long it is silent. A test with a stub harness that has not settled and stays silent for ten times the count asserts it is not ended. A harness that has settled but whose report has no `RESULT:` footer is not ended either, and a test asserts it.
-- **c4:** A harness that produces output or uses CPU after it settled restarts the count. A test asserts a harness that prints one line between samples is not ended.
-- **c5:** The run is recorded as finished by the run face, not as a failure, and the loop judges its candidate: the attempt is classed as answered. The run record states when the session settled, when the run face ended the harness, and why, in one new end cause. A test asserts all three facts in the record and the class.
-- **c6:** A harness that exits by itself, before or after it settled, is recorded exactly as before, and the run face never reads the clock for it. A test with a stub that settles and exits at once asserts an unchanged record.
-- **c7:** The Pi adapter in print mode exits after its session settles, if the adapter can do so; the item says where the fix belongs, and makes it there or states why it cannot be made there. The run face's rule in c1 holds in either case, because other harnesses can linger the same way.
-- **c8:** No test asserts elapsed time, and the run face's README and the drain's README state the rule and its record.
 
 **Agent details:**
 

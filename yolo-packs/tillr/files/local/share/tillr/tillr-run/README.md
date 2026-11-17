@@ -66,6 +66,40 @@ it is ignored on fresh executions and also included when an adapter requires a f
 for the continuation. The drain uses it to ask an exited build worker to finish verification
 and commit existing fenced work, without changing the staged brief.
 
+## Ending a settled harness that lingers
+
+A top-level `agent_settled` stream event means the session has finished its work;
+`agent_end` alone does not. The executor requires a freshly extracted report from
+this execution whose final nonempty line is a recognized `RESULT:` footer. It then
+ends the harness's private process group after **five consecutive one-second
+samples** with no output or CPU activity. The interval and count are constants in
+[the run package](./run/settled.go), with injected sample instants in the tests.
+New stdout, stderr (including the adapter's separate stream error file), CPU ticks,
+or changed group membership restarts the count. A new `agent_start` removes the
+settlement evidence. A resumed execution cannot reuse an earlier segment's footer.
+
+The kill reaches the harness and helpers in its private process group, not sibling
+processes in the lane. Linux process counters include helper CPU and the CPU of
+children the harness has reaped. Missing or unreadable evidence does not authorize
+termination. This is not a watchdog for unfinished work: an unsettled session or a
+report without a final footer can remain silent indefinitely.
+
+The run stays `exited`, retaining its observed signal exit code, with the new
+`end_cause: settled-idle`. Its `run.record`, `run.finish` event and `run status`
+include `settled_at` (when the executor observed settlement) and `harness_ended_at`
+(the terminating sample's instant). Ordinary exits keep their existing cause and
+omit these fields; an immediate exit never arms the injected sampling clock. The
+[drain judges the answer](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#settled-harnesses), rather than
+retrying it as infrastructure failure.
+
+The [Pi adapter](./backends/pi/run-pi) uses `exec pi --print --mode json`: print-mode
+cleanup belongs in Pi's `runPrintMode` runtime disposal, not in a shell wrapper
+that kills on the first settlement event. The cached Pi source inspected on
+2026-11-17 already awaits runtime disposal and stdout flushing, but does not force
+exit if handles remain. A source fix must be delivered in the Pi fork patch series,
+which is outside this change's allowed paths; no adapter-only forced exit is added.
+The run-face rule remains necessary for other harnesses as well.
+
 ## Pausing a live run
 
 ```sh
