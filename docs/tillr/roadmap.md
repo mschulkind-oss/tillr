@@ -759,9 +759,41 @@ one resumed session end to end.
 
 <!-- tillr: item id="item-view-no-unclassified" paths="tools/tillr-view/,tools/tillr-drain/,yolo-packs/tillr/,docs/" -->
 
-- **c1:** No row of the waiting face is `unclassified`, has an empty reason, or has a dash for its mover. On 2026-11-15 six items whose runs had been killed and four items no pass had looked at yet showed all three. A test builds a store holding every hold the drain can record and asserts each maps to a class, a reason and a mover.
-- **c2:** An item no pass has decided yet reads `waits on the loop · not yet planned`, and an item whose last run was ended by a loop stop reads `waits on the loop · run ended by a stop` with that run as its mover.
-- **c3:** A reason the view has no rule for fails the view's test suite by name, so a new hold cannot ship without its line.
+**Ruling, 2026-11-17 (answers the second run's conflict):** the waiting face is two faces, and
+the criteria below did not say which one they meant. The default face, which is what the
+`waiting` command and the observatory's Home and Items screens show, asks the planner on every
+read what the next pass would do with each item. The history face, which is `waiting --history`
+and `GET /api/v1/waiting`, reads the decisions that passes have already recorded. The second run
+built c2 on the history face, and its reviewer then found that the default face cannot show the
+same words: `TestWhyAPIAndWaitingBeforeAnyPass` requires an item no pass has looked at to read
+`no-policy` there, because that is what the planner answers.
+
+The default face keeps its contract, and c2 belongs to the history face alone. An item is never
+"not yet planned" on the default face, because the planner plans it at the moment of the read and
+its answer is the real reason the item is not moving. Replacing `no-policy` with `not yet
+planned` would hide the one thing the reader can act on. The same holds for a stopped run: the
+default face shows what the next pass will do with that item, and the planner already gives a
+re-dispatch the reason `earlier run orphaned by a loop stop`. The stop itself is a recorded fact,
+so the history face is where it is shown. The three defects seen on 2026-11-15 — `unclassified`,
+an empty reason and a dash for the mover — exist today only in the history face's fallback row and
+fallback rule, and that is where this item removes them.
+
+The second run also left one defect in its unfinished work, and c2 now settles it. A hold recorded
+in the same millisecond as a stop was hidden behind the stop's label. Decisions carry a
+millisecond time and no sequence number, so a tie cannot be ordered by time; the rule below orders
+it by which run the decision belongs to.
+
+- **c1:** No row of either waiting face is `unclassified`, has an empty reason, or has a dash for its mover. On 2026-11-15 six items whose runs had been killed and four items no pass had looked at yet showed all three. A test builds a store holding every hold the drain can record and asserts that the history face maps each one to a class, a reason and a mover. The observatory no longer lists `unclassified` among its classes and lists `waits on the loop`.
+- **c2:** On the history face, an item with no recorded decision reads `waits on the loop · not yet planned` with the next pass as its mover, and an item whose last run was ended by a loop stop reads `waits on the loop · run ended by a stop` with that run as its mover. The stop's label gives way to any decision recorded for the item at or after the stop's time, unless that decision is the one that dispatched the stopped run, and it gives way once the run is resumed. A test records a hold in the same millisecond as a stop and asserts the row shows the hold.
+- **c3:** The default face is unchanged: `TestWhyAPIAndWaitingBeforeAnyPass` passes with its assertions unchanged, and a test asserts that an item whose last run was ended by a stop shows the planner's own class, reason and mover there.
+- **c4:** A reason the history face has no rule for fails the view's test suite by name, so a new hold cannot ship without its line.
+
+**Agent details:**
+
+- **Where:** the history face is `assembleWaiting`, `waitingRuleFor` and `waitingDecision` in `tools/tillr-view/waiting.go`; the fallback row there is the one built with `Class: "unclassified"` and `Why: "no pass yet"`, and the fallback rule is the last line of `waitingRuleFor`. The default face is `plannerWhy` in `tools/tillr-view/why.go`, which runs `tillr-drain why`; its classes come from `whyPresentation` in `tools/tillr-drain/drain/why.go`, which this item does not change. The observatory's class lists are under `tools/tillr-view/web/src/components/`. The pack's copy under `yolo-packs/tillr/` is regenerated with `just pack-sync`.
+- **The stop's evidence:** the drain records a `drain.orphaned` event whose object is the run, and a later `run.resume` event for the same run withdraws it. Read those two event kinds; do not infer a stop from a signal or an exit code. The decision that dispatched a run is the `dispatches` row whose `run_id` is that run.
+- **Not this item:** changing what the planner answers, or adding the stop to the default face. The README section *Why each unlanded item is not moving* in `tools/tillr-view/README.md` already states the default face's contract; this item updates only its *Recorded-decision history* section.
+- **Evidence:** at `77fe7c39`, `rg -n 'unclassified' tools/tillr-view/waiting.go tools/tillr-drain/drain/why.go` returns two lines, both in `waiting.go`: the fallback rule and the fallback row. `whyPresentation` has no such branch, and its default returns `needs a cause` with a named mover.
 
 ### Stop dispatching when the spend ceiling is reached
 
