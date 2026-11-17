@@ -289,6 +289,34 @@ it.
 **Product QA can try:** finishing a finding as a repeat of another, with the pointer to it, and reading
 both back from `tillr item show`.
 
+**What this item builds on:** the lifecycle item above, which is on the trunk. A first run of this
+item on 2026-11-17 was staged from a base older than that landing, found the state face still on
+hard-coded states, and stopped. It was right to stop, and the plan stands: this item is not built
+on hard-coded states and does not absorb the lifecycle work. The check is one command,
+`rg -n 'SetStateWithReceipt|MoveReceipt' tools/tillr-item/`. A tree where it prints nothing is
+staged too early; the run reports that as a staging fault, and the answer is a restage on the
+current trunk, not another change to this block.
+
+What the lifecycle landing left for this item to extend, as read on the trunk on 2026-11-17:
+
+- `tillr item state` already declares `--reason` and `--by`, and hands them to
+  `SetStateWithReceipt` in [state.go](../../tools/tillr-item/item/state.go) as a `MoveReceipt`.
+  That receipt is checked and recorded only when an item *leaves* a finished state. This item adds
+  the pointer to the same receipt and uses it for a move *into* one. It adds no second receipt type
+  and no second event shape.
+- Which states are finished comes from the store's definition (`IsFinished`), never from a list in
+  the item utility, so the three flags work under a definition whose finished states are
+  `confirmed` and `rejected` exactly as under `git-landing`.
+- The flags are accepted on a move into a finished state, not required by this item: the loop moves
+  an item to `landed` with none of them, and c5 keeps that working. Requiring the pointer for
+  `resolved-elsewhere` is the queued terminal-state block's c2, not this item's.
+- `--reason` is stored on three moves once this item lands: into a finished state, out of one, and
+  into the blocked state, where it is the reason the item waits. `--by` is stored on the first two.
+  `--resolves-via` is stored only on the first. Every other use is the `flag-not-stored` refusal of
+  c3, whose test therefore starts from a state that is neither finished nor blocked.
+- A write of the state an item already has still answers the item and appends no event, so a
+  repeated move does not overwrite a stored receipt.
+
 **Agent details:** the pointer flag is `--resolves-via`, the name the queued
 [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 uses in its c2, so that block's criterion is met by this one rather than contradicted.
