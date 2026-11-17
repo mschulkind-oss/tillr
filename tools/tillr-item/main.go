@@ -61,6 +61,8 @@ func run(args []string) int {
 		return syncFace(rest)
 	case "comments":
 		return commentsFace(rest)
+	case "list":
+		env, code = listFace(rest)
 	case "show":
 		env, code = showFace(rest)
 	case "state":
@@ -279,6 +281,26 @@ func syncFace(args []string) int {
 		return record.ExitNegative
 	}
 	return record.ExitOK
+}
+
+// listFace answers item summaries from one read-only store snapshot.
+func listFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("list")
+	path := fs.String("store", "", "the store to read")
+	var states []string
+	fs.Func("state", "keep items in this state; repeat to include multiple states", func(state string) error {
+		states = append(states, state)
+		return nil
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return record.Envelope{}, fail(err)
+	}
+	if *path == "" {
+		return record.Envelope{}, fail(item.Usagef("list needs --store <path>"))
+	}
+	return readStore(*path, func(_ context.Context, r *store.Reader) (record.Envelope, error) {
+		return item.List(r, states)
+	})
 }
 
 // showFace answers the stored item.record for one item, with the open questions of the
@@ -730,7 +752,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, seed, sync, comments, show, state, close, reopen, decision, mail, grant or verdict"
+const faceList = "apply, seed, sync, comments, list, show, state, close, reopen, decision, mail, grant or verdict"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
