@@ -57,7 +57,19 @@ vantage:
 
 *(Single-line `<!-- tillr: item id="..." paths="..." -->` is equivalent. Omit `blocked_by` when empty. For a standalone chore or defect with no design document, place the comment and `- **c1:**` bullets indented beneath `- **<Title>**` on the domain roadmap.)*
 
-**Amendment (2026-11-15): an optional `seat` attribute.** A directive may also carry `seat="<seat>"`, naming one of the item model's seats (`design`, `build`, `review` or `scout`, the closed set in `tools/tillr-item/item/seat.go`). Omitted, the item asks for no seat, which is the default a seeded row without one gets; an unknown value is a finding like any other invalid attribute. The allowed attribute set is therefore `id`, `paths`, `blocked_by` and `seat`. Reason: a design item has no other way to ask for the design seat from a document.
+**Amendment (2026-11-15): an optional `seat` attribute.** A directive may also carry `seat="<seat>"`, naming one of the item model's seats (`design`, `build`, `review` or `scout`, the closed set in `tools/tillr-item/item/seat.go`). Omitted, the item asks for no seat, which is the default a seeded row without one gets; an unknown value is a finding like any other invalid attribute. Reason: a design item has no other way to ask for the design seat from a document.
+
+**Amendment (2026-11-17): an optional `from` attribute.** A directive may carry
+`from="<item id>"`, identifying the source of newly imported work. It must match
+`^item-[a-z0-9-]+$`; a malformed value is a finding, but a source absent from the
+store is not. On first import, a keyed source places the new item immediately after
+it and any items the same mark already placed there, in block order. A landed source
+still supplies its retained key. Existing items never move because of this mark.
+Key choice and crowded-order respacing are shared with `tillr-item place`;
+respacing preserves the other items' relative order. See
+[the new-item placement rules](observatory-actions.md#44-where-a-new-item-is-placed).
+The closed attribute set is `id`, `paths`, `blocked_by`, `seat`, `prose`, `workflow`,
+`claims`, `judge` and `from`; none permits state, rank or tombstones.
 
 **Exact field mapping (and nothing more):**
 - `item_id`: `id` attribute (required; `^item-[a-z0-9-]+$`).
@@ -65,6 +77,10 @@ vantage:
 - `allowed_paths`: comma-split, trimmed `paths` attribute (required, non-empty, repo-relative prefixes present on `main`, no globs).
 - `blocked_by`: comma-split, trimmed `blocked_by` attribute (optional; defaults to `[]`).
 - `seat`: the `seat` attribute (optional, per the amendment above; defaults to no seat).
+- `from`: first-import placement only, not an editable item-record field. Sync records
+  the source as `placed_from` on the placement event so subsequent syncs can find
+  earlier siblings even after their blocks are deleted. The idea pipeline's
+  `derived_from` edge is separate future work, not a table this amendment introduces.
 - `criteria`: ordered `- **c<N>:** <text>` bullets in the same section up to the next heading or `<!-- tillr: item` directive (`criterion_id = "c<N>"`, `state = ""`; at least `c1` required).
 - `body_ref` and `design_doc` are derived from the containing file path and heading slug, never written in the directive.
 

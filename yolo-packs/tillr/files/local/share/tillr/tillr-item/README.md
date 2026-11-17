@@ -188,7 +188,14 @@ The following rules describe Git-landing, including its established refusal name
   [the queue-persistence ruling's Section 1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md#1-shared-item-block-shape).
   A new item is `in-queue`, or `not-started` when a roadmap's `## Icebox` or
   `## Exploration` section links to its document; an item the store holds keeps its state,
-  rank, runs and criterion states. A changed block updates the item's definition while no
+  rank, runs and criterion states. A new block may name its source with
+  `from="<item id>"`: a keyed source, including a landed one, places it immediately
+  after that source and earlier items placed by the same mark, in block order.
+  A malformed source id is a finding; an absent or unkeyed source does not place
+  the item. This mark never moves an existing item. Placement events retain
+  `placed_from`, so retiring a sibling's block does not lose its placement history.
+  Sync and `place` share key choice and respacing; crowded gaps can change other
+  keys while preserving their relative order. A changed block updates the item's definition while no
   criterion carries a state, and is reported `definition-frozen` once one does. A second run
   over unchanged documents changes no item and appends no event; it refreshes the
   saved sync observation.

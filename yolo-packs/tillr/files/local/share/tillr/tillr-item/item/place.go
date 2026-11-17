@@ -126,6 +126,21 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 	if pos == old {
 		return result(old + 1)
 	}
+	seq, err = insertOrdered(tx, target, rest, pos, at, by, via, "")
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	return result(pos + 1)
+}
+
+// insertOrdered shares the sparse key choice and crowded-order respacing between
+// manual moves and first-import placement. The caller decides which rows belong
+// in its order; sync includes keyed terminal sources, unlike the place face.
+func insertOrdered(tx *store.Tx, target orderedItem, rest []orderedItem, pos int, at time.Time, by, via, from string) (int64, error) {
+	var seq int64
+	if err := tx.Reader().QueryRow(`SELECT event_seq FROM items WHERE item_id=?`, target.id).Scan(&seq); err != nil {
+		return 0, Internalf("reading the placement receipt: %v", err)
+	}
 	lo, hi := "", ""
 	if pos > 0 {
 		lo = rest[pos-1].rank
@@ -155,6 +170,11 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 		}
 		fields["placed_by"] = by
 		fields["placed_via"] = via
+		if v.id == target.id && from != "" {
+			// This immutable receipt finds prior siblings even after their blocks
+			// are retired. It is not the idea pipeline's future derived_from edge.
+			fields["placed_from"] = from
+		}
 		raw, err = json.Marshal(fields)
 		if err != nil {
 			return err
@@ -166,14 +186,14 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 		if _, err := tx.Exec(`UPDATE items SET rank=?,updated_at=?,event_seq=? WHERE item_id=?`, key, at.UnixMilli(), next, v.id); err != nil {
 			return err
 		}
-		if v.id == id {
+		if v.id == target.id {
 			seq = next
 		}
 		return nil
 	}
 	if ok {
 		if err := write(target, key); err != nil {
-			return record.Envelope{}, err
+			return 0, err
 		}
 	} else {
 		final := append(append(append([]orderedItem{}, rest[:pos]...), target), rest[pos:]...)
@@ -188,14 +208,14 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 				n /= 36
 			}
 			key := string(buf[:])
-			if v.rank != key {
+			if v.rank != key || (v.id == target.id && from != "") {
 				if err := write(v, key); err != nil {
-					return record.Envelope{}, err
+					return 0, err
 				}
 			}
 		}
 	}
-	return result(pos + 1)
+	return seq, nil
 }
 
 // betweenKeys returns a strict lexical gap, or false when a prefix ending in

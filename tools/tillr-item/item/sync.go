@@ -27,10 +27,10 @@ import (
 const SyncRecordKind = "item.sync"
 
 // The item block grammar (docs/design/queue-persistence-ruling.md Section 1, D-RS1, and the
-// seat amendment of 2026-11-15):
+// seat and source-placement amendments):
 //
 //	### <Title>
-//	<!-- tillr: item id="<item_id>" paths="<prefix>,<prefix>" blocked_by="<id>,<id>" seat="<seat>" -->
+//	<!-- tillr: item id="<item_id>" paths="<prefix>,<prefix>" blocked_by="<id>,<id>" seat="<seat>" from="<id>" -->
 //
 //	- **c1:** <criterion text>
 //
@@ -160,7 +160,11 @@ type syncPlan struct {
 	// writes are the files with something to write, in the order they may be written, and
 	// each file's payloads in the order its items may be written.
 	writes []fileWrites
+	// placements retain block order independently of dependency-ordered writes.
+	placements []sourcePlacement
 }
+
+type sourcePlacement struct{ id, from string }
 
 type fileWrites struct {
 	file     string
@@ -177,7 +181,9 @@ type fileWrites struct {
 // not hold, `in-queue` or `not-started` when its document is parked; it updates the
 // definition of an item it holds — title, fence, blockers, seat, criteria text, body_ref and
 // design_doc — when no criterion of that item carries a recorded state; and it leaves the
-// item's state, rank, runs and criterion states exactly as the store holds them. An item whose
+// item's state, runs and criterion states exactly as the store holds them. The from
+// mark places new items only; a crowded gap may respace keys while preserving the
+// other items' relative order. An item whose
 // definition differs while a criterion carries a state is reported `definition-frozen` and
 // left alone, because rewriting presented criteria would make a recorded verdict stop meaning
 // what it said.
@@ -196,6 +202,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	}
 	report := plan.report
 	report.Created, report.Updated = []string{}, []string{}
+	created := map[string]bool{}
 	for _, fw := range plan.writes {
 		if _, err := tx.Exec(`SAVEPOINT item_sync_file`); err != nil {
 			return SyncReport{}, Internalf("opening the savepoint for %s: %v", fw.file, err)
@@ -231,6 +238,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			for _, payload := range fw.payloads {
 				if fw.created[payload.ItemID] {
 					report.Created = append(report.Created, payload.ItemID)
+					created[payload.ItemID] = true
 				} else {
 					report.Updated = append(report.Updated, payload.ItemID)
 				}
@@ -238,6 +246,15 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		}
 		if _, err := tx.Exec(`RELEASE SAVEPOINT item_sync_file`); err != nil {
 			return SyncReport{}, Internalf("releasing the savepoint for %s: %v", fw.file, err)
+		}
+	}
+	// Apply files under their savepoints first, then place only successful imports
+	// in original block order. Dependency ordering must not change priority.
+	for _, p := range plan.placements {
+		if created[p.id] {
+			if err := placeFrom(tx, p.id, p.from, in.At); err != nil {
+				return SyncReport{}, err
+			}
 		}
 	}
 	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli()); err != nil {
@@ -512,6 +529,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	// Classify every block of a file with no finding.
 	perFile := map[string]*fileWrites{}
 	var fileOrder []string
+	var placements []sourcePlacement
 	for _, b := range blocks {
 		if bad[b.file] {
 			continue
@@ -544,6 +562,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 			fw.payloads = append(fw.payloads, desired)
 			fw.created[desired.ItemID] = true
+			if from := b.attributes["from"]; from != "" {
+				placements = append(placements, sourcePlacement{desired.ItemID, from})
+			}
 			report.Created = append(report.Created, desired.ItemID)
 			continue
 		}
@@ -595,7 +616,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			writes = append(writes, proseRewriteWrites(&report, blocks, held, d.Ready)...)
 		}
 	}
-	return syncPlan{report: report, writes: writes}, nil
+	return syncPlan{report: report, writes: writes, placements: placements}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after
@@ -894,6 +915,10 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 			bad("missing-id", "the directive names no id")
 		case !itemIDShape.MatchString(id):
 			bad("invalid-id", "id %q does not match ^item-[a-z0-9-]+$", id)
+		}
+
+		if from, named := attrs["from"]; named && !itemIDShape.MatchString(from) {
+			bad("invalid-from", "from %q does not match ^item-[a-z0-9-]+$", from)
 		}
 
 		paths := splitList(attrs["paths"])
