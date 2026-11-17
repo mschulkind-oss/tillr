@@ -18,9 +18,10 @@
 ## What this module owns
 
 `tillr-store` creates a store, seeds one from a bundle, verifies the store's own invariants,
-reads the event log back, and checkpoints the store on demand. It is the utility every other utility's fixture starts from,
-so its report is a contract rather than a convenience: one `store.report` record per face,
-describing the store as it stands after the face ran.
+reads the event log back, records the store's definition, and checkpoints the store on demand.
+It is the utility every other utility's fixture starts from, so its report is a contract
+rather than a convenience: one `store.report` record per face describing the store as it
+stands after the face ran, except `definition`, which emits `store.definition`.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
@@ -52,6 +53,44 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   on that store is trustworthy until a person looks.
 - **`events` writes back the cursor it read to**, so a caller resumes from the last record
   it saw instead of re-reading the log.
+
+## The store's definition
+
+A [definition](../tillr/definition/README.md) states one use's vocabulary and rules.
+The store records the declaration so utilities can share one answer; it does not yet
+make the item utility or drain use that vocabulary in place of their existing rules.
+
+```bash
+tillr store init --store checks.sqlite3 --definition checks.json
+tillr store definition --store checks.sqlite3
+tillr store definition --store checks.sqlite3 --set revised-checks.json
+```
+
+`init --definition` reads and validates the file before creating any store or directory.
+An invalid or unreadable file is refused with exit 2. Without the flag, initialization
+keeps its existing behavior: no declaration or definition event is written. An existing
+store's declaration is preserved unless the flag explicitly supplies a replacement.
+
+`definition` emits one `store.definition` record. Its payload contains `definition`
+(the name), `version`, `content` (the exact JSON file bytes as a string), `sha256`
+(the lowercase SHA-256 hash of those bytes), and `default`. A store with no declaration
+returns the embedded Git-landing definition with `default: true`, including stores created
+before this face existed. Reading never creates or migrates a store. Missing stores and
+corrupt declarations are errors, not requests to create a store or use the default.
+
+`definition --set` validates the new file before opening a writer. It refuses with exit 2
+if any item's current state is absent from the new definition and names every affected
+item and state. The refusal leaves both the declaration and events unchanged. This check
+and the replacement share SQLite's write transaction, so another writer cannot move an
+item between them. The declaration uses the existing `meta` table and needs no schema
+migration. A successful replacement, including `init --definition`, appends
+`store.definition.set` with `old_sha256` and `new_sha256` in the same transaction.
+When replacing an implicit default, the old hash names the embedded content. Git, file
+reading, and process execution never occur inside that transaction.
+
+The shared Go reader is `definition.ForStore`; it returns the same payload plus a
+validated `Parsed` definition for utilities. The core package owns the content parser,
+so consumers do not parse stored JSON themselves.
 
 ## Durability and checkpoints
 

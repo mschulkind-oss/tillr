@@ -1,5 +1,5 @@
 // Package definition reads the vocabulary and rules for one use of tillr.
-// It does not execute hooks, check prerequisites, or read a store.
+// It also reads a store's declaration. It does not execute hooks or check prerequisites.
 package definition
 
 import (
@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 )
 
 // GitLandingName is a placeholder name, pending the owner's naming decision.
@@ -82,6 +83,11 @@ func Read(r io.Reader) (Definition, error) {
 	var raw json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
 		return Definition{}, fmt.Errorf("definition: %w", err)
+	}
+	// encoding/json replaces invalid UTF-8 in strings. Refuse those bytes so a
+	// validated declaration can be stored and printed without changing its hash.
+	if !utf8.Valid(raw) {
+		return Definition{}, fmt.Errorf("definition: content must be valid UTF-8")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
