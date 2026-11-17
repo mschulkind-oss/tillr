@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -81,7 +82,11 @@ func refuseTerminalItem(r *store.Reader, itemID, step string) error {
 	if err != nil {
 		return err
 	}
-	if terminalStates[state] {
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return err
+	}
+	if finishedState(declared.Parsed, state) {
 		return &itemTerminalError{ItemID: itemID, State: state, Step: step}
 	}
 	return nil

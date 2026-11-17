@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ func ForStore(ctx context.Context, s *store.Store) (Record, error) {
 	var result Record
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		result, err = readStore(r)
+		result, err = ForReader(r)
 		return err
 	})
 	return result, err
@@ -61,12 +62,35 @@ func ForStore(ctx context.Context, s *store.Store) (Record, error) {
 // ForReader reads the declaration in the caller's transaction, so state validation
 // and its write use the same declaration even during a concurrent replacement.
 // A nil reader uses the embedded definition for a not-yet-created store.
+// Immutable read transactions load it once, including when a consumer calls an
+// item helper that reads it again. Writable transactions always reread it.
 func ForReader(r *store.Reader) (Record, error) {
 	if r == nil {
 		return fromContent(gitLandingJSON, true)
 	}
-	return readStore(r)
+	value, err := r.ReadOnce(readerDefinitionKey{}, func() (any, error) {
+		return readStore(r)
+	})
+	if err != nil {
+		return Record{}, err
+	}
+	// The cached declaration is private to the reader; callers still own their
+	// copies just as they did before reads were shared.
+	rec := value.(Record)
+	rec.Parsed.States = slices.Clone(rec.Parsed.States)
+	rec.Parsed.Finished = slices.Clone(rec.Parsed.Finished)
+	rec.Parsed.Transitions = slices.Clone(rec.Parsed.Transitions)
+	rec.Parsed.Prerequisites = slices.Clone(rec.Parsed.Prerequisites)
+	if rec.Parsed.Hooks != nil {
+		hooks := *rec.Parsed.Hooks
+		hooks.Argv = slices.Clone(hooks.Argv)
+		hooks.Names = slices.Clone(hooks.Names)
+		rec.Parsed.Hooks = &hooks
+	}
+	return rec, nil
 }
+
+type readerDefinitionKey struct{}
 
 func readStore(r *store.Reader) (Record, error) {
 	var raw string

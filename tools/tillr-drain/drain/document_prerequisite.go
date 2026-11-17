@@ -53,7 +53,7 @@ func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[s
 			rewrites[id] = rewrite
 			for _, note := range notes {
 				if strings.HasPrefix(note.Message, "criteria-count:") {
-					owners[rewrite] = "prose-criteria-count: the original has more than eight criteria; preserving them cannot pass the guide. The owner must reconcile the original criteria before a rewrite can run."
+					owners[rewrite] = ReasonProseCriteriaCount + ": the original has more than eight criteria; preserving them cannot pass the guide. The owner must reconcile the original criteria before a rewrite can run."
 				}
 			}
 		}

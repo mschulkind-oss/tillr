@@ -101,8 +101,9 @@ type VantageQuestions struct {
 	index VantageIndex
 }
 
-// Document answers one design document.
-func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
+// DocumentPresence answers only whether the tree holds the document. It never
+// starts the questions index, so a presence check does not depend on that tool.
+func (v *VantageQuestions) DocumentPresence(path string) (DocumentQuestions, error) {
 	if path == "" || v == nil {
 		return DocumentQuestions{}, nil
 	}
@@ -118,6 +119,15 @@ func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
 			return DocumentQuestions{}, nil
 		}
 		return DocumentQuestions{}, err
+	}
+	return DocumentQuestions{Present: true}, nil
+}
+
+// Document answers one design document's presence and indexed questions.
+func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
+	present, err := v.DocumentPresence(path)
+	if err != nil || !present.Present {
+		return present, err
 	}
 	// The index names documents relative to the root it walked, so an absolute reference is
 	// keyed the way the index spells it.

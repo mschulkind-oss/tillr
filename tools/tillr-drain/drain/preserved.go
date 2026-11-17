@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -197,7 +198,11 @@ func (l *Loop) preservationDisposition(ctx context.Context, runID string) (*Pres
 			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
-			terminal = err == sql.ErrNoRows || terminalStates[state]
+			declared, readErr := definition.ForReader(r)
+			if readErr != nil {
+				return readErr
+			}
+			terminal = err == sql.ErrNoRows || finishedState(declared.Parsed, state)
 		}
 		return nil
 	})
@@ -336,6 +341,10 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
 		for _, p := range saved {
 			if p.Pruned {
 				continue
@@ -345,7 +354,7 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
-			if err == sql.ErrNoRows || terminalStates[state] {
+			if err == sql.ErrNoRows || finishedState(declared.Parsed, state) {
 				drop = append(drop, p)
 			}
 		}

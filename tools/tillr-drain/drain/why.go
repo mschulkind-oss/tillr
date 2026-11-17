@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -44,6 +45,7 @@ type WhySummary struct {
 }
 
 type WhyAnswer struct {
+	Definition   string     `json:"definition"`
 	EventHeadSeq int64      `json:"event_head_seq"`
 	Rows         []WhyRow   `json:"rows"`
 	Summary      WhySummary `json:"summary"`
@@ -82,7 +84,13 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		return answer, readFailure(err)
 	}
 	answer.EventHeadSeq = head
-	envs, err := Plan(r, tick, policy, questions)
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	answer.Definition = declared.Name
+	def := declared.Parsed
+	envs, err := planDefinition(r, tick, policy, questions, def)
 	if err != nil {
 		return answer, err
 	}
@@ -173,7 +181,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	assigned := map[string]string{}
 	for i, env := range envs {
 		it := items[i]
-		if it.State == StateLanded {
+		if (def.Completes == "landing" && it.State == StateLanded) || (def.Completes != "landing" && finishedState(def, it.State)) {
 			continue
 		}
 		var d Decision
@@ -198,7 +206,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
-				if !terminalStates[states[id]] {
+				if !finishedState(def, states[id]) {
 					row.WaitingOn = append(row.WaitingOn, id)
 				}
 			}

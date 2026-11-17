@@ -8,7 +8,7 @@ import "context"
 const LandAlreadyOnTrunk = "already-on-trunk"
 
 // StateResolvedElsewhere is the item state for work whose change reached the trunk by
-// another route. It is one of the item model's terminal states (terminalStates), so the
+// another route. It is one of the item model's finished states in the store’s definition, so the
 // item stops blocking its dependents and is not planned again.
 const StateResolvedElsewhere = "resolved-elsewhere"
 

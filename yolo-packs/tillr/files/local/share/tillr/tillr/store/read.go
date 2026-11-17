@@ -49,8 +49,31 @@ func (s *Store) Describe(ctx context.Context) (Snapshot, error) {
 // report assembled from several of them is a snapshot rather than a set of unrelated
 // answers.
 type Reader struct {
-	ctx context.Context
-	q   queryer
+	ctx        context.Context
+	q          queryer
+	readValues map[any]readValue
+}
+
+type readValue struct {
+	value any
+	err   error
+}
+
+// ReadOnce loads a value at most once per key in an immutable ReadTx. Keys must
+// be comparable and values must not be mutated by callers. A Reader obtained
+// from a writable Tx always reloads, because that transaction can change its rows.
+// Errors are retained too: every consumer of one snapshot sees the same answer.
+// Like Query, this method is used serially within the transaction's callback.
+func (r *Reader) ReadOnce(key any, load func() (any, error)) (any, error) {
+	if r.readValues == nil {
+		return load()
+	}
+	if saved, ok := r.readValues[key]; ok {
+		return saved.value, saved.err
+	}
+	value, err := load()
+	r.readValues[key] = readValue{value: value, err: err}
+	return value, err
 }
 
 // ReadTx runs fn inside one read transaction. A deferred transaction takes its read
@@ -68,7 +91,7 @@ func (s *Store) ReadTx(ctx context.Context, fn func(*Reader) error) error {
 		return fmt.Errorf("store: beginning the read transaction: %w", err)
 	}
 	defer tx.Rollback()
-	return fn(&Reader{ctx: ctx, q: tx})
+	return fn(&Reader{ctx: ctx, q: tx, readValues: map[any]readValue{}})
 }
 
 // Query runs one query inside the read transaction. It is the domain-row half of the

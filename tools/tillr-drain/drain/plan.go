@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -174,6 +175,14 @@ type itemRow struct {
 // than dispatching it on a guess. That is the deliberate direction: a caller that forgot
 // to read the index gets held items with a reason, not a silent "no questions".
 func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) ([]record.Envelope, error) {
+	d, err := definition.ForReader(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	return planDefinition(r, tick, policy, questions, d.Parsed)
+}
+
+func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition) ([]record.Envelope, error) {
 	if err := tick.check(); err != nil {
 		return nil, err
 	}
@@ -236,7 +245,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	}
 	trunkWaiters := map[string]string{}
 	for _, row := range items {
-		if row.State != StateBlocked {
+		if def.Completes != "landing" || row.State != def.Blocked {
 			continue
 		}
 		waiting, _, err := item.ReadWaitingOn(r, row.ItemID)
@@ -264,13 +273,17 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	if source, ok := questions.(*VantageQuestions); ok {
 		root = source.Root
 	}
-	unshared, rewriteHolds, rewriteOwnerHolds, err := documentPrerequisites(r, root)
-	if err != nil {
-		return nil, err
+	unshared := map[string]bool{}
+	rewriteHolds, rewriteOwnerHolds := map[string]string{}, map[string]string{}
+	if hasPrerequisite(def, definition.PrerequisiteDesignDocument) && def.Completes == "landing" {
+		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root)
+		if err != nil {
+			return nil, err
+		}
 	}
 	inputs := map[string]*RunInputs{}
 	for _, row := range items {
-		if row.State != StateInQueue || unshared[row.ItemID] {
+		if row.State != def.Ready || unshared[row.ItemID] {
 			continue
 		}
 		inputs[row.ItemID], err = currentRunInputs(r, row, policy, root, build)
@@ -284,7 +297,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		states[item.ItemID] = item.State
 	}
 	var green string
-	if root != "" {
+	if def.Completes == "landing" && root != "" {
 		gatePolicy, _, e := ReadGatePolicy(root)
 		if e != nil {
 			return nil, e
@@ -298,9 +311,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			}
 		}
 	}
-	unproved, err := unprovedBlockers(context.Background(), r, root, green, states, edges)
-	if err != nil {
-		return nil, err
+	unproved := map[string]bool{}
+	if def.Completes == "landing" {
+		unproved, err = unprovedBlockers(context.Background(), r, root, green, states, edges)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// An override naming an item the store does not hold is refused rather than ignored:
 	// the override map names items, so a stale entry is the rot design §2 prices and
@@ -359,11 +375,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	}
 	commentHolds := map[string]string{}
 	for _, row := range items {
-		if item.IsCommentItem(row.ItemID) && row.State != StateLanded && row.State != "closed" && row.State != StateResolvedElsewhere {
+		if hasPrerequisite(def, definition.PrerequisiteDesignQuestions) && item.IsCommentItem(row.ItemID) && !finishedState(def, row.State) {
 			commentHolds[plannerDocumentKey(root, row.DesignDoc)] = row.ItemID
 		}
 	}
 	p := &planner{
+		definition:   &def,
 		commentHolds: commentHolds, documentRoot: root,
 		conflicts: conflicts,
 		shut:      shut,
@@ -371,7 +388,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		tick:      tick, policy: policy, held: lanes, itemStates: states, history: history,
 		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
 		trunkWaiters: trunkWaiters,
-		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items), unproved: unproved,
+		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
 	var hasNodes bool
@@ -401,7 +418,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			continue
 		}
 		var decision Decision
-		if fault, held := faults[item.ItemID]; held && !terminalStates[item.State] {
+		if fault, held := faults[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, fault.Reason) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
 			identifyDecision(&decision)
 		} else if work := works[item.ItemID]; work != nil && !work.Done {
@@ -410,14 +427,14 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			// An item already terminal by another route settles it unjudged instead
 			// (terminal_item.go); a workflow item is released below on the same fact.
 			settled := false
-			if terminalStates[item.State] && work.Decision.Workflow == nil {
+			if p.finished(item.State) && work.Decision.Workflow == nil {
 				decision, settled, err = terminalSettlement(r, work, at)
 				if err != nil {
 					return nil, readFailure(err)
 				}
 			}
 			if !settled {
-				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
+				decision, err = pendingDecision(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
 			}
 			if err == nil && !settled && decision.Action == ActionJudge && item.JudgeMode == "agent" && item.JudgeGrant == "" {
 				decision.Action, decision.Reason, decision.To = ActionHold, ReasonJudgeGrantAbsent, ""
@@ -437,7 +454,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				identifyDecision(&decision)
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
-				invalid := item.State != StateInQueue || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
+				invalid := item.State != def.Ready || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
 				before, now := work.Decision.Inputs, inputs[item.ItemID]
 				if before != nil && now != nil && (before.ItemBlock != now.ItemBlock || before.AllowedPaths != now.AllowedPaths) {
 					invalid = true
@@ -461,11 +478,11 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			if err != nil {
 				return nil, readFailure(err)
 			}
-		} else if rewriteOwnerHolds[item.ItemID] != "" && !terminalStates[item.State] {
+		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: rewriteOwnerHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if rewriteHolds[item.ItemID] != "" && !terminalStates[item.State] {
-			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "awaits-rewrite", DeferredBy: rewriteHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
+		} else if rewriteHolds[item.ItemID] != "" && !p.finished(item.State) {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonAwaitsRewrite, DeferredBy: rewriteHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
 		} else if unshared[item.ItemID] {
 			decision, err = p.triageDecision(r, item)
@@ -485,7 +502,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			}
 			hold := ""
 			_, hasRetry := retries[item.ItemID]
-			if w != nil && hasNodes && !terminalStates[item.State] && !hasRetry {
+			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
 					return nil, readFailure(err)
@@ -506,7 +523,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 					decision.Attempt = work.Decision.Attempt
 				}
 			} else if loadErr != nil {
-				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
+				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonWorkflowInvalid + ": " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
 				decision.SelectedWorkflow, decision.WorkflowSource = selected, source
@@ -544,6 +561,7 @@ func plannerDocumentKey(root, doc string) string {
 }
 
 type planner struct {
+	definition *definition.Definition
 	// An open review batch holds new build dispatches for its document; workers
 	// already running settle normally, without being interrupted by intake.
 	commentHolds   map[string]string
@@ -601,7 +619,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	conflict, hasConflict := p.conflicts[item.ItemID]
 	// An explicit owner disposition (apply/state) can release a blocked item.
 	// Historical conflicts do not undo that act or hold terminal items.
-	if item.State != StateBlocked && conflict.Status != "answered" {
+	if !p.lands() || (item.State != p.rules().Blocked && conflict.Status != "answered") {
 		hasConflict = false
 	}
 	if hasConflict && conflict.Status != "closed" && conflict.Status != "answered" {
@@ -673,26 +691,26 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// problem a ruling solves.
 	questions := p.questionState(item)
 	switch {
-	case p.trunkWaiters[item.ItemID] != "":
+	case p.lands() && p.trunkWaiters[item.ItemID] != "":
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkBroken
 		decision.DeferredBy = p.trunkWaiters[item.ItemID]
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
-	case p.unproved[item.ItemID]:
+	case p.lands() && p.unproved[item.ItemID]:
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkUnproved
-	case p.fixerOpen != "" && !IsTrunkFixer(item.ItemID):
+	case p.lands() && p.fixerOpen != "" && !IsTrunkFixer(item.ItemID):
 		// The trunk is red and a fixer owns the repair. Every ordinary item waits: a run
 		// staged from a base that never passed would produce a candidate the same red gate
 		// refuses, and the queue would spend itself proving the same breakage one item at a
 		// time. The fixer itself is exempt and dispatches normally.
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkBroken
 		decision.DeferredBy = p.fixerOpen
-	case item.State != StateInQueue:
+	case item.State != p.rules().Ready:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
 	case item.JudgeMode == "agent" && item.JudgeGrant == "":
 		decision.Action, decision.Reason = ActionHold, ReasonJudgeGrantAbsent
-	case !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
-		decision.Action, decision.Reason = ActionHold, "design-under-comment"
+	case hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions) && !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
+		decision.Action, decision.Reason = ActionHold, ReasonDesignUnderComment
 		decision.DeferredBy = p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)]
 	case questions.reason != "":
 		decision.Action, decision.Reason = ActionHold, questions.reason
@@ -708,11 +726,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonReadmissionExhausted
 	case retry == nil && changed == "" && attempt.exhausted:
 		decision.Action, decision.Reason = ActionHold, ReasonInfraExhausted
-	case retry == nil && !interrupted && changed == "" && !attempt.failover && p.mayBeARetry(item.ItemID) && decision.ConflictID == "":
+	case retry == nil && !interrupted && changed == "" && !attempt.failover && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
-	case fenceAdmitsNothing(fence):
+	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
 		decision.Action, decision.Reason = ActionHold, ReasonNoFence
-	case forkHeld:
+	case p.lands() && forkHeld:
 		decision.Action, decision.Reason = ActionHold, ReasonForkHeld
 		decision.DeferredBy = heldBy
 	case p.policy == nil:
@@ -857,22 +875,36 @@ type questionState struct {
 // An item that names no document at all is not one of the four: it has no document to be
 // missing, and its question state is simply not a fact this planner needs.
 func (p *planner) questionState(item itemRow) questionState {
-	if itemIsComment(item.ItemID) || item.DesignDoc == "" {
+	checkDocument := hasPrerequisite(p.rules(), definition.PrerequisiteDesignDocument)
+	checkQuestions := hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions)
+	if (!checkDocument && !checkQuestions) || itemIsComment(item.ItemID) || item.DesignDoc == "" {
 		return questionState{}
+	}
+	if p.questions == nil && !checkQuestions {
+		return questionState{reason: ReasonDesignDocMissing}
 	}
 	if p.questions == nil {
 		return questionState{reason: ReasonQuestionsUnknown}
 	}
-	answer, err := p.questions.Document(item.DesignDoc)
+	var answer DocumentQuestions
+	var err error
+	if source, ok := p.questions.(*VantageQuestions); ok && !checkQuestions {
+		answer, err = source.DocumentPresence(item.DesignDoc)
+	} else {
+		answer, err = p.questions.Document(item.DesignDoc)
+	}
 	if err != nil {
 		// The reason is the report. The error text is the tool's own and would be printed
 		// once per item per tick, which is the log spam the decision record replaces.
-		return questionState{reason: ReasonQuestionsUnknown}
-	}
-	if !answer.Present {
+		if checkQuestions {
+			return questionState{reason: ReasonQuestionsUnknown}
+		}
 		return questionState{reason: ReasonDesignDocMissing}
 	}
-	if question, ok := firstUnanswered(answer.Questions); ok {
+	if !answer.Present && checkDocument {
+		return questionState{reason: ReasonDesignDocMissing}
+	}
+	if question, ok := firstUnanswered(answer.Questions); checkQuestions && ok {
 		return questionState{reason: ReasonQuestionOpen, questionID: question.ID}
 	}
 	return questionState{}
@@ -953,12 +985,12 @@ func (p *planner) forkHeldBy(allowed []string) (string, bool) {
 // not hold blocks, which is the safe direction: an edge whose target cannot be read is
 // not evidence that the target is done.
 func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
-	if item.State == StateBlocked {
+	if item.State == p.rules().Blocked {
 		return true
 	}
 	for _, blocker := range blockedBy {
 		state, found := p.itemStates[blocker]
-		if !found || !terminalStates[state] {
+		if !found || !p.finished(state) {
 			return true
 		}
 	}
@@ -1006,7 +1038,7 @@ func (p *planner) retryHoldReason(itemID string) string {
 	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeGrantAbsent:
 		return p.history.refusals[latest]
 	case RefusalNodeOutput:
-		return RefusalNodeOutput
+		return ReasonNodeOutputMissing
 	case RefusalFence:
 		return ReasonBoundaryScopeEscape
 	case RefusalNoOp:

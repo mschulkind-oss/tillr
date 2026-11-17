@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -635,6 +636,10 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 	defer s.Close()
 	created := false
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		declared, err := definition.ForReader(tx.Reader())
+		if err != nil {
+			return err
+		}
 		// Check identity outlives a red tip. Reuse an unresolved repair, preserving
 		// its blocked/owner state, and retain the newly observed tip as evidence.
 		rows, err := tx.Query(`SELECT i.item_id,i.state,i.allowed_paths,c.text FROM items i JOIN item_criteria c USING(item_id) WHERE i.item_id LIKE 'fixer-main-%' AND c.criterion_id='trunk-green' ORDER BY i.rank,i.item_id`)
@@ -648,7 +653,7 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 				rows.Close()
 				return err
 			}
-			if terminalStates[state] {
+			if finishedState(declared.Parsed, state) {
 				continue
 			}
 			if id == fixerID {
@@ -742,9 +747,13 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 // reads this once per tick and holds every ordinary item behind it: dispatching ordinary
 // work onto a red trunk would stage it from a base whose checks never passed, which is
 // the defect the whole file exists to prevent.
-func trunkFixerOpen(items []itemRow) string {
+func trunkFixerOpen(items []itemRow, declarations ...definition.Definition) string {
+	def := defaultDefinition()
+	if len(declarations) != 0 {
+		def = declarations[0]
+	}
 	for _, item := range items {
-		if IsTrunkFixer(item.ItemID) && !terminalStates[item.State] {
+		if IsTrunkFixer(item.ItemID) && !finishedState(def, item.State) {
 			return item.ItemID
 		}
 	}

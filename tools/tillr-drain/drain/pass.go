@@ -12,6 +12,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 	"os"
@@ -593,9 +594,34 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 }
 
 type plannedApplication struct {
-	decision    Decision
-	version     string
-	parentRunID string
+	decision      Decision
+	version       string
+	parentRunID   string
+	definitionSHA string
+	definition    *definition.Definition
+}
+
+func (p plannedApplication) checksComments() bool {
+	d := p.definition
+	if d == nil {
+		fallback := defaultDefinition() // Direct application fixtures predate definitions.
+		d = &fallback
+	}
+	return holdEnabled(*d, ReasonVantageUnavailable)
+}
+
+// currentDefinition refuses a stale application before it claims a run or records
+// a hold. The pass reads the declaration once; applications revalidate it in their
+// write transaction alongside the item's other input versions.
+func currentDefinition(r *store.Reader, p plannedApplication) (bool, error) {
+	if p.definitionSHA == "" {
+		return true, nil
+	} // Direct application unit fixtures.
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return false, err
+	}
+	return declared.SHA256 == p.definitionSHA, nil
 }
 
 type runCompletion struct {
@@ -681,7 +707,11 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			// Standalone planner callers do not own a document refresh lifecycle.
 			questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
 		}
-		envs, err := Plan(r, tick, l.cfg.Policy, questions)
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
+		}
+		envs, err := planDefinition(r, tick, l.cfg.Policy, questions, declared.Parsed)
 		if err != nil {
 			return err
 		}
@@ -697,7 +727,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			if d.Reason == ReasonNoPolicy {
 				return Usagef("the loop's policy cannot build a request for item %s (seat %s)", d.ItemID, d.Seat)
 			}
-			if reason, held := l.heldFor(r, d.ItemID); held {
+			if reason, held := l.heldFor(r, d.ItemID); held && holdEnabled(declared.Parsed, reason) {
 				d.Action, d.Reason, d.From, d.To = ActionHold, reason, "held", ""
 				d.LaneID, d.RunRequest = "", nil
 				identifyDecision(&d)
@@ -710,7 +740,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			if work := works[d.ItemID]; work != nil {
 				parent = work.ParentRunID
 			}
-			plans = append(plans, plannedApplication{decision: d, version: version, parentRunID: parent})
+			plans = append(plans, plannedApplication{decision: d, version: version, parentRunID: parent, definitionSHA: declared.SHA256, definition: &declared.Parsed})
 		}
 		return nil
 	})
@@ -742,6 +772,10 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			}
 			defer s.Close()
 			err = s.WriteTx(ctx, func(tx *store.Tx) error {
+				current, err := currentDefinition(tx.Reader(), p)
+				if err != nil || !current {
+					return err
+				}
 				version, err := inputVersion(tx.Reader(), p.decision)
 				if err != nil || version != p.version {
 					return err
@@ -759,6 +793,10 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		}
 		defer s.Close()
 		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			current, err := currentDefinition(tx.Reader(), p)
+			if err != nil || !current {
+				return err
+			}
 			version, err := inputVersion(tx.Reader(), p.decision)
 			if err != nil || version != p.version {
 				return err
@@ -792,6 +830,10 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 	applied := false
 	var work *pendingWork
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		current, err := currentDefinition(tx.Reader(), p)
+		if err != nil || !current {
+			return err
+		}
 		version, err := inputVersion(tx.Reader(), p.decision)
 		if err != nil {
 			return err
@@ -1284,7 +1326,7 @@ planned:
 		closedBatch := false
 		for _, p := range plans {
 			d := p.decision
-			if !item.IsCommentItem(d.ItemID) || l.active[p.parentRunID] ||
+			if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.active[p.parentRunID] ||
 				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
 				continue
 			}
@@ -1348,10 +1390,10 @@ plans:
 		if l.active[p.parentRunID] || ((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID]) {
 			continue
 		}
-		if item.IsCommentItem(d.ItemID) && (d.Action == ActionDispatch || d.Action == ActionRetry || d.Action == ActionHold) {
+		if p.checksComments() && item.IsCommentItem(d.ItemID) && (d.Action == ActionDispatch || d.Action == ActionRetry || d.Action == ActionHold) {
 			if !commentReady[d.ItemID] {
 				d.Action = ActionHold
-				d.Reason = "Vantage not answering"
+				d.Reason = ReasonVantageUnavailable
 				holds = append(holds, d)
 				continue
 			}

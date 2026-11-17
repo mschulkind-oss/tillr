@@ -7,6 +7,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -50,8 +51,24 @@ func TestWhyChangesWithPlannerHoldRule(t *testing.T) {
 	}
 	read(ReasonBlocked)
 	// Change the planner's rule for which states satisfy an edge. No why rule changes.
-	terminalStates["custom-done"] = true
-	defer delete(terminalStates, "custom-done")
+	d, err := definition.GitLanding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.States = append(d.States, "custom-done")
+	d.Finished = append(d.Finished, "custom-done")
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.Open(context.Background(), f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := definition.Set(context.Background(), writer, raw); err != nil {
+		t.Fatal(err)
+	}
 	read(ReasonReady)
 }
 

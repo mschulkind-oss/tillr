@@ -126,7 +126,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 		t.Fatalf("table: %v: %s", err, table)
 	}
 	lines := strings.Split(strings.TrimSpace(string(table)), "\n")
-	if len(lines) != 7 || strings.Join(strings.Fields(lines[0]), " ") != "rank item_id class where why mover since" {
+	if len(lines) != 8 || !strings.HasPrefix(lines[0], "definition: ") || strings.Join(strings.Fields(lines[1]), " ") != "rank item_id class where why mover since" {
 		t.Fatalf("table columns/rows: %s", table)
 	}
 	if storeFingerprint(t, h.store) != before {
