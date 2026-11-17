@@ -157,12 +157,16 @@ is a defect in tillr's own Git-landing use, so it depends on nothing and goes fi
 **Agent details:** the queued
 [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 asks for the same refusal in its c3; once this lands, that criterion is already true, and its
-worker finds it so.
+worker finds it so. The two criterion rules `tillr item apply` already has stay as they are and
+are checked first, which answers the conflict a worker raised on 2026-11-17:
+`TestAStateMoveDoesNotUnfreezeACriterion` in [state_test.go](../../tools/tillr-item/state_test.go)
+changes a landed item's criterion state and requires `criterion-state`, and it passes unchanged.
+`state-terminal` is the name for a change those two rules let through.
 
 <!-- tillr: item id="item-def-finished-states-final" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" prose="2" -->
 
 - **c1:** `tillr item state` refuses a move out of `landed` or `resolved-elsewhere` to any other state as `state-terminal`, naming the item and its state. Writing the state the item already has still succeeds and appends no event. A test covers both states and every other state as a target.
-- **c2:** `tillr item apply` refuses, as `state-terminal`, a record for an item in `landed` or `resolved-elsewhere` that changes its state, title, criteria, blockers or fence. A record identical to the stored item still succeeds and appends no event. A test applies each kind of change to a landed item.
+- **c2:** `tillr item apply` refuses a record for an item in `landed` or `resolved-elsewhere` that changes its state, title, criteria, blockers or fence. A change that `criterion-state` or `criterion-frozen` refuses today, on a criterion's state, or on the text or presence of a criterion that has a state, keeps that name, also when the record changes something else as well. Every other change is refused as `state-terminal`, including a new criterion. A record identical to the stored item still succeeds and appends no event. A test applies each kind of change to a landed item and asserts the refusal's name for each.
 - **c3:** A test reproduces Product QA's sequence: an item is moved to `landed`, then a record saying `in-queue` with a new title is applied. It asserts the refusal and that the stored item is unchanged.
 - **c4:** `tillr item sync` over a document that still holds a landed item's block reports it as stale, as it does today, writes nothing for it, and still syncs the file's other blocks. A test asserts both.
 - **c5:** The loop's own sequence, verdicts first and then the move to `landed`, still ends an item `landed`, and moves into and out of `closed` are unchanged. A test runs the loop's sequence.
