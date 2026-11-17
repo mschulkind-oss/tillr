@@ -266,7 +266,7 @@ The seed's retirement and re-admission on a changed input are item blocks the dr
 
 - **c1:** The seed file `config/tillr/seed-items.json` and the `seed` face of `tillr-item` are gone, and `tillr item seed` answers a usage refusal that names `tillr item sync`.
 - **c2:** The seven seed rows that were neither landed nor a restated open question appear as prose entries on `docs/pi/roadmap.md`.
-- **c3:** The gate's seed-freeze check and the row-count pin in `tools/tillr-drain/seed_test.go` are removed with the file, and the gate's own suite passes.
+- **c3:** The gate's legacy-seed intake freeze is gone with the file: `tools/fork-check.py` no longer describes or reads `config/tillr/seed-items.json`, `tests/fork-check.test.py` no longer writes a seed fixture, `tools/tillr-drain/seed_test.go` and its row-count pin are removed, and the gate's own suite passes.
 - **c4:** The store keeps a way to set an item's rank after the seed is gone: `tillr item rank` sets the rank of one item the store already holds and changes nothing else about that item (its state, criteria, allowed paths and runs are as they were), refuses an item the store does not hold, and a test pins both.
 - **c5:** The board's unranked heading in `tools/tillr-view/web/src/components/QueueRail.tsx`, its tests and `tools/tillr-view/web/README.md` name `tillr item rank` as the command that records a priority, and no file under `tools/tillr-view/` outside test fixture item ids names `config/tillr/seed-items.json` or `tillr-item seed`.
 
