@@ -1829,11 +1829,19 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 	if runID == "" || sha == "" {
 		return nil
 	}
+	// A pin is the one write that keeps a candidate reachable once its lane is reset, so a
+	// stop's cancellation does not cut it off: a stop that arrives mid-pin finishes the pin.
+	// The timeout bounds a wedged git rather than the stop.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pinTimeout)
+	defer cancel()
 	if _, err := l.git(ctx, l.cfg.Root, "update-ref", "refs/tillr/runs/"+runID, sha); err != nil {
 		return Externalf("pinning refs/tillr/runs/%s at %s: %v", runID, sha, err)
 	}
 	return nil
 }
+
+// pinTimeout bounds one pin's `git update-ref`, which survives the loop's stop.
+const pinTimeout = 30 * time.Second
 
 // pinQuietly pins a head and reports a failure without failing the lane: the pin is
 // bookkeeping, and a lane that cannot be pinned is reported rather than left unreleased.
@@ -2019,7 +2027,7 @@ func (l *Loop) reportf(format string, args ...any) {
 // sibling lanes are named: the loop holds them, and one run's write into another's worktree
 // is an escape, not a neighbour's work.
 func (l *Loop) snapshot(ctx context.Context, targets, watched []string) (*Boundary, error) {
-	spec := BoundarySpec{Repo: l.cfg.Root, Targets: targets}
+	spec := BoundarySpec{Repo: l.cfg.Root, Targets: targets, LaneRoot: l.cfg.LaneRoot}
 	// Only the lanes this tick is not dispatching are watched. A lane whose own run is in
 	// flight writes in its own worktree, and a sibling bracket that watched it would convict
 	// the sibling's own work as a write into it.

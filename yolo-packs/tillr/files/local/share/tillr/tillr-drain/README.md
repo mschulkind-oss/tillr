@@ -192,6 +192,14 @@ signal: the stop exits non-zero naming it, after stopping the local loops and, w
 run face is gone but whose worker survives is ended like any other: the interruption is
 recorded, then every process of this user carrying that run and store identity gets SIGTERM.
 
+A stop that arrives during the loop's own checks ends them before their worktrees go. The
+rolling tier's program and the trunk-already-red replay's run in a process group of their
+own; the stop's cancellation kills that whole group, a normal exit kills whatever the
+program left in it, and the step waits (up to five seconds) for the group to be gone before
+it removes its scratch worktree. A pin (`refs/tillr/runs/<run>`) that a stop interrupts is
+finished rather than cut off, bounded at thirty seconds, because the pin is what keeps a
+candidate reachable after its lane is reset.
+
 For an unbounded claim with no terminal record, replacement loops compare the recorded
 process ID and start time within the same Linux boot, process namespace, and user
 identity, then check that no worker carrying that run and store identity survives.
@@ -282,7 +290,10 @@ convictions and attribution limits are:
 | An unassigned ref inside tillr's namespaces | Yes | No run or loop delivery owns that ref. |
 | Main-checkout uncommitted content | No | Content belongs to the owner, regardless of when it appeared. |
 | Changed status of a path in a watched, idle sibling worktree | Yes | The run was not assigned that worktree. Siblings that became active are removed from the comparison. |
-| A worktree appearing or disappearing outside a sibling's own lane directory | Yes | The run does not own worktree lifecycle. |
+| The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | No | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. The excuse is that exact place and shape: a worker that registered a detached checkout there gains no ref and no content the bracket does not otherwise read, and the loop removes the path before its own next use. A run's own target worktree is never excused. |
+| A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | No | The loop's own `git worktree prune` removes it; the directory was gone before the run began. |
+| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | No | That is a sibling's fork-series landing: the lander marks the squash commit before it moves the patch branch. Any other patch-branch move still convicts. |
+| A worktree appearing or disappearing anywhere else outside a sibling's own lane directory | Yes | The run does not own worktree lifecycle. |
 | Main checkout's checked-out branch changes | Yes | This changes which checkout the loop supervises, rather than advancing its history. |
 | Candidate changes outside its fence, or uncommitted work past its candidate | Yes, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
 | A named store file changing in an adapter-only bracket | Yes, in the standalone boundary check | The adapter does not own the store; run execution brackets omit it because the run face writes its own records. |
