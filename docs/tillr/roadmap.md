@@ -907,6 +907,42 @@ reopen that ruling or introduce another way to throttle work.
 - **Not this item:** how an ended or orphaned run's spend is recorded belongs to *Add the spend of killed runs to the record* (`item-drain-record-killed-run-spend`). This item reads whatever cost a run's record carries and does not wait on that one.
 - **Evidence:** at `2532d9b8`, `rg -n 'window_hours|ceiling_usd' tools/tillr-drain tools/tillr-view` returns nothing, so no part of the withdrawn ceiling is in the tree to remove.
 
+**Ruling, 2026-11-17 (answers the conflict raised after the fourth run):** no criterion is at fault,
+so c1 to c4 stand as written. The measurement was built whole twice and passed the gate both times.
+Both landings were refused because the trunk had moved under the candidate. The fix for the second
+refusal carried the change onto a newer trunk and then stopped without a commit, on a test failure
+that this item does not cause and that the trunk has since repaired. Five points settle it.
+
+- [unlanded] **Start from the built candidate.** Commit `fb08eb32f`, the tip of `refs/tillr/preserved/run-item-drain-spend-ceiling-a4-cfix`, holds the implementation, its tests and the pack copy, already carried forward once onto a newer trunk, and it does not touch this file. Apply that one commit to the base and do not write the item again. Its message is a recovery record and not a commit message, so the new commit gets its own. On 2026-11-17 `git merge-tree --write-tree --name-only --merge-base fb08eb32f^ 8b22572cc fb08eb32f` printed a tree and no conflicted path. The same day, on that merged tree with nothing else running, `python3 tools/go-test-shards.py tools/tillr-drain -k 6` passed 1583 tests and `python3 tools/go-test-shards.py tools/tillr-view -k 6` passed 440. If the base has moved since and a conflict appears, keep what the trunk added and re-add the measurement beside it; a pack copy is regenerated with `just pack-sync` and never resolved by hand. A file that merges without a conflict can still be wrong against a newer trunk, so the full suites on the builder's own base decide and not the merge.
+- **The builder does not edit this block or any other part of this file.** The second landing's
+  refusal listed this file among its conflicts. The candidate named above does not change it, and
+  the loop retires the block after landing. The `docs/` entry in this item's paths is for a tool
+  README the change must keep true.
+- **The test that stopped the fix is repaired on the trunk, so it gets no allowance.** The fix's
+  full drain suite failed `TestCommentPathTwice` once with `designer <nil>`, while the view suite
+  and a review ran beside it. The candidate changes no designer code and no comment test. The cause
+  was a race in designer retirement, and commit `650f1f16e`, "fix(tillr-drain): keep a designer row
+  while a landing rewrites its document", repaired it on the trunk after the fix ran. Measured on
+  2026-11-17 on a 32-processor machine, on the merged tree named above: the compiled `drain` test
+  binary run as `-test.run '^TestCommentPathTwice$' -test.count=6` in 24 processes at once passed
+  144 of 144 runs. The builder leaves `tools/tillr-drain/drain/designer.go` and the comment tests
+  as the trunk has them. A failure of this test, or of any other, is a failure like any other: the
+  candidate's to fix when the change causes it, and `trunk-broken` only when the same check is red
+  on the base with no change applied.
+- **The waiting face is the text the `waiting` command prints.** The third run's review asked for
+  the measurement in the browser too, and the fourth run's did not, so this is ruled here: c2 and c3
+  are met by the loop's start line and by the line the `waiting` command prints above its table.
+  The command's `--json` output, the HTTP routes and the browser view stay as they are. The
+  candidate does exactly this. Showing the measurement in the browser is separate work for the
+  owner to file if they want it, and its absence is not a finding against this item.
+- **Where the two lines are printed.** The *Where* entry above names `main.go`, `serve.go` and
+  `serveread.go`, and none of them prints either line. The loop's start line belongs in `Run` in
+  `tools/tillr-drain/drain/loop.go`, after the `loop: build` line and before the definition is
+  started. The waiting line belongs in `waitingFace` in `tools/tillr-view/waiting.go`, with the
+  `definition:` line. One reader in `tools/tillr-drain/spend/`, a directory the candidate adds,
+  computes the window for both, so the two places cannot disagree. A measurement that cannot be
+  read is printed as unavailable at the loop's start and never stops the loop.
+
 ### Turn the after-merge check back on
 
 
