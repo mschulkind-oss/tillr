@@ -416,6 +416,44 @@ export interface VerdictView {
   actor_kind: string;
   claim_class: string;
   recorded_at: string;
+  reason?: string;
+  evidence?: string[];
+}
+
+export interface ItemRunView {
+  run_id: string;
+  lane_id: string;
+  backend: string;
+  state: string;
+  exit_code: number | null;
+  started_at_ms: number;
+  finished_at_ms: number;
+  end_cause: string | null;
+  usage_tokens: number | null;
+  cost_usd: number | null;
+}
+
+export interface OwnerDecisionView {
+  decision_id: string;
+  text: string;
+  scope_kind: string;
+  scope_ref: string;
+  decided_by: string;
+  decided_at_ms: number;
+  status: string;
+  supersedes: string;
+  session_id: string;
+}
+
+export interface StateMoveView {
+  event_seq: number;
+  kind: string;
+  at_ms: number;
+  from: string;
+  to: string;
+  action: string;
+  reason: string;
+  actor: string;
 }
 
 export interface ItemData {
@@ -428,6 +466,9 @@ export interface ItemData {
   blocked_by: string[];
   decisions: DispatchView[];
   attempts: AttemptView[];
+  runs: ItemRunView[];
+  owner_decisions: OwnerDecisionView[];
+  state_moves: StateMoveView[];
 }
 
 export interface StageView {

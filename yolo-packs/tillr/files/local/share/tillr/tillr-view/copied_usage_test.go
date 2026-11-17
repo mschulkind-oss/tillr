@@ -75,7 +75,9 @@ func TestCopiedUsageCorrectionLowersItemAndObservatoryTotals(t *testing.T) {
 	bin := copiedUsageBinary(t, h)
 	items := performanceData(t, h, "/api/v1/perf/items")["items"].([]any)
 	first := items[0].(map[string]any)
-	if first["item_id"] != "item-seed-02" || first["cost_usd"] != .06 || first["usage_tokens"] != float64(3000) || first["lower_bound"] != true {
+	// HTTP reports recorded tokens, not prices; the correction has not yet
+	// invalidated the copied measurement, so this total is not a lower bound.
+	if first["item_id"] != "item-seed-02" || first["cost_usd"] != nil || first["usage_tokens"] != float64(3000) || first["lower_bound"] != false {
 		t.Fatalf("before: %v", items)
 	}
 	beforePass := fixturePassSpend(t, h)
@@ -85,12 +87,12 @@ func TestCopiedUsageCorrectionLowersItemAndObservatoryTotals(t *testing.T) {
 	copiedUsageCommand(t, bin, h.store, "--apply", "--reason", "preceding report reused")
 	items = performanceData(t, h, "/api/v1/perf/items")["items"].([]any)
 	first = items[0].(map[string]any)
-	if first["cost_usd"] != .03 || first["usage_tokens"] != float64(1500) || first["lower_bound"] != true || first["unrecorded_runs"] != float64(1) || first["run_count"] != float64(2) {
+	if first["cost_usd"] != nil || first["usage_tokens"] != float64(1500) || first["lower_bound"] != true || first["unrecorded_runs"] != float64(1) || first["run_count"] != float64(2) {
 		t.Fatalf("after: %v", items)
 	}
 	_, body, raw := h.get("/api/v1/snapshot")
 	drain := body["data"].(map[string]any)["drain_summary"].(map[string]any)
-	if drain["total_cost_usd"] != .07 || drain["unreported_runs"] != float64(1) || drain["cost_unreported_runs"] != float64(1) {
+	if drain["total_cost_usd"] != nil || drain["unreported_runs"] != float64(1) || drain["cost_unreported_runs"] != nil {
 		t.Fatalf("observatory after: %s", raw)
 	}
 	afterPass := fixturePassSpend(t, h)
