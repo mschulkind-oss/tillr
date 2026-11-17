@@ -3046,18 +3046,28 @@ rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go
 The owner reads history in `tig`, and on 2026-11-17 he said: "shouldn't the refs disappear as the
 commits land on main? that's what is cluttered. let's file an item for this."
 
-### Drop a run's refs once its change has landed
+### Prevent finished runs from cluttering history
 
-Every run leaves a ref behind, and the loop never removes one once the change is on the trunk. The
-repository held 736 refs under `refs/tillr` on 2026-11-17: 564 run pins, 153 landing markers, 8
-saved edits, 7 held candidates, 2 recovery refs, and the fixed pointers for the green commit and
-the trunk history. A history viewer draws every one of them as a label, so the log the owner reads
-is buried under labels for work that finished days ago. A run pin exists to keep an unlanded
-candidate reachable, and a landing marker exists to let the lander's retry find a landing whose
-receipt was lost, so each is needed only until the store holds the landing. After that, they are
-clutter. The loop should delete them as part of recording the landing, and a one-time sweep should
-clear what has built up. Neither may delete a commit that a live lane, a held candidate or a
-retry still needs.
+When a worker finishes and its change lands on the main branch, the drain loop leaves behind
+named pointers to its commits and never removes them. History viewers display those pointers as
+labels, so the owner's history fills with labels for work that finished days ago. The repository
+held 736 of these pointers on 2026-11-17: 564 run pins, 153 landing markers, 8 saved edits, 7 held
+candidates, 2 recovery pointers, and the fixed pointers for the green commit and the trunk
+history. The drain loop should remove the pointers that finished work no longer needs, and a
+one-time cleanup should clear what has built up. That makes the history easier to read without
+removing the changes that landed.
+
+Some pointers still serve a purpose. A run pin keeps a worker's proposed change available until
+it lands, and a landing marker lets the lander recognize a completed landing when a crash prevents
+it from saving the receipt. Cleanup must wait until the landing record is safely stored and any
+checks that need the marker have finished. It must also preserve commits needed by an active
+worker, a candidate held for later, or a run that can still be retried.
+
+**Outcomes:**
+
+- Remove obsolete run labels after recording a landing or otherwise finishing an item.
+- Clear accumulated labels while preserving work that still needs to land or be retried.
+- Document how long the drain loop keeps each kind of commit pointer.
 
 <!-- tillr: item id="item-run-refs-dropped-once-landed" paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
