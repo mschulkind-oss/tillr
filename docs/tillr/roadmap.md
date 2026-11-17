@@ -894,6 +894,51 @@ a run cut off when the window shuts starts again from nothing on the next backen
 
 <!-- tillr: item id="item-policy-quota-probe" paths="tools/tillr-run/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/design/tillr-claude-backend.md" -->
 
+**Ruling, 2026-11-17 (answers the second failed attempt):** two runs stopped. The first was refused
+at its first message because the subscription's seven-day window was spent, which is the gap this
+item closes and needs no ruling. The second built most of c1 to c4 and stopped on three things:
+one failing test it had not changed, and two faults in a step the criteria never asked for. Its
+work is kept at `refs/tillr/preserved/run-item-policy-quota-probe-a6`, made on an older trunk, so
+the next run re-applies what it needs onto the current one and does not check that tree out whole.
+Five points settle it:
+
+1. **The quota is checked once, when the loop chooses and claims a backend, and never after
+   staging.** The second run added a second check after an item was staged, and cancelled the
+   staged dispatch when the backend had shut in between. That cancel is what lost a workflow's
+   next step, left a design conflict waiting on a run that never started, and recorded one
+   session id for a designer while dispatching another. The second check and the cancel are
+   removed, not repaired. The plan and the claim transaction are the only places a quota reading
+   or a reserve can stop a dispatch. A dispatch that has been claimed always starts.
+2. **The reserve is a threshold on the last reading, not a guarantee.** A reading may be as old as
+   the interval c2 names, and work claimed just before a window crosses the line still starts, so
+   the loop can overshoot the reserve by the runs it started inside one interval. That is
+   accepted. A run that then meets a spent window is refused by the backend and handled as today,
+   and moving such a run is a later item's work, not this one's.
+3. **A designer's replacement session is held before it is staged.** When a designer's resume has
+   failed and every backend its seat may use is shut, the loop leaves the failed run's record
+   unsettled and holds, as the second run already built in the plan. It is settled and replaced on
+   a later pass, once a backend is open. No session id is minted or recorded for a replacement
+   until that pass, so the recorded id and the dispatched id are the same one.
+4. **A refusal still shuts any backend, with or without a `quota` command.** The second run made a
+   refused start shut a backend only when its row named a `quota` command, and edited fixtures to
+   opt in. That is withdrawn: it would let a backend that has just refused a run be sent the next
+   one. "Treated as always open" in c2 is about readings only: a backend with no `quota` command
+   is never probed and never shut by a reading or a reserve. No existing fixture changes to keep
+   its refusal hold. A `quota` command that fails, or answers something the loop cannot read,
+   shuts that backend alone until a later reading succeeds, and the waiting face shows the error
+   in place of the fractions.
+5. **The failing test is a race in the test, and this item fixes it.** The test is
+   `TestRunOutputSurvivesLoopProcessExit` in `tools/tillr-drain/run_output_test.go`, which is
+   inside this item's paths. Its wrapper script writes each signal file with a shell redirect,
+   which creates the file before it writes to it, and the test reads the file as soon as it
+   exists. The failure the second run saw, an exit status of `""` where `1` was expected, is that
+   empty file. On 2026-11-17, at trunk `768aa883a`, `go test . -run
+   '^TestRunOutputSurvivesLoopProcessExit$' -count=30` in `tools/tillr-drain` passed, so the trunk
+   is not broken and the race shows only under the load of the full suite. The wrapper writes both
+   the `ready` and the `finished` file under another name and renames it into place, in the same
+   commit as this item's work. If the full suite then fails in some other test this item did not
+   touch, the run reports `trunk-broken` with the test's name, and does not stop as blocked.
+
 - **c1:** A backend row may name a `quota` command. The claude adapter ships one that answers the five-hour and seven-day windows as fractions used with their reset times. The commit states how it reads them and what one reading costs; a way that spends no model tokens is used if one exists, and if none does the design document says so with the measurement.
 - **c2:** The loop reads a backend's quota before dispatching to it when its last reading is older than a named interval, and records each reading. A backend with no `quota` command is never probed and is treated as always open.
 - **c3:** A backend row may set `reserve`, a fraction of the window the loop leaves unused. With `reserve = 0.2` the loop sends no new work to that backend once a window is 80 percent used, so the owner's own sessions keep room. The default is 0.
