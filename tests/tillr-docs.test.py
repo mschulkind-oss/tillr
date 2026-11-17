@@ -713,6 +713,12 @@ def case_document_fed_prerequisite_documented():
 
 
 def main():
+    green_build_tests = subprocess.run(
+        [sys.executable, str(ROOT / "tests/tillr-build.test.py")],
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    if green_build_tests.returncode:
+        fail("the green-tree deployment regression tests failed")
     case_run_environment_documented()
     case_cache_safe_working_loop_documented()
     case_fork_filing_documented()

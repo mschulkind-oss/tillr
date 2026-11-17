@@ -799,15 +799,7 @@ After a landing the trunk holds changes that only the heavy checks have judged, 
 
 ### tillr builds from the green pointer
 
-<!-- tillr: item
-     id="item-gate-deploy-from-green"
-     paths=".justfile,tools/tillr-drain/,tests/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** `just tillr-build` builds the eight programs from the tree of `refs/tillr/green`. A test sets the pointer one commit behind a trunk tip that changes a program's version string and asserts the built program reports the older string.
-- **c2:** With no green pointer the recipe exits non-zero, names the heavy run that creates one, and builds nothing.
-- **c3:** The loop's first line names the green commit its programs were built from, and `tillr-view status` says whether the main checkout is at the green pointer.
 
 ### Twenty lanes land without waiting on each other
 
