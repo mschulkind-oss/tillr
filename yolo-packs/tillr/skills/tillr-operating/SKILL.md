@@ -68,6 +68,14 @@ A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
 The former stay option is removed; waiting no longer needs an option.
 
+## Change an item's rank without changing its work
+
+A rank-only seed changes the rank alone, apart from `updated_at` and `event_seq`
+bookkeeping. It preserves every other stored field, including `workflow` (the item's
+chosen sequence of work steps), criteria and dependency edges. Items with a workflow
+can be ranked without skipping them. The seed must still match the stored definition;
+a conflicting definition is refused rather than overwritten.
+
 ## Declare document-fed work before building it
 
 In a store fed by documents, an item needs a document block before it is built.

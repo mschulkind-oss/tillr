@@ -401,10 +401,11 @@ func storedItem(r *store.Reader, id string) (itemPayload, bool, error) {
 	var allowedPaths string
 	err := r.QueryRow(
 		`SELECT item_id, title, COALESCE(body_ref, ''), state, COALESCE(design_doc, ''),
-		        COALESCE(allowed_paths, ''), COALESCE(rank, ''), COALESCE(seat, ''), COALESCE(prose, '')
+		        COALESCE(allowed_paths, ''), COALESCE(rank, ''), COALESCE(seat, ''), COALESCE(prose, ''),
+		        COALESCE(workflow, '')
 		   FROM items WHERE item_id = ?`, id,
 	).Scan(&payload.ItemID, &payload.Title, &payload.BodyRef, &payload.State, &payload.DesignDoc,
-		&allowedPaths, &payload.Rank, &payload.Seat, &payload.Prose)
+		&allowedPaths, &payload.Rank, &payload.Seat, &payload.Prose, &payload.Workflow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return itemPayload{}, false, nil
 	}
