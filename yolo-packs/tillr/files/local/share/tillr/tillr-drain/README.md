@@ -905,6 +905,32 @@ in one transaction. Its aborted staging remains in the append-only event history
 but a later plan may assign the same unstarted attempt to another lane without
 colliding with that row.
 
+## Staging without Git landing
+
+A store's [definition](https://github.com/mschulkind-oss/tillr/blob/main/tillr/definition/README.md#keys-types-defaults-and-readers)
+sets `completes`. When it is not `landing`, planning names `work` instead of the
+Git working-directory default, and staging creates an ordinary directory there.
+An explicitly configured different relative working directory is retained. Staging
+writes the brief and session identity beside that directory and keeps a per-run
+copy, but creates no worktree, base sha, fence, or Git target metadata. A lane that
+still contains Git staging metadata is refused rather than reset or silently reused.
+
+The definition's `brief_template` is required for this staging. A relative template
+path resolves under the drain's root; an absolute path is read as supplied. It does
+not fall back to the Git `--brief-template`. Supported placeholders are `ITEM_ID`,
+`TITLE`, `TASK`, `CRITERION_1` (the numbered criteria), `RUN_ID`, `BACKEND`, `TARGET`,
+`TARGET_KIND` (`plain directory`), `DATE`, `TIMEOUT_SECONDS`, `DURABLE_DIR`, `SETTLED`,
+`FACTS`, `METHOD`, and `VERIFICATION`. Staging supplies no Git base, fence, or trunk
+values; a template asking for an unsupported placeholder is refused before creating
+the working directory. A missing item title or criteria remains an item-content
+refusal, but an item needs no allowed paths for plain staging.
+
+For Git landing, staging still requires `working_dir` to be `worktree` and uses the
+existing Git brief template and boundary files. This rule belongs to staging, not
+to `tillr run exec`: the runner continues to accept relative working directories
+and refuse absolute ones. The [plain-staging tests](./plain_stage_test.go) cover
+the directory, planned request, rendered values, and Git-staging refusal.
+
 ## Lanes that staging refuses
 
 Some staging refusals are about the lane, not the item it was offered. The next item

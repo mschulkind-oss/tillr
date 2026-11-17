@@ -659,14 +659,7 @@ template is the drain's `--brief-template` flag today, whose default is
 [brief-template.md](../../tools/tillr-run/backends/brief-template.md). The plain directory is
 named relative to the lane directory, like every working directory a request carries.
 
-<!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the definition does not complete on `landing`, staging creates the lane's working directory as a plain directory, with no worktree, no base sha and no fence file, and the run request names it.
-- **c2:** The worktree-only rule belongs to staging, not to `tillr run exec`, and stays there: under Git landing, staging still refuses a request whose `working_dir` is not the worktree, and a test asserts that refusal. `tillr run exec` is unchanged: it accepts any working directory relative to the lane directory, refuses an absolute one, and so runs the plain directory with no new rule. Read at `65b08368`, `checkRequest` in [exec.go](../../tools/tillr-run/run/exec.go) refuses only an absolute `working_dir`, and `TestTerminalEndCauses/success` runs with `"."`; do not tighten either.
-- **c3:** The brief is rendered from the definition's `brief_template`, and no value staging fills in for it names a sha, a fence or a trunk. A test renders a brief from a fixture template and asserts its values.
-- **c4:** A test stages one item of a fixture definition and asserts the directory, the request and the brief.
-- **c5:** Under the Git-landing definition staging is unchanged; the existing stage and loop suites pass unchanged.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
 
 ### Add completion through the definition's hook for items that never land
 
@@ -684,7 +677,7 @@ with the reason on the record.
 move goes through the existing `ItemState` step in [steps.go](../../tools/tillr-drain/drain/steps.go)
 with the flags the receipts item added.
 
-<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-stage-plain-directory" prose="2" -->
+<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
 - **c2:** When the hook exits 0 and prints a finished state, a reason and an optional pointer, the drain moves the item there with `--reason`, `--resolves-via` and `--by definition:<name>`.
