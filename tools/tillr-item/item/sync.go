@@ -52,7 +52,7 @@ var (
 // syncAttributes is the closed attribute set of a directive. Anything else — `rank`, `state`,
 // `after`, a typo — is a finding, because the ruling keeps state and order out of documents
 // and a misspelt attribute would otherwise be dropped in silence.
-var syncAttributes = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true}
+var syncAttributes = map[string]bool{"id": true, "paths": true, "blocked_by": true, "seat": true, "prose": true, "workflow": true, "claims": true}
 
 // roadmapDocuments are the roadmaps whose `## Icebox` and `## Exploration` sections park a
 // document: an item block in a parked document is synced as `not-started`, not `in-queue`.
@@ -425,6 +425,25 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			bad[b.file] = true
 		}
 	}
+	// Class weakening is a finding even when text is frozen, including in dry runs.
+	if r != nil {
+		for _, b := range blocks {
+			if bad[b.file] {
+				continue
+			}
+			stored, found, err := storedItem(r, b.payload.ItemID)
+			if err != nil {
+				return syncPlan{}, err
+			}
+			if found {
+				if err := checkClaimMoves(b.payload.ItemID, stored.Criteria, b.payload.Criteria); err != nil {
+					rejection, _ := RejectionOf(err)
+					report.Findings = append(report.Findings, note(b, rejection.Rule, err.Error()))
+					bad[b.file] = true
+				}
+			}
+		}
+	}
 	// A blocker declared only in a file that writes nothing will not exist when this block's
 	// edge is written. That makes this file a finding too, and the rule is applied until no
 	// file changes, since one skipped file can strand another.
@@ -531,7 +550,17 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			report.Unchanged = append(report.Unchanged, desired.ItemID)
 			continue
 		}
-		if judged := judgedCriterion(stored); judged != "" {
+		// Class-only hardening does not rewrite what the judge read.
+		withoutClaims := desired
+		withoutClaims.Criteria = append([]criterion(nil), desired.Criteria...)
+		for i := range withoutClaims.Criteria {
+			for _, held := range stored.Criteria {
+				if held.CriterionID == withoutClaims.Criteria[i].CriterionID {
+					withoutClaims.Criteria[i].ClaimClass = held.ClaimClass
+				}
+			}
+		}
+		if judged := judgedCriterion(stored); judged != "" && definitionDiff(withoutClaims, stored) != "" {
 			report.Frozen = append(report.Frozen, note(b, "definition-frozen",
 				fmt.Sprintf("the block's %s differs from the store's, and criterion %q already carries the state %q, so the stored definition stands: a presented criterion is not rewritten", field, judged, criterionState(stored, judged))))
 			continue
@@ -670,7 +699,7 @@ func definitionDiff(block, stored itemPayload) string {
 		return "criteria"
 	}
 	for i, c := range block.Criteria {
-		if c.CriterionID != stored.Criteria[i].CriterionID || c.Text != stored.Criteria[i].Text {
+		if c.CriterionID != stored.Criteria[i].CriterionID || c.Text != stored.Criteria[i].Text || c.ClaimClass != stored.Criteria[i].ClaimClass {
 			return "criterion " + c.CriterionID
 		}
 	}
@@ -879,7 +908,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 			}
 			rest = rest[m[1]:]
 			if !syncAttributes[name] {
-				later("unknown-attribute", "attribute %q is not one of id, paths, blocked_by, seat, prose or workflow: a block carries no state, rank or tombstone", name)
+				later("unknown-attribute", "attribute %q is not one of id, paths, blocked_by, seat, prose, workflow or claims: a block carries no state, rank or tombstone", name)
 				continue
 			}
 			if _, twice := attrs[name]; twice {
@@ -1000,6 +1029,36 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		}
 		if !seen["c1"] {
 			bad("missing-criterion", "the block carries no `- **c1:**` criterion: an item without one has nothing a verdict can judge")
+		}
+		claimIDs := map[string]bool{}
+		for _, entry := range splitList(attrs["claims"]) {
+			criterionID, class, ok := strings.Cut(entry, ":")
+			criterionID, class = strings.TrimSpace(criterionID), strings.TrimSpace(class)
+			if !ok || !claimClasses[class] {
+				bad("invalid-claim-class", "claims carries %q: name a criterion and a known claim class", entry)
+				continue
+			}
+			if !seen[criterionID] {
+				bad("claim-criterion-missing", "claims names criterion %q, which this block does not carry", criterionID)
+				continue
+			}
+			if claimIDs[criterionID] {
+				bad("duplicate-claim", "claims names criterion %q twice", criterionID)
+				continue
+			}
+			claimIDs[criterionID] = true
+			for i := range criteria {
+				if criteria[i].CriterionID == criterionID {
+					criteria[i].ClaimClass = class
+				}
+			}
+		}
+		if err := checkCriteria(id, criteria); err != nil {
+			rule := "invalid-criteria"
+			if rejection, ok := RejectionOf(err); ok {
+				rule = rejection.Rule
+			}
+			bad(rule, "%s", err)
 		}
 		for _, c := range criteria {
 			if c.Text == "" {

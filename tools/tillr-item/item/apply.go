@@ -81,6 +81,7 @@ type criterion struct {
 	CriterionID string `json:"criterion_id"`
 	Text        string `json:"text"`
 	State       string `json:"state"`
+	ClaimClass  string `json:"claim_class"`
 }
 
 // Apply is item's one record→row mapping: it validates the record, writes the rows
@@ -323,6 +324,9 @@ func carryCriteria(r *store.Reader, itemID string, criteria []criterion) ([]crit
 	if err != nil {
 		return nil, err
 	}
+	if err := checkClaimMoves(itemID, stored, criteria); err != nil {
+		return nil, err
+	}
 	presented := make(map[string]criterion, len(stored))
 	for _, c := range stored {
 		presented[c.CriterionID] = c
@@ -382,7 +386,18 @@ func checkSeat(itemID, seat string) error {
 // would refuse it too, but as a write failure rather than as the rule it breaks.
 func checkCriteria(itemID string, criteria []criterion) error {
 	seen := make(map[string]bool, len(criteria))
-	for _, c := range criteria {
+	for i := range criteria {
+		c := &criteria[i]
+		if c.ClaimClass == "" {
+			c.ClaimClass = ClaimVerification
+		}
+		if err := validateClaimClass(c.ClaimClass, itemID); err != nil {
+			return err
+		}
+		if c.ClaimClass == ClaimVerification && ownerCriterion.MatchString(c.Text) {
+			return Rejectionf("owner-criterion-untyped", itemID,
+				"criterion %q records an owner decision but is verification-only: declare its claim class", c.CriterionID)
+		}
 		if c.CriterionID == "" {
 			return Usagef("a criterion needs a criterion_id")
 		}
@@ -461,8 +476,8 @@ func replaceCriteria(ctx context.Context, tx *store.Tx, payload itemPayload) err
 	}
 	for _, c := range payload.Criteria {
 		if _, err := tx.Exec(
-			`INSERT INTO item_criteria (item_id, criterion_id, text, state) VALUES (?, ?, ?, ?)`,
-			payload.ItemID, c.CriterionID, c.Text, c.State,
+			`INSERT INTO item_criteria (item_id, criterion_id, text, state, claim_class) VALUES (?, ?, ?, ?, ?)`,
+			payload.ItemID, c.CriterionID, c.Text, c.State, c.ClaimClass,
 		); err != nil {
 			return Internalf("writing a criterion: %v", err)
 		}

@@ -85,9 +85,17 @@ func RecordVerdict(ctx context.Context, tx *store.Tx, env record.Envelope) (reco
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	text, err := frozenCriterion(ctx, tx.Reader(), payload.ItemID, payload.CriterionID)
+	text, class, err := frozenCriterion(ctx, tx.Reader(), payload.ItemID, payload.CriterionID)
 	if err != nil {
 		return record.Envelope{}, err
+	}
+	if payload.ClaimClass != class {
+		return record.Envelope{}, Rejectionf("claim-class-mismatch", payload.ItemID,
+			"criterion %q is stored as %q, but this verdict claims %q", payload.CriterionID, class, payload.ClaimClass)
+	}
+	if payload.ActorKind == ActorMechanical && class != ClaimVerification || payload.ActorKind == ActorAgent && class == ClaimOwnerOnly {
+		return record.Envelope{}, Rejectionf("claim-class-actor", payload.ItemID,
+			"actor kind %q cannot judge criterion %q with stored class %q", payload.ActorKind, payload.CriterionID, class)
 	}
 	if hash := CriterionHash(text); payload.CriterionHash != hash {
 		return record.Envelope{}, Rejectionf("criterion-hash", payload.ItemID,
@@ -166,26 +174,26 @@ func decodeVerdict(env record.Envelope) (verdictPayload, error) {
 // frozenCriterion answers the criterion text the store froze, refusing an item or a
 // criterion the store does not hold: a verdict is about a criterion that exists, and a
 // store that invented one to answer against would bind nothing.
-func frozenCriterion(ctx context.Context, r *store.Reader, itemID, criterionID string) (string, error) {
+func frozenCriterion(ctx context.Context, r *store.Reader, itemID, criterionID string) (string, string, error) {
 	exists, err := itemExists(ctx, r, itemID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !exists {
-		return "", Rejectionf("not-found", itemID, "no item %q in this store", itemID)
+		return "", "", Rejectionf("not-found", itemID, "no item %q in this store", itemID)
 	}
-	var text string
+	var text, class string
 	err = r.QueryRow(
-		`SELECT text FROM item_criteria WHERE item_id = ? AND criterion_id = ?`, itemID, criterionID,
-	).Scan(&text)
+		`SELECT text, claim_class FROM item_criteria WHERE item_id = ? AND criterion_id = ?`, itemID, criterionID,
+	).Scan(&text, &class)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", Rejectionf("criterion-missing", itemID,
+		return "", "", Rejectionf("criterion-missing", itemID,
 			"item %q carries no criterion %q: a verdict names the criterion the store froze", itemID, criterionID)
 	}
 	if err != nil {
-		return "", Internalf("reading criterion %q of item %q: %v", criterionID, itemID, err)
+		return "", "", Internalf("reading criterion %q of item %q: %v", criterionID, itemID, err)
 	}
-	return text, nil
+	return text, class, nil
 }
 
 // checkIndependence is the independence rule for a delegated verdict: the judge is never

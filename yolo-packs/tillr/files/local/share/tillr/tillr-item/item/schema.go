@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS item_criteria (
   criterion_id TEXT NOT NULL,
   text         TEXT NOT NULL,
   state        TEXT NOT NULL,
+  claim_class  TEXT NOT NULL DEFAULT 'verification-only',
   PRIMARY KEY (item_id, criterion_id)
 );
 
@@ -152,6 +153,18 @@ CREATE TABLE IF NOT EXISTS mail_deliveries (
 );
 
 CREATE INDEX IF NOT EXISTS mail_deliveries_target ON mail_deliveries (to_target, acked_at);
+
+-- Registered DDL runs before additive columns. The schema-version insert runs
+-- after them, including on reopening, so only then may this backfill name the
+-- new column. New writes refuse untyped owner prose; repeated updates are inert.
+CREATE TRIGGER IF NOT EXISTS item_owner_claim_migration
+BEFORE INSERT ON schema_migrations
+BEGIN
+  UPDATE item_criteria SET claim_class = 'owner-only'
+  WHERE claim_class = 'verification-only'
+    AND text LIKE 'owner decision recorded%'
+    AND substr(text, 24, 1) NOT GLOB '[A-Za-z0-9_]';
+END;
 `
 
 // init registers item's contract from item's own package: its DDL, its event kinds and
@@ -165,6 +178,9 @@ CREATE INDEX IF NOT EXISTS mail_deliveries_target ON mail_deliveries (to_target,
 // neither: a rejection asserts no state transition and writes no row.
 func init() {
 	if err := store.RegisterDDL("item", ItemDDL); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn("item", "item_criteria", "claim_class", "TEXT NOT NULL DEFAULT 'verification-only'"); err != nil {
 		panic(err)
 	}
 	// items.AllowedPaths is the one column added to a table that predates it, so it lands

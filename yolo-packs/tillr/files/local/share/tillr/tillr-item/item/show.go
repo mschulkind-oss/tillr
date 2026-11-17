@@ -106,7 +106,7 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 // item produce the same record.
 func readCriteria(r *store.Reader, id string) ([]criterion, error) {
 	rows, err := r.Query(
-		`SELECT criterion_id, text, state FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, id,
+		`SELECT criterion_id, text, state, claim_class FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, id,
 	)
 	if err != nil {
 		return nil, Internalf("reading the criteria of %q: %v", id, err)
@@ -115,7 +115,7 @@ func readCriteria(r *store.Reader, id string) ([]criterion, error) {
 	criteria := []criterion{}
 	for rows.Next() {
 		var c criterion
-		if err := rows.Scan(&c.CriterionID, &c.Text, &c.State); err != nil {
+		if err := rows.Scan(&c.CriterionID, &c.Text, &c.State, &c.ClaimClass); err != nil {
 			return nil, Internalf("reading a criterion of %q: %v", id, err)
 		}
 		criteria = append(criteria, c)

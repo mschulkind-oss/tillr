@@ -63,7 +63,7 @@ func TestAnEditLeavesAnUnpresentedCriterionUnfrozen(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("the edit exited %d: %s", code, out)
 	}
-	if got := decode(t, out); criterionOf(t, got, "c1") != (criterion{CriterionID: "c1", Text: "the first criterion, reworded"}) {
+	if got := decode(t, out); criterionOf(t, got, "c1") != (criterion{CriterionID: "c1", Text: "the first criterion, reworded", ClaimClass: "verification-only"}) {
 		t.Fatalf("the edit echoed the criterion as %+v", criterionOf(t, got, "c1"))
 	}
 	stored := criterionOf(t, showItem(t, db, "item_042"), "c1")

@@ -103,8 +103,8 @@ ITEM_SHOW = {
         "title": "the item under test",
         "state": "ready",
         "criteria": [
-            {"criterion_id": "c1", "text": "the first criterion", "state": "pending"},
-            {"criterion_id": "c2", "text": "the second criterion", "state": "pending"},
+            {"criterion_id": "c1", "text": "the first criterion", "state": "pending", "claim_class": "verification-only"},
+            {"criterion_id": "c2", "text": "the second criterion", "state": "pending", "claim_class": "verification-only"},
         ],
     },
 }
@@ -531,6 +531,43 @@ def test_verdict_exit_mapping(tmp):
     assert result.returncode == 2, (result.returncode, result.stderr)
 
 
+def test_verdict_leaves_owner_criterion(tmp):
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    shown = json.loads(fixture.item_show.read_text())
+    shown["payload"]["criteria"][0]["claim_class"] = "owner-only"
+    fixture.item_show.write_text(json.dumps(shown))
+    result = fixture.run_adapter("verdict", ["--verdict", "pass"])
+    assert result.returncode == VERDICT_RECORDED, (result.returncode, result.stderr)
+    assert "c1" in result.stdout and "owner-only" in result.stdout, result.stdout
+    records = list(fixture.run_dir.glob("item.verdict.*.json"))
+    assert len(records) == 1, records
+    payload = json.loads(records[0].read_text())["payload"]
+    assert payload["criterion_id"] == "c2" and payload["verdict"] == "done", payload
+    assert not (fixture.run_dir / "item.verdict.c1.json").exists()
+
+
+def test_verdict_all_nonmechanical_and_missing_class(tmp):
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    shown = json.loads(fixture.item_show.read_text())
+    shown["payload"]["criteria"] = [
+        {"criterion_id": f"c{i}", "text": "a judgment", "claim_class": claim}
+        for i, claim in enumerate(["red-gate-triage", "direction", "owner-only"], 1)
+    ]
+    fixture.item_show.write_text(json.dumps(shown))
+    result = fixture.run_adapter("verdict", ["--verdict", "pass"])
+    assert result.returncode == VERDICT_RECORDED, (result.returncode, result.stderr)
+    assert result.stdout.count("left criterion") == 3, result.stdout
+    assert not list(fixture.run_dir.glob("item.verdict.*.json"))
+    assert not any(call.startswith("verdict record ") for call in fixture.calls())
+    del shown["payload"]["criteria"][0]["claim_class"]
+    fixture.item_show.write_text(json.dumps(shown))
+    result = fixture.run_adapter("verdict", ["--verdict", "pass"])
+    assert result.returncode != VERDICT_RECORDED, result
+    assert "no valid stored claim_class" in result.stderr, result.stderr
+
+
 def test_failing_verdict_is_a_usage_error(tmp):
     """An attempt that did not land must not grade or freeze item criteria."""
     fixture = Fixture(tmp)
@@ -706,6 +743,8 @@ def main():
             test_fixer_range_reaches_the_judge,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,
+            test_verdict_leaves_owner_criterion,
+            test_verdict_all_nonmechanical_and_missing_class,
             test_failing_verdict_is_a_usage_error,
             test_missing_judge_is_not_a_failure,
             test_self_check_names_argv_without_running_it,
