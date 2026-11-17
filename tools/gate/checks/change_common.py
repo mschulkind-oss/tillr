@@ -1,10 +1,16 @@
 """Change-only checks. The caller supplies both commits; no gate record is read."""
+import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
+import tempfile
+import time
+from urllib.parse import unquote
 
 HEAD = "HEAD"
 LEGACY_SEED = "config/tillr/seed-items.json"
@@ -321,6 +327,251 @@ def identity_findings(root, base, head):
     return findings
 
 
+# --- documents: a remembered pass per document ------------------------------------
+#
+# A document's verdict is remembered in the gate's own result store -- the directory the
+# runner keeps tree checks' remembered passes in, `<git common dir>/tillr-gate/results`,
+# one `<key>.<pass|fail>.json` file per verdict, in the runner's own field names -- under
+# a key over everything the renderer reads to judge that one document. A pass is reused
+# only when no fail was ever recorded under the same key, so a remembered fail can never
+# become a pass, and only when it was recorded by the renderer version that would judge
+# the document now. The key's inputs, and why each is there:
+#
+# * the document's path, mode and blob;
+# * the bytes of this check (its declaration and both Python files), so a change to how
+#   documents are judged forgets every remembered pass;
+# * every `.vantage.toml` and `.vantageignore`, which set rule severities;
+# * the names in the document's own directory (`ref/unlinked-file` judges a filename in
+#   prose against the files beside the document);
+# * every tree entry the document's text names -- a link, reference definition, `href` or
+#   `src`, resolved against the document's directory and the repository root, files and
+#   directories alike, and any other word that resolves to a file. The target's object id
+#   is the input: a moved heading changes the target blob, so `link/dead-section-anchor`
+#   is judged again. A link whose target is absent fails the document, so a remembered
+#   pass never depends on an absence;
+# * every `roadmap.md`, when a config turns on `planning/unrouted`, the one rule that
+#   reads documents a page does not name.
+#
+# The renderer's version is not in the key, because asking for it costs a process start
+# (about 0.28 s): a run that renders anything reads the version from its own JSON report,
+# and only a run with every document remembered asks `vantage-check version`. A
+# remembered pass from another version is judged again, in one run with the rest.
+#
+# Every document left to judge is rendered in ONE renderer run, as before. Measured on
+# 2026-11-16 on the four-document candidate of the drain fault, one run per document in
+# parallel was slower than one run over all four (2.0-2.2 s against 1.9-2.0 s alone, and
+# 3.7-4.0 s against 2.7 s at ten concurrent gates): the renderer's start-up, not its
+# per-file work, is the cost.
+#
+# Memory is an optimization of a verdict, never a verdict: a store that cannot be read or
+# written loses a hit, not a result. A result file is renamed into place but not fsynced --
+# a crash may lose one, and an unreadable file reads as absent, which renders the document.
+
+DOCUMENT_MEMORY_FORMAT = "documents-1"
+DOCUMENT_CHECK_FILES = ("tools/gate/checks/documents.json", "tools/gate/checks/documents.py",
+                        "tools/gate/checks/change_common.py")
+DOCUMENT_CONFIG_NAMES = (".vantage.toml", ".vantageignore")
+LINK_DESTINATIONS = (
+    re.compile(r"\]\(\s*<([^>\n]*)>"),
+    re.compile(r"\]\(\s*([^)\s]+)"),
+    re.compile(r"^ {0,3}\[[^\]\n]+\]:\s*<?([^\s>]+)", re.M),
+    re.compile(r"""(?:href|src)\s*=\s*["']([^"'\n]+)["']""", re.I),
+)
+WORD = re.compile(r"[^\s()<>\[\]{}\"'`|,;*]+")
+
+
+def tree_entries(root):
+    """Every entry at HEAD, trees included: path -> (mode, type, object)."""
+    entries = {}
+    for entry in git(root, "ls-tree", "-r", "-t", "-z", HEAD).split("\0"):
+        if not entry:
+            continue
+        metadata, _, path = entry.partition("\t")
+        mode, kind, obj = metadata.split()
+        entries[path] = (mode, kind, obj)
+    return entries
+
+
+def named_inputs(text, path, entries):
+    """The tree entries a document's text names, as `path -> object id`."""
+    here = posixpath.dirname(path)
+    named = {}
+
+    def resolve(token, linked):
+        if "://" in token or token.startswith(("mailto:", "#")):
+            return
+        token = unquote(token.split("#", 1)[0].split("?", 1)[0]).rstrip(".:,").rstrip("/")
+        if not token:
+            return
+        for candidate in (posixpath.normpath(posixpath.join(here, token)),
+                          posixpath.normpath(token.lstrip("/"))):
+            if candidate.startswith("..") or candidate == ".":
+                continue
+            entry = entries.get(candidate)
+            if entry and (linked or entry[1] == "blob"):
+                named[candidate] = entry[2]
+
+    for pattern in LINK_DESTINATIONS:
+        for token in pattern.findall(text):
+            resolve(token.strip(), True)
+    for token in WORD.findall(text):
+        resolve(token, False)
+    return named
+
+
+def document_keys(root, documents):
+    """Each document's memory key: a hash of every input its verdict reads."""
+    entries = tree_entries(root)
+    configs = {path: entry[2] for path, entry in entries.items()
+               if posixpath.basename(path) in DOCUMENT_CONFIG_NAMES}
+    roadmaps = {}
+    for path in configs:
+        if posixpath.basename(path) == ".vantage.toml" and "unrouted" in git(root, "show", f"{HEAD}:{path}"):
+            roadmaps = {p: e[2] for p, e in entries.items() if posixpath.basename(p) == "roadmap.md"}
+            break
+    code = {path: entries.get(path, ("", "", "absent"))[2] for path in DOCUMENT_CHECK_FILES}
+    keys = {}
+    for path in documents:
+        mode, _, blob = entries[path]
+        here = posixpath.dirname(path)
+        siblings = sorted(p for p in entries if posixpath.dirname(p) == here)
+        text = git(root, "cat-file", "blob", blob)
+        identity = {"format": DOCUMENT_MEMORY_FORMAT, "check": "documents", "code": code,
+                    "configs": configs, "roadmaps": roadmaps, "path": path, "mode": mode,
+                    "blob": blob, "siblings": siblings, "named": named_inputs(text, path, entries)}
+        raw = json.dumps(identity, sort_keys=True).encode()
+        keys[path] = hashlib.sha256(raw).hexdigest()
+    return keys
+
+
+def result_store(root):
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return Path(common) / "tillr-gate" / "results"
+
+
+def stored_result(store, key, verdict):
+    try:
+        data = json.loads((store / f"{key}.{verdict}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("result") != verdict or not data.get("time"):
+        return None
+    return data
+
+
+def store_result(store, key, verdict, duration_ms, tree, tool):
+    record = {"check_id": "documents", "result": verdict, "duration_ms": duration_ms,
+              "time": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+              "tree": tree, "tool": tool}
+    temporary = None
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(dir=store, prefix=".result-")
+        with os.fdopen(handle, "w") as out:
+            json.dump(record, out)
+        os.replace(temporary, store / f"{key}.{verdict}.json")
+        temporary = None
+    except OSError as error:
+        print(f"documents: could not remember a {verdict} ({error}); the verdict stands", file=sys.stderr)
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def renderer_version():
+    """`vantage-check version`'s number, or None when it cannot say."""
+    asked = subprocess.run(["uvx", "vantage-check", "version"], capture_output=True, text=True)
+    words = asked.stdout.split()
+    return words[-1] if asked.returncode == 0 and words else None
+
+
+def render(paths):
+    """One renderer run over `paths`: its exit, its JSON report (None when unreadable), its time."""
+    started = time.monotonic()
+    rendered = subprocess.run(["uvx", "vantage-check", "check", "--format", "json", *paths],
+                              capture_output=True, text=True)
+    duration_ms = int((time.monotonic() - started) * 1000)
+    try:
+        report = json.loads(rendered.stdout)
+    except ValueError:
+        report = None
+    if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
+        report = None
+    for finding in (report or {}).get("findings", []):
+        print(f"{finding.get('file')}:{finding.get('line')}:{finding.get('column')}: "
+              f"{finding.get('severity')} {finding.get('rule')} {finding.get('message')}")
+    for failure in (report or {}).get("failures") or []:
+        print(f"could not check: {json.dumps(failure, sort_keys=True)}")
+    if report is None and rendered.stdout.strip():
+        print(rendered.stdout, end="")
+    print(rendered.stderr, end="", file=sys.stderr)
+    return rendered.returncode, report, duration_ms
+
+
+def judge_documents(root, documents):
+    """Judge the changed documents in one renderer run, skipping remembered passes.
+
+    The run's exit is the check's, as it was before memory: 0 passes, 1 with a finding
+    fails, anything else -- or a report that cannot be read -- could not judge. Memory only
+    narrows which documents the run is given. From a passing run every document is
+    remembered as a pass; from a failing one, a document with an error finding is
+    remembered as a fail and one with no finding at all as a pass. Nothing is remembered
+    from a run that could not judge, nor for a document the report says it could not check.
+    """
+    store = result_store(root)
+    tree = git(root, "rev-parse", f"{HEAD}^{{tree}}").strip()
+    keys = document_keys(root, documents)
+    remembered = {}
+    for path in documents:
+        passed = stored_result(store, keys[path], "pass")
+        if passed and not stored_result(store, keys[path], "fail"):
+            remembered[path] = passed
+    pending = [path for path in documents if path not in remembered]
+    if pending:
+        code, report, duration_ms = render(pending)
+        version = report.get("version") if report else None
+        # A run that produced no report could not judge, whatever is remembered.
+        stale = [path for path, passed in remembered.items() if version and passed.get("tool") != version]
+    else:
+        code, report, duration_ms = 0, None, 0
+        version = renderer_version()
+        stale = [path for path, passed in remembered.items() if passed.get("tool") != version]
+    if stale:
+        # Remembered under another renderer, or the renderer could not say which it is: the
+        # pass is not this renderer's verdict, so every document is judged in one run.
+        print(f"documents: {len(stale)} remembered pass(es) are not from renderer {version}; judging again",
+              file=sys.stderr)
+        pending = list(documents)
+        code, report, duration_ms = render(pending)
+        version = report.get("version") if report else None
+    for path in documents:
+        if path not in pending:
+            print(f"documents: {path}: remembered pass at {remembered[path]['time']}", file=sys.stderr)
+    if len(documents) > 1 or len(pending) < len(documents):
+        print(f"documents: {len(documents)} document(s): {len(pending)} rendered, "
+              f"{len(documents) - len(pending)} remembered", file=sys.stderr)
+    if not pending:
+        return 0
+    findings = report.get("findings", []) if report else []
+    if report is None or code not in (0, 1) or code == 1 and not findings:
+        raise RuntimeError(f"uvx vantage-check exited {code} without a document finding")
+    if version:
+        unchecked = {failure.get("file") for failure in report.get("failures") or [] if isinstance(failure, dict)}
+        flagged = {finding.get("file") for finding in findings}
+        errors = {finding.get("file") for finding in findings if finding.get("severity") == "error"}
+        for path in pending:
+            if path in unchecked:
+                continue
+            if code == 0 or path not in flagged:
+                store_result(store, keys[path], "pass", duration_ms, tree, version)
+            elif path in errors:
+                store_result(store, keys[path], "fail", duration_ms, tree, version)
+    return code
+
+
 def run(kind, args):
     global HEAD
     try:
@@ -354,13 +605,7 @@ def run(kind, args):
                 raise RuntimeError("documents require the named head to be checked out")
             if git(root, "status", "--porcelain", "--", *documents).strip():
                 raise RuntimeError("changed Markdown files are dirty")
-            rendered = subprocess.run(["uvx", "vantage-check", *documents], capture_output=True, text=True)
-            print(rendered.stdout + rendered.stderr, end="")
-            if rendered.returncode == 0:
-                return 0
-            if rendered.returncode == 1 and rendered.stdout.strip():
-                return 1
-            raise RuntimeError(f"uvx vantage-check exited {rendered.returncode} without a document finding")
+            return judge_documents(root, documents)
         else:
             raise RuntimeError(f"unknown change check {kind}")
         if findings:

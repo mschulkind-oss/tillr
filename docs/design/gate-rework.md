@@ -398,11 +398,14 @@ the case that still holds on one core with twenty lanes. A change that adds a fa
 does not fit fails on that change, and its author has three moves: make room, make it faster, or
 declare it heavy.
 
-**At run time, by each check's own declaration.** The runner gives a fast check its `budget_ms`
-as a deadline. A fast check still running at its deadline is stopped and **carried**: recorded on
-the landing as `over-budget`, and owed to the heavy tier, which runs it with no deadline but its
-timeout. The landing proceeds. So the gate's wall time is bounded by the sum the admission test
-already bounded, whatever the machine is doing.
+**At run time, by each check's own declaration.** The runner gives a fast tree check its
+`budget_ms` as a deadline. A fast tree check still running at its deadline is stopped and
+**carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs it
+with no deadline but its timeout. The landing proceeds. A fast change check cannot be carried (the
+first boundary below), so its budget is not where it is stopped: it runs on and its own answer is
+the verdict, with the overrun recorded against the check. So the gate's wall time is bounded by
+the sum the admission test already bounded, plus whatever a change check ran past its budget, and
+machine load makes the gate slower rather than failing the item.
 
 **What happens to a check that outgrows its budget.** It stops holding landings the first time
 it overruns, and it is still judged, after the merge. The heavy runner then runs that check
@@ -410,13 +413,29 @@ alone, with nothing else of its run beside it. When it exceeds its declared budg
 heavy run is red on `gate-budget`, naming the check, with the measured and declared times. The
 repair is an edit to that check's own file: a larger budget if the sum still fits, or `tier:
 heavy`. A red here is handled like any other heavy red
-([Section 6.8](#68-a-red-heavy-check)).
+([Section 6.8](#68-a-red-heavy-check)). A change check that overruns is not re-measured by
+anything: its `over_budget_ms` on the landing's verdict is the record, and the repair is the same
+edit to its own file, or making it cheaper.
 
 Two boundaries:
 
 - **Change checks are never carried**, because nothing after the merge has their base. A change
-  check that reaches its deadline makes the run "could not judge" (exit 2), naming the check.
-  Their five budgets total 3,950 milliseconds against 1.78 seconds measured.
+  check that runs past its `budget_ms` is not stopped there. It runs to its **ceiling** *(coined
+  here: the point a change check is stopped)*, which is its own `timeout_ms`, or the 9,000
+  millisecond fast-tier cap when it declares none. A check that answers by then keeps its verdict,
+  pass or fail. The verdict entry records `over_budget_ms`, how far past its budget it ran; its
+  log says so, and `tillr-gate` prints a line naming the check beside the run's summary. The
+  overrun is a defect against the check's declared cost. It is not "could not judge" for the
+  candidate, because the check did judge it
+  ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
+  Only a check still running at its ceiling makes the run "could not judge" (exit 4), naming the
+  check. *Ruled 2026-11-16* after `documents` ran 2,001 milliseconds against its 2,000 budget in
+  a drain pass at load 16, and the candidate was held as `gate-harness-error` until an operator
+  cleared it. The same four-document change measured 1.8 seconds alone and up to 2.4 seconds
+  beside nine other gates, so a fixed deadline was failing items for the machine's load, which
+  [`D-GR11`](#decision-ledger) rejects. Carrying the check instead was weighed and refused: no
+  heavy runner exists yet to judge a carried check, and a deferred change check would land a
+  change whose diff nobody judged.
 - **Under the before-merge strategy nothing is carried.** An overrun there is "could not judge".
 
 This is the one place the gate judges elapsed time, and it is a statement about the gate, which

@@ -226,9 +226,11 @@ const (
 
 // gatePrefixes are the spellings `tools/fork-check.py` uses to name an outcome of its own:
 // `fork-check:` opens every status line, and a failing check is diagnosed on a
-// `triage <check>: <label>` line. A program that uses neither is still triaged -- by its
+// `triage <check>: <label>` line. `tillr-gate checks:` is the declaration checks' face,
+// which `tools/gate/change-gate.py` runs first: its lines name a check that could not
+// judge or ran past its budget. A program that uses none is still triaged -- by its
 // last lines -- so this table narrows what is kept, never whether anything is.
-var gatePrefixes = []string{"fork-check:", "triage "}
+var gatePrefixes = []string{"fork-check:", "triage ", "tillr-gate checks:"}
 
 // gateTriage accumulates a bounded reading of the gate program's output as it is written,
 // so the whole log is never read back to produce the record's evidence.

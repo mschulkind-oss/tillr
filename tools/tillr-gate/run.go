@@ -59,7 +59,28 @@ type VerdictCheck struct {
 	CheckID     string `json:"check_id"`
 	Result      string `json:"result"`
 	DurationMS  int64  `json:"duration_ms"`
-	LogRef      string `json:"log_ref"`
+	// OverBudgetMS is how far a fast change check ran past its `budget_ms`. The check
+	// still answered, so its result is its verdict; the overrun is a defect against the
+	// check's declared cost, not a statement about the candidate (design §6.5).
+	OverBudgetMS int64  `json:"over_budget_ms,omitempty"`
+	LogRef       string `json:"log_ref"`
+}
+
+// FastTierCapMS is the fast tier's admission cap: the sum of every fast `budget_ms` may
+// not exceed it (`tools/gate/checks/gate-budget.py`, LIMIT_MS). It is also the default
+// ceiling of a fast change check that runs past its own budget: a check still running
+// when it alone has taken the whole tier's allowance is stopped, with no verdict.
+const FastTierCapMS = 9000
+
+// changeCeilingMS is where a fast change check is stopped. Its budget is not that point:
+// a change check is never carried (nothing after the merge has its base), so stopping it
+// at its budget would turn machine load into "could not judge" for the item. It runs on
+// to its declared `timeout_ms`, or to the tier cap when it declares none.
+func changeCeilingMS(check PlanCheck) int {
+	if check.TimeoutMS > 0 {
+		return check.TimeoutMS
+	}
+	return FastTierCapMS
 }
 
 // VerdictPayload is the `gate.verdict` payload: design §5.7's field list, verbatim.
@@ -237,10 +258,13 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	ctx := context.Background()
 	deadlineMS := check.TimeoutMS
 	if check.Tier == "fast" {
-		deadlineMS = check.BudgetMS
-		if deadlineMS <= 0 {
+		if check.BudgetMS <= 0 {
 			fmt.Fprintln(logFile, "fast check requires a positive budget_ms; no verdict")
 			return outcome
+		}
+		deadlineMS = check.BudgetMS
+		if check.Scope == "change" {
+			deadlineMS = changeCeilingMS(check)
 		}
 	}
 	if deadlineMS > 0 {
@@ -267,13 +291,15 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.DurationMS = time.Since(started).Milliseconds()
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		if check.Tier == "fast" {
-			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d; deferred judgment\n", check.CheckID, check.BudgetMS)
-			if check.Scope == "tree" {
-				outcome.Result = ResultOverBudget
-			} else {
-				outcome.Result = ResultError
-			}
+		if check.Tier == "fast" && check.Scope == "tree" {
+			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d; stopped and recorded over-budget, "+
+				"its judgment deferred to the heavy tier\n", check.CheckID, check.BudgetMS)
+			outcome.Result = ResultOverBudget
+		} else if check.Tier == "fast" {
+			// Past its budget and then past its ceiling: the check never answered.
+			fmt.Fprintf(logFile, "check %q exceeded budget_ms %d and was stopped at its ceiling of %d ms; "+
+				"no verdict\n", check.CheckID, check.BudgetMS, deadlineMS)
+			outcome.Result = ResultError
 		} else if check.Tier == "heavy" {
 			// A heavy declaration's timeout is a limit on the judge, not a
 			// completed negative judgment about the candidate.
@@ -296,7 +322,32 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	default:
 		outcome.Result = ResultPass
 	}
+	if check.Tier == "fast" && check.Scope == "change" && outcome.Result != ResultError &&
+		outcome.DurationMS > int64(check.BudgetMS) {
+		outcome.OverBudgetMS = outcome.DurationMS - int64(check.BudgetMS)
+		fmt.Fprintf(logFile, "check %q ran %d ms, over its budget_ms %d by %d ms; its verdict (%s) stands, "+
+			"and the overrun is a defect against the check's declared cost\n",
+			check.CheckID, outcome.DurationMS, check.BudgetMS, outcome.OverBudgetMS, outcome.Result)
+	}
 	return outcome
+}
+
+// budgetNotes are the lines a face prints for every fast check that ran past its budget,
+// so a slow check is visible on the gate's own output and not only inside its log: a tree
+// check that was stopped and carried, and a change check that ran long and still answered.
+func budgetNotes(verdict VerdictPayload) []string {
+	var notes []string
+	for _, check := range verdict.Checks {
+		switch {
+		case check.Result == ResultOverBudget:
+			notes = append(notes, fmt.Sprintf("%s: over-budget after %d ms; stopped, judgment deferred to the heavy tier",
+				check.CheckID, check.DurationMS))
+		case check.OverBudgetMS > 0:
+			notes = append(notes, fmt.Sprintf("%s: ran %d ms, %d ms over its budget_ms; its verdict (%s) stands",
+				check.CheckID, check.DurationMS, check.OverBudgetMS, check.Result))
+		}
+	}
+	return notes
 }
 
 // checkEnv is the environment a check runs with: this process's, minus the names the plan
