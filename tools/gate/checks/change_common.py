@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import unquote
+import roadmap_sections
 
 HEAD = "HEAD"
 LEGACY_SEED = "config/tillr/seed-items.json"
@@ -385,7 +386,7 @@ def identity_findings(root, base, head):
 
 DOCUMENT_MEMORY_FORMAT = "documents-1"
 DOCUMENT_CHECK_FILES = ("tools/gate/checks/documents.json", "tools/gate/checks/documents.py",
-                        "tools/gate/checks/change_common.py")
+                        "tools/gate/checks/change_common.py", "tools/gate/checks/roadmap_sections.py")
 DOCUMENT_CONFIG_NAMES = (".vantage.toml", ".vantageignore")
 LINK_DESTINATIONS = (
     re.compile(r"\]\(\s*<([^>\n]*)>"),
@@ -460,6 +461,11 @@ def document_keys(root, documents):
         siblings = sorted(p for p in entries if posixpath.dirname(p) == here)
         text = git(root, "cat-file", "blob", blob)
         named, absent = named_inputs(text, path, entries)
+        # A symlink's Git object binds the link text, not the contents its target
+        # exposes to the renderer. That mutable target cannot certify a tree pass.
+        symlinks = sorted(p for p in named if entries[p][0] == "120000")
+        if symlinks:
+            unsettled[path] = symlinks
         identity = {"format": DOCUMENT_MEMORY_FORMAT, "check": "documents", "code": code,
                     "configs": configs, "roadmaps": roadmaps, "path": path, "mode": mode,
                     "blob": blob, "siblings": siblings, "named": named}
@@ -476,7 +482,7 @@ def document_keys(root, documents):
             posixpath.join(directory, name) for directory in ancestors for name in DOCUMENT_CONFIG_NAMES}
             if candidate not in entries and os.path.lexists(root / candidate))
         if on_disk:
-            unsettled[path] = on_disk
+            unsettled.setdefault(path, []).extend(on_disk)
     changed = tracked_changes(root, set().union(*watched.values()))
     for path in documents:
         differ = sorted(p for p in changed if any(p == w or p.startswith(w + "/") for w in watched[path]))
@@ -509,8 +515,8 @@ def stored_result(store, key, verdict):
     return data
 
 
-def store_result(store, key, verdict, duration_ms, tree, tool):
-    record = {"check_id": "documents", "result": verdict, "duration_ms": duration_ms,
+def store_result(store, key, verdict, duration_ms, tree, tool, check_id="documents"):
+    record = {"check_id": check_id, "result": verdict, "duration_ms": duration_ms,
               "time": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
               "tree": tree, "tool": tool}
     temporary = None
@@ -538,7 +544,7 @@ def renderer_version():
     return words[-1] if asked.returncode == 0 and words else None
 
 
-def render(paths):
+def render(paths, locations=None):
     """One renderer run over `paths`: its exit, its JSON report (None when unreadable), its time."""
     started = time.monotonic()
     rendered = subprocess.run(["uvx", "vantage-check", "check", "--format", "json", *paths],
@@ -551,7 +557,13 @@ def render(paths):
     if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
         report = None
     for finding in (report or {}).get("findings", []):
-        print(f"{finding.get('file')}:{finding.get('line')}:{finding.get('column')}: "
+        name, line = finding.get("file"), finding.get("line")
+        location = (locations or {}).get(reported(Path.cwd(), name))
+        if location:
+            name = location[0]
+            if isinstance(line, int):
+                line += location[1]
+        print(f"{name}:{line}:{finding.get('column')}: "
               f"{finding.get('severity')} {finding.get('rule')} {finding.get('message')}")
     for failure in (report or {}).get("failures") or []:
         print(f"could not check: {json.dumps(failure, sort_keys=True)}")
@@ -562,6 +574,16 @@ def render(paths):
 
 
 def judge_documents(root, documents):
+    keys, unsettled = document_keys(root, documents)
+    paths, locations, temporary = roadmap_sections.prepare(
+        root, documents, sys.modules[__name__], keys, unsettled)
+    try:
+        return judge_document_set(root, paths, keys, unsettled, locations)
+    finally:
+        roadmap_sections.cleanup(temporary)
+
+
+def judge_document_set(root, documents, keys, unsettled, locations):
     """Judge the changed documents in one renderer run, skipping remembered passes.
 
     The run's exit is the check's, as it was before memory: 0 passes, 1 with a finding
@@ -575,15 +597,14 @@ def judge_documents(root, documents):
     """
     store = result_store(root)
     tree = git(root, "rev-parse", f"{HEAD}^{{tree}}").strip()
-    keys, unsettled = document_keys(root, documents)
     remembered = {}
     for path in documents:
         passed = stored_result(store, keys[path], "pass")
-        if passed and not stored_result(store, keys[path], "fail"):
+        if passed and path not in unsettled and not stored_result(store, keys[path], "fail"):
             remembered[path] = passed
     pending = [path for path in documents if path not in remembered]
     if pending:
-        code, report, duration_ms = render(pending)
+        code, report, duration_ms = render(pending, locations)
         version = report.get("version") if report else None
         # A run that produced no report could not judge, whatever is remembered.
         stale = [path for path, passed in remembered.items() if version and passed.get("tool") != version]
@@ -597,13 +618,16 @@ def judge_documents(root, documents):
         print(f"documents: {len(stale)} remembered pass(es) are not from renderer {version}; judging again",
               file=sys.stderr)
         pending = list(documents)
-        code, report, duration_ms = render(pending)
+        code, report, duration_ms = render(pending, locations)
         version = report.get("version") if report else None
     for path in documents:
         if path not in pending:
-            print(f"documents: {path}: remembered pass at {remembered[path]['time']}", file=sys.stderr)
+            location = locations.get(path)
+            label = f"{location[0]} (section at line {location[2]})" if location else path
+            print(f"documents: {label}: remembered pass at {remembered[path]['time']}", file=sys.stderr)
     if len(documents) > 1 or len(pending) < len(documents):
-        print(f"documents: {len(documents)} document(s): {len(pending)} rendered, "
+        units = "render unit(s)" if locations else "document(s)"
+        print(f"documents: {len(documents)} {units}: {len(pending)} rendered, "
               f"{len(documents) - len(pending)} remembered", file=sys.stderr)
     if not pending:
         return 0

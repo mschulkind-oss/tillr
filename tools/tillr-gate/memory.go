@@ -95,6 +95,13 @@ func treeFingerprint(check PlanCheck, inputs []treeInput, root string) (string, 
 		}
 		versions = append(versions, tool, string(raw))
 	}
+	if check.CheckID == "go-build" {
+		identity, _, err := goBuildIdentity(check, root, inputs)
+		if err != nil {
+			return "", err
+		}
+		versions = append(versions, "go build environment", identity)
+	}
 	refs, missing, err := resolveRefNeeds(check, root)
 	if err != nil {
 		return "", err
@@ -307,6 +314,19 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 	}
 	if len(missing) > 0 {
 		return VerdictCheck{CheckID: check.CheckID, Result: ResultUnavailable, MissingNeeds: missing}, nil
+	}
+	if check.CheckID == "go-build" && memory != nil {
+		_, reason, err := goBuildIdentity(check, root, memory.inputs)
+		if err != nil {
+			return VerdictCheck{CheckID: check.CheckID, Result: ResultError}, err
+		}
+		if reason != "" {
+			outcome := runCheck(check, root, logs, index)
+			outcome.Memory, outcome.UnboundPath = "not remembered", reason
+			state, err := readBinding(root, memory.tree)
+			memory.binding = state
+			return outcome, err
+		}
 	}
 	if check.Scope != "tree" || check.Remember != nil && !*check.Remember {
 		outcome := runCheck(check, root, logs, index)

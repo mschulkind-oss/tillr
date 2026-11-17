@@ -105,6 +105,174 @@ sys.exit(rc)
         return subprocess.run([str(self.runner), "checks", "--logs", str(self.repo / "logs"), *args],
                               cwd=self.repo, env=self.env, capture_output=True, text=True)
 
+    def roadmap(self, text):
+        path = self.repo / "docs/tillr/roadmap.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        self.git("add", "docs")
+        return self.commit()
+
+    def test_roadmap_remembers_unchanged_sections_but_not_changed_headings(self):
+        text = "# Roadmap\n\n## First\n\nOne.\n\n## Second\n\nTwo.\n"
+        self.roadmap(text)
+        self.assertEqual(self.check("documents").returncode, 0)
+        log = self.repo / "render.log"
+        self.assertEqual(len(log.read_text().splitlines()), 3)
+        self.roadmap(text.replace("Two.", "Changed."))
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(log.read_text().splitlines()), 4)
+        self.roadmap(text.replace("## Second", "## Renamed"))
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(log.read_text().splitlines()), 7)
+        self.assertEqual(list((self.repo / "docs/tillr").glob(".gate-roadmap-*")), [])
+
+    def test_roadmap_cross_section_markup_gets_the_full_renderer(self):
+        self.roadmap("# Roadmap\n\n## First\n\n[shared][ref]\n\n## Second\n\n[ref]: target.md\n")
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checking the full file", result.stderr)
+        self.assertEqual((self.repo / "render.log").read_text().splitlines(),
+                         ["vantage-check docs/tillr/roadmap.md"])
+
+    def test_real_renderer_catches_a_broken_roadmap_link_and_changed_target(self):
+        self.env["PATH"] = os.environ["PATH"]
+        target = self.repo / "docs/tillr/target.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# Target\n\n## Live\n")
+        text = "# Roadmap\n\n## First\n\n[Target](target.md#live).\n\n## Second\n\nTwo.\n"
+        self.roadmap(text)
+        first = self.check("documents")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.roadmap(text.replace("Two.", "[Broken](missing-roadmap-target.md)."))
+        broken = self.check("documents")
+        self.assertEqual(broken.returncode, 1, broken.stdout + broken.stderr)
+        self.assertIn("link/missing-target", broken.stdout)
+        self.assertIn("docs/tillr/roadmap.md:9:", broken.stdout)
+        self.roadmap(text)
+        target.write_text("# Target\n\n## Renamed\n")
+        self.roadmap(text)
+        changed = self.check("documents")
+        self.assertEqual(changed.returncode, 1, changed.stdout + changed.stderr)
+        self.assertIn("link/dead-section-anchor", changed.stdout)
+
+    def test_roadmap_does_not_remember_a_mutable_symlink_target(self):
+        self.env["PATH"] = os.environ["PATH"]
+        target = Path(self.build.name) / (self.repo.name + "-target.md")
+        target.write_text("# Target\n\n## Live\n")
+        linked = self.repo / "docs/tillr/linked.md"
+        linked.parent.mkdir(parents=True, exist_ok=True)
+        linked.symlink_to(target)
+        self.git("add", "docs")
+        base = self.commit()
+        text = "# Roadmap\n\n## First\n\n[Target](linked.md#live).\n\n## Second\n\nTwo.\n"
+        self.roadmap(text)
+        result = self.check("documents", base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        target.write_text("# Target\n\n## Removed\n")
+        self.roadmap(text.replace("Two.", "Changed."))
+        result = self.check("documents", base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("link/dead-section-anchor", result.stdout)
+
+    def test_real_renderer_catches_header_only_invalid_frontmatter(self):
+        self.env["PATH"] = os.environ["PATH"]
+        self.roadmap("---\ntitle: [\n---\n")
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("frontmatter/parse", result.stdout)
+
+    def test_real_renderer_invalidates_indented_and_tabbed_heading_links(self):
+        self.env["PATH"] = os.environ["PATH"]
+        for prefix in ("  ### ", "###\t"):
+            text = "# Roadmap\n\n## First\n\n[Hidden](#hidden).\n\n## Second\n\n" + prefix + "Hidden\n"
+            self.roadmap(text)
+            result = self.check("documents")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.roadmap(text.replace(prefix + "Hidden", prefix + "Renamed"))
+            result = self.check("documents")
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("link/dead-section-anchor", result.stdout)
+
+    def test_real_renderer_does_not_split_cross_section_math(self):
+        self.env["PATH"] = os.environ["PATH"]
+        self.roadmap("# Roadmap\n\n## First\n\n$$\nx\n## Second\ny\n$$\n")
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("katex/parse", result.stdout)
+        self.assertIn("checking the full file", result.stderr)
+
+    def test_real_renderer_invalidates_self_line_links_when_page_length_changes(self):
+        self.env["PATH"] = os.environ["PATH"]
+        text = "# Roadmap\n\n## First\n\n[Tail](#L25).\n\n## Second\n\n" + "Padding.\n\n" * 15
+        self.roadmap(text)
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.roadmap(text.replace("Padding.\n\n" * 15, "Short.\n"))
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("link/line-anchor-range", result.stdout)
+
+    def test_real_renderer_invalidates_header_only_dependency_targets(self):
+        self.env["PATH"] = os.environ["PATH"]
+        target = self.repo / "docs/design/target.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# Target\n\n<!-- vantage: question id=OQ-X1 -->\n\n## Choice\n")
+        self.git("add", "docs")
+        base = self.commit()
+        text = "---\nstatus: draft\nstage: DESIGN\ndepends-on: [../design/target.md#OQ-X1]\n---\n\n# Roadmap\n\n## First\n\nOne.\n"
+        self.roadmap(text)
+        result = self.check("documents", base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        target.write_text("# Target\n\n## Removed\n")
+        self.roadmap(text)
+        result = self.check("documents", base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("planning/depends-on-missing", result.stdout)
+
+    def test_markdown_only_change_remembers_go_build_without_starting_a_compile(self):
+        declaration = json.loads((ROOT / "tools/gate/checks/go-build.json").read_text())
+        registry = self.repo / "build-check"
+        registry.mkdir()
+        (registry / "go-build.json").write_text(json.dumps(declaration))
+        spec = importlib.util.spec_from_file_location("build_check", ROOT / "tools/gate/checks/go-build.py")
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        for directory in build.GO_TOOL_DIRS:
+            module = self.repo / directory
+            module.mkdir(parents=True, exist_ok=True)
+            (module / "go.mod").write_text("module fixture/" + module.name + "\n\ngo 1.24\n")
+            (module / "main.go").write_text("package main\nfunc main() {}\n")
+        marker = Path(self.build.name) / (self.repo.name + "-compile.log")
+        goroot = subprocess.run(["go", "env", "GOROOT"], capture_output=True, text=True, check=True).stdout.strip()
+        real_go = str(Path(goroot) / "bin/go")
+        go = self.bin / "go"
+        go.write_text(f"#!{sys.executable}\n" +
+                      "import os, sys\n" +
+                      f"if sys.argv[1] in ('list', 'build', 'test'):\n    with open({str(marker)!r}, 'a') as log: log.write('compile\\n')\n" +
+                      f"os.execv({real_go!r}, [{real_go!r}, *sys.argv[1:]])\n")
+        go.chmod(0o755)
+        self.git("add", ".")
+        self.git("commit", "-qm", "chore: build inputs")
+        base = self.git("rev-parse", "HEAD")
+        logs = Path(self.build.name) / (self.repo.name + "-logs")
+        def run_build():
+            result = subprocess.run([str(self.runner), "checks", "--base", base, "--head", "HEAD",
+                                     "--fast-tree", "--checks", str(registry), "--logs", str(logs)],
+                                    cwd=self.repo, env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return json.loads(result.stdout)["payload"]["checks"]
+        first = run_build()
+        self.assertEqual(first[0]["memory"], "passed", first)
+        compiles = marker.read_text()
+        self.assertTrue(compiles)
+        (self.repo / "README.md").write_text("# Markdown-only change\n")
+        self.git("add", "README.md")
+        self.git("commit", "-qm", "docs: fixture")
+        second = run_build()
+        self.assertEqual(len(second), 1, second)
+        self.assertEqual(second[0]["memory"], "remembered", second)
+        self.assertEqual(marker.read_text(), compiles, "remembered build started a compiler")
+
     def test_recorded_baseline_predating_seed_is_not_a_change_base(self):
         result = subprocess.run(["python3", str(ROOT / "tools/gate/checks/change-checks.test.py")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)

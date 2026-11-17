@@ -106,6 +106,99 @@ class TreeChecks(unittest.TestCase):
                             for target in node.targets))
         self.assertEqual(go_build.GO_TOOL_DIRS, dirs)
 
+    def module_fixture(self):
+        module = self.root / "tool"
+        module.mkdir()
+        (module / "go.mod").write_text("module fixture/tool\n\ngo 1.24\n")
+        (module / "main.go").write_text("package main\nfunc main() {}\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+        return module
+
+    def test_module_memory_detects_nested_auto_workspace(self):
+        module = self.module_fixture()
+        (module / "go.work").write_text("go 1.24\nuse .\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "workspace"], check=True)
+        with patch.dict(os.environ, GOWORK=""):
+            keys = go_build.module_keys(self.root, [module])
+        self.assertFalse(keys[module][1], "a nested auto-discovered workspace was remembered")
+
+    def test_module_memory_rechecks_binding_before_publication(self):
+        module = self.module_fixture()
+        original = (module / "main.go").read_text()
+        calls = []
+        def build(module, scratch):
+            calls.append(module)
+            (module / "main.go").write_text(original + "// changed during compilation\n")
+            return 0, ""
+        with patch.object(go_build, "GO_TOOL_DIRS", (str(module),)), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "build_module", build):
+            self.assertEqual(go_build.main(), 0)
+            (module / "main.go").write_text(original)
+            self.assertEqual(go_build.main(), 0)
+        self.assertEqual(len(calls), 2, "a build of dirty sources certified the committed tree")
+        store = self.root / ".git/tillr-gate/results"
+        self.assertEqual(list(store.glob("*.json")), [])
+
+    def test_external_replacements_and_file_options_build_without_memory(self):
+        module = self.module_fixture()
+        external = tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"])
+        self.addCleanup(external.cleanup)
+        overlay = Path(external.name) / "overlay.json"
+        overlay.write_text('{"Replace":{}}')
+        for flags, workspace in [("-overlay=" + str(overlay), "off"), ("-gcflags=all=-N", "off"),
+                                 ("", str(self.root / "custom.work"))]:
+            (self.root / "custom.work").write_text("go 1.24\nuse ./tool\n")
+            with patch.dict(os.environ, GOFLAGS=flags, GOWORK=workspace):
+                keys = go_build.module_keys(self.root, [module])
+                self.assertFalse(keys[module][1], keys)
+        (module / "go.mod").write_text("module fixture/tool\n\ngo 1.24\nreplace fixture/external => " + external.name + "\n")
+        with patch.object(go_build, "GO_TOOL_DIRS", (str(module),)), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "build_module", return_value=(0, "")) as build:
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual(build.call_count, 1)
+
+    def test_module_memory_rebuilds_local_dependents_but_not_unrelated_modules(self):
+        modules = [self.root / name for name in ("a", "b", "c")]
+        for module in modules:
+            module.mkdir()
+            (module / "go.mod").write_text("module fixture/" + module.name + "\n\ngo 1.24\n")
+            (module / "main.go").write_text("package main\nfunc main() {}\n")
+        (modules[1] / "go.mod").write_text("module fixture/b\n\ngo 1.24\nrequire fixture/a v0.0.0\nreplace fixture/a => ../a\n")
+        def commit():
+            subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                            "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+        commit()
+        seen = []
+        def build(module, scratch):
+            seen.append(module.name)
+            return 0, ""
+        with patch.object(go_build, "GO_TOOL_DIRS", tuple(map(str, modules))), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "build_module", build):
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual(set(seen), {"a", "b", "c"})
+            seen.clear()
+            (modules[0] / "main.go").write_text("package main\nfunc main() { println(1) }\n")
+            commit()
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual(set(seen), {"a", "b"})
+            seen.clear()
+            self.track("docs/guide.md", "# Markdown only\n")
+            commit()
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual(seen, [])
+            # Uncommitted source cannot consume a remembered pass from HEAD.
+            (modules[2] / "main.go").write_text("package main\nfunc main() { println(2) }\n")
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual(seen, ["c"])
+
     def test_go_modules_start_in_parallel_including_nested_module(self):
         roots = [self.root / str(i) for i in range(2)]
         nested = roots[0] / "nested"
@@ -135,9 +228,30 @@ class TreeChecks(unittest.TestCase):
         with patch.object(go_build, "GO_TOOL_DIRS", (str(self.root / "missing"),)):
             self.assertEqual(go_build.main(), 4)
 
+    def test_go_build_does_not_execute_testmain(self):
+        module = self.root / "tool"
+        module.mkdir()
+        marker = self.root / "testmain-ran"
+        (module / "go.mod").write_text("module fixture/tool\n\ngo 1.24\n")
+        (module / "main.go").write_text("package main\nfunc main() {}\n")
+        (module / "main_test.go").write_text(
+            'package main\nimport ("os"; "testing")\n'
+            f'func TestMain(m *testing.M) {{ os.WriteFile({json.dumps(str(marker))}, []byte("ran"), 0600); os.Exit(m.Run()) }}\n')
+        code, output = go_build.build_module(module, self.root)
+        self.assertEqual(code, 0, output)
+        self.assertFalse(marker.exists(), "a compile check ran TestMain")
+
+    def test_go_build_catches_a_source_compile_error(self):
+        module = self.root / "tool"
+        module.mkdir()
+        (module / "go.mod").write_text("module fixture/tool\n\ngo 1.24\n")
+        (module / "main.go").write_text("package main\nfunc main() { undefinedSourceSymbol() }\n")
+        code, output = go_build.build_module(module, self.root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("undefinedSourceSymbol", output)
+
     def test_go_build_trims_paths_in_every_go_command_it_starts(self):
-        # Every go command the check starts -- and every one those start, such as a test
-        # binary's TestMain building its tool -- trims source paths, so a new checkout
+        # Every go command the check starts trims source paths, so a new checkout
         # reuses the shared cache's entries. The flag rides in GOFLAGS, added to the
         # caller's own GOFLAGS, and the cache location is left exactly as the caller set it.
         module = self.root / "tool"
@@ -150,6 +264,8 @@ class TreeChecks(unittest.TestCase):
             self.assertEqual(go_build.build_module(module, self.root)[0], 0)
             expected_cache = os.environ.get("GOCACHE")
         self.assertEqual([args[:2] for args, _ in calls], [["go", "list"], ["go", "build"], ["go", "test"]])
+        self.assertIn("-exec", calls[2][0])
+        self.assertEqual(calls[2][0][calls[2][0].index("-exec") + 1], "true")
         for args, env in calls:
             self.assertEqual(env["GOFLAGS"].split(), ["-mod=mod", "-trimpath"], args)
             self.assertEqual(env.get("GOCACHE"), expected_cache, args)
