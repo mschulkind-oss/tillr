@@ -617,6 +617,8 @@ def add_binary_flags(parser: argparse.ArgumentParser) -> None:
 
 def parser_for(kind: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=f"tillr-loop {kind}", allow_abbrev=False)
+    parser.add_argument("--check-argv", action="store_true",
+                        help="parse arguments only; tillr-step-argv-check-v1 (see drain README)")
     add_candidate_flags(parser)
     add_common_flags(parser)
     add_binary_flags(parser)
@@ -755,6 +757,8 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return EXIT_USAGE
     args = parser_for(kind).parse_args(rest)
+    if args.check_argv:
+        return EXIT_PASS
     try:
         ctx = context(args)
         if kind == "self-check":

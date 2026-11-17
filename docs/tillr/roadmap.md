@@ -1306,12 +1306,7 @@ refusal is right, because every landing would fail the same way. Finding out at 
 is late. The loop's existing start-up check reads its settings, policies and store, but never asks
 the step programs whether they accept what it will send. It should, before any run starts.
 
-<!-- tillr: item id="item-drain-check-step-program-flags" paths="tools/tillr-drain/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr drain loop --check`, and the loop's own start-up, hand each configured gate, fixer gate, land and verdict program the argument list the loop would send, with every optional flag present, in a mode that judges nothing. A program that refuses it stops the start with a usage fault naming the program and the flag.
-- **c2:** The mode that judges nothing is defined once in the drain's README as part of the step-program contract, and the tillr-loop adapter implements it. A test starts a loop with an adapter that lacks one flag and asserts the start is refused before any run is dispatched.
-- **c3:** A step program that does not implement the mode is reported once at start-up as unchecked, and the loop still starts. A test asserts the warning.
-- **c4:** A step program's usage refusal at run time is reported as a configuration fault naming the program, not as an external failure. A test asserts the stop's class.
 
 **Agent details:**
 

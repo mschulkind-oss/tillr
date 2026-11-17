@@ -324,6 +324,36 @@ in one transaction. Its aborted staging remains in the append-only event history
 but a later plan may assign the same unstarted attempt to another lane without
 colliding with that row.
 
+## Step-program argument contract
+
+A **step program** is the configured gate, fixer gate, land or verdict command that
+receives the candidate's flags. Its help invocation (`<command> --help`) must judge
+nothing. Programs supporting startup argument validation advertise the literal
+`tillr-step-argv-check-v1` in that help output and accept `--check-argv` alongside
+normal arguments. This is the drain's contract, not the adapter's broader self-check.
+
+With `--check-argv`, parse all arguments with the normal step's parser and return
+0 if accepted or 2 with a diagnostic naming the refused flag if not. Do not read
+candidate artifacts, open the store, invoke judges, write records or move refs.
+Synthetic candidate values need not name existing files or commits: this mode
+checks the argument interface, not the candidate's validity.
+
+Both `tillr drain loop --check` and normal startup negotiate support using help,
+then pass every candidate flag through this mode. The land check includes
+`--observed-trunk`, `--base-ref` and `--message-from`; verdict checks include
+`--store` and both verdict values. Fixer gates check both `{green}` expansions
+(`--all` and `--since <sha>`) separately, because those options are mutually
+exclusive. The [tillr-loop adapter](../tillr-loop/README.md) implements the mode.
+No run is dispatched before these checks finish.
+
+A command that does not advertise support is named once as `unchecked` at startup
+and receives no synthetic candidate invocation; the loop still starts. Help
+failure also means unchecked, never evidence of supported parsing. A supported
+command that refuses the check stops startup with a configuration fault (exit 2),
+naming the command, its arguments and its diagnostic. At run time, a step's exit 2
+likewise stops the loop as a configuration fault, not an external failure or an
+item's failing judgment. Other step exit meanings remain unchanged.
+
 ## Faults that stop the whole loop
 
 Fault stops are for failures that cannot be attributed to one item:

@@ -297,19 +297,7 @@ type LandOutcome struct {
 // refusal and carries the conflict paths; a land program that printed no record falls back
 // to its exit code, which is what a stub is.
 func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutcome, error) {
-	extra := []string{}
-	if candidate.ObservedTrunk != "" {
-		extra = append(extra, "--observed-trunk", candidate.ObservedTrunk)
-	}
-	// A fork-series candidate lands a patch branch rather than the trunk: the ref is the
-	// item's delivery, and it is named explicitly because the loop's working directory is
-	// the trunk's repository, not the checkout the candidate was made in.
-	if candidate.BaseRef != "" {
-		extra = append(extra, "--base-ref", candidate.BaseRef)
-	}
-	if candidate.WorkerHeadSHA != "" {
-		extra = append(extra, "--message-from", candidate.WorkerHeadSHA)
-	}
+	extra := landArgs(candidate)
 	code, out, span, err := s.program(ctx, "land", ".", s.LandProgram, candidate, extra...)
 	if err != nil {
 		return LandOutcome{}, err
@@ -353,7 +341,7 @@ func (s *ProcessSteps) Verdict(ctx context.Context, candidate Candidate, verdict
 	// The store is passed explicitly because the verdict program records against the item's
 	// frozen criteria, and it must read the same store the loop planned from: a verdict
 	// recorded into a default path the loop never touched is a verdict nobody will find.
-	code, _, span, err := s.program(ctx, "verdict", ".", s.VerdictProgram, candidate, "--store", s.Store, "--verdict", verdict)
+	code, _, span, err := s.program(ctx, "verdict", ".", s.VerdictProgram, candidate, s.verdictArgs(verdict)...)
 	if err != nil {
 		return err
 	}
@@ -439,9 +427,7 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	if program == "" {
 		return 0, "", StepSpan{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")
 	}
-	argv := append([]string{}, strings.Fields(program)...)
-	argv = append(argv, candidateArgs(candidate, s.Root)...)
-	argv = append(argv, extra...)
+	argv := s.programArgv(program, candidate, extra...)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	if len(env) > 0 {
@@ -457,6 +443,9 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	}
 	if cmd.ProcessState == nil {
 		return 0, "", span, Externalf("running %q in %s: %v: %s", argv[0], dir, err, stderr.String())
+	}
+	if cmd.ProcessState.ExitCode() == record.ExitUsage {
+		return record.ExitUsage, string(out), span, Usagef("configuration fault: %s program %q refused its arguments for %s%s", step, program, candidate.ItemID, stderrReason(span))
 	}
 	return cmd.ProcessState.ExitCode(), string(out), span, nil
 }

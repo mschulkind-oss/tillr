@@ -212,9 +212,10 @@ func fixtureAt(t *testing.T, path string, records ...string) {
 	}
 }
 
-// always answers a stub program that exits with one code and records its invocation.
+// always records real step calls, not startup help discovery. It models a legacy
+// step with harmless help but no parse-only support.
 func always(t *testing.T, name string, code int) string {
-	return stub(t, name, counting+"exit "+strconv.Itoa(code))
+	return stub(t, name, "[ \"$1\" = --help ] && exit 0\n"+counting+"exit "+strconv.Itoa(code))
 }
 
 // lines reads a stub's record of what ran, one line per invocation.
