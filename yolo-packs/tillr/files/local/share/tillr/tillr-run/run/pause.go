@@ -162,6 +162,9 @@ func prepareContinuation(req Request, kind, lane, worktree, durable string) (str
 		return "", "", Internalf("reading pause notice: %v", err)
 	}
 	restarting := len(notice) > 0
+	if req.ResumePrompt != "" {
+		notice = []byte(req.ResumePrompt + "\n")
+	}
 	if len(notice) == 0 {
 		notice = []byte("Continue the same attempt from where you stopped. The session was interrupted; keep existing work and make only the one requested commit.\n")
 	}
@@ -180,6 +183,9 @@ func prepareContinuation(req Request, kind, lane, worktree, durable string) (str
 		reason := "The earlier session was cut short."
 		if restarting {
 			reason = "The earlier session was stopped for a restart and was interrupted by a restart."
+		}
+		if req.ResumePrompt != "" {
+			reason = req.ResumePrompt
 		}
 		notice = []byte(fmt.Sprintf("%s Continue the same attempt in a fresh session, preserving the worktree and its uncommitted changes. Transcript: %s. Worktree: %s.\n", reason, filepath.Join(lane, req.RunID+".log"), worktree))
 		report := filepath.Join(durable, "report.md")

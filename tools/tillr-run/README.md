@@ -61,6 +61,10 @@ tillr-run lanes
 staging pinned in the lane (`session-id`, which every adapter passes to its harness) is
 reused, so the provider's prefix cache is warm; and the run's log is appended to rather than
 truncated, because the killed segment's transcript is the evidence the resume continues.
+A request may supply `resume_prompt` to replace the default interrupted-session instruction;
+it is ignored on fresh executions and also included when an adapter requires a fresh session
+for the continuation. The drain uses it to ask an exited build worker to finish verification
+and commit existing fenced work, without changing the staged brief.
 
 ## Pausing a live run
 

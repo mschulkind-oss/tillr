@@ -61,6 +61,29 @@ func TestContinuationUsesOnlyThisRunsReportAndConsumesRestartNotice(t *testing.T
 			t.Fatalf("named stale lane report: %s", prompt)
 		}
 	})
+	t.Run("commit instruction reaches resumable and fresh sessions", func(t *testing.T) {
+		req.ResumePrompt = "Finish verification and commit candidate.txt before ending."
+		defer func() { req.ResumePrompt = "" }()
+		for _, kind := range []string{PauseAtGap, PauseWhereItStands, PauseCannotResume} {
+			mode, path, err := prepareContinuation(req, kind, lane, worktree, durable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), req.ResumePrompt) {
+				t.Fatalf("lost commit instruction: %s", body)
+			}
+			if kind != PauseCannotResume && mode != "resume" {
+				t.Fatalf("lost session: %s", mode)
+			}
+			if kind == PauseCannotResume && !strings.Contains(string(body), "Continue fixture work.") {
+				t.Fatal("fresh continuation lost brief")
+			}
+		}
+	})
 	t.Run("a paused run points to its own report and consumes its notice", func(t *testing.T) {
 		report := filepath.Join(durable, "report.md")
 		write(report, "This run's report.\n")
