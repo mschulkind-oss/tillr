@@ -132,6 +132,20 @@ def tracked_markdown(root: Path) -> list[str]:
     return [path for path in git(root, "ls-files", "*.md").split("\n") if path]
 
 
+# The tillr pack delivers dated copies of the tillr design documents under this prefix
+# (tools/pack-docs.py, `just pack-docs`). A copy carries its source's lines, so it is
+# excused exactly where its source is: the copy of `docs/design/x.md` lives at
+# DELIVERED_DOCS + `design/x.md`.
+DELIVERED_DOCS = "yolo-packs/tillr/files/local/share/tillr/docs/"
+
+
+def excused_as(path: str) -> str:
+    """The path whose SCRATCH_EXCEPTIONS apply to `path`: its source, for a delivered copy."""
+    if path.startswith(DELIVERED_DOCS):
+        return "docs/" + path[len(DELIVERED_DOCS):]
+    return path
+
+
 def scratch_citations(root: Path) -> list[str]:
     """Every tracked Markdown line that cites scratch, outside a fenced specimen.
 
@@ -151,7 +165,8 @@ def scratch_citations(root: Path) -> list[str]:
                 continue
             if in_fence or not SCRATCH.search(line):
                 continue
-            if any(path == allowed and marker in line for allowed, marker in SCRATCH_EXCEPTIONS):
+            if any(excused_as(path) == allowed and marker in line
+                   for allowed, marker in SCRATCH_EXCEPTIONS):
                 continue
             findings.append(f"{path}:{number}: {line.strip()}")
     return findings

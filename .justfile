@@ -328,6 +328,16 @@ tillr-keep *args:
 pack-sync-test:
     @python3 tests/pack-sync.test.py
 
+# Refresh the tillr pack's dated snapshot of tillr's design documentation: the status
+# index docs/tillr/design-status.md and every document its tables mark `shipped`, copied
+# from HEAD into yolo-packs/tillr/files/local/share/tillr/docs/ (tools/pack-docs.py), then
+# judged current against HEAD. Commit the result. Deliberately NOT part of `pack-sync`:
+# lanes run pack-sync, the docs tree is outside a lane's fence, and the drain edits design
+# documents on every landing, so the snapshot is refreshed by hand, never per landing.
+pack-docs:
+    @python3 tools/pack-docs.py sync
+    @python3 tests/pack-sync.test.py --fresh
+
 # Render and screenshot the pi-subagents Background work roster at many widths and
 # content mixes (tools/roster-storybook); writes $YOLO_DURABLE_DIR/roster-storybook.
 roster_storybook *args:
