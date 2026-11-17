@@ -567,6 +567,31 @@ sys.exit(rc)
         self.assertEqual(args[:2], ["checks", "--fast-tree"])
         self.assertEqual(args[args.index("--tree-overrun") + 1], "keep")
 
+    def test_loop_program_warms_the_trimmed_go_cache_once_outside_the_ceilings(self):
+        # go-build trims source paths, and the first trimmed build on a machine compiles the
+        # standard library and every module from cold (19.9 s measured 2026-11-16), past
+        # the 9 s ceiling. The gate program pays that once per Go version, before the fast
+        # tier and outside its ceilings, so no item is held for a cold cache. A failed warm
+        # is not a verdict: the check itself still judges the candidate.
+        log = self.repo / "warm.log"
+        (self.repo / "tools/gate/checks/go-build.py").write_text(
+            f"import sys\nopen({str(log)!r}, 'a').write('warm\\n')\nsys.exit(int({str(self.repo / 'warm-rc')!r} and "
+            f"open({str(self.repo / 'warm-rc')!r}).read() or 0))\n")
+        (self.repo / "warm-rc").write_text("4")
+        (self.repo / "README.md").write_text("# Changed\n")
+        head = self.commit()
+        runner = self.bin / "recording-runner"
+        runner.write_text(f"#!{sys.executable}\nimport sys\nopen({str(log)!r}, 'a').write('runner\\n')\nsys.exit(1)\n")
+        runner.chmod(0o755)
+        gate = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
+                "--runner", str(runner), "--logs", str(self.repo / "logs")]
+        for rc in ("4", "0", "0"):
+            (self.repo / "warm-rc").write_text(rc)
+            result = subprocess.run(gate, cwd=self.repo, env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        # The failed warm is tried again; the completed one is not repeated.
+        self.assertEqual(log.read_text().split(), ["warm", "runner", "warm", "runner", "runner"])
+
 
 if __name__ == "__main__":
     unittest.main()

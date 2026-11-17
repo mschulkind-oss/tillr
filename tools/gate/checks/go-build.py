@@ -17,6 +17,16 @@ GO_TOOL_DIRS = (
 def build_module(module, scratch):
     env = dict(os.environ, CGO_ENABLED="0")
     env.pop("LAND_BATCH_LIMIT", None)
+    # -trimpath, for this check only. The check builds to prove the tree compiles and
+    # throws the output away, so trimmed source paths change nothing that is kept -- and
+    # without it Go keys compiled packages by their absolute source path, so every new
+    # checkout (a new lane's worktree) compiles cold: 2.85 s alone against 0.84 s trimmed,
+    # measured 2026-11-16, and past the 9 s ceiling beside nine other gates. It rides in
+    # GOFLAGS, after the caller's own, so the `go build` a test binary's TestMain starts
+    # is trimmed too. It is NOT a global flag: recipes that build binaries people run
+    # (`just tillr-build` and the like) keep their full paths. CGO is off above, so no C
+    # object embeds a path, and no Go source here embeds one.
+    env["GOFLAGS"] = " ".join(filter(None, [os.environ.get("GOFLAGS", ""), "-trimpath"]))
     # Leave GOCACHE and GOMODCACHE exactly as the caller selected them.
     with tempfile.TemporaryDirectory(dir=scratch, prefix="gate-go-build-") as output:
         listed = subprocess.run(["go", "list", "-f", '{{if eq .Name "main"}}M{{end}}', "./..."],

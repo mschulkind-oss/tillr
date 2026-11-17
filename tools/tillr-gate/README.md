@@ -96,8 +96,16 @@ runner exists yet, so a carried check's judgment would be dropped: the verdict
 stays pass and nothing runs the check again. The loop's gate program,
 [`change-gate.py`](../../tools/gate/change-gate.py), states its choice in one
 constant, `TREE_OVERRUN`, which the heavy runner's item turns back to `carry`. A
-change check is never carried, because no tree-only run has its base. The rule
-and its measurement are in
+change check is never carried, because no tree-only run has its base.
+
+The `go-build` check builds with `-trimpath`, in `GOFLAGS`, so a new checkout
+reuses the shared Go build cache instead of compiling cold past its ceiling;
+`change-gate.py` runs it once per Go version, unbounded and before the fast tier,
+to pay the first trimmed build on a machine (19.9 seconds measured) as time
+rather than as a fault. On 2026-11-16 the fast tier took 4.0 to 4.4 seconds for
+one gate and 7.9 to 9.0 seconds for each of ten concurrent gates, in stable or
+new checkouts, with no check reaching its ceiling. The rule and its measurement
+are in
 [design Section 6.5](../../docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test).
 
 The `documents` change check remembers a pass for each changed document in the
