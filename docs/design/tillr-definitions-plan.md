@@ -213,14 +213,7 @@ The Git-landing values come from `writableStates` and `frozenStates` in
 [apply.go](../../tools/tillr-item/item/apply.go), [lifecycle.go](../../tools/tillr-item/item/lifecycle.go),
 and the hold reasons in [schema.go](../../tools/tillr-drain/drain/schema.go).
 
-<!-- tillr: item id="item-def-definition-file" paths="tools/tillr/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** A new package `tools/tillr/definition` reads and validates a definition file with these keys: `definition` (its name), `version`, `states`, `ready` (the state the planner dispatches from), `blocked` and `closed` (the states the block, close and reopen commands write), `finished` (the states that end an item and satisfy a dependent's `blocked_by`), `transitions` (each allowed move as `from` and `to`, including any move out of a finished state), `prerequisites` (names from a closed list the package defines), `completes` (`landing` or `hook`), `retention` (`keep` is the only rule built), `brief_template`, and `hooks` (one program's argv and the hook names it answers).
-- **c2:** The validator refuses an unknown key, a state named twice, a transition or role that names an undeclared state, and an unknown prerequisite, each with a message that names the key. A test covers each refusal.
-- **c3:** The Git-landing definition is a file embedded in the package. It states the six writable states, `in-queue` as ready, `landed`, `resolved-elsewhere` and `closed` as finished, the moves today's item utility allows, the prerequisites the planner checks today (the fence, the design document and its questions, a clean owner checkout), `completes: landing`, `retention: keep`, and no hook program. A test asserts the embedded file's values equal a table written literally in the test.
-- **c4:** The word `git-landing` appears in Go source in one constant of this package and nowhere else. A test walks the Go sources under `tools/tillr*` and asserts it.
-- **c5:** `tools/tillr/definition/README.md` states every key, its type, its default and what reads it, and says that the names are placeholders.
-- **c6:** No utility reads the package yet, and every existing test passes unchanged.
 
 ### Add the definition a store runs to the store itself
 
@@ -236,7 +229,7 @@ where the declaration lives; the direction document records it for him to confir
 **Agent details:** the reader every utility uses lives in the definition package; no utility parses
 the stored content itself.
 
-<!-- tillr: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-definition-file,item-def-tables-at-init" prose="2" -->
+<!-- tillr: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-tables-at-init" prose="2" -->
 
 - **c1:** `tillr store init --definition <file>` validates the file with the definition package and records its name, version, content and SHA-256 in the store, with an event. An invalid file is refused with exit 2, and no store is created.
 - **c2:** `tillr store definition --store <path>` prints the recorded definition as a record. A store with none recorded answers the embedded Git-landing definition, marked as the default. A test reads a store created before this change.
