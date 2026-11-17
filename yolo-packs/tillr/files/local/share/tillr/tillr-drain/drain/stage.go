@@ -240,6 +240,7 @@ func OutOfFence(durableDir string) string {
 type StageSpec struct {
 	Continue       bool
 	Node           *WorkflowStage
+	InputPaths     map[string]string
 	PreviousReport string
 	BlockConflict  *item.Conflict
 	LaneID         string
@@ -426,7 +427,19 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if spec.Node.Access == "read_only" {
 			brief += "Read only: do not change files in the target or commit. Write your findings in the report and finish with RESULT: done. The item criteria describe the whole workflow, not this node.\n"
 		}
-		if spec.PreviousReport != "" {
+		dir := nodeOutputsDir(s.Root, spec.RunID)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+		brief += "Write declared outputs only in your output directory: " + dir + ". These files are outside the target and are not part of the candidate.\n"
+		for _, name := range sortedNames(spec.Node.Outputs) {
+			brief += "Output " + name + " (" + spec.Node.Outputs[name] + "): " + filepath.Join(dir, name) + "\n"
+		}
+		for _, name := range sortedNames(spec.InputPaths) {
+			brief += "Input " + name + ": " + spec.InputPaths[name] + "\n"
+		}
+		// Preserve report-only workflows; explicit inputs receive only their wired files.
+		if len(spec.Node.Inputs) == 0 && spec.PreviousReport != "" {
 			brief += "Read the previous node report: " + spec.PreviousReport + "\n"
 		}
 	}
