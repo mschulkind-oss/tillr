@@ -53,6 +53,7 @@ var generalHolds = map[string]string{
 	ReasonBackendWindow: "", ReasonBlocked: "", ReasonNotReady: "",
 	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "",
 	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "",
+	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",
 	ReasonRetryJudged: "", ReasonRetryUnjudged: "", ReasonRetryStale: "",
 	ReasonQuestionOpen:       definition.PrerequisiteDesignQuestions,
 	ReasonQuestionsUnknown:   definition.PrerequisiteDesignQuestions,

@@ -44,7 +44,7 @@ func (s *commentSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return run.Record{}, "", err
 	}
 	s.briefs = append(s.briefs, string(raw))
-	if !strings.Contains(string(raw), "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.") {
+	if item.IsCommentItem(req.ItemID) && !strings.Contains(string(raw), "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.") {
 		s.t.Error("brief still requires a commit for an answer-only run")
 	}
 	if !strings.HasPrefix(req.LaneID, "desk-") {
@@ -82,7 +82,11 @@ func (s *commentSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	}
 	replyPath := filepath.Join(durable, commentRepliesFile)
 	replies := ""
-	for _, c := range batch.Comments {
+	var comments []item.ReviewComment
+	if batch != nil {
+		comments = batch.Comments
+	}
+	for _, c := range comments {
 		r := commentReply{ID: c.ID, Round: len(c.Reactions), Summary: "The Shape section explains this choice."}
 		if s.mode == "foreign" {
 			r.ID = "not-in-batch"

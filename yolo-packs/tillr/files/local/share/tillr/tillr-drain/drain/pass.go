@@ -748,14 +748,24 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	var leases []LaneLease
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		leases, err = activeLeases(r, at, l.cfg.Lanes)
+		observed := append([]string(nil), l.cfg.Lanes...)
+		held, err := readLanes(r, at)
+		if err != nil {
+			return err
+		}
+		for lane, busy := range held {
+			if busy && documentDesk(lane) {
+				observed = append(observed, lane)
+			}
+		}
+		leases, err = activeLeases(r, at, observed)
 		if err != nil {
 			return err
 		}
 		// A lane a lane-owned staging refusal took out of rotation is offered to no item
 		// until a re-check puts it back (lane_rotation.go).
 		available := l.rotationLanes()
-		tick := Pass{WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
+		tick := Pass{Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -966,6 +976,27 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			}
 			if len(leases) != 0 {
 				return nil
+			}
+			// Capacity is a dispatch invariant, not just a snapshot prediction.
+			// The writer transaction excludes a competing claim until this one
+			// records its lease and pending work.
+			if d.DeskDocument != "" && l.cfg.Comments != nil {
+				held, err := readLanes(tx.Reader(), at)
+				if err != nil {
+					return err
+				}
+				for _, owner := range works {
+					if !owner.Done && !owner.LaneReleased {
+						held[owner.Decision.LaneID] = true
+					}
+				}
+				// A continuing workflow already owns this desk. Reusing that
+				// reservation does not spend another slot; competing owners and
+				// live leases on this desk were rejected above.
+				delete(held, d.LaneID)
+				if countDocumentDesks(held, nil) >= l.cfg.Comments.MaxRunning {
+					return nil
+				}
 			}
 			heldForks, err := liveForks(tx.Reader(), at)
 			if err != nil {

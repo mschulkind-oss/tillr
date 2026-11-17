@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -51,7 +52,11 @@ func whyFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	tick := drain.Pass{Now: *now}
+	repositorySettings, err := settings.Read(*root)
+	if err != nil {
+		return fail(drain.Usagef("%v", err))
+	}
+	tick := drain.Pass{Now: *now, Comments: repositorySettings.Comments}
 	if tick.Now == "" {
 		tick.Now = time.Now().UTC().Format(time.RFC3339)
 	}
