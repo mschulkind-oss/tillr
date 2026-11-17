@@ -26,15 +26,22 @@ never read as a second declaration of an item.
 
 ## Reading order
 
-1. **The status index** (`docs/tillr/design-status.md`): one row per design, saying what it
-   covers, whether it is built, partly built, queued, proposed or historical, and what tillr
-   builds next.
-2. **What tillr will change for AutoQA** (`docs/design/tillr-separable-parts.md`): which of a
-   consumer's requests tillr will take, and the contract between tillr and a consumer.
-3. The design rows that bear on your work, in the order the index lists them.
+The paths below are under `~/.local/share/tillr/`.
 
-The owner has stated a direction for tillr's core and its landing that is not delivered yet.
-When its document lands it becomes the second item above, and the index says so.
+1. `docs/tillr/design-status.md`, its first section, "Read this first": what tillr is today, the
+   owner's direction for it, and how to read a status.
+2. `docs/design/tillr-core-and-git-landing.md`, Sections 1, 4, 5 and 6: the owner's stated
+   direction for tillr. tillr's code today is machinery for landing changes in a Git repository.
+   The direction is to separate it into general machinery of queues and graphs ("the core") and
+   one "definition" per use on top, the first being "the landing definition" for Git. Those are
+   the document's placeholder words; the owner has not chosen names. It is a draft for both
+   projects to react to, and nothing in it is built.
+3. Optional background, how work enters the Git-landing use: `docs/design/tillr-intake-paths.md`.
+4. `docs/design/tillr-separable-parts.md`: first "For the AutoQA project's agent", then
+   Section 2 (the contract), then Section 1.3 (what tillr will not change).
+5. Reply as the next section says.
+
+Read any other row of the status index when your work touches it.
 
 ## How to read a status
 
@@ -56,14 +63,15 @@ to the stable surface is announced.
 Do not edit the delivered copies. They are replaced whole on the next snapshot, and nothing
 reads them back.
 
-1. Write the request in **your own repository**, as a tracked document: one numbered request
-   per entry, each with the tillr behavior you checked, the snapshot commit you read it at
-   (from `snapshot.json`), and the date.
-2. Tell the owner it exists. The owner relays it to tillr. Where the next round of requests
-   should live is an open question,
-   [`OQ-SP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md#OQ-SP1)
-   in `tillr-separable-parts.md`. Until the owner
-   rules on it, your own repository is the place.
-3. tillr's answers come back in `tillr-separable-parts.md`. Section 1 gives each request's
-   fate, Section 2 gives the contract, and its Open Questions list what waits on the owner.
-   You see them in the next snapshot this pack delivers.
+1. Write the reply in `docs/design/tillr-autoqa-requests.md`, a tracked file in the owner's
+   repository beside AutoQA's design, or give it to the owner to relay. If your
+   workspace cannot write to that repository, write the reply as a tracked document in your own
+   repository and tell the owner where it is.
+2. Make it one numbered request per entry, each with the tillr behavior you checked, the
+   snapshot commit you read it at (from `docs/snapshot.json`), and the date. For the direction
+   document, react to its Sections 4 and 5 with one concrete case from your own project for each
+   extension point you need.
+3. tillr's answers come back in `tillr-separable-parts.md`. Section 1 gives each request's fate,
+   Section 2 gives the contract, and its Open Questions list what waits on the owner. Section 2.4
+   says how requests and answers travel. You see the answers in the next snapshot this pack
+   delivers.

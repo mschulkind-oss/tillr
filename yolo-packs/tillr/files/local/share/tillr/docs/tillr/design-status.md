@@ -9,7 +9,7 @@ summary: "The one page to read first about tillr: every design and reference doc
 
 # tillr designs: what is built, what is queued, and what is only proposed
 
-> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. Every status below was checked against the tree at `424cc9db0` and the
 queue on this checkout's store that evening, not copied from the documents' own status lines;
@@ -25,7 +25,11 @@ item is ready, runs an agent for it in a **lane** (a leased slot with its own gi
 checks the result with the **gate**, and puts one commit per item on the trunk with the
 **lander**. Each item has a **fence**, the paths it may change, and **criteria**, the testable
 conditions its verdict is judged against. An `OQ-` id names an open question only the owner rules
-on.
+on. That is what the code is today: machinery for landing changes in a Git repository. The owner's
+stated direction is to separate it into general machinery of queues and graphs, which
+[the direction document](../design/tillr-core-and-git-landing.md) calls **the core**, and a
+**definition** per use on top of it, the first being **the landing definition** for Git; those are
+that document's placeholder words, and the owner has not chosen names.
 
 **If you are reading this in another workspace,** you are reading the copy the tillr pack
 delivered to `~/.local/share/tillr/docs/tillr/design-status.md`. It is a snapshot of one commit,
@@ -46,12 +50,24 @@ was not delivered points at the repository on GitHub.
 - **Superseded / historical:** kept as a record; listed in
   [the second table](#superseded-and-historical-records) and not delivered with the pack.
 
-**Reading order for an agent from another project.** This page first; then the owner's stated
-design direction for tillr, which will be the first row of
-[the status table](#status-of-every-design) (on 2026-11-16 it was still being written, so the row
-is not there yet); then
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md), tillr's proposal to the
-AutoQA pipeline and the contract between the two, which is the first row until then.
+**Reading order for an agent from another project,** such as AutoQA's:
+
+1. This page, "Read this first".
+2. [The core and the Git-landing definition](../design/tillr-core-and-git-landing.md), the
+   owner's stated direction for tillr and the first row of
+   [the status table](#status-of-every-design): its
+   [Section 1](../design/tillr-core-and-git-landing.md#1-the-direction-in-the-owners-words),
+   [Section 4](../design/tillr-core-and-git-landing.md#4-what-one-file-could-mean),
+   [Section 5](../design/tillr-core-and-git-landing.md#5-the-extension-points) and
+   [Section 6](../design/tillr-core-and-git-landing.md#6-what-this-changes-in-what-was-said-before).
+3. Optional background, how work enters the Git-landing use:
+   [Intake paths](../design/tillr-intake-paths.md).
+4. [What tillr will change for AutoQA](../design/tillr-separable-parts.md): first
+   ["For the AutoQA project's agent"](../design/tillr-separable-parts.md#for-the-autoqa-projects-agent), then
+   [Section 2, the contract](../design/tillr-separable-parts.md#2-the-contract-between-tillr-and-autoqa-for-now), then
+   [Section 1.3](../design/tillr-separable-parts.md#13-what-tillr-will-not-change).
+5. Reply in `docs/design/tillr-autoqa-requests.md`, a tracked file in the owner's repository
+   repository beside [AutoQA's design](../design/tillr-autoqa.md), or through the owner.
 
 **What is stable to build on.** tillr's seam for another program is processes and records: each
 face (one subcommand of one program) reads and writes versioned JSON records, and its exit code is
@@ -61,8 +77,9 @@ may rely on, and how it learns of a breaking change, is
 whose first part is
 [The stable surface](../design/tillr-separable-parts.md#21-the-stable-surface).
 
-**How to ask for something.** Write the request in a design document in your own repository,
-saying what you need and the case that needs it, and ask the owner to relay it. tillr answers in
+**How to ask for something.** Write the request in `docs/design/tillr-autoqa-requests.md` (step 5
+above), or in a design document in your own repository and ask the owner to relay it, saying what
+you need and the case that needs it. tillr answers in
 [tillr-separable-parts.md](../design/tillr-separable-parts.md), which the pack delivers (its
 [section 2.4](../design/tillr-separable-parts.md#24-how-requests-and-answers-travel) says how
 requests and answers travel), and files what it accepts as items that appear in this page's next
@@ -91,12 +108,15 @@ with the pack as a skill, says how the eight programs compose across the loop's 
 
 ## Status of every design
 
-Ordered for a reader from another project: the proposal addressed to that reader first, then the
+Ordered for a reader from another project: the owner's direction first, then the intake idea
+under it, then the proposal addressed to that reader, then the
 roadmap, then from the foundation outward. "Next" lists queued item ids in the order their dependencies
 allow, first the ones that wait on nothing.
 
 | Document | Covers | Status (2026-11-16) | What tillr builds next | Pack |
 | :--- | :--- | :--- | :--- | :--- |
+| [The core and the Git-landing definition](../design/tillr-core-and-git-landing.md) | The owner's direction: tillr as general machinery of queues and graphs whose nodes are agents and commands, with landing changes in a Git repository as one small, separate definition on top; where the Git-landing assumption is wired in today, three shapes for that one definition, and the extension points a second use would fill. | The owner's stated direction, 2026-11-17; a draft for both projects to react to; nothing built. Open: [OQ-CG1](../design/tillr-core-and-git-landing.md#OQ-CG1), [OQ-CG2](../design/tillr-core-and-git-landing.md#OQ-CG2), [OQ-CG3](../design/tillr-core-and-git-landing.md#OQ-CG3), [OQ-CG4](../design/tillr-core-and-git-landing.md#OQ-CG4), [OQ-CG5](../design/tillr-core-and-git-landing.md#OQ-CG5), none of which needs an answer before that conversation | Nothing is filed: AutoQA's agent reacts to its sections 4 to 6, then the owner and both sides decide what to build | shipped |
+| [Intake paths](../design/tillr-intake-paths.md) | The owner's idea that work enters tillr by different doors (an agent-filed item without the prose guide's mark, a rough idea the owner dumps, an item with no document block, a worker's conflict, a complete item), each through its own small graph, all ending in one item shape that everything downstream depends on. | Draft, 2026-11-17; records the owner's intake idea; nothing built; the doors' queued items are named in it | Nothing as its own item; the doors' items it names are `item-sync-hold-unshared-items`, `item-prose-rewrite-before-build`, `item-oa-idea-save` and `item-oa-idea-design-turn` | shipped |
 | [What tillr will change for AutoQA](../design/tillr-separable-parts.md) | tillr's proposal to the AutoQA pipeline: what changes now, what waits on the queued design, what tillr will not take, and the contract between the two. | Proposed, awaiting the owner: [OQ-SP1](../design/tillr-separable-parts.md#OQ-SP1), [OQ-SP2](../design/tillr-separable-parts.md#OQ-SP2), [OQ-SP3](../design/tillr-separable-parts.md#OQ-SP3), [OQ-SP4](../design/tillr-separable-parts.md#OQ-SP4), [OQ-SP5](../design/tillr-separable-parts.md#OQ-SP5), [OQ-SP6](../design/tillr-separable-parts.md#OQ-SP6), [OQ-SP7](../design/tillr-separable-parts.md#OQ-SP7), [OQ-SP8](../design/tillr-separable-parts.md#OQ-SP8) | The proposed small changes of its section 3, filed as items only once the owner rules | shipped |
 | [Roadmap — tillr](roadmap.md) | The order of all remaining tillr work and the reason for it. | Current; reconciled 2026-11-15 | Its own blocks: eight drain items are ready (`item-drain-recover-commands`, `item-drain-express-lanes`, `item-drain-record-killed-run-spend`, `item-drain-hold-repeatedly-orphaned`, `item-drain-design-seat-quota-failover`, `item-drain-answered-conflict-beats-stale-retry`, `item-conflict-transition-not-duplicate`, `item-drain-check-step-program-flags`), then gate, policy, sync and view items | shipped |
 | [Board utilities](../design/board-utilities.md) | The founding contract: seven programs over one store, each runnable alone, joined by processes and records. | Built: the seven `tillr-<noun>` programs and the shared `tools/tillr` library | Nothing; the contract is in force | shipped |

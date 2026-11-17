@@ -21,7 +21,7 @@ vantage:
 
 # Shared Documents Carry the Work; Private Queue State Stays Private
 
-> **Delivered copy.** This is `docs/design/queue-persistence-ruling.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/queue-persistence-ruling.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 > **Carried out.** `tillr item sync` reads item blocks from documents (commit `3c215883d`), and the lander writes no trailer. This document stays as the record of the ruling.
 

@@ -1,6 +1,6 @@
 # tillr-loop
 
-> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 The three programs `tillr drain loop` requires, so a person can start the loop with one
 command and nothing on its command line is a judgment.

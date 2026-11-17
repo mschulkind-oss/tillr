@@ -9,9 +9,10 @@ tags:
   - store
   - boundaries
   - autoqa
-summary: "tillr's proposal to AutoQA, the bug-finding pipeline the Product QA design conversation asked for. Five small changes now, four adjustments to items already queued, eight requests tillr will not take, and the command-and-record contract between the two projects. The assessment of the thirteen requests is kept below as the evidence."
-next: "The owner rules OQ-SP1 to OQ-SP8. The proposed items are filed only after the question that governs each; then AutoQA's agent reads this document and the second round of conversation starts from both sides."
+summary: "What tillr can change for AutoQA now, without prejudging the owner's direction that tillr is a core plus one definition per use: five small changes, four adjustments to items already queued, eight requests that are provisionally no, and the command-and-record contract between the two projects. The assessment of the thirteen requests is kept below as the evidence."
+next: "AutoQA's agent reads the design index, the core-and-landing direction and this proposal, and replies; the second round of conversation follows. Only OQ-SP3 and OQ-SP6 are worth answering before it."
 depends-on:
+  - tillr-core-and-git-landing.md
   - tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
   - tillr-idea-pipeline.md
@@ -20,11 +21,13 @@ depends-on:
 
 # What tillr will change for AutoQA, and what it will not
 
-> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-16. A proposal, and nothing in it has been built or filed. It answers the owner's
-request of 2026-11-16: a proposal for what tillr changes because of AutoQA's requests, written so
-AutoQA's agent can read it alongside tillr's designs, after which both sides talk again. The facts
+**Status:** 2026-11-16. A proposal, and nothing in it has been built or filed. It sits under the
+owner's direction in [tillr-core-and-git-landing.md](tillr-core-and-git-landing.md): tillr is a
+general core plus one definition per use, and Git landing is the first definition. This document
+lists only what can change now without prejudging that design, and its "no"s are provisional
+until the second round of conversation with AutoQA. The facts
 under it were re-run on 2026-11-16 with the binaries `just tillr-build` produces, on throwaway
 stores, and the planner's holds were read from the live store through `tillr drain why`. Commands
 and results are in [Evidence](#evidence). Each claim is marked **[ran]**, **[read]** (file and
@@ -34,9 +37,9 @@ section) or **[inferred]**.
 > will fix the one defect that stops them on a fresh store, close the hole that lets a raw state
 > write move a finished item, and write down which commands and records another program may rely
 > on. Command nodes, node outputs and finishing with no commit are already queued, and four of
-> their criteria should be adjusted so they also serve AutoQA. New item states, reopening landed
-> items, open graph rewriting, clocks in the plan and a Go library stay out: AutoQA builds those on
-> its own side.
+> their criteria should be adjusted so they also serve AutoQA. Eight requests are no today and
+> inside the landing definition; which of them open up as a second definition's choice is the
+> direction document's to settle.
 
 **Why it matters.** The owner's priority is to prove the drain by landing the existing queue
 unattended, then to run 10 lanes. Measured against that:
@@ -44,26 +47,50 @@ unattended, then to run 10 lanes. Measured against that:
 - [What changes now](#11-now-or-queued-at-once) is hours of work.
 - [What is on the existing design path](#12-on-the-existing-design-path) is already on the drain's
   own path.
-- [What tillr will not change](#13-what-tillr-will-not-change) is the part that would cost the
-  proof weeks.
+- [What tillr will not change now](#13-what-tillr-will-not-change) is the part that would cost
+  the proof weeks, and is provisional.
 
 **Start at [Section 1](#1-what-tillr-will-change).** [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now)
 is the contract AutoQA's agent builds against. [Section 4](#4-where-the-documents-disagree) lists
 where this document and the earlier AutoQA design say different things.
 
-**Needs your ruling:** [OQ-SP1](#OQ-SP1), [OQ-SP2](#OQ-SP2), [OQ-SP3](#OQ-SP3), [OQ-SP4](#OQ-SP4),
-[OQ-SP5](#OQ-SP5), [OQ-SP6](#OQ-SP6), [OQ-SP7](#OQ-SP7), [OQ-SP8](#OQ-SP8).
+**Needs your ruling:** worth answering before the second round, [OQ-SP3](#OQ-SP3) and
+[OQ-SP6](#OQ-SP6); the rest may wait for it: [OQ-SP1](#OQ-SP1), [OQ-SP2](#OQ-SP2),
+[OQ-SP4](#OQ-SP4), [OQ-SP5](#OQ-SP5), [OQ-SP7](#OQ-SP7), [OQ-SP8](#OQ-SP8).
 
-**Reads with:** [tillr-autoqa.md](tillr-autoqa.md) (AutoQA's first design, aimed at tillr
+**Reads with:** [tillr-core-and-git-landing.md](tillr-core-and-git-landing.md) (the direction
+this proposal sits under), [tillr-autoqa.md](tillr-autoqa.md) (AutoQA's first design, aimed at tillr
 itself), [tillr-item-graphs.md](tillr-item-graphs.md) (graphs inside one item, and what a node may
 never be), [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) (item states and the
 terminal-state rulings), [tillr-idea-pipeline.md](tillr-idea-pipeline.md) (item kinds and child
 items), [board-utilities.md](board-utilities.md) (the process-and-record seam).
 
-**Where AutoQA's agent reads tillr's designs.** A status index of every tillr design, implemented
-and planned, is being written under `docs/tillr/` and shipped to other agents through the
-`yolo-packs/tillr` pack. This document is one entry in it. Until that index lands, this document
-and the five it reads with are the set.
+## For the AutoQA project's agent
+
+**Read first**, in this order:
+
+1. [The tillr design index](../tillr/design-status.md), which the tillr pack ships: what every
+   tillr design covers and whether it is built, queued or only proposed.
+2. [The core and the landing definition](tillr-core-and-git-landing.md): the owner's direction.
+   tillr is general machinery plus one definition per use; landing changes in Git is the first.
+3. This proposal: what can change now, and the contract for now.
+
+**React to:**
+
+- [the candidate shapes of the one file](tillr-core-and-git-landing.md#4-what-one-file-could-mean);
+- [the extension points](tillr-core-and-git-landing.md#5-the-extension-points), with one concrete
+  case from your prototype for each one you need;
+- [the stable surface](#21-the-stable-surface);
+- [the eight provisional "no"s](#13-what-tillr-will-not-change), and which of them are real
+  tensions for you.
+
+**Write the reply** in a tracked file beside AutoQA's design, `docs/design/tillr-autoqa-requests.md`,
+or give it to the owner to relay. [Section 2.4](#24-how-requests-and-answers-travel) says how it is
+answered.
+
+**Two placeholder words** are used here as in the direction document: a **definition** is the layer
+that turns tillr's core into one use, and the **landing definition** is the one for Git landing.
+The owner has not named either yet.
 
 ---
 
@@ -249,16 +276,14 @@ spend ceiling. Lane count, backend policy, and pluggable gate, land and verdict 
 - **Not promised:** deadlines, which are [C5](#13-what-tillr-will-not-change).
 
 **B8. Items fed by `item apply` keep working once unshared items are held.** Carried by the queued
-[unshared-item hold](../tillr/roadmap.md#hold-an-item-that-has-no-document-block),
-which is ready **[ran]**.
+[unshared-item hold](../tillr/roadmap.md#hold-an-item-that-has-no-document-block).
 
-- **Adjustment, its c1:** the hold applies only to a store whose items come through sync. As
-  written, it holds every item no tracked document declares, which is every item AutoQA files into
-  its own store with `tillr item apply`, and AutoQA's design runs the drain on that store
-  ([tillr-autoqa.md §2.2](tillr-autoqa.md#22-two-stores-and-sandboxed-sut-snapshots)). How the
-  hold tells the two kinds of store apart is [OQ-SP8](#OQ-SP8).
+- **Adjustment:** made on 2026-11-16 in commit `eed553151`: the hold's c1 now applies only in a
+  store that documents feed, and its c5 says a store no sync has written to is never held for
+  lacking a block **[read]**. That covers AutoQA's own store. Another agent is now rewriting the
+  item so an undeclared item gets a next step (triage or design) instead of a hold, as the owner
+  asked ([the direction, Section 2](tillr-core-and-git-landing.md#2-the-workflow-the-landing-definition-wraps-as-it-runs-today)).
 - **Today:** apply works on any store, and only the sync report's `unshared_open` count notices.
-- **This one is urgent:** the item could land on any pass.
 
 **B9. An owner acknowledgment point.** No design carries it. `tillr view events --since` takes a
 cursor **[ran]**, and mail has an acknowledgment **[read]**; a stored "the owner has seen up to here"
@@ -267,19 +292,23 @@ drain proof. AutoQA keeps its own cursor in its own ledger for now.
 
 ### 1.3 What tillr will not change
 
-Each row names the ruling the request runs into and what AutoQA builds instead. The arguments from
-both sides are in [Section 6.3](#63-the-requests-that-cut-against-the-design).
+**Provisional.** Each row says what holds today, and inside the landing definition. By the owner's
+decision rule, a choice that suits Git landing and chafes against AutoQA belongs to each
+definition and not to the core, so several of these may open up for AutoQA's own definition;
+[the direction, Section 6](tillr-core-and-git-landing.md#6-what-this-changes-in-what-was-said-before)
+says which. The arguments from both sides are in
+[Section 6.3](#63-the-requests-that-cut-against-the-design).
 
-| | Request | Ruling it runs into | AutoQA builds instead |
+| | Request | Holds today, and inside the landing definition | Meanwhile, AutoQA |
 | :--- | :--- | :--- | :--- |
-| C1 | New item states per kind | The closed seven-state model ([D-IP1](tillr-idea-pipeline.md#61-settled-decisions)) | Outcomes in its own ledger, and close reasons and pointers in tillr. A recorded outcome field is [OQ-SP2](#OQ-SP2) |
-| C2 | Reopening a landed or resolved-elsewhere item | Both are terminal ([lifecycle §3.2](tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | A new item that names the old one. Reopening a `closed` item works today **[ran]** |
-| C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | One item, one outcome (`D-IG2`); bounded replacement only (`D-IG3`); no model-written wiring (`D-IG5`, `D-IG9`) ([§2.2](tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) | Its dispatcher's own graph, or one tillr item per finding |
-| C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be)) | Its send step and its uncertain state. Outside a graph, `blocked` with a waiter and a reason works today **[ran]** |
-| C5 | Deadlines and clocks in the plan | No timers ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be), [agent-runtime.md §6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#6-the-task-graph)) | Its dispatcher's ordering and deadlines |
-| C6 | A Go library as the connection | Utilities meet through processes and records ([board-utilities.md §5.9](board-utilities.md#59-the-composed-pipeline)) | Calls to the commands in Section 2. [OQ-SP4](#OQ-SP4) |
-| C7 | Completion by "an artifact recorded and judged" in general | Not refused, but it reaches the planner's assumptions the drain proof rests on | Nothing before the drain proof. A design round after it is [OQ-SP5](#OQ-SP5) |
-| C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root ([tillr-keep](../../tillr-roll/tillr-keep), `find_loop`) | A loop with its own root directory, which gets its own keeper lock and lanes **[inferred]**, not run |
+| C1 | New item states per kind | The closed seven-state model ([D-IP1](tillr-idea-pipeline.md#61-settled-decisions)). The owner places lifecycle in the definition, so another definition may name its own | keeps outcomes in its ledger, and uses close reasons and pointers. [OQ-SP2](#OQ-SP2) |
+| C2 | Reopening a landed or resolved-elsewhere item | Both are terminal ([lifecycle §3.2](tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)); a lifecycle rule, so the definition's | files a new item that names the old one. Reopening a `closed` item works today **[ran]** |
+| C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | Bounded replacement only, no model-written wiring (`D-IG2`, `D-IG3`, `D-IG5`, `D-IG9`, [§2.2](tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) | keeps its graph in its dispatcher, or one tillr item per finding |
+| C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be)) | keeps its send step and its uncertain state. Outside a graph, `blocked` with a waiter works today **[ran]** |
+| C5 | Deadlines and clocks in the plan | No timers ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be), [agent-runtime.md §6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#6-the-task-graph)) | orders and times work in its dispatcher |
+| C6 | A Go library as the connection | Processes and records ([board-utilities.md §5.9](board-utilities.md#59-the-composed-pipeline)) | calls the commands in Section 2. [OQ-SP4](#OQ-SP4) |
+| C7 | Completion by "an artifact recorded and judged" in general | Not refused; it reaches the planner's assumptions the drain proof rests on | waits for `no_commit`. [OQ-SP5](#OQ-SP5) |
+| C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root ([tillr-keep](../../tillr-roll/tillr-keep), `find_loop`) | runs a loop with its own root, which gets its own lock and lanes **[inferred]**, not run |
 
 ---
 
@@ -312,6 +341,12 @@ AutoQA may rely on these. A change to any of them is announced as
 - **Record kinds a consumer writes:** `item.record` (to `apply`) and `run.request` (to `exec`).
   **Kinds it reads:** `run.record`, the item and verdict records `show` prints, and the event kinds
   in the log.
+- **A naming point to settle before this surface is published to another project.** The owner asked
+  why the face is `tillr item apply` and not `item add`. It applies an `item.record` read from
+  `--input` as either an add or an update, and writes the event `item.add` or `item.update`
+  accordingly (`Apply` in [apply.go](../../tillr-item/item/apply.go), `AddKind` and
+  `UpdateKind` in [schema.go](../../tillr-item/item/schema.go)) **[read]**. Nothing is renamed
+  here.
 
 ### 2.2 What is internal, and may change daily
 
@@ -342,8 +377,8 @@ Today there is no mechanism **[ran]**. Proposed, as [A5](#11-now-or-queued-at-on
 - **tillr's answers** are this document: [Section 1](#1-what-tillr-will-change) for each request's
   fate, [Section 2](#2-the-contract-between-tillr-and-autoqa-for-now) for the contract, and the
   [Open Questions](#open-questions) for what waits on the owner.
-- **tillr's designs** reach AutoQA's agent through the status index described under
-  [Where AutoQA's agent reads tillr's designs](#what-tillr-will-change-for-autoqa-and-what-it-will-not).
+- **tillr's designs** reach AutoQA's agent through [the design index](../tillr/design-status.md),
+  which the tillr pack ships.
 - **AutoQA's own design** stays in [tillr-autoqa.md](tillr-autoqa.md) and its owed build items.
 
 ---
@@ -726,8 +761,8 @@ Request 1 is a small defect.
   **[read]**.
 - **Two dispatchers on one store.** The planner would hold AutoQA's items **[ran]**. Keep the
   stores separate.
-- **A queued item landing against AutoQA before the ruling.** The unshared-item hold is ready
-  **[ran]**; if it lands as written, AutoQA's store is held whole ([OQ-SP8](#OQ-SP8)).
+- **A queued item landing against AutoQA before the ruling.** The unshared-item hold was the one
+  case; its criteria were narrowed on 2026-11-16 so AutoQA's own store is not held ([B8](#12-on-the-existing-design-path)).
 
 ---
 
@@ -798,7 +833,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
    - **C — AutoQA does not use tillr.** It writes its own store, and none of tillr's lease or event
      work transfers.
 
-   Waits on it: the four adjustments, and AutoQA's agent starting work.
+   Waits on it: the four adjustments, and AutoQA's agent starting work. **May wait for the second
+   round**, which is the process this question proposes.
 
    <!-- vantage: question id=OQ-SP1 leaning="A — the stable parts work without git or the drain today, the adjustments cost nothing the queue is not already paying, and a second round is where AutoQA's prototype can show what the proposal missed." -->
 
@@ -821,7 +857,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
      ledger.
    - **C — New states per kind.** Every view, the planner and the landing rules learn each one.
 
-   Waits on it: nothing now; B3's receipt is shaped either way.
+   Waits on it: nothing now; B3's receipt is shaped either way. **May wait for the second round**:
+   the owner places lifecycle in the definition, which reshapes this question.
 
    <!-- vantage: question id=OQ-SP2 leaning="B now and A later — A keeps the closed state set, but it is not worth a design round before the drain proof." -->
 
@@ -841,7 +878,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
      around the failing faces.
    - **C — P1 only now.** The defect is fixed; the documentation waits.
 
-   Waits on it: P1, P2, P3, P4 and P6.
+   Waits on it: P1, P2, P3, P4 and P6. **Worth answering before the second round**: P1 fixes a
+   defect AutoQA's agent hits on its first command.
 
    <!-- vantage: question id=OQ-SP3 leaning="A — four small items fix a defect fresh stores hit too, and the drain should prove it can take new work; P6 touches code the proof depends on." -->
 
@@ -861,7 +899,7 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
    - **B — Support a Go library.** tillr keeps exported APIs stable, and every refactor checks a
      second consumer.
 
-   Waits on it: P4, and Section 2 becoming the contract.
+   Waits on it: P4, and Section 2 becoming the contract. **May wait for the second round**.
 
    <!-- vantage: question id=OQ-SP4 leaning="A — records are already versioned and pinned by the conformance tests, and a stable Go API would slow a tool that changes daily." -->
 
@@ -882,7 +920,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
    - **B — No.** `no_commit` is the only other ending, and anything wider stays in AutoQA.
    - **C — Now.** The round runs beside the drain proof.
 
-   Waits on it: nothing queued; [C7](#13-what-tillr-will-not-change).
+   Waits on it: nothing queued; [C7](#13-what-tillr-will-not-change). **May wait for the second
+   round**; the direction document's shapes subsume it.
 
    <!-- vantage: question id=OQ-SP5 leaning="A — the idea is sound and AutoQA will bring real cases, but it touches the planner the drain proof rests on." -->
 
@@ -901,7 +940,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
    - **B — Split c3 out as P5, with nothing in `blocked_by`.** The block loses c3 in the same commit.
    - **C — Restrict the raw face further:** only an operator flag may write `landed` at all.
 
-   Waits on it: P5, and an edit to the terminal-state block's criteria.
+   Waits on it: P5, and an edit to the terminal-state block's criteria. **Worth answering before
+   the second round**: it is tillr's own integrity, whatever AutoQA says.
 
    <!-- vantage: question id=OQ-SP6 leaning="B — the move out is the one that re-queues finished work, it waits on nothing, and C adds an authorization rule no design has." -->
 
@@ -921,7 +961,8 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
      idea pipeline's own next round.
    - **B — No.** AutoQA's dispatcher files the child with `tillr item apply`.
 
-   Waits on it: AutoQA's two-graph funnel inside tillr; nothing queued.
+   Waits on it: AutoQA's two-graph funnel inside tillr; nothing queued. **May wait for the second
+   round**.
 
    <!-- vantage: question id=OQ-SP7 leaning="A — settling is the same one-writer moment a land pass is, and B gives AutoQA a second writer of tillr's lineage." -->
 
@@ -933,16 +974,18 @@ tillr-item sync --dry-run (live store)                        created 0, unchang
 
 8. 💬 **OQ-SP8: When unshared items are held, how do AutoQA's items reach a store?**
 
-   The queued hold is ready and, as written, holds every item filed with `tillr item apply` — all
-   of AutoQA's own store, and every bug it files into tillr's ([B8](#12-on-the-existing-design-path)).
+   The queued hold now spares a store no sync feeds, so AutoQA's own store is safe; what remains is
+   how a bug AutoQA files reaches tillr's own store ([B8](#12-on-the-existing-design-path)).
 
-   - **A — Two rules.** In AutoQA's own store, the hold does not apply, because that store is
-     never synced (the hold's c1 is adjusted to say so). Into tillr's own store, AutoQA writes a
-     tracked document block and sync imports it, so D-AQ2's `item apply` becomes a block.
+   - **A — A document block.** Into tillr's own store, AutoQA writes a tracked document block and
+     sync imports it, so D-AQ2's `item apply` becomes a block.
    - **B — A store-level setting** that turns the hold off, with `item apply` everywhere.
-   - **C — No change.** AutoQA does not run the drain on its own store.
+   - **C — `item apply` as today.** The bug enters as an undeclared item, and the rewritten hold
+     routes it to triage or design for its block.
 
-   Waits on it: the unshared-item hold's c1, and D-AQ2 in AutoQA's design.
+   Waits on it: D-AQ2 in AutoQA's design. **May wait for the second round**: it was urgent, and is
+   no longer, because the hold's criteria were narrowed on 2026-11-16 and another agent is
+   rewriting that item to give an undeclared item a next step.
 
    <!-- vantage: question id=OQ-SP8 leaning="A — tillr's own queue keeps one intake, and a store nobody syncs has no documents to be missing from." -->
 

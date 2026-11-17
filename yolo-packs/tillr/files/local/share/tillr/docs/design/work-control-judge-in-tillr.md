@@ -9,7 +9,7 @@ next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; t
 
 # The item judge in tillr: migrate the verdict, delete the turn-end judge and the shadow
 
-> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-12. Ruled; nothing built. Evidence is the current tree:
 the four tillr design documents, the approver design, both work-control

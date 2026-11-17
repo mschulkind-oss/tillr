@@ -15,7 +15,7 @@ next: "Cut the idea flow into build items once the observatory-actions design se
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
 
-> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-13. Unbuilt design, measured against `/workspace/.tillr/state.db` (schema 5, 49 items: 33 `in-queue`, 13 `blocked`, 2 `landed`, 1 `closed`), `tillr-*` CLI faces, and the served `/api/v1/*` observatory wire.
 
@@ -31,7 +31,7 @@ next: "Cut the idea flow into build items once the observatory-actions design se
 
 **Needs your ruling:** None.
 
-**Reads with:** [observatory-design.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md) (the accepted four-region board and Vantage link contract), [board-item-state-model.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](tillr-selfhosted-build.md) (source launchers and board truth fixes this sequence builds on), and [tillr-day2.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-day2.md) (loop failure classes).
+**Reads with:** [observatory-design.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md) (the accepted four-region board and Vantage link contract), [board-item-state-model.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](tillr-selfhosted-build.md) (source launchers and board truth fixes this sequence builds on), [tillr-day2.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-day2.md) (loop failure classes), and [tillr-intake-paths.md](tillr-intake-paths.md) (the other doors work enters by, and the one item shape every door must end in).
 
 ## 1. Item Kinds, States, and Edges
 

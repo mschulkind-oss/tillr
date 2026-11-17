@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -54,6 +54,16 @@ eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
 AutoQA's requests with that proposal, and which of its small changes are filed before the drain
 proof.
+
+[The core and the landing definition](../design/tillr-core-and-git-landing.md#open-questions)
+writes down the owner's direction of 2026-11-16 and carries five more,
+[`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). None needs an answer before the
+second round of conversation with AutoQA's agent, which is the owner's stated order.
+
+[Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
+idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
+a ramble) runs its own small graph and ends in one item shape, and lists what is not yet settled.
 
 [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) carries eight more,
 [`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
@@ -986,37 +996,91 @@ defects. None stops the drain from running, so they go through the queue like an
 Each is a place where the loop does something a person watching would not expect, and where
 nothing tells the person it happened.
 
-### Hold an item that has no document block
+<a id="hold-an-item-that-has-no-document-block"></a>
+
+### Route an item with no document block to triage
 
 An item can reach the queue without a block in any tracked document, because the item tool's
-apply face writes the store directly. The loop then treats it like any other item, and its worker
-is sent to read a section that does not exist. On 2026-11-16 that happened to
+apply face writes the store directly. The loop then treats it like any other item and sends a
+build worker to read a section that does not exist. On 2026-11-16 that happened to
 `item-agent-default-bmad-superpowers-skills`: it had been in the store alone since 2026-11-15, the
 loop dispatched it, and its worker reported blocked after 34 seconds. The item tool's sync face
 already counts these items as `unshared_open`, and on that day `tillr-item sync --dry-run` printed
-`unshared_open: 3`, but nothing acts on the count. The loop should hold such an item with a reason
-a person can read, and the count should appear where the operator already looks.
+`unshared_open: 3`, but nothing acts on the count.
 
-On 2026-11-17 the scope was narrowed pending the owner's ruling on [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in
-the separable-parts design. Another project, AutoQA, files its
-items with the apply face into a store of its own that has no documents and that nobody syncs, so
-there the apply face is the only intake and holding every undeclared item would hold everything.
-The hold below therefore applies only to a store that documents feed, which is tillr's own. If the
-owner rules otherwise, the first criterion changes again.
+This item first asked the loop to hold such an item until a person wrote its block. The owner
+answered on 2026-11-17 that a hold nobody acts on is the wrong outcome: "if it ends up like this,
+it's probably that's some half-baked request for me and it should be able to go to ... the next
+step, which is a design agent or a triage agent or something like that. Like there should always
+be a next step that's clear for these items and we should handle them somehow." So an item with
+no block is read as a request that nobody has shaped yet, and its next step is a triage run on the
+design seat. That seat already answers a worker's design conflict by amending the item's block and
+landing the amendment through the gate, and on 2026-11-17 it did exactly that for the same BMAD
+item. The triage run's product is the missing block, written with the item's own id so the next
+sync binds the stored item to it. When the request is too thin to shape without the owner, the
+run writes one question to the owner instead, so the item waits on a question a person can see
+and answer rather than on nobody.
 
-<!-- inert copy of a tillr directive: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+An item applied straight to the store is one of several ways work arrives, and the owner said on
+2026-11-17 how they fit together: "You can imagine a triage subgraph which has the same output
+shape as like a human half-baked triage has the same output shape as like an agent filed item,
+even though they go through different paths to get there. The downstream stuff doesn't care
+because it's ultimately aligned in the interface." An item an agent filed without reading the
+prose guide is another such door, handled by the queued
+[rewrite before build](#file-a-rewrite-for-an-item-that-fails-the-prose-check-ahead-of-the-item-itself),
+and a rough idea the owner dumps in conversation is a third. Another session is recording these
+intake doors in the design documents on 2026-11-17. This item builds only the door for an item
+with no block, and it defines that door by what it must hand on: the same ready-item shape every
+door ends in, which is what a build run needs today.
 
-- **c1:** In a store that documents feed, the planner does not dispatch an open item that no document block declares. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner holds the undeclared item with the reason `no-document-block`, which names the document the item's body reference points to. A test stores an item with no block and a ready item with one, plans both, and asserts the first is held with that reason and the second is dispatched.
-- **c2:** The hold lifts by itself in the pass after a sync imports a block for the item, with no command from the operator. A test adds the block, syncs, plans again, and asserts the item is dispatched.
-- **c3:** The waiting face shows the held item as waiting on a person, with the reason `no-document-block` and the command that fixes it (add the block, or close the item). The loop's start line and the status face print the `unshared_open` count, so it is no longer visible only in a sync report.
-- **c4:** An item that is closed or landed is never counted as unshared and never held for this reason. A test asserts both.
-- **c5:** A store that no sync has written to is not held for lacking a document block. A test stores open items that no document block declares, with no declared item anywhere in the store, plans, and asserts every one is dispatched when otherwise ready and none carries the reason `no-document-block`.
+- A block in a tracked document, with the item's own id. Its heading starts with a verb from the
+  prose guide's list and runs to at most twelve words, which the sync warns about otherwise.
+- A prose paragraph before the directive that says why. The sync warns when there is none, but it
+  checks only that a paragraph is there.
+- A fence of allowed paths. The sync refuses a block that has none or names an invalid path, and
+  the planner holds an item whose fence admits nothing.
+- Dependencies in `blocked_by` that name items. The sync refuses one that is not an item id, and
+  the planner holds the item until each one is finished.
+- Between one and eight criteria. The sync refuses a block with none or with an empty one, and it
+  warns about more than eight.
+- The prose guide's current mark, which the sync reports as `prose-unmarked` when it is missing.
+- No open question on the item's document, which the planner otherwise holds as `question-open`.
+
+Nothing checks yet that a criterion can be checked, that the paragraph really says why, or that
+the fence covers the files the work needs. Today a build run finds those out by stopping with a
+conflict.
+
+The owner said on the same day where a rule like this belongs: "I guess retention policy, item
+lifecycle, item prerequisites, that sort of thing should be part of this custom, this layer that
+describes your workflow use case, not the actual core." An item needs a document block before it
+is built because this workflow lands changes in a Git repository from documents, so the rule is a
+prerequisite of that workflow and not of the queue itself, as
+[the core and the landing definition](../design/tillr-core-and-git-landing.md#2-the-workflow-the-landing-definition-wraps-as-it-runs-today)
+records. That is why it applies only to a store
+that documents feed, the narrowing made on 2026-11-17: AutoQA files its items with the apply face
+into a store of its own that nobody syncs, and that store is left alone. Question
+[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in the separable-parts design stays open on
+one point only: whether AutoQA writes a block for each bug it files into tillr's own store, or
+files it with the apply face and lets triage write the block.
+
+<!-- inert copy of a tillr directive: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,config/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** In a store that documents feed, the planner never dispatches an open item that no document block declares to the build seat, whatever seat or workflow the item names. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner dispatches one triage run for the undeclared item on the design seat, with the reason `triage-no-block`, fenced to the document the item's body reference names. A test stores an undeclared item that names the build seat and a ready declared item, plans both, and asserts the first goes to the design seat with that reason and the second to its own seat.
+- **c2:** The triage run's brief carries the item's stored title, body reference and criteria as the request, and the prose guide, and asks for exactly one of three results. The first is a block for the item in that document in the ready-item shape listed above, with the same id, landed through the gate like any design change; one triage run may both tidy the request's wording and shape it into designable work. The second, for a request too thin to shape, is a block that declares the item together with a numbered question to the owner in the same document, saying exactly what is missing, so the item waits on the existing `question-open` hold. The third is a report that the item duplicates a named item or is already done. A test stages a triage run and asserts that its brief names the three results and that its fence admits only that document.
+- **c3:** A triage block passes the same checks as a block from any other door: the loop refuses a triage candidate, before the gate and naming the rule, when the sync would report any finding or warning on its block, including `prose-unmarked` and every `prose-shape` warning. After a triage block lands, the next sync binds the stored item to it by id, and the planner sends the item to its own seat with no command from the operator. A test refuses a fixture triage block that lacks the guide mark, then lands a well-formed one, syncs, asserts no finding or warning on it, plans, and asserts the item is dispatched to its seat.
+- **c4:** A triage run that reports a duplicate or finished item, or that ends blocked, is recorded as a conflict (`item.conflict`) waiting on the owner that carries the run's report, so the item is held `conflict-owner`. The owner accepts a duplicate or finished verdict by closing the item, or rejects it by answering the conflict. An undeclared item whose body reference names no document goes to the owner the same way, with no run. A test asserts both.
+- **c5:** Each undeclared item gets at most one triage run for each version of its request. When the item is still undeclared after its triage run settles and its stored title, body reference and criteria have not changed, the planner raises the owner conflict of c4 instead of a second run; a change to any of the three allows one new triage run. A test settles a triage run that landed nothing, plans twice, and asserts that no second run is staged and the item is held `conflict-owner`, then changes the item's title and asserts one new triage run.
+- **c6:** The waiting face shows each undeclared item with its next step and who takes it: triage on the design seat while that run is due or running, and the owner, with the question or the conflict text, once it reaches them. The loop's start line and the status face print the `unshared_open` count. A test asserts both lines of the waiting face and the count.
+- **c7:** An item that is closed or landed is never counted as unshared and never triaged. A store with no item declared by any document block is left alone: a test stores open undeclared items with no declared item anywhere in the store, plans, and asserts every one goes to its own seat when otherwise ready and none is sent to triage.
+- **c8:** The rule is one named prerequisite of the document-fed landing workflow, kept apart from the planner's general queue rules, and the drain's documentation lists it as such: in a store that documents feed, an item needs a document block before it is built.
 
 **Agent details:**
 
-- **Ref:** `docs/design/queue-persistence-ruling.md` names the counter and its intent; the loop's start-up warning is the existing surface.
-- **Where:** `tools/tillr-item/item/sync.go` (the `unshared_open` count), the planner in `tools/tillr-drain/drain/plan.go`, the waiting face in `tools/tillr-view/waiting.go`.
-- **Evidence:** 2026-11-16, `tillr-item sync --dry-run --store .tillr/state.db` printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
+- **Ref:** the owner's two statements of 2026-11-17, quoted above. The design-seat conflict path this reuses is the one a worker's blocked report takes today; the idea pipeline's stage 2 already rules that a request too vague to split becomes a one-question document that holds on the owner ([the idea pipeline](../design/tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules)), and this item applies that disposition to an item already in the store. That pipeline's `intake` face and item kinds are not built, so nothing here waits on them. `docs/design/queue-persistence-ruling.md` names the `unshared_open` counter and its intent. The proposed `plan` seat in [planning and model tiering](../design/tillr-planning-node-model-tiering.md) is not in the seat vocabulary yet; if it lands first, the builder says whether triage belongs on it.
+- **Where:** `decide` in `tools/tillr-drain/drain/plan.go`; `conflictDecision` in `tools/tillr-drain/drain/blocked.go` (the design-seat dispatch, and the owner routing for an empty body reference or a design run that ends blocked); the conflict brief and its one-document fence in `tools/tillr-drain/drain/stage.go`; the `unshared_open` count in `tools/tillr-item/item/sync.go`; the waiting face in `tools/tillr-view/waiting.go`; the workflow files under `config/tillr/workflows/` if the prerequisite is expressed there; the pack's copy under `yolo-packs/tillr/`.
+- **Open point, one agent or two:** the owner has not said whether making a request well-formed and shaping rough text into designable work are one agent's job or two. This item lets one triage run on the design seat do both for this door and does not decide the question. The rewrite before build sends its rewrite to a cheap seat as a separate item instead, so whether the two doors share one rewriting seat belongs to the same open point. Both doors end in the same ready-item shape.
+- **Naming:** the owner asked on 2026-11-17 why the intake face is called `apply` and not `add`. Do not rename it in this item; report what a rename would touch: the face, its callers and tests, the docs and pack skills that name it, and AutoQA's design, which files with it.
+- **Evidence:** 2026-11-16, `tillr-item sync --dry-run` against this repository's store printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
 
 ### Add the spend of killed runs to the record
 
@@ -1199,17 +1263,26 @@ routing change from a bug that wrote it twice. Nothing refuses a record that rep
 exactly, so a real double write would look the same. A conflict should read as one conflict with
 its transitions, and a repeat that changes nothing should not be written.
 
+One record is neither a routing change nor a repeat. When an item fails a second time while its
+conflict is still open, the drain writes the conflict again with the same status, design run and
+answer but a longer report and the newer run's id. That record carries evidence the first one
+lacks, so it is kept, and the views show it as evidence added to the same conflict. A repeat is
+therefore a record equal to the last one in every field, not only in the three routing fields.
+
 <!-- inert copy of a tillr directive: item id="item-conflict-transition-not-duplicate" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Recording a conflict transition whose status, design run and answer equal the conflict's last recorded transition writes no event. A test records the same transition twice and asserts one event.
-- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, naming the status change and the design run, not as a second conflict. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
-- **c3:** The item tool's documentation states that a conflict is recorded once per transition.
+- **c1:** Recording a conflict whose every field equals the last record of the same conflict writes no conflict event. A test records the same conflict twice and asserts one event. A second test records it again with only the report and run id changed, as the drain's second-failure route does, and asserts a second event that holds the longer report.
+- **c2:** The event list and the waiting face show a conflict's later records as transitions of the first, not as a second conflict. A record that changes the status or the design run is named by that change; a record that changes only the report is named as added evidence, with the run it came from. A test renders a raised conflict and its move to `awaiting` and asserts one conflict with two transitions.
+- **c3:** The item tool's documentation states that a conflict is recorded once per transition, and that a record equal to the last one is not written.
+- **c4:** The waiting face keeps a conflict's transitions when another hold on the same item, a fault or a repair, supplies the reason line. A test renders an item with a conflict that has two transitions and a later fault hold, and asserts both the fault's reason and the transitions.
 
 **Agent details:**
 
 - **Ref:** `ConflictKind` and `RecordConflict` in `tools/tillr-item/item/conflict.go`, whose comment already says each routing change is recorded.
 - **Where:** `tools/tillr-item/item/conflict.go`, the drain's conflict routing in `tools/tillr-drain/drain/blocked.go`, and the events and waiting faces in `tools/tillr-view/`.
 - **Evidence:** 2026-11-17, `tillr view events --since 4243`: events 4269 (02:06:39.497 UTC) and 4275 (02:06:45.327 UTC) are both `item.conflict` with id `conflict-run-item-agent-default-bmad-superpowers-skills-a1`; the first has status `raised`, the second `awaiting` with design run `run-item-agent-default-bmad-superpowers-skills-a2`, and every other field is equal.
+- **Settled by the first attempt's conflict (2026-11-17):** that attempt compared only status, design run and answer, which suppressed the evidence record `routeSecondFailure` writes in `tools/tillr-drain/drain/second_failure.go`, and it then reshaped the drain to compensate. Compare the whole `Conflict` record instead and leave `routeSecondFailure` writing as it does; `TestSecondFailureRoutesToDesign` should pass unchanged.
+- **Verification scope:** run the Go suites from `tools/tillr-item`, `tools/tillr-drain` and `tools/tillr-view`. The pack copy is verified by `just pack-sync` and `python3 tests/pack-sync.test.py` only. Do not run `go test` inside the pack copy: at `6a9c634c`, before any change, `go test ./...` in `yolo-packs/tillr/files/local/share/tillr/tillr-item` already fails `TestSyncOverThisRepositorysDocuments`, because its `--root ../../..` resolves to the repository's top level only from `tools/tillr-item/item`. That failure is not this item's and is not a stop condition for it.
 
 ### Add the live loop's session and leases to the running view
 
