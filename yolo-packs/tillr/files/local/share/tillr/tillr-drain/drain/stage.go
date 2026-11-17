@@ -516,6 +516,16 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			stagedFile{TargetFile, fork.Checkout + "\n"},
 			stagedFile{PatchRefFile, fork.Ref + "\n"},
 		)
+	} else {
+		// The lane is reused: an earlier fork-series item's target and patch ref would
+		// otherwise send this ordinary item's checks into that fork checkout and its
+		// landing onto that patch branch.
+		for _, name := range []string{TargetFile, PatchRefFile} {
+			path := filepath.Join(laneDir, name)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return Externalf("clearing %s: %v", path, err)
+			}
+		}
 	}
 	// The lane directory is one per lane and the lane is reused, so the three files there
 	// describe the last run on it and nothing else. Each run gets its own copy under
