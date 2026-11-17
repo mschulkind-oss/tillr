@@ -30,9 +30,14 @@ type statusPayload struct {
 	Snapshot    snapshot           `json:"snapshot"`
 	Subject     *record.Subject    `json:"subject,omitempty"`
 	Found       *bool              `json:"found,omitempty"`
-	// UnsharedOpen compares the store snapshot to documents under --root.
-	// Record streams instead carry their latest sync observation, when supplied.
-	UnsharedOpen *int `json:"unshared_open"`
+	// Sync residue is the last whole writing sync's persisted observation, never a
+	// fresh document scan. Null counts mean no observation, not zero residue.
+	UnsharedOpen       *int     `json:"unshared_open"`
+	UnsharedOpenIDs    []string `json:"unshared_open_ids"`
+	UnsharedOpenOldest string   `json:"unshared_open_oldest,omitempty"`
+	StaleDocBlocks     *int     `json:"stale_doc_blocks"`
+	StaleDocBlockIDs   []string `json:"stale_doc_block_ids"`
+	SyncedAt           string   `json:"synced_at,omitempty"`
 	// Item is the subject's item.record payload, or null when the stream carries none.
 	Item *itemRecord `json:"item"`
 	// Items are every item the source holds, ordered by item_id for a store and by first
@@ -124,16 +129,27 @@ func assemble(v view, subject *record.Subject, source vantage.QuestionSource) (s
 	for _, e := range v.records {
 		if e.Kind == "item.sync" {
 			var observed struct {
-				Count *int `json:"unshared_open"`
+				Count    *int     `json:"unshared_open"`
+				IDs      []string `json:"unshared_open_ids"`
+				Oldest   string   `json:"unshared_open_oldest"`
+				Stale    *int     `json:"stale_doc_blocks"`
+				StaleIDs []string `json:"stale_doc_block_ids"`
 			}
 			if err := json.Unmarshal(e.Payload, &observed); err != nil {
 				return statusPayload{}, usagef("reading item.sync: %v", err)
 			}
-			p.UnsharedOpen = observed.Count
+			p.UnsharedOpen, p.StaleDocBlocks = observed.Count, observed.Stale
+			p.UnsharedOpenIDs, p.StaleDocBlockIDs = observed.IDs, observed.StaleIDs
+			p.UnsharedOpenOldest = observed.Oldest
+			p.SyncedAt = e.CreatedAt.UTC().Format(time.RFC3339Nano)
 		}
 	}
-	if v.unsharedOpen != nil {
-		p.UnsharedOpen = v.unsharedOpen
+	if v.domain != nil && v.domain.residue != nil {
+		s := v.domain.residue
+		open, stale := len(s.UnsharedOpenIDs), len(s.StaleDocBlockIDs)
+		p.UnsharedOpen, p.StaleDocBlocks = &open, &stale
+		p.UnsharedOpenIDs, p.StaleDocBlockIDs = s.UnsharedOpenIDs, s.StaleDocBlockIDs
+		p.UnsharedOpenOldest, p.SyncedAt = s.UnsharedOpenOldest, s.SyncedAt
 	}
 	if subject == nil {
 		// No subject named is a report about the board, not an empty report: the same

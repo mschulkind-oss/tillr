@@ -90,7 +90,15 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
   `## Exploration` section links to its document; an item the store holds keeps its state,
   rank, runs and criterion states. A changed block updates the item's definition while no
   criterion carries a state, and is reported `definition-frozen` once one does. A second run
-  over unchanged documents writes nothing and appends no event.
+  over unchanged documents changes no item and appends no event; it refreshes the
+  saved sync observation.
+- **A whole writing sync saves its residue counts in the same transaction.** The
+  item-owned `item_sync_residue` table holds one row: the sync time, ids of open store
+  items no document declares (`unshared_open`), the oldest one's last write, and ids
+  of landed items whose blocks remain (`stale_doc_blocks`). Each whole sync replaces
+  that row even when no item changes. A dry run leaves it alone; a caller supplying
+  only some documents must set `SyncInput.Partial` and also leaves it alone. Status
+  reads this observation, not documents, so its timestamp names when counts were computed.
 - **A document with a finding writes nothing; the others are written.** A missing or
   malformed id, a duplicate id, no paths, no `c1`, an unknown attribute or seat, or a
   `blocked_by` naming nothing a block declares or the store holds is reported with its file

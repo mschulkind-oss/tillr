@@ -68,6 +68,8 @@ type SyncDocument = docshare.Document
 // SyncInput is one sync run: the repository root the documents were read from (a path in a
 // block that does not exist under it is a warning), the documents, and the clock.
 type SyncInput struct {
+	// Partial marks documents as a subset; it must not replace the last whole sync observation.
+	Partial   bool
 	Root      string
 	Documents []SyncDocument
 	At        time.Time
@@ -243,6 +245,11 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	}
 	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli()); err != nil {
 		return SyncReport{}, err
+	}
+	if !in.Partial {
+		if err := replaceSyncResidue(tx, report, in.At); err != nil {
+			return SyncReport{}, Internalf("saving sync residue: %v", err)
+		}
 	}
 	return finishReport(report), nil
 }
@@ -471,19 +478,20 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	}
 	sort.Strings(ids)
 	var oldest int64
+	oldestSet := false
 	for _, id := range ids {
 		st := held[id]
 		if !unshared[id] {
 			continue
 		}
 		report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
-		if oldest == 0 || (st.updatedAt > 0 && st.updatedAt < oldest) {
-			oldest = st.updatedAt
+		if !oldestSet || st.updatedAt < oldest {
+			oldest, oldestSet = st.updatedAt, true
 		}
 	}
 	report.UnsharedOpen = len(report.UnsharedOpenIDs)
-	if oldest > 0 {
-		report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339)
+	if oldestSet {
+		report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
 	}
 	for _, b := range blocks {
 		if st, ok := held[b.payload.ItemID]; ok && st.state == "landed" {

@@ -12,6 +12,7 @@ import (
 // store rather than from a record stream (VIEW-2): the components are the rows the
 // write faces already maintain, not a second copy of them.
 type storeDomain struct {
+	residue    *syncResidue
 	items      []storeItem
 	criteria   map[string][]storeCriterion
 	edges      map[string][]storeEdge
@@ -40,6 +41,9 @@ func readStoreDomain(r *store.Reader) (*storeDomain, error) {
 		attempts: map[string][]storeAttempt{},
 	}
 	var err error
+	if d.residue, err = readSyncResidue(r); err != nil {
+		return nil, err
+	}
 	if d.items, err = readItems(r); err != nil {
 		if !isMissingTable(err) {
 			return nil, err

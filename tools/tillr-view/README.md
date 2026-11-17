@@ -71,15 +71,21 @@ tillr-view lanes --store /path/to/.tillr/state.db [--json]
 tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
 ```
 
-An external caller points these at a store snapshot and reads the same JSON the loop reads;
+An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
 `status` answers where the board stands now, `events` answers what happened in order,
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
 round decided, `lanes` lists every configured lane and its current or last run, and
-`running` answers what is in flight. Store `status` includes `unshared_open` by
-comparing that store snapshot with the tracked documents under its root, using the
-same declaration grammar and comparison as item sync. It does not import the item
-writer or register its migrations. A record stream instead reports its latest
-supplied sync observation, or null when it carries none. For an undeclared request, waiting output names
+`running` answers what is in flight. `status --text` prints a readable summary;
+status without a format flag, or with `--json`, emits its `view.status` record. Store status reads the last whole writing sync's observation
+directly from the item-owned table, without importing the item writer or reading documents
+for these counts. It prints `unshared_open` (open store items no document declares),
+with the oldest item's last-write age in whole minutes, and `stale_doc_blocks` (blocks
+for landed items), alongside the sync's timestamp. JSON carries `synced_at`, both
+counts, `unshared_open_ids`, `unshared_open_oldest`, and `stale_doc_block_ids`.
+The age advances at read time, but the counts describe that saved sync, not current
+documents. With no table or row, text says `no sync has been recorded` and JSON counts
+are null, never zero. A record stream instead reports its latest supplied sync
+observation, or null when it carries none. For an undeclared request, waiting output names
 triage on the design seat while it is due or running, then the owner with the full
 conflict report. See the [document-fed workflow prerequisite](../tillr-drain/README.md#document-fed-workflow-prerequisite).
 
