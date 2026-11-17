@@ -214,22 +214,24 @@ func TestOnceHandsOverExactlyTheDispatchRequests(t *testing.T) {
 }
 
 // The invariant that keeps the decision face usable as a simulator: plan writes nothing.
-// The store file is byte-identical and no dispatches row exists.
+// The store's content is unchanged and no dispatches row exists. Content, not the file's
+// bytes: a commit stays in the write-ahead log, so the database file does not move when a
+// face writes (store.Fingerprint).
 func TestPlanWritesNothingNotEvenADispatchRow(t *testing.T) {
 	storePath := fixture(t, itemRecord("item_042", "in-queue"))
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
-	before, err := os.ReadFile(storePath)
+	before, err := store.Fingerprint(context.Background(), storePath)
 	if err != nil {
 		t.Fatalf("reading the store failed: %v", err)
 	}
 	plan(t, storePath, tickPath)
-	after, err := os.ReadFile(storePath)
+	after, err := store.Fingerprint(context.Background(), storePath)
 	if err != nil {
 		t.Fatalf("reading the store failed: %v", err)
 	}
-	if string(before) != string(after) {
-		t.Fatalf("plan changed the store file: %d bytes then %d bytes", len(before), len(after))
+	if before != after {
+		t.Fatalf("plan changed the store's content: fingerprint %s then %s", before, after)
 	}
 	if rows := dispatchRows(t, storePath); len(rows) != 0 {
 		t.Fatalf("plan wrote %d dispatches rows", len(rows))

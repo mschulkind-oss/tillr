@@ -4,8 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
-	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,23 +16,16 @@ import (
 
 // inDatabaseFile runs query against a copy of the store's database file alone, without its
 // write-ahead log: what it answers is what a checkpoint has already copied into that file.
+// A database file that holds no schema yet answers "no such table" (see noSchemaYet).
+//
+// The copy is made by another process (cp): SQLite's locks on the database file are POSIX
+// record locks, which belong to the process, so this process closing a descriptor of its
+// own on that file would drop the locks its open connections hold there.
 func inDatabaseFile(t *testing.T, path, query string, args ...any) *sql.Row {
 	t.Helper()
 	copyPath := filepath.Join(t.TempDir(), "alone.sqlite3")
-	src, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer src.Close()
-	dst, err := os.Create(copyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		t.Fatal(err)
-	}
-	if err := dst.Close(); err != nil {
-		t.Fatal(err)
+	if out, err := exec.Command("cp", path, copyPath).CombinedOutput(); err != nil {
+		t.Fatalf("copying the database file: %v: %s", err, out)
 	}
 	db, err := sql.Open("sqlite", "file:"+copyPath)
 	if err != nil {
@@ -41,6 +33,14 @@ func inDatabaseFile(t *testing.T, path, query string, args ...any) *sql.Row {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db.QueryRow(query, args...)
+}
+
+// noSchemaYet answers whether err says the database file alone holds no schema: nothing
+// has copied the log's frames into it since the store was created, so it holds no row
+// either. Every handle keeps its own read-only connection, so no close deletes the log and
+// copies the store's creation into the file.
+func noSchemaYet(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
 }
 
 // thresholdFaceSteps does, during a running Loop's startup sync, a short-lived face's write
@@ -74,7 +74,9 @@ func (s *thresholdFaceSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	if err := face.Close(); err != nil {
 		return SyncOutcome{}, err
 	}
-	if err := inDatabaseFile(s.t, s.store, `SELECT count(*) FROM meta WHERE key LIKE 'face-%'`).Scan(&s.rowsInDatabase); err != nil {
+	if err := inDatabaseFile(s.t, s.store, `SELECT count(*) FROM meta WHERE key LIKE 'face-%'`).Scan(&s.rowsInDatabase); noSchemaYet(err) {
+		s.rowsInDatabase = 0
+	} else if err != nil {
 		return SyncOutcome{}, err
 	}
 	s.countedDatabase = true

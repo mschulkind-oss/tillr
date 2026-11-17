@@ -1,7 +1,6 @@
 package main_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -135,7 +134,9 @@ func TestSyncDryRunFreshStore(t *testing.T) {
 		}
 	}
 	assertEmpty()
-	before, err := os.ReadFile(db)
+	// The store's content, not its file: a commit stays in the write-ahead log, so the
+	// database file's bytes do not move when a face writes (store.Fingerprint).
+	before, err := store.Fingerprint(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,12 +148,12 @@ func TestSyncDryRunFreshStore(t *testing.T) {
 		t.Fatalf("fresh-store preview record %+v", rec.Payload)
 	}
 	assertEmpty()
-	after, err := os.ReadFile(db)
+	after, err := store.Fingerprint(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("preview changed the fresh store's database bytes")
+	if before != after {
+		t.Fatal("preview changed the fresh store's content")
 	}
 }
 

@@ -157,7 +157,7 @@ func TestTheOwnersLockFileTakesTheDatabaseFilesMode(t *testing.T) {
 }
 
 // A lock file the process cannot open means "no owner can be seen", not a store that cannot
-// be written: the handle checkpoints by SQLite's default, as it would with no loop running.
+// be written: the handle checkpoints at its close, as it would with no loop running.
 func TestAnUnopenableLockFileMeansNoOwner(t *testing.T) {
 	path := checkpointStore(t)
 	lock := path + "-checkpoint-owner"
@@ -169,9 +169,11 @@ func TestAnUnopenableLockFileMeansNoOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a writable open failed on an unopenable lock file: %v", err)
 	}
-	defer s.Close()
 	writePastTheThreshold(t, s, "unowned")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if n := rowsInDatabaseFile(t, path, "unowned"); n == 0 {
-		t.Error("with the lock file unopenable, the handle did not checkpoint by SQLite's default")
+		t.Error("with the lock file unopenable, the handle's close did not checkpoint the grown log")
 	}
 }

@@ -18,8 +18,7 @@ const (
 	sqliteTraceSlowSpan    = 2 * time.Second // Observation only, never cancellation.
 	sqliteTraceActiveLimit = 32
 	// One queue slot holds one phase record or one span's stack sample. A span queues
-	// each phase as it happens, so a WriteTx on a writable handle costs four slots:
-	// begin, its checkpoint policy (autocheckpoint.*), acquired and end.
+	// each phase as it happens, so a WriteTx costs three slots: begin, acquired and end.
 	sqliteTraceQueueLimit = 1024
 	sqliteTraceStackLimit = 1 << 20
 	// The bound on a program's exit flush: long enough for a healthy stderr to take a

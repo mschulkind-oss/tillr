@@ -43,10 +43,10 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 		t.Fatalf("trace changed rollback: %v %v", value, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	_, flushErr := store.FlushSQLiteTrace(ctx)
+	flushStatus, flushErr := store.FlushSQLiteTrace(ctx)
 	cancel()
 	if flushErr != nil {
-		t.Fatal(flushErr)
+		t.Fatalf("%v: %+v", flushErr, flushStatus)
 	}
 	if err := capture.Sync(); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if strings.Contains(line, `operation="open"`) {
+		if strings.Contains(line, `operation="open"`) || strings.Contains(line, `operation="close"`) {
 			continue
 		}
 		if strings.Contains(line, "phase=begin ") || strings.Contains(line, "phase=acquired ") || strings.Contains(line, "phase=end ") {

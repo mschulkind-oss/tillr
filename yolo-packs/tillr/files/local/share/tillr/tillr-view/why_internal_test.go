@@ -8,10 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
+
+// storeFingerprint answers the store's logical content. A test that a face writes nothing
+// compares these, never the database file's bytes: a commit stays in the write-ahead log,
+// so the file does not move when a face writes (store.Fingerprint).
+func storeFingerprint(t *testing.T, path string) string {
+	t.Helper()
+	f, err := store.Fingerprint(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
 
 func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	dir := t.TempDir()
@@ -39,10 +52,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := storeFingerprint(t, path)
 	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "absent-index"), dir, "", nil)
 	defer srv.close()
 	httpServer := httptest.NewServer(srv.routes())
@@ -92,11 +102,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	if len(waiting) != 2 || waiting[0].Why != "no-policy" || waiting[1].Mover != "a" {
 		t.Fatalf("waiting diverged: %s", out)
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
+	if storeFingerprint(t, path) != before {
 		t.Fatal("why/waiting wrote store")
 	}
 	var n int

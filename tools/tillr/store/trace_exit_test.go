@@ -31,7 +31,7 @@ func TestExitFlushWaitsForQueuedRecords(t *testing.T) {
 	}
 	release()
 	status, err := FlushSQLiteTraceAtExit()
-	if err != nil || status.Pending != 0 || status.Delivered != 4 {
+	if err != nil || status.Pending != 0 || status.Delivered != 3 {
 		t.Fatalf("the exit flush returned before delivery: %v %+v", err, status)
 	}
 }

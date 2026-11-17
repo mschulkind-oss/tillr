@@ -17,15 +17,19 @@ type Store struct {
 	db   *sql.DB
 	path string
 	// writable is whether Open made this handle; only a writable handle commits, so only
-	// it carries a checkpoint policy (checkpoint.go).
+	// its close can checkpoint (checkpoint.go).
 	writable bool
-	// lock is the checkpoint owner's lock file, opened once so that deciding the policy
-	// before each write transaction is two flock calls; nil when it could not be opened,
-	// which reads as no owner. policyConn and policyPages are the driver connection the
-	// policy pragma last ran on and the value it set, so an unchanged decision runs nothing.
-	lock        *os.File
-	policyConn  any
-	policyPages int
+	// sidecar is the writable handle's read-only connection, opened before db and closed
+	// after it, so this handle's close is never the store's last and cannot checkpoint or
+	// delete the log; nil when it could not be opened or attached (traced as
+	// sidecar.unavailable).
+	sidecar *sql.DB
+	// owner marks a checkpoint owner's own writer, whose close leaves checkpoints to the
+	// owner's cycles.
+	owner bool
+	// lock is the checkpoint owner's lock file, opened once per handle so that its close
+	// can see whether an owner runs; nil when it could not be opened, which reads as none.
+	lock *os.File
 }
 
 // Open opens the store at path and selects SQLite's write-ahead log (WAL), so
@@ -33,7 +37,14 @@ type Store struct {
 // With create, a missing store is created and the schema is migrated; without it
 // the store must already exist and is not migrated. Mode conversion needs SQLite's
 // exclusive lock and fails explicitly if it cannot acquire it.
-func Open(ctx context.Context, path string, create bool) (result *Store, resultErr error) {
+func Open(ctx context.Context, path string, create bool) (*Store, error) {
+	return open(ctx, path, create, create)
+}
+
+// open is Open with creating a missing store and migrating it separated: a checkpoint
+// owner that starts before any store exists creates the empty WAL database and leaves the
+// migration to the program that then opens it with create (CreateAndOwnCheckpoints).
+func open(ctx context.Context, path string, create, migrate bool) (result *Store, resultErr error) {
 	if path == "" {
 		return nil, errors.New("store: a store path is required")
 	}
@@ -46,10 +57,20 @@ func Open(ctx context.Context, path string, create bool) (result *Store, resultE
 	}
 	trace := startSQLiteTrace(path, "open")
 	defer func() { trace.finish(resultErr) }()
+	s := &Store{path: path, writable: true}
+	// The sidecar first, so that even this open's own failure paths close no connection
+	// that is the store's last. A store that does not exist yet gets it once WAL is
+	// selected, before anything is migrated.
+	attached := false
+	if _, err := os.Stat(path); err == nil {
+		attached = s.attachSidecar(ctx, trace)
+	}
 	db, err := sql.Open("sqlite", dsn(path, false))
 	if err != nil {
+		s.release(nil)
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
+	s.db = db
 	// One connection: the append-only triggers and the migration transaction are
 	// serialized by the store, not by the caller.
 	db.SetMaxOpenConns(1)
@@ -57,7 +78,7 @@ func Open(ctx context.Context, path string, create bool) (result *Store, resultE
 	pingErr := db.PingContext(ctx)
 	trace.record("ping.end", pingErr)
 	if err := pingErr; err != nil {
-		db.Close()
+		s.release(nil)
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 	var mode string
@@ -65,35 +86,75 @@ func Open(ctx context.Context, path string, create bool) (result *Store, resultE
 	walErr := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode)
 	trace.record("wal.end", walErr)
 	if err := walErr; err != nil {
-		db.Close()
+		s.release(nil)
 		return nil, fmt.Errorf("store: selecting WAL for %s: %w", path, err)
 	}
 	if mode != "wal" {
-		db.Close()
+		s.release(nil)
 		return nil, fmt.Errorf("store: selecting WAL for %s: SQLite answered %q", path, mode)
 	}
-	s := &Store{db: db, path: path, writable: true}
-	// A lock file this process cannot open or create means no owner can be seen: the handle
-	// checkpoints by SQLite's default, as it would with no loop running.
+	if !attached && !s.attachSidecar(ctx, trace) {
+		// Without a sidecar the handle runs on: its commits still never checkpoint
+		// (wal_autocheckpoint=0, dsn) and its close skips the cycle (checkpointIfDue,
+		// reason=no-sidecar). What it cannot prevent is SQLite's own last close: when no
+		// other connection has the store open, the writer's close checkpoints and deletes
+		// the log, because the driver offers no way to turn that off
+		// (SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE is not reachable through it).
+		if s.sidecar != nil {
+			s.sidecar.Close()
+			s.sidecar = nil
+		}
+		trace.record("sidecar.unavailable", nil)
+	}
+	// A lock file this process cannot open or create means no owner can be seen: the
+	// handle's close then checkpoints past CheckpointFrames, as it would with no loop.
 	lock, lockErr := openOwnerLock(path)
 	s.lock = lock
 	if lockErr != nil {
 		trace.record("owner-lock.unavailable", lockErr)
 	}
-	// Set before the migration can commit; WriteTx decides it again before each
-	// transaction, because a handle can outlive an owner or predate one (checkpoint.go).
-	policyErr := s.decidePolicy(ctx, trace)
-	if err := policyErr; err != nil {
-		s.Close()
-		return nil, err
-	}
-	if create {
+	if migrate {
 		if err := s.migrate(ctx); err != nil {
-			s.Close()
+			s.release(nil)
 			return nil, err
 		}
 	}
 	return s, nil
+}
+
+// failSidecar is a test seam: an error it answers is the sidecar's read's, as if attaching
+// had failed.
+var failSidecar func() error
+
+// attachSidecar opens the handle's read-only sidecar, if it has none yet, and reads through
+// it, which attaches it to the log's shared index. It answers whether the sidecar is now
+// attached to a WAL store; a store still in rollback mode (before Open selects WAL) or one
+// it could not read answers false, and the caller tries again after selecting WAL.
+func (s *Store) attachSidecar(ctx context.Context, trace *sqliteTraceSpan) bool {
+	trace.record("sidecar.begin", nil)
+	if s.sidecar == nil {
+		db, err := sql.Open("sqlite", dsn(s.path, true))
+		if err != nil {
+			trace.record("sidecar.end", err)
+			return false
+		}
+		db.SetMaxOpenConns(1)
+		s.sidecar = db
+	}
+	var n int
+	var mode string
+	var err error
+	if failSidecar != nil {
+		err = failSidecar()
+	}
+	if err == nil {
+		err = s.sidecar.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master`).Scan(&n)
+	}
+	if err == nil {
+		err = s.sidecar.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&mode)
+	}
+	trace.record("sidecar.end", err)
+	return err == nil && mode == "wal"
 }
 
 // OpenRead opens an existing store read-only. It never migrates: the read-only face
@@ -120,11 +181,42 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
-// Close closes the store.
+// Close closes the store. A writable handle first checkpoints the log if it is due
+// (checkpointIfDue), then closes its writer, and its sidecar last: its close neither
+// checkpoints nor deletes the log, so it flushes nothing and takes no lock another
+// connection can wait behind. A read-only handle just closes.
+//
+// With TILLR_SQLITE_TRACE=1 a writable handle's close is the span "close" (the
+// log-checkpoint decision, writer.close.begin, writer.close.end, sidecar.close.begin,
+// sidecar.close.end), so a close a writer waited behind is attributable.
 func (s *Store) Close() error {
-	err := s.db.Close()
+	if !s.writable {
+		return s.db.Close()
+	}
+	trace := startSQLiteTrace(s.path, "close")
+	err := s.checkpointIfDue(context.Background(), trace)
+	err = errors.Join(err, s.release(trace))
+	trace.finish(err)
+	return err
+}
+
+// release closes the writer, the lock file and then the sidecar, recording each close
+// into trace (which may be nil).
+func (s *Store) release(trace *sqliteTraceSpan) error {
+	var err error
+	if s.db != nil {
+		trace.record("writer.close.begin", nil)
+		err = s.db.Close()
+		trace.record("writer.close.end", err)
+	}
 	if s.lock != nil {
 		s.lock.Close()
+	}
+	if s.sidecar != nil {
+		trace.record("sidecar.close.begin", nil)
+		sidecarErr := s.sidecar.Close()
+		trace.record("sidecar.close.end", sidecarErr)
+		err = errors.Join(err, sidecarErr)
 	}
 	return err
 }
@@ -238,10 +330,11 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 // container or jail kill loses nothing. The owner ruled on 2026-11-16 that NORMAL stays
 // (tools/tillr-store/README.md, "Durability and checkpoints").
 //
-// What NORMAL leaves inside a writer is the log restart's header flush; the checkpoint
-// owner decides which writer pays it (checkpoint.go).
+// What NORMAL leaves inside a writer is the log restart's header flush. The writable handle
+// also runs wal_autocheckpoint=0, so no commit checkpoints: checkpoint.go decides which
+// program checkpoints, and so which writer pays that flush.
 func dsn(path string, readOnly bool) string {
-	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
+	params := "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(0)&_txlock=immediate"
 	if readOnly {
 		params = "?mode=ro&_pragma=busy_timeout(5000)"
 	}
