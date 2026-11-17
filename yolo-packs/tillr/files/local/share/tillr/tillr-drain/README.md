@@ -54,6 +54,15 @@ carrying the generation. On write-open, historical `drain_ticks` rows are copied
 without replacing new measurements or inventing missing historical values. The old
 table remains a migration source; new measurements never write it.
 
+A change to the gate runner or its wrapper, or to the legacy checker and its audit,
+proves its own suite before merging, regardless of `landing_strategy`. The
+[runner-change rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+keeps that entire landing out of the ordinary time distribution: `gate_ms`,
+`land_ms`, and `gate_count` measure ordinary candidates only. `runner_gate_ms` and
+`runner_land_ms` record the exceptional gate and landing times, and
+`runner_gate_count` counts those gate attempts. The loop reports these separately,
+including slow proofs. A measured duration does not fail a test or a landing.
+
 Loop reports are named by their inclusive first and last generations, not by the
 clock. A loop that allocated none uses zero endpoints, so a startup fault remains
 readable. For example:

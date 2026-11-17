@@ -410,12 +410,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 A change to the gate's own runner can break the gate for every lane, so the runner's suite proves such a change before it lands rather than after. Criterion c3 was aligned on 2026-11-17 with the owner's ruling on time limits ([`D-GR15`](../design/gate-rework.md#decision-ledger), [Section 6.5](../design/gate-rework.md#65-ten-seconds-is-a-failing-test)): a measured time is counted and reported and fails nothing.
 
-<!-- tillr: item id="item-gate-runner-pays-first" paths="tools/gate/,tools/tillr-loop/,tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** A candidate that changes a path under the runner's own directory has the runner's suite added to its landing checks, whatever `landing_strategy` says, and does not land while that suite is red.
-- **c2:** The same holds for `tools/fork-check.py` and its suite for as long as that file exists.
-- **c3:** Such a landing's time is left out of the ten-second measurement of ordinary landings and is counted and reported separately, so the distribution of ordinary landings stays honest and a slow one is not hidden. A measured time fails no test and no landing.
-- **c4:** A test lands one candidate that changes the runner and one that does not, and asserts the first ran the suite before the merge and the second did not.
 
 ## Filed 2026-11-15: a gate test that fails only under load
 

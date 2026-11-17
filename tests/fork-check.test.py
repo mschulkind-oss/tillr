@@ -2782,7 +2782,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (go_stub / "go").chmod(0o755)
     # The substrate suite lands; the other behavior suites roll. Both still share the
     # build's watch and run the whole suite.
-    GO_KINDS = ("go-tool", "go-substrate")
+    GO_KINDS = ("go-tool", "go-substrate", "gate-runner")
     # Suite kinds are selected dynamically, so the later literal-Check inventory
     # cannot discover them. Name both declarations here rather than letting a removed
     # kind hide behind the landing-tier default.
@@ -2802,7 +2802,8 @@ with tempfile.TemporaryDirectory() as tmp:
     )
 
     def suite_kind(directory):
-        return "go-substrate" if directory in module.GO_LANDING_SUITE_DIRS else "go-tool"
+        return ("gate-runner" if directory == "tools/tillr-gate" else
+                "go-substrate" if directory in module.GO_LANDING_SUITE_DIRS else "go-tool")
 
     def directory_kinds(directory):
         return (suite_kind(directory),)
@@ -2861,12 +2862,17 @@ with tempfile.TemporaryDirectory() as tmp:
             # The suite step is the WHOLE suite: `-short` would skip the
             # integration cases, which is the blind spot item 570 closed. The build is
             # the other step's job, so this command does not repeat it.
-            assert checks[0].argv == ["sh", "-c", module.go_tool_command(directory)], \
-                checks[0].argv
+            command = module.go_tool_command(directory)
+            if directory == "tools/tillr-gate":
+                command += (" && cd ../.. && python3 tools/gate/change-gate.test.py"
+                            " && python3 tools/gate/runner-first.test.py")
+            assert checks[0].argv == ["sh", "-c", command], checks[0].argv
             assert "-short" not in checks[0].argv[-1], checks[0].argv
             assert "go build" not in checks[0].argv[-1], checks[0].argv
             for check in checks:
-                assert check.watches == (f"{directory}/",), check.watches
+                expected_watches = (module.GATE_RUNNER_WATCHES if directory == "tools/tillr-gate"
+                                    else (f"{directory}/",))
+                assert check.watches == expected_watches, check.watches
             assert checks[0].timeout == module.GO_TOOL_TIMEOUT, checks[0].timeout
             assert checks[0].cost == module.GO_TOOL_COST_ESTIMATE[directory], checks[0].cost
         #      The directory the change did not touch is named as not run, so the plan
@@ -5278,7 +5284,11 @@ with tempfile.TemporaryDirectory() as tmp:
     plan_fields = dict(field.split("=", 1) for field in lines[-1].split()[2:])
     assert set(plan_fields) == {"base", "head", "ran", "notrun", "seconds", "full",
                                 "saved", "priced", "integrity", "checks", "required",
-                                "reused", "tier", "owed", "landing"}, plan_fields
+                                "reused", "tier", "owed", "landing", "landing_class",
+                                "runner_count", "runner_landing"}, plan_fields
+    assert plan_fields["landing_class"] == "ordinary", plan_fields
+    assert plan_fields["runner_count"] == "0", plan_fields
+    assert float(plan_fields["runner_landing"]) == 0.0, plan_fields
     # A bare run is the full gate: no tier was requested, nothing is owed, and the
     # landing-wall model is the landing subset of the checks this run just measured.
     assert plan_fields["tier"] == "full", plan_fields
@@ -7788,3 +7798,5 @@ with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as director
     assert observation["check_id"] and observation["last_output_line"] == "child holds pipe", observation
     assert observation["silent_samples"] == watch.WATCHDOG_SILENT_SAMPLES
 print("wrapper watchdog: cadence parity, output/CPU progress, unavailable accounting, group kill and named stall handoff pass")
+# The runner exception is part of the legacy judge's permanent audit too.
+subprocess.run([sys.executable, str(ROOT / "tools/gate/runner-first.test.py")], check=True)

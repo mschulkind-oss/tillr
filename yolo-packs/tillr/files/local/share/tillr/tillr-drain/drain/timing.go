@@ -28,10 +28,11 @@ const DefaultGateBudget = 330 * time.Second
 // PassTiming is one tick's phases, measured separately. It is the record the board reads
 // for a tick's gate time and for the trend across ticks.
 //
-// The four phases are the loop's, not the lane's: staging is the worktree preparation before
-// the bracket, dispatch is the run itself, gate is every gate program the tick ran (which is
-// serial), and land is every land step. The sum of gate across a tick's candidates is the
-// tick's gate wall time because the serial section runs one gate at a time (Loop.verify).
+// The phases are the loop's, not the lane's: staging is worktree preparation,
+// dispatch is the run itself, and gate and land are ordinary candidates' steps.
+// A change to the judge runs its proof before publication and records both phases
+// and its count in RunnerGateMS, RunnerLandMS, and RunnerGates instead. This keeps
+// its whole cost out of the ordinary landing target without hiding a slow proof.
 //
 // GateBudgetMS is the budget the tick was measured against, carried with the measurement so
 // a board reading an old row cannot compare it against a budget that has since moved
@@ -50,6 +51,10 @@ type PassTiming struct {
 	Applied        int
 	// Gates distinguishes an unmeasured gate from a gate measured at zero milliseconds.
 	Gates int
+	// Runner proof is counted apart from ordinary landings, never hidden in their budget.
+	RunnerGates  int
+	RunnerGateMS int64
+	RunnerLandMS int64
 }
 
 // IsOverBudget is whether the tick's gate time exceeded its budget. It is a method rather
@@ -79,7 +84,10 @@ CREATE TABLE IF NOT EXISTS drain_passes (
   ended_at         INTEGER,
   decision_counts  TEXT,
   applied_count    INTEGER,
-  gate_count       INTEGER
+  gate_count       INTEGER,
+  runner_gate_count INTEGER NOT NULL DEFAULT 0,
+  runner_gate_ms    INTEGER NOT NULL DEFAULT 0,
+  runner_land_ms    INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -90,11 +98,16 @@ CREATE TABLE IF NOT EXISTS drain_passes (
 // opening transaction, without fabricating absent historical measurements.
 // New measurements only write drain_passes; repeated opens never replace them.
 var legacyPassMigrationDDL = strings.Replace(PassDDL, "drain_passes", "drain_ticks", 1) + `
-CREATE TRIGGER IF NOT EXISTS drain_copy_legacy_passes
+DROP TRIGGER IF EXISTS drain_copy_legacy_passes;
+CREATE TRIGGER drain_copy_legacy_passes
 BEFORE INSERT ON schema_migrations BEGIN
  INSERT OR IGNORE INTO drain_passes
+ (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
+  gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count,
+  runner_gate_count, runner_gate_ms, runner_land_ms)
  SELECT tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
- gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count
+ gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count,
+ runner_gate_count, runner_gate_ms, runner_land_ms
  FROM drain_ticks;
 END;
 `
@@ -128,23 +141,28 @@ func recordAccumulatedPassTiming(ctx context.Context, storePath string, timing *
 			// never replace its decision counts or create a second pass row.
 			_, err := tx.Exec(`UPDATE drain_passes SET dispatch_ms = dispatch_ms + ?,
 			 gate_ms = gate_ms + ?, land_ms = land_ms + ?, gate_count = gate_count + ?,
-			 gate_over_budget = (gate_budget_ms > 0 AND gate_ms + ? > gate_budget_ms)
-			 WHERE tick_id = ?`, timing.DispatchMS, timing.GateMS, timing.LandMS, timing.Gates, timing.GateMS, timing.TickID)
+			 gate_over_budget = (gate_budget_ms > 0 AND gate_ms + ? > gate_budget_ms),
+			 runner_gate_count = runner_gate_count + ?, runner_gate_ms = runner_gate_ms + ?,
+			 runner_land_ms = runner_land_ms + ?
+			 WHERE tick_id = ?`, timing.DispatchMS, timing.GateMS, timing.LandMS, timing.Gates, timing.GateMS,
+				timing.RunnerGates, timing.RunnerGateMS, timing.RunnerLandMS, timing.TickID)
 			return err
 		}
 		_, err := tx.Exec(
-			`INSERT INTO drain_passes (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms, gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO drain_passes (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms, gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count, runner_gate_count, runner_gate_ms, runner_land_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tick_id) DO UPDATE SET
 			   started_at = excluded.started_at, stage_ms = excluded.stage_ms,
 			   dispatch_ms = excluded.dispatch_ms, gate_ms = excluded.gate_ms,
 			   land_ms = excluded.land_ms, gate_budget_ms = excluded.gate_budget_ms,
 			   gate_over_budget = excluded.gate_over_budget,
 			   ended_at = excluded.ended_at, decision_counts = excluded.decision_counts,
-			   applied_count = excluded.applied_count, gate_count = excluded.gate_count`,
+			   applied_count = excluded.applied_count, gate_count = excluded.gate_count,
+			   runner_gate_count = excluded.runner_gate_count, runner_gate_ms = excluded.runner_gate_ms,
+			   runner_land_ms = excluded.runner_land_ms`,
 			timing.TickID, timing.AtMS, timing.StageMS, timing.DispatchMS, timing.GateMS,
 			timing.LandMS, timing.GateBudgetMS, boolInt(timing.OverBudget), timing.EndMS,
-			string(counts), timing.Applied, timing.Gates,
+			string(counts), timing.Applied, timing.Gates, timing.RunnerGates, timing.RunnerGateMS, timing.RunnerLandMS,
 		)
 		if err != nil {
 			return Internalf("recording the timing of tick %s: %v", timing.TickID, err)
@@ -162,9 +180,11 @@ func aggregatePassTiming(ctx context.Context, storePath, id string) (PassTiming,
 	timing := PassTiming{TickID: id}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		return r.QueryRow(`SELECT started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
-		 gate_budget_ms, COALESCE(gate_count, 0) FROM drain_passes WHERE tick_id = ?`, id).
+		 gate_budget_ms, COALESCE(gate_count, 0), runner_gate_count, runner_gate_ms, runner_land_ms
+		 FROM drain_passes WHERE tick_id = ?`, id).
 			Scan(&timing.AtMS, &timing.StageMS, &timing.DispatchMS, &timing.GateMS,
-				&timing.LandMS, &timing.GateBudgetMS, &timing.Gates)
+				&timing.LandMS, &timing.GateBudgetMS, &timing.Gates,
+				&timing.RunnerGates, &timing.RunnerGateMS, &timing.RunnerLandMS)
 	})
 	timing.OverBudget = timing.IsOverBudget()
 	return timing, err
@@ -174,7 +194,7 @@ func aggregatePassTiming(ctx context.Context, storePath, id string) (PassTiming,
 // reports the gate time, and files an item when the gate exceeded its budget.
 // The background context preserves measurements even after an operator stops the loop.
 func (l *Loop) recordPass(timing *PassTiming) error {
-	if timing.TickID == "" || (timing.Gates == 0 && !strings.HasPrefix(timing.TickID, "gen-")) {
+	if timing.TickID == "" || (timing.Gates == 0 && timing.RunnerGates == 0 && !strings.HasPrefix(timing.TickID, "gen-")) {
 		// Legacy once measurements omit ticks without gates; every applied loop
 		// pass records its generation, even if it did not run a gate.
 		return nil
@@ -196,6 +216,11 @@ func (l *Loop) recordPass(timing *PassTiming) error {
 		seconds(time.Duration(timing.StageMS)*time.Millisecond),
 		seconds(time.Duration(timing.DispatchMS)*time.Millisecond),
 		seconds(time.Duration(timing.LandMS)*time.Millisecond))
+	if timing.RunnerGates > 0 {
+		l.reportf("loop: tick %s runner changes %d gate %s land %s (outside ordinary budget)\n",
+			timing.TickID, timing.RunnerGates, seconds(time.Duration(timing.RunnerGateMS)*time.Millisecond),
+			seconds(time.Duration(timing.RunnerLandMS)*time.Millisecond))
+	}
 	if !timing.OverBudget {
 		return nil
 	}

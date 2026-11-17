@@ -1772,6 +1772,10 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 	}
+	runnerChange, err := l.runnerProofChange(ctx, candidate)
+	if err != nil {
+		return "", false, err
+	}
 	l.mu.Lock()
 	l.gatesInFlight++
 	l.mu.Unlock()
@@ -1789,8 +1793,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if timing != nil {
 		l.mu.Lock()
-		timing.Gates++
-		timing.GateMS += gate.DurationMS
+		timing.addGateTime(gate.DurationMS, runnerChange)
 		l.mu.Unlock()
 	}
 	// The gate is the long step: an item landed by hand while it ran gets no verdict,
@@ -1852,11 +1855,15 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, l.holdRewrite(ctx, candidate, h)
 	}
 	candidate.ObservedTrunk = h.Observed
+	runnerChange, err := l.runnerProofChange(ctx, candidate)
+	if err != nil {
+		return "", false, err
+	}
 	landStart := time.Now()
 	landed, err := l.cfg.Steps.Land(ctx, candidate)
 	if timing != nil {
 		l.mu.Lock()
-		timing.LandMS += time.Since(landStart).Milliseconds()
+		timing.addLandTime(time.Since(landStart).Milliseconds(), runnerChange)
 		l.mu.Unlock()
 	}
 	if err != nil {
