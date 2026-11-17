@@ -86,9 +86,23 @@ rows), a tick cost 69 s of re-parsing that had nothing new in it.
   rewritten or truncated artifact replaces its rows instead of doubling them. A file that
   was only appended to is never re-read from the start — a build that resumed is proof
   the prefix was not touched.
-- **The layout has a version.** `PRAGMA user_version` is the schema's; a mismatch drops
-  and rebuilds rather than migrating, because the index is derived and a half-built one
-  is the one answer this tool must never give.
+- **The layout has a version.** `PRAGMA user_version` is the schema's; a mismatch
+  deletes the file and rebuilds rather than migrating, because the index is derived and a
+  half-built one is the one answer this tool must never give. Deleting is deliberate:
+  emptying a large index in place journals every page of it first.
+- **No statement in a sync walks the whole event table.** The row counter is kept in
+  `index_meta` rather than read as `MAX(seq)`, one source's rows are deleted by their id
+  range rather than by the unindexed `source` column, a gate record is re-read only when
+  it changed, and a `tick.decision` already indexed is not written again. The suite asks
+  SQLite's query planner about every statement a sync runs.
+- **Each run is its own transaction, in WAL mode.** A sync stopped part way keeps every
+  run it finished, and the next one starts after them. A killed writer's uncommitted work
+  is ignored by the next open instead of being rolled back, and a reader never meets a
+  hot journal it cannot recover — the defect that turned one killed ingest into a
+  whole-corpus rebuild on 2026-11-17.
+- **One writer at a time, without waiting.** A sync holds an exclusive lock on
+  `index.db.lock` beside the index. An `ingest` that finds it held prints `index: busy`
+  and exits 0 at once: the sync already running, or the next one, reads what is new.
 
 The parser reads a JSONL source one line at a time, so peak memory is the rows it keeps,
 not the size of the largest file: a 25 MiB log peaks around 450 KiB while parsing.
@@ -102,7 +116,7 @@ that connection raises.
 
 | Command | Answers |
 | --- | --- |
-| `tillr-trace ingest` | the write the drain loop runs after each tick: sync `index.db` with the artifacts the tick's runs left — parsing only what changed — and print where it is. Every face below syncs first, so this is the one a supervisor needs when it has no query to make. |
+| `tillr-trace ingest` | the write the drain loop asks for after each tick, in the background: sync `index.db` with the artifacts the tick's runs left — parsing only what changed — and print where it is. Every face below syncs first, so this is the one a supervisor needs when it has no query to make. |
 | `tillr-trace tick <id\|--last>` | acceptance Q4: one unattended tick, in order — every `obs.event` carrying that `tick_id`, plus `tick.decision` rows lifted from the store's `dispatches`. An empty tick says so; it is not reported as a verified quiet one. |
 | `tillr-trace audit <run-id>` | acceptance Q2: the run's lane/item/store state, its preserved `brief.md`/`fence.txt`/`base_sha` locations, its model turns with tokens and cost, the calls it made with exit codes, and every claim verdict. |
 | `tillr-trace cost` | acceptance Q1: per lane, per route, per model — runs, retries, LLM wall time, tokens in / cache-read / out / reasoning, US dollars. |

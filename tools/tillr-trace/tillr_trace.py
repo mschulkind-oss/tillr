@@ -14,7 +14,9 @@ Design: docs/design/session-recording.md §3.2 (layout), §4.2 (trace_key),
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -34,7 +36,12 @@ EXCERPT_MAX = 200
 # The index's own layout. The index is derived, so a version that does not match is
 # dropped and rebuilt rather than migrated: a migration would be a second spelling of
 # the build, and the one thing this tool must never do is answer from a half-built one.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# The page cache one ingest may hold, in KiB (SQLite reads a negative `cache_size` as
+# KiB). The default is 2 MiB, and an index of tens of millions of rows then re-reads its
+# B-tree pages from the OS for nearly every insert.
+CACHE_KIB = 65536
 
 # §5.1 rule 1: a credential never reaches an index row, even inside an excerpt.
 CREDENTIAL_RE = re.compile(
@@ -73,7 +80,7 @@ CREATE TABLE IF NOT EXISTS obs_events (
   payload     TEXT NOT NULL DEFAULT '{}',
   source      TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS obs_events_run  ON obs_events(run_id, ts_start);
+CREATE INDEX IF NOT EXISTS obs_events_run  ON obs_events(run_id, kind, ts_start);
 CREATE INDEX IF NOT EXISTS obs_events_tick ON obs_events(tick_id, ts_start);
 CREATE INDEX IF NOT EXISTS obs_events_kind ON obs_events(kind, ts_start);
 
@@ -125,6 +132,11 @@ CREATE TABLE IF NOT EXISTS ingested_files (
   state        TEXT NOT NULL DEFAULT 'ok',
   detail       TEXT NOT NULL DEFAULT '',
   carry        TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS index_meta (
+  key   TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
 );
 """
 
@@ -206,14 +218,24 @@ def reset_seq(conn):
     """Continue the build-wide row counter where the index left it.
 
     `seq` orders two rows a run wrote in the same millisecond, so an appended row must
-    sort after everything already stored. It restarts from the highest stored value
-    rather than from one, because a rebuild is no longer the only way rows arrive.
+    sort after everything already stored. It restarts from the value the last commit
+    recorded in `index_meta` rather than from `MAX(seq)`: `seq` has no index, so that
+    maximum was a walk of the whole table on every sync.
     """
     global _SEQ
-    row = conn.execute(
-        "SELECT COALESCE(MAX(seq), 0) FROM obs_events WHERE seq >= 0").fetchone()
-    _SEQ = itertools.count((row[0] or 0) + 1)
+    row = conn.execute("SELECT value FROM index_meta WHERE key = 'next_seq'").fetchone()
+    _SEQ = itertools.count(row[0] if row else 1)
     return _SEQ
+
+
+def save_seq(conn):
+    """Record where the row counter stands, in the transaction that used it."""
+    global _SEQ
+    upcoming = next(_SEQ)
+    _SEQ = itertools.count(upcoming)
+    conn.execute(
+        "INSERT INTO index_meta (key, value) VALUES ('next_seq', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (upcoming,))
 
 
 def _source_slug(path):
@@ -325,13 +347,18 @@ class Parsed:
         self.summary = summary if summary is not None else {}
 
 
-def _jsonl_lines(path, start=0):
+def _jsonl_lines(path, start=0, wanted=None):
     """Yield `(line_start, line_end, obj, parsed, complete)` for each line from `start`.
 
     One line is read, decoded and handed on before the next is read, so a caller holds
     one line and its row — never the whole file. `complete` is False for a final line
     the writer has not finished appending; the caller leaves that line unread so the
     next build parses it whole instead of dropping or half-parsing it.
+
+    `wanted` is the byte strings a line the caller reads must contain. A complete line
+    holding none of them is passed on as `None` without being decoded: most of a git
+    trace is region and data events no row is made from, and decoding them was most of
+    the parse.
     """
     with open(path, "rb") as handle:
         handle.seek(start)
@@ -343,6 +370,9 @@ def _jsonl_lines(path, start=0):
             line_start = offset
             offset += len(raw)
             complete = raw.endswith(b"\n")
+            if wanted and complete and not any(marker in raw for marker in wanted):
+                yield line_start, offset, None, True, complete
+                continue
             text = raw.decode("utf-8", "replace").strip()
             if not text:
                 yield line_start, offset, None, True, complete
@@ -645,7 +675,8 @@ def parse_git_trace2(path, trace, start=0, ordinal=0, carry=None):
     open_sids = dict(carry.get("open") or {})
     stream = Stream(start)
     try:
-        for line_start, line_end, event, parsed, complete in _jsonl_lines(path, start):
+        for line_start, line_end, event, parsed, complete in _jsonl_lines(
+                path, start, wanted=GIT_EVENTS_READ):
             if not stream.feed(line_start, line_end, parsed, complete):
                 break
             if not parsed or not isinstance(event, dict):
@@ -664,6 +695,11 @@ def parse_git_trace2(path, trace, start=0, ordinal=0, carry=None):
     carry["open"] = open_sids
     state, detail = stream.state(rows.ordinal)
     return Parsed(rows, state, detail, stream.consumed, carry)
+
+
+# The two trace2 events a `git.trace2` row is made from. Every event line names its kind
+# as a JSON string, so a line holding neither string is not one of them.
+GIT_EVENTS_READ = (b'"start"', b'"exit"')
 
 
 def _git_row(rows, trace, started, event):
@@ -847,7 +883,10 @@ def _artifact_refs(raw):
         refs = json.loads(raw or "[]")
     except (TypeError, ValueError):
         return {}
-    return {ref.get("kind"): ref.get("Ref") for ref in refs if isinstance(ref, dict)}
+    # The run record spells the key `ref` (tools/tillr-run, `ArtifactRef`). `Ref` is kept
+    # for a record written before the field had a JSON name.
+    return {ref.get("kind"): ref.get("ref") or ref.get("Ref")
+            for ref in refs if isinstance(ref, dict)}
 
 
 # ---------------------------------------------------------------- build
@@ -978,129 +1017,199 @@ class Index:
             stamp[path] = (stat.st_mtime_ns, stat.st_size)
         return stamp
 
-    def _stored_sources(self):
-        """What the index last recorded for each source, or None when it must be rebuilt.
+    def _lock_path(self):
+        return self.index_path.with_name(self.index_path.name + ".lock")
 
-        A None answer means "there is nothing here this build can trust": no index, a
-        layout from another schema version, or a file that is not a database. A full
-        rebuild is the only honest response to any of them.
+    @contextlib.contextmanager
+    def _writer(self):
+        """Hold the index's one-writer lock, answering False when another sync holds it.
+
+        The lock is taken without waiting. A second writer would either wait on the first
+        one's transactions or parse the same new bytes again, and neither is work the
+        caller needs: the sync already running, or the next one, reads what is new.
+        """
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._lock_path(), "a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def _discard(self):
+        """Remove the index and its side files, so the next open starts an empty one.
+
+        The index is derived, so a layout it cannot trust is deleted rather than emptied.
+        Emptying it in place is a `DELETE` of every row inside one transaction, which
+        journals every page of the old file: measured on 2026-11-17, a 32 GB index grew a
+        32 GB rollback journal that way before the rebuild had parsed anything.
+        """
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            with contextlib.suppress(FileNotFoundError):
+                Path(str(self.index_path) + suffix).unlink()
+
+    def _foreign_layout(self):
+        """Whether the file at the index path is not this layout's index.
+
+        A rollback journal beside the index can only be a writer of an older layout's —
+        this one writes a WAL — and opening the file read-write would first roll that
+        journal back, which costs as much as the transaction it undoes. Its version is
+        therefore read from the file as it stands, without recovering anything.
         """
         if not self.index_path.exists():
-            return None
+            return False
+        journal = Path(str(self.index_path) + "-journal")
+        if not journal.exists():
+            return False
         try:
-            conn = sqlite3.connect(f"file:{self.index_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(f"file:{self.index_path}?immutable=1", uri=True)
         except sqlite3.Error:
-            return None
+            return True
         try:
-            if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                return None
-            return {
-                row[0]: {"path": row[0], "run_id": row[1], "mtime_ns": row[2],
-                         "size_bytes": row[3], "parsed_bytes": row[4],
-                         "rows_parsed": row[5], "state": row[6], "detail": row[7],
-                         "carry": row[8]}
-                for row in conn.execute(
-                    "SELECT path, run_id, mtime_ns, size_bytes, parsed_bytes,"
-                    " rows_parsed, state, detail, carry FROM ingested_files")}
-        except sqlite3.Error:
-            return None
+            return conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION
+        except sqlite3.DatabaseError:
+            return True
         finally:
             conn.close()
+
+    def _open(self):
+        """The index's one read-write connection, on this layout, in WAL mode.
+
+        WAL is what makes a killed writer cheap: its uncommitted frames are ignored by the
+        next open instead of being rolled back into the file, and a read-only reader never
+        meets a hot journal it cannot recover. An index of another layout, or a file that
+        is not a database, is discarded and an empty index opened in its place.
+        """
+        if self._foreign_layout():
+            self._discard()
+        for attempt in (1, 2):
+            conn = sqlite3.connect(str(self.index_path))
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute(f"PRAGMA cache_size = -{CACHE_KIB}")
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+            except sqlite3.DatabaseError:
+                conn.close()
+                if attempt == 2:
+                    raise
+                self._discard()
+                continue
+            if version == SCHEMA_VERSION:
+                return conn
+            fresh = not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone()
+            if fresh:
+                conn.executescript(SCHEMA)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                conn.commit()
+                return conn
+            conn.close()
+            if attempt == 2:
+                raise sqlite3.DatabaseError(f"{self.index_path}: layout {version} remains")
+            self._discard()
+        raise AssertionError("unreachable")
+
+    def _stored_sources(self, conn):
+        """What the index last recorded for each source; empty for a new index."""
+        return {
+            row[0]: {"path": row[0], "run_id": row[1], "mtime_ns": row[2],
+                     "size_bytes": row[3], "parsed_bytes": row[4],
+                     "rows_parsed": row[5], "state": row[6], "detail": row[7],
+                     "carry": row[8]}
+            for row in conn.execute(
+                "SELECT path, run_id, mtime_ns, size_bytes, parsed_bytes,"
+                " rows_parsed, state, detail, carry FROM ingested_files")}
 
     # -- the sync
 
     def sync(self, rebuild=False):
         """Bring the index up to date with its sources, parsing only what changed.
 
-        Answers `reused` when no artifact changed and `rebuilt` when at least one was
-        read. Both answers are derived facts, never a judgment: the sources are right and
-        the index is only ever their shadow.
+        Answers `reused` when no artifact changed, `rebuilt` when at least one was read,
+        and `busy` when another sync holds the index's writer lock — that sync, or the
+        next, reads what is new. None is a judgment: the sources are right and the index
+        is only ever their shadow.
         """
+        with self._writer() as held:
+            if not held:
+                return "busy"
+            if rebuild or self.rebuild:
+                self._discard()
+            return self._sync()
+
+    def build(self, watermark=None):
+        """A full rebuild of the index from its artifacts: discard it and sync."""
+        return self.sync(rebuild=True)
+
+    def _sync(self):
         store_runs = self._store_runs()
         run_dirs = self._run_dirs()
         sources = self._source_map(store_runs, run_dirs)
         wanted = self._watermark(sources)
-        stored = self._stored_sources()
-        if rebuild or self.rebuild or stored is None:
-            self._build(wanted, stored or {}, store_runs, run_dirs, sources, full=True)
-            return "rebuilt"
-        changed = {
-            path for path, (mtime, size) in wanted.items()
-            if path not in stored or (stored[path]["mtime_ns"],
-                                      stored[path]["size_bytes"]) != (mtime, size)}
-        gone = set(stored) - set(wanted)
-        if not changed and not gone:
-            derived = self._build(wanted, stored, store_runs, run_dirs, sources)
-            return "rebuilt" if derived else "reused"
-        self._build(wanted, stored, store_runs, run_dirs, sources,
-                    changed=changed, gone=gone)
-        return "rebuilt"
-
-    def build(self, watermark=None):
-        """A full rebuild of the index from its artifacts, drop and refill."""
-        store_runs = self._store_runs()
-        run_dirs = self._run_dirs()
-        sources = self._source_map(store_runs, run_dirs)
-        self._build(watermark if watermark is not None else self._watermark(sources),
-                    {}, store_runs, run_dirs, sources, full=True)
+        conn = self._open()
+        try:
+            stored = self._stored_sources(conn)
+            changed = {
+                path for path, (mtime, size) in wanted.items()
+                if path not in stored or (stored[path]["mtime_ns"],
+                                          stored[path]["size_bytes"]) != (mtime, size)}
+            gone = set(stored) - set(wanted)
+            derived = self._build(conn, wanted, stored, store_runs, run_dirs, sources,
+                                  changed, gone)
+        finally:
+            conn.close()
+        return "rebuilt" if derived or changed or gone else "reused"
 
     # -- the build
 
-    def _build(self, wanted, stored, store_runs, run_dirs, sources,
-               changed=frozenset(), gone=frozenset(), full=False):
+    def _build(self, conn, wanted, stored, store_runs, run_dirs, sources, changed, gone):
         """Bring the index up to date, answering how many runs were derived.
 
         A run with nothing new is not derived at all: its rows and its claims are already
         what a derivation would produce, so the store columns it owns are refreshed and
-        nothing is parsed.
+        nothing is parsed. Each derived run is its own transaction, so a sync stopped part
+        way keeps every run it finished and the next one starts after them.
         """
         derived = 0
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.index_path))
-        try:
-            if self._ensure_schema(conn):
-                full = True
-            if full:
-                for table in ("obs_events", "runs_index", "claim_checks", "ingested_files"):
-                    conn.execute(f"DELETE FROM {table}")
-                stored = {}
-            reset_seq(conn)
-            existing = {row[0] for row in conn.execute("SELECT run_id FROM runs_index")}
-            run_ids = set(store_runs) | set(run_dirs)
-            dirty = set(run_ids) if full else set()
-            if not full:
-                # A changed file marks its run; a removed one marks the run it belonged
-                # to; a run the index has never seen is derived whatever its files say.
-                dirty |= {sources[path] for path in changed if path in sources}
-                dirty |= {stored[path].get("run_id") for path in gone
-                          if path in stored and stored[path].get("run_id")}
-                dirty |= {run_id for run_id in run_ids if run_id not in existing}
-            if self._store_readable():
-                # A run the store no longer holds and no directory remains for is gone
-                # from the sources, so it goes from the index too: a lingering row is a
-                # claim about a run that nothing on disk supports.
-                for (run_id,) in conn.execute("SELECT run_id FROM runs_index").fetchall():
-                    if run_id in run_ids:
-                        continue
-                    for table in ("obs_events", "runs_index", "claim_checks"):
-                        conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
-            for run_id in sorted(run_ids):
-                store_row = store_runs.get(run_id)
-                if run_id in dirty:
-                    meta, summary, updates = self._derive(
-                        conn, run_id, run_dirs.get(run_id), store_row, wanted, stored)
-                    self._upsert_run(conn, meta)
-                    self._replace_claims(conn, meta, summary)
-                    self._record_sources(conn, run_id, updates)
-                    derived += 1
-                else:
-                    self._update_store_columns(conn, run_id, store_row)
-            self._tick_decisions(conn)
-            self._sync_unreadable_store(conn)
-            self._prune_sources(conn, gone)
-            conn.commit()
-        finally:
-            conn.close()
+        reset_seq(conn)
+        existing = {row[0] for row in conn.execute("SELECT run_id FROM runs_index")}
+        run_ids = set(store_runs) | set(run_dirs)
+        # A changed file marks its run; a removed one marks the run it belonged to; a run
+        # the index has never seen is derived whatever its files say.
+        dirty = {sources[path] for path in changed if path in sources}
+        dirty |= {stored[path].get("run_id") for path in gone
+                  if path in stored and stored[path].get("run_id")}
+        dirty |= {run_id for run_id in run_ids if run_id not in existing}
+        if self._store_readable():
+            # A run the store no longer holds and no directory remains for is gone from
+            # the sources, so it goes from the index too: a lingering row is a claim
+            # about a run that nothing on disk supports.
+            for run_id in existing - run_ids:
+                for table in ("obs_events", "runs_index", "claim_checks"):
+                    conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
+        self._prune_sources(conn, gone, stored)
+        self._tick_decisions(conn)
+        self._sync_unreadable_store(conn)
+        save_seq(conn)
+        conn.commit()
+        for run_id in sorted(run_ids):
+            store_row = store_runs.get(run_id)
+            if run_id in dirty:
+                meta, summary, updates = self._derive(
+                    conn, run_id, run_dirs.get(run_id), store_row, wanted, stored)
+                self._upsert_run(conn, meta)
+                self._replace_claims(conn, meta, summary)
+                self._record_sources(conn, run_id, updates)
+                save_seq(conn)
+                conn.commit()
+                derived += 1
+            else:
+                self._update_store_columns(conn, run_id, store_row)
+        conn.commit()
         return derived
 
     def _store_readable(self):
@@ -1114,21 +1223,6 @@ class Index:
             return store.state == "ok" and "runs" in store.tables
         finally:
             store.close()
-
-    def _ensure_schema(self, conn):
-        """Create the index's tables, answering True when an old layout was dropped."""
-        try:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-        except sqlite3.Error:
-            version = -1
-        if version != SCHEMA_VERSION:
-            for table in ("obs_events", "runs_index", "claim_checks", "ingested_files"):
-                conn.execute(f"DROP TABLE IF EXISTS {table}")
-            conn.executescript(SCHEMA)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            return True
-        conn.executescript(SCHEMA)
-        return False
 
     def _derive(self, conn, run_id, run_dirs, store_row, wanted, stored):
         """Derive one run: its runs_index row, its new obs rows, its claims.
@@ -1214,10 +1308,14 @@ class Index:
             # Nothing to read now. A source that was read before and is gone is parsed
             # again so it reads `missing` instead of keeping a state it no longer has.
             return ("skip", 0, None) if row is None else ("full", 0, row)
-        if force_full or row is None:
+        if row is None:
             return "full", 0, row
         if (row["mtime_ns"], row["size_bytes"]) == stat:
             return "skip", row["parsed_bytes"], row
+        if force_full:
+            # A record rewritten whole is re-read whole, but only when it changed: an
+            # unchanged one is skipped like any other source.
+            return "full", 0, row
         if stat[1] > row["parsed_bytes"]:
             return "resume", row["parsed_bytes"], row
         return "full", 0, row
@@ -1232,7 +1330,7 @@ class Index:
                           row["parsed_bytes"], _loads(row.get("carry")),
                           _loads(row.get("carry")).get("summary") or {})
         if mode == "full":
-            conn.execute("DELETE FROM obs_events WHERE source = ?", (str(path),))
+            _delete_source_rows(conn, trace["run_id"], path)
             ordinal, carry = 0, {}
         else:
             ordinal, carry = row["rows_parsed"], _loads(row.get("carry"))
@@ -1324,9 +1422,11 @@ class Index:
                 (path, run_id, rec["mtime_ns"], rec["size_bytes"], rec["parsed_bytes"],
                  rec["rows_parsed"], rec["state"], rec["detail"], rec["carry"]))
 
-    def _prune_sources(self, conn, gone):
+    def _prune_sources(self, conn, gone, stored):
         for path in gone:
-            conn.execute("DELETE FROM obs_events WHERE source = ?", (path,))
+            run_id = (stored.get(path) or {}).get("run_id")
+            if run_id:
+                _delete_source_rows(conn, run_id, path)
             conn.execute("DELETE FROM ingested_files WHERE path = ?", (path,))
 
     def _tick_decisions(self, conn):
@@ -1339,6 +1439,8 @@ class Index:
         """
         store = Store(self.store_path)
         held = set()
+        indexed = {obs_id for (obs_id,) in conn.execute(
+            "SELECT obs_id FROM obs_events WHERE kind = 'tick.decision'")}
         try:
             if store.state != "ok" or "dispatches" not in store.tables:
                 # The store is the authority for these rows. With none to read there is
@@ -1350,6 +1452,11 @@ class Index:
                     " dispatched_at FROM dispatches"):
                 obs_id = f"obs-dispatch-{row['decision_id']}"
                 held.add(obs_id)
+                if obs_id in indexed:
+                    # A dispatch row is written once and never changed, so one already
+                    # indexed is not written again: rewriting every decision on every
+                    # sync made a sync's cost follow the store's whole history.
+                    continue
                 payload = {"outcome": row["action"], "reason": row["reason"]}
                 conn.execute(
                     "INSERT OR REPLACE INTO obs_events (obs_id, seq, kind, ts_start,"
@@ -1361,10 +1468,8 @@ class Index:
                      json.dumps(payload), str(self.store_path)))
         finally:
             store.close()
-        for (obs_id,) in conn.execute(
-                "SELECT obs_id FROM obs_events WHERE kind = 'tick.decision'").fetchall():
-            if obs_id not in held:
-                conn.execute("DELETE FROM obs_events WHERE obs_id = ?", (obs_id,))
+        for obs_id in indexed - held:
+            conn.execute("DELETE FROM obs_events WHERE obs_id = ?", (obs_id,))
 
     def _sync_unreadable_store(self, conn):
         obs_id = f"obs-store-{UNREADABLE}"
@@ -1378,6 +1483,18 @@ class Index:
              f"store: unreadable (no store at {self.store_path})",
              json.dumps({"artifact": "state.db", "path": str(self.store_path),
                          "reason": "absent"}), str(self.store_path)))
+
+
+def _delete_source_rows(conn, run_id, path):
+    """Delete the rows one run derived from one source, by their id range.
+
+    A row's id is `obs-<run>-<source stamp>-<ordinal>`, so one source's rows are one
+    contiguous range of the primary key. `source` has no index, and a `DELETE ... WHERE
+    source = ?` walked the whole table once per source re-read.
+    """
+    prefix = f"obs-{run_id}-{_source_slug(path)}-"
+    conn.execute("DELETE FROM obs_events WHERE obs_id >= ? AND obs_id < ?",
+                 (prefix, prefix[:-1] + "."))
 
 
 def _loads(raw):
@@ -1790,8 +1907,8 @@ def main(argv=None):
                        help="drop and rebuild index.db from the Tier 1 artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # `ingest` is the write the loop runs after a tick: it builds index.db from the
-    # artifacts the tick's runs left and prints nothing else. Every other face syncs
+    # `ingest` is the write the loop asks for after a tick: it brings index.db up to
+    # date with the artifacts the tick's runs left and prints nothing else. Every other face syncs
     # too, because a query that read a stale index would answer the wrong question, but
     # a supervisor has no query to make -- it only needs the derived rows to exist.
     sub.add_parser("ingest", help="index the recorded artifacts, and print where")
@@ -1813,8 +1930,16 @@ def main(argv=None):
     index = Index(args.trace_root, args.store, args.index, args.rebuild)
     state = index.sync(rebuild=args.rebuild)
     if args.command == "ingest":
-        print(f"index: {state} {index.index_path}")
+        if state == "busy":
+            print(f"index: busy {index.index_path} (another ingest holds"
+                  f" {index._lock_path()}; it, or the next one, reads what is new)")
+        else:
+            print(f"index: {state} {index.index_path}")
         return 0
+    if state == "busy" and not index.index_path.exists():
+        print(f"tillr-trace: no index at {index.index_path} yet, and another ingest is"
+              " building it", file=sys.stderr)
+        return 1
     conn = _conn(index.index_path)
     try:
         if args.command == "tick":
