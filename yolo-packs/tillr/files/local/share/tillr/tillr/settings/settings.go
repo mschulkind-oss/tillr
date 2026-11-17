@@ -15,10 +15,17 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// Intake names the tracked words directory and the paths an idea may change.
+type Intake struct {
+	Dir   string
+	Paths []string
+}
+
 // Settings holds optional post-landing actions and review intake. Empty command
 // and false after_landing disable actions; empty remote/ref mean the trunk's
-// configured upstream. A nil Comments disables automatic intake.
+// configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
+	Intake   Intake
 	Roll     Roll
 	Push     Push
 	Comments *Comments
@@ -98,8 +105,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows or prose)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose or intake)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -129,12 +136,14 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					}
 					s.WorkflowDefaults[seat] = ref
 				}
-			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo":
+			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo", "intake.dir":
 				str, ok := value.(string)
 				if !ok {
 					return Settings{}, refuse(full, "a string")
 				}
 				switch full {
+				case "intake.dir":
+					s.Intake.Dir = str
 				case "roll.command":
 					s.Roll.Command = str
 				case "push.remote":
@@ -146,7 +155,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				case "comments.repo":
 					s.Comments.Repo = str
 				}
-			case "roll.paths", "comments.paths":
+			case "roll.paths", "comments.paths", "intake.paths":
 				list, ok := value.([]any)
 				if !ok {
 					return Settings{}, refuse(full, "an array of strings")
@@ -159,7 +168,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					}
 					paths[i] = str
 				}
-				if table == "comments" {
+				if table == "intake" {
+					s.Intake.Paths = paths
+				} else if table == "comments" {
 					s.Comments.Paths = paths
 				} else {
 					s.Roll.Paths = paths
@@ -201,6 +212,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				s.Push.AfterLanding = flag
 			default:
 				expected := "a known push key (after_landing, remote or ref)"
+				if table == "intake" {
+					expected = "a known intake key (dir or paths)"
+				}
 				if table == "prose" {
 					expected = "a known prose key (rewrite)"
 				}
@@ -215,6 +229,16 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				return Settings{}, refuse(full, expected)
 			}
+		}
+	}
+	pathsToCheck := append([]string{}, s.Intake.Paths...)
+	if s.Intake.Dir != "" {
+		pathsToCheck = append(pathsToCheck, s.Intake.Dir)
+	}
+	for _, p := range pathsToCheck {
+		clean := strings.TrimSuffix(p, "/")
+		if clean == "" || clean == "." || !filepath.IsLocal(clean) || filepath.ToSlash(filepath.Clean(clean)) != clean || strings.ContainsAny(p, "*?") {
+			return Settings{}, refuse("intake", "clean repository-relative paths, not wildcards or the whole tree")
 		}
 	}
 	if c := s.Comments; c != nil {

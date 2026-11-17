@@ -1,4 +1,4 @@
-# tillr-view — the board, with opt-in item placement
+# tillr-view — the board, with opt-in owner writes
 
 > [!WARNING]
 > **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
@@ -20,7 +20,7 @@
 `tillr-view` renders a board's status and event log from a store snapshot or from a stream
 of records, answers what is running right now, and serves the same answers over HTTP. It
 keeps its own store handle read-only, so reads remain safe while writers run.
-With `serve --write`, it also delegates item placement to the item command.
+With `serve --write`, it also delegates item placement and idea saving to the item command.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
@@ -47,6 +47,50 @@ with `--tillr-item`. A missing writer is an explicit 503 `writer-unavailable`.
 The [observatory actions design](../../docs/design/observatory-actions.md#65-what-the-server-refuses)
 lists the refusal rules. Whoever can reach a write-enabled server can reorder
 items; there is no login. These requests never edit the repository or move a ref.
+
+## Saving ideas from every page
+
+With `serve --write`, every page's header has **New idea** (`n` when not typing).
+The form has one words box and Top, Bottom, or After an item. Save with the button
+or `Ctrl+Enter`. Closing the form keeps the draft; reload restores it from browser
+storage scoped to the served store. A confirmed save clears only the matching
+submitted draft; a newer draft written by another tab is kept. A refusal
+leaves the form and words open; a storage failure is visible rather than claiming
+the draft will survive a reload.
+
+`POST /api/v1/ideas` accepts exactly this form:
+
+```json
+{"words":"The owner's exact words\n","place":{"to":"first"}}
+```
+
+`place` accepts the four destinations above. Both write routes share the origin,
+content-type and size checks. The server passes words on standard input to
+`tillr-item idea --root <root>`, with its configured store and destination.
+Configure `intake.dir` and `intake.paths` in the served repository's settings;
+[the item command](../tillr-item/README.md#saving-an-idea) owns the words file,
+transaction, bounds and retry behavior. Success returns the same position and
+event fields as placement, with the new or original item's id.
+
+Items rows show an `idea` chip. The Item page shows the words as plain text in
+full, with `not yet in the tree` until the words path is a regular file in the
+served repository's current commit. Untracked or uncommitted copies do not
+close this gap, and uncommitted edits never replace the saved words on the page.
+The committed bytes or, before landing, the intake bytes must match the saved
+hash and size. A missing or altered copy is an explicit read refusal, never
+invented text.
+The [observatory actions design](../../docs/design/observatory-actions.md#65-what-the-server-refuses)
+lists request and input statuses; a failed store write also returns 500
+`intake-store-failed`, naming the preserved file. Without `--write`, no New idea
+control or shortcut is available and POST is refused before request validation.
+
+## Dependency advisory backlog
+
+The [web dependency lockfile](./web/package-lock.json) needs a separate security
+review. On 2026-11-17, `npm ci` in `tools/tillr-view/web` completed successfully
+but reported six vulnerabilities: three moderate, one high, and two critical.
+Next: identify the affected packages, repair their dependency versions, and
+verify the browser suite and build. Idea saving does not change those versions.
 
 ## Earlier uncommitted work
 

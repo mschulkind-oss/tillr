@@ -181,6 +181,7 @@ export interface ItemProjection {
 }
 
 export interface ItemView {
+  kind?: "idea";
   /** All recorded dependency edges, including completed blockers; absent on older servers. */
   blocked_by?: string[];
   item_id: string;
@@ -504,6 +505,7 @@ export interface GraphRevisionView {
 }
 
 export interface ItemData {
+  idea?: { words: string; words_path: string; in_tree: boolean };
   graph_revisions?: GraphRevisionView[];
   usage?: UsageSum;
   comments?: CommentItemView;

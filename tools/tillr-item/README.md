@@ -51,6 +51,41 @@ Unknown items or neighbors are refused as `unknown-item`; terminal or parked
 ones as `not-in-order`. Update events record `placed_by` and `placed_via`,
 defaulting to `owner` and `cli`. Run `tillr-item place --help` for all flags.
 
+## Saving an idea
+
+`idea` reads the owner's words from standard input and accepts the same destinations
+as `place`. The [idea intake design](../../docs/design/observatory-actions.md#5-adding-an-idea)
+defines the item: design seat, first-line title, three fixed criteria, and the tracked
+words path plus the configured paths as its fence.
+
+```sh
+printf 'Make the queue easier to read\n' | tillr-item idea --store .tillr/state.db --root . --to first
+```
+
+Configure the repository's `.tillr.toml` before saving:
+
+```toml
+[intake]
+dir = "docs/ideas"
+paths = ["docs/design/", "docs/tillr/roadmap.md", "docs/pi/roadmap.md", "docs/roadmap.md"]
+```
+
+The command preserves valid UTF-8 words of 1 byte through 256 KiB, not only
+whitespace. It flushes `intake/<item-id>.txt` beside the store before creating
+both the item and `idea_intake` row in one transaction. The row records SHA-256,
+byte count, and the tracked words path. A failed store write leaves the file and
+names it in the refusal; missing settings refuse `intake-not-configured` with
+only the words file saved. Opening a missing, incompatible, or busy store does
+not write an idea.
+
+The id is `item-idea-` plus ten hash digits, lengthened on a collision. Identical
+words answer the first item without changing its place or appending an event.
+An `item.idea` result carries `item_id`, `place`, `count`, `event_seq`, and
+`event_head_seq`; a retry of an item no longer in the order has place 0.
+`words-empty`, `words-not-text`, and `words-too-large` name input refusals.
+No tracked file is written by saving; the words reach the tree through the
+idea's own landing. There is no reserved priority prefix.
+
 ## State invariants
 
 Item states, finished states, the ready/blocked/closed roles, and allowed moves come

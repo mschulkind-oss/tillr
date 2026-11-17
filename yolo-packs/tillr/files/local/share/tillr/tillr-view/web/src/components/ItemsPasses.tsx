@@ -203,7 +203,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
             if (below && next) dropAt(next.item_id);
             else dropAt(row.item_id, below);
           }}>
-          <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
+          <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}{item?.kind === "idea" ? <> <span className="chip">idea</span> {item.title}</> : null}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
           {writesEnabled ? <td>{canMove(row) ? <>
             {orderedMoves ? <button type="button" className="ledger__drag" aria-label={`Drag ${row.item_id}`} disabled={moving !== null} draggable={moving === null}

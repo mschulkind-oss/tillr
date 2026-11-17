@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ApiEnvelope, PassRow, SnapshotData } from "../models/types";
 import { LoopSummary } from "./Home";
+import { NewIdea } from "./NewIdea";
 import { Glossary } from "./Glossary";
 import { refusalCode } from "./RefusalState";
 import { URL_CHANGE_EVENT } from "../models/url";
@@ -44,6 +45,7 @@ export function ObservatoryShell({ children, hash, snapshot, snapshotError, pass
         <strong>tillr</strong><nav aria-label="Observatory">{NAV.map(([label, url]) => <a key={url} href={url}
           aria-current={(hash || "#/").split("?")[0] === url ? "page" : undefined}>{label}</a>)}</nav>
         <span className="observatory-nav__freshness">{paused ? "paused" : live ? "live" : "polling"} · seq {snapshot?.snapshot.event_head_seq ?? "not recorded"} · {age === null ? "age not recorded" : `${age}s old`}</span>
+        <NewIdea key={snapshot?.snapshot.store_path ?? ""} enabled={snapshot?.snapshot.writes_enabled === true} items={snapshot?.data.items ?? []} store={snapshot?.snapshot.store_path ?? ""} onSaved={() => onRefresh()} />
         <button type="button" onClick={onPause}>{paused ? "Resume updates" : "Pause updates"}</button>
         <button type="button" onClick={onRefresh}>Refresh</button>
       </header>

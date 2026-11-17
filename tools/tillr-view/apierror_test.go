@@ -22,6 +22,7 @@ import (
 // Negative control: dropping one entry from apiCodes fails
 // TestEveryErrorCodeHasAStatus.
 var allErrorCodes = []string{
+	codeWordsEmpty, codeWordsNotText, codeWordsTooLarge, codeIntakeNotConfigured, codeIntakeStoreFailed,
 	codeReadOnly, codeOriginRefused, codeContentType, codeTooLarge, codeBadRequest,
 	codeUnknownItem, codeNotInOrder, codeStoreBusy, codeWriterUnavailable,
 	codeStoreAbsent,

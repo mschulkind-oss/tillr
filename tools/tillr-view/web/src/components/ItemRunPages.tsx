@@ -61,6 +61,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
   const [pinned, setPinned] = useState(row);
   if (!pinned && row) setPinned(row);
   return <div className="entity-page" aria-label="Item page"><h1>Item <EntityLink kind="item" id={id} /></h1>
+    {item.data?.data.idea ? <section aria-label="Idea words"><h2><span className="chip">idea</span> The words</h2><p>{item.data.data.idea.in_tree ? "in the tree" : "not yet in the tree"} · {item.data.data.idea.words_path}</p><pre className="idea-words">{item.data.data.idea.words}</pre></section> : null}
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => { window.location.hash = `#/run/${encodeURIComponent(run)}`; }} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
     {item.data ? <><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} /><ItemTimeline item={item.data.data} /></> : null}
