@@ -1364,6 +1364,9 @@ planned:
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
 		return "", err
 	}
+	if err := l.releaseUnlaunchedClaims(ctx); err != nil {
+		return "", err
+	}
 	if !l.nonLanding {
 		if err := l.releaseTrunkAcquittals(ctx); err != nil {
 			return "", err

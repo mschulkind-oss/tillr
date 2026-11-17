@@ -131,7 +131,12 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 		if _, err := tx.Exec(`DELETE FROM dispatches WHERE decision_id=? AND item_id=? AND run_id=?`, d.DecisionID, d.ItemID, d.RunRequest.RunID); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id=?`, "idle", d.LaneID, d.RunRequest.RunID)
+		if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id=?`, "idle", d.LaneID, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		// The run never started, so the claim's conflict move is undone with it
+		// (unlaunched_claim.go): the re-plan offers the item another lane.
+		_, err := undoClaimedConflict(tx, d, l.cfg.Now().UTC())
 		return err
 	})
 }
