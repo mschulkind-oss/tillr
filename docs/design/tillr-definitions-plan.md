@@ -711,8 +711,50 @@ and a block holds at most eight criteria, so c8 carries both fixes and a test fo
   utility's side: a verdict recorded twice is two events for the same answer, and a move to the
   state an item already has appends nothing.
 
-The first run's partial work was not committed and is not on the trunk. A run of this item starts
-from the tree as it stands.
+A second run on 2026-11-17 built c1 to c8 against this text and also stopped before committing.
+Its work is kept at the ref `refs/tillr/preserved/run-item-def-finish-on-hook-a3` [unlanded]: 34
+files, 17 of them source and 17 their pack copies. It stopped because one test that hook
+completion does not reach, `TestFailedDesignerResumeStartsNewSessionOnce` in
+[designer_choice_test.go](../../tools/tillr-drain/drain/designer_choice_test.go), failed once in
+the full sharded suite with `context deadline exceeded`. A failed suite cannot be waived by a
+passing rerun, so that run was right not to commit. This answers the conflict it raised. No
+criterion changes; the rulings below say what a run of this item does about that test and about
+the fixtures it had to edit.
+
+- **The failure is the test's own 10-second deadline, not the change.** The test puts one
+  `context.WithTimeout` of 10 seconds around two whole loop runs and every store read after them.
+  The failure was at the last store read, after every earlier assertion had passed, so the clock ran
+  out and nothing was wrong with the result. Measured on 2026-11-17 on the second run's tree:
+  `go test ./drain -run '^TestFailedDesignerResumeStartsNewSessionOnce$' -count=20` passed all 20
+  in 75.5 seconds, about 3.8 seconds each, on a 32-core machine at a load average of 37. The
+  recorded duration for that test is 2.03 seconds. It fails when six shards and a review share the
+  machine and one run takes more than 10 seconds.
+- **This item repairs that test, because its file is under this item's paths.** The repair removes
+  the deadline: the test's context is cancelled when the test ends and carries no timeout, so a hang
+  is ended by the test binary's own limit and not by a clock that depends on load. That is the
+  repair the [sharded-runner report](../pi/tillr-go-shards-2026-11-17.md) records for the other
+  nested test deadlines. The test's assertions do not change. Raising 10 to a larger number is not
+  the repair, since any fixed number fails at some load.
+- **The same rule covers any other test the full suite fails.** If the failing test's file is under
+  this item's paths and the run can name the cause, the run repairs it in the same commit and
+  reports the failure, the cause and the passing result. A rerun that passes with nothing changed
+  repairs nothing and does not count. If the cause is outside this item's paths, or the run cannot
+  name it, the run stops and reports as before.
+- **Three test edits are expected, and c7 allows them.** c7 is about what the Git-landing
+  definition does when a run ends: its assertions stay as they are. It does not freeze fixtures
+  that the new start check reaches. The second run found that `TestNonLandingLoopStartsWithoutGit`
+  and `TestNonLandingLoopRefusesLandingSettings` used an item stub that failed on any call, or an
+  installed item program without `--require-verdicts`. Their fixtures may answer the start check's
+  help call, and must still fail if document sync or Git runs. The third edit is the deadline
+  above.
+- **The Git-only checks when a run is claimed are skipped under `hook`.** The second run's failing
+  `git` on `PATH` showed two Git checks in dispatch claiming, before any run starts. Under a
+  definition that completes on `hook` they do not run. Under the Git-landing definition they run
+  as today. This is what c5 already requires, stated so the next run does not rediscover it.
+
+Neither run's work is on the trunk. A run of this item starts from the tree as it stands and reads
+the preserved ref as a draft: it was built on an older base, its high-effort review was not
+finished, and its item suite was never run in full. The run finishes all three before it commits.
 
 <!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
