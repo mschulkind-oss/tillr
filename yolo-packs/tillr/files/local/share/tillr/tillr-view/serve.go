@@ -1147,25 +1147,30 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
-	Usage          usageSum         `json:"usage"`
-	Comments       *commentItemView `json:"comments,omitempty"`
-	Item           itemDetail       `json:"item"`
-	Criteria       []criterionView  `json:"criteria"`
-	BlockedBy      []string         `json:"blocked_by"`
-	Decisions      []dispatchView   `json:"decisions"`
-	Attempts       []attemptView    `json:"attempts"`
-	Verdicts       []verdictView    `json:"verdicts"`
-	ClosedBlockers []string         `json:"closed_blockers"`
+	Usage          usageSum            `json:"usage"`
+	Comments       *commentItemView    `json:"comments,omitempty"`
+	Item           itemDetail          `json:"item"`
+	Criteria       []criterionView     `json:"criteria"`
+	BlockedBy      []string            `json:"blocked_by"`
+	Decisions      []dispatchView      `json:"decisions"`
+	Attempts       []attemptView       `json:"attempts"`
+	Verdicts       []verdictView       `json:"verdicts"`
+	ClosedBlockers []string            `json:"closed_blockers"`
+	Runs           []itemRunView       `json:"runs"`
+	OwnerDecisions []ownerDecisionView `json:"owner_decisions"`
+	StateMoves     []stateMoveView     `json:"state_moves"`
 }
 
 // verdictView preserves each recorded judgment, not just the criterion's current state.
 type verdictView struct {
-	CriterionID string `json:"criterion_id"`
-	Verdict     string `json:"verdict"`
-	Actor       string `json:"actor"`
-	ActorKind   string `json:"actor_kind"`
-	ClaimClass  string `json:"claim_class"`
-	RecordedAt  string `json:"recorded_at"`
+	CriterionID string   `json:"criterion_id"`
+	Verdict     string   `json:"verdict"`
+	Actor       string   `json:"actor"`
+	ActorKind   string   `json:"actor_kind"`
+	ClaimClass  string   `json:"claim_class"`
+	RecordedAt  string   `json:"recorded_at"`
+	Reason      string   `json:"reason"`
+	Evidence    []string `json:"evidence"`
 }
 
 type itemDetail struct {
@@ -1265,18 +1270,54 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		}
 		out.Attempts = append(out.Attempts, attempt)
 	}
-	var active *storeRun
-	allUsageRuns, err := readUsageRuns(r)
+	out.OwnerDecisions, err = readOwnerDecisions(r, id)
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	itemRuns := []storeRun{}
-	for _, run := range allUsageRuns {
+	out.StateMoves, err = readStateMoves(r, id)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	var active *storeRun
+	itemRuns, err := readItemRuns(r, id)
+	if err != nil && !isMissingTable(err) {
+		return nil, unreadable(err)
+	}
+	lanes, err := readLanes(r)
+	if err != nil && !isMissingTable(err) {
+		return nil, unreadable(err)
+	}
+	allocations, err := readAllocations(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	for _, run := range liveRuns(lanes, itemRuns, allocations) {
 		if run.ItemID == id {
 			itemRuns = append(itemRuns, run)
 		}
 	}
+	// Preserve the usage summary's unfinished allocations, including lost leases.
+	known := make(map[string]bool, len(itemRuns))
+	for _, run := range itemRuns {
+		known[run.RunID] = true
+	}
+	for runID, a := range allocations {
+		if a.ItemID == id && !known[runID] {
+			itemRuns = append(itemRuns, storeRun{RunID: runID, ItemID: id, LaneID: a.LaneID,
+				Backend: a.Backend, StartedAtMS: a.StartedAtMS})
+		}
+	}
 	out.Usage, err = sumUsage(r, itemRuns)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	sort.SliceStable(itemRuns, func(i, j int) bool {
+		if itemRuns[i].StartedAtMS != itemRuns[j].StartedAtMS {
+			return itemRuns[i].StartedAtMS < itemRuns[j].StartedAtMS
+		}
+		return itemRuns[i].RunID < itemRuns[j].RunID
+	})
+	out.Runs, err = readItemRunHistory(r, itemRuns)
 	if err != nil {
 		return nil, unreadable(err)
 	}

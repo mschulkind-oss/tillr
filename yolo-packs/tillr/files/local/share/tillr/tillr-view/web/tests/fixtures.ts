@@ -333,6 +333,9 @@ export const blockedItemData: ItemData = {
   blocked_by: ["item-seed-02"],
   decisions: [],
   attempts: [],
+  runs: [],
+  owner_decisions: [],
+  state_moves: [],
 };
 
 export const dispatchedItemData: ItemData = {
@@ -350,6 +353,9 @@ export const dispatchedItemData: ItemData = {
   blocked_by: [],
   decisions: [],
   attempts: [],
+  runs: [],
+  owner_decisions: [],
+  state_moves: [],
 };
 
 /** Four rows, one per state the design's counts name, so a state filter has something to

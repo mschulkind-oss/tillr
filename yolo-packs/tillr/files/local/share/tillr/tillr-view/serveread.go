@@ -494,9 +494,24 @@ func readRun(r *store.Reader, runID string) (storeRun, bool, error) {
 
 // readItemRuns answers the runs dispatched for one item.
 func readItemRuns(r *store.Reader, itemID string) ([]storeRun, error) {
-	rows, err := r.Query(`SELECT run_id, COALESCE(item_id, ''), lane_id, backend, state, exit_code,
+	query := `SELECT run_id, COALESCE(item_id, ''), lane_id, backend, state, exit_code,
 		started_at, finished_at, usage_tokens, usage_cost_usd, event_seq FROM runs
-		WHERE item_id = ? ORDER BY started_at, run_id`, itemID)
+		WHERE item_id = ? ORDER BY started_at, run_id`
+	rows, err := r.Query(query, itemID)
+	// Spend columns arrived after runs shipped. Project only the absent columns as
+	// NULL, preserving any spend the historical store does carry, without migrating
+	// it from this read-only face. Other schema errors still refuse the request.
+	for isMissingColumn(err) {
+		switch {
+		case strings.Contains(err.Error(), "no such column: usage_tokens"):
+			query = strings.Replace(query, "usage_tokens", "NULL", 1)
+		case strings.Contains(err.Error(), "no such column: usage_cost_usd"):
+			query = strings.Replace(query, "usage_cost_usd", "NULL", 1)
+		default:
+			return nil, err
+		}
+		rows, err = r.Query(query, itemID)
+	}
 	if err != nil {
 		return nil, err
 	}

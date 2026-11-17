@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
 import type { DispatchView, ItemData, ItemView, TimelineData } from "../models/types";
 import { assembleSpans } from "../models/spans";
@@ -23,7 +23,28 @@ export function foldedDecisions(decisions: DispatchView[]) {
   return folds;
 }
 export function ItemTimeline({ item }: { item: ItemData }) {
-  return <><section aria-label="Item timeline"><h2>Pass timeline (newest first)</h2>
+  const history: { at: number; key: string; body: ReactNode }[] = [
+    ...item.runs.map(run => ({ at: run.started_at_ms, key: `run-${run.run_id}`, body: <>
+      Run <EntityLink kind="run" id={run.run_id} /> · {run.backend} · {run.end_cause ?? "end cause not recorded"} · {run.state} · exit {run.exit_code ?? "not recorded"}
+      {" · finish "}{run.finished_at_ms ? new Date(run.finished_at_ms).toISOString() : "not recorded"}
+      {" · "}{run.usage_tokens === null ? "tokens not recorded" : `${run.usage_tokens} tokens`}
+    </> })),
+    ...item.verdicts.map((v, i) => ({ at: Date.parse(v.recorded_at), key: `verdict-${i}`, body: <>
+      Verdict {v.criterion_id} · {v.verdict} · {v.reason || "reason not recorded"} · {v.actor || "actor not recorded"} ({v.actor_kind || "kind not recorded"}) · evidence: {v.evidence?.length ? v.evidence.join(", ") : "not recorded"}
+    </> })),
+    ...item.owner_decisions.map(d => ({ at: d.decided_at_ms, key: `decision-${d.decision_id}`, body: <>
+      Decision {d.decision_id} · {d.text} · {d.decided_by} · {d.status}{d.supersedes ? ` · supersedes ${d.supersedes}` : ""}
+    </> })),
+    ...[...item.state_moves].sort((a, b) => a.event_seq - b.event_seq).map(m => ({ at: m.at_ms, key: `move-${m.event_seq}`, body: <>
+      State {m.from || "not recorded"} → {m.to}{m.action ? ` · ${m.action}` : ""} · {m.reason || "reason not recorded"} · {m.actor || "actor not recorded"}
+    </> })),
+  ];
+  // Stable time sorting retains the source order for tied clocks, including the
+  // event log's numeric sequence for state moves.
+  history.sort((a, b) => a.at - b.at);
+  return <><section aria-label="Item history"><h2>Item history (oldest first)</h2>
+    {history.length ? <ol>{history.map(entry => <li key={entry.key}><time>{Number.isFinite(entry.at) ? new Date(entry.at).toISOString() : "time not recorded"}</time> · {entry.body}</li>)}</ol> : <p>No runs, verdicts, owner decisions or state moves recorded.</p>}
+  </section><section aria-label="Item timeline"><h2>Pass timeline (newest first)</h2>
     {foldedDecisions(item.decisions).map(({ decision: d, count, since }) => <p key={d.decision_id}><a href={`#/passes?item=${encodeURIComponent(item.item.item_id)}`}>{new Date(d.dispatched_at_ms).toISOString()} · {d.action} · {d.reason} · ×{count} pass{count === 1 ? "" : "es"} since {new Date(since).toISOString()}, same answer</a>{d.run_id ? <EntityLink kind="run" id={d.run_id} /> : null}</p>)}
     {!item.decisions.length ? <p>No pass has recorded a decision for this item.</p> : null}
   </section><section aria-label="Item landings"><h2>Landing attempts</h2>

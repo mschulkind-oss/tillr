@@ -89,6 +89,9 @@ function queuedItem(itemId: string): ItemData {
     verdicts: [],
     closed_blockers: [],
     attempts: [],
+    runs: [],
+    owner_decisions: [],
+    state_moves: [],
   };
 }
 

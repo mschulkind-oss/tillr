@@ -437,14 +437,7 @@ own items need the same history.
 nodes on top of this; its c3 draws an item with no workflow as one node from its run, which this
 item's list of runs feeds. That block needs no edit.
 
-<!-- tillr: item id="item-def-item-page-history" paths="tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** The served item answer lists every run of the item, with its end cause, start, finish, backend and spend, whether or not the run made a landing candidate.
-- **c2:** It lists each verdict with its criterion, outcome, reason, evidence and actor, and each entry of the owner's decision ledger that names the item.
-- **c3:** It lists each move of the item's state from the event log, with the reason and the actor where the event carries them, including close and reopen.
-- **c4:** The keys the served answer has today keep their names and meaning; the new lists are added beside them.
-- **c5:** The observatory's item page shows the runs, verdicts, decisions and moves in time order.
-- **c6:** A test reads the served answer for an item with two runs that made no candidate, a verdict, a decision, a close and a reopen, and asserts every entry.
 
 ### Route the loop's start around Git when the definition does not land
 
@@ -561,7 +554,7 @@ to `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md` in any works
 pack. The test lives in the drain's suite because the drain module already links the item and run
 utilities.
 
-<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory,item-def-tillr-loop-hooks,item-def-item-page-history" prose="2" -->
+<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory,item-def-tillr-loop-hooks" prose="2" -->
 
 - **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
 - **c2:** The README gives one fenced command sequence that a Product QA agent runs from an empty directory with no Git repository: `tillr store init --definition`, `tillr item apply` of three findings, `tillr drain loop --exit-when-drained`, then `tillr item list` and `tillr item show` to read the outcomes.
