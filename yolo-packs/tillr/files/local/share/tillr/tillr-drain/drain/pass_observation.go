@@ -83,6 +83,22 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	return err
 }
 
+// heartbeatTicker is the clock the heartbeat waits on: C delivers one tick per
+// PassInterval until Stop is called. newHeartbeatTicker's default is a time.Ticker.
+type heartbeatTicker struct {
+	C    <-chan time.Time
+	Stop func()
+}
+
+// newHeartbeatTicker answers the production ticker unless a test supplied its own.
+func (l *Loop) newHeartbeatTicker() heartbeatTicker {
+	if l.heartbeatClock != nil {
+		return l.heartbeatClock()
+	}
+	t := time.NewTicker(PassInterval)
+	return heartbeatTicker{C: t.C, Stop: t.Stop}
+}
+
 // keepSessionAlive refreshes the same session while synchronous startup, staging,
 // planning, or rolling work prevents the pass goroutine from reaching its next read.
 // A failed heartbeat cancels that work and returns a fault, never false liveness.
@@ -90,7 +106,7 @@ func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) 
 	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		ticker := time.NewTicker(PassInterval)
+		ticker := l.newHeartbeatTicker()
 		defer ticker.Stop()
 		for {
 			select {

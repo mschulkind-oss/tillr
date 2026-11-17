@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -137,17 +138,63 @@ func TestStartupHeartbeatUsesTheViewsExpiryContract(t *testing.T) {
 	}
 }
 
+// manualClock is the heartbeat's clock in tests: now only moves when the test moves it,
+// and a tick only happens when the test sends one.
+type manualClock struct {
+	mu    sync.Mutex
+	now   time.Time
+	ticks chan time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+func (c *manualClock) heartbeat() heartbeatTicker {
+	return heartbeatTicker{C: c.ticks, Stop: func() {}}
+}
+
+// heartbeatTicksDuringStartup is how many heartbeat ticks the startup step below sends.
+const heartbeatTicksDuringStartup = 4
+
+// heartbeatStallBound only bounds how long a FAILING test waits to learn that something is
+// stuck (the heartbeat, or a writer a diagnostic must not retain). A passing run never
+// waits on it: each event is observed as soon as it happens, however slow the machine is.
+const heartbeatStallBound = 60 * time.Second
+
 type slowHeartbeatSyncSteps struct {
 	recordingSteps
 	store string
 	t     *testing.T
+	clock *manualClock
 }
 
+// Sync is the long synchronous startup step. It never returns on its own schedule: it
+// hands the heartbeat tick after tick and returns once it has been served enough of them.
+// The ticks channel is unbuffered, so a send only completes when the heartbeat goroutine
+// has taken that tick, which it does only after finishing the previous tick's refresh. So
+// when send n returns, refresh n-1 is on disk: the order of events, not a duration, is what
+// proves the heartbeat ran while this step was still in progress.
 func (s *slowHeartbeatSyncSteps) Sync(ctx context.Context) (SyncOutcome, error) {
-	// This startup operation lasts longer than the one-second deadline and five-second
-	// view grace period. Its live session must not depend on reaching the first pass.
-	if !waitFor(ctx, 6500*time.Millisecond) {
-		return SyncOutcome{}, ctx.Err()
+	for i := 1; i <= heartbeatTicksDuringStartup; i++ {
+		s.clock.advance(PassInterval)
+		select {
+		case s.clock.ticks <- s.clock.Now():
+		case <-ctx.Done():
+			s.t.Errorf("startup was cancelled while the heartbeat was still owed tick %d: %v", i, context.Cause(ctx))
+			return SyncOutcome{}, ctx.Err()
+		case <-time.After(heartbeatStallBound):
+			s.t.Errorf("the heartbeat took no tick %d while startup was in progress: it is blocked", i)
+			return SyncOutcome{}, errors.New("heartbeat blocked")
+		}
 	}
 	read := openFixture(s.t, s.store)
 	defer read.Close()
@@ -156,7 +203,13 @@ func (s *slowHeartbeatSyncSteps) Sync(ctx context.Context) (SyncOutcome, error) 
 		if err := r.QueryRow(`SELECT started_at, refreshed_at, next_pass_at FROM drain_sessions`).Scan(&started, &refreshed, &next); err != nil {
 			return err
 		}
-		if !startupHeartbeatCurrent(started, refreshed, next, time.Now().UnixMilli()) {
+		// Refreshes 1..n-1 are done, each stamped at or after its own tick's time.
+		wantRefreshed := started + int64(heartbeatTicksDuringStartup-1)*PassInterval.Milliseconds()
+		if refreshed < wantRefreshed {
+			s.t.Errorf("startup heartbeat refreshed at +%dms, want at least +%dms after the session started",
+				refreshed-started, wantRefreshed-started)
+		}
+		if !startupHeartbeatCurrent(started, refreshed, next, s.clock.Now().UnixMilli()) {
 			s.t.Errorf("startup heartbeat expired: %d %d %d", started, refreshed, next)
 		}
 		return nil
@@ -166,10 +219,14 @@ func (s *slowHeartbeatSyncSteps) Sync(ctx context.Context) (SyncOutcome, error) 
 	return SyncOutcome{}, errors.New("fixture startup finished")
 }
 
+// The heartbeat must keep the session fresh while a startup step is still running. The
+// test proves it with a clock it moves and ticks it sends, never by letting wall time pass.
 func TestHeartbeatContinuesDuringLongSynchronousStartup(t *testing.T) {
 	f, l := passFixture(t)
-	l.cfg.Now = time.Now
-	l.cfg.Steps = &slowHeartbeatSyncSteps{store: f.storePath, t: t}
+	clock := &manualClock{now: l.cfg.Now(), ticks: make(chan time.Time)}
+	l.cfg.Now = clock.Now
+	l.heartbeatClock = clock.heartbeat
+	l.cfg.Steps = &slowHeartbeatSyncSteps{store: f.storePath, t: t, clock: clock}
 	if _, err := l.Run(context.Background()); err == nil || err.Error() != "fixture startup finished" {
 		t.Fatalf("startup result: %v", err)
 	}

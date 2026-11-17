@@ -87,7 +87,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(heartbeatStallBound):
 		release()
 		<-competitor
 		<-result
@@ -97,7 +97,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	go func() { l.sessionMu.Lock(); l.sessionMu.Unlock(); close(free) }()
 	select {
 	case <-free:
-	case <-time.After(time.Second):
+	case <-time.After(heartbeatStallBound):
 		release()
 		<-free
 		<-result

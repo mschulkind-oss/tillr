@@ -480,6 +480,9 @@ type Loop struct {
 	waitingDetail string
 	hasAnswers    bool
 	pollOnly      bool // test seam: suppress accelerators, retain store polling
+	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
+	// returns instead of a wall-clock one, so a test decides when each tick happens.
+	heartbeatClock func() heartbeatTicker
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
 	syncedSHA    string
 	syncClearSeq int64
