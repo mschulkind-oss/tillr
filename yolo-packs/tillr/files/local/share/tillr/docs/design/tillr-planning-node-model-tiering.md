@@ -2,7 +2,7 @@
 title: "Plan first, then give each node the cheapest seat whose check it can pass"
 status: in-review
 stage: DESIGN
-updated: 2026-11-16
+updated: 2026-11-17
 tags:
   - tillr
   - graphs
@@ -11,7 +11,7 @@ tags:
   - models
   - design
 summary: "A planning node splits a large build item into slices, and each slice carries its own registered check. Each kind of work is a seat, and the backend policy puts each seat on a ladder of models, cheapest first. A node runs below the top rung only when a deterministic check right after it decides whether it passed. Measured on the loop's history: the larger savings are in failed runs and in context written to the cache twice, and routing to cheaper models is worth 5–35% of build spend depending on how often the cheaper model fails."
-next: "The owner rules OQ-PT1 and OQ-PT2. The Terra trial is a policy edit that can run before the ten-lane ramp; nothing else here should."
+next: "The owner reviews the decision box at the top and rules OQ-PT1 and OQ-PT2 first. On a yes, Section 15 is filed as it stands: the Terra trial is a policy edit, and the items become blocks in a plan document."
 depends-on:
   - tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
@@ -19,9 +19,9 @@ depends-on:
 
 # Plan first, then give each node the cheapest seat whose check it can pass
 
-> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-16. This is a proposal, and none of it is built. The evidence is the loop's event log at event 4343 (generated 2026-11-17 03:33 UTC) and 334 pi run logs, read against the tree at `424cc9db0`. Every figure is marked **measured**, with its source, or **estimated**, with its assumption.
+**Status:** 2026-11-16, with review aids added on 2026-11-17. This is a proposal, and none of it is built. The evidence is the loop's event log at event 4343 (generated 2026-11-17 03:33 UTC) and 334 pi run logs, read against the tree at `424cc9db0`. Every figure is marked **measured**, with its source, or **estimated**, with its assumption. On 2026-11-17 the owner asked to review the questions before anything is built. So [the decision box](#what-i-am-asking-you-to-decide) asks each one in a line, and [Section 15](#15-ready-to-file-on-your-word) holds everything that would be filed on a yes, written out but not yet live. Two faults in the run record that wait on no question were filed the same day as `item-pt-copied-usage` and `item-pt-cache-rewrites`.
 
 > **In short.** What a node costs depends on how its failures are caught, not on which model runs it. A cheap model saves money only where something deterministic catches its mistakes before they spread. So the planning node's job is to cut a large item into slices that each carry their own registered check. The backend policy, never the item, puts each kind of slice on the cheapest model that stays cheaper than the model above it once its failures are paid for.
 
@@ -45,7 +45,7 @@ There is no new program. The graph mechanics are [item graphs](tillr-item-graphs
 
 **Start at** [Section 1.6](#16-what-the-history-means-three-levers-ranked), which explains why routing is the third-largest lever and not the first. The design falls out of that ranking.
 
-**Needs your ruling:** [OQ-PT1](#OQ-PT1), [OQ-PT2](#OQ-PT2), [OQ-PT3](#OQ-PT3), [OQ-PT4](#OQ-PT4), [OQ-PT5](#OQ-PT5), [OQ-PT6](#OQ-PT6), [OQ-PT7](#OQ-PT7), [OQ-PT8](#OQ-PT8).
+**Needs your ruling:** [OQ-PT1](#OQ-PT1), [OQ-PT2](#OQ-PT2), [OQ-PT3](#OQ-PT3), [OQ-PT4](#OQ-PT4), [OQ-PT5](#OQ-PT5), [OQ-PT6](#OQ-PT6), [OQ-PT7](#OQ-PT7), [OQ-PT8](#OQ-PT8). [The decision box](#what-i-am-asking-you-to-decide) below puts each in one line.
 
 **Reads with:**
 
@@ -55,7 +55,28 @@ There is no new program. The graph mechanics are [item graphs](tillr-item-graphs
 - [`criterion-repair.md`](criterion-repair.md): who may change a frozen criterion.
 - The [tillr roadmap](../tillr/roadmap.md): where these questions are routed.
 
-No implementation-plan seed exists yet. The sketches in [Section 7](#7-routing-is-policy-not-code) are at design altitude.
+No implementation plan exists yet. [Section 15](#15-ready-to-file-on-your-word) is its seed: the items written out in full, to become blocks in a plan document once the questions they need are ruled. The sketches in [Section 7](#7-routing-is-policy-not-code) are at design altitude.
+
+---
+
+## What I am asking you to decide
+
+Answer [OQ-PT1](#OQ-PT1) and [OQ-PT2](#OQ-PT2) first. The trial is the only part that can start in hours, and [OQ-PT1](#OQ-PT1) reopens an October ruling. The other six shape items that cannot start until the item-graph blocks they need have landed, which is days of drain time. Each recommendation below is the leaning recorded with its question, and every item in [Section 15](#15-ready-to-file-on-your-word) is written to it.
+
+| Question | My recommendation | What a yes unlocks | What it costs if I am wrong |
+| :--- | :--- | :--- | :--- |
+| [OQ-PT1](#OQ-PT1): may models cheaper than Sol do build work at all? | **B.** Only behind a check: Terra fixes tests, and Luna only makes one-turn edits that a command checks. Sol still writes the code | The two stage 2 items: ladders in the policy, and the fix seat on Terra | A cheap fix that fails its check climbs to Sol. The waste is the cheap attempt, about $0.09 per fix (estimated from a Terra seam), and never more than two rungs per slice |
+| [OQ-PT2](#OQ-PT2): try Terra on five real items before the ramp to ten lanes? | **A.** Before the ramp | One policy edit, in [Section 15.4](#154-the-terra-trial), live at the loop's next pass | About $4 of Terra runs (estimated: five attempts at half of Sol's mean recorded run of $1.62), and one attempt's delay on each item that fails |
+| [OQ-PT3](#OQ-PT3): a planner finds a criterion that cannot be met as written | **B.** Report it, and send the item to the design seat before any build is paid for | The planner's criterion finding, in the plan-seat item | One plan, about $0.35, on each such item |
+| [OQ-PT4](#OQ-PT4): a planner finds the work needs a file outside the fence | **B.** Report it, and let the conflict path widen the fence | The planner's fence finding, in the same item | The same: one plan per such item |
+| [OQ-PT5](#OQ-PT5): may a cheaper model change the loop's own code? | **B.** Not yet: work under `tools/tillr-` or `yolo-packs/tillr/` starts on its seat's top rung | A guard in the fix-seat item | Most of today's queue is loop code, so B keeps most cheap routing off until stage 2's records exist. That forgoes saving, and breaks nothing |
+| [OQ-PT6](#OQ-PT6): how often may an item be planned again? | **A.** Once, on Fable | The re-plan, in stage 3 | About $2 more on each item whose first planned attempt fails |
+| [OQ-PT7](#OQ-PT7): commit a plan as a document, or keep it with its run? | **A.** Keep it with the run | Nothing extra to build | A plan you wanted to read in Vantage is only on the item page |
+| [OQ-PT8](#OQ-PT8): who decides whether an item is planned? | **A.** A rule in the repository's settings that an author can override | The threshold item | A wrong number in one settings file plans too many items or too few. Planning an item costs about $0.35 |
+
+**What [OQ-PT1](#OQ-PT1) reopens.** The October ruling it asks again is [`OQ-SP5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#decision-ledger), recorded in [`seat-profiles.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#25-bedrock-work-aws--approved-as-narrowed-2026-10-20-only-solluna-rows-encode) as: "Ruled 2026-10-20 ([OQ-SP5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#decision-ledger)): anything on Bedrock is permitted — no family is barred — but only the Sol/Luna combo is worth encoding, cheapest first, global variant." Beside it stands the Luna-worker verdict of [`OQ-SP6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#decision-ledger), "replace, do not keep". B keeps that verdict for every seat that has no check. What is new since October is that a slice's check runs the moment it finishes, so a cheap model's mistake is caught before anything is built on it. Terra was never considered then.
+
+**How quickly the trial shows whether the ruling still holds.** With five lanes busy, each trial item waits for a free lane like any other item. So the five items are also ranked first ([Section 15.5](#155-how-the-items-would-be-ranked-first)), and then each is dispatched within one lane turnover, a few hours. The run record of each attempt names its backend, `pi-terra`, and its usage. If four of the five land on their Terra attempt, each for less than $1.80 (the mean Sol run that committed its work, [Section 1.1](#11-where-the-money-went)), the October ruling no longer holds for checked work and stage 2 is worth building. If two fail, implementation stays on Sol and the ruling stands for that kind. The reading rule is in [Section 15.4](#154-the-terra-trial).
 
 ---
 
@@ -90,10 +111,10 @@ Routing saves nothing on design spend. Planning alone, still on Sol, costs more 
 **What can be on before the ten-lane ramp, in hours:**
 
 - a Terra trial on five named single-package items, which is a policy edit using the existing `overrides`;
-- a filed defect for duplicated run usage;
-- a filed investigation into the doubled cache writes.
+- the correction of 49 old run records that carry another run's usage, filed on 2026-11-17 as `item-pt-copied-usage` (the cause was fixed on 2026-11-15);
+- the investigation into context written to the cache more than once, filed the same day as `item-pt-cache-rewrites`.
 
-Planning needs eight queued item-graph blocks and three new items, so it is days of drain time, not hours. Do not switch seats wholesale to cheaper models, turn on planning, or allow parallel writers before the ramp.
+Planning needs nine queued item-graph blocks and five new items ([Section 15.3](#153-the-items)), so it is days of drain time, not hours. Do not switch seats wholesale to cheaper models, turn on planning, or allow parallel writers before the ramp.
 
 **Decisions needed:** [OQ-PT1](#OQ-PT1) (cheaper models for build work at all) and [OQ-PT2](#OQ-PT2) (the trial before the ramp) first. The other six shape stages 1 to 3.
 
@@ -112,7 +133,7 @@ Wall times cap each wait between turns at 20 minutes and set the wait after a fi
 
 The store records 338 runs and $455.56. That total double-counts, for two reasons:
 
-- **Duplicated usage.** 49 runs carry exactly another run's tokens and cost, $133.65 in all. Most are killed runs of one or two seconds. For example, 21 runs of `item-land-retires-block` each record $3.134482 and 16,061,350 tokens.
+- **Duplicated usage.** 49 runs carry exactly another run's tokens and cost, $133.65 in all. Most are killed runs of one or two seconds. For example, 21 runs of `item-land-retires-block` each record $3.134482 and 16,061,350 tokens. The cause was a report file shared between attempts on one lane, fixed by commit `263173aed` on 2026-11-15. All 49 started before that commit, and none of the 285 runs started after it repeats another run's usage (measured at event 5494, 2026-11-17).
 - **Missing usage.** 83 runs record no cost, and the logs of 79 of them price to $89.11.
 
 With duplicates removed and the missing runs priced from their logs, the best total is about **$417**.
@@ -654,7 +675,7 @@ Each "before" figure is measured from the logs. Each "after" figure is estimated
 
 ## 10. The staged path
 
-Each stage lands alone and is measured before the next one starts. Proposed items are written as plain prose here, not as queue directives. They become blocks once the owner has ruled.
+Each stage lands alone and is measured before the next one starts. Proposed items are summarized here and written out in full in [Section 15](#15-ready-to-file-on-your-word), not as queue directives. They become blocks once the owner has ruled.
 
 ### 10.1 Stage 0: measure
 
@@ -666,21 +687,15 @@ This stage can run before the ramp.
 - Compare each item's Terra usage, turns and outcome against the history of similar Sol items.
 - This depends on [OQ-PT2](#OQ-PT2).
 
-**A run's recorded usage is its own.** 49 runs carry exactly another run's tokens and cost, $133.65 in all, and every rate built on run records inherits the error. Criteria:
+**Correct the run records that carry another run's usage.** Filed on 2026-11-17 as [`item-pt-copied-usage`](../tillr/roadmap.md#hold-the-copied-usage-of-49-old-runs-out-of-spend-totals). 49 runs carry exactly another run's tokens and cost, $133.65 in all, and every rate built on run records inherits the error. The cause, a report file shared between attempts on one lane, was fixed on 2026-11-15, so the item corrects the old records and keeps a detector.
 
-- c1: a run whose session never started records zero tokens and zero cost;
-- c2: no two runs record the same usage unless one continues the other's session;
-- c3: a test kills a run in its first second and asserts that its usage is its own.
+**Find why build runs write their context to the cache twice.** Filed on 2026-11-17 as [`item-pt-cache-rewrites`](../tillr/roadmap.md#isolate-why-long-runs-write-their-whole-context-to-the-cache-again). Its output is a finding in `docs/research/`, plus the fix when the fix is small and lies in how tillr runs pi. Sol runs wrote 2.2 times the sum of their largest contexts (an estimated $69), and the largest Fable run wrote 6.6 times its largest context. A per-turn read on 2026-11-17 found two patterns, recorded in the item: past a context of about 132k tokens (the median onset), some runs stop reading from the cache at all, and in other turns the part read stops growing while the part written grows.
 
-**Find why build runs write their context to the cache twice.** This is a research item for the scout or design seat, and its output is a document in `docs/research/`. Sol runs wrote 2.2 times the sum of their largest contexts (an estimated $69), and the largest Fable run wrote 6.6 times its largest context. Criteria:
-
-- c1: name the cause, measured on at least three logs;
-- c2: price a fix;
-- c3: say whether the one-hour retention the matt pack sets is still worth it for runs that are never resumed, given that resumed designer sessions need it.
+**Record each node's seat, rung, check outcome and usage.** Written out in [Section 15.3](#153-the-items) and not yet filed: much of what it records, the rung and the slice's check, comes from stages 1 and 2, so it waits for the same review.
 
 ### 10.2 Stage 1: plan, then build with the checker, all on Sol
 
-Stage 1 proves the split's overhead and its effect on stops with no change of model. It needs eight queued item-graph blocks:
+Stage 1 proves the split's overhead and its effect on stops with no change of model. [Section 15.3](#153-the-items) writes its items out in full, with the first one below split in two so that each is one worker's job, and adds the node records. It needs eight queued item-graph blocks:
 
 - `item-ig-workflow-check`, `item-ig-command-node`, `item-ig-node-write-scope`, `item-ig-node-outputs`, `item-ig-exit-condition`;
 - `item-ig-stage-names-workflow`, `item-ig-propose-replacement`, `item-ig-view-nodes`;
@@ -735,8 +750,8 @@ Only after stage 2's records show test-fix escalating less than its break-even (
 
 ### 10.5 Before the ramp, and what not to do
 
-- **Hours, before the ramp:** the Terra trial (if [OQ-PT2](#OQ-PT2) says so), filing the usage-duplication item, and filing the cache-write investigation.
-- **Days, after the ramp:** stage 1 (eight item-graph blocks and three items), then stage 2.
+- **Hours, before the ramp:** the Terra trial (if [OQ-PT2](#OQ-PT2) says so). The usage correction and the cache-write investigation were filed on 2026-11-17 and wait on no ruling.
+- **Days, after the ramp:** stage 1 (nine item-graph blocks and five items, [Section 15.3](#153-the-items)), then stage 2.
 - **Not before the ramp:**
   - switching any seat wholesale to Terra or Luna, which would confound the ramp's own measurements;
   - turning planning on;
@@ -778,7 +793,7 @@ Only after stage 2's records show test-fix escalating less than its break-even (
 | The planner splits along the wrong seams, so slices fight | Interface sketches and notes; one re-plan on Fable; then one node on Sol. Refusals and re-plans are visible on the item page |
 | Seams cost more than estimated | Stage 1 runs on Sol only and measures seam cost before any routing |
 | A cheap slice breaks the drain's own code and stops the loop for everyone | [OQ-PT5](#OQ-PT5); the gate; a stopped loop is today's recovery |
-| Duplicated usage records make every rate wrong | The stage-0 item comes first |
+| Duplicated usage records make every rate wrong | The cause is fixed; `item-pt-copied-usage` corrects the 49 old records and keeps a detector |
 
 ---
 
@@ -793,6 +808,346 @@ Only after stage 2's records show test-fix escalating less than its break-even (
 | Comparison statistics live in the owner's own project | 2026-11-15 | **Holds** (`D-PT5`) |
 | The observatory shows usage, never a price | 2026-11-15 | **Holds** |
 | The one-hour cache retention (`c5f4a82f7`) | 2026-11 | Unchanged here. The stage-0 research asks whether runs that are never resumed need it |
+
+---
+
+## 15. Ready to file on your word
+
+Everything in this section waits for your review. It is written out in full so that a yes becomes a
+mechanical edit: each item below has its title, why it matters, its paths, its blockers and its
+criteria, and only the item directive is missing, so that nothing here is synced. On a yes, the items
+go into a plan document, `docs/design/tillr-planning-node-model-tiering-plan.md`, which carries no
+open questions. That matters because the queue holds an item while its own document has an open
+question, and this design keeps its questions until you rule them.
+
+### 15.1 What is filed already, and what is held
+
+- **Filed on 2026-11-17, waiting on no question:** [`item-pt-copied-usage`](../tillr/roadmap.md#hold-the-copied-usage-of-49-old-runs-out-of-spend-totals)
+  and [`item-pt-cache-rewrites`](../tillr/roadmap.md#isolate-why-long-runs-write-their-whole-context-to-the-cache-again),
+  in the roadmap. Both are faults in the run record, and neither moves any work to another model.
+- **Held for your review:** the seven items of [Section 15.3](#153-the-items), the Terra trial,
+  and every rank in [Section 15.5](#155-how-the-items-would-be-ranked-first). No rank has been set,
+  no policy has been edited, no item-graph block has been changed, and no Terra call has been made.
+  The model is known to pi: on 2026-11-17, `pi --list-models terra` listed
+  `amazon-bedrock  global.openai.gpt-6.1-terra  272K`.
+
+### 15.2 The item-graph blocks these need
+
+Nine queued blocks of [item graphs](tillr-item-graphs.md#9-build-order) come first. None needs its
+criteria changed for this design. Their states are those `tillr drain why` printed for this
+checkout's store on 2026-11-17 at about 05:50 UTC, with five lanes, all busy. None of them is ranked.
+
+| Item | State | Waits on |
+| :--- | :--- | :--- |
+| `item-ig-workflow-check` | queued, waiting for a free lane | nothing |
+| `item-ig-command-node` | queued, waiting for a free lane | nothing |
+| `item-ig-node-write-scope` | queued, waiting for a free lane | nothing |
+| `item-ig-node-outputs` | queued, waiting for a free lane | nothing |
+| `item-ig-seat-default-workflow` | queued, waiting for a free lane | nothing |
+| `item-ig-exit-condition` | held, blocked | `item-ig-node-outputs` |
+| `item-ig-stage-names-workflow` | held, blocked | `item-ig-node-outputs`, `item-ig-workflow-check` |
+| `item-ig-propose-replacement` | held, blocked | `item-ig-stage-names-workflow` |
+| `item-ig-view-nodes` | held, blocked | `item-ig-node-outputs`, `item-ig-stage-names-workflow` |
+
+The first four have each run twice without landing (measured from the event log at event 5494).
+
+### 15.3 The items
+
+They are listed in dependency order. Each item that rewrites the drain's hot files (its loop, pass,
+planner and stager) waits on the one before it, so no two of them run at once and collide when they
+land. That chain is: records, then the plan seat, then the planning workflow, then the threshold, then
+ladders, then the fix seat. Every item also carries two criteria of the same kind. The first is that
+no Git, file or process work happens inside a SQLite write transaction. The second is that the queue
+behaves exactly as it does today when nothing selects the new workflow, seat or policy entry.
+
+| Id | Title | Waits on |
+| :--- | :--- | :--- |
+| `item-pt-node-records` | Add each node run's seat, stage, model and size to its record | nothing |
+| `item-pt-slice-checks` | Add the registered checks a slice may name | `item-ig-command-node` |
+| `item-pt-plan-seat` | Add a plan seat and the checked slice list a planner writes | `item-ig-workflow-check`, `item-ig-command-node`, `item-pt-node-records` |
+| `item-pt-plan-workflow` | Add the planning workflows and their fallback to one node | `item-pt-plan-seat`, `item-pt-slice-checks`, `item-ig-node-write-scope`, `item-ig-node-outputs`, `item-ig-exit-condition`, `item-ig-stage-names-workflow`, `item-ig-propose-replacement` |
+| `item-pt-planning-threshold` | Route build items over the planning threshold into planning | `item-pt-plan-workflow`, `item-ig-seat-default-workflow`, `item-ig-view-nodes` |
+| `item-pt-ladders` | Add escalation ladders to the backend policy | `item-pt-planning-threshold` |
+| `item-pt-fix-seat` | Route the fix seat to Terra, escalating to Sol | `item-pt-ladders`, `item-run-commit-before-ending` |
+
+Stage 3 (prose and mechanical seats, judging only what no check covers, the re-plan on Fable, the
+conflict's kind, and implement slices on Terra) stays as prose in
+[Section 10.4](#104-stage-3-the-full-split) and is not written out here.
+
+#### Add each node run's seat, stage, model and size to its record
+
+Every later decision in this design is a comparison: did the cheap rung pass its check more often
+than its break-even, and what did it use? That comparison is only possible if each node's run records
+which seat and stage it ran for, which model and effort it used, and how much it changed. Today a
+run's record names its backend and its usage, and nothing about the node it was. This item makes the
+record say so, and makes the item page show it, so that the owner's own project can compute the rates
+from facts that tillr records.
+
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-run/`, `tools/tillr-view/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** nothing.
+- **c1:** Each run record carries the seat it ran for, its workflow and stage name, its model and effort, and a rung of 1. A run outside a workflow records the stage `work`. A test asserts each field for a two-node workflow.
+- **c2:** When a writing node settles, its record carries how many files it changed between the head it started at and the head it left. A test asserts the count for a fixture node that changes three files.
+- **c3:** A run that continues another run's session records that run's id. A test resumes a paused fixture run and asserts the field.
+- **c4:** The run page and the item page show each run's seat, stage, model and rung beside its usage, and never a price. A test asserts the text view and the web view agree.
+- **c5:** A store written before this item still reads: a run without these fields shows them as absent, never as zero or as a default. A test opens a fixture store from before the change.
+- **c6:** An item that runs as one node today gets the same dispatch, brief and landing as before. A test compares a fixture pass's plan and brief before and after.
+- **c7:** No Git, file or process work runs inside a SQLite write transaction. The file count is taken before the settling transaction opens. A test asserts the order.
+- **Ref:** [Section 7.5](#75-how-the-owner-learns-a-placement-is-wrong), the list of facts tillr records on each node run.
+- **Where:** where the drain builds a run request (`tools/tillr-drain/drain/stage.go`) and where it settles one (`tools/tillr-drain/drain/loop.go`); the run record in `tools/tillr-run/run/`; the run and item pages in `tools/tillr-view/`.
+
+#### Add the registered checks a slice may name
+
+A slice runs on a cheaper model only because a command checks it the moment it finishes. So the set
+of commands a slice may name has to be reviewed and fixed in advance, like any other command node,
+and each must exit 1 when the work is wrong rather than when the machinery breaks. This item adds
+those entries to the reviewed command list that the command-node block creates.
+
+- **Paths:** `config/tillr/`, `tools/tillr-drain/`, `tests/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-ig-command-node`.
+- **c1:** The command list holds a package test for each Go module under `tools/`, `vantage-check` on named files, the documentation tests, the pack-sync check, and the gate's own check selection over the paths a candidate changed.
+- **c2:** A test runs each entry's argv on a passing fixture and asserts exit 0, and on a failing fixture and asserts exit 1.
+- **c3:** No entry takes a value that reaches a shell. The workflow check refuses each flag value that is not a string, a number or a path inside the repository. A test asserts each refusal.
+- **c4:** Each entry names the paths it covers, so a later planner can name the right check for a slice. A test asserts that every Go module directory has exactly one package-test entry.
+- **c5:** Adding the entries changes no item that names no command node. A test compares a fixture pass's plan before and after.
+- **c6:** No Git, file or process work runs inside a SQLite write transaction.
+- **Ref:** [Section 5.5](#55-deterministic-validation), the rule `plan-check-unregistered`; the command-node block of [item graphs](tillr-item-graphs.md#add-command-nodes-that-run-a-registered-program).
+- **Where:** `config/tillr/commands.json`, which `item-ig-command-node` creates.
+
+#### Add a plan seat and the checked slice list a planner writes
+
+A planner is useful only if its plan can be refused by something that is not another model. This item
+adds the `plan` seat and the three other new seats, the slice list as a fourth kind of bounded workflow
+argument, and the deterministic checker that accepts or refuses a plan under a named rule. It does not
+yet run a planner. That is the next item, so this one can be reviewed as a format and a checker alone.
+
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-item/`, `config/tillr/`, `tools/tillr-view/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-ig-workflow-check`, `item-ig-command-node`, `item-pt-node-records`.
+- **c1:** `plan`, `fix`, `prose` and `mechanical` join the closed seat vocabulary. A policy that maps none of them still loads and passes its check, and only an item or stage that asks for an unmapped new seat is held, naming the seat. A test loads each tracked policy file unchanged.
+- **c2:** A workflow argument may be a slice list of 2 to 6 entries, each with a write scope, criterion ids, a check that names a command entry, a kind, a size, a prompt and an interface sketch. The workflow check refuses any other shape. A test holds one fixture for each field.
+- **c3:** Each rule of the table in [Section 5.5](#55-deterministic-validation) refuses its case under its own name, from `plan-schema` to `plan-text-bound`. A test holds one fixture for each rule and asserts the name.
+- **c4:** The checker runs in the transaction that applies a proposal and reads only rows and already-read text. A test asserts that no file is read and no process starts while that transaction is open.
+- **c5:** A refusal is recorded with its rule and the slice it names, and the item page shows it. A test asserts the record and the page.
+- **c6:** A planner may write a criterion finding or a fence finding in place of a plan. Either sends the item to the design seat as a conflict that names the criterion or the path, and no build node runs. This follows the recommended answers to [OQ-PT3](#OQ-PT3) and [OQ-PT4](#OQ-PT4). A test covers each.
+- **c7:** No item, workflow or policy that exists today changes behavior. A test compares a fixture pass's plan, before and after, for a store with one single-node item and one item in the tracked two-node workflow.
+- **Ref:** [Section 5.3](#53-what-the-planner-writes), [Section 5.5](#55-deterministic-validation), [Section 7.1](#71-from-kind-of-work-to-seat-to-model); `D-PT1` and `D-PT2` in the [decision ledger](#decision-ledger).
+- **Where:** the seat vocabulary in `tools/tillr-item/item/seat.go`; the policy check in `tools/tillr-drain/drain/policy.go`; the workflow loader and its check in `tools/tillr-drain/drain/`.
+
+#### Add the planning workflows and their fallback to one node
+
+This is the item that runs a planner. A build item slotted into `plan-then-build@v1` first runs a
+planner on Sol at high, which proposes slices. When the plan is accepted the item runs them, each
+checked the moment it finishes. When the plan is refused, or the planner fails, the item runs as one
+node exactly as it does today, so planning can make an item cheaper but can never stop one. Each slice
+hands the next what it needs through the plan, the planner's interface sketch and its own notes. Every
+node still runs on Sol in this item: it proves what the split costs and what it does to failed runs
+before any model changes.
+
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-run/`, `config/tillr/`, `tools/tillr-view/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-pt-plan-seat`, `item-pt-slice-checks`, `item-ig-node-write-scope`, `item-ig-node-outputs`, `item-ig-exit-condition`, `item-ig-stage-names-workflow`, `item-ig-propose-replacement`.
+- **c1:** `plan-then-build@v1` and `split-build@v1` are tracked in the workflows directory, with the stages of [Section 5.1](#51-where-it-sits) and [Section 5.4](#54-the-graph-a-plan-becomes), and pass the workflow check.
+- **c2:** The policy maps `plan` to Sol at high in the Bedrock and mixed policy files, and maps `fix` to the build seat's own backend, so nothing in this item runs on a model other than today's.
+- **c3:** A planner that is refused, fails, times out or writes no proposal leaves the item running `work` as one node. A loop test with stub harnesses covers each of the four.
+- **c4:** Each slice's brief holds the item's title, the text of its own criteria from the store, its write scope, its prompt, the slice list in summary and the interface sketch. Each slice writes a `notes` output that later slices and fixes read from it. A test asserts a third slice's brief names the first two slices' notes.
+- **c5:** A loop test with stub harnesses runs a three-slice plan, with one check failing and its fix passing, to one landed commit, and asserts the order of the runs.
+- **c6:** The plan is kept with the planning run and shown on the item page with any refusal, and it is not committed. This follows the recommended answer to [OQ-PT7](#OQ-PT7).
+- **c7:** An item not slotted into `plan-then-build@v1` gets the same dispatch, brief and landing as before. A test compares a fixture pass before and after.
+- **c8:** No Git, file or process work runs inside a SQLite write transaction. The plan file is read before the proposal transaction opens. A test asserts the order.
+- **Ref:** [Section 5](#5-the-planning-node) and [Section 6.3](#63-how-handoffs-carry-context).
+- **Where:** `config/tillr/workflows/`; the graph build and the proposal transaction in `tools/tillr-drain/drain/`; the brief in `tools/tillr-drain/drain/stage.go`.
+
+#### Route build items over the planning threshold into planning
+
+Planning an item costs about $0.35 (estimated), which is more than it saves on a small one. So only
+items that the history marks as large or troubled are planned: five or more criteria, a fence across
+three or more modules, or an earlier attempt that edited files and did not land. The rule lives in the
+repository's settings file, where its numbers are edited in one place, and an author overrides it
+either way in the item's block. This follows the recommended answer to [OQ-PT8](#OQ-PT8). The item
+builds the rule and leaves it off in this repository, because turning planning on is the owner's step.
+
+- **Paths:** `tools/tillr/settings/`, `tools/tillr-drain/`, `tools/tillr-item/`, `tools/tillr-view/`, `config/tillr/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-pt-plan-workflow`, `item-ig-seat-default-workflow`, `item-ig-view-nodes`.
+- **c1:** The settings file takes a planning rule with the three conditions of [Section 5.7](#57-when-planning-is-not-worth-it) and their numbers. With no rule, no item is planned. A test asserts both.
+- **c2:** Modules are counted as Section 5.7 says: each `tools/<name>/` and each other top-level directory, leaving out `docs/`, `config/` and `yolo-packs/`. A table-driven test covers a fence for each case.
+- **c3:** An item whose block names a workflow keeps it, whatever the rule says. A test covers `workflow="single-worker@v1"` on an item the rule selects and `workflow="plan-then-build@v1"` on one it does not.
+- **c4:** Design items, the fixer for a broken trunk, the fixer for a landing conflict and work on express lanes are never planned. A test asserts each.
+- **c5:** The choice is made once, when the item's graph is first built, and stored with whether the rule or the author made it. `tillr item show` and the item page show both.
+- **c6:** This repository's settings file is left without the rule, and the drain README names the one change that turns it on.
+- **c7:** No Git, file or process work runs inside a SQLite write transaction, and a store with no rule plans exactly as before. A test compares a fixture pass.
+- **Ref:** [Section 5.7](#57-when-planning-is-not-worth-it).
+- **Where:** the settings reader in `tools/tillr/settings/settings.go`; where the drain slots an item into its graph, beside the seat default that `item-ig-seat-default-workflow` adds.
+
+#### Add escalation ladders to the backend policy
+
+A cheap model pays only if its failures climb to a stronger one at once and stop there. This item adds
+`ladders` to the backend policy: for each seat, an ordered list of backends whose first entry is the
+seat's own. A stage names its rung, and each node run records the rung it ran on and the run it
+escalated from. Failover for a broken or exhausted backend stays a separate list at the same rung, so a
+fault in the backend never looks like a weak model. The policy files gain a Terra row and no ladder, so
+nothing moves to Terra in this item.
+
+- **Paths:** `tools/tillr-drain/`, `config/tillr/`, `tools/tillr-view/`, `tests/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-pt-planning-threshold`.
+- **c1:** `ladders` maps a seat to an ordered list of backends whose first entry must be the seat's backend. The policy check refuses any other first entry and any name that is not a backend. A test covers each refusal.
+- **c2:** A stage's `rung` is an integer from 1, defaulting to 1, and a rung past the ladder's end means its last rung. A test covers rungs 1, 2 and 5 on a two-rung ladder.
+- **c3:** Each node run records its rung and, when it escalated, the run it escalated from. A test asserts both on a fixture item with a failed check.
+- **c4:** Failover walks the seat's failover list at the same rung and never climbs the ladder. A test with a broken first backend asserts the second run is the failover backend at rung 1.
+- **c5:** The Bedrock and mixed policy files gain a `pi-terra` backend and no ladder. The policy tests in `tools/tillr-drain/seat_test.go` and `tests/tillr-muse-backend.test.py` pass.
+- **c6:** A policy reloaded at a pass boundary with a new ladder leaves a live run as it was. `TestPolicyReloadAtPassBoundaryKeepsLiveRequest` gains that case.
+- **c7:** A policy without `ladders` plans exactly as before. A test compares a fixture pass's plan with and without the change.
+- **c8:** No Git, file or process work runs inside a SQLite write transaction.
+- **Ref:** [Section 7.1](#71-from-kind-of-work-to-seat-to-model), [Section 7.3](#73-the-escalation-ladder-and-its-cap); `D-PT3` in the [decision ledger](#decision-ledger).
+- **Where:** `tools/tillr-drain/drain/policy.go` (`firstBackend` and the failover walk) and `tools/tillr-drain/drain/plan.go`.
+
+#### Route the fix seat to Terra, escalating to Sol
+
+Test-fix is the kind of work where a cheap model is safest: the context is narrow, and the same check
+that failed decides whether the fix worked. This item puts the fix seat on Terra, with Sol as its
+second rung. A fix on the same backend as the node it repairs continues that session while the context
+is small, which costs about one turn instead of a fresh start. It follows the recommended answer to
+[OQ-PT1](#OQ-PT1). It also follows the recommended answer to [OQ-PT5](#OQ-PT5): a slice that writes
+the loop's own code starts its fix on Sol, until the records show that Terra is safe there. It waits
+on the item that makes a build run commit its passing work, because without it a cheap rung inherits
+that defect and looks weaker than it is.
+
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-run/`, `config/tillr/`, `tools/tillr-view/`, `yolo-packs/tillr/`, `docs/`
+- **Waits on:** `item-pt-ladders`, `item-run-commit-before-ending`.
+- **c1:** `split-build@v1`'s fix stages ask for the `fix` seat, slice fixes at rungs 1 and 2 and the full check's fix at rung 2.
+- **c2:** The Bedrock and mixed policy files map `fix` to `pi-terra`, with the ladder `pi-terra`, then `pi`.
+- **c3:** A fix on the same backend as the node it repairs continues that session while its context is under 150k tokens and records that it did. Otherwise, and always on a higher rung, it starts fresh and reads the notes, the diff and the check's report. A test with stub harnesses covers both paths.
+- **c4:** A slice whose write scope includes a path under `tools/tillr-` or `yolo-packs/tillr/` starts its fix at the seat's top rung. A test asserts it.
+- **c5:** The item page shows each fix with its rung, its backend and its check's outcome.
+- **c6:** A workflow that names no `fix` stage, and every item not slotted into `split-build@v1`, runs exactly as before. A test compares a fixture pass.
+- **c7:** No Git, file or process work runs inside a SQLite write transaction. The session resume is started after the dispatch transaction commits.
+- **Ref:** [Section 6.3](#63-how-handoffs-carry-context), [Section 7.4](#74-an-example-placement-of-the-four-models); `D-PT7` in the [decision ledger](#decision-ledger).
+- **Where:** the pause-and-resume path in `tools/tillr-run/` and `tools/tillr-drain/drain/`; the policy files in `config/tillr/`.
+
+### 15.4 The Terra trial
+
+This is a policy edit, not an item. It needs a yes to [OQ-PT2](#OQ-PT2). The policy is read again at
+each pass boundary, and a run already live keeps the backend it started with
+(`TestPolicyReloadAtPassBoundaryKeepsLiveRequest` in `tools/tillr-drain/drain/`). So the edit takes
+effect at the loop's next pass and needs no restart. The drain README does not say this; the test is
+the only record.
+
+**The five items.** Each is narrow work that a command decides, small, outside the drain's core, not
+running, never run before, and not touched by the other agent's definitions plan.
+
+| Item | Why it suits the trial |
+| :--- | :--- |
+| `item-just-format-recipe` | A recipe and a gate check file; each of its seven criteria is decided by a command (`just format --check` and a scratch-tree test) |
+| `item-view-running-shows-live-loop` | One view in `tools/tillr-view/`; three criteria, each with its test |
+| `item-test-runs-remove-their-binary-directories` | A mechanical change to each module's test entry point and one repository check |
+| `item-obs2-run-usage` | Record fields read from a stream and shown on pages; four criteria, each with a fixture test |
+| `item-test-cache-sees-sibling-programs` | Declares build inputs for the drain's tests; decided by a reproducible cache experiment and a list test |
+
+**The override text.** In both `config/tillr/backend-policy.bedrock.json`, the loop's policy today, and
+`config/tillr/backend-policy.mixed.json`, so that the trial survives the switch after 2026-11-19, add
+this backend:
+
+```json
+"pi-terra": {
+  "adapter": "tools/tillr-run/backends/pi/run-pi",
+  "model": "amazon-bedrock/global.openai.gpt-6.1-terra",
+  "effort": "medium"
+}
+```
+
+and this top-level key:
+
+```json
+"overrides": {
+  "item-just-format-recipe": "pi-terra",
+  "item-view-running-shows-live-loop": "pi-terra",
+  "item-test-runs-remove-their-binary-directories": "pi-terra",
+  "item-obs2-run-usage": "pi-terra",
+  "item-test-cache-sees-sibling-programs": "pi-terra"
+}
+```
+
+The policy check accepts an override only when it names one of the file's backends, so the row and the
+key land together, in one commit titled `chore(tillr): route five named items to Terra for a measured
+trial`. If the loop is moved to another policy file, the same two edits must be made there.
+
+**How to undo it.** An override applies to every attempt of its item, retries included. So, after an
+item's first Terra attempt that does not land, delete that item's line from both files, and its next
+attempt runs on Sol. To end the trial, delete the `overrides` key and the `pi-terra` row from both
+files. Each removal takes effect at the next pass.
+
+**How to read it.** The run record of each attempt names its backend, `pi-terra`, and its usage
+(`tillr view events --since 0`, kind `run.finish`), and the run's log gives its turns. An item
+succeeds when it lands on its Terra attempt for less than $1.80, the mean Sol run that committed its
+work ([Section 1.1](#11-where-the-money-went)). It fails when the attempt does not land. Each
+attempt's turn count is set beside the mean Sol run of 50 turns (11,427 turns over 227 logs,
+[Section 1.2](#12-where-a-sol-runs-money-goes)), so that turn inflation shows.
+
+**When to stop.** After each item's first Terra attempt; the whole trial after five attempts, or after
+two failures in a row; and at once if a Terra candidate turns the trunk or the rolling run red.
+
+**What it needs to run soon.** An override chooses the model and not the turn. With five lanes busy,
+the five items wait in the queue in id order like any other unranked item. So the trial also ranks
+them first ([Section 15.5](#155-how-the-items-would-be-ranked-first)), and then the first result
+arrives within one lane turnover.
+
+### 15.5 How the items would be ranked first
+
+**The supported way today.** The seed face, `tillr-item seed`, calls itself the queue's only rank
+writer. For an item the store already holds, it changes only the rank, under three conditions. First,
+the seed entry must restate the item's stored definition: its title, body reference, design document,
+seat, paths, criteria and blockers. A differing field refuses the whole seed and writes nothing.
+Second, the payload it writes back is the stored item with the new rank, so the item's state and its
+criteria's states are kept. Third, it appends one item-update event for each item. The steps are:
+
+1. Read each item with `tillr-item show`.
+2. Write a `tillr.seed` file that restates each definition and adds the new rank.
+3. Run the seed with its dry-run flag and check that every item is reported as ranked and none as written.
+4. Run it for real, then compare `tillr-item show` before and after, and confirm the order with `tillr drain why`.
+
+**Its one hazard.** The seed reads the stored item without its workflow, so a rerank writes that item's
+workflow back as empty. This was read in `seed.go` on 2026-11-17 and not run (`storedItem` selects no
+workflow column, and `Apply` writes the workflow the payload carries). It is safe for every item named
+here, because none declares a workflow: `tillr-item show` reported an empty workflow for
+`item-ig-node-outputs` on 2026-11-17, and `rg -n 'workflow="' docs` finds no item directive that sets one: its three matches are prose.
+`tillr-item apply` is not used, because it writes every field from the record it is given.
+
+**The face that replaces it.** The queued `item-oa-move-to-top`
+([observatory actions](observatory-actions.md#add-a-move-to-top-action-that-works-from-the-items-page))
+adds a command that places one item and writes that item's order key alone. Once it lands, it is the
+way to rank.
+
+**A small item to file if ranks are needed before then:**
+
+- **Title:** Hold an item's workflow when the seed changes its rank
+- **Why:** A rerank through the seed re-applies the stored item with a new rank, but the stored item it reads has no workflow, so an item slotted into a workflow would silently lose it.
+- **Paths:** `tools/tillr-item/`, `yolo-packs/tillr/`, `docs/`. **Waits on:** nothing.
+- **c1:** A rerank keeps the stored workflow. A test syncs an item with a workflow, reranks it through a seed, and asserts the workflow is unchanged.
+- **c2:** A rerank changes no stored field other than the rank, the update time and the event sequence. A test compares the item's show output before and after.
+- **c3:** No Git, file or process work runs inside the seed's SQLite write transaction.
+
+**The proposed ranks.** A rank is a string compared as text, and an empty rank sorts after every rank.
+The only ranked item in the store is closed, and its rank is `a` (`tillr drain why`, 2026-11-17). So
+every rank below sorts first. Ranks only order items that are ready; a blocked item still waits for its
+blockers.
+
+| Rank | Items |
+| :--- | :--- |
+| `01` to `05` | the five trial items, in the order of [Section 15.4](#154-the-terra-trial) |
+| `0a` to `0e` | `item-ig-node-outputs`, `item-ig-workflow-check`, `item-ig-command-node`, `item-ig-node-write-scope`, `item-ig-seat-default-workflow` |
+| `0f` to `0i` | `item-ig-exit-condition`, `item-ig-stage-names-workflow`, `item-ig-propose-replacement`, `item-ig-view-nodes` |
+| `0j`, `0k` | `item-pt-copied-usage`, `item-pt-cache-rewrites` |
+| `0l` to `0r` | the seven items of [Section 15.3](#153-the-items), in its order |
+
+### 15.6 Where another plan touches the same code
+
+[The definitions plan](tillr-definitions-plan.md), filed on 2026-11-17 in commit `36085b3fd`, restructures
+the drain's core. Several of its items rewrite the same functions as the items above:
+
+- `item-def-stage-plain-directory` changes how the stager fills a brief, and `item-def-finish-on-hook` changes the end-of-run path in the loop. `item-pt-node-records` touches both.
+- `item-def-planner-lifecycle` changes the planner, where `item-pt-ladders` changes the first backend an item is given.
+- `item-def-command-node-plain-directory` already waits on `item-ig-command-node`, which `item-pt-slice-checks` and `item-pt-plan-seat` also wait on, so it needs no new edge.
+
+When both sets are filed, the later item in each pair should wait on the earlier. Where there is a real
+choice, the cost-saving item goes first: `item-def-stage-plain-directory` and `item-def-finish-on-hook`
+would wait on `item-pt-node-records`, and `item-def-planner-lifecycle` on `item-pt-ladders`.
 
 ---
 

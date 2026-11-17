@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -76,12 +76,24 @@ That document also lists the owner's statements as the pipeline reported them, f
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
 a ramble) runs its own small graph and ends in one item shape, and lists what is not yet settled.
 
-[Planning and model tiering](../design/tillr-planning-node-model-tiering.md) carries eight more,
+[Planning and model tiering](../design/tillr-planning-node-model-tiering.md) is the proposal for the
+owner's ask to spend less by giving each kind of work the cheapest model that can do it. A cheaper
+model such as Terra runs only work that a command checks the moment it finishes, and climbs to Sol
+when the check fails; a planning node first cuts a large build item into such checked slices. It
+carries eight more questions,
 [`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
-[`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16: whether models
-cheaper than Sol do build work behind a check, whether Terra is tried on five items before the ramp
-to ten lanes, and how a planning node splits an item and when. The first two come first because
-the trial is the only part that can run in hours.
+[`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16, and the document
+opens with [a box](../design/tillr-planning-node-model-tiering.md#what-i-am-asking-you-to-decide) that
+puts each in one line with its recommendation and its cost if wrong. Answer the first two first.
+[`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) asks again the October ruling that
+on Bedrock only Sol and Luna are worth setting up; a yes lets the two stage 2 items be filed, which put
+test fixes on Terra behind a check.
+[`OQ-PT2`](../design/tillr-planning-node-model-tiering.md#OQ-PT2) is the only part that can start in
+hours; a yes is one policy edit that runs five named items on Terra and measures it. The other six
+shape the planning items, and each item is written to its question's recommended answer, so on a yes
+[the written-out items](../design/tillr-planning-node-model-tiering.md#15-ready-to-file-on-your-word)
+are filed as they stand. Two faults in the run record that the proposal found wait on no question and
+are [filed below](#filed-2026-11-17-the-run-records-spend-corrected-before-it-is-compared).
 
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
 it carried is a row of its ledger, and on 2026-11-16 it was cut into
@@ -1695,3 +1707,76 @@ built it. The three usage-recording fork items wait on this one.
 - **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and says that "any other patch-branch move still convicts". AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
 - **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
 - **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.
+
+## Filed 2026-11-17: the run record's spend, corrected before it is compared
+
+Principle: a routing decision is a comparison of what runs cost, so the record of what they cost
+has to be right before anything is moved to a cheaper model. Reading the loop's history for
+[the model-tiering design](../design/tillr-planning-node-model-tiering.md) on 2026-11-17 turned up
+two faults in that record. Neither waits on any of that design's questions.
+
+### Hold the copied usage of 49 old runs out of spend totals
+
+Every cost figure the owner sees comes from the run records the store keeps, and 49 of those
+records describe somebody else's run. Each of the 49 carries exactly the tokens and the cost of an
+earlier run, $133.65 in all, out of $455.56 recorded. Most of them were attempts that were killed in
+their first one or two seconds and never reached a model. The cause is already fixed: since
+2026-11-15 each attempt reads its spend from a report it wrote itself, so a killed attempt can no
+longer pick up the report of the attempt before it, and none of the runs started since then repeats
+another run's usage. But the 49 old rows still say what they said. The observatory's performance
+totals, each item's spend, and every rate anyone computes from the store therefore count that money
+twice. This item adds a way to mark a run's usage as copied, with the old values kept in the event
+log, a detector that finds such runs, and the operator's step that applies the correction to this
+repository's store. The detector stays as a check, so a new leak of the same kind shows at once.
+
+<!-- inert copy of a tillr directive: item id="item-pt-copied-usage" paths="tools/tillr-run/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A new face of the run program marks one run's recorded usage as copied from a named earlier run. Afterward the run's stored tokens and cost read as unknown, and one new event holds the old values, the run they match and the reason. A test asserts the row and the event.
+- **c2:** The face refuses, and writes nothing, when the run's tokens and cost are not both equal to the named run's, when the named run started after it, or when the named run is the same run continued. A test covers each refusal.
+- **c3:** A detector lists every run whose nonzero tokens and cost both equal those of an earlier run, each with the run it matches, and can apply the correction to all of them in one transaction. A test with a fixture store of three runs, two of which share their usage, asserts exactly one listed run.
+- **c4:** After the correction, the observatory's performance totals and each item's spend count a corrected run as a run that recorded no usage, and mark the sum as a lower bound the way they already mark one. A test asserts a fixture item's total before and after.
+- **c5:** On a store that holds no copied usage, the detector lists nothing, the correction writes nothing, and every view's totals are unchanged. A test asserts all three.
+- **c6:** `TestInterruptedRetryCannotReadPrecedingAttemptsReport` still passes, and the run program's README says how an operator runs the detector and the correction on a store, and that this repository's store needs it once after this item lands.
+- **c7:** The correction does no Git, file or process work inside a SQLite write transaction. The mark and its event are written in one transaction. A test asserts that no process starts while the write transaction is open.
+
+**Agent details:**
+
+- **Ref:** [the model-tiering design](../design/tillr-planning-node-model-tiering.md), Section 1.1, "Where the money went"; the "Usage attribution" section of [the run program's README](../../tillr-run/README.md), which records the fix.
+- **Where:** `readSpend` in `tools/tillr-run/run/exec.go` (fixed, leave it); the run row's `usage_tokens` and `usage_cost_usd` in `tools/tillr-run/run/apply.go`; the event kinds in `tools/tillr-run/run/schema.go`, where `run.usage` already records a run whose spend could not be read; the sums in `tools/tillr-view/performance.go` and the run rows in `tools/tillr-view/serveread.go`.
+- **Evidence:** 2026-11-17, `tillr view events --since 0` read at event 5494: 375 runs, of which 49 carry exactly the tokens and cost of an earlier run, $133.65 in all. All 49 started between 2026-11-15 22:19 UTC and 2026-11-16 00:58 UTC. Twenty-one of them are attempts a4 to a24 of `item-land-retires-block`, each recording 16,061,350 tokens and $3.134482, most of them ending after one or two seconds.
+- **Evidence:** 2026-11-17, the same read: 285 runs started after 2026-11-16 01:18 UTC, the time of commit `263173aed`, which gave each spend extraction a fresh directory, and none of them repeats another run's usage. `git merge-base --is-ancestor 263173aed HEAD` succeeds.
+
+### Isolate why long runs write their whole context to the cache again
+
+Writing context into the model's prompt cache is the most expensive kind of token a Sol run pays
+for. In the Sol run logs read on 2026-11-17 it was 47% of what those runs cost, against 39% for
+reading from the cache and 14% for output. A run should write each part of its context to the cache
+once and read it back on every later turn. Instead, those logs wrote 50.4 million tokens to the
+cache while the largest contexts of the same runs add up to 22.8 million. About 27.6 million tokens,
+an estimated $69 or 26% of Sol's spend, were written more than once. Reading the logs turn by turn
+shows two patterns. In some long runs, once the context passes a certain size, every later turn
+reads nothing from the cache and writes the whole context again. In other turns, the part read from
+the cache stops growing at a fixed size while the part written grows on every turn. Neither is the
+cache expiring while the run sits idle. The cause is not known: it may be where pi places its cache
+markers, a limit on the provider's side, or something early in the context that changes and
+invalidates everything after it. This item finds the cause, and fixes it when the fix is small and
+lies in how tillr runs pi. It is the second-largest saving that the model-tiering design measured.
+
+<!-- inert copy of a tillr directive: item id="item-pt-cache-rewrites" paths="docs/,tools/tillr-run/,yolo-packs/tillr/" blocked_by="" prose="2" -->
+
+- **c1:** A finding in `docs/research/` names the cause of each pattern, shown on at least three run logs per pattern, with the turn numbers and the token counts that show it.
+- **c2:** The finding prices the repeated writes for the Sol build seat and for the Fable design seat separately, from the run logs, as command, result and date.
+- **c3:** The finding reproduces the first pattern with the smallest pi session outside the loop that shows it, or says why it cannot be reproduced, and records that session's model, turns, tokens and cost.
+- **c4:** When the fix lies in the pi adapter or in how tillr starts pi, the item makes it. A test asserts the changed arguments or environment, and one measured run after the fix shows the pattern gone, as command, result and date.
+- **c5:** When the fix belongs in pi itself, in its patch series, on the provider's side or in a yolo pack's settings, the item does not make it. The finding states the change, where it belongs and its expected saving.
+- **c6:** The finding says whether the one-hour cache retention that every pi session runs with is still worth it for runs that are never resumed, given that resumed designer sessions depend on it, and the item changes nothing about that retention.
+- **c7:** Without a fix, nothing outside `docs/` changes. With one, `tools/tillr-run`'s tests pass, and a run that never reaches the pattern gets the same arguments and environment as before, which a test asserts.
+- **c8:** The item writes nothing to the store, and no measurement in it is a test that asserts elapsed time.
+
+**Agent details:**
+
+- **Ref:** [the model-tiering design](../design/tillr-planning-node-model-tiering.md), Section 1.2, "Where a Sol run's money goes", and Section 1.6, lever 2; [the usage ledger's request](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/usage-recording-request.md), whose section 4 is a different gap (cache writes that are billed but never recorded, filed as `item-pi-fork-billing-attempts`). This item explains writes that are recorded, so do not duplicate that one.
+- **Where:** the run logs the loop keeps beside each lane, which each run record's artifacts name; each assistant message's `usage` carries `input`, `cacheRead` and `cacheWrite`. The pi adapter is `tools/tillr-run/backends/pi/run-pi`. `PI_CACHE_RETENTION=long` is set for every pi session by the matt pack (commit `c5f4a82f7`).
+- **Evidence:** 2026-11-17, a per-turn read of the 227 Sol logs: cache writes cost $126.06 in all. Turns after the first that read nothing from the cache and wrote more than 50k tokens cost $30.18. They occur in 13 logs, starting at a context between 63k and 264k tokens, with a median of 132k. In `run-item-obs2-shell-home-a3`, turns 89 to 108 each read 0 and wrote between 132k and 149k tokens.
+- **Evidence:** 2026-11-17, the same read: turns whose cache read equals the previous turn's while they write more than 15k tokens cost $20.53. In `run-item-drain-stop-keeps-runs-a3`, turns 34 to 53 each read exactly 92,262 tokens while their writes grew from 20,862 to 48,266, and from turn 54 every turn read nothing.
+- **Evidence:** 2026-11-16, the design's own read: turns that started five or more minutes after the previous one carry under 2% of the cache writes, so idle expiry is not the cause. The largest Fable run, of `item-design-gate-rework`, wrote 1.695M tokens to the cache against a largest context of 256k.

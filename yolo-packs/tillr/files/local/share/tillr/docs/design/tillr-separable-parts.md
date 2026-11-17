@@ -22,7 +22,7 @@ depends-on:
 
 # What tillr will change for Product QA, and what it will not
 
-> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `0cd2582789` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. A proposal and tillr's answer to Product QA's second round
 ([Section 7](#7-the-second-round-tillrs-answer)). The owner said to build on 2026-11-17, and the
