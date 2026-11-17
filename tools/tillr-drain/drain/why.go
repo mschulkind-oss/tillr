@@ -212,6 +212,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			}
 		case d.Action == ActionHold && (d.Reason == ReasonConflictDesign || d.Reason == ReasonConflictOwner) && d.ConflictID != "":
 			row.WaitingOn = append(row.WaitingOn, d.ConflictID)
+			if d.Reason == ReasonConflictOwner && d.DeferredBy != "" {
+				row.WaitingOn = append(row.WaitingOn, "design run "+d.DeferredBy)
+			}
 		case d.Reason == ReasonNoLane:
 			for _, lane := range offered {
 				if busy[lane] || assigned[lane] != "" {

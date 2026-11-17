@@ -452,7 +452,10 @@ type Loop struct {
 	laneBootstrapReported bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
-	staleBaseChecked            map[string]bool
+	staleBaseChecked map[string]bool
+	// designUnansweredChecked holds, per owner conflict an unanswered design run left,
+	// the trunk commit its inputs were last compared at (design_unanswered.go).
+	designUnansweredChecked     map[string]string
 	gatePolicy                  GatePolicy
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	heavyMu                     sync.Mutex
