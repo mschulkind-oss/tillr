@@ -78,6 +78,7 @@ type Decision struct {
 	DesignerReason    string         `json:"designer_reason,omitempty"`
 	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
 	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
+	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
 	Workflow          *Workflow      `json:"workflow,omitempty"`
 	NodeIndex         int            `json:"node_index,omitempty"`
@@ -469,7 +470,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				}
 			}
 			if hold != "" {
-				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: hold, From: "held", Attempt: p.nextAttempt(item.ItemID)}
+				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: hold, From: "held", Attempt: p.nextAttempt(item.ItemID), Workflow: w}
+				if work := works[item.ItemID]; work != nil && work.Decision.Workflow != nil {
+					decision.Workflow = work.Decision.Workflow
+					decision.NodeIndex = work.Decision.NodeIndex
+					decision.Attempt = work.Decision.Attempt
+				}
 			} else if loadErr != nil {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {

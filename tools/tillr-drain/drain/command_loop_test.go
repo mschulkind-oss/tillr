@@ -15,6 +15,7 @@ import (
 
 type commandSteps struct {
 	workflowSteps
+	repairThird bool
 }
 
 func (s *commandSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -38,7 +39,7 @@ func (s *commandSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return rec, logTail(rec.ArtifactRefs), err
 	}
 	contents := "built\n"
-	if strings.HasSuffix(req.RunID, "-n4") {
+	if strings.HasSuffix(req.RunID, "-n4") || (s.repairThird && strings.HasSuffix(req.RunID, "-n3")) {
 		contents = "recovered\n"
 	}
 	writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), contents)
@@ -217,7 +218,7 @@ func TestCommandFirstIgnoresBackendQuota(t *testing.T) {
 
 func TestCommandFailureEdgeRunsOnlyFailureSuccessor(t *testing.T) {
 	f, l, steps := commandLoopFixture(t, "fail", "read_only", false)
-	raw := `{"name":"scout-then-build","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"write"},{"id":"check","kind":"command","command_ref":"check","access":"read_only"},{"id":"success","kind":"agent","seat":"build","access":"write"},{"id":"recover","kind":"agent","seat":"build","access":"write"}],"edges":[{"from_node":"work","to_node":"check"},{"from_node":"check","to_node":"success","when_outcome":"pass"},{"from_node":"check","to_node":"recover","when_outcome":"fail"}]}`
+	raw := `{"name":"scout-then-build","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"write"},{"id":"check","kind":"command","command_ref":"check","access":"read_only"},{"id":"success","kind":"agent","seat":"build","access":"write"},{"id":"recover","kind":"agent","seat":"build","access":"write"}],"edges":[{"from_node":"work","to_node":"check"},{"from_node":"check","to_node":"success","when_outcome":"pass"},{"from_node":"check","to_node":"recover","when_outcome":"fail"}],"exit":{"requires_nodes":["recover"],"requires_candidate":"commit_required"}}`
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), raw)
 	runGit(t, f.root, "add", ".")
 	runGit(t, f.root, "commit", "-qm", "failure edge fixture")
@@ -233,7 +234,7 @@ func TestCommandFailureEdgeRunsOnlyFailureSuccessor(t *testing.T) {
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM node_runs WHERE node_id='success'`).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM node_runs WHERE node_id='success' AND outcome!='skipped'`).Scan(&n); err != nil {
 			return err
 		}
 		if n != 0 {

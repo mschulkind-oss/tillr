@@ -367,6 +367,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
 		name := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
+		if d.NodeInfraFailures > 0 {
+			name = d.RunRequest.Backend
+		}
 		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
 		if !ok {
 			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""

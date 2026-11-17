@@ -1343,6 +1343,23 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if decision.Workflow != nil {
+		if ClassifyAttempt(record, log) == AttemptUnjudged && !commandStage(decision) {
+			// A prior node's commit is not this node's answer. Continue the
+			// interrupted node in place, or retain its unjudged hold; neither
+			// route may enter the single-run candidate admission path.
+			resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, request, worktree, record, tick, at, result, watched)
+			if err != nil || stop != "" {
+				return laneOutcome{err: err, stop: stop}
+			}
+			if resumed.RunID != "" {
+				prepared = deferJudge
+				return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+			}
+			if err := l.nodeOutcome(ctx, decision, "unjudged"); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "workflow node was cut short and remains unjudged")}
+		}
 		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result)
 		if handled {
 			prepared = nodeErr == nil
@@ -1977,17 +1994,8 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		terminal.Landed = true
 		return "", false, terminal
 	}
-	if candidate.BlockConflict != nil {
-		if err := l.answerBlock(ctx, candidate); err != nil {
-			return "", false, err
-		}
-	} else {
-		if err := l.cfg.Steps.Verdict(ctx, candidate, VerdictPassed); err != nil {
-			return "", false, err
-		}
-		if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateLanded); err != nil {
-			return "", false, err
-		}
+	if err := l.completeItem(ctx, candidate); err != nil {
+		return "", false, err
 	}
 	l.mu.Lock()
 	result.Landed++

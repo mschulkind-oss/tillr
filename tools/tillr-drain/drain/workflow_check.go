@@ -69,7 +69,13 @@ func workflowFields(raw []byte) []error {
 	}
 	var exit map[string]json.RawMessage
 	if json.Unmarshal(object["exit"], &exit) == nil {
-		check(exit, "requires_nodes", "exit")
+		check(exit, "requires_nodes requires_candidate", "exit")
+		if raw, present := exit["requires_candidate"]; present {
+			var candidate string
+			if json.Unmarshal(raw, &candidate) != nil || (candidate != "commit_required" && candidate != "commit_optional" && candidate != "no_commit") {
+				findings = append(findings, fmt.Errorf("workflow-exit: exit: requires_candidate must be commit_required, commit_optional or no_commit"))
+			}
+		}
 	}
 	return findings
 }
@@ -96,11 +102,13 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 	w.SHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
 	w.Sources = map[string]string{ref: w.SHA256}
 	entries, exits := map[string][]string{}, map[string][]string{}
+	composed := map[string]bool{}
 	stages := []WorkflowStage{}
 	edges := []WorkflowEdge{}
 	var findings []error
 	for _, stage := range w.Stages {
 		if stage.Kind == "workflow" {
+			composed[stage.ID] = true
 			rel := filepath.Join("config", "tillr", "workflows", stage.Workflow+".json")
 			tracked := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", rel)
 			if err := tracked.Run(); err != nil {
@@ -118,6 +126,11 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 				incoming[edge.To] = true
 				edge.From = prefix + edge.From
 				edge.To = prefix + edge.To
+				required := make([]string, len(edge.RequiresPassed))
+				for i, id := range edge.RequiresPassed {
+					required[i] = prefix + id
+				}
+				edge.RequiresPassed = required
 				edges = append(edges, edge)
 			}
 			for _, node := range inner.Stages {
@@ -154,6 +167,9 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 			for _, to := range entries[edge.To] {
 				expanded := edge
 				expanded.From, expanded.To = from, to
+				if composed[edge.From] && edge.WhenOutcome != "fail" {
+					expanded.RequiresPassed = append([]string(nil), exits[edge.From]...)
+				}
 				edges = append(edges, expanded)
 			}
 		}
@@ -162,7 +178,11 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 	for _, id := range requiredWorkflowNodes(w) {
 		required = append(required, exits[id]...)
 	}
-	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required}
+	candidate := workflowCandidatePolicy(w)
+	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate}
+	if err := validateWorkflowExit(w); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return w, nil
 }
 

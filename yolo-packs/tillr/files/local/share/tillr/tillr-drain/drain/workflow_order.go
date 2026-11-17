@@ -4,63 +4,77 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// nextWorkflowNode walks the existing serial order, admitting a node only when
-// all incoming edges match the producer's recorded outcome.
+// nextWorkflowNode waits for incoming producers to settle, then follows any
+// matching edge. This admits joins of mutually exclusive pass/fail branches;
+// a node with no followed incoming edge is skipped, never dispatched.
 func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
-	s, err := store.Open(ctx, l.cfg.Store, false)
+	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return -1, err
 	}
 	defer s.Close()
-	outcomes := map[string]string{}
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		rows, err := r.Query(`SELECT node_id,outcome FROM node_runs WHERE item_id=? AND attempt=?`, d.ItemID, d.Attempt)
+	index := -1
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		outcomes, err := workflowOutcomes(tx.Reader(), d.ItemID, d.Attempt)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var id, outcome string
-			if err := rows.Scan(&id, &outcome); err != nil {
-				return err
-			}
-			outcomes[id] = outcome
+		if workflowDone(d.Workflow, outcomes) {
+			return nil
 		}
-		return rows.Err()
-	})
-	if err != nil {
-		return -1, err
-	}
-	for i := d.NodeIndex + 1; i < len(d.Workflow.Stages); i++ {
-		ready := true
-		for _, e := range d.Workflow.Edges {
-			if e.To != d.Workflow.Stages[i].ID {
+		for i, stage := range d.Workflow.Stages {
+			if outcomes[stage.ID] != "" {
 				continue
 			}
-			want := "passed"
-			if e.WhenOutcome == "fail" {
-				want = "handled-fail"
+			incoming, settled, followed := false, true, false
+			for _, edge := range d.Workflow.Edges {
+				if edge.To != stage.ID {
+					continue
+				}
+				incoming = true
+				outcome := outcomes[edge.From]
+				if outcome == "" || outcome == "running" {
+					settled = false
+				}
+				matches := outcome == "passed"
+				if edge.WhenOutcome == "fail" {
+					matches = outcome == "handled-fail"
+				}
+				for _, id := range edge.RequiresPassed {
+					matches = matches && outcomes[id] == "passed"
+					if outcomes[id] == "" || outcomes[id] == "running" {
+						settled = false
+					}
+				}
+				followed = followed || matches
 			}
-			if outcomes[e.From] != want {
-				ready = false
-				break
+			if !settled {
+				continue
 			}
+			if !incoming || followed {
+				index = i
+				return nil
+			}
+			_, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'skipped') ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, stage.ID, attemptRunID(d.ItemID, d.Attempt)+"-n"+strconv.Itoa(i+1))
+			if err != nil {
+				return err
+			}
+			outcomes[stage.ID] = "skipped"
 		}
-		if ready {
-			return i, nil
-		}
-	}
-	return -1, nil
+		return nil
+	})
+	return index, err
 }
 
 func commandNodeHold(r *store.Reader, id string) (string, error) {
 	var node, outcome string
 	err := r.QueryRow(`SELECT n.node_id,n.outcome FROM node_runs n JOIN runs r ON r.run_id=n.run_id
- WHERE n.item_id=? AND r.backend='command' AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
+ WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
  AND n.outcome IN ('failed','fault') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome)
 	if err == sql.ErrNoRows {
 		return "", nil
