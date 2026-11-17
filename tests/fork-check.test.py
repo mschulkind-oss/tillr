@@ -990,8 +990,22 @@ with tempfile.TemporaryDirectory() as tmp:
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "run  storybook" in result.stdout, result.stdout
-    assert calls(base, "storybook-calls") and calls(base, "storybook-calls")[0].endswith("/roster-storybook"), calls(base, "storybook-calls")
+    roster_calls = calls(base, "storybook-calls")
+    assert roster_calls and roster_calls[0].split()[0].endswith("/roster-storybook"), roster_calls
+    # The renderer is handed the working copies `forks_root()` resolved. Left to find
+    # `.forks/` beside its own script, it fails in any checkout but the main one -- a lane
+    # worktree, or the drain's detached heavy checkout, where it kept every heavy run on
+    # 2026-11-17 from proving the trunk.
+    forks = repo / ".forks"
+    assert f"--source {forks / 'pi-subagents'} --pi-source {forks / 'pi'}" in roster_calls[0], roster_calls
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
+    clear(base, "storybook-calls")
+    # A checkout with no `.forks/` of its own reads the shared one PI_FORKS_ROOT names.
+    elsewhere = base / "shared-root"
+    result = run(repo, {**env, "PI_FORKS_ROOT": str(elsewhere)}, "--since", "HEAD~1")
+    roster_calls = calls(base, "storybook-calls")
+    assert roster_calls, result.stdout + result.stderr
+    assert f"--source {elsewhere / '.forks' / 'pi-subagents'} --pi-source {elsewhere / '.forks' / 'pi'}" in roster_calls[0], roster_calls
     clear(base, "storybook-calls")
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1008,7 +1022,9 @@ with tempfile.TemporaryDirectory() as tmp:
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "regenerate the pi-archimedes footer storybook" in result.stdout, result.stdout
-    assert calls(base, "footer-storybook-calls") and calls(base, "footer-storybook-calls")[0].endswith("/footer-storybook"), calls(base, "footer-storybook-calls")
+    footer_calls = calls(base, "footer-storybook-calls")
+    assert footer_calls and footer_calls[0].split()[0].endswith("/footer-storybook"), footer_calls
+    assert f"--source {repo / '.forks' / 'pi-archimedes' / 'packages' / 'footer'}" in footer_calls[0], footer_calls
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
     clear(base, "footer-storybook-calls")
 
