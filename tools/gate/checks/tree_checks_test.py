@@ -43,6 +43,17 @@ class TreeChecks(unittest.TestCase):
         self.track("guide.md", location)
         self.assertTrue(tree_common.scratch_citations(self.root))
 
+    def test_scratch_exception_follows_a_delivered_copy_to_its_source(self):
+        # The tillr pack delivers dated copies of design documents (tools/pack-docs.py).
+        # A copy carries its source's lines, so it is excused exactly where its source is.
+        line = "build into `$YOLO_DURABLE_DIR/bin` and prepend it to PATH.\n"
+        copy = "yolo-packs/tillr/files/local/share/tillr/docs/design/tillr-distribution.md"
+        self.track(copy, line)
+        self.assertEqual(tree_common.scratch_citations(self.root), [])
+        other = "yolo-packs/tillr/files/local/share/tillr/docs/design/other.md"
+        self.track(other, line)
+        self.assertIn(other + ":1", tree_common.scratch_citations(self.root)[0])
+
     def test_design_document_and_anchor_resolution(self):
         self.track("docs/design/target.md", '# Target\n## 3. The section\n<a id="html"></a>\n<!-- vantage: question id=Q1 -->\n')
         for citation in ["target.md", "target.md#3-the-section", "target.md#html", "target.md#q1"]:

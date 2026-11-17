@@ -1,0 +1,220 @@
+---
+title: Agent Context Delivery — How Instructions Should Reach an Agent
+date: 2026-10-26
+status: draft
+stage: SKETCH
+next: Owner review of D-AC1–D-AC11 (item 224); no implementation until autonomous-landing restores the drain
+board: "224"
+depends-on: autonomous-landing.md
+tags: [agents, context-delivery, briefing, pi-fork, board-drain, subagents]
+summary: Rules should travel at the granularity of their invariance — fleet rules in the broadcast briefing, role rules in agent definitions, run rules in the dispatcher's brief, hard limits in code and config, never in prose. The week's three leaks were one missing concept (no per-run prose channel, now fixed via the brief), one unguarded ambient extension, and one global config ceiling. Neither mode-scoping the briefing nor rebuilding on Pi's split libraries fixes the class; the briefing is materialized per home, and all context machinery lives in pi-coding-agent, not the lower libraries.
+---
+
+## In short
+
+The interface gap is real but narrower than it feels. This fleet already owns every conditional mechanism it needs — per-lane environment identity (`BOARD_DRAIN_*`), per-lane process argv (`--model`, `--thinking`, `--tools`, `--extension`), per-agent definitions with prompt/tool/model/thinking fields, and an extension hook (`before_agent_start`) that can rewrite the system prompt per process. What was missing was exactly one concept: a prose channel whose scope is *one run*. Today's fix — lane rules composed into the lane brief — is that channel, and this design rules it the governing mechanism rather than a stopgap.
+
+The two larger moves on the table do not survive inspection. Mode-scoping the briefing (a pack declaring "lanes only") cannot work at the briefing's granularity: briefing contributions are rendered at launch into files in the agent home (`~/.pi/agent/AGENTS.md` for pi), so their scope is a *home*, not a process or a task. Rebuilding on Pi's split libraries buys nothing for context delivery: extension loading, skill loading, `AGENTS.md` discovery, and system-prompt assembly all live in `pi-coding-agent`, not in `pi-ai` or `pi-agent-core`, so depending on the split packages means reimplementing precisely the machinery under discussion — plus the tools, session handling, and TUI — while the drain is broken.
+
+And the prior-art question has a plain answer: the "Evaluating pi-forks purpose and necessity" session did not decide Pi-versus-libraries at all. It decided the scope of the `bin/pi-forks` tooling. Section 2.5 gives the detail; the dependency question is decided here for the first time, on the evidence in Section 1.
+
+## 1. The gap, named precisely
+
+### 1.1 Channels and their true granularity
+
+Four channels are usually named. There are really seven delivery surfaces, and they differ in *when* scope is resolved — that resolution point, not the file format, is what a rule's scope can be.
+
+| Channel | Scope resolved | Granularity | Conditional on a run? | Evidence |
+|---|---|---|---|---|
+| Pack briefing (`briefing/*.md`) | At launch, by the pack materializer | Per agent home | No | Manifest keys are only `agents`, `from`, `into` (`agents`/`into` mutually exclusive; neither means broadcast); contributions render into the home (pi: `~/.pi/agent/AGENTS.md`) and every pi process in that home reads the same file |
+| Pack `files` → extensions | At install into the home; at runtime, by the extension's own code | Per home at load; per process if the code self-gates | Only as hand-written code | `design-lane.ts` is contributed unconditionally (`yolo-packs/matt/pack.json`, `files` from `files/extensions/design-lane.ts` into `.pi/agent/extensions/`); its fence is now gated in `registerDesignLane` on `BOARD_DRAIN_ARTIFACT` |
+| Skill | At invocation, by the model | Per agent that can see it; per-agent definition can set `skills`/`inheritSkills` | Triggered, never guaranteed | Agent-definition fields in `.forks/pi-subagents/src/agents/agents.ts` |
+| `AGENTS.md` / `CLAUDE.md` | At session start, by working directory | Per repository | No | `loadProjectContextFiles` in `packages/coding-agent/src/core/resource-loader.ts` |
+| Agent definition (pi-subagents) | At dispatch, by role name | Per role | Per role, not per task | Fields include `thinking`, `model`, `tools`, `excludeTools`, `systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `extensions`, `subagentOnlyExtensions` (`agents.ts`) |
+| The brief (lane brief / subagent task) | At dispatch, by whoever composes it | Per run | Yes — the only prose channel that is | the Pi backend in `tools/board-cli/internal/board/lane_backend.go` builds, and `resume.go` spawns, `pi --session "$BOARD_DRAIN_SESSION" … -p "$BOARD_DRAIN_BRIEF"`; `laneRules`/`childBrief` in `drain.go`, `designChildBrief` in `design.go` |
+| Process argv + env (drain only) | At spawn, by the drain | Per lane | Yes, for hard knobs, not prose | the Pi backend bakes `--model/--thinking/--tools/--extension` into argv; `drainChildEnv` exports `BOARD_DRAIN_ITEM`, `_RUN`, `_BRANCH`, `_WORKTREE`, `_AGENT`, `_MODEL`, `_THINKING`, `_TOOLS`, `_EXTENSIONS`, plus design keys `BOARD_DRAIN_DESIGN_MODEL`, `_DESIGN_THINKING`, `_RESEARCH_MODEL`, `_DESIGN_TOOLS`, `_DESIGN_EXTENSIONS`, `_ARTIFACT`, `BOARD_TOPIC`, `BOARD_SEAT` |
+
+Two under-appreciated facts fall out of the table. First, **identity was never missing**: a drained lane process can be told from an ordinary session with certainty, from `drainChildEnv`'s exports — an in-process consumer just has to look. (`BOARD_DRAIN_AGENT` specifically is exported but read by nothing in the lane process; the others are either baked into argv by the Pi backend or read by lane-aware extensions.) Second, **the briefing and the brief resolve at opposite ends of a run's life**: the materializer that renders the briefing runs before any mode exists and writes to a home shared by every session launched from it, while the dispatcher composing a brief knows the item, the role, and the mode exactly. Any design that wants per-run prose must compose where the mode is known. That is the whole argument of this document in one sentence.
+
+### 1.2 What "mode scoping" would mean, per channel
+
+"Mode" here means the run's operating context — drained lane (implementing or designing), lead-orchestrated, or plain interactive session — as opposed to *who* the agent is or *which repository* it is in.
+
+| Channel | What mode scoping would concretely require | Can it express "lanes only"? |
+|---|---|---|
+| Briefing | The launch-time materializer would need to know the mode of a process that does not exist yet, and the rendered destination would need to be partitioned by mode, since one home otherwise serves lane and interactive processes the same `AGENTS.md` | Not at current granularity; only if homes became per-mode or per-process |
+| Extension | Nothing new: read `BOARD_DRAIN_*` from `process.env` before registering hooks — the idiom `registerDesignLane` now uses. A declared form (a manifest `activation` key checked by the loader) does not exist | Yes, today, as code — opt-in per extension, invisible to review at the manifest level |
+| Skill | A mode-visible skill set: partly expressible today per role (`skills`, `inheritSkills` in an agent definition), not per run | Per role only; and a skill only fires if the model invokes it, so it can carry know-how, never a rule that must hold |
+| `AGENTS.md` | Nothing sensible — directory nesting is the only sub-scope | No |
+| Agent definition | Mode *is* role selection at dispatch — but only for pi-subagents children. A drained lane is a bare `pi` process; nothing in it reads an agent definition | For subagent workers, yes; for drain lanes, not without new plumbing (Section 2.3) |
+| Brief | Already mode-scoped by construction: the drain composes lane briefs, a lead composes worker briefs | Yes — in production since today's `laneRules` fix |
+| Config ceilings (`subagents.maxThinking`) | A per-agent key in the override surface. The data model already has a per-agent `maxThinking` field; it is populated only by the global apply, never by per-agent override config (`agents.ts`) | Yes, with a small patch — this is a config-surface gap, not a concept gap |
+
+### 1.3 The three leaks, classified
+
+| Leak | Missing concept, or bug in a mechanism? | Precise fault | State |
+|---|---|---|---|
+| 1. `subagents.maxThinking` refused `xhigh` for the design seat | **Bug in a mechanism** — an incompletely surfaced field | Per-agent `thinking` and a per-agent `maxThinking` slot both exist in `agents.ts`, but only the global apply writes `maxThinking`; no per-agent override is expressible, so raising the ceiling raised it fleet-wide | Open; fixed by D-AC7, a small pi-subagents patch, unrelated to prose delivery |
+| 2. `design-lane.ts` fenced tools in ordinary sessions | **Bug in the use of a mechanism, on a channel whose conditionality is undeclared** | The pack `files` contribution is unconditional, so the extension installs into every home; the runtime self-gate on `BOARD_DRAIN_ARTIFACT` was available from the start but absent, and nothing in the manifest declares that it should exist — the mistake is silent until it leaks | Repaired: `registerDesignLane` now returns without registering the `tool_call` hook when the artifact env is empty (commit `c2e9159dc…`). The absence of a *declared* activation remains — see [`OQ-AC1`](#OQ-AC1) |
+| 3. Lane workflow rules in `briefing/work-rules.md` read as everyone's rules | **The one missing concept** | At the time there was no prose channel between "every process in this home" and "this repository". The `[lane]` prose tags tried to simulate scope inside a broadcast and were rightly rejected: a rule explaining why it does not apply still costs the reading and still reads as an instruction | Fixed today, and settled: lane rules live in the brief (`laneRules`, appended by `childBrief` and `designChildBrief`) |
+
+So of three leaks that felt like one design flaw, only the third was. The other two are instances of one recurring shape — *a hard constraint delivered on a too-broad surface* — and each has its own narrow repair. A single new "mode" mechanism bolted onto the briefing would have fixed, at best, one leak of three, and that one only if homes were re-partitioned.
+
+## 2. Ruling on the mechanism
+
+### 2.1 Alternative (a) — Rules travel in the brief, composed by the dispatcher
+
+What we do now for drain lanes. **Build cost:** near zero; it is shipped. The residual work is hygiene — `laneRules` is a Go string constant, so rule changes are code changes in `drain.go`, hard to review as prose and easy to diverge between `childBrief` and `designChildBrief`. **Cost of getting it wrong:** a dispatcher that forgets a rule produces a lane without it; a rule in a brief is a task-level instruction, not a system-level one, and stays advisory to a model that skims. Both failures are *local* — one lane, visibly, never a silent fleet-wide broadcast. **Cannot express:** hard constraints (a brief cannot fence a tool or cap thinking); rules for sessions with no dispatcher (plain interactive work); any guarantee that two dispatchers compose the same rules.
+
+### 2.2 Alternative (b) — The briefing gains a mode/task scope
+
+**Build cost:** medium in code (a manifest key, materializer support), high in consequence: because contributions render per home, a mode scope is only honest if homes are partitioned per mode or per process, and if the drain — which spawns bare `pi`, not the pack launcher — re-renders or selects the right home per lane. That is a change to the launch topology, not to a schema. **Cost of getting it wrong:** the exact leak class that prompted this design, except silent and at broadcast strength; every session in a mis-scoped home is contaminated at once. It also creates a global mode taxonomy that every pack must agree on forever. **Cannot express:** per-item variation inside a mode, rules for an already-launched home, or anything the dispatcher knows that the launch did not. **Verdict: rejected** as the mechanism for run-scoped rules. The existing `agents:` audience key stays the briefing's only scope, and the briefing keeps only what is true for every process that will ever share the home.
+
+### 2.3 Alternative (c) — A lane is an agent definition
+
+Give lane kinds their own agent definitions (prompt, tools, model, thinking, inheritance) so a lane *is* a role. The definitions are rich enough today — the obstacle is the consumer. A drained lane is a separate `pi` process by settled design (session resume via `BOARD_DRAIN_SESSION`, worktree isolation); nothing in that process reads a definition, and `BOARD_DRAIN_AGENT` is exported but unconsumed. Three ways to close that: make the drain a pi-subagents parent (reopens the process-isolation decisions the drain is built on — rejected); patch `pi` itself with an `--agent <name>` profile that applies a definition at startup (a real fork patch, and it couples the definition format across the pi and pi-subagents forks); or treat the definition's *prompt file* as the canonical rule source and have each composer — drain or lead — include it in the brief. **Build cost:** high for the first two, low for the third — because the third is alternative (a) with a single source of truth. **Cost of getting it wrong:** for the true (c), a second definition-loading path that can drift from pi-subagents', and lane behavior that changes when an unrelated pack edits a role. **Cannot express:** per-item rules (a definition is per role by definition); it still needs the brief for everything run-specific. **Verdict: deferred in its true form; adopted in its cheap form** — role-invariant rules belong in agent definitions where a definition is already the delivery vehicle (subagent workers), and lane rules get one canonical source file that composers embed (D-AC10).
+
+A variant worth naming, because it is available today without any fork patch: **(c′) env-gated prompt injection by an extension.** The extension API's `before_agent_start` event (`.forks/pi/packages/coding-agent/src/core/extensions/types.ts`) lets a handler replace the system prompt or inject a message per session. An extension that reads `BOARD_DRAIN_ITEM` and, only then, injects the lane rules would deliver run-scoped prose at system precedence, per process, from one file. Its failure class is leak 2's — ambient installation, undeclared gating — so it is an escalation path if brief-level delivery proves too weak, not a starting point (D-AC11).
+
+### 2.4 Alternative (d) — Move control into the runtime: depend on the split packages
+
+The owner's instinct — own the layer instead of tolerating an interface gap — deserves a direct answer: **there is no owned layer underneath the gap.** In the fork's own monorepo (`.forks/pi/packages/`, 15 packages), everything this design is about lives in `pi-coding-agent`: `loadExtensions` (`core/extensions/loader.ts`), `loadSkills`/`discoverSkills` (`core/skills.ts`), `loadProjectContextFiles` (`core/resource-loader.ts`), `buildSystemPrompt` (`core/system-prompt.ts`), plus the built-in tools and session management. The split libraries below it — `pi-ai` (model API), `pi-agent-core` (agent loop, transport, state), `pi-tui` — contain none of it. So (d) does not mean "keep the machinery, gain control of delivery"; it means *reimplementing* delivery, tools, sessions, and UI, discarding pi-subagents with it (an extension on the very package being dropped), and carrying alone a delta the fork currently carries at roughly 170 patches, `coding-agent`-dominant. The mode concept would still have to be designed from scratch on top — the libraries do not have it either. **Cost of getting it wrong:** the platform rebuilt under a broken drain, with every existing pack, extension, and agent definition invalidated at once. **Verdict: rejected** for this problem. The control the owner wants already exists at the layers we patch: pi-subagents definitions, drain argv/env, extension self-gating, and `before_agent_start`.
+
+### 2.5 What the earlier session actually decided
+
+A scout read the session the owner remembered — `2026-10-25T18-39-42-454Z_01a1745c-…` under `~/.pi/agent/sessions/--workspace--/`, titled "Evaluating pi-forks purpose and necessity", necessity exchange at 2026-10-26T01:54–01:56Z. **It concluded nothing about depending on Pi's split libraries versus Pi itself, because that was not its question.** Its subject was the `bin/pi-forks` maintenance tooling: the verdict was "keep it — but roughly half of it is now dead weight", keeping the branch-centric half (setup, merge-check, lag, fetch, published, build/run) and dropping the series-shaped half (export, check, verify) after the cutover to a published patch branch. The owner approved on the spot ("yes do it all right now. your 1-4."). So Section 2.4 is a first ruling on the dependency question, not a reopening — and it lands on the same side as that session's spirit: the patched branch *is* the dependency strategy; the work is keeping its surface honest, not replacing it.
+
+### 2.6 Recommendation
+
+** Adopt (a) as the governing mechanism, hardened: placement by invariance.** Every rule goes to the channel whose granularity matches how long the rule is true, and no rule is written one level broader and "contextualized" in prose:
+
+| If the rule is true for… | It lives in… | Never in… |
+|---|---|---|
+| Every process in any home (fleet) | Pack briefing, `agents:`-scoped where narrower | — |
+| A role, whoever dispatches it | Its agent definition (subagent path); the canonical lane-rule source (process path) | The briefing |
+| One repository | `AGENTS.md` | Briefs copied by hand |
+| One run: a lane, an item, a dispatch | The brief, composed by the dispatcher from canonical sources | The briefing, with or without tags |
+| A hard limit (tools, thinking, model, extension activation) | Code and config: `laneCommand` argv, agent-definition fields, env-gated extensions, per-agent ceilings | Prose anywhere |
+
+This is mostly a ratification of today's fix, plus the discipline that makes it stay fixed: one canonical source per rule set (D-AC10), hard knobs out of prose (D-AC6), and the two narrow mechanism repairs for leaks 1 and 2 (D-AC7, D-AC8).
+
+**What would overturn it.**
+
+- (i) Measured lane-rule violations *despite* the brief carrying the rule — brief precedence too weak → escalate to (c′) env-gated system-prompt injection, not to (b).
+- (ii) A third and fourth brief composer appear and their rule copies observably diverge → the single-source discipline has failed socially; move to true (c), a definition the lane process loads itself.
+- (iii) Per-process or per-mode agent homes become the fleet's launch topology for other reasons → (b) becomes cheap and honest, revisit D-AC3.
+- (iv) Upstream ships a native agent-profile or conditional-context mechanism in `pi-coding-agent` → adopt it as the carrier for role rules.
+- (v) Fork maintenance pain concentrates in `coding-agent` merge surface — repeated upstream-merge failures attributable to it → re-evaluate (d) on maintenance grounds; context delivery alone never justifies it.
+
+## 3. The subagent question
+
+The two lane kinds are not symmetric, and the brief fix does not cover them the same way — because, on inspection, the subagent path never had leak 3.
+
+A fresh pi-subagents child receives: the parent's brief as its task, its agent definition's prompt (for the worker, `systemPromptMode: replace`, displacing Pi's base prompt), and the repository's `AGENTS.md` (`inheritProjectContext` defaults true and the worker keeps it). It does **not** receive the broadcast briefing: pack briefing composes into the parent's `~/.pi/agent/AGENTS.md`, which is *global* context, and `inheritGlobalContext` defaults false with no role enabling it. The one exception is fork-context children, which inherit the parent's whole prompt — briefing included — and should be treated as the parent for rule-scope purposes.
+
+Three consequences. First, removing lane rules from `briefing/work-rules.md` changes nothing directly for a lead's workers; they were never reading it. What it changes is the *lead's* context when the lead is a top-level session in that home — and a lead that stops internalizing lane caps as its own is exactly the repair wanted. Second, the risk on the subagent path is the opposite of a leak: *under*-delivery. There is no `laneRules` equivalent a lead automatically composes; lane-like discipline for workers exists only if each lead writes it into each brief. Third — and this is the placement rule that resolves it — most "lane rules" govern a *loop* (repair-cycle caps, re-plan after failures), and on the subagent path the loop's owner is the lead, not the worker. Those rules belong in the lead's agent definition, where they bind the seat that counts the cycles; a worker's brief should carry the item, its bounds, and its acceptance shape, not loop policy it cannot act on. Where a lead genuinely dispatches a worker to run its own bounded loop, the lead composes from the same canonical rule source the drain embeds (D-AC10) — one text, two composers, no third copy.
+
+So: the brief-injection fix fully covers the process lane; the subagent path needs no new channel, only the discipline of D-AC9 — loop rules in the loop owner's definition, `inheritGlobalContext` left false, and shared rule text sourced, not paraphrased.
+
+## 4. Migration
+
+The drain is broken: seven candidates are unlanded, the gate has been red, and `docs/design/autonomous-landing.md` owns that repair. Nothing in this design is urgent enough to touch the drain's working surface before that lands; today's `laneRules` fix is already the recommendation's core, so the fleet is not exposed while it waits. Settled decisions stand throughout and are built on, not revisited: `publish.mode` off, one trunk-grant landing workspace, the carried-gate rule, 2 remedy / 3 round caps with owner-only abandon, `mq` as its own program, lane rules in the brief.
+
+| Phase | Work | Why then |
+|---|---|---|
+| Now (drain still broken) | Ratify the Decision Ledger. Verify the shipped pack carries the `design-lane.ts` env guard (scout evidence: present in tree, commit `c2e9159dc…`). No code moves | The only leak-class exposure not already fixed is leak 1, which is a pi-subagents change — also deferred, since agent dispatch is the drain's surface |
+| Must not be migrated yet | The briefing materializer; `laneCommand`/spawn path and `BOARD_DRAIN_*` env shape; designer/worker agent definitions; any pi-fork patch touching system-prompt assembly | Every one is load-bearing for the repair [`autonomous-landing.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autonomous-landing.md) is making; changing delivery under it confounds its gate |
+| First, once the gate is green | D-AC10: extract `laneRules` (and the design-lane additions) from Go constants to one canonical Markdown source embedded by `childBrief`/`designChildBrief`, with a golden test pinning today's brief bytes so the move is provably behavior-neutral | Removes the divergence risk in the mechanism we now depend on, at near-zero risk |
+| Second | D-AC7: per-agent `maxThinking` in the pi-subagents override surface, with a test that the design seat may use `xhigh` under a lower fleet ceiling. D-AC9: loop rules into the lead's definition; confirm no role sets `inheritGlobalContext` | Closes leak 1's mechanism properly; aligns the subagent path with Section 3 |
+| Third | D-AC8: the fencing-extension discipline — every extension registering a `tool_call` fence (or equivalent refusal) must self-gate on lane env, enforced by whatever check [`OQ-AC1`](#OQ-AC1) settles on | Converts leak 2 from a remembered mistake into an impossible one |
+| Only if triggered (Section 2.6) | (c′) env-gated `before_agent_start` injection; true (c) lane-loaded definitions; (b) if homes are re-partitioned; (d) only on fork-maintenance evidence | Each is a real cost against a hypothetical; none is owed on today's evidence |
+
+## 5. What this does not solve
+
+Plainly: **the chosen mechanism would not have prevented leaks 1 or 2.** Neither was a prose problem. Leak 1 was a number in a config schema — a fleet ceiling with no per-agent key; perfectly scoped briefs leave the design seat still refused `xhigh` before any model call. Only D-AC7 fixes it. Leak 2 was installed code refusing tool calls in sessions it never should have touched; a rule written in any prose channel, however well scoped, does not stop an extension from registering a hook. Only the env self-gate (done) and the D-AC8 discipline (pending) fix it. The brief mechanism addresses leak 3's class — prose true for one run broadcast to all — and, by giving run-scoped rules a home, removes the pressure that pushed them into the briefing in the first place.
+
+It also does not make any prose rule *binding*. A brief is an instruction to a model, not an enforcement; the caps that must hold regardless of the model's reading (2 remedy / 3 round, abandon owner-only, tool fences) have to live where they already should — in drain code, argv, config, and gated extensions — with prose merely explaining them to the agent they bind. Nor does it give plain interactive sessions a mode: a session with no dispatcher has no brief, by definition, and rules that should bind *it* must go through briefing, `AGENTS.md`, or not exist.
+
+## 6. Risks
+
+| Risk | Shape | Mitigant |
+|---|---|---|
+| Brief-rule dilution | As briefs grow (item, context, rules, acceptance), a lane skims the rules the way it skimmed `[lane]` tags | Rules stay short and canonical (D-AC10); overturn trigger (i) watches for measured violations and escalates to (c′) |
+| Composer divergence | Drain, design drain, and leads each "improve" their copy of the rules until lanes behave differently by parentage | One embedded source, golden-tested; leads source rather than paraphrase (D-AC9/D-AC10) |
+| Env-gate spoofing or drift | A session with stray `BOARD_DRAIN_*` in its environment gets lane fences; or the drain renames a key and a fence goes inert in a real lane — failing *open* | Fences should require the item-scoped keys (`BOARD_DRAIN_ARTIFACT`, `_ITEM`), not generic ones; D-AC8's check pins the key set against `drainChildEnv` |
+| Ratifying the status quo too early | (a) is ruled load-bearing on one day of operation | The overturn triggers in Section 2.6 are the exit; (c′) is pre-designed so escalation is a step, not a project |
+| Home-topology assumption | Section 2.2 rests on briefing rendering per home shared by concurrent processes (scout-evidenced for the materializer); if some lanes already run in isolated homes, (b)'s cost is lower than stated for lanes specifically | Unverified for the drain's spawn environment; [`OQ-AC4`](#8-open-questions) must be answered before any future (b) work — and it does not change today's ruling, since the brief already covers lanes |
+| Prior-art misreading | Section 2.5 rests on a scout's reading of one session file; a different session may hold a genuine Pi-vs-libraries discussion the owner remembers | If such a session with a contrary, acted-on decision surfaces, D-AC4 must be re-argued against it; the located session is the one named in the brief |
+
+## 7. Decision Ledger
+
+| ID | Decision | Basis |
+|---|---|---|
+| D-AC1 | Rules are placed by invariance: fleet → briefing, role → agent definition or canonical lane-rule source, repository → `AGENTS.md`, run → brief, hard limit → code/config. No rule is broadcast broader and qualified in prose | Section 2.6; the `[lane]`-tag rejection generalized |
+| D-AC2 | Lane (mode/run) prose rules travel in the brief composed by the dispatcher — retained as the governing mechanism, building on the settled `laneRules` fix | Section 2.1; only per-run prose channel, already shipped |
+| D-AC3 | The briefing channel gains no mode/task scope; `agents:` remains its only audience narrowing | Section 2.2; per-home materialization makes mode inexpressible honestly |
+| D-AC4 | The fleet does not rebase onto `pi-ai`/`pi-agent-core` or another agent library; the patched `pi-coding-agent` branch remains the runtime | Section 2.4; all context machinery is in `pi-coding-agent`; Section 2.5 confirms no prior contrary decision exists |
+| D-AC5 | A drained lane remains a separate `pi` process spawned by `laneCommand`; it is not converted into a pi-subagents child | Process isolation and session resume are the drain's settled design; (c) true form deferred per Section 2.3 |
+| D-AC6 | Hard limits never travel as prose: tools, model, thinking via `laneCommand` argv and definition fields; fences via env-gated extensions; caps via drain code | Leaks 1 and 2; Section 5 |
+| D-AC7 | pi-subagents gains a per-agent `maxThinking` in its override surface, so a seat may exceed the fleet ceiling by declaration | Leak 1; the field exists in `agents.ts` and is only unwired |
+| D-AC8 | Any extension that can refuse a tool call must self-gate on lane env (`BOARD_DRAIN_ARTIFACT`/`BOARD_DRAIN_ITEM`-class keys) before registering its fence; enforcement mechanism per [`OQ-AC1`](#OQ-AC1) | Leak 2; generalizes the `registerDesignLane` repair |
+| D-AC9 | On the subagent path, loop rules live in the loop owner's (lead's) agent definition; worker briefs carry item, bounds, acceptance. `inheritGlobalContext` stays false for all roles; fork-context children are treated as their parent for rule scope | Section 3 |
+| D-AC10 | Lane rules get one canonical Markdown source, embedded by `childBrief`/`designChildBrief` and sourced by any lead composing a lane-like dispatch — replacing the Go string constant, byte-stable under a golden test | Section 4; hardens D-AC2 against divergence |
+| D-AC11 | If brief-level delivery measurably fails, escalate to env-gated `before_agent_start` system-prompt injection from the same canonical source — not to briefing mode scope | Section 2.3 (c′); Section 2.6 trigger (i) |
+
+## 8. Open Questions
+
+- 💬 **OQ-AC1: How is extension activation declared and checked?**
+
+   D-AC8 states the discipline; the mechanism could be a pack-manifest `activation` key the loader enforces, or a lint/test that fails a pack whose fence-registering extension does not read lane env, or review convention alone. A manifest key is the only form a reviewer can see without reading extension code, but it means loader work in the materializer's layer.
+
+   <!-- vantage: question id=OQ-AC1 leaning="Lint/test first" -->
+
+   _Leaning:_ Lint/test first; manifest `activation` only if a second fence leaks.
+
+- ✅ **OQ-AC2: Where does the canonical lane-rule source (D-AC10) live?**
+
+   Embedded in `board-cli` from a Markdown file in its tree, or shipped as a pack file both the drain and leads read at runtime? Embedding keeps the drain self-contained and golden-testable; a pack file makes the lead path cheaper but adds a runtime dependency on pack layout.
+
+   _Closed 2026-11-16:_ moot: it asked where in the deleted board command the brief is assembled; tillr hands the brief to pi on standard input.
+
+   _Leaning:_ Embed in `board-cli`; publish the same file into the pack for leads.
+
+- 💬 **OQ-AC3: Should `pi` gain a `--agent <name>` startup profile (true alternative (c))?**
+
+   This would let any process — lane or interactive — wear a definition, unifying the role concept across spawn paths. It is a cross-fork format commitment, so it should wait for a trigger from Section 2.6 rather than being built speculatively.
+
+   <!-- vantage: question id=OQ-AC3 leaning="No, until a Section 2.6 trigger fires." -->
+
+   _Leaning:_ No, until a Section 2.6 trigger fires.
+
+- ✅ **OQ-AC4: What agent home does a drained lane process actually run with?**
+
+   Unverified: scouts evidenced the briefing materializer (per home) and the drain's argv/env, but not whether lanes share a home with interactive sessions or get isolated ones. The answer sets the true cost of any future (b) and confirms whether interactive sessions in a lane's home are a live collision risk today.
+
+   _Closed 2026-11-16:_ answered by the tree: a lane runs pi with no home override, so lanes and interactive sessions share one home.
+
+   _Leaning:_ Verify before any briefing work; expect a shared home.
+
+- 💬 **OQ-AC5: How is brief-rule adherence measured, so trigger (i) can fire on evidence?**
+
+   Options range from sampling landed lane transcripts for cap violations to a drain-side counter of out-of-policy lane behaviors it already observes (extra repair cycles, missing status posts). Without a measure, D-AC11's escalation stays a matter of feel — the condition this whole design argues against.
+
+   <!-- vantage: question id=OQ-AC5 leaning="Count what the drain already observes" -->
+
+   _Leaning:_ Count what the drain already observes; do not add transcript review.
+
+## 9. Defined Terms
+
+| Term | Meaning in this document |
+|---|---|
+| **Broadcast** | A channel whose every recipient receives the same content with no per-recipient condition — the pack briefing within an agent home. |
+| **Brief** | The per-run prose composed by a dispatcher for one run: `BOARD_DRAIN_BRIEF` for a drained lane, the task message for a pi-subagents child. |
+| **Lane** | One bounded unit of autonomous work: a separate `pi` process spawned by the board drain for one item (implementing or designing), or, by analogy in Section 3, a lead's dispatched worker. |
+| **Mode** | A run's operating context — drained lane, lead-orchestrated, plain interactive — independent of the agent's role and the repository. |
+| **Materialization** | The launch-time rendering of pack contributions (briefing, `files`) into files inside an agent home, where standing processes then read them. |
+| **Ambient extension** | A pack-contributed extension installed into every agent home and auto-loaded by every session of that agent, regardless of mode. |
+| **Self-gate** | An ambient extension's runtime check of its own activation condition (here, `BOARD_DRAIN_*` env) before registering behavior; reaching for it is currently each extension's own responsibility. |
+| **Agent definition** | A pi-subagents role declaration (prompt, `tools`, `model`, `thinking`, inheritance flags) applied to a child at dispatch. |
+| **Hard knob / hard limit** | A constraint enforced by code or config (argv flags, tool fences, thinking ceilings, drain caps), as opposed to a prose rule, which only instructs. |
+| **Loop owner** | The seat that runs a retry/repair loop and counts its cycles — the lane itself on the process path, the lead on the subagent path. Loop rules bind the loop owner. |

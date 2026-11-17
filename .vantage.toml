@@ -1,9 +1,17 @@
 # Vantage planning configuration.
 #
-# Only the stage vocabulary is declared. Vantage discovers every `roadmap.md` on its
-# own, so no `[planning]` include/exclude is needed, and no roadmap path is pinned:
-# this repository keeps two, `docs/roadmap.md` and `docs/pi/roadmap.md`, and pinning
-# either would turn discovery off for the other.
+# Vantage discovers every `roadmap.md` on its own, and no roadmap path is pinned: this
+# repository keeps three, `docs/roadmap.md`, `docs/pi/roadmap.md` and
+# `docs/tillr/roadmap.md`, and pinning any would turn discovery off for the others.
+#
+# One tree is excluded from planning: the tillr pack's delivered copies of the tillr
+# design documents (`tools/pack-docs.py`, `just pack-docs`). They are a dated snapshot
+# for agents in other workspaces, not planning documents. Without the exclusion the copy
+# of `docs/tillr/roadmap.md` would be discovered as a fourth roadmap, and every open
+# question in a copy would be indexed a second time beside its source.
+[planning]
+exclude = ["yolo-packs/tillr/files/local/share/tillr/docs/**"]
+
 #
 # The seven words are the ones `design-doc` defines; a document's `stage:` says what
 # it owes someone, never what kind of document it is (genre belongs in `tags:`).

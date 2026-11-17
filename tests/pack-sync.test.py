@@ -23,6 +23,16 @@ A copied README must not link out of the pack: `../../docs/...` is correct besid
 repository gate reads that as a broken link. The recipe rewrites those links to the
 repository on GitHub, and `mirrored()` below spells the same rule.
 
+The pack also delivers tillr's design documentation: the status index
+`docs/tillr/design-status.md` and every document it marks `shipped`, copied by
+`just pack-docs` (tools/pack-docs.py) into `files/local/share/tillr/docs/`. Those copies
+are a SNAPSHOT of one commit, recorded in `docs/snapshot.json`, and they are judged
+against that snapshot rather than against HEAD: the running drain edits design documents
+on every landing, a lane's fence does not include this tree, and a check that required
+the copies to match HEAD would turn every such landing red for every lane after it. How
+far the snapshot lags HEAD is the `--fresh` mode, which fails on any lag and names the
+refresh command; `just pack-docs` runs it.
+
 Cases:
   1. every module's copy is present and carries exactly the source's committable files;
   2. every copied file is byte-identical to its source, with the README rewrite applied;
@@ -30,9 +40,18 @@ Cases:
   4. a Python bytecode cache is a build output and never enters the source set, so a
      developer's global gitignore cannot decide what this check reads;
   5. the eight launchers are one body, each naming the module it builds, one per declared
-     `program` entry.
+     `program` entry;
+  6. the documentation transform: links re-resolved for the delivered tree, item
+     directives inert outside fences, fences and frontmatter untouched, one banner;
+  7. the index's declaration: a `shipped` row is declared, a `not shipped` row is not,
+     and a row that says neither is named;
+  8. the delivered documents: each copy is exactly the transform of the blob the snapshot
+     names, nothing is missing or extra, every document the delivered index declares is
+     delivered, and no copy carries a live item directive;
+  9. (--fresh only) the snapshot is current: no delivered source changed at HEAD, and the
+     index at HEAD declares the documents the snapshot delivered.
 
-Run: python3 tests/pack-sync.test.py [--candidate]
+Run: python3 tests/pack-sync.test.py [--candidate | --fresh]
 """
 
 import json
@@ -151,6 +170,11 @@ _resolver_path = Path(__file__).resolve().parent.parent / "tools" / "pack-mirror
 _spec = importlib.util.spec_from_file_location("pack_mirror_links", _resolver_path)
 pack_mirror_links = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pack_mirror_links)
+
+_docs_path = Path(__file__).resolve().parent.parent / "tools" / "pack-docs.py"
+_docs_spec = importlib.util.spec_from_file_location("pack_docs", _docs_path)
+pack_docs = importlib.util.module_from_spec(_docs_spec)
+_docs_spec.loader.exec_module(pack_docs)
 
 
 def mirrored(relative, data):
@@ -287,14 +311,240 @@ def case_launchers():
        f"program ({len(declared)} entries)")
 
 
+# --- the delivered design documentation ------------------------------------------------
+
+
+def case_docs_transform():
+    """The transform, on a specimen that exercises every rule it has."""
+    source = "docs/design/a.md"
+    delivered = {"docs/design/a.md", "docs/design/b.md", "docs/tillr/design-status.md"}
+    text = "\n".join([
+        "---",
+        "depends-on: [b.md]",
+        "---",
+        "",
+        "# A",
+        "",
+        "See [b](./b.md#2-the-part), [index](../tillr/design-status.md), [gone](./c.md#x),",
+        "[stage](../../tools/tillr-drain/drain/stage.go), [loop](../../tools/tillr-loop/README.md),",
+        "[here](#local), [web](https://example.com/x.md) and [dir](../../tools/tillr-gate/).",
+        "[ref]: ../roadmap.md",
+        '<!-- tillr: item id="item-x" paths="docs/" blocked_by="" -->',
+        "   <!-- vantage: question id=OQ-A1 leaning=\"A\" -->",
+        "```text",
+        '<!-- tillr: item id="item-specimen" paths="docs/" blocked_by="" -->',
+        "[kept](./c.md)",
+        "```",
+        "",
+    ])
+    out = pack_docs.transform(text, source, delivered, "0123456789abcdef", "2026-11-16")
+    lines = out.split("\n")
+    assert lines[:3] == ["---", "depends-on: [b.md]", "---"], "frontmatter must be untouched"
+    assert lines[5] == "" and lines[6].startswith("> **Delivered copy.** This is `docs/design/a.md`"), (
+        "the banner follows the first heading")
+    assert out.count("> **Delivered copy.**") == 1, "exactly one banner"
+    repo = pack_mirror_links.REPOSITORY
+    for expected in ("[b](./b.md#2-the-part)".replace("./", ""),
+                     "[index](../tillr/design-status.md)",
+                     f"[gone]({repo}docs/design/c.md#x)",
+                     "[stage](../../tillr-drain/drain/stage.go)",
+                     f"[loop]({repo}tools/tillr-loop/README.md)",
+                     "[here](#local)", "[web](https://example.com/x.md)",
+                     "[dir](../../tillr-gate/)",
+                     f"[ref]: {repo}docs/roadmap.md"):
+        assert expected in out, f"the transform should have written {expected!r}:\n{out}"
+    assert '<!-- inert copy of a tillr directive: item id="item-x"' in out
+    assert '<!-- tillr: item id="item-specimen"' in out, "a fenced specimen is left alone"
+    assert "[kept](./c.md)" in out, "a fenced link is left alone"
+    assert '   <!-- vantage: question id=OQ-A1 leaning="A" -->' in out, (
+        "a question directive stays live, because Vantage refuses an open question without one")
+    assert pack_docs.live_directives(out) == [], pack_docs.live_directives(out)
+    assert pack_docs.live_directives(text), "the specimen's own directive is live"
+    # A document delivered OUTSIDE docs/ links back with the path the tree gives it.
+    back = pack_docs.transform("# L\n[a](../../docs/design/a.md)\n", "tools/tillr-loop/README.md",
+                               delivered | {"tools/tillr-loop/README.md"}, "0" * 40, "2026-11-16")
+    assert "[a](../docs/design/a.md)" in back, back
+    ok("the documentation transform re-resolves links, makes item directives inert outside "
+       "fences, leaves fences, frontmatter and questions alone, and adds one banner")
+
+
+def case_docs_declaration():
+    """The index is the declaration, read from its table rows."""
+    index = "\n".join([
+        "| Document | Status | Pack |",
+        "| :--- | :--- | :--- |",
+        "| [Item graphs](../design/tillr-item-graphs.md) | built | shipped |",
+        "| [Seams](../design/autoqa-tillr-seams.md#top) | superseded | not shipped |",
+        "| [Gate](../../tools/tillr-gate/README.md) | built | shipped |",
+        "| [Unsure](../design/unsure.md) | ? | maybe |",
+        "| not a link | built | shipped |",
+        "```",
+        "| [Specimen](../design/specimen.md) | x | shipped |",
+        "```",
+    ])
+    assert pack_docs.declared(index) == ["docs/design/tillr-item-graphs.md",
+                                         "tools/tillr-gate/README.md"], pack_docs.declared(index)
+    assert len(pack_docs.undecided_rows(index)) == 1, pack_docs.undecided_rows(index)
+    assert pack_docs.MIRRORED_MODULES == MODULES, (
+        "tools/pack-docs.py's MIRRORED_MODULES and this suite's MODULES disagree, so a link "
+        "into a module would be rewritten as if it were (or were not) delivered")
+    ok("the index declares exactly its `shipped` rows, names an undecided row, and agrees "
+       "with this suite about which modules are mirrored")
+
+
+def read_blobs(blobs):
+    """Each blob's bytes, from one `git cat-file --batch`."""
+    if not blobs:
+        return {}
+    batch = subprocess.run(["git", "-C", str(ROOT), "cat-file", "--batch"],
+                           input="".join(f"{blob}\n" for blob in blobs).encode(),
+                           capture_output=True, check=True).stdout
+    found, at = {}, 0
+    for blob in blobs:
+        end = batch.index(b"\n", at)
+        header = batch[at:end].split()
+        assert len(header) == 3 and header[1] == b"blob", (
+            f"the snapshot names {blob}, which this repository does not hold as a blob: "
+            "run `just pack-docs`")
+        size = int(header[2])
+        found[blob] = batch[end + 1:end + 1 + size]
+        at = end + 1 + size + 1
+    return found
+
+
+def load_snapshot():
+    path = COPY / pack_docs.SNAPSHOT
+    assert path.is_file(), (
+        f"missing the delivered documentation's snapshot: {path.relative_to(ROOT)}\n"
+        "run `just pack-docs`")
+    return json.loads(path.read_text())
+
+
+def case_docs_delivered(candidate=False):
+    """Every delivered document against the blob its snapshot names."""
+    if candidate:
+        print("n/a  the delivered documentation: a candidate does not carry the generated tree")
+        return
+    snapshot = load_snapshot()
+    entries = pack_docs.snapshot_entries(snapshot)
+    delivered = pack_docs.delivered_set(snapshot)
+    blobs = read_blobs([blob for _, blob, _ in entries])
+    size = 0
+    for source, blob, dest in entries:
+        copy = COPY / dest
+        assert copy.is_file() and not copy.is_symlink(), (
+            f"the delivered copy of {source} is missing or a symlink: {dest}; run `just pack-docs`")
+        expected = pack_docs.transform(blobs[blob].decode("utf-8"), source, delivered,
+                                       snapshot["commit"], snapshot["date"]).encode("utf-8")
+        actual = copy.read_bytes()
+        assert actual == expected, (
+            f"the delivered copy of {source} is not the transform of the blob its snapshot "
+            f"names ({blob[:10]}); it was edited by hand or the transform changed: run "
+            "`just pack-docs`")
+        live = pack_docs.live_directives(actual.decode("utf-8"))
+        assert not live, f"the delivered copy of {source} carries a live item directive: {live[0]}"
+        size += len(actual)
+    on_disk = {path.relative_to(COPY).as_posix() for path in (COPY / "docs").rglob("*")
+               if not path.is_dir()}
+    expected_files = {dest for _, _, dest in entries if dest.startswith("docs/")} | {pack_docs.SNAPSHOT}
+    stray = sorted(on_disk - expected_files)
+    assert not stray, (
+        f"the delivered docs tree carries {len(stray)} file(s) its snapshot does not name: "
+        f"{', '.join(stray[:5])}; run `just pack-docs`")
+    index = COPY / pack_docs.destination(snapshot["index"])
+    assert snapshot["index"] in delivered and index.is_file(), "the status index is not delivered"
+    # The delivered index's links were re-resolved for the delivered tree, so what it
+    # declares is in DESTINATION space (`tillr-store/README.md`, no `tools/`): compare there.
+    declared = pack_docs.declared(index.read_text(encoding="utf-8"), snapshot["index"])
+    copied = {dest for _, _, dest in entries}
+    undelivered = [path for path in declared if path not in copied
+                   and not (path in mirror_destinations(snapshot) and (COPY / path).is_file())]
+    assert not undelivered, (
+        f"the delivered index lists {len(undelivered)} shipped document(s) the pack does not "
+        f"deliver: {', '.join(undelivered[:5])}; run `just pack-docs`")
+    unlisted = sorted(copied - set(declared) - {pack_docs.destination(snapshot["index"])})
+    assert not unlisted, (
+        f"the pack delivers {len(unlisted)} document(s) its index does not list as shipped: "
+        f"{', '.join(unlisted[:5])}; run `just pack-docs`")
+    # How far the snapshot lags HEAD is said, never judged here (see the module docstring).
+    at_head = head_blobs([source for source, _, _ in entries])
+    lagging = [source for source, blob, _ in entries if at_head.get(source) != blob]
+    ok(f"the delivered documentation is the snapshot of {snapshot['commit'][:10]} "
+       f"({snapshot['date']}): {len(entries)} document(s), {size:,} bytes, plus "
+       f"{len(snapshot.get('in_module_mirror', []))} delivered by the module mirror; "
+       f"{len(lagging)} changed at HEAD since (`--fresh` judges that)")
+
+
+def mirror_destinations(snapshot):
+    """Where the documents the module mirror delivers land under the delivered root."""
+    return {pack_docs.destination(path) for path in snapshot.get("in_module_mirror", [])}
+
+
+def head_blobs(paths):
+    """Each path's blob at HEAD, from one `git ls-tree`; a path HEAD lacks is absent."""
+    if not paths:
+        return {}
+    listing = subprocess.run(["git", "-C", str(ROOT), "ls-tree", "-z", "HEAD", "--", *paths],
+                             capture_output=True, check=True).stdout.decode()
+    found = {}
+    for entry in listing.split("\0"):
+        if entry:
+            meta, _, path = entry.partition("\t")
+            found[path] = meta.split()[2]
+    return found
+
+
+def stale_documents(entries, at_head):
+    """The delivered sources whose blob at HEAD is not the one the snapshot copied."""
+    return [source for source, blob, _ in entries if at_head.get(source) != blob]
+
+
+def case_docs_stale_rule():
+    """The freshness rule, on data: a changed or deleted source is stale."""
+    entries = [("docs/a.md", "1" * 40, "docs/a.md"), ("docs/b.md", "2" * 40, "docs/b.md"),
+               ("docs/c.md", "3" * 40, "docs/c.md")]
+    at_head = {"docs/a.md": "1" * 40, "docs/b.md": "9" * 40}
+    assert stale_documents(entries, at_head) == ["docs/b.md", "docs/c.md"]
+    assert stale_documents(entries[:1], at_head) == []
+    ok("a delivered source changed or deleted at HEAD reads as stale, and an unchanged one does not")
+
+
+def case_docs_fresh():
+    """--fresh: the snapshot is the documentation as HEAD holds it."""
+    snapshot = load_snapshot()
+    entries = pack_docs.snapshot_entries(snapshot)
+    stale = stale_documents(entries, head_blobs([source for source, _, _ in entries]))
+    assert not stale, (
+        f"{len(stale)} delivered document(s) changed at HEAD since the snapshot of "
+        f"{snapshot['commit'][:10]} ({snapshot['date']}): {', '.join(stale[:8])}"
+        f"{' ...' if len(stale) > 8 else ''}\nrun `just pack-docs` and commit the result")
+    index = subprocess.run(["git", "-C", str(ROOT), "show", f"HEAD:{pack_docs.INDEX}"],
+                           capture_output=True, check=True).stdout.decode("utf-8")
+    declared = set(pack_docs.declared(index))
+    shipped = (pack_docs.delivered_set(snapshot) - {pack_docs.INDEX}) | set(
+        snapshot.get("in_module_mirror", []))
+    assert declared == shipped, (
+        "the index at HEAD declares a different set of shipped documents from the snapshot's: "
+        f"added {sorted(declared - shipped)[:5]}, removed {sorted(shipped - declared)[:5]}\n"
+        "run `just pack-docs` and commit the result")
+    ok(f"the delivered documentation is current: {len(entries)} document(s) match HEAD")
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if "--fresh" in argv:
+        case_docs_fresh()
+        return 0
     candidate = "--candidate" in argv
     case_tree_matches_source(candidate=candidate)
     case_bytes(candidate=candidate)
     case_modes(candidate=candidate)
     case_build_outputs()
     case_launchers()
+    case_docs_transform()
+    case_docs_declaration()
+    case_docs_stale_rule()
+    case_docs_delivered(candidate=candidate)
     return 0
 
 

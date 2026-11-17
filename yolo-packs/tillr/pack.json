@@ -1,6 +1,6 @@
 {
   "name": "tillr",
-  "description": "The tillr toolset: eight `tillr*` binaries on PATH built lazily from the Go source this pack ships, the seven-step loop skill, and the AutoQA design-review handoff.",
+  "description": "The tillr toolset: eight `tillr*` binaries on PATH built lazily from the Go source this pack ships, a dated snapshot of tillr's design documentation under ~/.local/share/tillr/docs, the seven-step loop skill, the skill for reading the designs from another repository, and the AutoQA design-review handoff.",
   "contributes": [
     // The toolset's Go tree, delivered whole to ~/.local/share/tillr/<module>. It is a
     // GENERATED copy of tools/tillr* in this repository, produced by
