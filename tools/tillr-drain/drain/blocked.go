@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -206,8 +207,33 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 	return true, nil
 }
 
+// answerDefinitionError is a landed answer whose document does not declare its item as
+// the trunk now holds it: that one item's condition, held as its fault, never the loop's.
+type answerDefinitionError struct{ detail string }
+
+func (e *answerDefinitionError) Error() string { return e.detail }
+
+// answerBlock records a landed design answer: the trunk's document is synced and the
+// conflict answered for the build seat. A prose-rewrite item is generated, never declared,
+// and its block is its original item's (item.ProseRewriteOriginal), so the document is
+// read for that id. A document that does not declare the item holds only that item
+// (definition-sync-failed, whose mover corrects the definition): on 2026-11-17 the check
+// read a rewrite item's own id, failed, and stopped the loop twice.
 func (l *Loop) answerBlock(ctx context.Context, candidate Candidate) error {
+	err := l.recordBlockAnswer(ctx, candidate)
+	var held *answerDefinitionError
+	if errors.As(err, &held) {
+		return l.holdItemFault(ctx, candidate, ReasonDefinitionSyncFailed, held.detail)
+	}
+	return err
+}
+
+func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error {
 	c := *candidate.BlockConflict
+	blockID := c.ItemID
+	if original := item.ProseRewriteOriginal(c.ItemID); original != "" {
+		blockID = original
+	}
 	file, _, _ := strings.Cut(c.BodyRef, "#")
 	raw, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+file)
 	if err != nil {
@@ -228,18 +254,18 @@ func (l *Loop) answerBlock(ctx context.Context, candidate Candidate) error {
 			return err
 		}
 		if len(report.Findings) != 0 || len(report.Frozen) != 0 {
-			return fmt.Errorf("landed conflict answer %s could not sync its definition: %s", c.ConflictID, mustJSON(report))
+			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s could not sync its definition: %s", c.ConflictID, mustJSON(report))}
 		}
 		found := false
 		for _, ids := range [][]string{report.Created, report.Updated, report.Unchanged} {
 			for _, id := range ids {
-				if id == c.ItemID {
+				if id == blockID {
 					found = true
 				}
 			}
 		}
 		if !found {
-			return fmt.Errorf("landed conflict answer %s does not declare item %s in %s", c.ConflictID, c.ItemID, file)
+			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s does not declare item %s in %s", c.ConflictID, blockID, file)}
 		}
 		c.Status, c.WaitingOn, c.AnswerHead = "answered", "build", candidate.HeadSHA
 		return item.RecordConflict(tx, c, l.cfg.Now().UTC())

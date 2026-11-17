@@ -1043,6 +1043,9 @@ A gate that could not start or crashed (`gate-harness-error`), a recorded bounda
 (`definition-sync-failed`) holds only the affected item. Other items keep running
 and landing. A sync finding skips its entire document, so every stored item whose
 definition comes from that file is held, not just the item named by the finding.
+A landed design answer whose document, as the trunk holds it, does not declare its
+item is held the same way (`definition-sync-failed`), never a loop stop; a
+prose-rewrite item (`rewrite-<item>`) is read on its original item's block.
 These holds survive a supervisor restart and do not record a failing
 criterion verdict or spend a new model attempt. A retained candidate releases its
 ordinary lane once its pinned commit is read back; worktree-dependent holds keep
