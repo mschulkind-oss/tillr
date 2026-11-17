@@ -848,6 +848,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+	if err := l.intakeComments(ctx); err != nil {
+		return "", err
+	}
 	if err := l.confirmCommentReplies(ctx); err != nil {
 		return "", err
 	}
@@ -935,6 +938,22 @@ planned:
 		}
 		if l.active[p.parentRunID] || ((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID]) {
 			continue
+		}
+		if item.IsCommentItem(d.ItemID) && (d.Action == ActionDispatch || d.Action == ActionRetry || d.Action == ActionHold) {
+			ready, closed, err := l.checkCommentDispatch(ctx, p, at)
+			if err != nil {
+				return "", err
+			}
+			if !ready {
+				if closed {
+					stale = true
+				} else {
+					d.Action = ActionHold
+					d.Reason = "Vantage not answering"
+					holds = append(holds, d)
+				}
+				continue
+			}
 		}
 		ok, work, err := l.applyPlanGeneration(ctx, p, mainSHA, at, &timing.TickID)
 		if err != nil {
