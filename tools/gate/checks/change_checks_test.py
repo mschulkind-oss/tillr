@@ -636,7 +636,7 @@ sys.exit(rc)
         # without reintroducing them as legacy implementations in the registry.
         before = {"file-size", "commit-identity", "seed-freeze", "citations",
                   "documents", "pipeline-evidence", "self-suite", "workflows"}
-        tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build"}
+        tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
         self.assertEqual(migrated | remaining, before | tree_ids)
         self.assertFalse((IDS - {"file-size"}) & remaining)
         self.assertEqual(tree_ids & remaining, tree_ids)
@@ -680,11 +680,36 @@ sys.exit(rc)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         verdict, legacy = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
-        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build"}
+        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
         self.assertTrue(all(check["result"] == "pass" for check in checks))
         self.assertEqual(legacy, "legacy inventory: file-size warning")
+
+    def test_real_format_declarations_execute_on_clean_tree(self):
+        # Unlike the routing fixtures, use the actual declarations and tools. A
+        # clean tree exercises result caching's tool probes unless explicitly disabled.
+        shutil.copy(ROOT / ".justfile", self.repo / ".justfile")
+        (self.repo / "tools/example").mkdir()
+        (self.repo / "tools/example/a.go").write_text("package example\n")
+        (self.repo / "tests").mkdir()
+        # Stand in for the suite body to avoid recursively running the suites here;
+        # the heavy declaration's command, tools, and result-caching policy stay real.
+        (self.repo / "tests/format.test.py").write_text('print("format fixture ran")\n')
+        self.git("add", ".justfile", "tests")
+        head = self.commit()
+        declarations = self.repo / "format-checks"
+        declarations.mkdir()
+        for name in ("format", "format-test"):
+            shutil.copy(ROOT / "tools/gate/checks" / (name + ".json"), declarations)
+        for flag, name in (("--fast-tree", "format"), ("--heavy-tree", "format-test")):
+            with self.subTest(check=name):
+                result = self.runner_check(flag, "--base", self.base, "--head", head,
+                                           "--checks", str(declarations))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                checks = json.loads(result.stdout)["payload"]["checks"]
+                self.assertEqual([(check["check_id"], check["result"]) for check in checks],
+                                 [(name, "pass")])
 
     def test_loop_program_runs_change_runner_before_remaining_program(self):
         self.stub_tree_commands()

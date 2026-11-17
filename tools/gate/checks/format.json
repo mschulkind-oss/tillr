@@ -1,0 +1,11 @@
+{
+  "id": "format",
+  "label": "Tracked Go source is gofmt-clean",
+  "command": ["just", "format", "--check"],
+  "scope": "tree",
+  "remember": false,
+  "tier": "fast",
+  "budget_ms": 600,
+  "reads": [".justfile", "tools/", "yolo-packs/tillr/files/local/share/tillr/"],
+  "tools": ["just", "git", "python3", "gofmt"]
+}

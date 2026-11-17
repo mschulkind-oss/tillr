@@ -7,7 +7,7 @@
   ],
   "scope": "tree",
   "tier": "fast",
-  "budget_ms": 500,
+  "budget_ms": 400,
   "reads": [
     "."
   ],
