@@ -2356,16 +2356,25 @@ should wait for an answer.
 - **Where:** `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go`; the report at the `recorded, not attributed to the run` line in `tools/tillr-drain/drain/loop.go`; `tools/tillr-view/waiting.go`; `bin/patch-branches-publish`.
 - **Evidence:** 2026-11-17, `rg -n 'observed = append' tools/tillr-drain/drain/boundary.go` shows `compareRunRefs` feeding `observed`, not `violations`, and `rg -n 'patch/' tools/tillr-view/waiting.go` finds no waiting rule for an observation. Until this lands, before a push, check the loop log for `recorded, not attributed to the run` naming `refs/heads/patch/`.
 
-### Hold a lane out of rotation while its ended run's processes are alive
+### Hold lanes until their runs' background processes exit
 
-When a run ends, the loop frees its lane for the next item. If processes that carry the run's
-markers are still alive, the loop prints a line and frees the lane anyway. That trades a lane
-leased forever for a quieter fault. `tillr-run exec` ends the worker's process group only when the
-run is cancelled, so after a normal exit the worker's background children survive: tool servers,
-helper runners and jobs the worker started with `&`. If one of them is writing in the lane's
-worktree, the next item is staged there and the stray's writes land in that item's candidate. The
-next item's fence and gate judge them, so the harm is a misattributed refusal and not a bad
-landing, but the owner gets no warning beyond one log line.
+When a worker finishes, its background helpers can keep running. The drain loop currently
+makes the lane available to the next worker even when those helpers are still alive,
+leaving only a log message for the owner. If a helper keeps writing in the lane's working copy,
+its changes can become part of the next item's proposed change. The next item's checks catch
+the unexpected writes, but the refusal is attributed to the wrong item.
+
+The drain loop should keep that lane unavailable until the ended run's processes leave it,
+without stopping work on other lanes. The owner also needs a visible explanation of which
+processes are holding the lane and how to end them. Normal worker exit should clean up
+background children; when it cannot, the lane must remain unavailable rather than pass the
+problem to the next item.
+
+**Outcomes:**
+
+- Keep the next item out of a lane while an ended run's processes still occupy it.
+- Show the owner which processes hold the lane and how to end them.
+- Clean up background children on normal exit, or keep the lane unavailable.
 
 <!-- tillr: item id="item-lane-release-waits-for-run-children" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
@@ -2378,6 +2387,7 @@ landing, but the owner gets no warning beyond one log line.
 
 - **Ref:** the review's finding M3-2, and the lane-rotation mechanism in `tools/tillr-drain/drain/lane_rotation.go`.
 - **Where:** `releaseExamination` and `processIsRunFace` in `tools/tillr-drain/drain/pass.go`; `cmd.Cancel` in `tools/tillr-run/run/exec.go`; the lane rows in `tools/tillr-view/waiting.go`.
+- **Verify:** Leave a process carrying the ended run's markers with its working directory under the lane directory: assert the lane is not offered until the process exits, and the waiting row names its process id and how to end it. Repeat with the process's working directory outside the lane and assert the lane is offered. Run a worker that starts a `sleep` child and exits normally: assert the child is gone or the lane is held, and record why if normal-exit cleanup is not implemented.
 - **Evidence:** 2026-11-17, `rg -n 'released anyway' tools/tillr-drain/drain/pass.go` finds the loop releasing the lane with the strays left running, and `rg -n 'cmd.Cancel' tools/tillr-run/run/exec.go` finds the group kill only on cancellation.
 
 ### Take a lane out of rotation when its branch is held at loop start
