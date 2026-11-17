@@ -36,6 +36,11 @@ export interface BuildStamp {
   modified: boolean;
   front_end: string;
   executable: string;
+  /** SHA-256 of the running executable, absent from older servers. */
+  digest?: string;
+  /** This build compared with the served checkout's HEAD (Go: build.go checkoutFreshness).
+   * "behind" means the tillr sources moved since the server was built. */
+  checkout?: { state: "current" | "behind" | "unknown"; head?: string; note: string };
 }
 
 export interface ServerSnapshot {
@@ -172,6 +177,9 @@ export interface LaneRow {
   state: "idle" | "running" | "settling";
   state_since_ms: number | null;
   run_id: string; item_id: string; seat: string; backend: string; attempt: number; outcome: string;
+  /** Where `seat` was read: the run's dispatch, the item, or "none" — the item asked for no
+   * seat and the policy's default backend ran it. Absent from a server older than the field. */
+  seat_source?: "dispatch" | "item" | "none";
   last_step: string; last_step_at_ms: number | null; log_grew_at_ms: number | null;
   latest_action: { kind: "action" | "liveness" | "unrecorded"; text: string; at_ms: number | null; clock: string };
   note?: string;

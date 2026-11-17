@@ -5089,7 +5089,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "  run  hooks-install" in result.stdout, result.stdout
     assert calls(base, "hooks-install-calls") == [""], calls(base, "hooks-install-calls")
 
-# 47b. The observatory dev recipe's supervision is checked only for its four inputs.
+# 47b. The observatory recipes' suite is checked only for its five inputs.
 #      The fixture runs a stand-in suite; the real supervision suite has its own controls.
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
@@ -5101,7 +5101,8 @@ with tempfile.TemporaryDirectory() as tmp:
         stub.write_text("#!/bin/sh\nexit 0\n")
         stub.chmod(0o755)
     dev_test = "tests/observatory-dev.test.py"
-    inputs = (".justfile", "tools/tillr-view/Procfile.dev", "mise.toml", dev_test)
+    inputs = (".justfile", "tools/observatory/run.sh", "tools/tillr-view/Procfile.dev",
+              "mise.toml", dev_test)
     (repo / dev_test).write_text(
         "from pathlib import Path\n"
         f"Path({str(base / 'observatory-dev-calls')!r}).open('a').write('dev\\n')\n"
@@ -5143,9 +5144,10 @@ with tempfile.TemporaryDirectory() as tmp:
             # their assertions; a 120s limit cut them off as unanswerable, not red.
             assert check.timeout == module.OBSERVATORY_DEV_TIMEOUT == 600, check.timeout
             assert module.CHECK_TIER[check.kind] == module.TIER_LANDING
-            assert check.cost == 0.9 < module.CHEAP_CHECK_SECONDS, check.cost
+            assert check.cost == 1.4 < module.CHEAP_CHECK_SECONDS, check.cost
         for path in ("bashrc", ".justfile.bak", "mise.toml.bak", dev_test + ".bak",
-                     "tools/tillr-view/Procfile.dev.bak", "tools/tillr-view/serve/server.go"):
+                     "tools/tillr-view/Procfile.dev.bak", "tools/tillr-view/serve/server.go",
+                     "tools/observatory/run.sh.bak"):
             checks, planned = dev_plan([path])
             assert checks == [], (path, checks)
             assert any(s.kind == "observatory-dev" and not s.planned

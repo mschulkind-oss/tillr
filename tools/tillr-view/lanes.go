@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,12 +21,17 @@ import (
 // laneRow describes only recorded states. A completed command is not evidence that
 // the next command is in progress; LastStep is deliberately the last finished step.
 type laneRow struct {
-	LaneID       string     `json:"lane_id"`
-	State        string     `json:"state"`
-	StateSinceMS *int64     `json:"state_since_ms"`
-	RunID        string     `json:"run_id"`
-	ItemID       string     `json:"item_id"`
-	Seat         string     `json:"seat"`
+	LaneID       string `json:"lane_id"`
+	State        string `json:"state"`
+	StateSinceMS *int64 `json:"state_since_ms"`
+	RunID        string `json:"run_id"`
+	ItemID       string `json:"item_id"`
+	Seat         string `json:"seat"`
+	// SeatSource says where Seat was read: "dispatch" (the seat the planner recorded on the
+	// decision that started this run), "item" (the item's current seat, for a run whose
+	// decision predates the dispatch column), or "none" — the item asked for no seat, and
+	// the policy's default backend ran it. "none" is a recorded fact, not a missing record.
+	SeatSource   string     `json:"seat_source"`
 	Backend      string     `json:"backend"`
 	Attempt      int        `json:"attempt"`
 	Outcome      string     `json:"outcome"`
@@ -159,7 +165,44 @@ func assembleLanes(r *store.Reader, loop, lanes string, now time.Time) ([]laneRo
 			return nil, err
 		}
 	}
-	return buildLaneRows(d, verdicts, seats, loop, lanes, now), nil
+	rows := buildLaneRows(d, verdicts, seats, loop, lanes, now)
+	// The seat a run was dispatched for is on its decision row (tillr-drain's
+	// dispatches.seat), and it outranks the item's seat: an item's seat can change after the
+	// run started, and the lane is describing the run.
+	dispatched, err := dispatchSeats(r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if seat, ok := dispatched[rows[i].RunID]; ok && seat != "" {
+			rows[i].Seat, rows[i].SeatSource = seat, "dispatch"
+		}
+	}
+	return rows, nil
+}
+
+// dispatchSeats answers the seat each run's dispatch recorded. A store whose dispatches
+// table predates the seat column answers none, which leaves the item's seat in place.
+func dispatchSeats(r *store.Reader) (map[string]string, error) {
+	out := map[string]string{}
+	rs, err := r.Query(`SELECT run_id, COALESCE(seat, '') FROM dispatches WHERE run_id IS NOT NULL AND run_id != ''`)
+	if err != nil {
+		if isMissingColumn(err) || isMissingTable(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	defer rs.Close()
+	for rs.Next() {
+		var run, seat string
+		if err := rs.Scan(&run, &seat); err != nil {
+			return nil, err
+		}
+		if seat != "" {
+			out[run] = seat
+		}
+	}
+	return out, rs.Err()
 }
 
 func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[string]string, loop, lanes string, now time.Time) []laneRow {
@@ -219,6 +262,10 @@ func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[st
 		row.ItemID = run.ItemID
 		row.Backend = run.Backend
 		row.Seat = seats[run.ItemID]
+		row.SeatSource = "none"
+		if row.Seat != "" {
+			row.SeatSource = "item"
+		}
 		row.Attempt = numbers[run.RunID]
 		since := run.StartedAtMS
 		if row.State != "running" {
@@ -317,9 +364,15 @@ func lastFinishedLaneStep(path string) (string, *int64) {
 
 func readLaneAction(path, backend string) (laneAction, string, *int64) {
 	missing := laneAction{Kind: "unrecorded", Clock: stateNoneClock}
+	if path == "" {
+		return missing, "no lane root is configured, so this run's stream log has no path to read", nil
+	}
 	raw, mtime, err := laneTail(path)
 	if err != nil {
-		return missing, err.Error(), nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return missing, "no stream log at " + path + ": the run has written none there", nil
+		}
+		return missing, "the stream log " + path + " could not be read: " + err.Error(), nil
 	}
 	latest := laneAction{Kind: "liveness", AtMS: mtime, Clock: stateDerivedClock}
 	// Backend names are policy aliases (for example pi-designer). Identify the

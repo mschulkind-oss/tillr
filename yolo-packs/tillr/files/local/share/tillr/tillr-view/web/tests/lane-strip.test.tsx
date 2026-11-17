@@ -53,3 +53,13 @@ test("lane refusal is explicit, not an idle count", () => {
   expect(within(container).getByRole("alert").textContent).toContain("Lanes refused: store unreadable");
   expect(container.textContent).not.toContain("0 of 0");
 });
+
+// An item that asks for no seat is run on the policy's default backend: that is recorded,
+// and "seat unrecorded" read as a gap in the record for every lane of a healthy drain.
+test("an item that asked for no seat says so rather than 'seat unrecorded'", () => {
+  const { container } = render(<LaneStrip lanes={[{ ...lanes[0], seat: "", seat_source: "none" }]} now={now} />);
+  expect(container.textContent).toContain("no seat asked (policy default)");
+  expect(container.textContent).not.toContain("seat unrecorded");
+  const { container: older } = render(<LaneStrip lanes={[{ ...lanes[0], seat: "" }]} now={now} />);
+  expect(older.textContent).toContain("seat unrecorded");
+});

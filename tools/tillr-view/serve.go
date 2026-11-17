@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -89,11 +90,17 @@ type server struct {
 	questionsCmd []string
 	policyRef    string
 	offeredLanes string
+	// plannerFlag is the `--tillr-drain` the caller named, or "" to resolve the planner
+	// beside this executable (siblings.go). It is re-resolved per request, so a planner
+	// built after the server started is found without a restart.
+	plannerFlag string
 	// web is the built front end, or nil when this binary carries none. It is served at
 	// `/` and never at `/api/v1/`, so the API's route set stays closed.
 	web fs.FS
 	// build is this program's stamp, reported on every response (build.go).
 	build buildStamp
+	// checkout compares that build with the served checkout's HEAD (build.go).
+	checkout *checkoutWatch
 }
 
 // openWebAssets answers the front end to serve: an explicit `--web-dist` directory wins,
@@ -148,7 +155,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("serve")
 	storePath := fs.String("store", "", "the store to serve (required)")
 	loopDir := fs.String("loop-dir", "", "the loop's record directory (default: <store dir>/../loop)")
-	laneRoot := fs.String("lane-root", "", "where the lane directories live, for a run's lane-copied inputs")
+	laneRoot := fs.String("lane-root", "", "where the lane directories live: each run's stream log and lane-copied inputs (default: <store dir>/lanes)")
 	index := fs.String("trace-index", defaultTraceIndex(), "the tillr-trace index to read (default: $TILLR_TRACE_ROOT or the state home)")
 	addr := fs.String("addr", "127.0.0.1:4318", "the address to listen on")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
@@ -158,6 +165,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	policyRef := fs.String("policy", "", "the loop's policy file for /why; absent means no-policy")
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop for /why (default: all store lanes)")
+	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -169,6 +177,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	defer srv.close()
 	srv.policyRef = *policyRef
 	srv.offeredLanes = *lanesArg
+	srv.plannerFlag = *plannerFlag
 	web, webNote, code := openWebAssets(*webDist, *uiAt)
 	if code != record.ExitOK {
 		return record.Envelope{}, code
@@ -177,10 +186,30 @@ func serveFace(args []string) (record.Envelope, int) {
 	srv.build = buildInfo(frontEndLabel(web, webNote))
 	fmt.Fprintf(os.Stderr, "tillr-view serve: ui: %s\n", webNote)
 	fmt.Fprintf(os.Stderr, "tillr-view serve: build: %s\n", srv.build)
+	if program, err := resolvePlanner(srv.plannerFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "tillr-view serve: planner: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "tillr-view serve: planner: %s\n", program)
+	}
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		if addrInUse(err) {
+			// The holder is asked who it is, because "address already in use" is the line
+			// that left an older process's board on the owner's screen (holder.go).
+			verdict := describeHolder(ctx, *addr, srv.build, srv.storePath)
+			fmt.Fprintf(os.Stderr, "tillr-view serve: %s\n", verdict.Message)
+			if verdict.Kind == "same" {
+				return record.Envelope{}, record.ExitOK
+			}
+			return record.Envelope{}, record.ExitUsage
+		}
+		fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
+		return record.Envelope{}, record.ExitInternal
+	}
+	// Printed once the port is this process's: before, a refused bind printed it too.
 	fmt.Fprintf(os.Stderr, "tillr-view serve: %s on http://%s/api/v1/snapshot\n", srv.storePath, *addr)
-
-	httpServer := &http.Server{Addr: *addr, Handler: srv.routes(), ReadHeaderTimeout: 5 * time.Second}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	httpServer := &http.Server{Handler: srv.routes(), ReadHeaderTimeout: 5 * time.Second}
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
 		return record.Envelope{}, record.ExitInternal
 	}
@@ -214,7 +243,8 @@ func defaultTraceIndex() string {
 // they can be told apart is in an answer. The diagnosis is printed to stderr as well, so an
 // operator who started the face by hand still reads which condition they named.
 func newServer(ctx context.Context, storePath, loopDir, laneRoot, index, root, vantageBase string, questionsCmd []string) *server {
-	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd}
+	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd,
+		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}}
 	srv.openStore(ctx)
 	if srv.problem != nil {
 		fmt.Fprintf(os.Stderr, "tillr-view serve: %s; every API route answers %d %s\n",
@@ -223,8 +253,24 @@ func newServer(ctx context.Context, storePath, loopDir, laneRoot, index, root, v
 	if loopDir == "" {
 		loopDir = filepath.Join(filepath.Dir(storePath), "loop")
 	}
+	// The lane root defaults beside the store, exactly as the lanes and running faces
+	// default it. Until 2026-11-17 serve alone defaulted it to "", so every lane's stream
+	// log was opened at the empty path: the Lanes panel answered `open : no such file or
+	// directory` and "action unrecorded" for a drain whose logs were all there. Both
+	// defaults are relative to the store the caller named, so the same tree read from
+	// another mount (the host's path for a container's `/workspace`) resolves the same files.
+	if laneRoot == "" {
+		laneRoot = filepath.Join(filepath.Dir(storePath), "lanes")
+	}
 	srv.obs = &observations{loopDir: loopDir, laneRoot: laneRoot, trace: openTraceIndex(ctx, index)}
 	return srv
+}
+
+// currentBuild is the build stamp with its comparison against the served checkout.
+func (s *server) currentBuild() buildStamp {
+	b := s.build
+	b.Checkout = s.checkout.read(s.build)
+	return b
 }
 
 // openStore is called at startup or under openMu exclusively. Only a successful
@@ -419,7 +465,7 @@ func (s *server) get(fn payloadFunc) http.HandlerFunc {
 				EventHeadSeq:     head,
 				TraceWatermarkNS: s.obs.trace.watermarkNS(),
 				GeneratedAt:      time.Now().UTC(),
-				Build:            s.build,
+				Build:            s.currentBuild(),
 				VantageBaseURL:   s.vantageBase,
 			}
 			data, fail = fn(r, req)

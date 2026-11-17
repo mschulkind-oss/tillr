@@ -342,127 +342,39 @@ footer_storybook *args:
 dev *args:
     @bash tools/roster-storybook/dev.sh {{args}}
 
-# Build the drain observatory's front end and serve it with the API from one process on
-# http://127.0.0.1:<port> (`just observatory 5000`, or `port=5000`; the default is 4318).
-# `--store`, `--root` and the rest pass through to `tillr-view serve`, and a passthrough
-# flag beats the default this recipe supplies for the same option. The binary is built with
-# the `observatory` tag so the built assets are embedded: no Node runtime is needed to look
-# at a drain.
+# Serve the drain observatory for THIS checkout on http://127.0.0.1:<port> (`just observatory
+# 5000`; the default is 4318), from one process with the front end embedded. It builds
+# tillr-view and the tillr-drain it asks for Waiting from this tree (static, so a host and a
+# container can run each other's builds) into one directory per checkout, passes the store,
+# root and planner as absolute paths, and runs with any working directory, mount path or
+# PATH that holds the toolchain. `--store`, `--root`, `--addr` and the rest pass through to
+# `tillr-view serve` and beat the defaults. No Node is needed once the front end is built.
+# A port held by this same build serving this store answers with its URL; one held by an
+# older build or anything else is refused with the command that frees it. In a yolo jail the
+# recipe binds 0.0.0.0 only for a port published in yolo-jail.toml, and otherwise prints the
+# line to add. tools/tillr-view/README.md ("Starting the observatory") states every refusal.
+[doc("Serve this checkout's observatory, built from this checkout, on 127.0.0.1:<port> (default 4318)")]
+[no-exit-message]
 observatory port="4318" *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    web=tools/tillr-view/web
-    # Reinstall when the tree has no modules AND when the lockfile has moved past them. A
-    # jail and its host share this directory, so "node_modules exists" is not the same
-    # question as "node_modules is current": a package.json that gains a dependency (as this
-    # one did when the board began rendering Markdown) would otherwise build against the old
-    # set and fail on an import that is plainly in the lockfile.
-    if [ ! -d "$web/node_modules" ] || [ "$web/package-lock.json" -nt "$web/node_modules/.package-lock.json" ]; then
-        npm --prefix "$web" ci
-    fi
-    npm --prefix "$web" run build
-    bin="${YOLO_DURABLE_DIR:-${TMPDIR:-/tmp}}/tillr-view-observatory"
-    mkdir -p "$(dirname "$bin")"
-    (cd tools/tillr-view && go build -tags observatory -o "$bin" .)
-    args=({{args}})
-    has() { local want="$1" f; for f in "${args[@]}"; do [ "${f%%=*}" = "$want" ] && return 0; done; return 1; }
-    cmd=(serve)
-    has --store || cmd+=(--store .tillr/state.db)
-    has --root || cmd+=(--root .)
-    has --addr || cmd+=(--addr "127.0.0.1:{{port}}")
-    exec "$bin" "${cmd[@]}" "${args[@]}"
+    @exec bash "{{justfile_directory()}}/tools/observatory/run.sh" serve "{{port}}" {{args}}
 
 # Develop against the observatory with hot reload. The port you name is the one you OPEN --
 # Vite serves the UI there and proxies `/api` to a Go server one port above it (so two dev
 # runs do not collide); a caller-named `--addr` moves the API and the proxy follows it.
-# Live reload is for code, not data (design §5.3).
-#
-# TWO PORTS, AND THE UI IS THE LOWER ONE. Opening the API port answers a bare JSON service,
-# and before 2026-11-14 it answered "this binary carries no built front end" for `/`, which
-# reads exactly like a broken install and is not: the UI was on the other port. The line
-# this recipe prints names both, and it prints the API's build stamp, so "which program am
-# I looking at" is answered by both panes.
-#
-# NO `npm run build` HERE, deliberately. Vite serves the UI from source and proxies every
-# `/api` call to the Go server, so the Go server's own `/` handler is never reached: building
-# `dist/` first cost this recipe 28 s per restart to produce assets nothing requested. The
-# dev binary is built without the `observatory` tag for the same reason -- embedded assets
-# would be a stale snapshot of the code Vite is serving -- so it has no UI to serve and does
-# not pretend to. A caller who wants `--web-dist` anyway still gets it passed through.
+# Live reload is for code, not data (design Section 5.3). The same guarantees as
+# `observatory`: both programs built from this tree, every path absolute, nothing found on
+# PATH but the toolchain. No `npm run build` and no `observatory` tag: Vite serves the UI
+# from source, so embedded assets would be a stale snapshot of it.
 #
 # ONE SUPERVISED TREE, NOT TWO BACKGROUND JOBS. The processes are declared in
-# `tools/tillr-view/Procfile.dev` and run under hivemind (pinned in `mise.toml`), which is
-# what makes this recipe safe to interrupt: a child that dies takes the other with it, and
-# SIGINT or SIGTERM tears down both process groups, so `npm`'s `vite` cannot outlive the
-# API or the terminal. The recipe this replaces backgrounded the API and then `exec`'d Vite,
-# which discarded the `EXIT` trap that was supposed to kill it; an API left holding the port
-# then made the NEXT run answer `bind: address already in use` while Vite proxied to the
-# previous process's stale board. A port that is already answering is refused up front for
-# the same reason: the last way to serve the wrong board is to serve an old process's.
+# `tools/tillr-view/Procfile.dev` and run under hivemind (pinned in `mise.toml`): a child that
+# dies takes the other with it, and SIGINT or SIGTERM tears down both process groups. A port
+# that is already answering is refused before any build, and Vite runs with `--strictPort`,
+# because the last way to serve the wrong board is to serve an old process's.
+[doc("Hot-reload observatory for this checkout: Vite on <port>, the API on <port>+1")]
+[no-exit-message]
 observatory-dev port="4318" *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    web=tools/tillr-view/web
-    args=({{args}})
-    # The API's address: one above the UI port unless the caller names one, in which case
-    # that address is used for the server AND for the proxy -- a proxy pinned to a port the
-    # server is not on is the same silent freeze a missing `ws: true` produces.
-    api="127.0.0.1:$(( {{port}} + 1 ))"
-    for ((i = 0; i < ${#args[@]}; i++)); do
-        case "${args[i]}" in
-            --addr) api="${args[i + 1]:-$api}"; unset 'args[i]' 'args[i + 1]' ;;
-            --addr=*) api="${args[i]#--addr=}"; unset 'args[i]' ;;
-        esac
-    done
-    # Refuse a port that is already answering, before any build. The usual holder is a
-    # previous face that outlived its terminal, and letting the API discover it is the worst
-    # way to find out: the API dies on `bind: address already in use`, Vite stays up, and the
-    # board on screen is that older process's -- a stale snapshot, or a verdict it cached at
-    # its own start. This check runs before the toolchain so a held port costs a second, not
-    # a `go build`.
-    apihost="${api%:*}"; apiport="${api##*:}"
-    [ "$apihost" = "0.0.0.0" ] && apihost=127.0.0.1
-    if (exec 3<>"/dev/tcp/${apihost}/${apiport}") 2>/dev/null; then
-        printf 'observatory-dev: %s is already answering, so this run would not be the face you see.\n' "$api" >&2
-        if command -v ss >/dev/null; then ss -ltnp "sport = :$apiport" >&2 || true; fi
-        printf 'observatory-dev: kill it and run this again -- a previous observatory that outlived its terminal is the usual cause:\n' >&2
-        printf '  fuser -k %s/tcp    # or kill the pid ss named above\n' "$apiport" >&2
-        exit 1
-    fi
-    # Reinstall when the tree has no modules AND when the lockfile has moved past them. A
-    # jail and its host share this directory, so "node_modules exists" is not the same
-    # question as "node_modules is current": a package.json that gains a dependency (as this
-    # one did when the board began rendering Markdown) would otherwise build against the old
-    # set and fail on an import that is plainly in the lockfile.
-    if [ ! -d "$web/node_modules" ] || [ "$web/package-lock.json" -nt "$web/node_modules/.package-lock.json" ]; then
-        npm --prefix "$web" ci
-    fi
-    bin="${YOLO_DURABLE_DIR:-${TMPDIR:-/tmp}}/tillr-view-observatory-dev"
-    mkdir -p "$(dirname "$bin")"
-    (cd tools/tillr-view && go build -o "$bin" .)
-    # No `--web-dist` default: this recipe builds none, and a `dist/` left over from an
-    # earlier `just observatory` is a stale snapshot nobody asked for. A caller who names
-    # one gets it (their args pass through).
-    #
-    # `--ui-at` is what makes the API's own account of itself true. Without it this process
-    # has no front end and says `front-end none`, which the board drew beside its build —
-    # reading as "this board has no UI" while the board was on screen, served by Vite. The
-    # stamp names where the UI is instead, so `build <rev> · vite` is the honest line.
-    # Both are defaults the Procfile supplies; a caller's own flag comes after them and wins.
-    export TILLR_VIEW_BIN="$bin"
-    export TILLR_VIEW_STORE=".tillr/state.db"
-    export TILLR_VIEW_ROOT="."
-    export TILLR_VIEW_ADDR="$api"
-    export TILLR_VIEW_PORT="{{port}}"
-    export TILLR_VIEW_WEB="$web"
-    export TILLR_VIEW_API_ARGS="${args[*]}"
-    export TILLR_VIEW_API="http://$api"
-    printf 'observatory-dev: open the UI at http://localhost:%s  (the API on %s is JSON only, never the UI)\n' "{{port}}" "$api"
-    # `exec`, deliberately: hivemind is the supervisor now, and it traps the signals itself.
-    # The trap this recipe used to set never ran, because `exec` replaces the shell that set
-    # it -- which is exactly the orphan this hands to a process manager that starts each
-    # child in its own process group and interrupts the group.
-    exec hivemind --root . --timeout 10 tools/tillr-view/Procfile.dev
+    @exec bash "{{justfile_directory()}}/tools/observatory/run.sh" dev "{{port}}" {{args}}
 
 # End of task: check every change since the last successfully verified commit,
 # including earlier tasks and sessions. Advance that approved point only when all

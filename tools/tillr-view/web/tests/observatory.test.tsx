@@ -603,3 +603,27 @@ describe("the observatory renders gaps as gaps", () => {
     });
   }
 });
+
+// A server that outlived the tree it was built from says so: the comparison is the server's
+// own (build.go checkoutFreshness), and "behind" is the one state that asks for a restart.
+test("the build line says when the server is behind the checkout it serves", () => {
+  const behind = envelope(snapshotData);
+  behind.snapshot.build = {
+    revision: "f0a53cd7ce6d0000000000000000000000000000", time: "", modified: false,
+    front_end: "embedded", executable: "/x/tillr-view",
+    checkout: { state: "behind", head: "abc", note: "the checkout's tillr sources moved since this server was built" },
+  };
+  const { container } = render(
+    <ObservatoryHeaderBar snapshot={behind} error={null} onRefresh={() => {}} refreshing={false} live={true} {...noFilter} />,
+  );
+  const flag = container.querySelector(".head-build__behind");
+  expect(flag?.textContent).toContain("behind the checkout");
+  expect(flag?.getAttribute("title")).toContain("moved since this server was built");
+  cleanup();
+  const current = envelope(snapshotData);
+  current.snapshot.build = { ...behind.snapshot.build, checkout: { state: "current", note: "" } };
+  const now = render(
+    <ObservatoryHeaderBar snapshot={current} error={null} onRefresh={() => {}} refreshing={false} live={true} {...noFilter} />,
+  );
+  expect(now.container.querySelector(".head-build__behind")).toBeNull();
+});

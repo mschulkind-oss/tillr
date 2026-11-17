@@ -504,6 +504,11 @@ function BuildLine({ build }: { build?: import("../models/types").BuildStamp }) 
     >
       build <strong>{revision}</strong>
       {build.modified ? "+dirty" : ""} · {frontEnd}
+      {build.checkout?.state === "behind" ? (
+        <strong className="head-build__behind" title={build.checkout.note}>
+          {" "}· behind the checkout — restart with `just observatory`
+        </strong>
+      ) : null}
     </span>
   );
 }
