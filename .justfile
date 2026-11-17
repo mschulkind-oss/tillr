@@ -368,6 +368,18 @@ dev *args:
 observatory port="4318" *args:
     @exec bash "{{justfile_directory()}}/tools/observatory/run.sh" serve "{{port}}" {{args}}
 
+# Summarize the observatory's performance log: per-route and per-page p50/p95/max, the slowest
+# requests with their phase breakdown, the browser-versus-server gap, the live channel's
+# traffic and each start's phases. `just observatory` and `observatory-dev` write that log
+# under this checkout's durable scratch directory (tools/tillr-view/README.md, "The
+# performance log"), which the host and its jails share, so this reads what the HOST's server recorded
+# too. Arguments pass through to `tillr-view perf-log` (`--since 1h`, `--top 20`, `--json`, or
+# a log file or directory instead of every server's).
+[doc("Summarize the observatory's performance log (what the host's or this jail's server recorded)")]
+[no-exit-message]
+observatory-perf *args:
+    @cd "{{justfile_directory()}}/tools/tillr-view" && go run . perf-log --logs "{{justfile_directory()}}/.yolo/durable/tillr-observatory/logs" --from "{{invocation_directory()}}" {{args}}
+
 # Develop against the observatory with hot reload. The port you name is the one you OPEN --
 # Vite serves the UI there and proxies `/api` to a Go server one port above it (so two dev
 # runs do not collide); a caller-named `--addr` moves the API and the proxy follows it.

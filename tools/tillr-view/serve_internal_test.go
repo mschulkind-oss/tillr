@@ -1808,8 +1808,9 @@ func TestTheQuestionsRouteKeepsUnknownAndMissingApart(t *testing.T) {
 }
 
 // TestTheQuestionsListDropsAnAnsweredQuestionOnTheNextRead pins the turnaround: the route
-// reads a fresh index per request, so an answer written in Vantage leaves the list on the
-// next read rather than after a restart.
+// rebuilds the index when the tree's Markdown changes (a caller-named command is never
+// reused), so an answer written in Vantage leaves the list on the next read rather than
+// after a restart.
 func TestTheQuestionsListDropsAnAnsweredQuestionOnTheNextRead(t *testing.T) {
 	command, indexPath := stubMutableIndexCommand(t)
 	h := newServeHarnessWithQuestions(t, "", command)

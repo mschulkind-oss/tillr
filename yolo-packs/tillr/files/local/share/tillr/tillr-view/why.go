@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -17,7 +19,12 @@ import (
 // into the read utility. The program is the one resolvePlanner names, never a bare PATH
 // lookup, and its answer is refused unless it names this server's build (siblings.go). A
 // missing or mismatched planner is an explicit refusal, never a history fallback.
-func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, path, root, policy, lanes string, questionsCmd []string) (json.RawMessage, []waitingRow, error) {
+//
+// index, when it is not nil, is the Vantage index document the server already holds
+// (vantagecache.go): it is handed to the planner on stdin with `--questions-index -`, so the
+// planner answers from the same walk instead of starting its own, which was 98% of its time.
+// A nil index leaves the planner to run the index command itself, as it always has.
+func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, path, root, policy, lanes string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
 	args := []string{"why", "--store", path, "--root", root, "--json"}
 	if policy != "" {
 		args = append(args, "--policy", policy)
@@ -25,13 +32,24 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 	if lanes != "" {
 		args = append(args, "--lanes", lanes)
 	}
-	if len(questionsCmd) > 0 {
+	if index != nil {
+		args = append(args, "--questions-index", "-")
+	} else if len(questionsCmd) > 0 {
 		args = append(args, "--questions-cmd", strings.Join(questionsCmd, " "))
 	}
 	cmd := exec.CommandContext(ctx, program.Path, args...)
+	if index != nil {
+		cmd.Stdin = bytes.NewReader(index)
+	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
+	start := time.Now()
 	raw, err := cmd.Output()
+	planned := map[string]any{"ms": msSince(time.Now, start), "bytes": len(raw), "exit": cmd.ProcessState.ExitCode(), "index": "own"}
+	if index != nil {
+		planned["index"] = "preloaded"
+	}
+	phase(ctx, "planner", planned)
 	if err != nil {
 		return nil, nil, &plannerError{Kind: plannerUnavailable,
 			Msg: fmt.Sprintf("the read-only planner (tillr-drain why, %s) failed: %v; %s", program, err, strings.TrimSpace(stderr.String()))}
@@ -100,12 +118,12 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 
 // askPlanner resolves the planner and asks it, so every caller gets the same refusal for a
 // planner that cannot be found as for one that cannot answer.
-func askPlanner(ctx context.Context, explicit string, self buildStamp, path, root, policy, lanes string, questionsCmd []string) (json.RawMessage, []waitingRow, error) {
+func askPlanner(ctx context.Context, explicit string, self buildStamp, path, root, policy, lanes string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
 	program, err := resolvePlanner(explicit)
 	if err != nil {
 		return nil, nil, err
 	}
-	return plannerWhy(ctx, program, self, path, root, policy, lanes, questionsCmd)
+	return plannerWhy(ctx, program, self, path, root, policy, lanes, questionsCmd, index)
 }
 
 type whyPayloadData struct {
@@ -114,7 +132,15 @@ type whyPayloadData struct {
 }
 
 func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure) {
-	raw, _, err := askPlanner(r.Context(), s.plannerFlag, s.build, s.storePath, s.root, s.policyRef, s.offeredLanes, s.questionsCmd)
+	// The index is the server's cached walk. When it cannot be read the planner is asked
+	// without it and runs the index command itself, so a failure is the planner's own
+	// answer (`questions-unknown`) exactly as before the cache existed.
+	index, look, ierr := s.vantage.get(r.Context())
+	phase(r.Context(), "vantage", look)
+	if ierr != nil {
+		index = nil
+	}
+	raw, _, err := askPlanner(r.Context(), s.plannerFlag, s.build, s.storePath, s.root, s.policyRef, s.offeredLanes, s.questionsCmd, index)
 	if err != nil {
 		// The planner is a program beside this one, not the store and not the drain: its
 		// absence says nothing about whether the loop is moving, and the code says so.

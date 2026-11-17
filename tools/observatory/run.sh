@@ -25,6 +25,27 @@
 # not the board. A missing one is refused by name before anything is built.
 set -euo pipefail
 
+# The recipe's own clock, for the performance log's startup record: bash's EPOCHREALTIME is
+# read without a subprocess, and a bash without it (before 5.0) reports no phases rather than
+# wrong ones.
+now_ms() {
+    local t="${EPOCHREALTIME:-}"
+    [ -n "$t" ] || return 1
+    t="${t/,/.}"
+    local s="${t%.*}" f="${t#*.}000"
+    printf '%s%s' "$s" "${f:0:3}"
+}
+recipe_start="$(now_ms || true)"
+phases=""
+phase_start=""
+begin_phase() { phase_start="$(now_ms || true)"; }
+end_phase() {
+    local end
+    end="$(now_ms || true)"
+    [ -n "$phase_start" ] && [ -n "$end" ] && phases="${phases:+$phases,}$1=$((end - phase_start))"
+    phase_start=""
+}
+
 mode="${1:?usage: run.sh serve|dev <port> [args...]}"
 port="${2:?usage: run.sh serve|dev <port> [args...]}"
 shift 2
@@ -147,9 +168,11 @@ ensure_modules() {
     fi
     if [ -n "$reason" ]; then
         printf '%s: npm ci (%s)\n' "$name" "$reason" >&2
+        begin_phase
         npm --prefix "$web" ci --no-audit --no-fund ||
             refuse "npm ci in $web failed (its output is above), so the front end has no modules to build or serve with: fix what npm names (a cache directory it cannot write is set with NPM_CONFIG_CACHE) and run this again"
         printf '%s\n' "$platform" >"$stamp"
+        end_phase npm_ci
     fi
 }
 
@@ -175,9 +198,13 @@ if [ "$mode" = dev ]; then
 elif ! has --web-dist; then
     if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
         ensure_modules
+        begin_phase
         if ! dist_current; then
             npm --prefix "$web" run build ||
                 refuse "npm run build in $web failed (its output is above), so there is no current front end to embed: fix the build and run this again"
+            end_phase web_build
+        else
+            end_phase web_current_check
         fi
     elif ! dist_current; then
         refuse "the front end in $web/dist is missing or older than its sources, and node is not on PATH to rebuild it: install Node (the version in $root/mise.toml), or run this once from a shell that has it, after which no Node is needed"
@@ -215,12 +242,32 @@ build() {
 view="$out/tillr-view"
 [ "$mode" = dev ] && view="$out/tillr-view-dev"
 drain="$out/tillr-drain"
+begin_phase
 if [ "$mode" = dev ]; then
     build "$view" "$view_src"
 else
     build "$view" "$view_src" -tags observatory
 fi
+end_phase go_build_view
+begin_phase
 build "$drain" "$drain_src"
+end_phase go_build_drain
+
+# --- the performance log ---------------------------------------------------------------------
+# Every request, WebSocket window and browser report is a JSON line (tools/tillr-view
+# perflog.go), written under THIS checkout's durable scratch directory -- never under the build
+# directory's ~/.cache fallback above. A host and its jail mount the same checkout, so a log the
+# host writes at <root>/.yolo/durable/... is the jail's /workspace/.yolo/durable/..., and an
+# agent in the jail reads what the owner's browser met. One directory per host and port, so two
+# servers never interleave one file. OBSERVATORY_PERF_LOG moves it; `off` turns it off.
+perf_log="${OBSERVATORY_PERF_LOG:-$root/.yolo/durable/tillr-observatory/logs/${HOSTNAME:-host}-$port}"
+export TILLR_VIEW_PERF_LOG="$perf_log"
+export TILLR_VIEW_PERF_STARTUP="${phases}${recipe_start:+${phases:+,}recipe_start_ms=$recipe_start}"
+if [ "$perf_log" = off ]; then
+    printf '%s: performance log: off (OBSERVATORY_PERF_LOG=off)\n' "$name" >&2
+else
+    printf '%s: performance log: %s (summarize it with `just observatory-perf`)\n' "$name" "$perf_log" >&2
+fi
 
 if [ -n "$jail_note" ] && { [ "$mode" = dev ] || ! has --addr; }; then
     printf '%s: %s\n' "$name" "$jail_note" >&2

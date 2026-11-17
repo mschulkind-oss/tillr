@@ -102,6 +102,12 @@ SCRATCH_EXCEPTIONS = (
     # marker is that line's own text so the exception cannot grow to cover a neighbouring line.
     ("tools/tillr-view/README.md",
      "tillr-observatory/<key>/`, where `<key>`"),
+    # The observatory's performance log directory: tools/observatory/run.sh hands serve that
+    # directory by design and the README says where, so a reader can find the log. It is a
+    # location, not an artifact that proved a past claim; the pack's mirror is excused by
+    # `excused_as`, and the marker is that line's own text.
+    ("tools/tillr-view/README.md",
+     "`<checkout>/.yolo/durable/tillr-observatory/logs/<hostname>-<port>/` and prints it at"),
 )
 
 

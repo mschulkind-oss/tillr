@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -101,6 +100,11 @@ type server struct {
 	build buildStamp
 	// checkout compares that build with the served checkout's HEAD (build.go).
 	checkout *checkoutWatch
+	// perf is the performance log (perflog.go), nil when it is off.
+	perf *perfLog
+	// vantage is the one cached walk of Vantage's index every question-reading route and
+	// the planner share (vantagecache.go).
+	vantage *vantageCache
 }
 
 // openWebAssets answers the front end to serve: an explicit `--web-dist` directory wins,
@@ -165,6 +169,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	policyRef := fs.String("policy", "", "the loop's policy file for /why; absent means no-policy")
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop for /why (default: all store lanes)")
+	perfDir := fs.String("perf-log", os.Getenv("TILLR_VIEW_PERF_LOG"), "a directory for the performance log: a JSON line per request, WebSocket window and browser report, a startup record and a periodic summary (`off` or empty: no log; default $TILLR_VIEW_PERF_LOG). `just observatory` names one under the checkout; `tillr-view perf-log` reads it")
+	perfStartup := fs.String("perf-startup", os.Getenv("TILLR_VIEW_PERF_STARTUP"), "the recipe's startup phases for the log's startup record, as name=milliseconds pairs separated by commas; `recipe_start_ms=<unix ms>` dates the recipe's start, so the record can say how long the recipe took to listen")
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
@@ -184,6 +190,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	}
 	srv.web = web
 	srv.build = buildInfo(frontEndLabel(web, webNote))
+	srv.perf = openPerfLog(*perfDir, srv.build.Revision, time.Now)
+	defer srv.perf.close()
 	fmt.Fprintf(os.Stderr, "tillr-view serve: ui: %s\n", webNote)
 	fmt.Fprintf(os.Stderr, "tillr-view serve: build: %s\n", srv.build)
 	if program, err := resolvePlanner(srv.plannerFlag); err != nil {
@@ -208,7 +216,14 @@ func serveFace(args []string) (record.Envelope, int) {
 	}
 	// Printed once the port is this process's: before, a refused bind printed it too.
 	fmt.Fprintf(os.Stderr, "tillr-view serve: %s on http://%s/api/v1/snapshot\n", srv.storePath, *addr)
+	if srv.perf != nil {
+		srv.perf.emit("start", srv.startRecord(*addr, webNote, *perfStartup))
+		fmt.Fprintf(os.Stderr, "tillr-view serve: perf log: %s (read it with `tillr-view perf-log %s`)\n", srv.perf.path(), srv.perf.dir)
+	} else {
+		fmt.Fprintf(os.Stderr, "tillr-view serve: perf log: off\n")
+	}
 	httpServer := &http.Server{Handler: srv.routes(), ReadHeaderTimeout: 5 * time.Second}
+	stopOnSignal(httpServer)
 	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
 		return record.Envelope{}, record.ExitInternal
@@ -244,7 +259,7 @@ func defaultTraceIndex() string {
 // operator who started the face by hand still reads which condition they named.
 func newServer(ctx context.Context, storePath, loopDir, laneRoot, index, root, vantageBase string, questionsCmd []string) *server {
 	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd,
-		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}}
+		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}, vantage: newVantageCache(root, questionsCmd)}
 	srv.openStore(ctx)
 	if srv.problem != nil {
 		fmt.Fprintf(os.Stderr, "tillr-view serve: %s; every API route answers %d %s\n",
@@ -309,8 +324,8 @@ func (s *server) close() {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/snapshot", s.get(s.snapshotPayload))
-	mux.HandleFunc("GET /api/v1/why", s.get(s.whyPayload))
-	mux.HandleFunc("GET /api/v1/waiting", s.get(s.waitingPayload))
+	mux.HandleFunc("GET /api/v1/why", s.vantage.prefetch(s.getOutsideTx(s.whyPayload)))
+	mux.HandleFunc("GET /api/v1/waiting", s.vantage.prefetch(s.get(s.waitingPayload)))
 	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))
 	mux.HandleFunc("GET /api/v1/lanes", s.get(s.lanesPayload))
@@ -323,12 +338,13 @@ func (s *server) routes() http.Handler {
 	// a parse found, its path, and the section the item names. It carries no prose — the
 	// board does not render the document, and Vantage owns that rendering (design §8.3).
 	// It is a read of one file the store names, not a second source of truth.
-	mux.HandleFunc("GET /api/v1/items/{id}/doc", s.get(s.documentPayload))
+	mux.HandleFunc("GET /api/v1/items/{id}/doc", s.vantage.prefetch(s.get(s.documentPayload)))
 	// The board's one place for the questions waiting on the owner: every item whose design
 	// document still asks something, with the question ids and the document each link is
-	// built from. It reads Vantage's index fresh per request, so an answer written there
-	// leaves the list on the next read rather than after a restart.
-	mux.HandleFunc("GET /api/v1/questions", s.get(s.questionsPayload))
+	// built from. Vantage's index is reused only while the tree's Markdown is unchanged
+	// (vantagecache.go), so an answer written there leaves the list on the next read rather
+	// than after a restart.
+	mux.HandleFunc("GET /api/v1/questions", s.vantage.prefetch(s.get(s.questionsPayload)))
 	mux.HandleFunc("GET /api/v1/designs", s.get(s.designsPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}", s.get(s.runPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}/exchanges", s.get(s.exchangesPayload))
@@ -346,6 +362,9 @@ func (s *server) routes() http.Handler {
 	// It reads through the same read-only handle as the routes above, so watching costs
 	// the store nothing a refresh does not.
 	mux.HandleFunc("GET /api/v1/ws", s.wsHandler())
+	// The browser's account of the page loads it timed (perfhttp.go). It is the one route
+	// that is not a GET, and it writes only to the performance log, never to the store.
+	mux.HandleFunc("POST "+clientTimingPath, s.clientTimingHandler)
 	// An unknown `/api/v1/` path is a caller's mistake, and it must not fall through to
 	// the index page: a client that receives HTML where it expected JSON would read a
 	// routing bug as a data bug.
@@ -355,7 +374,7 @@ func (s *server) routes() http.Handler {
 		writeJSON(w, f.status, *f)
 	})
 	mux.Handle("GET /", s.webHandler())
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	return s.instrument(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if (req.Method != http.MethodGet && req.Method != http.MethodHead) || !strings.HasPrefix(req.URL.Path, "/api/v1/") {
 			mux.ServeHTTP(w, req)
 			return
@@ -373,7 +392,7 @@ func (s *server) routes() http.Handler {
 		// lock before serving, especially before a long-lived WebSocket upgrade.
 		s.openMu.Unlock()
 		mux.ServeHTTP(w, req)
-	})
+	}))
 }
 
 // storeProblem answers every API route while the store is not one this face can read.
@@ -418,11 +437,18 @@ func (s *server) webHandler() http.Handler {
 			return
 		}
 		files := http.FileServerFS(s.web)
+		// Vite names every built asset by its content hash, so an asset URL never changes
+		// meaning and the browser may keep it; the page that names them must be revalidated
+		// on every load, or a rebuilt board would load the previous build's scripts.
+		w.Header().Set("Cache-Control", "no-cache")
 		if req.URL.Path == "/" {
 			files.ServeHTTP(w, req)
 			return
 		}
 		if _, err := fs.Stat(s.web, strings.TrimPrefix(path.Clean(req.URL.Path), "/")); err == nil {
+			if strings.HasPrefix(req.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			files.ServeHTTP(w, req)
 			return
 		}
@@ -447,7 +473,16 @@ type payloadFunc func(r *store.Reader, req *http.Request) (any, *apiFailure)
 // get wraps one payload in the snapshot envelope: the read transaction, the cursor and
 // the JSON. Pinning one ReadTx per request is what makes "the two items and their runs"
 // one moment rather than two (design §3.3).
-func (s *server) get(fn payloadFunc) http.HandlerFunc {
+func (s *server) get(fn payloadFunc) http.HandlerFunc { return s.serveRead(fn, false) }
+
+// getOutsideTx is get for a route whose answer is not read through this server's
+// transaction: /why, which the drain plans in its own process and its own pinned read. The
+// wrapper's transaction reads only the cursor and is closed before fn runs, so the planner's
+// few hundred milliseconds do not hold the server's one store connection (store.OpenRead)
+// and every other pane's read does not wait for them. fn is handed a nil Reader.
+func (s *server) getOutsideTx(fn payloadFunc) http.HandlerFunc { return s.serveRead(fn, true) }
+
+func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
 		var (
@@ -455,6 +490,7 @@ func (s *server) get(fn payloadFunc) http.HandlerFunc {
 			cursor serverSnapshot
 			fail   *apiFailure
 		)
+		start := time.Now()
 		err := s.store.ReadTx(ctx, func(r *store.Reader) error {
 			head, err := r.EventHeadSeq()
 			if err != nil {
@@ -469,15 +505,25 @@ func (s *server) get(fn payloadFunc) http.HandlerFunc {
 				Build:            s.currentBuild(),
 				VantageBaseURL:   s.vantageBase,
 			}
-			data, fail = fn(r, req)
-			// /why is planned in the drain process's own pinned read transaction.
-			// Its cursor belongs to that answer, not this earlier wrapper read.
-			if planned, ok := data.(whyPayloadData); ok {
-				cursor.EventHeadSeq = planned.head
-				data = planned.raw
+			if !outside {
+				data, fail = fn(r, req)
 			}
 			return nil
 		})
+		if outside && err == nil {
+			data, fail = fn(nil, req)
+		}
+		// /why is planned in the drain process's own pinned read transaction.
+		// Its cursor belongs to that answer, not this earlier wrapper read.
+		if planned, ok := data.(whyPayloadData); ok {
+			cursor.EventHeadSeq = planned.head
+			data = planned.raw
+		}
+		// payload is the read transaction and everything the route assembled inside it,
+		// which for /why includes the planner it waited on (its own phase says how long).
+		phase(ctx, "payload_ms", msSince(time.Now, start))
+		encodeStart := time.Now()
+		defer func() { phase(ctx, "encode_ms", msSince(time.Now, encodeStart)) }()
 		if err != nil {
 			f := failure(codeStoreUnreadable, "the store could not be read: %v", err)
 			f.Snapshot = cursor
@@ -1055,10 +1101,10 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 		}
 		return nil, failure(code, "%s", err.Error())
 	}
-	// A fresh reader per request, so a question answered in Vantage while the board runs
-	// leaves the count on the next read rather than after a restart.
-	questions := &vantage.VantageQuestions{Root: s.root, Command: s.questionsCmd, Context: req.Context()}
-	answer := readQuestions(questions, it.DesignDoc)
+	// The index is reused only while the tree's Markdown is unchanged (vantagecache.go), so
+	// a question answered in Vantage while the board runs leaves the count on the next read
+	// rather than after a restart.
+	answer := readQuestions(s.vantage.source(req.Context()), it.DesignDoc)
 	designer, err := readLastDesigner(r, documentLinkPath(s.root, path))
 	if err != nil {
 		return nil, unreadable(err)

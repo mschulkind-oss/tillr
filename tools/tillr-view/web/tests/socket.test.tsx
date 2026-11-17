@@ -7,6 +7,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  LANES_REFRESH_MIN_MS,
   RECONNECT_FIRST_MS,
   RECONNECT_MAX_MS,
   RECONNECT_STABLE_MS,
@@ -129,6 +130,37 @@ describe("the live channel invalidates the cache the panels already read", () =>
     socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["runlog:run-1"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.lanes() });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.run("run-1") });
+  });
+
+  test("a burst of log growth refreshes the lane strip once per gap, and never drops the last", () => {
+    vi.useFakeTimers();
+    try {
+      let clock = 1_000;
+      const { invalidate } = renderProbe(PROBE_URL, () => clock);
+      const socket = FakeSocket.opened[0];
+      socket.accept();
+      invalidate.mockClear();
+      const lanes = () => invalidate.mock.calls.filter(call => JSON.stringify(call[0]) === JSON.stringify({ queryKey: queryKeys.lanes() })).length;
+      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["runlog:run-1"] });
+      expect(lanes()).toBe(1);
+      // Three more frames inside the gap: no refresh now, one scheduled for when it ends.
+      for (const at of [1_250, 1_500, 1_750]) {
+        clock = at;
+        socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["runlog:run-1"] });
+      }
+      expect(lanes()).toBe(1);
+      // The run's own payload is still refreshed per frame: only the strip is rate-limited.
+      expect(invalidate.mock.calls.filter(call => JSON.stringify(call[0]) === JSON.stringify({ queryKey: queryKeys.run("run-1") })).length).toBe(4);
+      clock = 3_000;
+      vi.advanceTimersByTime(LANES_REFRESH_MIN_MS);
+      expect(lanes()).toBe(2);
+      // A frame after the gap is answered at once again.
+      clock = 5_100;
+      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["snapshot"] });
+      expect(lanes()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a resource this client does not cache invalidates nothing", () => {

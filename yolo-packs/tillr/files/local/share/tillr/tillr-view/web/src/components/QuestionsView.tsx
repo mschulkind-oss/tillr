@@ -4,8 +4,9 @@
 //
 // It is a view rather than a fifth pane: the board's four regions are unchanged, and this
 // is the list the header's Questions control opens. The list is the server's answer to
-// `GET /api/v1/questions`, which reads Vantage's index fresh per request — so an answer
-// written in Vantage leaves the list on the next read rather than after a restart. The
+// `GET /api/v1/questions`, which reuses Vantage's index only while the tree's Markdown is
+// unchanged — so an answer written in Vantage leaves the list on the next read rather than
+// after a restart. The
 // board never requests the configured base URL: it is a link target, not a service this
 // screen waits on.
 

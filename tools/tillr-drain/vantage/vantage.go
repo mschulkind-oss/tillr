@@ -218,10 +218,30 @@ const IndexTimeout = 2 * time.Minute
 // has to make the same decision about an unreadable index, and a value that cannot be
 // mistaken for "no questions" is what makes that decision impossible to get wrong.
 func ReadVantageIndex(ctx context.Context, root string, command []string) VantageIndex {
+	out, err := RunIndexCommand(ctx, root, command)
+	if err != nil {
+		return VantageIndex{err: err}
+	}
+	return ParseIndex(out, IndexCommandName(command))
+}
+
+// IndexCommandName is how a refusal names the index command: the argv as one line, the
+// default when none was given.
+func IndexCommandName(command []string) string {
 	if len(command) == 0 {
 		command = DefaultIndexCommand
 	}
-	named := strings.Join(command, " ")
+	return strings.Join(command, " ")
+}
+
+// RunIndexCommand runs the index command over root and answers its raw JSON. It is the
+// half of ReadVantageIndex a caller that keeps the document — the observatory's index cache,
+// which hands one walk to several readers — needs on its own.
+func RunIndexCommand(ctx context.Context, root string, command []string) ([]byte, error) {
+	named := IndexCommandName(command)
+	if len(command) == 0 {
+		command = DefaultIndexCommand
+	}
 	ctx, cancel := context.WithTimeout(ctx, IndexTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
@@ -234,13 +254,32 @@ func ReadVantageIndex(ctx context.Context, root string, command []string) Vantag
 		if detail == "" && ctx.Err() != nil {
 			detail = ctx.Err().Error()
 		}
-		return VantageIndex{err: fmt.Errorf("running %s: %w: %s", named, err, detail)}
+		return nil, fmt.Errorf("running %s: %w: %s", named, err, detail)
 	}
-	index, err := parseVantageIndex(out)
+	return out, nil
+}
+
+// ParseIndex reads an index document a caller already holds. A document that is not an
+// index answers the same refusal ReadVantageIndex would, named after where it came from.
+func ParseIndex(raw []byte, from string) VantageIndex {
+	index, err := parseVantageIndex(raw)
 	if err != nil {
-		return VantageIndex{err: fmt.Errorf("reading %s: %w", named, err)}
+		return VantageIndex{err: fmt.Errorf("reading %s: %w", from, err)}
 	}
 	return index
+}
+
+// IndexError is an index that could not be read, carrying why: every question asked of it
+// refuses with that error, which the planner and the board answer as `questions-unknown`.
+func IndexError(err error) VantageIndex {
+	return VantageIndex{err: err}
+}
+
+// Preloaded is a VantageQuestions whose index was already read, so asking it a question
+// starts no subprocess. The answers are the index's, exactly as if this source had run the
+// command itself: a refused index still refuses every document.
+func Preloaded(root string, index VantageIndex) *VantageQuestions {
+	return &VantageQuestions{Root: root, read: true, index: index}
 }
 
 // parseVantageIndex reads the two things the answer needs out of the index document: the

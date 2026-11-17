@@ -26,6 +26,7 @@ import type {
   TranscriptData,
   TranscriptEntryData,
 } from "./types";
+import { perf, resourceTiming } from "./perf";
 
 /** An answer the server refused, carrying the cursor it refused at. */
 export class ApiError extends Error {
@@ -42,8 +43,16 @@ export class ApiError extends Error {
 export const fetchDesigns = (signal?: AbortSignal) => read<DesignsData>("/api/v1/designs", signal);
 
 async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<T>> {
+  // Every read is timed as the browser waited for it, and reported with the server's request
+  // id, so the performance log can put the two side by side (models/perf.ts).
+  const started = performance.now();
   const response = await fetch(path, { signal, headers: { Accept: "application/json" } });
-  const body: unknown = await response.json();
+  const text = await response.text();
+  perf.fetched({
+    path, request_id: response.headers.get("X-Request-Id") ?? "", ms: Math.round((performance.now() - started) * 10) / 10,
+    bytes: text.length, status: response.status, ...resourceTiming(path),
+  });
+  const body: unknown = JSON.parse(text);
   if (!response.ok) {
     const failure = body as ApiFailure;
     throw new ApiError(
@@ -114,9 +123,10 @@ export async function fetchPassRange(since: number | null, end: number, signal?:
 export const fetchSnapshot = (signal?: AbortSignal) =>
   read<SnapshotData>("/api/v1/snapshot", signal);
 
-/** The board's one place for the questions waiting on the owner. The server reads Vantage's
- * index on this request, so it is fetched when the view is opened rather than on every
- * snapshot: the index walks the tree, and the snapshot must stay cheap. */
+/** The board's one place for the questions waiting on the owner. The server needs Vantage's
+ * index for it (cached while the tree's Markdown is unchanged, but a walk of the whole tree
+ * when it is not), so it is fetched when the view is opened rather than on every snapshot:
+ * the snapshot must stay cheap. */
 export const fetchQuestions = (signal?: AbortSignal) =>
   read<QuestionsData>("/api/v1/questions", signal);
 

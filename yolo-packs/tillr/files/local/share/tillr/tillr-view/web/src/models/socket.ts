@@ -28,6 +28,14 @@ export const RECONNECT_MAX_MS = 10_000;
  * failure, and the delay after it grows. */
 export const RECONNECT_STABLE_MS = 1_000;
 
+/** The shortest gap between two lane-strip refreshes the live channel asks for. A running
+ * lane's log grows several times a second, and the server names each growth in a frame
+ * (measured 2026-11-17: 92 frames a minute with the drain busy, 52 of them `runlog:`), so a
+ * refresh per frame re-read every lane's log tail one to two times a second per open tab. The
+ * strip shows a lane's latest action in words; two seconds is below what a reader can tell
+ * apart, and the last frame in a burst is never lost — it is answered when the gap ends. */
+export const LANES_REFRESH_MIN_MS = 2_000;
+
 /** The reconnect delay after `attempt` consecutive failures, counted from zero. */
 export function reconnectDelay(attempt: number): number {
   return Math.min(RECONNECT_FIRST_MS * 2 ** attempt, RECONNECT_MAX_MS);
@@ -121,6 +129,25 @@ export function useObservatorySocket(
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let socket: WebSocket | null = null;
+    // The lane strip's refresh, rate-limited (LANES_REFRESH_MIN_MS): when it last ran, and the
+    // one trailing refresh a burst inside the gap leaves scheduled.
+    let lanesAt = Number.NEGATIVE_INFINITY;
+    let lanesTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshLanes = () => {
+      const wait = lanesAt + LANES_REFRESH_MIN_MS - now();
+      if (wait <= 0) {
+        lanesAt = now();
+        void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+        return;
+      }
+      if (lanesTimer !== null) return;
+      lanesTimer = setTimeout(() => {
+        lanesTimer = null;
+        if (stopped || paused.current) return;
+        lanesAt = now();
+        void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+      }, wait);
+    };
 
     const open = () => {
       const opened = new WebSocket(url);
@@ -147,7 +174,7 @@ export function useObservatorySocket(
         // to keep reading what they were reading.
         if (paused.current) return;
         if (frame.changed.some(name => name === "snapshot" || name.startsWith("runlog:") || name.startsWith("runs:"))) {
-          void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+          refreshLanes();
         }
         for (const name of frame.changed) {
           const key = invalidationKey(name);
@@ -170,6 +197,7 @@ export function useObservatorySocket(
     return () => {
       stopped = true;
       if (timer !== null) clearTimeout(timer);
+      if (lanesTimer !== null) clearTimeout(lanesTimer);
       socket?.close();
       socket = null;
     };
