@@ -1,13 +1,13 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "b3690673a01ae89103a9097f45a8ba823121e45b",
+  "commit": "bdc40d858b50a430a2f598e2dadd71f174c3d09f",
   "date": "2026-11-16",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
   "documents": [
     {
       "source": "docs/tillr/design-status.md",
-      "blob": "7355efde108572c3c1c45c2d2529e338210daad9",
+      "blob": "617d2e3ef5fe31e2040470b944ebbebb0b369a88",
       "delivered": "docs/tillr/design-status.md"
     },
     {
@@ -16,13 +16,23 @@
       "delivered": "tillr-loop/README.md"
     },
     {
+      "source": "docs/design/tillr-core-and-git-landing.md",
+      "blob": "edfcdc66ee52acbfec717b7ba03d967014425a33",
+      "delivered": "docs/design/tillr-core-and-git-landing.md"
+    },
+    {
+      "source": "docs/design/tillr-intake-paths.md",
+      "blob": "9fb7abdf054ae4795d994899ee54a0149984f312",
+      "delivered": "docs/design/tillr-intake-paths.md"
+    },
+    {
       "source": "docs/design/tillr-separable-parts.md",
-      "blob": "6f74284d7a83e021003a7ef88c6269855cd5d7ff",
+      "blob": "d47e949640a83eb2fdd9008b5450dd995160e3e1",
       "delivered": "docs/design/tillr-separable-parts.md"
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "15636b5c8b51c893f4200257650c281f9ca2b43d",
+      "blob": "cc5c2e60855a1d0d3ed1d00e1a965007ce8b891d",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
@@ -72,12 +82,12 @@
     },
     {
       "source": "docs/design/tillr-idea-pipeline.md",
-      "blob": "d075c18e823c5a33448d70cf66f28ac19df567b6",
+      "blob": "d155d9fa26e662f1300b163a602daf88c07bacb8",
       "delivered": "docs/design/tillr-idea-pipeline.md"
     },
     {
       "source": "docs/design/tillr-designer-sessions.md",
-      "blob": "a8c7b6b8ec413ece393c58e01efc49ba0e1c4dd9",
+      "blob": "8528fef0f299ad6f41eb9c968c3d9f6691a6e45c",
       "delivered": "docs/design/tillr-designer-sessions.md"
     },
     {

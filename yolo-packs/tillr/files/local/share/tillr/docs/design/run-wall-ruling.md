@@ -19,7 +19,7 @@ depends-on:
 
 # Design ruling: remove the run wall and judge committed candidates before wall status
 
-> **Delivered copy.** This is `docs/design/run-wall-ruling.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/run-wall-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/run-wall-ruling.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/run-wall-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 > **Carried out** in commit `adc9b1269`: no adapter sets a run wall by default. This document stays as the record of the ruling.
 

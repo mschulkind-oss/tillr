@@ -15,7 +15,7 @@ vantage:
 
 # Repairing a frozen criterion
 
-> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `b3690673a0` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-10-21. Nothing built, and this doc proposes no patch. Symbols read in
 `work-control.ts` at `e7bdc147`; the pile
