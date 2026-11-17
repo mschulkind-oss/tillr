@@ -4,7 +4,9 @@
 Starts or adopts tillr-drain in this checkout, waits for exit, then restarts it.
 Short runs (under five minutes) wait 60s, 120s, 240s, ... up to 30 minutes.
 A run of at least five minutes resets the wait to 60s. --stop leaves the loop alive.
-Linux /proc supplies process names and identities; command lines are never searched.
+Linux /proc supplies process names and identities. A process named tillr-drain is the
+loop only when its arguments are the loop face for this checkout: argv is parsed, never
+searched for a substring, so a `tillr-drain why` or `plan` beside the loop is not adopted.
 """
 import argparse
 import fcntl
@@ -30,6 +32,36 @@ def process(pid):
         return None
 
 
+DRAIN_NAME = re.compile(r"tillr-drain(?:-[0-9a-f]+)?")
+
+
+def is_loop_face(pid, root):
+    """Whether pid's arguments are `tillr-drain loop` for root, read from /proc cmdline.
+
+    The program is the first argument whose base name is the drain's (argv[0] for the
+    binary, argv[1] when an interpreter runs a script of that name); the face is the next
+    argument. A --root, when given, must name this checkout; without one the loop's root
+    is its working directory, which find_loop has already matched.
+    """
+    raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+    argv = [arg.decode("utf-8", "replace") for arg in raw.split(b"\0")[:-1]]
+    for index, arg in enumerate(argv[:2]):
+        if DRAIN_NAME.fullmatch(os.path.basename(arg)):
+            rest = argv[index + 1:]
+            break
+    else:
+        return False
+    if rest[:1] != ["loop"]:
+        return False
+    named = None
+    for position, arg in enumerate(rest[1:], start=1):
+        if arg in ("--root", "-root") and position + 1 < len(rest):
+            named = rest[position + 1]
+        elif arg.startswith(("--root=", "-root=")):
+            named = arg.split("=", 1)[1]
+    return named is None or (root / named).resolve() == root.resolve()
+
+
 def find_loop(root):
     """Find this user's own-named drain in this checkout, not another repository."""
     found = []
@@ -44,7 +76,9 @@ def find_loop(root):
             # first 15 bytes of that executable name (three digest characters).
             if info is None or not re.fullmatch(r"tillr-drain(?:-[0-9a-f]{3})?", info[0]) or info[2] == "Z":
                 continue
-            if directory.joinpath("cwd").resolve(strict=True) == root.resolve():
+            if directory.joinpath("cwd").resolve(strict=True) != root.resolve():
+                continue
+            if is_loop_face(int(directory.name), root):
                 found.append(int(directory.name))
         except (FileNotFoundError, ProcessLookupError):
             continue
