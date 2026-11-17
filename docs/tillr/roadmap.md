@@ -1721,6 +1721,107 @@ built it. The three usage-recording fork items wait on this one.
 - **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
 - **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.
 
+## Filed 2026-11-17: follow-ups from the review of six drain fixes
+
+An independent review of six drain fixes on 2026-11-17 found that none of them blocked a restart,
+and that each left one gap that can only be closed by a further change. The four items below are
+those gaps. Each one says what happens today and what the review measured.
+
+### Stop the rolling checks when the loop stops
+
+When the loop is stopped during a rolling run, the loop kills the check program and expects its
+children to go with it. They do not. The rolling program, `tools/fork-check.py`, starts every
+check in a session of its own so that its own cancellation can reach it, and the loop's kill
+reaches only the program's process group. Each `go test` therefore keeps running, and the loop's
+cleanup then deletes the rolling worktree underneath it. That is what happened at 05:17 on
+2026-11-17, when an orphaned `go test -parallel 48` kept running for about two minutes after a
+stop. The fix that was meant to prevent it passes its test only because the test's child stays in
+the program's own group. Rolling is off in the loop that runs today, so this bites only once it is
+turned on.
+
+<!-- tillr: item id="item-loop-stop-ends-rolling-checks" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A loop stop during a rolling run ends every check the run started, including checks that `tools/fork-check.py` placed in their own session, before the loop removes the rolling worktree. A test starts a check whose child calls `setsid`, stops the run, and asserts that no process from that tree is alive afterward.
+- **c2:** `tools/fork-check.py` ends its running checks when it receives SIGTERM, and the loop sends SIGTERM to the program and waits briefly for it before it sends SIGKILL. A test sends SIGTERM to the program and asserts that its children are gone.
+- **c3:** The replay step that also runs checks in a scratch worktree ends its checks the same way. A test covers it with the same `setsid` child.
+- **c4:** The regression test for c1 fails when the SIGTERM step is removed.
+
+**Agent details:**
+
+- **Ref:** the review's finding M1-1, and the fix this one completes in `runCheckGroup`.
+- **Where:** `runCheckGroup` and `endProcessGroup` in `tools/tillr-drain/drain/steps.go`; `_run_cancellable`, `_kill_process_group` and `Cancellation.cancel` in `tools/fork-check.py`.
+- **Evidence:** 2026-11-17, `rg -n 'start_new_session' tools/fork-check.py` finds `_run_cancellable` starting each check in its own session, and `rg -n 'cmd.Cancel' tools/tillr-drain/drain/steps.go` finds the loop's kill aimed at `-cmd.Process.Pid`, one group. A copy of the shipped test whose child calls `os.setsid()` failed with "the rolling check's child ... outlived the stopped rolling run".
+
+### Show a moved patch branch to the owner before a push publishes it
+
+The drain no longer stops a run because `refs/heads/patch/<fork>` moved while it ran. That is
+deliberate: exporting a fork series is ordinary work, and stopping every other run for it was
+a fault of its own. But the run is now only told about the move, in one loop log line and in the
+run's `boundary.check` event, and nothing else reads either. A worker on an unrelated lane that
+moves a patch branch passes its fence and its gate, and the owner's next push then publishes the
+branch through the pre-push hook, after which the next launch builds pi from it. Nothing holds
+that move and nothing shows it on the waiting view. The owner should be shown it, and the push
+should wait for an answer.
+
+<!-- tillr: item id="item-patch-branch-move-held-visible" paths="tools/tillr-drain/,tools/tillr-view/,bin/patch-branches-publish,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A move of `refs/heads/patch/<fork>` that the run boundary observes and that is not the run's own delivery or a landing appears on `tillr view waiting` as a row that needs the owner, naming the fork, the run and the old and new commits. A test records such an observation and asserts the row appears.
+- **c2:** `bin/patch-branches-publish` refuses to publish a patch branch with an unacknowledged observed move, and its message names the fork and how to acknowledge. A test asserts the refusal and asserts a branch with no observation is still published.
+- **c3:** Acknowledging the observation clears the row and lets the push through, and the acknowledgement is recorded with who gave it and when. A test asserts both.
+- **c4:** A move that the lander marked, or that is the run's own delivery, raises no row and no refusal. A test asserts neither appears.
+
+**Agent details:**
+
+- **Ref:** the review's finding M2-3, and `item-drain-fork-lane-safety` c3 for who may move the branch.
+- **Where:** `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go`; the report at the `recorded, not attributed to the run` line in `tools/tillr-drain/drain/loop.go`; `tools/tillr-view/waiting.go`; `bin/patch-branches-publish`.
+- **Evidence:** 2026-11-17, `rg -n 'observed = append' tools/tillr-drain/drain/boundary.go` shows `compareRunRefs` feeding `observed`, not `violations`, and `rg -n 'patch/' tools/tillr-view/waiting.go` finds no waiting rule for an observation. Until this lands, before a push, check the loop log for `recorded, not attributed to the run` naming `refs/heads/patch/`.
+
+### Hold a lane out of rotation while its ended run's processes are alive
+
+When a run ends, the loop frees its lane for the next item. If processes that carry the run's
+markers are still alive, the loop prints a line and frees the lane anyway. That trades a lane
+leased forever for a quieter fault. `tillr-run exec` ends the worker's process group only when the
+run is cancelled, so after a normal exit the worker's background children survive: tool servers,
+helper runners and jobs the worker started with `&`. If one of them is writing in the lane's
+worktree, the next item is staged there and the stray's writes land in that item's candidate. The
+next item's fence and gate judge them, so the harm is a misattributed refusal and not a bad
+landing, but the owner gets no warning beyond one log line.
+
+<!-- tillr: item id="item-lane-release-waits-for-run-children" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A lane whose ended run still has a live process carrying its markers, with its working directory under the lane's directory, is not staged with a new item. It is released in the store but stays out of rotation, with the same event and waiting row a lane refusal has, until no such process is left. A test leaves a marker-carrying process in a lane and asserts that the lane is not offered, and is offered once the process exits.
+- **c2:** The waiting row names the process ids and how to end them. A test asserts the text.
+- **c3:** A marker carrier whose working directory is outside the lane does not hold the lane. A test asserts the lane is offered.
+- **c4:** A worker's background child is ended when its run exits normally, or the item records why that is not done. A test runs a worker that starts a `sleep` child, lets the run end, and asserts the child is gone or the lane is held.
+
+**Agent details:**
+
+- **Ref:** the review's finding M3-2, and the lane-rotation mechanism in `tools/tillr-drain/drain/lane_rotation.go`.
+- **Where:** `releaseExamination` and `processIsRunFace` in `tools/tillr-drain/drain/pass.go`; `cmd.Cancel` in `tools/tillr-run/run/exec.go`; the lane rows in `tools/tillr-view/waiting.go`.
+- **Evidence:** 2026-11-17, `rg -n 'released anyway' tools/tillr-drain/drain/pass.go` finds the loop releasing the lane with the strays left running, and `rg -n 'cmd.Cancel' tools/tillr-run/run/exec.go` finds the group kill only on cancellation.
+
+### Take a lane out of rotation when its branch is held at loop start
+
+A lane whose branch is checked out by a worktree elsewhere is taken out of rotation when an item is
+staged on it, and the loop carries on with the other lanes. At loop start the same condition is
+handled differently: the check that creates the lane worktrees returns the refusal as a fault, and
+the loop does not start. The owner widens the loop from five lanes to ten, an old worktree that
+still holds one of the new lanes' branches stops it, and the keeper restarts it into the same
+fault. The lane that is blocked should wait and the rest should run.
+
+<!-- tillr: item id="item-loop-start-holds-blocked-lane" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** At loop start, a lane whose branch another worktree holds is taken out of rotation with the existing `lane-branch-held` condition, and the loop starts with the other lanes. A test starts a loop with one such lane and asserts the loop runs and the lane is not offered.
+- **c2:** The held lane shows on `tillr view waiting` with the path of the worktree that holds the branch. A test asserts the row.
+- **c3:** When the holder is removed, the lane returns to rotation at the next re-check. A test asserts it.
+- **c4:** A start where every lane is held still refuses to run, with a message that names each holder. A test asserts it.
+
+**Agent details:**
+
+- **Ref:** the review's precaution 2, and `ReasonLaneBranchHeld` in `tools/tillr-drain/drain/lane_rotation.go`.
+- **Where:** `stageLanes` in `tools/tillr-drain/drain/loop.go`, and `refuseBranchHeld` and `branchHolder` it calls.
+- **Evidence:** 2026-11-17, `rg -n 'refuseBranchHeld' tools/tillr-drain/drain/loop.go` finds the refusal returned from `stageLanes`, and `rg -n 'stageLanes' tools/tillr-drain/drain/loop.go` finds the call at loop start returning its error.
+
 ## Filed 2026-11-17: the run record's spend, corrected before it is compared
 
 Principle: a routing decision is a comparison of what runs cost, so the record of what they cost
