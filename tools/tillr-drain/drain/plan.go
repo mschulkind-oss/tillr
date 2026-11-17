@@ -876,9 +876,15 @@ func (p *planner) retryFor(itemID string) *retry {
 	if !ok {
 		return nil
 	}
-	// A design answer supersedes the failed authorized attempt. Its consumed
-	// authorization must not mask the existing answered-conflict dispatch path.
+	// A pending build against a design answer takes precedence over any earlier
+	// retry. The retry may have been consumed before the run that raised the conflict,
+	// such as by the build whose conflict-fix run then needed a design ruling.
 	if c, ok := p.conflicts[itemID]; ok && (c.Status == "answered" || c.Status == "closed") {
+		if c.Status == "answered" {
+			return nil
+		}
+		// Closed means a build already consumed the answer; preserve the existing
+		// retirement of the authorization used by the conflict's raising run.
 		if d := p.inputDecisions[c.RunID]; d.Action == ActionRetry && d.RetryID == row.RetryID {
 			return nil
 		}

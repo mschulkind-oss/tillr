@@ -1172,11 +1172,7 @@ first item of the judge-and-lifecycle chain, held as `retry-stale` with its conf
 its answer landed, so five items behind it could not start. The planner should send an item whose
 conflict is answered to its build, whatever retry its earlier runs used.
 
-<!-- tillr: item id="item-drain-answered-conflict-beats-stale-retry" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** An item whose latest conflict is `answered` is dispatched to its build even when an operator's retry for one of its earlier runs was used by a run before the one that raised the conflict. A test stores a retry used by run a7, a conflict raised by a7's conflict-fix run and answered by a design run, and asserts the plan dispatches rather than holding `retry-stale`.
-- **c2:** A retry that names a run older than the latest, with no answered conflict after it, is still refused as `retry-stale`. A test asserts it.
-- **c3:** `tillr drain why` names the answered conflict as the reason the item moves, so an operator can see why the retry no longer matters.
 
 **Agent details:**
 
