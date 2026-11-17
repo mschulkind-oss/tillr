@@ -31,6 +31,8 @@ type Workflow struct {
 	Args           map[string]WorkflowArgument `json:"args,omitempty"`
 	Inputs         map[string]string           `json:"inputs,omitempty"`
 	ExpansionDepth int                         `json:"expansion_depth,omitempty"`
+	Revision       int                         `json:"revision,omitempty"`
+	Groups         map[string]WorkflowGroup    `json:"groups,omitempty"`
 }
 
 // WorkflowExit names the stages required to pass; omission requires every stage.
@@ -39,23 +41,31 @@ type WorkflowExit struct {
 	RequiresCandidate string                  `json:"requires_candidate,omitempty"`
 	Outputs           map[string]WorkflowPort `json:"outputs,omitempty"`
 }
+
+// WorkflowGroup retains the interface of an expanded stage for later replacements.
+type WorkflowGroup struct {
+	Stage   WorkflowStage           `json:"stage"`
+	Outputs map[string]WorkflowPort `json:"outputs"`
+}
+
 type WorkflowStage struct {
-	ID         string            `json:"id"`
-	Parent     string            `json:"parent,omitempty"`
-	Args       map[string]any    `json:"args,omitempty"`
-	Repeat     string            `json:"repeat,omitempty"`
-	Prompt     string            `json:"prompt,omitempty"`
-	WriteScope WorkflowScope     `json:"write_scope,omitempty"`
-	Workflow   string            `json:"workflow,omitempty"`
-	Kind       string            `json:"kind"`
-	Seat       string            `json:"seat"`
-	Access     string            `json:"access"`
-	CommandRef string            `json:"command_ref,omitempty"`
-	Flags      map[string]any    `json:"flags,omitempty"`
-	Command    []string          `json:"resolved_argv,omitempty"`
-	TimeoutMS  int               `json:"timeout_ms,omitempty"`
-	Inputs     map[string]string `json:"inputs,omitempty"`
-	Outputs    map[string]string `json:"outputs,omitempty"`
+	MayReplace map[string][]string `json:"may_replace,omitempty"`
+	ID         string              `json:"id"`
+	Parent     string              `json:"parent,omitempty"`
+	Args       map[string]any      `json:"args,omitempty"`
+	Repeat     string              `json:"repeat,omitempty"`
+	Prompt     string              `json:"prompt,omitempty"`
+	WriteScope WorkflowScope       `json:"write_scope,omitempty"`
+	Workflow   string              `json:"workflow,omitempty"`
+	Kind       string              `json:"kind"`
+	Seat       string              `json:"seat"`
+	Access     string              `json:"access"`
+	CommandRef string              `json:"command_ref,omitempty"`
+	Flags      map[string]any      `json:"flags,omitempty"`
+	Command    []string            `json:"resolved_argv,omitempty"`
+	TimeoutMS  int                 `json:"timeout_ms,omitempty"`
+	Inputs     map[string]string   `json:"inputs,omitempty"`
+	Outputs    map[string]string   `json:"outputs,omitempty"`
 }
 type WorkflowEdge struct {
 	From        string `json:"from_node"`
@@ -105,6 +115,25 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
 		}
 		ids[s.ID] = true
+		proposalCount := 0
+		for _, typ := range s.Outputs {
+			if typ == "graph.proposal" {
+				proposalCount++
+			}
+		}
+		if proposalCount > 1 {
+			return nil, fmt.Errorf("workflow-proposal: %s: at most one proposal output", s.ID)
+		}
+		for target, refs := range s.MayReplace {
+			if target == "" || len(refs) == 0 {
+				return nil, fmt.Errorf("workflow-proposal: %s: target and workflows required", s.ID)
+			}
+			for _, ref := range refs {
+				if !item.WorkflowRefValid(ref) {
+					return nil, fmt.Errorf("workflow-proposal: %s: invalid workflow %q", s.ID, ref)
+				}
+			}
+		}
 		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" {
 			return nil, fmt.Errorf("workflow-kind: %s: expected agent, command or workflow", s.ID)
 		}
@@ -198,6 +227,13 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		}
 	}
 	w.Stages = ordered
+	for _, stage := range w.Stages {
+		for target := range stage.MayReplace {
+			if !ids[target] || !proposalLater(&w, stage.ID, target) {
+				return nil, fmt.Errorf("workflow-proposal: %s: %s is not a later stage", stage.ID, target)
+			}
+		}
+	}
 	if err := validateWorkflowExit(&w); err != nil {
 		return nil, err
 	}
@@ -366,7 +402,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.Seat = stage.Seat
 	next.Action, next.Reason = ActionDispatch, "workflow-next-node"
 	next.From, next.To = "running", "running"
-	runID := attemptRunID(d.ItemID, d.Attempt) + "-n" + strconv.Itoa(next.NodeIndex+1)
+	runID := workflowNodeRunID(next, next.NodeIndex)
 	if stage.Kind == "command" {
 		next.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, runID)
 	} else {
@@ -535,7 +571,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		return true, l.markExamined(ctx, d)
 	}
-	if err := l.acceptNodeOutputs(ctx, d, artifacts); err != nil {
+	if err := l.acceptNodeSettlement(ctx, &d, artifacts); err != nil {
 		return true, err
 	}
 	next, err := l.nextWorkflowNode(ctx, d)

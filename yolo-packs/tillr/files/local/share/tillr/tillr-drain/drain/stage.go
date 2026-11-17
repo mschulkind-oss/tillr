@@ -479,6 +479,13 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		brief += "Write declared outputs only in your output directory: " + dir + ". These files are outside the target and are not part of the candidate.\n"
 		for _, name := range sortedNames(spec.Node.Outputs) {
 			brief += "Output " + name + " (" + spec.Node.Outputs[name] + "): " + filepath.Join(dir, name) + "\n"
+			if spec.Node.Outputs[name] == "graph.proposal" {
+				allowed, err := json.Marshal(spec.Node.MayReplace)
+				if err != nil {
+					return err
+				}
+				brief += "This output is optional. To request replacement, write one JSON object with target, workflow, and args. Allowed target/workflow pairs: " + string(allowed) + ". No file means no graph change. A refused proposal leaves the graph unchanged.\n"
+			}
 		}
 		for _, name := range sortedNames(spec.InputPaths) {
 			brief += "Input " + name + ": " + spec.InputPaths[name] + "\n"

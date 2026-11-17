@@ -24,6 +24,10 @@ export function foldedDecisions(decisions: DispatchView[]) {
 }
 export function ItemTimeline({ item }: { item: ItemData }) {
   const history: { at: number; key: string; body: ReactNode }[] = [
+    ...(item.graph_revisions ?? []).map(revision => ({ at: revision.recorded_at_ms, key: `graph-${revision.revision_id}`, body: <>
+      {revision.rule ? `Graph proposal refused by ${revision.rule}: ${revision.detail}` : `Graph changed by ${revision.proposing_node}: ${revision.before_nodes} → ${revision.after_nodes} nodes`}
+      {" · target "}{revision.target}{" · workflow "}{revision.workflow}{" · proposing run "}<EntityLink kind="run" id={revision.proposing_run} />
+    </> })),
     ...item.runs.map(run => ({ at: run.started_at_ms, key: `run-${run.run_id}`, body: <>
       Run <EntityLink kind="run" id={run.run_id} /> · {run.backend} · {run.end_cause ?? "end cause not recorded"} · {run.state} · exit {run.exit_code ?? "not recorded"}
       {" · finish "}{run.finished_at_ms ? new Date(run.finished_at_ms).toISOString() : "not recorded"}

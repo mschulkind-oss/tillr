@@ -1158,6 +1158,7 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
+	GraphRevisions []graphRevisionView `json:"graph_revisions"`
 	Usage          usageSum            `json:"usage"`
 	Comments       *commentItemView    `json:"comments,omitempty"`
 	Item           itemDetail          `json:"item"`
@@ -1290,6 +1291,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	out.OwnerDecisions, err = readOwnerDecisions(r, id)
 	if err != nil {
 		return nil, unreadable(err)
+	}
+	out.GraphRevisions, err = readGraphRevisions(r, id)
+	if err != nil {
+		return nil, failure(codeStoreUnreadable, "graph revisions could not read the store: %v", err)
 	}
 	out.StateMoves, err = readStateMoves(r, id)
 	if err != nil {

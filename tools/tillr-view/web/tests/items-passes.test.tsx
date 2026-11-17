@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { foldPasses, ItemsView, PassesView } from "../src/components/ItemsPasses";
+import { Home } from "../src/components/Home";
 import type { PassRow, WaitingRow } from "../src/models/types";
 import { snapshotData } from "./fixtures";
 
@@ -11,6 +12,13 @@ const rows: WaitingRow[] = [
 ];
 const pass = (ms: number, reason = "blocked"): PassRow => ({ dispatched_at_ms: ms, decisions: [{ item_id: "item-a", rank: "a", action: "hold", reason }] });
 function route(hash: string) { window.history.replaceState(null, "", `/${hash}`); }
+
+test.each(["items", "home"])("%s waiting table reports who changed the graph and node counts", (face) => {
+  route("#/items?state=unlanded");
+  const waiting = [{ ...rows[0], graph_changes: ["graph changed by open (plan-run): 4 → 5 nodes"] }];
+  render(face === "items" ? <ItemsView waiting={waiting} snapshot={snapshotData} /> : <Home waiting={waiting} snapshot={snapshotData} />);
+  expect(screen.getByText("graph changed by open (plan-run): 4 → 5 nodes")).toBeTruthy();
+});
 
 test("Pass filters say what they do and offer only recorded actions", () => {
   route("#/passes?range=all");

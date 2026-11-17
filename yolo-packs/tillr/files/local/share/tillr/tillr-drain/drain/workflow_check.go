@@ -24,7 +24,7 @@ workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
 workflow-exit, workflow-file, workflow-output-promise, workflow-write-scope,
 workflow-argument-missing, workflow-argument-type, workflow-argument-most,
-workflow-argument-unknown, workflow-repeat; command-registry, command-reference, command-flag,
+workflow-argument-unknown, workflow-repeat, workflow-proposal; command-registry, command-reference, command-flag,
 command-value, command-path. Graph size is reported, never refused.`
 
 // workflowFields checks each object independently so every unsupported field has
@@ -57,7 +57,7 @@ func workflowFields(raw []byte) []error {
 			stage := "graph"
 			if field == "stages" {
 				json.Unmarshal(obj["id"], &stage)
-				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs args repeat prompt write_scope", "stage="+stage)
+				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs args repeat prompt write_scope may_replace", "stage="+stage)
 			} else {
 				json.Unmarshal(obj["to_node"], &stage)
 				check(obj, "from_node to_node when_outcome from_output to_input", "stage="+stage)
@@ -122,6 +122,7 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 	}
 	w.SHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
 	w.Sources = map[string]string{ref: w.SHA256}
+	w.Groups = map[string]WorkflowGroup{}
 	entries, exits := map[string][]string{}, map[string][]string{}
 	composed := map[string]bool{}
 	inputPorts := map[string]map[string][]string{}
@@ -194,7 +195,18 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 				port.Node = stage.ID + "/" + port.Node
 				outputPorts[stage.ID][name] = port
 			}
+			w.Groups[stage.ID] = WorkflowGroup{Stage: stage, Outputs: outputPorts[stage.ID]}
 			prefix := stage.ID + "/"
+			for id, group := range inner.Groups {
+				group.Stage.ID = prefix + group.Stage.ID
+				ports := map[string]WorkflowPort{}
+				for name, port := range group.Outputs {
+					port.Node = prefix + port.Node
+					ports[name] = port
+				}
+				group.Outputs = ports
+				w.Groups[prefix+id] = group
+			}
 			incoming := map[string]bool{}
 			for _, edge := range inner.Edges {
 				incoming[edge.To] = true
@@ -217,6 +229,13 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 					node.Parent = prefix + node.Parent
 				}
 				node.ID = prefix + node.ID
+				if len(node.MayReplace) > 0 {
+					allowed := map[string][]string{}
+					for target, refs := range node.MayReplace {
+						allowed[prefix+target] = refs
+					}
+					node.MayReplace = allowed
+				}
 				stages = append(stages, node)
 			}
 			for _, id := range requiredWorkflowNodes(inner) {

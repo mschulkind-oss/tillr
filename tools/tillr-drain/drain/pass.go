@@ -38,7 +38,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, candidateGatedKind} {
+	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -91,7 +91,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			continue
 		}
 		switch e.Kind {
-		case dispatchStartedKind, nodeAdvancedKind:
+		case dispatchStartedKind, nodeAdvancedKind, graphChangedKind:
 			var work pendingWork
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
 				return nil, nil, err
