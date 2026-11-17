@@ -64,7 +64,13 @@ An external caller points these at a store snapshot and reads the same JSON the 
 `status` answers where the board stands now, `events` answers what happened in order,
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
 round decided, `lanes` lists every configured lane and its current or last run, and
-`running` answers what is in flight.
+`running` answers what is in flight. Store `status` includes `unshared_open` by
+comparing that store snapshot with the tracked documents under its root, using the
+same declaration grammar and comparison as item sync. It does not import the item
+writer or register its migrations. A record stream instead reports its latest
+supplied sync observation, or null when it carries none. For an undeclared request, waiting output names
+triage on the design seat while it is due or running, then the owner with the full
+conflict report. See the [document-fed workflow prerequisite](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#document-fed-workflow-prerequisite).
 
 ### Conflict transitions in the event list
 

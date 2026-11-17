@@ -12,10 +12,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/docshare"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -62,9 +62,7 @@ func init() {
 	}
 }
 
-var commentItemID = regexp.MustCompile(`^item-comments-[A-Za-z0-9._-]+-[1-9][0-9]*$`)
-
-func IsCommentItem(id string) bool { return commentItemID.MatchString(id) }
+func IsCommentItem(id string) bool { return docshare.IsCommentItem(id) }
 
 type reviewReaction struct {
 	Actor        string  `json:"actor"`

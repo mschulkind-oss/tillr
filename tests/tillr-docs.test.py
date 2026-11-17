@@ -697,6 +697,21 @@ def case_run_environment_documented():
     ok("run README lists every child environment variable once in one fence, with conditions")
 
 
+def case_document_fed_prerequisite_documented():
+    drain = (ROOT / "tools/tillr-drain/README.md").read_text()
+    skill = SKILL.read_text()
+    heading = "## Document-fed workflow prerequisite"
+    if heading not in drain:
+        fail("the drain must name the document-fed workflow prerequisite separately")
+    section = drain.split(heading, 1)[1].split("\n## ", 1)[0]
+    for phrase in ("before it is built", "triage-no-block", "question-open",
+                   "conflict-owner", "at most one run", "title, body reference, and criteria"):
+        if phrase not in section:
+            fail(f"the document-fed prerequisite omits {phrase!r}")
+    if "#document-fed-workflow-prerequisite" not in skill:
+        fail("the operating skill must route the reader to the drain prerequisite")
+
+
 def main():
     case_run_environment_documented()
     case_cache_safe_working_loop_documented()
@@ -707,6 +722,7 @@ def main():
     )
     if cleanup_tests.returncode:
         fail("the TestMain scratch cleanup regression tests failed")
+    case_document_fed_prerequisite_documented()
     case_designer_session_selection_documented()
     case_comment_intake_documented()
     case_recovery()

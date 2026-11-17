@@ -295,6 +295,28 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	if err != nil {
 		return nil, err
 	}
+	// A triage continuation remains a one-document run. The ordinary item's
+	// build fence must not broaden the design run's original authority.
+	r, err := store.OpenRead(ctx, cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	err = r.ReadTx(ctx, func(reader *store.Reader) error {
+		_, works, err := readPendingHistory(reader)
+		if err != nil {
+			return err
+		}
+		if work := works[runID]; work != nil && work.Decision.ItemID == row.ItemID {
+			if c := work.Decision.BlockConflict; c != nil && c.TriageVersion != "" {
+				recorded.AllowedPaths = []string{triageDocument(c.BodyRef)}
+			}
+		}
+		return nil
+	})
+	r.Close()
+	if err != nil {
+		return nil, err
+	}
 	if len(recorded.AllowedPaths) == 0 {
 		return nil, Externalf("item %s names no allowed_paths: a resume refuses to continue under a fence that admits nothing", recorded.ItemID)
 	}

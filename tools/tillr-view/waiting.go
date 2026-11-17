@@ -51,6 +51,7 @@ var waitingRules = map[string]waitingRule{
 	"backend-window":                 {"waits on work", "backend", "the reset time"},
 	"lane-holds-unlanded-change":     {"needs you", "lane", "land the change, or reset the lane deliberately"},
 	"lane-branch-held":               {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
+	"triage-no-block":                {"waits on work", "queue", "triage on the design seat"},
 	"conflict-design":                {"waits on work", "queue", "design"},
 	"design-under-comment":           {"waits on work", "queue", "the comment item"},
 	"conflict-owner":                 {"needs you", "queue", "owner"},
@@ -344,6 +345,10 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				answer := readQuestions(questions, item.DesignDoc)
 				if answer.State == questionsOK && len(answer.Questions) > 0 {
 					row.Mover = answer.Questions[0].QuestionID
+					if c := conflicts[item.ItemID]; c.TriageVersion != "" {
+						row.Mover = "owner; answer " + row.Mover
+						row.Why += ": " + answer.Questions[0].Text
+					}
 				} else if answer.State != "" && answer.State != questionsOK {
 					row.Mover = answer.State
 				}
@@ -380,7 +385,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				row.Class = "needs you"
 			}
 		}
-		if item.State == "blocked" && item.Waiter != "" {
+		if c := conflicts[item.ItemID]; item.State == "blocked" && item.Waiter != "" && c.TriageVersion == "" {
 			row.Class, row.Mover, row.Why = "waits on work", item.Waiter, item.WaitingReason
 			if strings.TrimSpace(row.Why) == "" {
 				row.Why = "waiting reason not recorded"
@@ -428,6 +433,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		}
 		if active != nil {
 			row.Class, row.Where, row.Mover = "moving", "lane", active.RunID
+			if c := conflicts[item.ItemID]; c.TriageVersion != "" && c.WaitingOn == "design" {
+				row.Mover = "triage on the design seat; " + active.RunID
+			}
 		}
 		if stopped && (!found || last.DispatchedMS < stoppedAt) {
 			row.Class, row.Where = "waits on the loop", "lane"

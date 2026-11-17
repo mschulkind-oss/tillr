@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
@@ -29,6 +30,9 @@ type statusPayload struct {
 	Snapshot    snapshot           `json:"snapshot"`
 	Subject     *record.Subject    `json:"subject,omitempty"`
 	Found       *bool              `json:"found,omitempty"`
+	// UnsharedOpen compares the store snapshot to documents under --root.
+	// Record streams instead carry their latest sync observation, when supplied.
+	UnsharedOpen *int `json:"unshared_open"`
 	// Item is the subject's item.record payload, or null when the stream carries none.
 	Item *itemRecord `json:"item"`
 	// Items are every item the source holds, ordered by item_id for a store and by first
@@ -117,6 +121,20 @@ func gateSummaryOf(ticks []storeTick) *gateSummary {
 // from the subject the caller named, or from a record in the stream.
 func assemble(v view, subject *record.Subject, source vantage.QuestionSource) (statusPayload, int) {
 	p := statusPayload{GeneratedAt: time.Now().UTC(), Snapshot: v.snapshot}
+	for _, e := range v.records {
+		if e.Kind == "item.sync" {
+			var observed struct {
+				Count *int `json:"unshared_open"`
+			}
+			if err := json.Unmarshal(e.Payload, &observed); err != nil {
+				return statusPayload{}, usagef("reading item.sync: %v", err)
+			}
+			p.UnsharedOpen = observed.Count
+		}
+	}
+	if v.unsharedOpen != nil {
+		p.UnsharedOpen = v.unsharedOpen
+	}
 	if subject == nil {
 		// No subject named is a report about the board, not an empty report: the same
 		// source the snapshot was read from holds the items, candidates and runs, and a

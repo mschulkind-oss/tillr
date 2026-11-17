@@ -22,6 +22,7 @@ type waitingConflict struct {
 	Status          string               `json:"status"`
 	DesignRunID     string               `json:"design_run_id"`
 	AnswerHead      string               `json:"answer_head"`
+	TriageVersion   string               `json:"triage_version"`
 	Since           int64                `json:"-"`
 	History         []conflictTransition `json:"-"`
 }

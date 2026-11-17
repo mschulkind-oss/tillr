@@ -1363,6 +1363,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 			c := *decision.BlockConflict
 			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+			if c.TriageVersion != "" {
+				c.Status, c.WaitingOn, c.DesignRunID = "owner", "owner", record.RunID
+			}
 			c.Text += "\n\nDesign run " + record.RunID + " refused by backend quota on " + record.Backend
 			if err := l.saveBlockConflict(ctx, c); err != nil {
 				return laneOutcome{err: err}
@@ -1447,7 +1450,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// A run that answers `blocked` is the model's own statement that the item cannot be
 	// done as written: a spec conflict, not a failing candidate. The item is blocked for a
 	// person to decide, its criteria are left as they were, and nothing is judged.
-	if footer := reportFooter(log); request.Backend != "command" && footer == "blocked" {
+	if footer := reportFooter(log); (request.Backend != "command" && footer == "blocked") || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) {
 		l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
 		if err := l.reportedBlock(ctx, decision, log); err != nil {
 			return laneOutcome{err: err}
@@ -1546,6 +1549,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			return laneOutcome{err: err}
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "ended without a candidate commit")}
+	}
+	if decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" {
+		c := *decision.BlockConflict
+		c.DesignRunID = request.RunID
+		c.Text += "\n\nTriage run " + request.RunID + ":\n" + strings.TrimSpace(log)
+		decision.BlockConflict = &c
 	}
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
@@ -1756,6 +1765,19 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		return "", false, nil
+	}
+	if candidate.BlockConflict != nil && candidate.BlockConflict.TriageVersion != "" {
+		detail, err := l.validateTriage(ctx, candidate)
+		if err != nil {
+			return "", false, err
+		}
+		if detail != "" {
+			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+			c := *candidate.BlockConflict
+			c.Status, c.WaitingOn = "owner", "owner"
+			c.Text += "\nTriage run " + candidate.RunID + ": " + detail
+			return "", false, l.saveBlockConflict(ctx, c)
+		}
 	}
 	if candidate.BlockConflict != nil {
 		file, _, _ := strings.Cut(ref, "#")

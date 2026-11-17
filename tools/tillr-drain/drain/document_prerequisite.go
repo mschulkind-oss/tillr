@@ -1,0 +1,196 @@
+package drain
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path"
+	"strings"
+
+	"github.com/mschulkind-oss/tillr-item/docshare"
+	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+// ReasonTriageNoBlock is a prerequisite of the document-fed Git landing workflow,
+// not of the queue: an undeclared request must be shaped before it can be built.
+const ReasonTriageNoBlock = "triage-no-block"
+
+func documentPrerequisites(r *store.Reader, root string) (map[string]bool, error) {
+	missing := map[string]bool{}
+	if root == "" {
+		return missing, nil
+	}
+	docs, err := docshare.ReadQueue(root)
+	if err != nil {
+		return nil, err
+	}
+	report, err := item.Sync(context.Background(), r, nil, item.SyncInput{Root: root, Documents: docs})
+	if err != nil {
+		return nil, err
+	}
+	if report.DocumentFed {
+		for _, id := range report.UnsharedOpenIDs {
+			missing[id] = true
+		}
+	}
+	return missing, nil
+}
+
+// requestVersion reads only the request's three fields, never its execution state.
+// The criteria order is stable; neither a rank edit nor a disposition grants a run.
+func requestVersion(r *store.Reader, id string) (string, string, error) {
+	var title, ref string
+	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id=?`, id).Scan(&title, &ref); err != nil {
+		return "", "", err
+	}
+	rows, err := r.Query(`SELECT criterion_id, text FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, id)
+	if err != nil {
+		return "", "", err
+	}
+	defer rows.Close()
+	criteria := [][2]string{}
+	for rows.Next() {
+		var c [2]string
+		if err := rows.Scan(&c[0], &c[1]); err != nil {
+			return "", "", err
+		}
+		criteria = append(criteria, c)
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", err
+	}
+	raw, err := json.Marshal([]any{title, ref, criteria})
+	if err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), ref, nil
+}
+
+func triageDocument(ref string) string {
+	file, _, _ := strings.Cut(ref, "#")
+	clean := path.Clean(file)
+	if file == "" || strings.Contains(file, "\\") || path.IsAbs(file) || clean == ".." || strings.HasPrefix(clean, "../") || !strings.HasPrefix(clean, "docs/") || !strings.HasSuffix(clean, ".md") {
+		return ""
+	}
+	return clean
+}
+
+func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error) {
+	version, ref, err := requestVersion(r, row.ItemID)
+	if err != nil {
+		return Decision{}, err
+	}
+	c := item.Conflict{ConflictID: "triage-" + row.ItemID + "-" + version, ItemID: row.ItemID, BodyRef: ref, Text: "Request has no document block; triage must declare it before it is built.", Status: "raised", WaitingOn: "design", BlockedCriteria: []string{}, TriageVersion: version}
+	// Look through history, not just the latest conflict: changing A to B and back
+	// to A must not spend a second run for the same request version.
+	var raw []byte
+	err = r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.triage_version')=? ORDER BY seq DESC LIMIT 1`, row.ItemID, version).Scan(&raw)
+	if err == nil {
+		if err = json.Unmarshal(raw, &c); err != nil {
+			return Decision{}, err
+		}
+		if c.DesignRunID != "" {
+			c.Status, c.WaitingOn = "owner", "owner"
+			if !strings.Contains(c.Text, "still has no document block") {
+				c.Text += "\nRequest still has no document block after triage; the owner must close it or answer the conflict."
+			}
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Decision{}, err
+	}
+	if triageDocument(ref) == "" {
+		c.Status, c.WaitingOn = "owner", "owner"
+		c.Text = "Request has no repository-relative Markdown document under docs/ in its body reference; sync reads only that document scope. The owner must supply one or close the item."
+	}
+	d := p.conflictDecision(row, c)
+	d.BlockConflict = &c
+	if c.WaitingOn == "design" {
+		if d.Action == ActionDispatch || d.Reason == ReasonConflictDesign {
+			d.Reason = ReasonTriageNoBlock
+		}
+		if d.RunRequest != nil {
+			c.RunID = d.RunRequest.RunID
+			d.BlockConflict = &c
+		}
+	}
+	identifyDecision(&d)
+	return d, nil
+}
+
+func triageTask(recorded stagedItem) string {
+	return fmt.Sprintf(`Triage this stored request; do not build it yet.
+
+Title: %s
+Body reference: %s
+Stored seat: %s; workflow: %s. Preserve this routing in the block unless shaping the request requires a different next step.
+The criteria below are the stored request, not acceptance of its wording.
+
+Produce exactly one of these three results:
+1. Write a ready item block for %s in the referenced document. Keep the same id; you may tidy the wording and shape rough text into designable work in this run. Commit it for landing through the gate like any design change.
+2. If the request is too thin to shape, declare that same item and write a numbered question to the owner in the same document, saying exactly what is missing. It will wait on question-open after landing.
+3. Report that this request duplicates a named item or is already done, explaining the evidence. Commit nothing for this result; the report goes to an owner conflict.
+
+Follow the prose guide at .agents/skills/tillr-prose-style/SKILL.md. Its ready-item shape requires an imperative heading of at most twelve words, a paragraph explaining why before the directive, valid allowed paths, item-id dependencies, one to eight nonempty criteria, and the current prose="2" mark. Read the guide before writing. The loop refuses every sync finding or warning on your block, including prose-unmarked and prose-shape. Do not implement the original request.`, recorded.Title, recorded.BodyRef, recorded.Seat, recorded.Workflow, recorded.ItemID)
+}
+
+// validateTriage reads the pinned candidate's tracked documents rather than the
+// mutable lane tree. Use the same sync parser, including cross-document checks.
+func (l *Loop) validateTriage(ctx context.Context, c Candidate) (string, error) {
+	names, err := l.git(ctx, c.Worktree, "ls-tree", "-r", "-z", "--name-only", c.HeadSHA, "--", "docs")
+	if err != nil {
+		return "", err
+	}
+	docs := []item.SyncDocument{}
+	file := triageDocument(c.BlockConflict.BodyRef)
+	seen := false
+	for _, name := range strings.Split(names, "\x00") {
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		raw, err := l.git(ctx, c.Worktree, "show", c.HeadSHA+":"+name)
+		if err != nil {
+			return "", err
+		}
+		docs = append(docs, item.SyncDocument{Path: name, Content: []byte(raw)})
+		if name == file {
+			seen = item.DefinitionBlockExists(name, c.ItemID, []byte(raw))
+		}
+	}
+	if !seen {
+		return "triage-no-block: candidate does not declare the requested item in " + file, nil
+	}
+	r, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	detail := ""
+	err = r.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec("SAVEPOINT triage_admission"); err != nil {
+			return err
+		}
+		// Run the real writer validation, including dependency cycles, then roll
+		// every materialized row and event back before leaving this transaction.
+		report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: c.Worktree, Documents: docs, At: l.cfg.Now().UTC()})
+		if err != nil {
+			return err
+		}
+		for kind, notes := range [][]item.SyncNote{report.Findings, report.Warnings, report.Frozen} {
+			for _, n := range notes {
+				if n.ItemID == c.ItemID || (n.File == file && (n.ItemID == "" || kind != 1)) {
+					detail += n.Rule + ": " + n.Message + "\n"
+				}
+			}
+		}
+		if _, err := tx.Exec("ROLLBACK TO SAVEPOINT triage_admission"); err != nil {
+			return err
+		}
+		_, err = tx.Exec("RELEASE SAVEPOINT triage_admission")
+		return err
+	})
+	return strings.TrimSpace(detail), err
+}

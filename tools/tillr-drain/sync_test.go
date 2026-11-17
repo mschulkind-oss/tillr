@@ -102,10 +102,11 @@ func TestASyncFindingDoesNotStopTheLoop(t *testing.T) {
 func TestSyncFindingHoldsTheStaleDefinitionWhileAnotherItemLands(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item-bad", "in-queue"), itemRecord("item-good", "in-queue"))
+	commitDocument(t, f, "docs/good.md", "### Add independent work\n\nThe sibling remains dispatchable.\n\n<!-- tillr: item id=\"item-good\" paths=\"candidate.txt\" -->\n- **c1:** The candidate exists.\n")
 	commitDocument(t, f, "docs/bad.md", "### Bad\n<!-- tillr: item id=\"item-bad\" paths=\"candidate.txt\" rank=\"a\" -->\n- **c1:** x\n")
 	var report bytes.Buffer
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
-	result, err := syncLoop(t, f, steps, &report, "docs/bad.md").Run(context.Background())
+	result, err := syncLoop(t, f, steps, &report, "docs/bad.md", "docs/good.md").Run(context.Background())
 	if err != nil || result.Stop != drain.StopQueueDrained || result.Landed != 1 {
 		t.Fatalf("finding stopped sibling: %+v / %v; %s", result, err, &report)
 	}
@@ -121,6 +122,7 @@ func TestSyncFindingHoldsTheStaleDefinitionWhileAnotherItemLands(t *testing.T) {
 func TestSkippedSyncFileHoldsEveryStoredDefinitionInIt(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item-independent", "in-queue"))
+	commitDocument(t, f, "docs/independent.md", "### Add independent work\n\nThe sibling remains dispatchable.\n\n<!-- tillr: item id=\"item-independent\" paths=\"candidate.txt\" -->\n- **c1:** The candidate exists.\n")
 	good := "### A\n<!-- tillr: item id=\"item-a\" paths=\"candidate.txt\" -->\n- **c1:** old A\n\n### B\n<!-- tillr: item id=\"item-b\" paths=\"candidate.txt\" -->\n- **c1:** old B\n"
 	commitDocument(t, f, "docs/definitions.md", good)
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
@@ -130,7 +132,7 @@ func TestSkippedSyncFileHoldsEveryStoredDefinitionInIt(t *testing.T) {
 	bad := strings.Replace(strings.Replace(good, "id=\"item-a\"", "id=\"item-a\" rank=\"bad\"", 1), "old B", "new B", 1)
 	commitDocument(t, f, "docs/definitions.md", bad)
 	var report bytes.Buffer
-	result, err := syncLoop(t, f, steps, &report, "docs/definitions.md").Run(context.Background())
+	result, err := syncLoop(t, f, steps, &report, "docs/definitions.md", "docs/independent.md").Run(context.Background())
 	if err != nil || result.Landed != 1 {
 		t.Fatalf("skipped-file definitions escaped: %+v / %v; %s", result, err, &report)
 	}

@@ -116,7 +116,10 @@ name what is not there rather than guessing, and write nothing. `sync --dry-run`
 for the documents: it prints what a sync would create, update and refuse, with the two
 residue counters — `unshared_open`, the open store items no block declares, and
 `stale_doc_blocks`, the blocks whose item this store already holds as `landed` — and writes
-nothing.
+nothing. The sync report also carries `document_fed`: true when at least one
+stored item, in any state, has a document block. The drain uses this same comparison
+for its [document-fed workflow prerequisite](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#document-fed-workflow-prerequisite);
+sync itself neither dispatches triage nor changes the queue’s readiness rules.
 
 ## Listing a store's items
 

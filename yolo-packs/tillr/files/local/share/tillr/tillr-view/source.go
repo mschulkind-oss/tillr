@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/docshare"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -56,10 +57,11 @@ type eventRecord struct {
 // holds, and, in records mode, the records themselves. Both faces assemble from a
 // view, so the store path and the records path cannot drift.
 type view struct {
-	snapshot  snapshot
-	events    []eventRecord
-	conflicts []conflictHistory
-	records   []record.Envelope
+	unsharedOpen *int
+	snapshot     snapshot
+	events       []eventRecord
+	conflicts    []conflictHistory
+	records      []record.Envelope
 	// domain is the store's own rows, present when the source is a store: it is what
 	// `status --store` assembles from, so the report's components are store rows rather
 	// than null (VIEW-2).
@@ -71,6 +73,18 @@ type view struct {
 // asked to describe would answer a different question, and §5.8 requires it to be safe
 // to point at the live store while writers run.
 func openStore(ctx context.Context, path string, since int64) (view, error) {
+	return openStoreWithDocuments(ctx, path, since, nil)
+}
+
+func openStoreWithDocuments(ctx context.Context, path string, since int64, root *string) (view, error) {
+	var docs []docshare.Document
+	if root != nil {
+		var err error
+		docs, err = docshare.ReadQueue(*root)
+		if err != nil {
+			return view{}, err
+		}
+	}
 	s, err := store.OpenRead(ctx, path)
 	if err != nil {
 		return view{}, err
@@ -101,6 +115,15 @@ func openStore(ctx context.Context, path string, since int64) (view, error) {
 		v.snapshot = snapshot{SchemaVersion: version, EventHeadSeq: head, Source: sourceStore}
 		v.events = eventRecords(events)
 		v.domain = domain
+		if root != nil {
+			states := make(map[string]string, len(domain.items))
+			for _, it := range domain.items {
+				states[it.ItemID] = it.State
+			}
+			_, missing := docshare.Sharing(docs, states)
+			count := len(missing)
+			v.unsharedOpen = &count
+		}
 		groups, err := readConflictHistories(r)
 		if err != nil {
 			return err

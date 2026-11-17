@@ -112,6 +112,7 @@ func statusFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, code
 	}
 
+	src.documentRoot = root
 	v, refusal, code := openSource(context.Background(), src, "view.status")
 	if code != record.ExitOK {
 		return refusal, code
@@ -202,9 +203,10 @@ func commandFields(line string) []string { return strings.Fields(line) }
 // sourceFlags are the two ways a face is given its input, plus the cursor both faces
 // read from. Exactly one source is required.
 type sourceFlags struct {
-	store   *string
-	records *string
-	since   *int64
+	documentRoot *string
+	store        *string
+	records      *string
+	since        *int64
 }
 
 func newSourceFlags(fs *flag.FlagSet) sourceFlags {
@@ -225,7 +227,7 @@ func (f sourceFlags) open(ctx context.Context) (view, error) {
 	case !hasStore && !hasRecords:
 		return view{}, usageErrorf("a source is required: --store <path> or --records <file>")
 	case hasStore:
-		return openStore(ctx, *f.store, *f.since)
+		return openStoreWithDocuments(ctx, *f.store, *f.since, f.documentRoot)
 	default:
 		return openRecords(*f.records, *f.since)
 	}
