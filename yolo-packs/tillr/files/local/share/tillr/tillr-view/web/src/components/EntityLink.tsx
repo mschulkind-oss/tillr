@@ -5,7 +5,7 @@ export const ENTITY_KINDS = ["item", "run", "pass", "lane", "check", "landing", 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
 /** The shared entity URL and visual treatment, including references not yet in the store. */
-export function EntityLink({ kind, id, title, state = "unclassified", children, overBudget, query }: {
+export function EntityLink({ kind, id, title, state = "not known", children, overBudget, query }: {
   kind: EntityKind; id: string; title?: string; state?: string; children?: ReactNode; overBudget?: boolean; query?: Record<string, string>;
 }) {
   return <a className="entity-link" data-entity-kind={kind} data-entity-id={id} data-over-budget={overBudget}
@@ -15,8 +15,8 @@ export function EntityLink({ kind, id, title, state = "unclassified", children, 
 }
 
 export function ClassState({ value }: { value: string }) {
-  const known = ["moving", "ready", "needs you", "waits on work", "needs a cause", "landed", "pass", "closed", "skipped", "stopped", "not known", "unclassified"].includes(value);
-  return <span className="class-state" data-class={known ? value : "unclassified"}>
-    <StateGlyph state={known ? value : "unclassified"} />{value}
+  const known = ["moving", "ready", "needs you", "waits on work", "needs a cause", "landed", "pass", "closed", "skipped", "stopped", "not known", "waits on the loop"].includes(value);
+  return <span className="class-state" data-class={known ? value : "not known"}>
+    <StateGlyph state={known ? value : "not known"} />{value}
   </span>;
 }

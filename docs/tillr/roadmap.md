@@ -746,7 +746,6 @@ one resumed session end to end.
 
 ### Give every held item a class and a reason
 
-<!-- tillr: item id="item-view-no-unclassified" paths="tools/tillr-view/,tools/tillr-drain/,yolo-packs/tillr/,docs/" -->
 
 **Ruling, 2026-11-17 (answers the second run's conflict):** the waiting face is two faces, and
 the criteria below did not say which one they meant. The default face, which is what the
@@ -772,10 +771,6 @@ in the same millisecond as a stop was hidden behind the stop's label. Decisions 
 millisecond time and no sequence number, so a tie cannot be ordered by time; the rule below orders
 it by which run the decision belongs to.
 
-- **c1:** No row of either waiting face is `unclassified`, has an empty reason, or has a dash for its mover. On 2026-11-15 six items whose runs had been killed and four items no pass had looked at yet showed all three. A test builds a store holding every hold the drain can record and asserts that the history face maps each one to a class, a reason and a mover. The observatory no longer lists `unclassified` among its classes and lists `waits on the loop`.
-- **c2:** On the history face, an item with no recorded decision reads `waits on the loop · not yet planned` with the next pass as its mover, and an item whose last run was ended by a loop stop reads `waits on the loop · run ended by a stop` with that run as its mover. The stop's label gives way to any decision recorded for the item at or after the stop's time, unless that decision is the one that dispatched the stopped run, and it gives way once the run is resumed. A test records a hold in the same millisecond as a stop and asserts the row shows the hold.
-- **c3:** The default face is unchanged: `TestWhyAPIAndWaitingBeforeAnyPass` passes with its assertions unchanged, and a test asserts that an item whose last run was ended by a stop shows the planner's own class, reason and mover there.
-- **c4:** A reason the history face has no rule for fails the view's test suite by name, so a new hold cannot ship without its line.
 
 **Agent details:**
 

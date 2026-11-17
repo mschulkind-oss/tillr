@@ -113,7 +113,7 @@ test.each([
 });
 
 test("each class remains a distinct shape and word when color is forced", () => {
-  const rows = ["moving", "ready", "needs you", "waits on work", "needs a cause", "unclassified"].map((value, i) => ({ ...waiting[0], class: value, item_id: `item-${i}` }));
+  const rows = ["moving", "ready", "needs you", "waits on work", "needs a cause", "waits on the loop"].map((value, i) => ({ ...waiting[0], class: value, item_id: `item-${i}` }));
   const { container } = render(<div style={{ color: "black" }}><Home snapshot={snapshotData} waiting={rows} /></div>);
   const badges = Array.from(container.querySelectorAll("tbody .class-state"));
   expect(new Set(badges.map(b => b.querySelector("svg")?.getAttribute("data-glyph"))).size).toBe(6);

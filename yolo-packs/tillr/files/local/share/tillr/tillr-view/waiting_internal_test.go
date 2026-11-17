@@ -110,7 +110,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 	for id, fields := range map[string]map[string]any{
 		"item-seed-02": {"class": "needs a cause", "where": "gate", "why": "gate-failed", "mover": "cause not recorded; end cause not recorded", "since": "1970-01-01T00:00:05Z"},
 		"item-seed-06": {"since": "no pass yet", "why": "waiter not recorded", "mover": "waiter not recorded"},
-		"item-unknown": {"class": "unclassified", "where": "gate", "why": "future-reason", "mover": "—; end cause not recorded"},
+		"item-unknown": {"class": "needs a cause", "where": "gate", "why": "future-reason", "mover": "add a history rule for this recorded reason; end cause not recorded"},
 		"item-land":    {"where": "land", "why": "retry-stale"},
 		"item-fence":   {"where": "fence", "why": "not-ready"},
 		"item-moving":  {"class": "moving", "where": "lane", "why": "ready", "mover": "run-moving"},
@@ -175,6 +175,8 @@ func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := 0
+	h := newServeHarness(t)
+	h.exec(`DELETE FROM dispatches; DELETE FROM items`)
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -206,12 +208,13 @@ func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					h.exec(fmt.Sprintf(`INSERT INTO items(item_id,title,state,updated_at) VALUES ('%s','hold','in-queue',1); INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at) VALUES ('%s','%s','hold','%s',1000)`, name.Name, name.Name, name.Name, reason))
 					rule, ok := waitingRules[reason]
 					if !ok {
 						t.Errorf("drain exports %s = %q without a waiting rule", name.Name, reason)
 					}
 					switch rule.class {
-					case "needs you", "waits on work", "needs a cause", "ready", "moving", "unclassified":
+					case "needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop":
 					default:
 						t.Errorf("invalid class for %s: %q", name.Name, rule.class)
 					}
@@ -222,7 +225,21 @@ func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no exported drain reasons were enumerated")
 	}
-	t.Logf("all %d exported drain reasons have waiting rules", checked)
+	rows, err := readWaiting(context.Background(), h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != checked {
+		t.Fatalf("got %d held rows, want %d", len(rows), checked)
+	}
+	for _, row := range rows {
+		t.Run(row.ItemID, func(t *testing.T) {
+			if row.Class == "unclassified" || row.Class == "" || strings.TrimSpace(row.Why) == "" || row.Mover == "" || strings.HasPrefix(row.Mover, "—") {
+				t.Fatalf("unexplained hold %q: %+v", row.Why, row)
+			}
+		})
+	}
+	t.Logf("all %d exported drain reasons have waiting rules and explained history rows", checked)
 }
 
 func TestWaitingMoversAndLeaseOnlyRun(t *testing.T) {
@@ -322,7 +339,7 @@ func TestWaitingAbsenceAndReadFailures(t *testing.T) {
 	if got := waitingRuleFor(`seat-degraded: seat "design" fell back to backend "pi"`).class; got != "ready" {
 		t.Fatalf("declared decorated reason: %q", got)
 	}
-	if got := waitingRuleFor("seat-degraded-new").class; got != "unclassified" {
+	if got := waitingRuleFor("seat-degraded-new").class; got != "needs a cause" {
 		t.Fatalf("unknown similar reason: %q", got)
 	}
 }

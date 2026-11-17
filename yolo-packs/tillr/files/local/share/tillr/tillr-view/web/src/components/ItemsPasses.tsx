@@ -86,7 +86,7 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
   }, [ids.join("\n"), focused, focus, href]);
 }
 
-const CLASSES = ["needs you", "waits on work", "needs a cause", "ready", "moving", "unclassified"];
+const CLASSES = ["needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
 export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null }) {
   const { params, set } = useListParams();
   const preset = params.get("state") || "not-moving";
