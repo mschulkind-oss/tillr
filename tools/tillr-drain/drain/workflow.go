@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,13 +20,22 @@ import (
 // Workflow is a versioned, pre-approved sequence of agent and command runs.
 // Edges order stages and select outcomes; ready stages run serially on one lane.
 type Workflow struct {
-	Name    string          `json:"name"`
-	Version int             `json:"version"`
-	Stages  []WorkflowStage `json:"stages"`
-	Edges   []WorkflowEdge  `json:"edges"`
+	Name    string            `json:"name"`
+	Version int               `json:"version"`
+	Stages  []WorkflowStage   `json:"stages"`
+	Edges   []WorkflowEdge    `json:"edges"`
+	Exit    *WorkflowExit     `json:"exit,omitempty"`
+	SHA256  string            `json:"sha256,omitempty"`
+	Sources map[string]string `json:"sources,omitempty"`
+}
+
+// WorkflowExit names the stages required to pass; omission requires every stage.
+type WorkflowExit struct {
+	RequiresNodes []string `json:"requires_nodes"`
 }
 type WorkflowStage struct {
 	ID         string            `json:"id"`
+	Workflow   string            `json:"workflow,omitempty"`
 	Kind       string            `json:"kind"`
 	Seat       string            `json:"seat"`
 	Access     string            `json:"access"`
@@ -45,6 +55,9 @@ type WorkflowEdge struct {
 }
 
 func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
+	if findings := workflowFields(raw); len(findings) != 0 {
+		return nil, errors.Join(findings...)
+	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	d.UseNumber()
@@ -70,15 +83,27 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	}
 	ids := map[string]bool{}
 	for _, s := range w.Stages {
-		if s.ID == "" {
-			return nil, fmt.Errorf("workflow-stage-id: empty id")
+		if s.ID == "" || strings.ContainsAny(s.ID, "/\r\n\t") {
+			return nil, fmt.Errorf("workflow-stage-id: %q: id must be nonempty and contain no slash or control whitespace", s.ID)
 		}
 		if ids[s.ID] {
 			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
 		}
 		ids[s.ID] = true
-		if s.Kind != "agent" && s.Kind != "command" {
-			return nil, fmt.Errorf("workflow-kind: %s: expected agent or command", s.ID)
+		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" {
+			return nil, fmt.Errorf("workflow-kind: %s: expected agent, command or workflow", s.ID)
+		}
+		if s.Kind == "workflow" {
+			if !item.WorkflowRefValid(s.Workflow) {
+				return nil, fmt.Errorf("workflow-reference: %s: %q", s.ID, s.Workflow)
+			}
+			if s.Seat != "" || s.Access != "" || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 || len(s.Inputs) != 0 || len(s.Outputs) != 0 {
+				return nil, fmt.Errorf("workflow-kind: %s: workflow stage cannot specify run fields or named inputs/outputs", s.ID)
+			}
+			continue
+		}
+		if s.Workflow != "" {
+			return nil, fmt.Errorf("workflow-kind: %s: only workflow stages name a workflow", s.ID)
 		}
 		if len(s.Command) != 0 {
 			return nil, fmt.Errorf("workflow-command: resolved_argv is internal, not workflow input")
@@ -102,11 +127,21 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	if err := validateOutputWiring(&w); err != nil {
 		return nil, err
 	}
+	if w.Exit != nil {
+		if len(w.Exit.RequiresNodes) == 0 {
+			return nil, fmt.Errorf("workflow-exit: exit: requires_nodes must not be empty")
+		}
+		for _, id := range w.Exit.RequiresNodes {
+			if !ids[id] {
+				return nil, fmt.Errorf("workflow-exit: exit: unknown stage %q", id)
+			}
+		}
+	}
 	indegree := map[string]int{}
 	next := map[string][]string{}
 	for _, e := range w.Edges {
 		if e.WhenOutcome != "" && e.WhenOutcome != "pass" && e.WhenOutcome != "fail" {
-			return nil, fmt.Errorf("workflow-outcome: %s", e.WhenOutcome)
+			return nil, fmt.Errorf("workflow-outcome: %s: %s", e.To, e.WhenOutcome)
 		}
 		if !ids[e.From] || !ids[e.To] {
 			return nil, fmt.Errorf("workflow-unknown-node: %s -> %s", e.From, e.To)
@@ -142,27 +177,7 @@ func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
 		return nil, fmt.Errorf("workflow-reference: %q", ref)
 	}
 	path := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("workflow-file: %s: %w", path, err)
-	}
-	w, err := decodeWorkflow(raw, ref)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	for i := range w.Stages {
-		s := &w.Stages[i]
-		if s.Kind == "command" {
-			if err := resolveCommand(root, s); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if policy == nil || policy.Seats[s.Seat] == "" {
-			return nil, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy", path, s.Seat)
-		}
-	}
-	return w, nil
+	return readWorkflow(root, path, policy, map[string]bool{})
 }
 
 const nodeAdvancedKind = "drain.node-advanced"

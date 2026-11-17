@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,12 +14,14 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// seedFile is the repository's real seed: the queue a burn drains, read exactly as
-// `tillr item seed --from config/tillr/seed-items.json` reads it.
+// seedFile is the frozen historical queue. Its untyped owner criteria are no
+// longer valid fresh intake; existing stored criteria are typed by migration.
 const seedFile = "../../config/tillr/seed-items.json"
 
-// The seed a burn starts from dispatches the items the owner ruled for, and every item it
-// carries names a fence.
+// The historical queue, with the eleven legacy owner criteria explicitly typed
+// in this fixture, dispatches the ruled items and keeps every item's fence.
+// The frozen source is not rewritten; the separate refusal test below pins why
+// it cannot be fed unchanged into today's stricter seed loader.
 //
 // Both halves are the ones that stop a burn before its first tick rather than during it.
 // An item with no `allowed_paths` is refused by staging (`briefValues`: a brief with no
@@ -41,10 +44,54 @@ const seedFile = "../../config/tillr/seed-items.json"
 // Negative control: the seed as it stood before this change — five `in-queue` items and no
 // `allowed_paths` — fails both halves, so a planner that answered "dispatch" for whatever
 // it was given, and a store that dropped the fence, each fail here.
-func TestTheSeedFileDispatchesTheRuledItems(t *testing.T) {
+func TestTypedFrozenSeedDispatchesTheRuledItems(t *testing.T) {
 	doc, err := os.ReadFile(seedFile)
 	if err != nil {
 		t.Fatalf("reading %s failed: %v", seedFile, err)
+	}
+	// Model the authority types that the legacy-store migration supplies, not
+	// a waiver of the loader's refusal of untyped owner decisions.
+	var fixture struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(doc, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	typed := 0
+	for _, entry := range fixture.Items {
+		var criteria []map[string]json.RawMessage
+		if err := json.Unmarshal(entry["criteria"], &criteria); err != nil {
+			t.Fatal(err)
+		}
+		for _, criterion := range criteria {
+			var text string
+			if err := json.Unmarshal(criterion["text"], &text); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(strings.ToLower(text), "owner decision recorded") {
+				criterion["claim_class"] = json.RawMessage(`"owner-only"`)
+				typed++
+			}
+		}
+		entry["criteria"], err = json.Marshal(criteria)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if typed != 11 {
+		t.Fatalf("typed %d historical owner criteria, want 11", typed)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["items"], err = json.Marshal(fixture.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
 	}
 	ctx := context.Background()
 	path := filepath.Join(scratch(t, "seed-plan"), "board.sqlite3")
@@ -150,6 +197,38 @@ func TestTheSeedFileDispatchesTheRuledItems(t *testing.T) {
 				t.Fatalf("item %s fences %q, which is not in the tree: %v", id, fence, err)
 			}
 		}
+	}
+}
+
+func TestFrozenSeedRefusesUntypedOwnerCriteria(t *testing.T) {
+	doc, err := os.ReadFile(seedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	s, err := store.InitFixture(ctx, filepath.Join(scratch(t, "frozen-seed"), "board.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := item.Seed(ctx, tx, seedFile, doc, time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC))
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), `seed entry "item-pile-507-allowlist-hunt"`) || !strings.Contains(err.Error(), "declare its claim class") {
+		t.Fatalf("frozen seed refusal: %v", err)
+	}
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var count int
+		if err := r.QueryRow("SELECT COUNT(*) FROM items").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Fatalf("refused seed wrote %d items", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

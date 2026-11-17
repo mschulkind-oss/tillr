@@ -346,12 +346,8 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				if before != nil && now != nil && (before.ItemBlock != now.ItemBlock || before.AllowedPaths != now.AllowedPaths) {
 					invalid = true
 				}
-				if policy != nil && !invalid {
-					w, loadErr := loadWorkflow(root, item.Workflow, policy)
-					oldHash, _ := inputHash(work.Decision.Workflow)
-					newHash, _ := inputHash(w)
-					invalid = loadErr != nil || oldHash != newHash
-				}
+				// The persisted graph, including source digests, owns this attempt.
+				// Editing its source does not invalidate or replace an in-flight node.
 				if invalid {
 					leases, leaseErr := activeLeases(r, at, []string{decision.LaneID})
 					if leaseErr != nil {
@@ -393,7 +389,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 			if hold != "" {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: hold, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else if loadErr != nil {
-				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + loadErr.Error(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
+				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
 				if w != nil && decision.RunRequest != nil {

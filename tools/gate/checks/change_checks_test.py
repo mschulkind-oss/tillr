@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
-IDS = {"commit-identity", "seed-freeze", "citations", "documents", "file-size"}
+IDS = {"commit-identity", "seed-freeze", "citations", "documents", "file-size", "workflows"}
 
 
 class Changes(unittest.TestCase):
@@ -309,7 +309,7 @@ sys.exit(rc)
         ids = {check["check_id"] for check in json.loads(result.stdout)["payload"]["checks"]}
         self.assertIn("fixture-citations", ids)
 
-    def test_markdown_change_runs_all_five_against_caller_base(self):
+    def test_markdown_change_runs_all_declared_checks_against_caller_base(self):
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()
         result = self.runner_check("--base", self.base, "--head", head)
@@ -320,8 +320,15 @@ sys.exit(rc)
         self.assertTrue(all(judged[kind] == "pass" for kind in IDS), judged)
         self.assertEqual(payload["base_sha"], self.base)
         self.assertEqual((self.repo / "render.log").read_text(), "vantage-check README.md\n")
+        checks = {check["check_id"]: check for check in payload["checks"]}
         for kind in IDS:
-            self.assertEqual(next((self.repo / "logs").glob("*-" + kind + ".log")).read_text(), "")
+            # The command stays silent; an unavailable watchdog is separately
+            # reported in both the verdict and the log, never silently ignored.
+            diagnostic = checks[kind].get("watchdog_unavailable", "")
+            if diagnostic:
+                self.assertTrue(diagnostic.startswith("watchdog unavailable: "), diagnostic)
+            expected_log = diagnostic + "\n" if diagnostic else ""
+            self.assertEqual(next((self.repo / "logs").glob("*-" + kind + ".log")).read_text(), expected_log)
 
     def test_seed_only_shrinks(self):
         for entries, rc, needle in (([{"item_id": "item-a", "title": "A"}], 0, ""),
@@ -627,7 +634,7 @@ sys.exit(rc)
         # Change checks remain disjoint from the legacy program. The two Markdown
         # conventions and structural proof now belong to the tree declarations.
         before = {"file-size", "commit-identity", "seed-freeze", "citations",
-                  "documents", "pipeline-evidence", "self-suite"}
+                  "documents", "pipeline-evidence", "self-suite", "workflows"}
         self.assertEqual(migrated | remaining, before)
         self.assertFalse((IDS - {"file-size"}) & remaining)
         tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build"}
@@ -647,6 +654,12 @@ sys.exit(rc)
             declaration = json.loads((self.repo / "tools/gate/checks" / (kind + ".json")).read_text())
             self.assertEqual(declaration["scope"], "tree")
             self.assertEqual(declaration["tier"], "fast")
+
+    def test_added_cyclic_workflow_fails_real_check(self):
+        result = subprocess.run(["python3", str(ROOT / "tools/gate/checks/workflows.test.py")],
+                                cwd=ROOT, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("added cycle fails workflow gate", result.stdout)
 
     def stub_tree_commands(self):
         # Only the fixture commands change: the real scope/tier/id declarations
@@ -705,9 +718,11 @@ sys.exit(rc)
         head = self.commit()
         common = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
                   "--runner", str(self.runner), "--logs", str(self.repo / "logs")]
-        for extra, want in (([], f"--since {self.base} --tier landing --lock-timeout 30"),
-                            (["--since", self.base], f"--since {self.base} --lock-timeout 30"),
-                            (["--all"], "--all --lock-timeout 30")):
+        # The append-only gate record has no landing-lock wait. Pin the exact
+        # forwarded arguments so neither a stale lock flag nor a tier returns.
+        for extra, want in (([], f"--since {self.base} --tier landing"),
+                            (["--since", self.base], f"--since {self.base}"),
+                            (["--all"], "--all")):
             result = subprocess.run(common + extra, cwd=self.repo, env=self.env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stdout.splitlines()[-1], want)
