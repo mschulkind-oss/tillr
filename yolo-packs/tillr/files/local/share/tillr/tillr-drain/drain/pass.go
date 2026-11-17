@@ -1290,8 +1290,10 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
-	if err := l.prunePreservedWork(ctx); err != nil {
-		return "", err
+	if !l.nonLanding {
+		if err := l.prunePreservedWork(ctx); err != nil {
+			return "", err
+		}
 	}
 	if err := l.intakeComments(ctx); err != nil {
 		return "", err
@@ -1329,8 +1331,10 @@ planned:
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
 		return "", err
 	}
-	if err := l.releaseTrunkAcquittals(ctx); err != nil {
-		return "", err
+	if !l.nonLanding {
+		if err := l.releaseTrunkAcquittals(ctx); err != nil {
+			return "", err
+		}
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
@@ -1344,8 +1348,10 @@ planned:
 			l.index(ctx)
 		}
 	}()
-	if err := l.recheckLanes(ctx); err != nil {
-		return "", err
+	if !l.nonLanding {
+		if err := l.recheckLanes(ctx); err != nil {
+			return "", err
+		}
 	}
 	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
 	if err != nil {

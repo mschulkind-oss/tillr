@@ -60,6 +60,16 @@ type Push struct {
 // Read loads only <root>/.tillr.toml. Missing files use the documented defaults;
 // unreadable or malformed files refuse rather than silently disabling actions.
 func Read(root string) (Settings, error) {
+	return read(root, "")
+}
+
+// ReadWithoutLanding rejects explicitly configured roll/push keys, even empty
+// strings and false flags, for the named definition that finishes without landing.
+func ReadWithoutLanding(root, definitionName string) (Settings, error) {
+	return read(root, definitionName)
+}
+
+func read(root, nonLandingDefinition string) (Settings, error) {
 	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}}
 	path := filepath.Join(root, ".tillr.toml")
 	raw, err := os.ReadFile(path)
@@ -74,6 +84,19 @@ func Read(root string) (Settings, error) {
 		return Settings{}, fmt.Errorf("%s: expected valid TOML: %w", path, err)
 	}
 	refuse := func(key, expected string) error { return fmt.Errorf("%s: %s: expected %s", path, key, expected) }
+	if nonLandingDefinition != "" {
+		var incompatible []string
+		for _, table := range []string{"roll", "push"} {
+			if values, ok := tables[table].(map[string]any); ok {
+				for _, key := range keys(values) {
+					incompatible = append(incompatible, table+"."+key)
+				}
+			}
+		}
+		if len(incompatible) != 0 {
+			return Settings{}, fmt.Errorf("%s: definition %q does not complete on landing: remove settings %s", path, nonLandingDefinition, strings.Join(incompatible, ", "))
+		}
+	}
 	for _, table := range keys(tables) {
 		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" {
 			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows or prose)")
