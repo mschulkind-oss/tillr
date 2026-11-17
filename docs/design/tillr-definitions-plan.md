@@ -275,15 +275,7 @@ and [lifecycle.go](../../tools/tillr-item/item/lifecycle.go), and `terminalState
 [sync.go](../../tools/tillr-item/item/sync.go). The legacy frozen states (`abandoned`, `deleted`,
 `in-progress`) stay readable and unwritable under every definition.
 
-<!-- tillr: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item state`, `apply`, `close` and `reopen` take the states, the finished states, the ready, blocked and closed roles, and the allowed moves from the store's definition through the definition package, and no longer from constants in the item utility.
-- **c2:** A move the definition does not list is refused as `transition-not-allowed`, naming the two states and the definition. A move out of a finished state is allowed only where the definition lists it, requires `--reason` and `--by`, and is recorded as an event that carries both.
-- **c3:** A test with a fixture definition whose finished states are `confirmed` and `rejected`, and which lists a move from `rejected` back to its ready state, asserts that an item can finish `confirmed`, that leaving `confirmed` is refused, and that leaving `rejected` with a reason and an actor succeeds with both in the event.
-- **c4:** Sync's set of finished states is the definition's finished states plus the legacy frozen states.
-- **c5:** Under the Git-landing definition every face behaves exactly as before: the existing state, lifecycle, apply and sync tests pass unchanged.
-- **c6:** A store created before this change opens and drains as before. A test opens such a store.
-- **c7:** The item utility's README says the states come from the store's definition and names the face that prints it.
 
 ### Add a reason, pointer and actor to every finished-state move
 
@@ -301,7 +293,7 @@ both back from `tillr item show`.
 [terminal-state block](./tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 uses in its c2, so that block's criterion is met by this one rather than contradicted.
 
-<!-- tillr: item id="item-def-finished-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-def-item-lifecycle" prose="2" -->
+<!-- tillr: item id="item-def-finished-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A move into any finished state through `tillr item state` takes `--reason`, `--by` and `--resolves-via`. The pointer is `item:<id>` for an item the store holds, `commit:<sha>` or `doc:<path>`. All three are stored on the item, carried by the update event, and printed by `tillr item show`.
 - **c2:** A test moves an item to a finished state with all three and asserts what `show` prints and what the event carries.
@@ -331,7 +323,7 @@ and `candidate-record-mismatch` (counted in
 The tests are `isBlocked`, `terminalStates` and the `StateInQueue` checks in
 [plan.go](../../tools/tillr-drain/drain/plan.go).
 
-<!-- tillr: item id="item-def-planner-lifecycle" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-def-item-lifecycle" prose="2" -->
+<!-- tillr: item id="item-def-planner-lifecycle" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The planner reads the store's definition once per pass. It dispatches only items in the definition's ready state, and a dependency is met when the blocker is in one of the definition's finished states.
 - **c2:** The planner raises a prerequisite hold, such as `no-fence`, the open-question holds, `design-doc-missing` or `trunk-path-dirty`, only when the definition names that prerequisite. A test with a fixture definition that names none asserts that an item with no fence and no design document is dispatched.

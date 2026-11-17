@@ -101,6 +101,8 @@ func applyFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("apply")
 	path := fs.String("store", "", "the store to write")
 	input := fs.String("input", "", "the item.record to apply")
+	reason := fs.String("reason", "", "why a finished item leaves its state")
+	by := fs.String("by", "", "the actor authorizing a finished-state move")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -120,7 +122,7 @@ func applyFace(args []string) (record.Envelope, int) {
 	// both come from it, so two runs of one input produce the same bytes.
 	env.CreatedAt = at.UTC()
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.Apply(ctx, tx, env)
+		return item.ApplyWithReceipt(ctx, tx, env, item.MoveReceipt{Reason: *reason, By: *by})
 	})
 }
 
@@ -350,7 +352,8 @@ func stateFace(args []string) (record.Envelope, int) {
 	id := fs.String("item", "", "the item whose state moves")
 	state := fs.String("state", "", "the state to move it to")
 	waiter := fs.String("waiter", "", "blocked waiter: owner, design, plan, or item:<id>")
-	reason := fs.String("reason", "", "why the blocked item waits")
+	reason := fs.String("reason", "", "why the item waits or leaves a finished state")
+	by := fs.String("by", "", "the actor authorizing a finished-state move")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -363,7 +366,7 @@ func stateFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.SetState(ctx, tx, *id, *state, at.UTC(), item.WaitingOn{Waiter: *waiter, Reason: *reason})
+		return item.SetStateWithReceipt(ctx, tx, *id, *state, at.UTC(), item.MoveReceipt{Reason: *reason, By: *by}, item.WaitingOn{Waiter: *waiter, Reason: *reason})
 	})
 }
 

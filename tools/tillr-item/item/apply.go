@@ -11,23 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-// writableStates is the closed state vocabulary of the item state model §7, in its
-// store spelling. A value outside it is malformed input; a value in frozenStates is a
-// known state no transition may write.
-//
-// `in-progress` is deliberately absent. A run that produces no judged candidate — a fence
-// refusal, a run with no commit, a wall that cut it short — leaves its item in `in-queue`,
-// where the planner's own named hold is what keeps it from being dispatched again. The
-// state was the loop's to write; the item's disposition is the owner's.
-var writableStates = map[string]bool{
-	"not-started": true, "blocked": true, "in-queue": true,
-	"landed": true, "resolved-elsewhere": true, "closed": true,
-}
 
 // frozenStates are the legacy values that stay readable and are never written again.
 // `in-progress` joined them because no transition writes it now; a legacy row stays
@@ -94,12 +82,21 @@ type criterion struct {
 // the record as stored. The write face and the seed materializer both call it, so a
 // fixture cannot construct a state the write face would reject (lanes §1, OQ-L2).
 func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envelope, error) {
-	return apply(ctx, tx, env, false)
+	return ApplyWithReceipt(ctx, tx, env, MoveReceipt{})
 }
 
 // apply shares the record writer with seed's validated rank-only updates. That
 // private path may change a finished item's rank, never its state or definition.
-func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool) (record.Envelope, error) {
+// ApplyWithReceipt records an authorized finished-state move with its reason and actor.
+func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, receipt MoveReceipt) (record.Envelope, error) {
+	return apply(ctx, tx, env, false, receipt)
+}
+
+func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool, receipts ...MoveReceipt) (record.Envelope, error) {
+	receipt := MoveReceipt{}
+	if len(receipts) > 0 {
+		receipt = receipts[0]
+	}
 	var payload itemPayload
 	// Read the whole value to retain the item id even when an unknown field sorts
 	// before item_id. Only unknown fields must refuse a replay: ordinary typed
@@ -138,6 +135,10 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 	}
 	payload.Criteria = criteria
 
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
+		return record.Envelope{}, err
+	}
 	existing, err := itemExists(ctx, tx.Reader(), payload.ItemID)
 	if err != nil {
 		return record.Envelope{}, err
@@ -153,7 +154,7 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
 		// carryCriteria runs first so its existing refusals keep their names,
 		// including when a record also tries to reopen or rename the item.
-		if terminalState(from) {
+		if d.IsFinished(from) && from != d.Closed && from == payload.State {
 			comparison := payload
 			if seedRank {
 				comparison.Rank = stored.Rank
@@ -178,10 +179,23 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 	if err := checkSeat(payload.ItemID, payload.Seat); err != nil {
 		return record.Envelope{}, err
 	}
-	if err := checkState(payload.ItemID, payload.State); err != nil {
+	if d.Name == definition.GitLandingName && d.IsFinished(from) && from != d.Closed && from != payload.State {
+		if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if err := checkState(d, payload.ItemID, payload.State); err != nil {
 		return record.Envelope{}, err
 	}
-	if err := checkClosedTransition(payload.ItemID, from, payload.State, true); err != nil {
+	if d.Name != definition.GitLandingName {
+		if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if err := checkClosedTransition(d, payload.ItemID, from, payload.State, true); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
 		return record.Envelope{}, err
 	}
 	allowedPaths, err := encodeAllowedPaths(payload.AllowedPaths)
@@ -195,10 +209,11 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
 		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, judge_mode = excluded.judge_mode,
-		   waiting_on = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.waiting_on ELSE '' END,
-		   underlying_state = CASE WHEN excluded.state IN ('blocked', 'closed') THEN items.underlying_state ELSE '' END`,
+		   waiting_on = CASE WHEN excluded.state IN (?, ?) THEN items.waiting_on ELSE '' END,
+		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
 		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, payload.JudgeMode,
+		d.Blocked, d.Closed, d.Blocked, d.Closed,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the item: %v", err)
 	}
@@ -213,7 +228,11 @@ func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool
 		return record.Envelope{}, err
 	}
 	payload.UpdatedAt = env.CreatedAt.UTC().Format(time.RFC3339)
-	body, err := json.Marshal(payload)
+	var eventPayload any = payload
+	if from != payload.State && d.IsFinished(from) {
+		eventPayload = lifecycleEvent(payload, "state", receipt.Reason, receipt.By)
+	}
+	body, err := json.Marshal(eventPayload)
 	if err != nil {
 		return record.Envelope{}, Internalf("encoding the stored record: %v", err)
 	}
@@ -354,19 +373,6 @@ func replay(ctx context.Context, tx *store.Tx, key string) (record.Envelope, boo
 		return record.Envelope{}, false, Internalf("reading the stored record: %v", err)
 	}
 	return env, true, nil
-}
-
-// checkState refuses a state no transition may write. An unknown value is malformed
-// input (exit 2) and a frozen legacy value is a state-rule violation (exit 1): the two
-// are different answers and a caller can tell them apart.
-func checkState(itemID, state string) error {
-	if writableStates[state] {
-		return nil
-	}
-	if frozenStates[state] {
-		return Rejectionf("state-frozen", itemID, "%q is a frozen legacy state no transition may write", state)
-	}
-	return Usagef("%q is not a state: want one of not-started, blocked, in-queue, landed, resolved-elsewhere, closed", state)
 }
 
 // carryCriteria answers the criteria as this record will store them. An edit replaces

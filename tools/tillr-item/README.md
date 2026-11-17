@@ -31,6 +31,24 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 
 ## State invariants
 
+Item states, finished states, the ready/blocked/closed roles, and allowed moves come
+from [the store's definition](../tillr/definition/README.md), not from the item utility.
+Print the declaration with `tillr store definition --store <path>`. Stores without a
+recorded declaration use the embedded Git-landing definition, without a migration.
+
+A distinct move must be listed in that definition; an unlisted move is refused as
+`transition-not-allowed`, naming the source, destination, and definition. Leaving a
+finished state additionally requires `--reason` and `--by` on `state` or `apply`;
+the update event records `lifecycle_reason` and `lifecycle_by`. The closed role still
+uses `close` and `reopen`, and a blocked-role state write still needs waiting metadata.
+Legacy `abandoned`, `deleted`, and `in-progress` rows stay readable but cannot be
+written as destinations. Sync treats finished and legacy frozen rows as finished
+for document-sharing counts; legacy `in-progress` rows still protect held work from
+being copied into a new version-suffixed item.
+
+The following rules describe Git-landing, including its established refusal names
+(`state-terminal` and the close/reopen guidance) for compatibility:
+
 - **An item's state and its criteria's states are different writes.** An item's state says
   where the work stands; a criterion's state says what a judge found. One face moving both
   would make a criterion's freeze depend on a caller's care.

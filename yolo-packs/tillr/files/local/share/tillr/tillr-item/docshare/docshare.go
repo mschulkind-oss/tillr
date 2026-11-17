@@ -138,6 +138,13 @@ func Declared(docs []Document) map[string]bool {
 // Sharing is the comparison used by sync, planning, and store status. A terminal
 // declaration still makes a store document-fed; synthetic comment batches are not residue.
 func Sharing(docs []Document, states map[string]string) (fed bool, missing []string) {
+	return SharingWithFinished(docs, states, func(state string) bool {
+		return state == "closed" || state == "landed" || state == "resolved-elsewhere" || state == "abandoned" || state == "deleted"
+	})
+}
+
+// SharingWithFinished compares declarations using the caller's finished-state policy.
+func SharingWithFinished(docs []Document, states map[string]string, finished func(string) bool) (fed bool, missing []string) {
 	declared := Declared(docs)
 	missing = []string{}
 	for id, state := range states {
@@ -145,7 +152,7 @@ func Sharing(docs []Document, states map[string]string) (fed bool, missing []str
 			fed = true
 			continue
 		}
-		if state == "closed" || state == "landed" || state == "resolved-elsewhere" || state == "abandoned" || state == "deleted" || IsCommentItem(id) {
+		if finished(state) || IsCommentItem(id) {
 			continue
 		}
 		missing = append(missing, id)

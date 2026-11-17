@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -28,6 +29,11 @@ import (
 // and appends no event, so a step retried after a half-completed tick does not record a
 // transition that did not happen.
 func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time, waiting ...WaitingOn) (record.Envelope, error) {
+	return SetStateWithReceipt(ctx, tx, itemID, state, at, MoveReceipt{}, waiting...)
+}
+
+// SetStateWithReceipt also records the reason and actor for leaving a finished state.
+func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time, receipt MoveReceipt, waiting ...WaitingOn) (record.Envelope, error) {
 	if itemID == "" {
 		return record.Envelope{}, Usagef("an item state write needs an item_id")
 	}
@@ -35,17 +41,31 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	if terminalState(payload.State) && state != payload.State {
-		return record.Envelope{}, terminalRejection(itemID, payload.State)
-	}
-	if err := checkState(itemID, state); err != nil {
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
 		return record.Envelope{}, err
 	}
-	if err := checkClosedTransition(itemID, payload.State, state, false); err != nil {
+	if d.Name == definition.GitLandingName && d.IsFinished(payload.State) && payload.State != d.Closed && state != payload.State {
+		if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if err := checkState(d, itemID, state); err != nil {
+		return record.Envelope{}, err
+	}
+	if d.Name != definition.GitLandingName {
+		if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if err := checkClosedTransition(d, itemID, payload.State, state, false); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
 	previousWaiting, previousUnderlying := payload.WaitingOn, payload.UnderlyingState
-	if state == "blocked" {
+	if state == d.Blocked {
 		var next WaitingOn
 		if len(waiting) > 0 {
 			next = waiting[0]
@@ -53,17 +73,17 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 		if err := checkWaitingOn(tx.Reader(), itemID, next); err != nil {
 			return record.Envelope{}, err
 		}
-		switch payload.State {
-		case "not-started", "in-queue", "blocked":
-		default:
+		// Legacy rows may leave their frozen state through this face, but the
+		// Git-landing block command has never admitted them as blocked sources.
+		if d.Name == definition.GitLandingName && payload.State != state && !d.Allows(payload.State, state) {
 			return record.Envelope{}, Rejectionf("blocked-state-invalid", itemID,
 				"item %q cannot move from %q to blocked", itemID, payload.State)
 		}
-		if payload.State != "blocked" || payload.UnderlyingState == "" {
+		if payload.State != d.Blocked || payload.UnderlyingState == "" {
 			payload.UnderlyingState = payload.State
 		}
 		payload.WaitingOn = &next
-	} else if state == "not-started" || state == "in-queue" {
+	} else if state != d.Closed && !d.IsFinished(state) {
 		payload.WaitingOn, payload.UnderlyingState = nil, ""
 	}
 	unchangedWaiting := previousWaiting == nil && payload.WaitingOn == nil ||
@@ -89,7 +109,11 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 	// is in, and the log holds how it got there. A reader that asks an item's history for
 	// its states (drain's planner, which reads `in-progress` as evidence an item has run)
 	// reads this event's payload for that field.
+	from := payload.State
 	payload.State = state
+	if from != state && d.IsFinished(from) {
+		return recordLifecycle(tx, payload, at, "state", receipt.Reason, receipt.By)
+	}
 	payload.UpdatedAt = at.UTC().Format(time.RFC3339)
 	body, err := json.Marshal(payload)
 	if err != nil {

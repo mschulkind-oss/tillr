@@ -136,8 +136,6 @@ func TestGitLandingLiteralValues(t *testing.T) {
 			{"not-started", "blocked"}, {"not-started", "in-queue"}, {"not-started", "landed"}, {"not-started", "resolved-elsewhere"}, {"not-started", "closed"},
 			{"blocked", "not-started"}, {"blocked", "in-queue"}, {"blocked", "landed"}, {"blocked", "resolved-elsewhere"}, {"blocked", "closed"},
 			{"in-queue", "not-started"}, {"in-queue", "blocked"}, {"in-queue", "landed"}, {"in-queue", "resolved-elsewhere"}, {"in-queue", "closed"},
-			{"landed", "not-started"}, {"landed", "blocked"}, {"landed", "in-queue"}, {"landed", "resolved-elsewhere"},
-			{"resolved-elsewhere", "not-started"}, {"resolved-elsewhere", "blocked"}, {"resolved-elsewhere", "in-queue"}, {"resolved-elsewhere", "landed"},
 			{"closed", "not-started"}, {"closed", "blocked"}, {"closed", "in-queue"},
 		},
 		Prerequisites: []string{"fence", "design-document", "design-questions", "owner-clean"},
@@ -148,7 +146,7 @@ func TestGitLandingLiteralValues(t *testing.T) {
 	}
 }
 
-func TestNameOnlyInOneConstantAndOnlyStoreConsumes(t *testing.T) {
+func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locating source")
@@ -179,8 +177,8 @@ func TestNameOnlyInOneConstantAndOnlyStoreConsumes(t *testing.T) {
 			for _, imp := range parsed.Imports {
 				value, _ := strconv.Unquote(imp.Path.Value)
 				if value == "github.com/mschulkind-oss/tillr/definition" &&
-					filepath.Base(module) != "tillr-store" && filepath.Dir(path) != filepath.Dir(file) {
-					t.Errorf("utility other than store imports definition: %s", path)
+					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Dir(path) != filepath.Dir(file) {
+					t.Errorf("utility other than store or item imports definition: %s", path)
 				}
 			}
 			if n == 0 {
