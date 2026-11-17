@@ -27,6 +27,12 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
 
 ## State invariants
 
+- **`init` creates the whole schema.** It creates every utility's tables and registered
+  columns, not just the store's own tables. A fresh store is ready for `drain why`,
+  `view waiting`, `view status`, and `run lanes` without running the loop first.
+  `run status --run <id>` reports an absent run with its usual record and exit 1.
+  Read faces still never create or migrate tables; writable opens retain the existing
+  migration path for older stores.
 - **The store uses SQLite WAL.** Every normal writable open selects and verifies
   SQLite's write-ahead log (WAL), so a killed writer's uncommitted changes are invisible
   to readers. The database and its `-wal`/`-shm` coordination files form the live store,

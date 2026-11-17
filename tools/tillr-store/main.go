@@ -17,6 +17,13 @@ import (
 	"path/filepath"
 	"time"
 
+	// Each utility owns its schema registration. Link all owners here so init
+	// creates the whole store without asking any read face to migrate it.
+	_ "github.com/mschulkind-oss/tillr-drain/drain"
+	_ "github.com/mschulkind-oss/tillr-item/item"
+	_ "github.com/mschulkind-oss/tillr-land/land"
+	_ "github.com/mschulkind-oss/tillr-run/run"
+
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
