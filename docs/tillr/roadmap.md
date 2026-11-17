@@ -1005,10 +1005,49 @@ move was never asked for, and it is withdrawn. Three points settle it:
 
 c1 and c4 are reworded below to say this. c2 and c3 are unchanged.
 
+**Ruling, 2026-11-17 (answers the conflict two more failed attempts raised):** neither attempt found
+a fault in c1 to c4, so they stand as written. The item was built whole both times. One landing was
+refused because the worker edited this block, and the other stopped on a test failure that this
+item does not cause. Four points settle it, and c5 below is added.
+
+- **The builder does not edit this block or any other part of this file.** The fifth run's
+  conflict fix was refused with `worker edited its own item block`, because the ref it re-applied
+  carried a cleanup of this block. The loop retires the block after landing. The `docs/` entry in
+  this item's paths is for the tool READMEs and design documents the change must keep true.
+- [unlanded] **Start from the built candidate.** Commit `09ee50b77`, the tip of `refs/tillr/runs/run-item-drain-express-lanes-a7`, holds the implementation, its tests, the drain README section and the pack copy, and it does not touch this file. Apply that one commit to the base and do not write the item again. Do not take `2ae758849`, the fifth run's fix, which carries the refused edit to this block. On 2026-11-17 `git merge-tree --write-tree --merge-base 09ee50b77^ 22dee52e5 09ee50b77` reported content conflicts in two source files, `tools/tillr-drain/README.md` and `tools/tillr-drain/drain/plan.go`, and in their pack copies, which `just pack-sync` regenerates and nobody resolves by hand. Resolve both by keeping what the trunk added since and re-adding the candidate's change beside it. A file that merges without a conflict can still be wrong against the newer trunk, so the full suites decide and not the merge.
+- **The failing test is a race in designer retirement, and it is on the trunk.** The seventh run's
+  full drain suite failed `TestCommentPathTwice` once with `designer <nil>`: the designer's row was
+  gone after a comment revision landed. `retireDesigners` in `tools/tillr-drain/drain/designer.go`
+  removes a row on two grounds: the document is absent, or its stage is done. It decides "absent"
+  with one `os.Stat` of the file in the main checkout. A landing runs beside the loop's passes and
+  rewrites that file, and git replaces a file by removing it and writing it again. Measured on
+  2026-11-17 with git 2.56.0: while a repository ran 100 `git merge --squash` landings that each
+  changed one tracked file, a second process that did nothing but stat that file found it absent on
+  6,459 of 5,619,879 reads. A pass that reads inside that window removes the row of a document that
+  was never deleted. The express change does not touch `retireDesigners` or the landing, so the
+  fault is the trunk's; the seventh run did not reproduce it in ten focused runs on either side
+  because the window is narrow.
+- **This item repairs the race, as c5.** The file is inside this item's paths, the repair is a few
+  lines, and the candidate cannot be verified honestly while the test can fail by chance. The
+  [designer sessions design](../design/tillr-designer-sessions.md#the-keep-warm-rule) ends a session
+  "when its document is deleted", and deleted means deleted from the trunk. So the loop treats a document
+  as deleted only when it is absent from the trunk commit the pass has just read and also absent
+  from the main checkout. A file that a landing is rewriting is in the trunk commit before and
+  after, so it is never taken as deleted. A document the owner has written and not yet committed is
+  in the checkout, so its row is kept as it is today. The stage-done ground is unchanged. This is
+  the one change to designer handling this item makes; the second ruling's points on desks, comment
+  dispatch and session choice all stand.
+
+The candidate also registers every configured lane in the store when the loop starts, without
+replacing an existing lease, so that the view can show "0 of 2 express" before the first express
+dispatch. That is accepted as part of c4. `retireDesigners` reads no lane rows, so it is not a
+suspect in the failure above.
+
 - **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)) and any item whose block sets `express="true"`. An item that answers review comments is not express work in this sense: it runs at its document's desk, as it does today. Whether an item is express is decided from the item's own definition, and a test asserts that a saved idea whose first workflow node names another seat is still dispatched on an express lane.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
 - **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express". Desk runs are shown as they are today and are counted in neither number.
+- **c5:** The loop ends a designer's session for a deleted document only when the document is absent from both the trunk commit the pass read and the main checkout. A test removes a committed document's file from the main checkout without committing the removal, runs the retirement, and asserts the designer's row is kept; it then commits the removal, runs the retirement again, and asserts the row is gone. `TestCommentPathTwice` and `TestRetireDesignerLeavesTranscript` pass unchanged.
 
 ## Filed 2026-11-16: two decided designs are cut into build items
 
