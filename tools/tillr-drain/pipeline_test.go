@@ -44,7 +44,11 @@ var siblingMu sync.Mutex
 func drive(t *testing.T, path string, args ...string) (int, []byte) {
 	t.Helper()
 	cmd := exec.Command(path, args...)
-	cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "state"))
+	// The gate program (tools/fork-check.py) reaches tillr-gate by name, so the binaries
+	// this case just built go first on PATH. Otherwise it runs whatever launcher the
+	// host delivered, which can predate the source under test and refuse its flags.
+	cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "state"),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); ok {
 		return exit.ExitCode(), out
