@@ -30,8 +30,10 @@ import (
 // runs row (D-UT19), and it is optional: a run dispatched for no item names none, and
 // the record then carries no item_id rather than an empty string read as an id.
 type Request struct {
-	RunID      string   `json:"run_id"`
-	ItemID     string   `json:"item_id"`
+	RunID  string `json:"run_id"`
+	ItemID string `json:"item_id"`
+	// NodeID optionally identifies the node whose program this run executes.
+	NodeID     string   `json:"node_id,omitempty"`
 	LaneID     string   `json:"lane_id"`
 	Backend    string   `json:"backend"`
 	Command    []string `json:"command"`
@@ -41,6 +43,9 @@ type Request struct {
 	// design D-RW1). A negative value is refused rather than read as unbounded.
 	TimeoutMS int      `json:"timeout_ms,omitempty"`
 	EnvRefs   []string `json:"env_refs"`
+	// ScratchEnv defaults to true when omitted. False preserves the caller's scratch
+	// environment; the run still creates and records its own scratch directory.
+	ScratchEnv *bool `json:"scratch_env,omitempty"`
 	// CorrelationID is the tick this request belongs to, in the tick's own spelling
 	// (`tick-<stamp>-<run ids>`). Drain stamps it when it emits the request, RequestRecord
 	// copies it onto the record envelope, and the run writes it into the run.allocate
@@ -256,6 +261,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		ArtifactRefs: []ArtifactRef{
 			{Kind: "lane-root", Ref: laneDir},
 			{Kind: "log", Ref: logPath},
+			{Kind: "scratch", Ref: durableDir},
 		},
 	}
 	if req.Backend == "command" {
@@ -291,21 +297,25 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// can honestly pass. A backend that ignores them records nothing and behaves exactly as
 	// before.
 	//
-	// YOLO_DURABLE_DIR is replaced, not appended to: os.Environ() arrives carrying the
-	// coordinator's value, and a duplicate assignment is shadowed by the first one in the
-	// child, so every inherited assignment has to be removed. Two lanes handed one scratch
-	// tree write it concurrently, and the durable directory is gitignored and outside every
-	// fence, so no boundary check could see the collision.
+	// Replace inherited identities, including an optional node absent from this request:
+	// a nested run must never claim its parent's item or node. Scratch is isolated by
+	// default, but an explicit opt-out preserves the caller's assignment (or absence).
 	cmd.Env = os.Environ()
-	for _, key := range []string{"YOLO_DURABLE_DIR", "TILLR_RUN_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST"} {
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST"} {
 		cmd.Env = withoutEnv(cmd.Env, key)
 	}
+	if req.ScratchEnv == nil || *req.ScratchEnv {
+		cmd.Env = append(withoutEnv(cmd.Env, "YOLO_DURABLE_DIR"), "YOLO_DURABLE_DIR="+durableDir)
+	}
+	if req.NodeID != "" {
+		cmd.Env = append(cmd.Env, "TILLR_NODE_ID="+req.NodeID)
+	}
 	cmd.Env = append(cmd.Env,
-		"YOLO_DURABLE_DIR="+durableDir,
 		"TILLR_SESSION_MODE="+mode,
 		"TILLR_RESUME_PROMPT_FILE="+prompt,
 		"TILLR_PAUSE_REQUEST="+pausePath,
 		"TILLR_RUN_ID="+req.RunID,
+		"TILLR_ITEM_ID="+req.ItemID,
 		"TILLR_LANE_ID="+laneID,
 	)
 	// The child leads its own process group, and the bound kills the group: a bound
