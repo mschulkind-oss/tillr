@@ -465,6 +465,24 @@ def test_every_argv_the_drain_sends_is_accepted(tmp):
                 assert f"{flag} {value}" in last, (case["case"], flag, last)
 
 
+def test_check_argv_parses_without_reading_or_judging(tmp):
+    """The startup mode accepts real argument lists even when every path is absent."""
+    cases = json.loads((HERE / "drain-argv.json").read_text())
+    for case in cases:
+        result = subprocess.run(
+            [sys.executable, str(ADAPTER), case["face"], "--check-argv", *case["args"]],
+            cwd=tmp, capture_output=True, text=True)
+        assert result.returncode == 0, (case["case"], result.stderr)
+    assert not list(Path(tmp).iterdir()), "parse-only mode wrote files"
+    help_result = subprocess.run([sys.executable, str(ADAPTER), "land", "--help"],
+                                 capture_output=True, text=True)
+    assert "tillr-step-argv-check-v1" in help_result.stdout, help_result
+    refused = subprocess.run(
+        [sys.executable, str(ADAPTER), "land", "--check-argv", *cases[3]["args"], "--unknown"],
+        capture_output=True, text=True)
+    assert refused.returncode == 2 and "--unknown" in refused.stderr, refused
+
+
 def test_fixer_range_reaches_the_judge(tmp):
     """A fixer's `--since`/`--all` widens the default judge, and refuses a named one."""
     fixture = Fixture(tmp)
@@ -684,6 +702,7 @@ def main():
             test_land_forwards_message_source,
             test_land_forwards_the_observed_trunk,
             test_every_argv_the_drain_sends_is_accepted,
+            test_check_argv_parses_without_reading_or_judging,
             test_fixer_range_reaches_the_judge,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,

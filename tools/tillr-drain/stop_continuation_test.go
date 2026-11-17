@@ -13,7 +13,8 @@ func TestStopDuringGateReleasesExaminationLease(t *testing.T) {
 	marker := filepath.Join(scratch(t, "gate-stop"), "started")
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecordWithFence("item_a", "in-queue", "candidate.txt"))
-	gate := stub(t, "blocked-gate", `echo started > "`+marker+`"
+	gate := stub(t, "blocked-gate", `[ "$1" = --help ] && exit 0
+echo started > "`+marker+`"
 exec sleep 300`)
 	cmd, out := startStopFixture(t, f, 1, gate)
 	waitForFile(t, marker, 10*time.Second)

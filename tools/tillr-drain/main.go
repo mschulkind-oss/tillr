@@ -607,7 +607,7 @@ func printHelp(fs *flag.FlagSet) {
 // the steps and the stopping conditions — never a step's judgment.
 func loopFace(args []string) int {
 	fs := newFlagSet("loop")
-	check := fs.Bool("check", false, "validate flags, settings, policies and the existing store, then exit without starting a pass or migrating the store")
+	check := fs.Bool("check", false, "validate flags, settings, policies, the existing store and step-program arguments, then exit without starting a pass or migrating the store")
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
@@ -728,8 +728,14 @@ func loopFace(args []string) int {
 		if version != store.SchemaVersion {
 			return fail(drain.Incompatiblef("the store %s: schema version %d; expected %d", *path, version, store.SchemaVersion))
 		}
+		if err := steps.CheckPrograms(context.Background(), os.Stderr); err != nil {
+			return failStartup(err)
+		}
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
 		return record.ExitOK
+	}
+	if err := steps.CheckPrograms(context.Background(), os.Stderr); err != nil {
+		return failStartup(err)
 	}
 	// Signals stop supervision only. Detached run faces retain their own lifetime;
 	// the explicit stop --end-runs request is the only drain path that ends them.

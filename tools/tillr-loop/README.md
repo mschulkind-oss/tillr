@@ -64,6 +64,10 @@ step, `--store` and `--verdict pass` on the verdict step after a landing. `--ver
 an unsuccessful attempt. Every flag in the string above is the adapter's own and the
 candidate arrives after it.
 
+The adapter also supports startup argument validation under the drain's
+[step-program argument contract](../tillr-drain/README.md#step-program-argument-contract).
+That mode is separate from `self-check`, which composes and displays real invocations.
+
 ## The three adapters
 
 | Face | Real invocation | What it derives |
@@ -172,7 +176,7 @@ the plan reads after an export, and that the self-check names the composed argv 
 the derived verdict path, the generated registry and the candidate head — while invoking no
 stub at all. No test runs a real gate, a real store or a model.
 
-`drain-argv.json` is every argument list `tillr drain loop` sends these faces, one per
+[drain-argv.json](./drain-argv.json) is every argument list `tillr drain loop` sends these faces, one per
 optional branch: the ordinary gate, the fixer's two ranges, the land step with each of its
 optional flags, and the verdict. The drain's own suite writes and checks it from its
 `ProcessSteps` code paths, with the real adapter as the program
