@@ -2,23 +2,29 @@
 title: "tillr is a core of queues and graphs, and landing changes in Git is one definition on top of it"
 status: draft
 stage: DESIGN
-updated: 2026-11-16
+updated: 2026-11-17
 tags:
   - tillr
   - design
   - boundaries
-  - autoqa
-summary: "The owner's direction for tillr, written down before anything is built: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate definition that turns it into machinery for landing changes in a Git repository. It records the workflow that definition wraps today, measures from the code where the Git-landing assumption is wired in, lays out three shapes the one file could take, and lists the extension points a second use would fill."
-next: "AutoQA's agent reacts to Sections 4 to 6; then the owner and both sides talk about what to build. No question here needs an answer before that conversation."
+  - product-qa
+summary: "The owner's direction for tillr, written down before anything is built: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate definition that turns it into machinery for landing changes in a Git repository. It records the workflow that definition wraps today, measures from the code where the Git-landing assumption is wired in, lays out three shapes the one file could take, and lists the extension points a second use would fill. Round two adds the Product QA pipeline's positions, the owner's words as they reported them and as he stated them directly, his go-ahead to build of 2026-11-17, and the working choices the build plan rests on."
+next: "The owner confirms or changes the statements of Section 1.1 and the working choices of Section 8. The build plan in tillr-definitions-plan.md is queued; Product QA's agent writes round three against what it builds."
 depends-on:
   - tillr-item-graphs.md
   - tillr-separable-parts.md
+  - tillr-product-qa-requests.md
+  - tillr-definitions-plan.md
 ---
 
 # tillr is a core of queues and graphs, and landing in Git is one definition on top of it
 
-**Status:** 2026-11-16. A draft that writes down a direction; nothing in it is designed to be
-built yet. The inventory was measured on the tree at `6c2af0b32` with `rg` over non-test sources,
+**Status:** 2026-11-17. A draft that writes down a direction. Round two with the Product QA pipeline
+is folded in, with the owner's words as they reported them and as he stated them directly
+([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)). On 2026-11-17 the owner said to build;
+the working choices that build rests on are in
+[Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices), and the items are in
+[the build plan](./tillr-definitions-plan.md). The inventory was measured on the tree at `6c2af0b32` with `rg` over non-test sources,
 commands in [Evidence](#evidence). Claims are marked **[ran]**, **[read]** (file named) or
 **[inferred]**.
 
@@ -27,18 +33,23 @@ commands in [Evidence](#evidence). Claims are marked **[ran]**, **[read]** (file
 > of its seventeen steps, the gate, the land and the verdict; the rest is Go that would have to move
 > behind extension points before "land a change in Git" can be one small definition among others.
 
-**Why it matters.** AutoQA wants tillr's queues, runs and tracking without its landing. If the
-landing part is one plainly separate definition, AutoQA writes a second definition instead of
+**Why it matters.** Product QA wants tillr's queues, runs and tracking without its landing. If the
+landing part is one plainly separate definition, Product QA writes a second definition instead of
 asking tillr for exceptions.
 
 **Start at [Section 3](#3-where-the-git-landing-assumption-is-wired-in-today).** It is measured;
 the shapes in [Section 4](#4-what-one-file-could-mean) are for both sides to react to.
 
-**Needs your ruling:** none before the second round. [OQ-CG1](#OQ-CG1), [OQ-CG2](#OQ-CG2),
-[OQ-CG3](#OQ-CG3), [OQ-CG4](#OQ-CG4) and [OQ-CG5](#OQ-CG5) are listed for after it.
+**Needs your ruling:** none before the build continues. Please confirm or correct the statements
+Product QA reported in your name ([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)) and the
+working choices of [Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices), after
+the next round. [OQ-CG1](#OQ-CG1), [OQ-CG2](#OQ-CG2), [OQ-CG3](#OQ-CG3) and [OQ-CG5](#OQ-CG5) each
+have a working choice in the meantime; [OQ-CG4](#OQ-CG4) can wait.
 
 **Reads with:** [the tillr design index](../tillr/design-status.md) (what every design's status
-is), [tillr-separable-parts.md](./tillr-separable-parts.md) (what can change now, under this
+is), [the build plan](./tillr-definitions-plan.md) (the queued items),
+[tillr-product-qa-requests.md](./tillr-product-qa-requests.md) (Product QA's second-round reply, as
+received), [tillr-separable-parts.md](./tillr-separable-parts.md) (what can change now, under this
 direction), [tillr-item-graphs.md](./tillr-item-graphs.md) (graphs inside one item),
 [board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline) (utilities meet only
 through processes and records).
@@ -57,8 +68,16 @@ names them ([OQ-CG5](#OQ-CG5)).
   its workflow, lifecycle, prerequisites, retention, completion rule and vocabulary.
 - **The landing definition** *(placeholder for this instance)*: the definition that lands changes
   in a Git repository, from item blocks in documents through a gate. It does not exist yet as one
-  file; today its content is spread across the programs Section 3 names. AutoQA's findings store
-  would be a second definition.
+  file; today its content is spread across the programs Section 3 names. Product QA's findings store
+  would be a second definition. In code the instance's placeholder name is `git-landing`
+  ([Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)).
+
+Two names of other projects. **Product QA** is a product bug-finding pipeline, with the
+fuzzer Mangle as its prober; its agent wrote the second round
+([tillr-product-qa-requests.md](./tillr-product-qa-requests.md)). **AutoQA** is something else:
+[tillr-autoqa.md](./tillr-autoqa.md), tillr's own design for exploratory testing of tillr. This
+document's first draft called Product QA "AutoQA", following the owner's word for it; round two
+corrected that, and so does this revision.
 
 Everything else is tillr's existing vocabulary, defined in
 [the design index](../tillr/design-status.md#read-this-first): store, item, drain, lane, gate,
@@ -82,6 +101,8 @@ The owner, 2026-11-16 (relayed by the coordinator as 2026-11-17):
 > Before I answer too many open questions, I want you to take this, write this all down, get the
 > pack documentation shipped so that we can then have the AutoQA agent answer something more up to
 > date. Then we can talk about truly what we're going to build here.
+
+By "the AutoQA agent" the owner means the Product QA project's agent (see the words above).
 
 Three more statements, 2026-11-16 (relayed as 2026-11-17). On where rules about items belong:
 
@@ -116,7 +137,48 @@ Restated:
 6. When a choice suits Git landing and chafes against another use, or the reverse, that tension is
    the signal that the choice does not belong in the core: each definition supplies it. This is
    the owner's decision rule; [Section 6](#6-what-this-changes-in-what-was-said-before) applies it.
-7. Nothing is built from this until AutoQA's agent has reacted and both sides have talked.
+7. Nothing is built from this until Product QA's agent has reacted and both sides have talked. Its
+   agent reacted on 2026-11-17, and the same day the owner said to build
+   ([Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)).
+
+### 1.1 The owner's words, as reported by Product QA
+
+Product QA's reply of 2026-11-17 quotes the owner five times
+([their Section 3](./tillr-product-qa-requests.md#3-graph-change) and
+[Section 4](./tillr-product-qa-requests.md#4-requests-for-this-round)). These are his words **as the
+other project's agent reported them**, not heard here; the owner can confirm or correct each.
+
+1. **On graph change**, clarifying a statement of the day before: a step cannot replace itself,
+   "but it can emit another node directly downstream of itself, which consumes all of its original
+   data that … it will pass through and has the exact same output shape"; and "you could have a
+   graph of 10 nodes fully executed. Then at some point in the future, you add two nodes to make it
+   12. That gives you two unexecuted nodes that will then get started the next scheduling pass."
+2. **On reopening:** "Reopening or not, when everything is done, I suppose should be a policy
+   determination for whatever your use case is. Like, we will define valid state transitions for
+   an item and reopening might be valid for some and not valid for others."
+3. **On the other differences** between Guild's graph runtime and tillr's item graphs: "they should
+   be all policy things that should be possible if you want them from core. Core should not
+   preclude them."
+4. **On fixed graph size limits** (`D-IG4`, at most 100 nodes and a depth of 8): "This 100 steps, I
+   hate this. I don't want limits like this. We should certainly tell Tiller that this is not
+   acceptable. Like, we'll build what we build."
+5. **On clocks:** "The agent works until it is done, it has an event, we have a stall detector
+   watchdog if we need something like that, but we don't just say, 'Okay, 30 minutes,' and then
+   have some gate given 20 seconds and on a loaded machine it fails".
+
+The owner, directly to the coordinator on 2026-11-17, on the gate's "could not judge", beside
+statement 5:
+
+> what does 'could not judge' mean. isn't this directly opposed to our principles? target budgets,
+> watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just
+> fine.
+
+The direct statement agrees with the reported ones, so this document treats all of them as the
+owner's direction: no fixed graph caps; no clock whose only consequence is a kill or a failure;
+reopening and graph change are a definition's policy, which the core must not preclude. They are
+still listed for him to confirm. Statements 4 and 5 cut against accepted designs,
+[Section 7](#7-where-the-documents-disagree) says where, and the work for clocks is filed separately
+from this document.
 
 ---
 
@@ -326,11 +388,11 @@ protocol the core must keep stable, and a second definition is a second such pro
 git-landing@v1:  work (agent, seat build, write)
                  → gate (command, gate)  → land (command, land)  → verdict (command)
                  exit: requires_candidate commit_required
-qa-probe@v1:     probe (agent, read_only) → replay (command) → judge (evaluator)
+findings@v1:     recheck (command) → investigate (agent, read_only) → verify (agent, evaluator)
                  exit: no_commit
 ```
 
-It makes "land a change" one workflow among others, and AutoQA's finding pipeline another, with
+It makes "land a change" one workflow among others, and Product QA's finding pipeline another, with
 command nodes ([the queued block](./tillr-item-graphs.md#add-command-nodes-that-run-a-registered-program))
 and exit conditions doing the work. It runs into
 [item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be), which refuses "a landing or a
@@ -344,6 +406,11 @@ are processes the caller names. The item-graph design leans toward a partial (c)
 its own completion (`commit_required`, `commit_optional`, `no_commit`), while the landing stays one
 act after the exit **[read]**. Nothing leans toward (a) alone; it reads as the vocabulary half of
 (b) **[inferred]**.
+
+**The second party's position.** Product QA chose option D of [OQ-CG1](#OQ-CG1), a data file plus
+one hook program, as "how we already compose tools", and option A of [OQ-CG2](#OQ-CG2)
+([their Section 2](./tillr-product-qa-requests.md#2-reactions)). Both match this document's leanings,
+and both are now working choices ([Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)).
 
 **What each implies for the eight "no"s** of
 [the separable-parts proposal](./tillr-separable-parts.md#13-what-tillr-will-not-change), as a
@@ -364,8 +431,10 @@ reading **[inferred]**:
 
 ## 5. The extension points
 
-The places a second use, AutoQA's findings store or its fuzzing-ideas store, would plug in
-something other than Git landing.
+The places a second use, Product QA's findings store or its ideas store, would plug in something
+other than Git landing. Product QA gave a concrete case for each row in
+[their Section 2](./tillr-product-qa-requests.md#2-reactions), and none needed a row this table does
+not have.
 
 | Extension point | Git landing fills it with | Status |
 | :--- | :--- | :--- |
@@ -398,25 +467,28 @@ next step for an undeclared item is that pipeline's design stage, whose output i
 [The separable-parts proposal](./tillr-separable-parts.md) listed eight requests tillr would not
 take, each against a settled ruling, plus the undeclared-item hold. The owner's decision rule
 ([Section 1](#1-the-direction-in-the-owners-words), item 6) reads each "no" as a tension between
-Git landing and AutoQA, and so as a candidate for what a definition supplies. Two parts are the
-owner's direction, not a reading: outcomes defined per item kind (AutoQA's request 3) and reopening
-from a finished state (its request 4) belong to the definition, because the owner put lifecycle
-there.
+Git landing and Product QA, and so as a candidate for what a definition supplies. Two parts are the
+owner's direction, not a reading: outcomes defined per item kind (Product QA's first-round request 3)
+and reopening from a finished state (its request 4) belong to the definition, because the owner put
+lifecycle there, and his reopening statement as Product QA reports it
+([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)) says the same.
 
-The last column is **this document's judgment**, for the owner to confirm: where a "no" is not a
-real tension but a protection every definition needs, it says why. No ruling is rewritten here.
+The "Judgment" column is **this document's judgment**, for the owner to confirm: where a "no" is
+not a real tension but a protection every definition needs, it says why. The last column is
+**Product QA's answer in round two**: four withdrawn and five real, with C3 narrowed. No ruling is
+rewritten here.
 
-| "No" | Ruling it rested on | A tension? | Judgment |
-| :--- | :--- | :--- | :--- |
-| C1 Outcomes per kind | The closed seven states, one projector ([D-IP1](./tillr-idea-pipeline.md#61-settled-decisions)) | Yes | The definition's, by the owner's direction. The protection that stays in the core: each definition's set is closed and projected one way |
-| C2 Reopening a finished item | Terminal `landed` and `resolved-elsewhere` ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | Yes | The definition's, by the owner's direction. Stays true inside Git landing. Core protection: a move out of a finished state is an event, never silent |
-| C3 Steps reshaping the graph | Bounded replacement only; no model-written wiring (`D-IG3`, `D-IG5`, `D-IG9`) | Partly | Which reshaping operations exist is the definition's. That each is applied by one writer, atomically with its event, and never to a node that has started, is a protection every use needs: without it the record lies |
-| C4 An uncertain outside effect as a state | No node changes anything outside its worktree ([item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) | Yes | The worktree rule is Git landing's. Core protection: an effect a definition declares is recorded before and after, so a retry can see it |
-| C5 Clocks and deadlines in the plan | No timers ([agent-runtime.md §6](./agent-runtime.md#6-the-task-graph)) | Partly | A deadline as an ordering input of dispatch policy is a tension and the definition's. The planner staying a function of the store, replayable, is a protection |
-| C6 A Go library as the connection | Processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | No | A protection: it is how a definition injects anything without linking the core |
-| C7 Completion that is not a landing | One item, one atomic change (`D-IG2`) | Yes | The completion rule is the definition's; Git landing's is a landing. Core protection: an item completes once, on a recorded receipt |
-| C8 A second loop in one root | None; how the keeper finds a loop | No | Not a tension. One writer per store and at-most-once launch of a run are protections; a second use runs its own store and root |
-| The undeclared-item hold | Sync is the only intake ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)) | Yes | A prerequisite, so the definition's, and already narrowed to stores documents feed. The owner's next-step principle applies in every definition |
+| "No" | Ruling it rested on | A tension? | Judgment | Product QA, round two |
+| :--- | :--- | :--- | :--- | :--- |
+| C1 Outcomes per kind | The closed seven states, one projector ([D-IP1](./tillr-idea-pipeline.md#61-settled-decisions)) | Yes | The definition's, by the owner's direction. The protection that stays in the core: each definition's set is closed and projected one way | Real: an inconclusive finding must be countable |
+| C2 Reopening a finished item | Terminal `landed` and `resolved-elsewhere` ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | Yes | The definition's, by the owner's direction. Stays true inside Git landing. Core protection: a move out of a finished state is an event, never silent | Real: the owner, as reported, rules it a definition's policy |
+| C3 Steps reshaping the graph | Bounded replacement only; no model-written wiring (`D-IG3`, `D-IG5`, `D-IG9`) | Partly | Which reshaping operations exist is the definition's. That each is applied by one writer, atomically with its event, and never to a node that has started, is a protection every use needs: without it the record lies | Real, narrowed to the four rules all three designs share: one writer applies each change atomically with its event, no node replaces itself, nothing started changes, and every change passes the downstream-shape check. Free rewriting is withdrawn |
+| C4 An uncertain outside effect as a state | No node changes anything outside its worktree ([item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) | Yes | The worktree rule is Git landing's. Core protection: an effect a definition declares is recorded before and after, so a retry can see it | Real: a report send that lost its session |
+| C5 Clocks and deadlines in the plan | No timers ([agent-runtime.md §6](./agent-runtime.md#6-the-task-graph)) | Partly | A deadline as an ordering input of dispatch policy is a tension and the definition's. The planner staying a function of the store, replayable, is a protection | Withdrawn: the time box is the fuzzer run's own |
+| C6 A Go library as the connection | Processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | No | A protection: it is how a definition injects anything without linking the core | Withdrawn: processes and records are enough |
+| C7 Completion that is not a landing | One item, one atomic change (`D-IG2`) | Yes | The completion rule is the definition's; Git landing's is a landing. Core protection: an item completes once, on a recorded receipt | Real: completion on a recorded, judged verdict |
+| C8 A second loop in one root | None; how the keeper finds a loop | No | Not a tension. One writer per store and at-most-once launch of a run are protections; a second use runs its own store and root | Withdrawn: it runs its own store and root |
+| The undeclared-item hold | Sync is the only intake ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)) | Yes | A prerequisite, so the definition's, and already narrowed to stores documents feed. The owner's next-step principle applies in every definition | Withdrawn: its stores are fed by `apply`, which the rewritten hold leaves alone |
 
 ---
 
@@ -436,6 +508,77 @@ real tension but a protection every definition needs, it says why. No ruling is 
    creep, and the owner describes the core as "queues and DAGs that have agents and other commands".
    Read together, the warnings are about features (cycles, timers, model-written wiring), not about
    generality **[inferred]**.
+5. **`D-IG4` in [tillr-item-graphs.md](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)**
+   caps an expanded graph at 100 nodes and a depth of 8, and four queued criteria carry a cap. The
+   owner, as Product QA reports him, refuses fixed caps (statement 4 of
+   [Section 1.1](#11-the-owners-words-as-reported-by-product-qa)). The build plan's next tranche
+   replaces them ([item 4 there](./tillr-definitions-plan.md#3-the-next-tranche-in-prose)).
+6. **`D-GR13` in [gate-rework.md](./gate-rework.md#decision-ledger)** stops a fast check still
+   running at its ceiling and answers "could not judge", which holds the item until an operator
+   clears it; and the lane lease in
+   [board-utilities.md §5.6](./board-utilities.md#56-run-alone) lets a reaper free a lane 300
+   seconds past a run's wall. Both are clocks whose consequence is a kill or a failure, against the
+   owner's direct principle and statement 5. That work is filed separately.
+7. **This document's first draft** treated [tillr-autoqa.md](./tillr-autoqa.md) as Product QA's
+   design, through the word "AutoQA", and its shape (c) used that design's `qa-probe@v1` as Product
+   QA's graph. Corrected on 2026-11-17: the sketch names a findings workflow instead.
+
+---
+
+## 8. Building it: the owner's go-ahead and the working choices
+
+On 2026-11-17 the owner told the coordinator: "file item(s) to build as much of the new tillr as
+possible so autoqa can play with the real thing and comment for real the next round. rather than
+your responses right now." By "autoqa" he means the Product QA pipeline. The items are in
+[the build plan](./tillr-definitions-plan.md), a separate document so that this one's open
+questions do not hold them.
+
+Code needs answers to questions the owner has not ruled. Each choice below is a **working choice,
+to be confirmed or changed by the owner after the next round**:
+
+1. **The one file is shape D** ([OQ-CG1](#OQ-CG1)): the vocabulary and rules as data, in a
+   definition file, plus one hook program the core calls for each judgment. Recommended here and
+   chosen by Product QA.
+2. **The lifecycle is option A** ([OQ-CG2](#OQ-CG2)): the core runs a generic lifecycle, and each
+   definition names its states, its ready state, its finished states and its valid moves, including
+   whether an item may leave a finished state and from which. Leaving one is always an event with a
+   reason and an actor. Recommended here and chosen by Product QA.
+3. **The words are placeholders** ([OQ-CG5](#OQ-CG5)): "definition" for the kind and `git-landing`
+   for this instance, in file names, flags and record fields. They were chosen so that a later
+   rename is mechanical, and every item keeps each word in as few places as possible: one package
+   and one constant.
+4. **The store records the definition it runs**, at `tillr store init --definition`, and a store
+   with none recorded runs `git-landing`. Every utility opens the store, so they cannot disagree.
+5. **Separation starts now** ([OQ-CG3](#OQ-CG3)), under a safety rule every item carries as a
+   criterion: today's Git-landing queue behaves identically, the existing suites pass unchanged,
+   and a store made before the change opens and drains. The drain runs on this code while it is
+   rebuilt.
+6. **The owner's reported statements are direction** ([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)):
+   no fixed graph caps, no clock whose only consequence is a kill, and reopening and graph change
+   as a definition's policy. They are still listed for him to confirm.
+
+### 8.1 What a store that does not land needs from the core
+
+Product QA's request R2-2, a store declared not to land, is the first real slice of the split. The
+inventory of [Section 3](#3-where-the-git-landing-assumption-is-wired-in-today) says what it has to
+avoid **[read]**:
+
+- **Holds only landing raises.** 14 of the drain's 47 hold reasons: `candidate-no-op`,
+  `boundary-scope-escape`, `gate-failed`, `land-refused`, `no-fence`, `fork-held`, `trunk-broken`,
+  `conflict-fix`, `conflict-exhausted`, `conflict-design`, `conflict-owner`, `trunk-path-dirty`,
+  `trunk-rewritten` and `candidate-record-mismatch`.
+- **Git at the loop's start.** The trunk read (`git rev-parse main`), the startup `tillr item
+  sync`, which refuses a root that is not a repository's top level, trunk history, the rolling tier,
+  and roll and push after a landing.
+- **Staging.** A worktree, a base sha and a fence file; `tillr run exec` accepts only the worktree
+  as a working directory; and the brief's values name a sha, a fence and a target.
+- **The end of a run.** The candidate rule, the boundary bracket, the gate, the lander and the
+  move to `landed`.
+
+What stays in the core for every definition: the store and its events, items, criteria, verdicts,
+edges and their `blocked_by`, lanes and leases, `run exec`, the planner's general holds, backend
+policy and quotas, workflows and their nodes, and the views. The build plan's items take each of
+the four lists above in turn, and its last item runs a definition that lands nothing end to end.
 
 ---
 
@@ -455,16 +598,28 @@ rg 'Default(Replay|Rolling|FixerGate)Program' tools/tillr-drain/drain   fork-che
 wc -l tools/tillr-loop/tillr-loop                                       769
 ```
 
-**Not determined:** how many lines of the drain would move behind hooks under shape (b); whether
-the views' landing pages are separable without a design round; anything about AutoQA's own code,
-which does not exist yet.
+Added on 2026-11-17 for round two, on binaries built from `2a35749f6`; the commands and results
+are in [the separable-parts Evidence](./tillr-separable-parts.md#evidence):
+
+```text
+tillr-drain loop --exit-when-drained, root outside any repository   exit 4 at git rev-parse main
+  root inside a repository but not its top level                    exit 2: tillr-item sync refuses it
+tillr-drain why on a store with an item that has no paths           held no-fence
+rg -n 'only agent is supported' tools/tillr-drain/drain/workflow.go  the loader refuses command stages
+```
+
+**Not determined:** how many lines of the drain move behind hooks; whether the views' landing pages
+are separable without a design round; anything about Product QA's code beyond what its reply
+reports.
 
 ---
 
 ## Open Questions
 
-None of these needs an answer before the second round of conversation with AutoQA's agent; the
-owner said so. They are here so that round has something sharp to aim at.
+The second round with Product QA's agent has happened, and the owner said to build. Each question
+below either has a working choice the build rests on
+([Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)) or can wait; none holds
+the build, whose items live in [the build plan](./tillr-definitions-plan.md).
 
 1. 💬 **OQ-CG1: Which shape does the one file take?**
 
@@ -478,7 +633,8 @@ owner said so. They are here so that round has something sharp to aim at.
      [what a node may never be](./tillr-item-graphs.md#5-what-a-node-may-never-be).
    - **D — A data file plus one hook program**, with the item graphs left as the inside of an item.
 
-   May wait for the second round.
+   Product QA's position in round two: D. **Working choice: D**, to be confirmed or changed by the
+   owner after the next round.
 
    <!-- vantage: question id=OQ-CG1 leaning="D — the vocabulary is data and the judgments are processes, which is the seam the design already enforces, and graphs stay inside items." -->
 
@@ -490,14 +646,16 @@ owner said so. They are here so that round has something sharp to aim at.
 
 2. 💬 **OQ-CG2: Where does the line between the core and the landing definition fall for item states?**
 
-   `landed` and `resolved-elsewhere` are landing words, hard-coded in the item face. AutoQA's
-   finished findings are confirmed, rejected or inconclusive.
+   `landed` and `resolved-elsewhere` are landing words, hard-coded in the item face. Product QA's
+   finished findings are confirmed, rejected, inconclusive, a repeat of another, or a tooling fault.
 
    - **A — The core owns a generic lifecycle** (not started, queued, blocked, finished, closed) and
      each definition names its finished states and which are terminal.
    - **B — The seven states stay core-wide**, and other definitions map onto them.
 
-   May wait for the second round.
+   Product QA's position in round two: A, and the owner's reopening statement as they report it
+   ([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)) extends A to which moves are
+   valid. **Working choice: A**, to be confirmed or changed by the owner after the next round.
 
    <!-- vantage: question id=OQ-CG2 leaning="A — it keeps one projector and a closed set per definition, which is what D-IP1 protects." -->
 
@@ -517,7 +675,10 @@ owner said so. They are here so that round has something sharp to aim at.
      hooks.
    - **B — Start separating now**, beside the drain proof.
 
-   May wait for the second round; A is the default until it is ruled.
+   The owner's go-ahead of 2026-11-17, "build as much of the new tillr as possible", reads as B.
+   **Working choice: B**, with the safety rule of
+   [Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices): every item leaves
+   today's queue behaving identically.
 
    <!-- vantage: question id=OQ-CG3 leaning="A — refactoring the loop while it drains the queue changes the thing under test, and the queued command nodes and exit conditions already move toward the split." -->
 
@@ -527,7 +688,7 @@ owner said so. They are here so that round has something sharp to aim at.
    **Answer:**
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-CG4: What should AutoQA's agent be asked to react to?**
+4. 💬 **OQ-CG4: What should Product QA's agent be asked to react to?**
 
    Its reply starts the second round, and it will answer what it is asked.
 
@@ -536,7 +697,7 @@ owner said so. They are here so that round has something sharp to aim at.
      needs, the provisional "no"s, and the stable surface.
    - **B — An open review** of every tillr design.
 
-   May wait for the second round; it shapes the request that opens it.
+   Round two answered option A's four things. **Can wait**: the next round reacts to what is built.
 
    <!-- vantage: question id=OQ-CG4 leaning="A — a concrete case per extension point is what turns a shape into a choice." -->
 
@@ -563,8 +724,10 @@ owner said so. They are here so that round has something sharp to aim at.
    - **F — trunk-landing:** names the trunk; less clear to a reader who does not know tillr's words.
    - **G — docs-to-trunk:** names both ends; long.
 
-   May wait for the second round; this document and the separable-parts proposal use "definition"
-   and "landing definition" until it is ruled.
+   Product QA has no preference, only that the kind and the instance be told apart. **Working
+   choice for code:** the placeholders `definition` and `git-landing`, kept in one constant each so
+   that the owner's ruling is a mechanical rename
+   ([Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)).
 
    <!-- vantage: question id=OQ-CG5 leaning="A and E — rig sits beside lane, seat and gate without colliding, and git-landing says what the instance does." -->
 
