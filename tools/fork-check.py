@@ -1396,10 +1396,17 @@ TILLR_LOOP_TIMEOUT = 300
 # (docs/design/tillr-distribution.md Section 3), so a document that restates one is the page
 # that disagrees with the binary a month later. It reads the eight module READMEs, the
 # `tillr-operating` skill and the binaries it builds, so a change to any of them plans it.
+# Its rolling-check guard also reads every tracked file, judging the tillr pack's delivered
+# copies as their sources by the rule in tools/pack-docs.py, so a change to that delivered
+# tree or to the rule plans it too.
 TILLR_DOCS_TEST = "tests/tillr-docs.test.py"
 TILLR_DOCS_SKILL = "yolo-packs/tillr/skills/tillr-operating/"
+TILLR_DOCS_DELIVERED = "yolo-packs/tillr/files/local/share/tillr/"
+TILLR_DOCS_RULE = "tools/pack-docs.py"
 TILLR_DOCS_WATCHES = (
     TILLR_DOCS_TEST,
+    TILLR_DOCS_RULE,
+    TILLR_DOCS_DELIVERED,
     "tools/tillr/",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
@@ -1415,6 +1422,8 @@ TILLR_DOCS_INPUT = (
     re.compile(r"^" + re.escape(TILLR_DOCS_TEST) + r"$"),
     re.compile(r"^tools/tillr(-[a-z]+)?/"),
     re.compile(r"^" + re.escape(TILLR_DOCS_SKILL)),
+    re.compile(r"^" + re.escape(TILLR_DOCS_RULE) + r"$"),
+    re.compile(r"^" + re.escape(TILLR_DOCS_DELIVERED)),
 )
 TILLR_DOCS_TIMEOUT = 600
 
