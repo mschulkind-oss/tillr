@@ -6,5 +6,5 @@
     "landings": 20,
     "minutes": 60
   },
-  "lane_base": "green"
+  "lane_base": "tip"
 }
