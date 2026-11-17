@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,6 +88,12 @@ type criterion struct {
 // the record as stored. The write face and the seed materializer both call it, so a
 // fixture cannot construct a state the write face would reject (lanes §1, OQ-L2).
 func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envelope, error) {
+	return apply(ctx, tx, env, false)
+}
+
+// apply shares the record writer with seed's validated rank-only updates. That
+// private path may change a finished item's rank, never its state or definition.
+func apply(ctx context.Context, tx *store.Tx, env record.Envelope, seedRank bool) (record.Envelope, error) {
 	// A replayed request answers the original result and writes nothing: the key is
 	// the caller's statement that this is the same request, and a second write would
 	// make the log say the transition happened twice.
@@ -107,19 +114,7 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 	if payload.ItemID == "" {
 		return record.Envelope{}, Usagef("an item.record needs an item_id")
 	}
-	if err := checkState(payload.ItemID, payload.State); err != nil {
-		return record.Envelope{}, err
-	}
 	if err := checkCriteria(payload.ItemID, payload.Criteria); err != nil {
-		return record.Envelope{}, err
-	}
-	if err := checkAllowedPaths(payload.ItemID, payload.AllowedPaths); err != nil {
-		return record.Envelope{}, err
-	}
-	if err := checkRank(payload.ItemID, payload.Rank); err != nil {
-		return record.Envelope{}, err
-	}
-	if err := checkSeat(payload.ItemID, payload.Seat); err != nil {
 		return record.Envelope{}, err
 	}
 	criteria, err := carryCriteria(tx.Reader(), payload.ItemID, payload.Criteria)
@@ -135,12 +130,38 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 	from := ""
 	payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = "", "", "", ""
 	if existing {
-		stored, _, err := readStoredItem(tx.Reader(), payload.ItemID)
+		stored, storedAt, err := readStoredItem(tx.Reader(), payload.ItemID)
 		if err != nil {
 			return record.Envelope{}, err
 		}
 		from = stored.State
 		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
+		// carryCriteria runs first so its existing refusals keep their names,
+		// including when a record also tries to reopen or rename the item.
+		if terminalState(from) {
+			comparison := payload
+			if seedRank {
+				comparison.Rank = stored.Rank
+			}
+			if !sameTerminalDefinition(stored, comparison) {
+				return record.Envelope{}, terminalRejection(payload.ItemID, from)
+			}
+			if payload.Rank == stored.Rank {
+				return envelopeOf(RecordKind, "item-"+payload.ItemID, storedAt, stored)
+			}
+		}
+	}
+	if err := checkAllowedPaths(payload.ItemID, payload.AllowedPaths); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkRank(payload.ItemID, payload.Rank); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkSeat(payload.ItemID, payload.Seat); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkState(payload.ItemID, payload.State); err != nil {
+		return record.Envelope{}, err
 	}
 	if err := checkClosedTransition(payload.ItemID, from, payload.State, true); err != nil {
 		return record.Envelope{}, err
@@ -218,6 +239,22 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		}
 	}
 	return env, nil
+}
+
+// sameTerminalDefinition compares the fields Apply writes, not read-through questions or
+// store-owned timestamps and lifecycle metadata. Criteria and blockers are stored
+// by id, so presenting those lists in another order does not change the item.
+func sameTerminalDefinition(a, b itemPayload) bool {
+	ac, bc := slices.Clone(a.Criteria), slices.Clone(b.Criteria)
+	slices.SortFunc(ac, func(a, b criterion) int { return strings.Compare(a.CriterionID, b.CriterionID) })
+	slices.SortFunc(bc, func(a, b criterion) int { return strings.Compare(a.CriterionID, b.CriterionID) })
+	ab, bb := slices.Clone(a.BlockedBy), slices.Clone(b.BlockedBy)
+	slices.Sort(ab)
+	slices.Sort(bb)
+	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef &&
+		a.DesignDoc == b.DesignDoc && a.Rank == b.Rank && a.Seat == b.Seat &&
+		a.Prose == b.Prose && a.Workflow == b.Workflow && slices.Equal(ac, bc) &&
+		slices.Equal(ab, bb) && slices.Equal(a.AllowedPaths, b.AllowedPaths)
 }
 
 // replay answers the record a request with this key already produced, and false when

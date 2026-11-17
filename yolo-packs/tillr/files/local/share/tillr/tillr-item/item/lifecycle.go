@@ -78,6 +78,15 @@ func Reopen(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Ti
 	return recordLifecycle(tx, p, at, "reopen", reason, by)
 }
 
+// terminalState names the finished dispositions raw writes cannot change.
+func terminalState(state string) bool {
+	return state == "landed" || state == "resolved-elsewhere"
+}
+
+func terminalRejection(id, state string) error {
+	return Rejectionf("state-terminal", id, "item %q is %q; raw writes cannot change a finished item", id, state)
+}
+
 // checkClosedTransition keeps raw state/apply writes from bypassing the two commands.
 // Apply may update a closed item's definition without changing its disposition.
 func checkClosedTransition(id, from, to string, definition bool) error {
