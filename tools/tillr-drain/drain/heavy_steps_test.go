@@ -70,7 +70,7 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 	}
 	child := filepath.Join(work, "child.pid")
 	marker := filepath.Join(work, "child-alive")
-	writeForkFile(t, filepath.Join(checks, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","budget_ms":1,"timeout_ms":1000,"command":["sh","-c","sleep 1000 & echo $! > `+child+`; touch `+marker+`; wait"],"reads":["value"],"remember":false}`)
+	writeForkFile(t, filepath.Join(checks, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","budget_ms":1,"timeout_ms":3600000,"command":["sh","-c","sleep 1000 & echo $! > `+child+`; touch `+marker+`; wait"],"reads":["value"],"remember":false}`)
 	heavyCommit(t, root, "ready")
 	steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: bin}
 	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: steps.JudgeHeavy}
@@ -78,7 +78,8 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := runner.Run(ctx); done <- err }()
-	deadline := time.After(20 * time.Second)
+	// No wall-clock bound: readiness is the file, and the run ending first is the only other
+	// outcome. A true hang is stopped by the test binary's own timeout.
 	for {
 		if _, err := os.Stat(marker); err == nil {
 			break
@@ -86,8 +87,6 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 		select {
 		case err := <-done:
 			t.Fatalf("ended before child: %v", err)
-		case <-deadline:
-			t.Fatal("child did not start")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

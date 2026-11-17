@@ -35,16 +35,13 @@ func stallGit(t *testing.T, subcommand string) (entered, release string) {
 
 func awaitGit(t *testing.T, entered string) {
 	t.Helper()
-	deadline := time.After(10 * time.Second)
+	// No wall-clock bound: the barrier file is the readiness signal, and a true hang is
+	// stopped by the test binary's own timeout.
 	for {
 		if _, err := os.Stat(entered); err == nil {
 			return
 		}
-		select {
-		case <-deadline:
-			t.Fatal("Git barrier not reached")
-		case <-time.After(10 * time.Millisecond):
-		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

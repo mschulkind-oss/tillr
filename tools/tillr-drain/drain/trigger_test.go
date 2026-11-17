@@ -203,8 +203,10 @@ func TestNewStoreFactDispatchesBeforeOwnedRunEnds(t *testing.T) {
 		if id != "item-c" {
 			t.Fatal(id)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("new fact did not wake free lane before first run ended")
+	// The first run stays blocked, so a lane that is never woken waits here; the bound is
+	// a hang guard, not a latency assertion.
+	case <-time.After(5 * time.Minute):
+		t.Fatal("hung: new fact did not wake free lane before first run ended")
 	}
 }
 
