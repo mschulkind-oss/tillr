@@ -1951,13 +1951,7 @@ combination need fixing. Validation must still check the hooks and reject warnin
 - Catch future validation failures with an automated test and document any setup needed.
 - Keep the mod's existing behavior and tests working.
 
-<!-- tillr: item id="item-mod-passes-strict-plugin-validate" paths="yolo-packs/matt-mods/mods/cloud-usage/,yolo-packs/matt-mods/README.md,tests/" blocked_by="" prose="2" -->
 
-- **c1:** `claude plugin validate --strict yolo-packs/matt-mods/mods/cloud-usage` exits 0 under the installed Claude Code. The report gives the command, the build from `claude --version`, and the date.
-- **c2:** The commit message names the root cause of the TypeScript warnings, and says whether the generated `.claude-plugin/types/` declarations were missing, the mod's own `tsconfig.json` or sources were wrong, or both. The fix removes that cause. It does not drop `--strict`, add suppression comments, or exclude the hooks from checking.
-- **c3:** A test in the repository's test directory runs the strict validation on the mod and asserts that it exits 0. It is `tests/cloud-usage-plugin-validate.test.py` unless the builder finds an existing test that already invokes the validator, which was not the case on 2026-11-17. When the `claude` binary is absent, the test skips and prints that reason. The report says whether the gate's environment has `claude`, and what runs there if it does not.
-- **c4:** The mod's README and the matt-mods README give the one validation command that works from a clean checkout, including any step that creates the declarations the check needs.
-- **c5:** `claude plugin test` on the mod and the existing cloud-usage Node and Python suites still pass, and `yolo pack lint yolo-packs/matt-mods` passes.
 
 **Agent details:**
 
