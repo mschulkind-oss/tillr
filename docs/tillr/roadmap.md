@@ -1159,6 +1159,48 @@ history used to keep those proportions.
 - **c4:** The policy check refuses a share that is not a positive number and a list that mixes a share on some entries with none on others, naming the seat.
 - **c5:** A seat may set `pick` to `in-order` (today's behavior and the default), `round-robin` (each open backend in turn, which is equal shares) or `random` (one open backend drawn at random per dispatch, weighted by share when shares are given). The draw is recorded on the dispatch, so a run's backend is a fact and never re-derived. A test asserts round-robin over three backends visits each in turn and that 300 random draws over two equal backends land between 120 and 180 on each.
 
+**Ruling, 2026-11-17 (answers the conflict raised by `run-item-policy-seat-shares-a6`):** the work
+is built, and no criterion changes. Run `run-item-policy-seat-shares-a5` reported done with one
+commit, and the gate refused it on the `documents` check alone. That check named two dead section
+links in this roadmap, in the blocks of two other items, and nothing in the candidate; no other
+check that ran failed. The links were dead at the base the run was staged from, `f1647cf10`, and
+the [quota item's ruling](#add-direct-quota-checks-with-a-reserve) records the same refusal of
+its own two runs. Run `run-item-policy-seat-shares-a6` ended five seconds after it started, wrote
+nothing and named no blocker, so it is evidence of nothing about the item. Measured on 2026-11-17
+at trunk `123aeab1b`: `uvx vantage-check docs/tillr/roadmap.md` reported nothing to fix. Four
+points settle it:
+
+1. **Start from the built candidate and do not write the item again.** It is the commit below the
+   tip of `refs/tillr/runs/run-item-policy-seat-shares-a5`, titled "feat(drain): distribute seat
+   dispatches by backend shares". The tip above it only removes this block and is not carried.
+   Apply that one commit to the base the run is staged from, which holds the link repair, and
+   give the new commit its own message.
+2. **The two README conflicts are resolved by keeping both sections.** On 2026-11-17 `git
+   merge-tree --write-tree` of that commit against trunk `123aeab1b` reported a content conflict in
+   `tools/tillr-drain/README.md` and in its pack copy, and merged every Go file without one. The
+   conflict is two sections added at the same place: the trunk's "Backend quota admission" and
+   the candidate's section on shares. Keep the trunk's section whole and place the candidate's
+   after it. Resolve the source README only, then regenerate the pack copy with `just pack-sync`;
+   do not resolve the pack copy by hand.
+3. **"Shut" in c3 means the trunk's combined set, and the candidate predates it.** The candidate
+   was built before the quota checks landed, so the dispatch claim it adds in `drain/pass.go`
+   reads `readShutBackends`, which knows only a backend held by a refused run. The trunk now has
+   `readQuotaShutBackends` in `drain/quota_probe.go`, which adds a backend shut by a quota reading
+   or by a reserve. Every place the candidate decides whether a backend is open (the share
+   selection at planning, the claim, the review-seat check and the restart checks for a workflow
+   and its parallel siblings) uses the combined set, so a backend shut by a reserve takes no
+   share. This merges without a conflict and is still wrong until changed, so it gets a test
+   written first: with shares of 1 and 1 and the first backend shut by a reserve alone, every
+   dispatch goes to the second, and the first takes its share again once its reading reopens it.
+   The quota item's rule that a claimed dispatch always starts still holds: a share is chosen
+   among the backends open at the claim, and is not re-drawn after it.
+4. **The full suite of `tools/tillr-drain/` decides, and a command limit is not a verdict.** The
+   first candidate's full run passed 1,552 tests only on a rerun, after the 600-second command
+   limit cut the first one off. Run the sharded suite as a background command with no limit
+   shorter than the suite. If it fails in a test this item did not touch, on a base where that
+   test also fails, the run reports `trunk-broken` with the test's name and does not stop as
+   blocked.
+
 ### Move unfinished runs when backend quota runs out
 
 When a backend runs out of its usage allowance partway through a run, the work already
