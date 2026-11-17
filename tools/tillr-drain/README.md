@@ -963,6 +963,21 @@ remedy as its mover. `tillr view lanes` prints the condition under the lane's ro
 Item-owned staging failures keep their behavior: they count toward the streak. Each item
 and lane prints its line once per distinct error, not once per pass.
 
+A refused staging cancels the claim, and a cancelled claim is no attempt. The run never
+started, so it has no terminal record, and the next dispatch reuses its run id. The claim
+can also have moved the item's conflict: a design-seat dispatch marks the conflict
+`awaiting` that design run, and a build dispatched against an answer closes the answer.
+The cancellation undoes that move in the same write, so the re-plan offers the item the
+next lane, as it does for an item with no conflict. Before 2026-11-17 the move was left in
+place. An awaiting conflict then read `conflict-design` with no design run alive, and a
+closed answer held its item as `run-link-missing` or `retry-stale` for an operator. At
+each pass the loop recognizes those records: the item's latest dispatch is examined
+(`drain.examined`), its run has no terminal record, and the conflict is still as the claim
+left it. It undoes the move, prints one `loop: <item> run <run> was claimed but never
+started` line, and the item is dispatched again with no operator command. The
+[unlaunched-claim tests](./drain/unlaunched_claim_test.go) cover the design run and the
+build re-offered in the same pass, and the recovery of the old records.
+
 A **lane copy** is our term for a lane commit that is kept somewhere else. Staging resets a
 lane copy rather than refusing the lane. Two things make a commit a lane copy. A run pin
 (`refs/tillr/runs/<run>`, which the loop never deletes) may contain it. Or a recorded
