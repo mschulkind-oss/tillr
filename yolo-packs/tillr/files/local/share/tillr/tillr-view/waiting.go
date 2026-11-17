@@ -17,6 +17,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/quota"
+	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -230,7 +231,11 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
 	} else {
-		_, err = fmt.Fprintf(os.Stdout, "definition: %s\n", declared.Name)
+		window, readErr := spend.Read(ctx, *path, time.Now())
+		if readErr != nil {
+			return record.Envelope{}, exitFor(readErr)
+		}
+		_, err = fmt.Fprintf(os.Stdout, "definition: %s\n%s\n", declared.Name, window)
 		var laneRows []laneRow
 		if err == nil {
 			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), time.Now())

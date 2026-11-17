@@ -400,8 +400,19 @@ func TestTheLoopPrintsOneSpendLinePerRunAndComparesNoCeiling(t *testing.T) {
 	if countMatching(strings.Split(report.String(), "\n"), "spent 1000000 tokens, $3.000000") != 2 {
 		t.Fatalf("the loop did not print one spend line per run: %s", report.String())
 	}
-	if strings.Contains(report.String(), "ceiling") {
-		t.Fatalf("the loop printed a ceiling it has no flag for: %s", report.String())
+	// A directory containing "ceiling" is not a budget printed by the loop.
+	// Shards share their test executable outside each shard's scratch root.
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportWithoutPaths := strings.ReplaceAll(report.String(), executable, "<executable>")
+	reportWithoutPaths = strings.ReplaceAll(reportWithoutPaths, scratchRoot(), "<scratch>")
+	for _, line := range strings.Split(reportWithoutPaths, "\n") {
+		// Relayed child output can contain truncated paths and is not a loop policy message.
+		if strings.HasPrefix(line, "loop: ") && !strings.Contains(line, " output: ") && strings.Contains(line, "ceiling") {
+			t.Fatalf("the loop printed a ceiling it has no flag for: %s", line)
+		}
 	}
 }
 

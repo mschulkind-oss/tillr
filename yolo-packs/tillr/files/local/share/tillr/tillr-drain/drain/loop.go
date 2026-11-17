@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -737,6 +738,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// process never loaded. It is the answer to "is this the binary that carries the fix?",
 	// and it is printed even when the very first tick fails.
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
+	// Cost is observation only. An unavailable measurement is explicit, but
+	// cannot withhold work that the planner would otherwise dispatch.
+	if window, err := spend.Read(ctx, l.cfg.Store, l.cfg.Now()); err != nil {
+		l.reportf("loop: spend, last 24h: unavailable: %v\n", err)
+	} else {
+		l.reportf("loop: %s\n", window)
+	}
 	if err := l.startDefinition(ctx); err != nil {
 		return faultResult(result, err)
 	}

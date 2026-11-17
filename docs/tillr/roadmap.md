@@ -963,12 +963,7 @@ reopen that ruling or introduce another way to throttle work.
   - Count runs without reported costs separately and avoid counting earlier costs again on retries.
   - Keep dispatch independent of spending and leave stopping decisions to the operator.
 
-<!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** This item adds no ceiling. It adds no setting, flag or environment variable that names an amount of spend, no hold whose reason is spend, and no comparison of a spend total against a number. Dispatch does not depend on spend in any way. `TestTheSpendLineNamesTheMeasurement` and `TestTheLoopCommandRefusesTheDeletedBudgets` pass with their assertions unchanged, and a new test dispatches a ready fixture item in a store whose recorded spend is far above any plausible limit.
-- **c2:** The loop's start line and the waiting face each show the recorded cost of runs started in the last 24 hours, labeled as a measurement with its window, such as `spend, last 24h: $41.20 over 37 runs`. The window is fixed at 24 hours and has no setting. A test builds a store with one run started inside the window and one started before it, and asserts that both places show only the first run's cost.
-- **c3:** A run in the window that reported no cost is counted on that line as a number of runs without a cost, and never as zero dollars. A test asserts that a window holding one run with a cost and one without shows the first run's cost and `1 run reported no cost`.
-- **c4:** A resumed or retried run that produced no new model output adds nothing to the windowed total. A test asserts a retry of an interrupted run does not inherit the earlier attempt's cost.
 
 **Agent details:**
 
