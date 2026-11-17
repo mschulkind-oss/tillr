@@ -53,6 +53,13 @@ eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 AutoQA's requests with that proposal, and which of its small changes are filed before the drain
 proof.
 
+[Planning and model tiering](../design/tillr-planning-node-model-tiering.md) carries eight more,
+[`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
+[`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16: whether models
+cheaper than Sol do build work behind a check, whether Terra is tried on five items before the ramp
+to ten lanes, and how a planning node splits an item and when. The first two come first because
+the trial is the only part that can run in hours.
+
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
 it carried is a row of its ledger, and on 2026-11-16 it was cut into
 [thirteen build items](../design/tillr-judge-and-lifecycle.md#8-build-order) that live in the
