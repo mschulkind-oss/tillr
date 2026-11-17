@@ -199,7 +199,16 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 	retired := []string{}
 	for _, doc := range docs {
 		if _, err := os.Stat(filepath.Join(l.cfg.Root, doc)); os.IsNotExist(err) {
-			retired = append(retired, doc)
+			// A landing rewrites the document in place, and git unlinks a file before it
+			// writes the new one, so absence from the working tree is not a deletion. The
+			// trunk's tree is what says the document is gone.
+			listed, err := l.git(ctx, l.cfg.Root, "ls-tree", "--name-only", TrunkRef, "--", doc)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(listed) == "" {
+				retired = append(retired, doc)
+			}
 			continue
 		} else if err != nil {
 			return err

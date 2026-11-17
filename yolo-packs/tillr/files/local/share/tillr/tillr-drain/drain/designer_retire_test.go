@@ -10,13 +10,19 @@ import (
 )
 
 func TestRetireDesignerLeavesTranscript(t *testing.T) {
-	for _, mode := range []string{"deleted", "done", "live"} {
+	for _, mode := range []string{"deleted", "mid-landing", "done", "live"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, _ := commentFixture(t, "")
 			transcript := filepath.Join(t.TempDir(), "session.jsonl")
 			writeForkFile(t, transcript, "kept")
 			putDesigner(t, f, lastDesigner{Document: "docs/design/example.md", Transcript: transcript})
-			if mode == "deleted" {
+			switch mode {
+			case "deleted":
+				runGit(t, f.root, "rm", "-q", "docs/design/example.md")
+				runGit(t, f.root, "commit", "-qm", "docs: delete the design")
+			case "mid-landing":
+				// git unlinks a file before it writes the landed revision; a pass that
+				// looks in that gap sees no file while trunk still holds the document.
 				if err := os.Remove(filepath.Join(f.root, "docs/design/example.md")); err != nil {
 					t.Fatal(err)
 				}
@@ -39,7 +45,7 @@ func TestRetireDesignerLeavesTranscript(t *testing.T) {
 			defer st.Close()
 			err = st.ReadTx(context.Background(), func(r *store.Reader) error {
 				d, e := readDesigner(r, "docs/design/example.md")
-				if (d != nil) != (mode == "live") {
+				if (d != nil) != (mode == "live" || mode == "mid-landing") {
 					t.Fatalf("row %+v", d)
 				}
 				return e
