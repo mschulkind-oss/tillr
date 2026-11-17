@@ -31,7 +31,8 @@ type Workflow struct {
 
 // WorkflowExit names the stages required to pass; omission requires every stage.
 type WorkflowExit struct {
-	RequiresNodes []string `json:"requires_nodes"`
+	RequiresNodes     []string `json:"requires_nodes"`
+	RequiresCandidate string   `json:"requires_candidate,omitempty"`
 }
 type WorkflowStage struct {
 	ID         string            `json:"id"`
@@ -52,6 +53,9 @@ type WorkflowEdge struct {
 	WhenOutcome string `json:"when_outcome,omitempty"`
 	FromOutput  string `json:"from_output,omitempty"`
 	ToInput     string `json:"to_input,omitempty"`
+	// Expanded edges out of a nested workflow require every inner exit node
+	// to pass, even though ordinary outcome branches are alternatives.
+	RequiresPassed []string `json:"requires_passed,omitempty"`
 }
 
 func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
@@ -128,6 +132,9 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		return nil, err
 	}
 	if w.Exit != nil {
+		if w.Exit.RequiresCandidate != "" && w.Exit.RequiresCandidate != "commit_required" && w.Exit.RequiresCandidate != "commit_optional" && w.Exit.RequiresCandidate != "no_commit" {
+			return nil, fmt.Errorf("workflow-exit: exit: requires_candidate must be commit_required, commit_optional or no_commit")
+		}
 		if len(w.Exit.RequiresNodes) == 0 {
 			return nil, fmt.Errorf("workflow-exit: exit: requires_nodes must not be empty")
 		}
@@ -169,6 +176,9 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		}
 	}
 	w.Stages = ordered
+	if err := validateWorkflowExit(&w); err != nil {
+		return nil, err
+	}
 	return &w, nil
 }
 
@@ -279,6 +289,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.NodeBaseSHA = head
 	next.NodeStartRunID = ""
 	next.WorkflowRestart = false
+	next.NodeInfraFailures = 0
 	next.WorkflowRelease = false
 	stage := next.Workflow.Stages[next.NodeIndex]
 	next.Seat = stage.Seat
@@ -324,6 +335,15 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if err != nil {
 		return true, err
 	}
+	if _, err := os.Stat(filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID), graphExitFile)); err == nil {
+		if head != base {
+			return true, Externalf("recorded no-commit graph head changed: %s", d.ItemID)
+		}
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, BaseSHA: base, HeadSHA: head, Worktree: target}
+		return true, l.settleGraphExit(ctx, d, c)
+	} else if !os.IsNotExist(err) {
+		return true, err
+	}
 	nodeBase := d.NodeBaseSHA
 	if nodeBase == "" {
 		nodeBase = l.laneBase(d.LaneID)
@@ -357,12 +377,34 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		return true, l.markExamined(ctx, d)
 	}
+	if stage.Kind == "agent" {
+		if ClassifyAttempt(rec, log) == AttemptUnjudged {
+			return true, Externalf("unjudged workflow node requires continuation or inspection")
+		}
+		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && reportFooter(log) == "") {
+			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
+		}
+		if reportFooter(log) != "done" && reportFooter(log) != "failed" {
+			if reportFooter(log) == "blocked" {
+				if err := l.reportedBlock(ctx, d, log); err != nil {
+					return true, err
+				}
+			}
+			if err := l.nodeOutcome(ctx, d, "blocked"); err != nil {
+				return true, err
+			}
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
+				return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			}
+			return true, l.markExamined(ctx, d)
+		}
+	}
 	failedCommand := stage.Kind == "command" && *rec.ExitCode == 1
-	if failedCommand || (stage.Kind == "agent" && (rec.ExitCode == nil || *rec.ExitCode != 0 || rec.State != run.StateExited || reportFooter(log) != "done")) {
+	if failedCommand || (stage.Kind == "agent" && reportFooter(log) == "failed") {
 		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
 			return true, err
 		}
-		if failedCommand {
+		{
 			for _, edge := range d.Workflow.Edges {
 				if edge.From == stage.ID && edge.WhenOutcome == "fail" {
 					if err := l.nodeOutcome(ctx, d, "handled-fail"); err != nil {
@@ -380,11 +422,6 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 					}
 					break
 				}
-			}
-		}
-		if stage.Kind == "agent" && reportFooter(log) == "blocked" {
-			if err := l.reportedBlock(ctx, d, log); err != nil {
-				return true, err
 			}
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
@@ -414,7 +451,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		return true, err
 	}
 	if next < 0 {
-		return false, nil
+		return l.finishWorkflow(ctx, d, rec, base, head, result)
 	}
 	// Preserve the full extracted report before staging overwrites the lane's report.
 	report := []byte(log)

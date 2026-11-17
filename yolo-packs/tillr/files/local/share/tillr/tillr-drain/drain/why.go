@@ -267,6 +267,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if d.Workflow != nil {
 			row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
+			outcomes, err := workflowOutcomes(r, d.ItemID, d.Attempt)
+			if err != nil {
+				return answer, err
+			}
+			passed := 0
+			for _, outcome := range outcomes {
+				if outcome == "passed" {
+					passed++
+				}
+			}
+			row.Why += fmt.Sprintf("; %d/%d nodes passed", passed, len(d.Workflow.Stages))
 		}
 		if d.Action == ActionDispatch || d.Action == ActionRetry {
 			assigned[d.LaneID] = d.ItemID
@@ -306,6 +317,9 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	}
 	if d.Action != ActionHold {
 		return "ready", where, "the next pass"
+	}
+	if strings.HasPrefix(d.Reason, "node-failed: ") {
+		return "needs you", "lane", "inspect the named node and authorize a retry"
 	}
 	switch d.Reason {
 	case ReasonBlocked:

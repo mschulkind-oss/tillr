@@ -45,7 +45,7 @@ type waitingRule struct{ class, where, mover string }
 // rolling also judges the deferred suites. Either red waits on the named fixer.
 var waitingRules = map[string]waitingRule{
 	"workflow-invalid":               {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
-	"node-failed":                    {"needs you", "lane", "inspect the named command node and authorize a retry"},
+	"node-failed":                    {"needs you", "lane", "inspect the named node and authorize a retry"},
 	"gate-stall-rerun":               {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
 	"gate-stalled":                   {"needs you", "gate", "diagnose the stalled check and clear the fault"},
 	"gate-harness-error":             {"needs you", "gate", "diagnose the gate and clear the fault"},
