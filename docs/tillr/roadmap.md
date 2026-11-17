@@ -2211,3 +2211,37 @@ says to skip items with a workflow.
 - **Evidence:** 2026-11-17, on a throwaway store: an item with `workflow` `scout-then-build@v1` came back with an empty workflow after a rank-only `tillr item seed`.
 - **Evidence:** 2026-11-17, `rg -n 'workflow' tools/tillr-item/item/seed.go` finds nothing, and `storedItem` there reads `item_id, title, body_ref, state, design_doc, allowed_paths, rank, seat, prose` from `items`, so `planSeed` re-applies an item with no workflow. `Workflow` is a field of the payload in `tools/tillr-item/item/apply.go`, which the apply path writes.
 - **Evidence:** 2026-11-17, the day's ranking run re-ranked 92 items one seed each and skipped none for carrying a workflow, so no live item has one yet and nothing was cleared.
+
+## Filed 2026-11-17: a landing that changed its own settlement
+
+A landing that changed what the verdict step reads from `tillr item show` could not be settled by
+the loop that landed it, and the loop stopped on every start until its binaries were rebuilt by
+hand. The rebuild was the fix for that night; this item removes the skew that made it necessary.
+
+### Prevent the loop's step programs from running ahead of its binaries
+
+The loop's gate, land and verdict steps run `tools/tillr-loop/tillr-loop` from the working tree,
+so a landing changes them at once. The Go programs those steps call, such as `tillr-item`, stay at
+the build the loop started from until someone rebuilds them. A landing that changes the contract
+between the two therefore meets an old binary at its own settlement. On 2026-11-17 commit
+`bb6e286b5` taught the verdict step to require each criterion's `claim_class` from
+`tillr item show`, and the `tillr-item` beside the loop was built from an older commit that
+prints no such field. The verdict step refused with exit 4, which the drain's contract treats as
+a failed step that stops the loop, and each restart settled the same landing and stopped again.
+The refusal also blamed the store ("has no valid stored claim_class") when the store was fine and
+the binary was old. The step programs and the binaries should change together, and a field the
+adapter needs but the binary does not print should be refused as a build mismatch.
+
+<!-- tillr: item id="item-loop-steps-match-binaries" paths="tools/tillr-loop/,tools/tillr-drain/,.justfile,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** The step programs the loop runs come from the same build as the Go programs they call, so landing a change to `tools/tillr-loop/` does not change the running loop's steps until its binaries are rebuilt too. A test lands a fixture change to the adapter and asserts the running loop's next step still runs the adapter of its own build.
+- **c2:** When `tillr item show` prints a criterion with no `claim_class` field at all, the verdict step's refusal says the `tillr-item` build is older than the adapter and names both builds, instead of saying the store holds no class. A test covers a missing field and an unknown class separately.
+- **c3:** A field present with an unknown value is still refused as it is today. A test asserts that refusal is unchanged.
+- **c4:** The drain README and the `tillr-loop` README say where the loop's step programs are read from and when they change.
+
+**Agent details:**
+
+- **Ref:** the verdict row of the exit-code table in `tools/tillr-loop/README.md`, which says a non-zero verdict stops the loop because a landed candidate whose item was not retired is landed work the board cannot see; that rule stands, and this item removes the skew that tripped it. `item-land-then-roll-and-push` in [the restart design](../design/tillr-restart.md) rebuilds binaries after a landing, but its roll runs after the landing's verdict, so it does not close this gap by itself.
+- **Where:** `compose_verdict` in `tools/tillr-loop/tillr-loop`; the `tillr-build` recipe in `.justfile`, which builds the binaries the loop runs; `Verdict` in `tools/tillr-drain/drain/steps.go`.
+- **Evidence:** 2026-11-17, the loop log: every start from about 09:52Z ended with `the verdict program answered exit 4 for item-jl-criterion-claim-class (pass): tillr-loop verdict: criterion c1 has no valid stored claim_class`, with the loop's build line naming `6221148e51e1`. `go version -m` on the installed `tillr-item` showed `vcs.revision=6221148e5`, and its `show` printed criteria with `criterion_id`, `text` and `state` only.
+- **Evidence:** 2026-11-17, after `just tillr-build` at `bb6e286b5` and a relaunch at 09:59:35Z, the loop's first writable open added the column, `tillr item show` printed `claim_class` `verification-only` for every criterion of `item-gate-red-cap` and `item-def-item-lifecycle`, and the loop logged `landed item-jl-criterion-claim-class` with every criterion `done`.
