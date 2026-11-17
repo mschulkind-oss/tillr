@@ -952,9 +952,27 @@ a run cut off when the window shuts starts again from nothing on the next backen
 
 
 
-### Read a backend's remaining quota directly and keep a reserve
+### Add direct quota checks with a reserve
 
-<!-- tillr: item id="item-policy-quota-probe" paths="tools/tillr-run/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/design/tillr-claude-backend.md" -->
+The drain loop currently learns that a backend has exhausted its subscription allowance only
+when it refuses a run. That wastes a start and gives the owner no way to leave room for their
+own sessions. Read the remaining allowance before choosing a backend, and let the owner reserve
+part of each usage window. The waiting view should show how much has been used, how much is
+reserved, and when work can resume, so the owner can understand why a backend is unavailable.
+
+**Outcomes:**
+
+- Check remaining allowance before assigning work rather than waiting for a refused run.
+- Hold new work when usage reaches the owner's reserve threshold.
+- Show usage, reserves, and reopening times in the waiting view.
+
+<!-- tillr: item id="item-policy-quota-probe" paths="tools/tillr-run/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/design/tillr-claude-backend.md" prose="2" -->
+
+**Agent Details:**
+
+- **Ref:** [Claude backend design](../design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent) and the ruling below.
+- **Where:** `tools/tillr-run/` (quota command and Claude adapter), `tools/tillr-drain/` (readings and dispatch decisions), `tools/tillr-view/` (waiting view), and `yolo-packs/tillr/` (delivery). Record the reading method and cost in the commit and, if no token-free method exists, in the [Claude backend design](../design/tillr-claude-backend.md).
+- **Verify:** Check the five-hour and seven-day usage fractions and reset times, refresh and record readings after the configured interval, leave backends without a quota command unprobed, enforce the reserve threshold with a default of zero, and display usage, reserves, and reopening times. Keep the dispatch and failure cases in the ruling below.
 
 **Ruling, 2026-11-17 (answers the second failed attempt):** two runs stopped. The first was refused
 at its first message because the subscription's seven-day window was spent, which is the gap this
