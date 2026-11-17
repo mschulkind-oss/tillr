@@ -2349,17 +2349,22 @@ An independent review of six drain fixes on 2026-11-17 found that none of them b
 and that each left one gap that can only be closed by a further change. The four items below are
 those gaps. Each one says what happens today and what the review measured.
 
-### Stop the rolling checks when the loop stops
+### Prevent rolling checks from outliving the loop
 
-When the loop is stopped during a rolling run, the loop kills the check program and expects its
-children to go with it. They do not. The rolling program, `tools/fork-check.py`, starts every
-check in a session of its own so that its own cancellation can reach it, and the loop's kill
-reaches only the program's process group. Each `go test` therefore keeps running, and the loop's
-cleanup then deletes the rolling worktree underneath it. That is what happened at 05:17 on
-2026-11-17, when an orphaned `go test -parallel 48` kept running for about two minutes after a
-stop. The fix that was meant to prevent it passes its test only because the test's child stays in
-the program's own group. Rolling is off in the loop that runs today, so this bites only once it is
-turned on.
+Stopping the drain loop should end its rolling checks before cleanup removes the temporary
+checkout where they run. Today, the loop ends the check runner but leaves some of the checks
+it started alive. Cleanup then removes their checkout while they are still using it. The
+runner deliberately starts checks in separate groups so it can cancel them, but the loop
+bypasses that cancellation when it stops the runner. The loop needs to give the runner time
+to end its checks before forcing it to exit. The replay step needs the same cleanup order.
+Rolling checks are currently disabled in the running loop; this gap matters when they are
+turned back on.
+
+**Outcomes:**
+
+- End all rolling checks before removing their temporary checkout.
+- Give the check runner time to cancel its children before forcing it to exit.
+- Apply the same shutdown behavior to replay checks.
 
 <!-- tillr: item id="item-loop-stop-ends-rolling-checks" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
@@ -2368,11 +2373,25 @@ turned on.
 - **c3:** The replay step that also runs checks in a scratch worktree ends its checks the same way. A test covers it with the same `setsid` child.
 - **c4:** The regression test for c1 fails when the SIGTERM step is removed.
 
-**Agent details:**
+**Agent Details:**
 
-- **Ref:** the review's finding M1-1, and the fix this one completes in `runCheckGroup`.
-- **Where:** `runCheckGroup` and `endProcessGroup` in `tools/tillr-drain/drain/steps.go`; `_run_cancellable`, `_kill_process_group` and `Cancellation.cancel` in `tools/fork-check.py`.
-- **Evidence:** 2026-11-17, `rg -n 'start_new_session' tools/fork-check.py` finds `_run_cancellable` starting each check in its own session, and `rg -n 'cmd.Cancel' tools/tillr-drain/drain/steps.go` finds the loop's kill aimed at `-cmd.Process.Pid`, one group. A copy of the shipped test whose child calls `os.setsid()` failed with "the rolling check's child ... outlived the stopped rolling run".
+- **Ref:** the review's finding M1-1, and the earlier shutdown fix in `runCheckGroup` that
+  this item completes.
+- **Where:** `runCheckGroup` and `endProcessGroup` in
+  [`steps.go`](../../tools/tillr-drain/drain/steps.go); `_run_cancellable`,
+  `_kill_process_group` and `Cancellation.cancel` in
+  [`fork-check.py`](../../tools/fork-check.py).
+- **Verify:** For c1 and c3, use a child that calls `setsid` to create a separate session
+  and assert that every process in the check's tree exits before worktree removal. For c2,
+  send SIGTERM to the runner and assert its children exit; check that the loop waits briefly
+  before SIGKILL. For c4, remove the SIGTERM step and confirm the c1 regression test fails.
+- **Evidence:** At 05:17 on 2026-11-17, an orphaned `go test -parallel 48` continued for
+  about two minutes after a stop. That day, `rg -n 'start_new_session' tools/fork-check.py`
+  found `_run_cancellable` starting each check in its own session, while
+  `rg -n 'cmd.Cancel' tools/tillr-drain/drain/steps.go` found the loop's kill aimed at
+  `-cmd.Process.Pid`, only the runner's process group. The shipped test passed because its
+  child stayed in that group. A copy whose child called `os.setsid()` failed with
+  "the rolling check's child ... outlived the stopped rolling run".
 
 ### Show a moved patch branch to the owner before a push publishes it
 
