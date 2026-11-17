@@ -431,9 +431,8 @@ Then:
    The lane branch has the form `tillr/<scope>/<lane>`. Read it before the reset with
    `git -C <lane root>/<lane>/worktree branch --show-current`.
 
-The next pass re-checks the lane, because its HEAD changed. A dedicated
-`tillr drain reset-lane --lane <lane>` command that runs these checks is queued work,
-not a command that exists today.
+The next pass re-checks the lane, because its HEAD changed. No drain command runs these
+checks and the reset for you yet; one is queued work.
 
 ## Step-program argument contract
 
