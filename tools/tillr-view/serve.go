@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -1283,11 +1284,12 @@ type stageView struct {
 
 // runData is one run's header, its pipeline, its claims and its spend.
 type runData struct {
-	Run          runDetail        `json:"run"`
-	Stages       []stageView      `json:"stages"`
-	ClaimChecks  []claimView      `json:"claim_checks"`
-	Cost         costView         `json:"cost"`
-	Completeness completenessView `json:"completeness"`
+	Run           runDetail                 `json:"run"`
+	Stages        []stageView               `json:"stages"`
+	ClaimChecks   []claimView               `json:"claim_checks"`
+	Cost          costView                  `json:"cost"`
+	Completeness  completenessView          `json:"completeness"`
+	PreservedWork []preserved.PreservedWork `json:"preserved_work,omitempty"`
 }
 
 type runDetail struct {
@@ -1344,6 +1346,15 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 		Run: runDetail{run.RunID, run.ItemID, run.LaneID, run.Backend, run.State, run.ExitCode,
 			run.StartedAtMS, run.FinishedAtMS, run.UsageTokens, run.CostUSD},
 		ClaimChecks: []claimView{},
+	}
+	saved, err := preserved.ReadPreservedWork(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	for _, p := range saved {
+		if p.RunID == id {
+			out.PreservedWork = append(out.PreservedWork, p)
+		}
 	}
 	out.Stages = s.stages(r, run)
 	claims, _ := s.obs.trace.runClaims(id)

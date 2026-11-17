@@ -348,7 +348,7 @@ lands in one of three outcomes:
 | :--- | :--- | :--- |
 | Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
 | Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | Ignored | These are deliveries or concurrent loop work. |
+| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | Ignored | These are deliveries or concurrent loop work. |
 | `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the squash commit before it moves the patch branch. |
 | The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
 | A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |
@@ -546,6 +546,62 @@ and candidate commit remain available. The
 loop after a recovered worker commits, leaves that worker running until it is released,
 then requires an unchanged restart to land that commit with zero new dispatches and a
 repair transcript that only grew: everything written before the stop is still its prefix.
+
+## Earlier uncommitted work
+
+Before resetting a settled lane, the loop saves its uncommitted edits at
+`refs/tillr/preserved/<run-id>`. This includes tracked edits and nonignored untracked
+files, both inside and outside the item's fence (the paths the worker may change).
+Files outside that fence are marked individually in the `drain.work-preserved`
+settlement event. The event names the item, run, ref, repository, stopped reason,
+and summary: file count, added and deleted text lines, binary-file count and
+outside-fence count. Git reports a dash instead of line counts for binary files.
+A clean lane creates no preservation ref or event.
+
+The loop builds this commit with a separate [Git index](https://git-scm.com/docs/gitglossary#def_index),
+the file Git uses to prepare a commit's contents. It does not move the lane's branch
+or change the contents staged in its real index. When staged bytes differ from both
+HEAD and the working copy, a second parent of the saved commit keeps that staged
+version. The event and briefs name its revision, `refs/tillr/preserved/<run-id>^2`,
+and report its files and line counts separately from the working copy.
+
+The saved commit is recovery evidence only: it is never put on a candidate ref,
+gated or landed. If saving the commit or its event fails, the loop retains the
+lane instead of resetting away its work. A restart recovers the event from the
+saved commit's message if the process stopped between creating the ref and
+recording the event. Before resetting on a replay, it checks that every current
+dirty path is covered by the saved working or staged version. Newer uncovered
+edits retain the lane; the loop does not overwrite the older evidence or discard
+the newer work. A recorded pruning prevents replay from recreating the ref.
+
+Preservation finishes before reset, including a workflow restart and a conflict
+repair; Git runs outside SQLite write transactions. Ordinary lane reset leaves
+untracked files in place. A workflow restart saves nonignored untracked files
+before its cleanup.
+
+> [!WARNING]
+> **Landing remains blocked.** A dirty tracked ignore file can hide work from the
+> snapshot, then resetting that file changes the ignore rules and the subsequent
+> workflow cleanup deletes the hidden work. Cleanup must run after preservation
+> but before resetting the ignore rules, with a regression for that sequence.
+> The independent review reproduced this on 2026-11-17. The separate
+> [operator-stop regression](./document_wait_test.go) also fails on base
+> `f4bbfaf26949fd3770110467a9f47bb6c01e4428` with `GOMAXPROCS=1`: queued SQLite
+> stderr can follow the final explanation and break the combined-output suffix
+> assertion. This run stopped under its out-of-scope-failure rule; neither blocker
+> is waived by passing reruns.
+
+The next attempt's brief and the design seat's conflict-answer brief say that
+earlier work exists, name the ref and summarize why the earlier run stopped.
+The run view and waiting view show the same evidence to the owner.
+
+**Retention:** saved-edit refs are removed when the loop observes their item as
+landed, resolved elsewhere, closed (dropped from active work), or removed from the
+store. A loop-owned landing cleans them up during its examination; an owner's
+closure is cleaned up on the next loop pass. The immutable settlement event remains
+in history, with a `drain.work-pruned` event marking that its ref is gone. Later
+briefs do not recommend a removed ref. The existing committed-head pins under
+`refs/tillr/runs/` have a separate lifetime and are not deleted by this rule.
 
 ## Conflict repair of a retired candidate
 

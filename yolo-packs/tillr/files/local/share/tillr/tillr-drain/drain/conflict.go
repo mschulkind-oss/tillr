@@ -82,6 +82,9 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// The lane still holds the candidate's commit. Reset it to the moved trunk before
 	// staging, because the stager is right to refuse a lane whose unlanded commit nobody
 	// accounted for; the candidate is pinned, so the reset loses nothing.
+	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted during landing"); err != nil {
+		return "", false, l.holdRepair(ctx, basis, err)
+	}
 	if err := l.resetLane(ctx, candidate.LaneID); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}

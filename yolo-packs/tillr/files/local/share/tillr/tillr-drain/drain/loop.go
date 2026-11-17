@@ -1069,10 +1069,13 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if decision.NodeIndex == 0 {
 						spec.BaseSHA = nodeBase
 					}
+					if err := l.preserveWork(ctx, decision.LaneID, previous, "orphaned workflow restarted"); err != nil {
+						return nil, err
+					}
 					if _, err := l.git(ctx, target, "reset", "--hard", nodeBase); err != nil {
 						return nil, err
 					}
-					if _, err := l.git(ctx, target, "clean", "-fdx"); err != nil {
+					if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
 						return nil, err
 					}
 				}
@@ -1320,7 +1323,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if orphaned {
-		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "orphaned by a loop stop")}
 	}
 	// A usage refusal says nothing about the conflict. Release it for the next
 	// planner pass instead of leaving the claimed design run awaiting forever.
@@ -1364,6 +1367,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 		if ok {
 			failover.CorrelationID = tick
+			if err := l.preserveWork(ctx, lane, request.RunID, "infrastructure failure before failover"); err != nil {
+				return laneOutcome{err: err}
+			}
 			if err := l.resetLane(ctx, lane); err != nil {
 				return laneOutcome{err: err}
 			}
@@ -1379,7 +1385,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			l.mu.Lock()
 			result.Dispatched++
 			l.mu.Unlock()
-			record, log, err = l.cfg.Steps.Run(ctx, *failover)
+			// After the reset this work belongs to the new run, not the run whose
+			// snapshot was just preserved. Reusing its ref would lose failover edits.
+			request = *failover
+			decision.RunRequest = failover
+			record, log, err = l.cfg.Steps.Run(ctx, request)
 			if err != nil {
 				return laneOutcome{err: err}
 			}
@@ -1413,7 +1423,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		if err := l.reportedBlock(ctx, decision, log); err != nil {
 			return laneOutcome{err: err}
 		}
-		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked")}
 	}
 	if item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: l.laneTarget(lane), HeadSHA: l.headOf(ctx, lane)}
@@ -1506,7 +1516,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		if err := l.refuse(ctx, candidate, result, RefusalNoOp); err != nil {
 			return laneOutcome{err: err}
 		}
-		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA)}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "ended without a candidate commit")}
 	}
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
@@ -1531,6 +1541,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{stop: stop}
 	}
 	if landed {
+		if err := l.prunePreservedWork(ctx); err != nil {
+			return laneOutcome{err: err}
+		}
 		return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
 	}
 	// Every non-landing outcome pins the head before the lane is reset, so a refused head
@@ -2088,7 +2101,15 @@ func insideFence(path string, fence []string) bool {
 // so the next tick's run starts from the same place, and a non-empty head is pinned first:
 // a refused, conflicted or unjudged head is evidence, and a lane reset is what would make it
 // unreachable.
-func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string) string {
+func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons ...string) string {
+	reason := "settled without landing"
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	if err := l.preserveWork(ctx, lane, runID, reason); err != nil {
+		l.reportf("loop: lane %s retained: could not preserve uncommitted work: %v\n", lane, err)
+		return StopFault
+	}
 	if headSHA != "" {
 		l.pinQuietly(ctx, runID, headSHA)
 	}

@@ -1744,16 +1744,7 @@ and it tells the next run and the owner where that ref is. The worker's side of 
 is the queued item `item-run-commit-before-ending`; this item covers the work the worker still
 leaves behind when it ends, is killed, or is orphaned.
 
-<!-- tillr: item id="item-keep-settled-run-uncommitted-work" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the loop settles a run that reported blocked, ended without a candidate, or was orphaned, and the lane holds uncommitted changes, it commits them on a ref under `refs/tillr/` before it resets the lane. The commit is not on the item's candidate ref, is never landed and is never gated. A test with a fixture lane that has a modified file asserts the ref holds the file's content after the reset.
-- **c2:** A lane with no uncommitted changes preserves nothing and creates no ref. A test asserts that a clean lane's settlement leaves the ref list as it was.
-- **c3:** Untracked files inside the item's fence are included in the preserved commit. Files outside the fence are preserved too and are flagged as outside it in the record. A test asserts both.
-- **c4:** The run's settlement event records the ref and a summary of the files and line counts. A test asserts the event carries both.
-- **c5:** The run-boundary check excuses the new ref the way it excuses `refs/tillr/runs/`. A test asserts a sibling run's preservation does not convict a run in flight.
-- **c6:** The brief for the next attempt of the same item, and the brief for the design-seat run that answers its conflict, name the ref, say that earlier work exists and say why that run stopped. The run view and the waiting view show the ref and its summary to the owner. A test asserts the brief text and the view output.
-- **c7:** A retention rule drops the ref when its item reaches a terminal state, and the README states it. A test asserts the ref is gone after the item lands and after it is dropped.
-- **c8:** The loop does the Git work for preservation outside any SQLite write transaction. A test asserts that no Git command runs while a write transaction is open.
 
 **Agent details:**
 

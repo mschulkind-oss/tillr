@@ -926,6 +926,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+	if err := l.prunePreservedWork(ctx); err != nil {
+		return "", err
+	}
 	if err := l.intakeComments(ctx); err != nil {
 		return "", err
 	}
@@ -1179,7 +1182,10 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 					}
 				}
 				if err == nil {
-					err = l.resetLane(ctx, d.LaneID)
+					err = l.preserveWork(ctx, d.LaneID, d.RunRequest.RunID, "orphaned workflow released")
+					if err == nil {
+						err = l.resetLane(ctx, d.LaneID)
+					}
 				}
 			}
 			if err == nil {
@@ -1256,11 +1262,14 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				}
 				if err == nil && stop == "" && !retainLane {
 					if landed {
-						l.abandon(ctx, c.LaneID, "", "")
+						stop = l.abandon(ctx, c.LaneID, "", "")
+						err = l.prunePreservedWork(ctx)
 					} else {
-						l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
+						stop = l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
 					}
-					err = l.markExamined(ctx, work.Decision)
+					if stop == "" && err == nil {
+						err = l.markExamined(ctx, work.Decision)
+					}
 				}
 				completion.outcome = laneOutcome{stop, err}
 			}

@@ -82,7 +82,7 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 				return err
 			}
 			addConflictHistory(answer.Rows, conflicts)
-			return nil
+			return addPreservedHistory(r, answer.Rows)
 		}); err != nil {
 			return nil, nil, err
 		}
