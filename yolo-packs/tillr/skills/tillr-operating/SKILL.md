@@ -70,8 +70,10 @@ leaves the loop's after-merge check enabled. Learn its options from
 
 The keeper runs in the foreground. On Linux it finds a loop by its own process
 name, `tillr-drain` (including the pack's source-digest suffix), owned by the same
-user and running in the same checkout.
-It never searches a command line. More than one matching process is a refusal,
+user and running in the same checkout. Its arguments must be the `loop` face for that
+checkout: a `tillr-drain why`, `plan` or other face beside the loop is not the loop. The
+keeper parses those arguments rather than searching them. More than one matching process
+is a refusal,
 not a reason to choose one. Start the loop in its repository checkout, not from
 another directory with a different root named in its arguments.
 

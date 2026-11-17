@@ -2,6 +2,7 @@
 """Keeper tests: no real store, loop, gate, or model is invoked."""
 import importlib.machinery
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,31 @@ loader = importlib.machinery.SourceFileLoader("keeper", str(KEEPER))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 keeper = importlib.util.module_from_spec(spec)
 loader.exec_module(keeper)
+
+
+def drain_stub(root, *argv, name=b"tillr-drain"):
+    """Start a stand-in tillr-drain in root whose argv after the program is argv.
+
+    The script is named tillr-drain, so its command line reads like the real binary's
+    (interpreter, then .../tillr-drain, then the face), and it renames its own process
+    to the drain's kernel name, which is what the keeper reads first.
+    """
+    script = Path(root) / ".stub" / "tillr-drain"
+    script.parent.mkdir(exist_ok=True)
+    if not script.exists():
+        # It waits for an `exit` file in its working directory, or thirty seconds.
+        script.write_text("import ctypes,sys,time\nfrom pathlib import Path\n"
+                          "ctypes.CDLL(None).prctl(15,sys.argv[-1].encode(),0,0,0)\n"
+                          "deadline = time.monotonic() + 30\n"
+                          "while not Path('exit').exists() and time.monotonic() < deadline:\n"
+                          "    time.sleep(0.01)\n")
+    child = subprocess.Popen([sys.executable, str(script), *argv, name.decode()], cwd=root)
+    deadline = time.monotonic() + 5
+    while (keeper.process(child.pid) or ("",))[0] != name.decode()[:15]:
+        if time.monotonic() > deadline:
+            raise AssertionError("the stub never renamed itself")
+        time.sleep(0.01)
+    return child
 
 
 class KeeperTests(unittest.TestCase):
@@ -52,18 +78,11 @@ class KeeperTests(unittest.TestCase):
             root = Path(directory)
             # Hold the adopted stub until observation begins; no timing race at discovery.
             marker = root / "exit"
-            script = ("import ctypes,time; from pathlib import Path; "
-                      "ctypes.CDLL(None).prctl(15,b'tillr-drain',0,0,0); "
-                      "exec('while not Path(\"exit\").exists(): time.sleep(0.01)')")
-            adopted = subprocess.Popen([sys.executable, "-c", script], cwd=root)
+            adopted = drain_stub(root, "loop")
             launched = []
             waits = []
             stop = threading.Event()
             try:
-                deadline = time.monotonic() + 5
-                while keeper.process(adopted.pid)[0] != "tillr-drain":
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(0.01)
 
                 def launch():
                     child = subprocess.Popen([sys.executable, "-c", "raise SystemExit(4)"], cwd=root)
@@ -102,6 +121,45 @@ class KeeperTests(unittest.TestCase):
                 self.assertIn("not a loop override", result.stderr)
             self.assertFalse((Path(directory) / ".tillr").exists())
 
+    def test_only_the_loop_face_for_this_root_is_the_loop(self):
+        # On 2026-11-17 the keeper adopted a short-lived `tillr-drain why` in the same
+        # checkout as the loop, waited for it to exit, and only then started the loop. A
+        # read-only face (why, plan, once, stop, policy) is never the loop, and neither is
+        # a loop for another root.
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            root = Path(directory)
+            others = [drain_stub(root, face) for face in ("why", "plan", "once", "stop", "policy")]
+            others.append(drain_stub(root, "loop", "--root", str(root / "elsewhere")))
+            try:
+                self.assertIsNone(keeper.find_loop(root))
+                loop = drain_stub(root, "loop", "--root", str(root), "--lanes", "5")
+                try:
+                    self.assertEqual(keeper.find_loop(root), loop.pid)
+                finally:
+                    loop.terminate()
+                    loop.wait(timeout=5)
+            finally:
+                for child in others:
+                    child.terminate()
+                    child.wait(timeout=5)
+
+    def test_just_recipe_keeps_an_empty_loop_argument(self):
+        # `just tillr-keep -- --rolling '' --lanes 5` rendered `--rolling  --lanes 5`, so
+        # --lanes became the rolling program. The recipe passes every argument through
+        # intact; a stand-in python3 on PATH prints the argv the recipe gave it.
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            stub = Path(directory) / "python3"
+            stub.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+            stub.chmod(0o755)
+            environment = {**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}
+            result = subprocess.run(["just", "--justfile", str(ROOT / ".justfile"), "tillr-keep",
+                                     "--root", directory, "--", "--rolling", "", "--lanes", "5", "a b"],
+                                    capture_output=True, text=True, timeout=5, env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout),
+                             ["tools/tillr-roll/tillr-keep", "--root", directory, "--",
+                              "--rolling", "", "--lanes", "5", "a b"])
+
     def test_cap_and_healthy_reset(self):
         delay = 60
         waits = []
@@ -126,13 +184,8 @@ class KeeperTests(unittest.TestCase):
             # Both commands mention tillr-drain, only one process names itself that.
             impostor = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)",
                                          "tillr-drain"], cwd=root)
-            real = subprocess.Popen([sys.executable, "-c",
-                                     "import ctypes,time; ctypes.CDLL(None).prctl(15,b'tillr-drain',0,0,0); time.sleep(30)"], cwd=root)
+            real = drain_stub(root, "loop")
             try:
-                deadline = time.monotonic() + 5
-                while keeper.process(real.pid)[0] != "tillr-drain":
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(0.01)
                 self.assertEqual(keeper.find_loop(root), real.pid)
                 self.assertIsNone(keeper.find_loop(root / "other"))
             finally:
@@ -184,14 +237,9 @@ class KeeperTests(unittest.TestCase):
     def test_stop_leaves_adopted_loop_and_prevents_second_keeper(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
             root = Path(directory)
-            loop = subprocess.Popen([sys.executable, "-c",
-                                     "import ctypes,time; ctypes.CDLL(None).prctl(15,b'tillr-drain',0,0,0); time.sleep(30)"], cwd=root)
+            loop = drain_stub(root, "loop")
             child = None
             try:
-                deadline = time.monotonic() + 5
-                while keeper.process(loop.pid)[0] != "tillr-drain":
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(0.01)
                 child = subprocess.Popen([sys.executable, str(KEEPER), "--root", str(root)],
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 self.assertIn("watching", child.stdout.readline())
@@ -216,14 +264,8 @@ class KeeperTests(unittest.TestCase):
     def test_ambiguous_process_names_refuse(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
             root = Path(directory)
-            children = [subprocess.Popen([sys.executable, "-c",
-                        "import ctypes,time; ctypes.CDLL(None).prctl(15,b'tillr-drain',0,0,0); time.sleep(30)"],
-                        cwd=root) for _ in range(2)]
+            children = [drain_stub(root, "loop") for _ in range(2)]
             try:
-                deadline = time.monotonic() + 5
-                while any(keeper.process(child.pid)[0] != "tillr-drain" for child in children):
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(0.01)
                 with self.assertRaisesRegex(RuntimeError, "multiple tillr-drain"):
                     keeper.find_loop(root)
             finally:

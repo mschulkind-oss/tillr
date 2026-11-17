@@ -319,8 +319,10 @@ tillr-build:
     printf 'tillr-build: prepend %s to PATH for the loop and its children: PATH=%s:$PATH\n' "$out" "$out"
 
 # Keep this checkout's loop alive; --stop stops only the keeper. Pass loop options after --.
+# Positional arguments keep each one intact, including an empty `--rolling ''`.
+[positional-arguments]
 tillr-keep *args:
-    @python3 tools/tillr-roll/tillr-keep {{args}}
+    @python3 tools/tillr-roll/tillr-keep "$@"
 
 # Check the one generated pack copy: the tillr pack's tree against tools/tillr*,
 # module by module, byte for byte, with the README rewrite, the exec bits, and the
