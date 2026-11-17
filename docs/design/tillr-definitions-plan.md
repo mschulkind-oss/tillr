@@ -245,12 +245,7 @@ worked example at the end of this plan reads its outcomes through this face.
 **Agent details:** the face sits beside `show` in [main.go](../../tools/tillr-item/main.go) and
 reads with the same query shape `show` uses in [show.go](../../tools/tillr-item/item/show.go).
 
-<!-- tillr: item id="item-def-list-items" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr item list --store <path>` prints one record listing every item: its id, title, state, blockers and last update, ordered by id. An empty store prints an empty list with exit 0.
-- **c2:** `--state <state>`, which may be given more than once, keeps only items in those states. A test builds a store with items in three states and asserts the list with and without the filter.
-- **c3:** The item utility's README documents the face.
-- **c4:** Every existing test of the item utility passes unchanged.
 
 ### Prevent item apply from dropping a field it does not store
 
@@ -267,7 +262,7 @@ named in the refusal.
 [apply.go](../../tools/tillr-item/item/apply.go). Every record tillr's own programs write must still
 pass: sync's, the comment intake's, seed's and the loop's.
 
-<!-- tillr: item id="item-def-apply-unknown-fields" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-def-list-items" prose="2" -->
+<!-- tillr: item id="item-def-apply-unknown-fields" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr item apply` refuses a record whose payload carries a field the item utility does not store, as `unknown-field`, naming the field, and writes nothing. A test applies a record carrying `"kind": "finding"`.
 - **c2:** Every kind of record tillr's own programs pass to `apply` is still accepted. A test builds one record from sync, one from the comment intake, one from seed and one in the shape the loop writes, and applies each.

@@ -118,6 +118,26 @@ residue counters — `unshared_open`, the open store items no block declares, an
 `stale_doc_blocks`, the blocks whose item this store already holds as `landed` — and writes
 nothing.
 
+## Listing a store's items
+
+```sh
+tillr item list --store .tillr/state.db
+tillr item list --store .tillr/state.db --state landed --state resolved-elsewhere
+```
+
+`list` reads one store snapshot without writing or migrating it and prints one
+`item.list` record. Its `payload.items` array contains every item, including finished
+items, in item-id order. Each entry contains `item_id`, `title`, `state`, `blocked_by`
+and `updated_at`. Blockers are the stored dependency ids in id order, not just those
+that currently hold work; `updated_at` is the item's last update in UTC, in RFC 3339
+format. No body or design document needs to exist for an item to be listed.
+
+With no state filter, every state is included. Repeating the state filter selects
+items matching any of its exact values, without duplicates. Values with no matches
+produce no entries. An empty store or a filter matching nothing returns
+`payload.items: []` with exit 0. The command requires an existing store; a missing
+store is a usage error, not an empty queue. Run `tillr item list --help` for its flags.
+
 ## Hand-driven review comments
 
 ```sh
