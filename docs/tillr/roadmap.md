@@ -2684,15 +2684,26 @@ may want to rewrite.
 - **Hook limits, read 2026-11-17:** `hooks/` holds only `pre-push`, and `bin/hooks-install` copies each executable there into the shared hooks directory, so one hook covers the main checkout and every worktree. A hook runs only for `git commit`, `merge` and `am`. It does not run for `commit-tree` or `update-ref`, and `--no-verify` and a `core.hooksPath` override skip it, so the hook is a convenience and the loop's check in c1 is the guard.
 - **Evidence:** 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints `fork-check test <test@example.invalid> initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
 
-### Keep the heavy proof across a restart
+### Prevent losing heavy proof across loop restarts
 
-The heavy proof judges the whole trunk and takes three to eight minutes. On 2026-11-17 each loop
-restart threw away a proof that was part-way through, and the new loop began it again from nothing.
-The drain already narrows a red proof to the first landing that broke it, by bisecting the landings
-since the last green commit, so that part of the work is done. What is missing is smaller. The
-checks that had already passed on the tip are forgotten at a restart, and the loop's log and view
-name the green commit but not how long ago it was proved, so an owner cannot tell a fresh proof from
-one that is hours old.
+The drain's heavy proof runs the expensive checks against the whole trunk, rather than checking
+one worker's change in isolation. It takes three to eight minutes. On 2026-11-17, restarting the
+loop discarded progress from a proof that was still running. The new loop repeated checks that
+had already passed against the same commit. Preserve those results so a restart can resume useful
+work instead of paying for it again.
+
+The owner also needs to know how recent the last successful proof is. The loop log and waiting
+view show the last commit that passed, but without its proof's age an hours-old result can look
+as reassuring as a fresh one. When a proof fails, the drain already searches the landings since
+that successful commit to find the first one that broke the checks. Keep that behavior. If the
+starting commit already fails, or the last landing passes despite the current tip failing, file
+repair work that identifies the affected commit range rather than ending the run with an error.
+
+**Outcomes:**
+
+- Reuse checks that passed against the same commit and resume proof promptly after a restart.
+- Show the owner how long ago the last successful proof finished.
+- File repair work for the affected commit range when no landing explains the failure.
 
 <!-- tillr: item id="item-heavy-restart-keeps-proof-and-names-red-landing" paths="tools/tillr-drain/,tools/tillr-view/,docs/" blocked_by="" prose="2" -->
 
@@ -2701,12 +2712,18 @@ one that is hours old.
 - **c3:** The loop's log line and the waiting view show the green commit and how long ago it was proved. A test asserts both.
 - **c4:** A red batch whose range cannot be narrowed, because the base is red or the last landing is green, files a fixer that names the first and last commit of the range, instead of ending the run with an error. A test asserts the fixer's text.
 
-**Agent details:**
+**Agent Details:**
 
-- **Ref:** `docs/design/landing-principles.md`, the rule that a mechanism whose cost rises with trunk activity points the wrong way.
-- **Where:** `HeavyRunner.Run` and `firstRed` in `tools/tillr-drain/drain/heavy.go`, where the bisect over recorded landings already exists; `startHeavy` in `tools/tillr-drain/drain/heavy_loop.go`, whose `heavyAttempted` is held in memory and so forgotten at a restart; `heavyStatusLine` in the same file; `HeavyStatus` in `tools/tillr-drain/heavy/status.go`, which carries `GreenCommit` and no time.
-- **Dropped from the first draft:** a criterion to bisect a red batch before filing a fixer. `firstRed` does that now, and `drain/heavy_attribution_test.go` covers it. The unattributable cases in c4 are the part it does not handle: it returns an error there.
-- **Evidence:** 2026-11-17, `rg -n 'heavyAttempted' tools/tillr-drain/drain` finds the field only in memory on the `Loop`, with no stored copy. `rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go` shows the bisect, and its two `Externalf` returns for a range with no landing and for a tip that is red where the last landing is green.
+- **Ref:** [Landing principles](../design/landing-principles.md), including the rule that a mechanism whose cost rises with trunk activity points the wrong way.
+- **Where:** `HeavyRunner.Run` and `firstRed` in [heavy.go](../../tools/tillr-drain/drain/heavy.go) implement the search over recorded landings. `startHeavy`, `heavyAttempted`, and `heavyStatusLine` are in [heavy_loop.go](../../tools/tillr-drain/drain/heavy_loop.go). `HeavyStatus` in [status.go](../../tools/tillr-drain/heavy/status.go) carries `GreenCommit` but no proof time. The waiting view lives in `tools/tillr-view/`.
+- **Verify:** For c1, restart between two checks; assert the first runs once and the log identifies reused checks. For c2, assert proof starts on the first tick after restart without a new landing, and report whether that behavior already held. For c3, assert both the log and waiting view include the green commit and proof age. For c4, cover both an already-failing base and a passing last landing; assert the filed fixer's text names both ends of the range.
+- **Existing coverage:** [heavy_attribution_test.go](../../tools/tillr-drain/drain/heavy_attribution_test.go) covers finding the first failing landing. Do not restore the first draft's removed criterion for that behavior; c4 addresses the cases where the search cannot attribute the failure.
+- **Evidence recorded on 2026-11-17:** The following inspections found `heavyAttempted` only in memory on `Loop`, with no stored copy, and found the existing search plus two `Externalf` returns: one for a range with no landing and one for a failing tip whose last landing passes.
+
+```bash
+rg -n 'heavyAttempted' tools/tillr-drain/drain
+rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go
+```
 
 ## Filed 2026-11-17: refs that outlive their run
 
