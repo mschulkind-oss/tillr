@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -233,6 +234,21 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
+	var green string
+	if root != "" {
+		gatePolicy, _, e := ReadGatePolicy(root)
+		if e != nil {
+			return nil, e
+		}
+		green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
+		if err != nil {
+			return nil, err
+		}
+	}
+	unproved, err := unprovedBlockers(context.Background(), r, root, green, states, edges)
+	if err != nil {
+		return nil, err
+	}
 	// An override naming an item the store does not hold is refused rather than ignored:
 	// the override map names items, so a stale entry is the rot design §2 prices and
 	// refuses mechanically instead of letting it fall through a silent default.
@@ -295,7 +311,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		forks:     forks,
 		tick:      tick, policy: policy, held: lanes, itemStates: states, history: history,
 		priors: priors, retries: retries, classes: classes, latest: latest, questions: questions,
-		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items),
+		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items), unproved: unproved,
 		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
 	var hasNodes bool
@@ -462,6 +478,7 @@ type planner struct {
 	// set, every ordinary item holds with ReasonTrunkBroken: staging ordinary work from a
 	// base whose checks never passed is the defect the fixer exists to repair.
 	fixerOpen string
+	unproved  map[string]bool
 }
 
 // plannedFork is one dispatched item and the fork whose patch branch it delivers, when it
@@ -545,6 +562,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	switch {
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
+	case p.unproved[item.ItemID]:
+		decision.Action, decision.Reason = ActionHold, ReasonTrunkUnproved
 	case p.fixerOpen != "" && !IsTrunkFixer(item.ItemID):
 		// The trunk is red and a fixer owns the repair. Every ordinary item waits: a run
 		// staged from a base that never passed would produce a candidate the same red gate

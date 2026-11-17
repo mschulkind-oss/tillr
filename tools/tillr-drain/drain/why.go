@@ -243,6 +243,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", where, "the next pass"
 	case ReasonTrunkBroken:
 		return "waits on work", "trunk", "the trunk fixer"
+	case ReasonTrunkUnproved:
+		return "waits on work", "trunk", "the heavy runner; prove the trunk"
 	case ReasonRepairStagingFailed:
 		return "needs you", "land", "correct the reported staging cause"
 	case ReasonConflictExhausted:
