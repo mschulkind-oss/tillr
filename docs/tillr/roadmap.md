@@ -990,37 +990,61 @@ defects. None stops the drain from running, so they go through the queue like an
 Each is a place where the loop does something a person watching would not expect, and where
 nothing tells the person it happened.
 
-### Hold an item that has no document block
+<a id="hold-an-item-that-has-no-document-block"></a>
+
+### Route an item with no document block to triage
 
 An item can reach the queue without a block in any tracked document, because the item tool's
-apply face writes the store directly. The loop then treats it like any other item, and its worker
-is sent to read a section that does not exist. On 2026-11-16 that happened to
+apply face writes the store directly. The loop then treats it like any other item and sends a
+build worker to read a section that does not exist. On 2026-11-16 that happened to
 `item-agent-default-bmad-superpowers-skills`: it had been in the store alone since 2026-11-15, the
 loop dispatched it, and its worker reported blocked after 34 seconds. The item tool's sync face
 already counts these items as `unshared_open`, and on that day `tillr-item sync --dry-run` printed
-`unshared_open: 3`, but nothing acts on the count. The loop should hold such an item with a reason
-a person can read, and the count should appear where the operator already looks.
+`unshared_open: 3`, but nothing acts on the count.
 
-On 2026-11-17 the scope was narrowed pending the owner's ruling on [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in
-the separable-parts design. Another project, AutoQA, files its
-items with the apply face into a store of its own that has no documents and that nobody syncs, so
-there the apply face is the only intake and holding every undeclared item would hold everything.
-The hold below therefore applies only to a store that documents feed, which is tillr's own. If the
-owner rules otherwise, the first criterion changes again.
+This item first asked the loop to hold such an item until a person wrote its block. The owner
+answered on 2026-11-17 that a hold nobody acts on is the wrong outcome: "if it ends up like this,
+it's probably that's some half-baked request for me and it should be able to go to ... the next
+step, which is a design agent or a triage agent or something like that. Like there should always
+be a next step that's clear for these items and we should handle them somehow." So an item with
+no block is read as a request that nobody has shaped yet, and its next step is a triage run on the
+design seat. That seat already answers a worker's design conflict by amending the item's block and
+landing the amendment through the gate, and on 2026-11-17 it did exactly that for the same BMAD
+item. The triage run's product is the missing block, written with the item's own id so the next
+sync binds the stored item to it. When the request is too thin to shape without the owner, the
+run writes one question to the owner instead, so the item waits on a question a person can see
+and answer rather than on nobody.
 
-<!-- tillr: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+The owner said on the same day where a rule like this belongs: "I guess retention policy, item
+lifecycle, item prerequisites, that sort of thing should be part of this custom, this layer that
+describes your workflow use case, not the actual core." An item needs a document block before it
+is built because this workflow lands changes in a Git repository from documents, so the rule is a
+prerequisite of that workflow and not of the queue itself, as
+[the core and the landing definition](../design/tillr-core-and-git-landing.md#2-the-workflow-the-landing-definition-wraps-as-it-runs-today)
+records. That is why it applies only to a store
+that documents feed, the narrowing made on 2026-11-17: AutoQA files its items with the apply face
+into a store of its own that nobody syncs, and that store is left alone. Question
+[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in the separable-parts design stays open on
+one point only: whether AutoQA writes a block for each bug it files into tillr's own store, or
+files it with the apply face and lets triage write the block.
 
-- **c1:** In a store that documents feed, the planner does not dispatch an open item that no document block declares. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner holds the undeclared item with the reason `no-document-block`, which names the document the item's body reference points to. A test stores an item with no block and a ready item with one, plans both, and asserts the first is held with that reason and the second is dispatched.
-- **c2:** The hold lifts by itself in the pass after a sync imports a block for the item, with no command from the operator. A test adds the block, syncs, plans again, and asserts the item is dispatched.
-- **c3:** The waiting face shows the held item as waiting on a person, with the reason `no-document-block` and the command that fixes it (add the block, or close the item). The loop's start line and the status face print the `unshared_open` count, so it is no longer visible only in a sync report.
-- **c4:** An item that is closed or landed is never counted as unshared and never held for this reason. A test asserts both.
-- **c5:** A store that no sync has written to is not held for lacking a document block. A test stores open items that no document block declares, with no declared item anywhere in the store, plans, and asserts every one is dispatched when otherwise ready and none carries the reason `no-document-block`.
+<!-- tillr: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,config/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** In a store that documents feed, the planner never dispatches an open item that no document block declares to the build seat, whatever seat or workflow the item names. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner dispatches one triage run for the undeclared item on the design seat, with the reason `triage-no-block`, fenced to the document the item's body reference names. A test stores an undeclared item that names the build seat and a ready declared item, plans both, and asserts the first goes to the design seat with that reason and the second to its own seat.
+- **c2:** The triage run's brief carries the item's stored title, body reference and criteria as the request, and the prose guide, and asks for exactly one of three results. The first is a block for the item in that document: a heading, a why paragraph, the directive with the same id and its `paths` and `blocked_by`, and checkable criteria, landed through the gate like any design change. The second, for a request too thin to shape, is a block that declares the item together with a numbered question to the owner in the same document, saying exactly what is missing, so the item waits on the existing `question-open` hold. The third is a report that the item duplicates a named item or is already done. A test stages a triage run and asserts that its brief names the three results and that its fence admits only that document.
+- **c3:** After a triage run lands a block, the next sync binds the stored item to it by id, and the planner then sends the item to its own seat with no command from the operator. A test lands a fixture block, syncs, plans again, and asserts the item is dispatched to its seat.
+- **c4:** A triage run that reports a duplicate or finished item, or that ends blocked, is recorded as a conflict (`item.conflict`) waiting on the owner that carries the run's report, so the item is held `conflict-owner`. The owner accepts a duplicate or finished verdict by closing the item, or rejects it by answering the conflict. An undeclared item whose body reference names no document goes to the owner the same way, with no run. A test asserts both.
+- **c5:** Each undeclared item gets at most one triage run for each version of its request. When the item is still undeclared after its triage run settles and its stored title, body reference and criteria have not changed, the planner raises the owner conflict of c4 instead of a second run; a change to any of the three allows one new triage run. A test settles a triage run that landed nothing, plans twice, and asserts that no second run is staged and the item is held `conflict-owner`, then changes the item's title and asserts one new triage run.
+- **c6:** The waiting face shows each undeclared item with its next step and who takes it: triage on the design seat while that run is due or running, and the owner, with the question or the conflict text, once it reaches them. The loop's start line and the status face print the `unshared_open` count. A test asserts both lines of the waiting face and the count.
+- **c7:** An item that is closed or landed is never counted as unshared and never triaged. A store with no item declared by any document block is left alone: a test stores open undeclared items with no declared item anywhere in the store, plans, and asserts every one goes to its own seat when otherwise ready and none is sent to triage.
+- **c8:** The rule is one named prerequisite of the document-fed landing workflow, kept apart from the planner's general queue rules, and the drain's documentation lists it as such: in a store that documents feed, an item needs a document block before it is built.
 
 **Agent details:**
 
-- **Ref:** `docs/design/queue-persistence-ruling.md` names the counter and its intent; the loop's start-up warning is the existing surface.
-- **Where:** `tools/tillr-item/item/sync.go` (the `unshared_open` count), the planner in `tools/tillr-drain/drain/plan.go`, the waiting face in `tools/tillr-view/waiting.go`.
-- **Evidence:** 2026-11-16, `tillr-item sync --dry-run --store .tillr/state.db` printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
+- **Ref:** the owner's two statements of 2026-11-17, quoted above. The design-seat conflict path this reuses is the one a worker's blocked report takes today; the idea pipeline's stage 2 already rules that a request too vague to split becomes a one-question document that holds on the owner ([the idea pipeline](../design/tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules)), and this item applies that disposition to an item already in the store. That pipeline's `intake` face and item kinds are not built, so nothing here waits on them. `docs/design/queue-persistence-ruling.md` names the `unshared_open` counter and its intent. The proposed `plan` seat in [planning and model tiering](../design/tillr-planning-node-model-tiering.md) is not in the seat vocabulary yet; if it lands first, the builder says whether triage belongs on it.
+- **Where:** `decide` in `tools/tillr-drain/drain/plan.go`; `conflictDecision` in `tools/tillr-drain/drain/blocked.go` (the design-seat dispatch, and the owner routing for an empty body reference or a design run that ends blocked); the conflict brief and its one-document fence in `tools/tillr-drain/drain/stage.go`; the `unshared_open` count in `tools/tillr-item/item/sync.go`; the waiting face in `tools/tillr-view/waiting.go`; the workflow files under `config/tillr/workflows/` if the prerequisite is expressed there; the pack's copy under `yolo-packs/tillr/`.
+- **Naming:** the owner asked on 2026-11-17 why the intake face is called `apply` and not `add`. Do not rename it in this item; report what a rename would touch: the face, its callers and tests, the docs and pack skills that name it, and AutoQA's design, which files with it.
+- **Evidence:** 2026-11-16, `tillr-item sync --dry-run` against this repository's store printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
 
 ### Add the spend of killed runs to the record
 
