@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -321,12 +322,16 @@ func TestTheReportPayloadCarriesExactlyTheContractKeys(t *testing.T) {
 		"action", "event_head_seq", "fixture", "integrity",
 		"schema_version", "supported_record_versions", "table_counts",
 	}
+	// check also reports the write-ahead log, so its size is visible without a tool that
+	// reads SQLite's files.
+	checked := append(append([]string{}, report...), "log")
+	sort.Strings(checked)
 	code, out := run(t, "check", "--store", path)
 	if code != 0 {
 		t.Fatalf("check exited %d: %s", code, out)
 	}
-	if got := payloadKeys(t, out); !slices.Equal(got, report) {
-		t.Fatalf("check's payload keys are %v, want %v", got, report)
+	if got := payloadKeys(t, out); !slices.Equal(got, checked) {
+		t.Fatalf("check's payload keys are %v, want %v", got, checked)
 	}
 
 	events := append(append([]string{}, report...), "event_count", "next_since", "since")
@@ -349,7 +354,7 @@ func TestEveryFaceRefusesAnIncompatibleSchema(t *testing.T) {
 	// the version it is incompatible with rather than a number, so a schema change does
 	// not silently make this case compatible.
 	for _, version := range []int{0, store.SchemaVersion + 1} {
-		for _, face := range []string{"init", "seed", "check", "events"} {
+		for _, face := range []string{"init", "seed", "check", "events", "checkpoint"} {
 			t.Run(fmt.Sprintf("%s/version-%d", face, version), func(t *testing.T) {
 				dir := t.TempDir()
 				path := filepath.Join(dir, "board.sqlite3")
@@ -360,10 +365,11 @@ func TestEveryFaceRefusesAnIncompatibleSchema(t *testing.T) {
 
 				output := filepath.Join(dir, "events.json")
 				args := map[string][]string{
-					"init":   {"init", "--store", path, "--fixture"},
-					"seed":   {"seed", "--store", path, "--input", seedBundle(t, dir)},
-					"check":  {"check", "--store", path},
-					"events": {"events", "--store", path, "--since", "0", "--output", output},
+					"init":       {"init", "--store", path, "--fixture"},
+					"seed":       {"seed", "--store", path, "--input", seedBundle(t, dir)},
+					"check":      {"check", "--store", path},
+					"events":     {"events", "--store", path, "--since", "0", "--output", output},
+					"checkpoint": {"checkpoint", "--store", path},
 				}[face]
 				code, out, stderr := runStderr(t, args...)
 				if code != 3 {
@@ -413,7 +419,9 @@ func TestInitFixtureRefusesALiveStore(t *testing.T) {
 	if code, out := run(t, "init", "--store", path); code != 0 {
 		t.Fatalf("init exited %d: %s", code, out)
 	}
-	before, err := os.ReadFile(path)
+	// The store's content, not its file: a commit stays in the write-ahead log, so the
+	// database file's bytes do not move when a face writes (store.Fingerprint).
+	before, err := store.Fingerprint(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,11 +429,11 @@ func TestInitFixtureRefusesALiveStore(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("init --fixture on a live store exited %d, want 2: %s%s", code, out, stderr)
 	}
-	after, err := os.ReadFile(path)
+	after, err := store.Fingerprint(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
+	if before != after {
 		t.Fatal("init --fixture changed a live store it refused")
 	}
 }
@@ -455,6 +463,10 @@ func TestEventsRefusesToWriteOverItsOwnStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	content, err := store.Fingerprint(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, out, stderr := runStderr(t, "events", "--store", path, "--since", "0", "--output", path)
 	if code != 2 {
 		t.Fatalf("events --output <the store> exited %d, want 2: %s%s", code, out, stderr)
@@ -463,8 +475,13 @@ func TestEventsRefusesToWriteOverItsOwnStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The bytes catch a truncation of the file; the fingerprint catches a write, which
+	// stays in the write-ahead log and leaves the file's bytes alone (store.Fingerprint).
 	if !bytes.Equal(before, after) {
 		t.Fatal("events --output <the store> truncated the store")
+	}
+	if now, err := store.Fingerprint(context.Background(), path); err != nil || now != content {
+		t.Fatalf("events --output <the store> changed the store's content (%v)", err)
 	}
 }
 
@@ -477,7 +494,7 @@ func TestHelpIsTheFaceSurface(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--help exited %d, want 0: %s", code, out)
 	}
-	for _, face := range []string{"init", "seed", "check", "events"} {
+	for _, face := range []string{"init", "seed", "check", "events", "checkpoint"} {
 		if !strings.Contains(string(out), face) {
 			t.Errorf("--help does not name the face %q: %s", face, out)
 		}
@@ -491,5 +508,220 @@ func TestHelpIsTheFaceSurface(t *testing.T) {
 	}
 	if code, out = run(t, "bogus", "--help"); code != 2 {
 		t.Errorf("a face that does not exist exited %d, want 2: %s", code, out)
+	}
+}
+
+// logPayload is the "log" object a check or checkpoint report carries.
+type logPayload struct {
+	Bytes  int64 `json:"bytes"`
+	Frames int   `json:"frames"`
+	Known  bool  `json:"known"`
+}
+
+// check reports the write-ahead log's size: no program's own work copies the log into the
+// database file any more, so how far it has grown is something an operator reads here.
+func TestCheckReportsTheLogsSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	if code, out := run(t, "init", "--store", path, "--fixture"); code != 0 {
+		t.Fatalf("init exited %d: %s", code, out)
+	}
+	code, out := run(t, "check", "--store", path)
+	if code != 0 {
+		t.Fatalf("check exited %d: %s", code, out)
+	}
+	var record struct {
+		Payload struct {
+			Log *logPayload `json:"log"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(out, &record); err != nil {
+		t.Fatalf("check did not emit a record: %v\n%s", err, out)
+	}
+	info, err := os.Stat(path + "-wal")
+	if err != nil {
+		t.Fatalf("init left no write-ahead log: %v", err)
+	}
+	l := record.Payload.Log
+	if l == nil || !l.Known || l.Frames == 0 || l.Bytes != info.Size() {
+		t.Fatalf("check's log is %+v, want known, with frames, and %d bytes", l, info.Size())
+	}
+}
+
+// rowsInDatabaseFileAlone counts the migration rows in a copy of the database file without its
+// log. The test process holds no connection to the store, so reading the file is safe.
+func rowsInDatabaseFileAlone(t *testing.T, path string) (int, error) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alone := filepath.Join(t.TempDir(), "alone.sqlite3")
+	if err := os.WriteFile(alone, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+alone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	err = db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n)
+	return n, err
+}
+
+// The checkpoint face is the supported way to make the database file alone current: after
+// it, a copy of that one file holds every commit, which is what a backup that copies only
+// the database file needs. Its report says what it copied and that the log restarted.
+func TestTheCheckpointFaceMakesTheDatabaseFileAloneCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	if code, out := run(t, "init", "--store", path, "--fixture"); code != 0 {
+		t.Fatalf("init exited %d: %s", code, out)
+	}
+	if _, err := rowsInDatabaseFileAlone(t, path); err == nil || !strings.Contains(err.Error(), "no such table") {
+		t.Fatalf("before the checkpoint the database file alone already held the schema (%v); the case proves nothing", err)
+	}
+	code, out, stderr := runStderr(t, "checkpoint", "--store", path)
+	if code != 0 {
+		t.Fatalf("checkpoint exited %d: %s%s", code, out, stderr)
+	}
+	var record struct {
+		Payload struct {
+			Action     string      `json:"action"`
+			Log        *logPayload `json:"log"`
+			Checkpoint *struct {
+				LogFrames    int  `json:"log_frames"`
+				CopiedFrames int  `json:"copied_frames"`
+				Restarted    bool `json:"restarted"`
+			} `json:"checkpoint"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(out, &record); err != nil {
+		t.Fatalf("checkpoint did not emit a record: %v\n%s", err, out)
+	}
+	p := record.Payload
+	if p.Action != "checkpoint" || p.Checkpoint == nil || p.Log == nil {
+		t.Fatalf("the checkpoint report is incomplete: %s", out)
+	}
+	if !p.Checkpoint.Restarted || p.Checkpoint.LogFrames == 0 || p.Checkpoint.CopiedFrames != p.Checkpoint.LogFrames {
+		t.Fatalf("the checkpoint did not copy the whole log and restart it: %+v", *p.Checkpoint)
+	}
+	if n, err := rowsInDatabaseFileAlone(t, path); err != nil || n != 1 {
+		t.Fatalf("after the checkpoint the database file alone holds %d migration rows (%v), want 1", n, err)
+	}
+}
+
+// While a drain loop owns the store's checkpoints the face refuses: the loop checkpoints
+// every minute and when it stops, and two cycles at once defeat each other's restart. The
+// refusal is a negative answer (exit 1) with the reason on stderr, and nothing is
+// checkpointed.
+func TestTheCheckpointFaceRefusesWhileALoopOwnsCheckpoints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	if code, out := run(t, "init", "--store", path, "--fixture"); code != 0 {
+		t.Fatalf("init exited %d: %s", code, out)
+	}
+	owner, err := store.OwnCheckpoints(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close(context.Background())
+	code, out, stderr := runStderr(t, "checkpoint", "--store", path)
+	if code != 1 {
+		t.Fatalf("checkpoint with a loop owning checkpoints exited %d, want 1: %s%s", code, out, stderr)
+	}
+	if !strings.Contains(stderr, "drain loop") {
+		t.Errorf("the refusal does not say a drain loop owns the checkpoints: %q", stderr)
+	}
+}
+
+// truncateReport is the part of a `checkpoint --truncate` record these cases read.
+type truncateReport struct {
+	Payload struct {
+		Log        *logPayload `json:"log"`
+		Checkpoint *struct {
+			Truncated *bool `json:"truncated"`
+		} `json:"checkpoint"`
+	} `json:"payload"`
+}
+
+// growLogByFace writes enough rows through the store's own handle that its close's cycle
+// leaves a log file of several megabytes: a restart keeps the file's length.
+func growLogByFace(t *testing.T, path string) {
+	t.Helper()
+	s, err := store.Open(context.Background(), path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := strings.Repeat("x", 4000)
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		for i := 0; i < 1100; i++ {
+			if _, err := tx.Exec(`INSERT INTO meta (key, value) VALUES (?, ?)`, fmt.Sprintf("grow-%d", i), value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `checkpoint --truncate` with nothing else holding the store shrinks the log file to one
+// frame and says so (truncated true, and the log's size).
+func TestTheCheckpointFaceTruncatesTheLogWhenNothingElseHasTheStoreOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	if code, out := run(t, "init", "--store", path, "--fixture"); code != 0 {
+		t.Fatalf("init exited %d: %s", code, out)
+	}
+	growLogByFace(t, path)
+	grown := store.ReadLog(path).Bytes
+	if grown < 4<<20 {
+		t.Fatalf("the log file is %d bytes; the case needs a long one", grown)
+	}
+	code, out, stderr := runStderr(t, "checkpoint", "--store", path, "--truncate")
+	if code != 0 {
+		t.Fatalf("checkpoint --truncate exited %d: %s%s", code, out, stderr)
+	}
+	var r truncateReport
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("checkpoint --truncate did not emit a record: %v\n%s", err, out)
+	}
+	p := r.Payload
+	if p.Checkpoint == nil || p.Checkpoint.Truncated == nil || !*p.Checkpoint.Truncated || p.Log == nil {
+		t.Fatalf("the report does not say the log was truncated: %s", out)
+	}
+	if p.Log.Frames != 1 || p.Log.Bytes >= grown/100 {
+		t.Fatalf("the reported log is %+v (it was %d bytes), want one frame", *p.Log, grown)
+	}
+}
+
+// Another process holding the store open refuses the truncate, exit 1, with the reason on
+// stderr, and the log file keeps its size. The other process is this test's own: the face
+// runs as a child.
+func TestTheCheckpointFaceRefusesToTruncateWhileAnotherProcessHasTheStoreOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	if code, out := run(t, "init", "--store", path, "--fixture"); code != 0 {
+		t.Fatalf("init exited %d: %s", code, out)
+	}
+	growLogByFace(t, path)
+	r, err := store.OpenRead(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := store.ReadLog(path)
+	code, out, stderr := runStderr(t, "checkpoint", "--store", path, "--truncate")
+	if code != 1 {
+		t.Fatalf("checkpoint --truncate with the store open elsewhere exited %d, want 1: %s%s", code, out, stderr)
+	}
+	if !strings.Contains(stderr, "another process has the store open") || !strings.Contains(stderr, fmt.Sprint(os.Getpid())) {
+		t.Errorf("the refusal does not name the process holding the store: %q", stderr)
+	}
+	if after := store.ReadLog(path); after != before {
+		t.Fatalf("a refused truncate changed the log: %+v then %+v", before, after)
 	}
 }

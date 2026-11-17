@@ -37,28 +37,13 @@ func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) error {
 	return s.writeTx(ctx, operation, fn)
 }
 
-// writeTx is WriteTx with the traced operation named by the caller, so the checkpoint
-// owner's own write reads as what it is rather than as the function that called it.
-//
-// The checkpoint policy is decided inside the span and before "acquired". One phase,
-// autocheckpoint.off or autocheckpoint.default, marks its end and its outcome, so the
-// wait for SQLite's writer is the time from that phase to "acquired". The policy takes no
-// SQLite lock: two flock calls, and a pragma only when the decision changed.
+// writeTx is WriteTx with the traced operation named by the caller, so a checkpoint
+// cycle's own writes read as what they are rather than as the function that called them.
+// Nothing about checkpoints is decided here: the handle's commits never checkpoint (dsn).
 func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) error) (result error) {
 	trace := startSQLiteTrace(s.path, operation)
 	defer func() { trace.finish(result) }()
-	// One connection carries both the checkpoint policy and the transaction it is for.
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("store: beginning the write transaction: %w", err)
-	}
-	defer conn.Close()
-	if s.writable {
-		if err := s.applyPolicyOn(ctx, conn, trace); err != nil {
-			return err
-		}
-	}
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: beginning the write transaction: %w", err)
 	}

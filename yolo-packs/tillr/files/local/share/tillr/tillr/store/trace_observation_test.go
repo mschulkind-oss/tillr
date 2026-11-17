@@ -32,7 +32,17 @@ func captureSQLiteTrace(t *testing.T, enabled bool) (string, func() string) {
 	}
 	original := os.Stderr
 	os.Stderr = file
-	t.Cleanup(func() { os.Stderr = original; file.Close() })
+	// A handle the test closes by defer traces its close after read() returns, so the
+	// capture delivers what is queued before it closes the file; a record delivered to a
+	// closed file is a sink error in the process-wide observer, and a later test's
+	// capture would report it as an incomplete trace.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _ = FlushSQLiteTrace(ctx)
+		os.Stderr = original
+		file.Close()
+	})
 	return path, func() string {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

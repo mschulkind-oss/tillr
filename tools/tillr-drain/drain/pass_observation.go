@@ -49,6 +49,18 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	// Only a successful first refresh proves this Loop initialized all registered
 	// owners and legacy data. Later heartbeats open that existing store, not a
 	// globally version-skipped migration path.
+	if l.keepWAL && l.walKeeper == nil {
+		// The keeper first, so the migration below, and every other program's close
+		// meanwhile, runs with the owner held: startup is never a stretch without one.
+		keeper, err := openWALKeeper(ctx, l.cfg.Store)
+		if err != nil {
+			return Incompatiblef("%v", err)
+		}
+		l.walKeeper, l.lastCheckpoint = keeper, at
+	}
+	if l.beforeSessionOpen != nil {
+		l.beforeSessionOpen(!l.sessionInitialized)
+	}
 	s, err := store.Open(ctx, l.cfg.Store, !l.sessionInitialized)
 	if err != nil {
 		return Incompatiblef("%v", err)
@@ -69,14 +81,6 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw))
 		return err
 	})
-	if err == nil && l.keepWAL && l.walKeeper == nil {
-		// s is still open, so the log this write used is the one the keeper holds.
-		keeper, err := openWALKeeper(ctx, l.cfg.Store)
-		if err != nil {
-			return Incompatiblef("%v", err)
-		}
-		l.walKeeper, l.lastCheckpoint = keeper, at
-	}
 	if err == nil {
 		l.sessionInitialized = true
 	}

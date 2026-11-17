@@ -35,10 +35,10 @@ A failed heartbeat is still a fault, never false liveness.
 
 Set `TILLR_SQLITE_TRACE=1` on the diagnostic process to emit stderr spans, not database
 rows. A span (this document's word for one traced store operation, from its `begin` line
-to its `end` line) is recorded for a write transaction, for opening a store (ping and WAL
-selection) and for a migration. Tracing is off unless the variable is `1`; off, behavior
-and allocations match an untraced build. The lander's Git commands print matching
-PID/time/repository/subcommand begin/end spans; commit messages and environment values
+to its `end` line) is recorded for a write transaction, for opening a store (ping, WAL
+selection and the sidecar), for a writable handle's close, and for a migration. Tracing
+is off unless the variable is `1`; off, behavior and allocations match an untraced build.
+The lander's Git commands print matching PID/time/repository/subcommand begin/end spans; commit messages and environment values
 are omitted, and no SQL values appear anywhere in trace output.
 
 Line kinds, all on the process's stderr:
@@ -49,32 +49,49 @@ Line kinds, all on the process's stderr:
   `acquired` followed by a busy `end` identifies a waiter, not a proven holder. A `begin`
   with no `end` means the span was in flight when output stopped: the process was killed,
   crashed, or its `end` record was dropped.
-- `phase=autocheckpoint.off|autocheckpoint.default`, inside a write transaction (and an
-  open) and before `acquired`: the checkpoint policy the commit runs under, decided
-  without any SQLite lock. `off` means a running drain loop owns checkpoints (the
-  *checkpoint owner*, a term defined in
+- An open records `sidecar.begin` and `sidecar.end` around its *sidecar*, the read-only
+  connection every writable handle holds so its close is never the store's last (a term
+  defined in
   [tillr-store's Durability and checkpoints](../../../tools/tillr-store/README.md#durability-and-checkpoints)).
-  The wait for the writer is the time from this phase to `acquired`.
+  `sidecar.unavailable` means the handle has none, so its close may checkpoint and delete
+  the log like any SQLite connection's last close when it is the store's last, and its close runs
+  no cycle (`reason=no-sidecar`).
 - `phase=owner-lock.unavailable`, inside an open: the process could not open or create the
-  checkpoint owner's lock file, so it sees no owner and checkpoints by SQLite's default.
-- The owner's own work is four plainly named operations.
-  - `checkpoint-owner.checkpoint` is one *checkpoint cycle*, a term defined in
-    [tillr-store's Durability and checkpoints](../../../tools/tillr-store/README.md#durability-and-checkpoints).
-    Its phases are `pin.begin`, `pin.end`, `checkpoint.begin`, then
-    `checkpoint.complete`, `.partial` or `.busy`. It ends with the cycle's outcome:
-    `log.restarted`, `log.not-restarted`, or `writer.busy` when one of the owner's writes
-    waited out the busy timeout. The outcome line carries `log_frames=`, `copied_frames=`
-    and `log_bytes=` after the error field. `checkpoint.complete` alone does not mean the
-    log restarted.
-  - Its own phases hold no writer, so their flushes delay only the loop's heartbeat. The
-    span contains the owner's two write spans, `checkpoint-owner.pre-write` and
+  *checkpoint owner*'s lock file (a term defined in the same section), so it sees no owner.
+- `operation="close"` is a writable handle's close, its own span. Its first phase is the
+  checkpoint decision: `log-checkpoint.skipped` (`reason=owner-writer`, `no-sidecar`,
+  `owner-or-cycle-running` (a loop owns the store, or another close is running its cycle
+  and holds the owner's lock file exclusively for it), or `cycled-at-this-log` with
+  `log_frames=`: a cycle already ran on this log and it has not grown 1000 frames since), `log-checkpoint.not-due` (`log_frames=`,
+  `known=`), or `log-checkpoint.due`. Then `writer.close.begin`/`end` and `sidecar.close.begin`/`end`.
+  A close holds no SQLite lock and flushes nothing unless it is due.
+- A due close is followed by a `log-checkpoint` span: one *checkpoint cycle* (defined in
+  the same section), with write spans `log-checkpoint.pre-write` and
+  `log-checkpoint.restart-write`.
+- The owner's own work is three plainly named operations; `tillr-store checkpoint` adds a
+  fourth, and `tillr-store checkpoint --truncate` a fifth.
+  - `checkpoint-owner.checkpoint` is the loop's cycle. Its phases are `pin.begin`,
+    `pin.end`, `checkpoint.begin`, then `checkpoint.complete`, `.partial` or `.busy`. It
+    ends with the cycle's outcome: `log.restarted`, `log.not-restarted`, `writer.busy`
+    when one of the cycle's writes waited out the busy timeout, or `pin.busy` when the pin's
+    read did (another connection held SQLite's exclusive lock, as a recovery does); a busy
+    pin skips the checkpoint, so its span has no `checkpoint.*` phase. The outcome line carries
+    `log_frames=`, `copied_frames=` and `log_bytes=` after the error field.
+    `checkpoint.complete` alone does not mean the log restarted. The same phases appear in
+    `log-checkpoint` and in `checkpoint-owner.close`.
+  - The cycle's own phases hold no writer, so their flushes delay only the cycle's caller.
+    The span contains two write spans, `checkpoint-owner.pre-write` and
     `checkpoint-owner.restart-write`, which are ordinary write spans. They are the only
     writes meant to pay a log restart's header flush while holding the writer: the restart
-    write in each cycle, and the pre-write when a checkpoint from outside the policy left
-    the log fully copied.
-  - `checkpoint-owner.close` is the loop's closing checkpoint (`owner-lock.released`,
-    `checkpoint.begin`, its outcome, `close.begin`, `close.end`), traced before the exit
-    flush.
+    write in each cycle, and the pre-write when a checkpoint from outside tillr left the
+    log fully copied.
+  - `checkpoint-owner.close` is the owner's closing cycle, then `owner-lock.released`,
+    `close.begin` and `close.end`, traced before the exit flush.
+  - `store.checkpoint` is `tillr-store checkpoint`: `owner.absent` and the owner's own spans
+    inside it, or `owner.running` and the refusal.
+  - `store.truncate` is `tillr-store checkpoint --truncate`: `owner.absent` or
+    `owner.running`, then `in-use` (with `pids=`) and the refusal, or `not-in-use`,
+    `truncate.begin`, `truncate.end` and the write span `store.truncate.write`.
 - `tillr-sqlite-stack ...`: one all-goroutine stack sample, taken once a span has run for
   2 s, framed per line. It shows what every goroutine in that process was doing; it does
   not name the process holding a lock. A sample over 1 MiB is cut and marked

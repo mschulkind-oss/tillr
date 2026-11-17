@@ -107,10 +107,7 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 	if len(page) != 1 || !reflect.DeepEqual(page[0], oldest) {
 		t.Fatalf("paged newest is not session newest: %v", page)
 	}
-	before, err := os.ReadFile(h.store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := storeFingerprint(t, h.store)
 	bin := filepath.Join(t.TempDir(), "tillr-view")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
@@ -135,12 +132,8 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 			t.Errorf("table lacks %q: %s", want, table)
 		}
 	}
-	after, err := os.ReadFile(h.store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatal("passes modified store bytes")
+	if storeFingerprint(t, h.store) != before {
+		t.Fatal("passes modified the store's content")
 	}
 }
 

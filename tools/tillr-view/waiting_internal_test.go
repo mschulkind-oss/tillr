@@ -65,10 +65,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 		}
 	}
 	beforeCounts := waitingTableCounts(t, db)
-	before, err := os.ReadFile(h.store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := storeFingerprint(t, h.store)
 	bin := filepath.Join(t.TempDir(), "tillr-view")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
@@ -132,12 +129,8 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 	if len(lines) != 7 || strings.Join(strings.Fields(lines[0]), " ") != "rank item_id class where why mover since" {
 		t.Fatalf("table columns/rows: %s", table)
 	}
-	after, err := os.ReadFile(h.store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatal("waiting changed the database bytes")
+	if storeFingerprint(t, h.store) != before {
+		t.Fatal("waiting changed the store's content")
 	}
 	if !reflect.DeepEqual(beforeCounts, waitingTableCounts(t, db)) {
 		t.Fatal("waiting changed a table's row count")

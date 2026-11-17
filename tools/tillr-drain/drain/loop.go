@@ -488,6 +488,9 @@ type Loop struct {
 	reportedLockError bool
 	beforeCheckpoint  func()
 	checkpointed      func(store.Checkpointed)
+	// beforeSessionOpen is a test seam, run just before a session write opens the store,
+	// with whether that open creates and migrates it.
+	beforeSessionOpen func(create bool)
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail string

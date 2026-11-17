@@ -21,7 +21,9 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 	// the store has refused that since closing gained a required reason and author.
 	closeFixtureItem(t, path, "closed")
 	ref := policy(t, "true")
-	before, err := os.ReadFile(path)
+	// The store's content, not its file: a commit stays in the write-ahead log, so the
+	// database file's bytes do not move when a face writes (store.Fingerprint).
+	before, err := store.Fingerprint(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,11 +96,11 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 	if code != 0 || !strings.Contains(string(out), "\"decision\"") || strings.Contains(string(out), "\"item_id\": \"ready\"") {
 		t.Fatalf("detail: %d %s", code, out)
 	}
-	after, err := os.ReadFile(path)
+	after, err := store.Fingerprint(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, after) {
+	if before != after {
 		t.Fatal("why wrote the store")
 	}
 }

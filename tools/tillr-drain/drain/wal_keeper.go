@@ -20,22 +20,24 @@ const CheckpointInterval = time.Minute
 const CheckpointAllowance = 30 * time.Second
 
 // The WAL keeper names this package's use of the store's checkpoint owner
-// (store.OwnCheckpoints): a running Loop holds it from its first successful session write
-// until Run returns. Every other face opens the store, does one thing and closes it.
+// (store.CreateAndOwnCheckpoints): a running Loop takes it before its first session write
+// opens the store, so before that open migrates (creating the empty store itself if there
+// is none), and holds it until Run returns. Every other face opens the store, does one
+// thing and closes it.
 //
-// It does two things. Its idle read-only connection means no short-lived close is the
-// store's last, so none of them checkpoints and deletes the write-ahead log (WAL) under
-// SQLite's exclusive lock. And while it is held, no other tillr handle checkpoints, so none
-// is the first writer after a complete checkpoint, the writer that restarts the log and
-// flushes its header (and, on a new handle, the directory) while holding SQLite's writer.
-// That hold, behind a slow disk, timed out the heartbeat (U1). The Loop checkpoints instead,
-// on its heartbeat (checkpointIfDue), and the log restart's one flush happens in the owner's
-// own write. A checkpoint from outside the policy (store.CheckpointOwner) is the exception.
+// While it is held, no other tillr handle's close checkpoints, so none restarts the log in
+// a writer that waits behind a flush: the restart's one header flush happens in the owner's
+// own write (checkpointIfDue, every CheckpointInterval). Without a Loop, a handle's close
+// checkpoints instead once the log has grown past store.CheckpointFrames, and
+// `tillr-store checkpoint` does it on demand. Every handle also keeps its own read-only
+// connection open across its life, so no close is the store's last and none deletes the
+// write-ahead log (WAL) under SQLite's exclusive lock; the keeper's idle reader no longer
+// carries that alone.
 func openWALKeeper(ctx context.Context, path string) (*store.CheckpointOwner, error) {
-	return store.OwnCheckpoints(ctx, path)
+	return store.CreateAndOwnCheckpoints(ctx, path)
 }
 
-// keepWALWhileRunning makes the Loop's first successful session write open the keeper.
+// keepWALWhileRunning makes the Loop's first session write take the keeper first.
 // Only Run asks for it, so a Loop driven pass by pass holds no connection between calls.
 func (l *Loop) keepWALWhileRunning() {
 	l.sessionMu.Lock()
@@ -55,9 +57,9 @@ const LogReportBytes = 64 << 20
 // flushes behind another goroutine; and it holds sessionMu only to read and record, never
 // across the checkpoint, so a pass refreshing the session does not wait on the disk either.
 //
-// A cycle is maintenance. One that did not restart the log, or whose own write waited out
-// SQLite's busy timeout behind another writer, is reported and tried again at the next
-// heartbeat; only an error that is neither faults the loop.
+// A cycle is maintenance. One that did not restart the log, whose own write waited out
+// SQLite's busy timeout behind another writer, or whose pin's read did, is reported and
+// tried again at the next heartbeat; only an error that is none of these faults the loop.
 func (l *Loop) checkpointIfDue(ctx context.Context) error {
 	l.sessionMu.Lock()
 	owner, now := l.walKeeper, l.cfg.Now()
@@ -103,6 +105,8 @@ func (l *Loop) reportCheckpoint(c store.Checkpointed) {
 		return
 	case c.WriterBusy:
 		l.reportf("loop: the checkpoint's own write waited out SQLite's busy timeout behind another writer (TILLR_SQLITE_TRACE=1 names it); the cycle is skipped and tried again at the next heartbeat\n")
+	case c.PinBusy:
+		l.reportf("loop: the checkpoint's read pin waited out SQLite's busy timeout (another connection held the store's exclusive lock, as a recovery does); the cycle is skipped and tried again at the next heartbeat\n")
 	case l.missedRestarts == 0:
 		l.reportf("loop: the checkpoint did not restart the write-ahead log (%d log frames, %d copied, log file %d bytes): a commit came between the checkpoint and the loop's write, or a reader held frames back; trying again at the next heartbeat\n", c.LogFrames, c.CopiedFrames, c.LogBytes)
 	}
@@ -115,9 +119,9 @@ func (l *Loop) reportCheckpoint(c store.Checkpointed) {
 
 // closeWALKeeper closes the keeper, if one was opened. Run defers it just before
 // endSession, so it runs after the session's end record, on every way out of Run,
-// including a panic. Closing checkpoints the whole log, so the database file alone holds
-// that end record; a checkpoint that could not copy everything is reported, and what it
-// left stays safe in the log for the next one.
+// including a panic. Closing runs one last checkpoint cycle, so the database file alone
+// holds that end record; a cycle that could not copy everything, or whose write waited
+// out the busy timeout, is reported, and what it left stays safe in the log for the next.
 func (l *Loop) closeWALKeeper() {
 	l.sessionMu.Lock()
 	owner := l.walKeeper
@@ -130,6 +134,10 @@ func (l *Loop) closeWALKeeper() {
 	switch {
 	case err != nil:
 		l.reportf("loop: the closing checkpoint failed: %v\n", err)
+	case checkpointed.WriterBusy:
+		l.reportf("loop: the closing checkpoint's own write waited out SQLite's busy timeout behind another writer (TILLR_SQLITE_TRACE=1 names it); the log stays for the next checkpoint\n")
+	case checkpointed.PinBusy:
+		l.reportf("loop: the closing checkpoint's read pin waited out SQLite's busy timeout (another connection held the store's exclusive lock); the log stays for the next checkpoint\n")
 	case !checkpointed.Complete():
 		l.reportf("loop: the closing checkpoint copied %d of %d log frames; the rest stay in the write-ahead log\n",
 			checkpointed.CopiedFrames, checkpointed.LogFrames)

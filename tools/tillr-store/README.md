@@ -18,7 +18,7 @@
 ## What this module owns
 
 `tillr-store` creates a store, seeds one from a bundle, verifies the store's own invariants,
-and reads the event log back. It is the utility every other utility's fixture starts from,
+reads the event log back, and checkpoints the store on demand. It is the utility every other utility's fixture starts from,
 so its report is a contract rather than a convenience: one `store.report` record per face,
 describing the store as it stands after the face ran.
 
@@ -29,10 +29,11 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 
 - **The store uses SQLite WAL.** Every normal writable open selects and verifies
   SQLite's write-ahead log (WAL), so a killed writer's uncommitted changes are invisible
-  to readers. The database and its `-wal`/`-shm` coordination files form the live store;
-  do not copy just the database while a writer is active, and above all not while a drain
-  loop runs, because no other process copies the log into the database then (see
-  [Durability and checkpoints](#durability-and-checkpoints)). Read-only opens preserve the
+  to readers. The database and its `-wal`/`-shm` coordination files form the live store,
+  and the `-wal` file normally holds recent work the database file does not: no program's
+  own writes copy it back (see [Durability and checkpoints](#durability-and-checkpoints)).
+  Never copy the database file alone. To back up or inspect the store, use one of
+  [the supported ways](#backing-up-or-copying-the-store). Read-only opens preserve the
   journal mode, never migrating or repairing it. A schema version this binary does not
   support is refused rather than migrated in place.
 - **A fixture store is seedable and a live store is not.** `init` decides which one it
@@ -58,80 +59,187 @@ page cache. The owner ruled on 2026-11-16 that `NORMAL` stays. The default, `FUL
 the disk inside every commit while holding SQLite's single write lock, so one slow flush
 became a wait for every other writer, against its five-second busy timeout.
 
-**While a drain loop runs, only the loop checkpoints.** A checkpoint copies the log's frames
-back into the database file. After a checkpoint that copied every frame, the next writer
-restarts the log at the top of the file. Before writing any frame there, it must flush the
-new log header, and on a newly opened handle it flushes the store's directory too. Both
-flushes happen while that writer holds the write lock. That flush cannot be removed
-without giving up SQLite's protection against power loss, so the loop decides who pays
-it:
+**No program's own writes checkpoint.** A *checkpoint* copies the log's frames back into
+the database file. After a checkpoint that copied every frame, the next writer *restarts*
+the log at the top of the file. Before writing any frame there, it must flush the new log
+header, and on a newly opened handle it flushes the store's directory too. Both flushes
+happen while that writer holds SQLite's single write lock, so every writer queued behind it
+waits them out against its five-second busy timeout. That flush cannot be removed without
+giving up SQLite's protection against power loss, so the store decides where it happens:
 
-- *Checkpoint owner* is a term this package coins. It means a process, a running
-  `tillr-drain` loop, that checkpoints the store while it runs. Its presence is a shared
-  `flock` on a file beside the store, `<store>-checkpoint-owner`. The kernel drops the lock
-  when the process dies, so a crashed loop leaves no owner behind. The file is created
-  with the database file's permissions, is harmless when left over, and need not be copied
-  with the store. A process that cannot open or create it sees no owner and checkpoints by
-  SQLite's default; with tracing on, that shows as `owner-lock.unavailable`.
-- While an owner holds that lock, every other writable handle sets
-  `wal_autocheckpoint=0` before each write transaction, so no other commit checkpoints.
-- About once a minute, on its heartbeat, the loop runs one *checkpoint cycle*, a term this
-  package coins for the following steps. First the loop makes a small write of its own,
-  so the log holds a frame no checkpoint has copied. Then it begins a read transaction and
-  holds it; this coined term is the *pin*. Then it runs a `PASSIVE` checkpoint, which never
-  takes the write lock. SQLite restarts the log only when it can take reader slots 1 to 4.
-  A pin begun while some frame is uncopied holds one of those slots, so while it is held,
-  no other writer can restart the log. (A pin begun on a log that is already fully copied
-  takes slot 0, which a restart does not need, and protects nothing. The loop's first write
-  is what rules that out. Such a log is left by a checkpoint from outside this policy: an
-  older `tillr` build, the `sqlite3` command-line tool, or another loop's closing
-  checkpoint. The first write then restarts the log itself, in the loop's writer; in the
-  loop's first cycle that restart can flush the directory too.) Last, the loop releases the pin inside a second small write, and that commit
-  restarts the log: one header flush, in the loop's writer, never the directory's.
-- The restart needs no commit between the pin and the loop's second write. A writer that
-  commits in that gap keeps the log appending. The cycle then reports that the log did not
-  restart, with its length, and the loop tries again at its next heartbeat rather than a
-  minute later. The loop's own log says so on the first miss, when the log passes 64 MiB,
-  at each doubling after that, and when a restart lands again.
-- A cycle whose own write waits out SQLite's busy timeout behind another writer is skipped
-  and tried again at the next heartbeat. It is reported, and it never faults the loop: a
-  checkpoint is maintenance.
-- Just before checkpointing, the heartbeat announces its next pass 30 seconds ahead, so
-  a slow checkpoint does not make the loop look dead to `tillr-drain stop` or the
-  observatory.
-- When the loop stops, it checkpoints the log. The database file alone then holds
-  everything, including the session's end, provided no reader held frames back (the loop
-  reports a closing checkpoint that copied only part of the log). That stays true only until
-  the next write by any program.
+- Every writable handle runs with `wal_autocheckpoint=0`: no commit checkpoints.
+- Every writable handle also holds a *sidecar*, a term this package coins: a read-only
+  SQLite connection to the same store, opened before the handle's writer and closed after
+  it. SQLite's last connection to close a store checkpoints the log and deletes it, under
+  an exclusive lock that a program starting at that moment queues behind; a read-only
+  connection's close cannot. So no handle's close is ever the store's last, and no program
+  deletes the log. The log is created once, with the store, and stays. The one exception
+  is a handle whose sidecar could not be attached ([Known limits](#known-limits)).
+- A checkpoint happens in exactly three places, each as one *checkpoint cycle* (below):
+  a running drain loop's heartbeat, about once a minute and when the loop stops; the close
+  of a writable handle that finds the log grown past 1000 frames (SQLite's own default
+  threshold) while no loop runs; and `tillr-store checkpoint`, on demand.
 
-With no loop running, every handle checkpoints as SQLite does by default, at 1000 log
-pages. With `TILLR_SQLITE_TRACE=1`, every write records which policy it ran under, and the
-owner's cycle, its two writes and its closing checkpoint are their own spans. The line
-format is in
+*Checkpoint owner* is a term this package coins. It means a process, a running
+`tillr-drain` loop, that checkpoints the store while it runs. Its presence is a shared
+`flock` on a file beside the store, `<store>-checkpoint-owner`. The kernel drops the lock
+when the process dies, so a crashed loop leaves no owner behind. The file is created with
+the database file's permissions, is harmless when left over, and need not be copied with
+the store. The loop takes it before its first write, and so before that write's migration,
+and holds it until it stops. While it is held, no close checkpoints and
+`tillr-store checkpoint` refuses. A close that runs a cycle takes the same file
+exclusively, without waiting, for as long as its cycle runs, because two cycles at once
+defeat each other's restart. A second close that finds the file held, by a loop or by
+another close's cycle, skips its own (`reason=owner-or-cycle-running`) and leaves the
+retry to a later close; `tillr-store checkpoint` refuses then too, and a loop that starts
+meanwhile waits for that cycle to end before it takes its shared lock. A process that
+cannot open or create the file sees no owner; with tracing on, that shows as
+`owner-lock.unavailable`.
+
+A *checkpoint cycle*, a term this package coins, is four steps:
+
+1. A small write of the cycle's own, so the log holds a frame no checkpoint has copied.
+2. A read transaction begun and held on a read-only connection; this coined term is the
+   *pin*. SQLite restarts the log only when it can take reader slots 1 to 4, and a pin
+   begun while some frame is uncopied holds one of them, so while it is held no other
+   writer can restart the log.
+3. A `PASSIVE` checkpoint, which never takes the write lock.
+4. A second small write that releases the pin, and that commit restarts the log: one
+   header flush, in the cycle's own writer.
+
+The cycle leaves the log holding that second write's frame, uncopied. The database file
+therefore holds everything written before the cycle, and no later writer finds a fully
+copied log to restart. A cycle can miss the restart when a writer commits between the pin
+and the second write; it reports that with the log's length, and the loop tries again at
+its next heartbeat. A close does not: the second write also records the log it found (its
+salt and its length, in the meta row `checkpoint.last-cycle`), and a later close runs
+another cycle only once the log has restarted since or grown another 1000 frames. Without
+that record, a log left long by a missed restart made every close run a cycle. A cycle
+whose own write waits out the busy timeout behind another writer is skipped and reported,
+and so is one whose pin's read does (`pin.busy`: another connection held SQLite's
+exclusive lock, as a recovery does); neither faults the loop, because a checkpoint is
+maintenance, and the loop tries again at its next heartbeat. Just before its cycle, the loop's heartbeat announces its next pass 30
+seconds ahead, so a slow checkpoint does not make the loop look dead to `tillr-drain stop`
+or the observatory.
+
+### Who waits behind each flush
+
+These are the flushes left inside a lock, and who can be queued behind each one:
+
+- **A cycle's restart write: one log-header flush, inside SQLite's writer.** A writer that
+  arrives during it waits for that one flush. The cycle runs in the loop's heartbeat, in a
+  `tillr-store checkpoint`, or in the close of a handle that found the log past 1000 frames,
+  after that handle's own work has finished.
+- **A cycle's `PASSIVE` checkpoint: a log flush, a database flush and, on a connection's
+  first log flush, a directory flush, inside no SQLite lock but the checkpoint lock.** A
+  second `PASSIVE` checkpoint that meets that lock answers busy at once rather than
+  waiting, so only the caller waits. When a close runs the cycle, any lock the caller still
+  holds of its own waits too; a program closes its store handle after its own work, so the
+  cycle's flushes delay that program's exit, not another writer.
+- **A writer that restarts a fully copied log: up to two flushes (the header and, on a new
+  handle, the directory), inside SQLite's writer.** A cycle that finishes leaves one frame
+  uncopied, so it leaves no such log. One whose restart write waits out the busy timeout
+  does (see [Known limits](#known-limits)), and so does a checkpoint from outside tillr, such
+  as the `sqlite3` command-line tool, or an older tillr build.
+- **The log's first creation: two flushes (the log and its directory), inside SQLite's
+  writer.** It happens once, when the store is created, by `tillr-store init` or by a
+  loop's first write after the loop has taken the owner. It happens again only if a program
+  outside tillr deleted the log. A tillr program cannot, because its sidecar keeps its
+  close from being the store's last.
+- **A handle's close: no flush.**
+
+With `TILLR_SQLITE_TRACE=1`, each of these is its own span or phase. The line format is in
 [Observing remaining contention](../../docs/recovery/sqlite-contention/README.md#observing-remaining-contention).
+
+### Backing up or copying the store
+
+The database file alone is current only straight after a checkpoint cycle and before the
+next write. Pick one of these:
+
+- **Copy a consistent snapshot through SQLite**, with anything writing or not:
+  `sqlite3 'file:/path/to/.tillr/state.db?mode=ro' ".backup /path/to/copy.db"`, or
+  `VACUUM INTO '/path/to/copy.db'` on a read-only connection. The copy is one file, with
+  everything committed at that moment.
+- **Make the database file alone current, then copy it**: with no drain loop running, run
+  `tillr-store checkpoint --store /path/to/.tillr/state.db`. Exit 0 means the database
+  file holds everything written before it. It stays current until the next write.
+- **Copy the three files together** (`state.db`, `state.db-wal`, `state.db-shm`) only
+  while nothing has the store open.
+
+`tillr-store check` reports the log's size (`log.bytes`, and `log.frames` written since it
+last restarted), so its growth is visible without a tool that reads SQLite's files.
 
 ### Known limits
 
 - **One flush remains inside a writer.** Each restart flushes the new log header in the
-  loop's write, while it holds SQLite's writer. A writer queued behind it times out only if
+  cycle's write, while it holds SQLite's writer. A writer queued behind it times out only if
   that single flush takes longer than about 5 seconds. The worst measured on this disk was
   2.1 seconds, and 3.0 seconds under heavier load, but btrfs has recorded a 6.7-second
-  transaction commit here. So the heartbeat's `database is locked` (U1) is rare now, not
-  impossible.
+  transaction commit here. So a `database is locked` behind it is rare, not impossible.
 - **The log can grow while writers never pause.** A restart needs a gap with no commit that
-  is as long as the checkpoint itself, which flushes the log and then the database. Writers
-  that never leave such a gap keep the log growing, and the loop can only report it and keep
-  trying. A strict bound would need the loop to hold SQLite's writer across the last part of
-  the checkpoint and the restart. Every other writer would then wait up to three flushes, 6.3
-  seconds at this disk's worst measured flush, which is past the 5-second timeout and the
-  same shape as U1. That has not been built; the owner has not ruled on it.
+  is as long as the checkpoint itself. Writers that never leave such a gap keep the log
+  growing, and the loop can only report it and keep trying. A strict bound would need the
+  cycle to hold SQLite's writer across the checkpoint's own flushes, which is the same
+  shape as the wait this design removes. The owner ruled on 2026-11-16 to accept this
+  growth with no loop running as a known limit. Measured on 2026-11-16 with no loop
+  running: four programs opening, writing and closing back to back, about 300 a second,
+  never let a close's cycle restart the log, and it reached 412 MB in 90 seconds; the
+  review's own run of that shape reached 170 to 185 MB in 90 seconds. The first program
+  after they stopped restarted it.
+- **The log file does not shrink by itself.** A restart writes from the top of the file
+  again but keeps its length (no `journal_size_limit` is set, so no writer ever pays to
+  truncate it), and the file stays as large as the longest log it has held. To shrink it,
+  run `tillr-store checkpoint --truncate --store <path>` while nothing else has the store
+  open. It copies the whole log, truncates the file and writes one frame, so the new log's
+  header is flushed by that command and not by the next program's writer. It refuses,
+  exit 1 and naming the processes, while any other process holds a lock on the store
+  (read from `/proc/locks`, so on Linux only), and it never waits for one; a program that
+  opens the store in the instant after that check makes the truncate answer busy instead.
+  A program that opens the store when no other connection is open rebuilds SQLite's index
+  of the log under SQLite's recovery lock, reading only the current log, not the file's
+  length. Measured on 2026-11-16 with a 432 MB valid log and nothing else open, on a
+  32-core machine whose load average was 37 from other work: that first open read in
+  0.11 seconds with the files in the page cache and 0.12 seconds after evicting them, and a
+  writer opening 20 ms behind it took 0.10 seconds to open. The review measured 0.10
+  seconds at 419 MB. An earlier figure here, 0.9 seconds, was a single reading taken
+  without recording the machine's load, and these replace it.
+- **The close-time threshold is SQLite's default, 1000 frames.** It was not tuned. A
+  smaller one would checkpoint more often at closes; a larger one lets the log, and the
+  work the next checkpoint copies, grow further between loops.
 - **A dead loop can read as alive for up to 35 seconds after each checkpoint.** The 30-second
   announcement is not shortened when the checkpoint finishes quickly. In that window,
   `tillr-drain stop` from another process domain refuses ("live in another process domain;
   stop it there"), and the observatory shows a current heartbeat.
 - **Two loops on one store are two owners.** Nothing makes the owner unique. Each loop's pin
-  can delay the other's restart, and one loop's closing checkpoint can leave a fully copied
-  log that the next writer restarts with two flushes while the other loop still owns.
+  can delay the other's restart.
+- **A cycle whose restart write times out leaves a fully copied log.** The cycle's
+  `PASSIVE` checkpoint has already copied every frame when its restart write waits out the
+  five-second busy timeout behind another writer. The next writer to arrive then restarts
+  the log inside SQLite's writer: one header flush, and on a newly opened handle a
+  directory flush, which is the wait the cycle exists to avoid. It needs a writer that held
+  SQLite's writer for five seconds or more first. A loop's next heartbeat retries at once
+  and restarts the log in its own first write if it comes first; a close does not retry.
+  There is no sound fix: the checkpoint would have to copy the last frame only while the
+  cycle holds the writer, which puts the checkpoint's flushes inside the writer.
+- **A handle without a sidecar can delete the log at its close.** A writable handle whose
+  sidecar cannot be attached runs without one, traced as `sidecar.unavailable`. That takes a
+  read that waits out the busy timeout during another process's recovery, or a damaged
+  store. Its commits still never checkpoint, and its close runs no cycle
+  (`reason=no-sidecar`). But if it is the store's last connection, its close is SQLite's own
+  last close, which checkpoints and deletes the log under the exclusive lock that a program
+  starting at that moment waits behind. The SQLite driver tillr uses (modernc.org/sqlite)
+  offers no way to turn that close-time checkpoint off: `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` is
+  not reachable through it. It does offer `SQLITE_FCNTL_PERSIST_WAL`, which keeps the file
+  but not the frames, so the next writer would pay a restart's flushes instead of the
+  creation's, which is no better.
+- **A close that runs the cycle can delay its own program's exit by seconds on a slow
+  disk.** The review measured it on 2026-11-16 with every flush delayed 2.6 seconds: one
+  program that opened the store, wrote once and closed it, on an 8 MB log, took 10.86
+  seconds to close, with four flushes (the directory, the log, the database and the log
+  header). Only the header flush is inside SQLite's writer, so only the closing program
+  waits for the rest. It happens at most once per 1000 frames, and only with no loop
+  running. No time-budgeted gate check opens the store (`tools/gate` and `tillr-gate` do
+  not import the store package), so this is interactive latency, not a gate timeout.
 
 ## Standalone invocation
 
@@ -171,9 +279,11 @@ failed open without restarting the server.
   broken store.
 - **A `seed` against a live store** — refused before anything is written.
 - **A face it does not have** — refused, naming the faces it does.
+- **A `checkpoint` while a drain loop owns the store's checkpoints** — exit 1 with the
+  reason on stderr; the loop checkpoints every minute and when it stops.
 
 ## Test
 
 `go test ./...` in this directory builds the binary and drives it against a scratch store:
-the report's contract keys, the schema refusal on every face, the fixture/live split, and
-the event cursor.
+the report's contract keys, the schema refusal on every face, the fixture/live split, the
+event cursor, the log's size in `check`, and the `checkpoint` face and its refusal.

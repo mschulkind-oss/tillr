@@ -67,6 +67,8 @@ func run(args []string) int {
 		env, code = recoverFace(rest)
 	case "events":
 		env, code = eventsFace(rest)
+	case "checkpoint":
+		env, code = checkpointFace(rest)
 	default:
 		return usagef("unknown face %q: want %s", face, faceList)
 	}
@@ -109,6 +111,38 @@ type report struct {
 	// skip every event appended after this read.
 	NextSince    *int64 `json:"next_since,omitempty"`
 	JournalFound string `json:"journal_found,omitempty"`
+	// Log is the write-ahead log as its file shows it, on check and checkpoint: no
+	// program's own work copies the log into the database file, so its size is read here.
+	Log *logReport `json:"log,omitempty"`
+	// Checkpoint is what the checkpoint face's one cycle did.
+	Checkpoint *checkpointReport `json:"checkpoint,omitempty"`
+}
+
+// logReport is store.LogState as the report spells it: the log file's bytes, the frames
+// written since the log last restarted, and whether the log could be read at all.
+type logReport struct {
+	Bytes  int64 `json:"bytes"`
+	Frames int   `json:"frames"`
+	Known  bool  `json:"known"`
+}
+
+func logOf(path string) *logReport {
+	l := store.ReadLog(path)
+	return &logReport{Bytes: l.Bytes, Frames: l.Frames, Known: l.Known}
+}
+
+// checkpointReport is store.Checkpointed as the report spells it.
+type checkpointReport struct {
+	LogFrames    int  `json:"log_frames"`
+	CopiedFrames int  `json:"copied_frames"`
+	Restarted    bool `json:"restarted"`
+	// Busy is SQLite's answer that a reader or writer kept the checkpoint from copying
+	// everything; WriterBusy that one of the cycle's two writes waited out the busy
+	// timeout behind another writer.
+	Busy       bool `json:"busy"`
+	WriterBusy bool `json:"writer_busy"`
+	// Truncated is whether --truncate shrank the log file; it is reported only with the flag.
+	Truncated *bool `json:"truncated,omitempty"`
 }
 
 // initFace creates the store, migrating it, and marks it as a fixture when asked.
@@ -235,9 +269,99 @@ func checkFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, storeFailure(err)
 	}
 	r := reportOf(snap, "check")
+	r.Log = logOf(*path)
 	// An intact store is the positive decision; a damaged one is a negative decision
 	// rather than an error, because the utility ran and the answer is no.
 	if r.Integrity != "ok" {
+		return envelope(r), record.ExitNegative
+	}
+	return envelope(r), record.ExitOK
+}
+
+// checkpointFace is the maintenance checkpoint: one checkpoint cycle as a brief owner, so
+// that the database file alone holds everything written before it, which is what a tool
+// that copies only that file needs. It flushes where only it waits: its checkpoint holds no
+// SQLite writer, and of its two small writes only the restart's header flush is one that
+// another writer arriving at that moment can wait behind.
+//
+// It refuses while a drain loop owns the store's checkpoints, for three reasons. The loop
+// already checkpoints every minute and when it stops. Two cycles at once defeat each other's
+// restart, because each one's pin holds a reader slot the other's restart write needs. And
+// a backup, the usual reason to want the database file current, is better made with
+// SQLite's `.backup` or `VACUUM INTO`, which copy a consistent snapshot whatever is writing
+// (README, "Backing up or copying the store"). It refuses for the second reason while
+// another program's close is running its cycle.
+//
+// With --truncate it shrinks the log file as well (store.TruncateLog): it copies the whole
+// log and leaves the file holding one frame, which no restart does. It refuses while any
+// other process has the store open, and never waits for one.
+//
+// A refusal, or a cycle that could not copy everything, is a negative answer: exit 1, with
+// the report on stdout and the reason on stderr.
+func checkpointFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("checkpoint")
+	path := fs.String("store", "", "the store whose write-ahead log is copied into its database file")
+	truncate := fs.Bool("truncate", false, "also shrink the log file to one frame; refused while any other process has the store open")
+	if code := parseFlags(fs, args); code != record.ExitOK {
+		return record.Envelope{}, code
+	}
+	if *path == "" {
+		return record.Envelope{}, usagef("checkpoint needs --store <path>")
+	}
+	ctx := context.Background()
+	if env, code := schemaGate(ctx, *path, "checkpoint"); code != record.ExitOK {
+		return env, code
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return record.Envelope{}, openFailure(err)
+	}
+	var checkpointed store.Checkpointed
+	var cycleErr error
+	if *truncate {
+		checkpointed, cycleErr = store.TruncateLog(ctx, *path)
+	} else {
+		checkpointed, cycleErr = store.Checkpoint(ctx, *path)
+	}
+	refused := errors.Is(cycleErr, store.ErrOwnerRunning) || errors.Is(cycleErr, store.ErrStoreInUse)
+	if cycleErr != nil && !refused {
+		return record.Envelope{}, storeFailure(cycleErr)
+	}
+	// The report is read after the cycle, through a read-only handle whose close cannot
+	// checkpoint, so it describes the store the cycle left.
+	s, err := store.OpenRead(ctx, *path)
+	if err != nil {
+		return record.Envelope{}, openFailure(err)
+	}
+	defer s.Close()
+	snap, err := s.Describe(ctx)
+	if err != nil {
+		return record.Envelope{}, storeFailure(err)
+	}
+	r := reportOf(snap, "checkpoint")
+	r.Log = logOf(*path)
+	switch {
+	case errors.Is(cycleErr, store.ErrOwnerRunning):
+		fmt.Fprintf(os.Stderr, "tillr-store: checkpoint: a drain loop owns this store's checkpoints and checkpoints it every minute and when it stops, or another program is running a checkpoint cycle now; nothing was checkpointed\n")
+		return envelope(r), record.ExitNegative
+	case cycleErr != nil:
+		fmt.Fprintf(os.Stderr, "tillr-store: checkpoint: %v; nothing was truncated or checkpointed. A truncated log makes the next writer of a program that has the store open flush the new log's header while it holds SQLite's writer, so --truncate runs only when no other process has the store open\n", cycleErr)
+		return envelope(r), record.ExitNegative
+	}
+	r.Checkpoint = &checkpointReport{
+		LogFrames: checkpointed.LogFrames, CopiedFrames: checkpointed.CopiedFrames,
+		Restarted: checkpointed.Restarted, Busy: checkpointed.Busy, WriterBusy: checkpointed.WriterBusy,
+	}
+	if *truncate {
+		r.Checkpoint.Truncated = &checkpointed.Truncated
+		if !checkpointed.Truncated {
+			fmt.Fprintf(os.Stderr, "tillr-store: checkpoint: the truncate did not finish: a program opened the store just after the check (busy %t); the log file keeps its size\n", checkpointed.Busy)
+			return envelope(r), record.ExitNegative
+		}
+		return envelope(r), record.ExitOK
+	}
+	if !checkpointed.Complete() {
+		fmt.Fprintf(os.Stderr, "tillr-store: checkpoint: copied %d of %d log frames (busy %t, writer busy %t, pin busy %t); the rest stay in the write-ahead log, so the database file alone is not current\n",
+			checkpointed.CopiedFrames, checkpointed.LogFrames, checkpointed.Busy, checkpointed.WriterBusy, checkpointed.PinBusy)
 		return envelope(r), record.ExitNegative
 	}
 	return envelope(r), record.ExitOK
@@ -475,7 +599,7 @@ func newID() string {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "init, seed, check, recover or events"
+const faceList = "init, seed, check, recover, checkpoint or events"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

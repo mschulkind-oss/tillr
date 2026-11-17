@@ -157,7 +157,17 @@ Queue rank, timestamps, and advancing trunk do not authorize that retry.
 `tillr store check`
 
 Whether the store still satisfies its own invariants. Run it after a pass and before
-trusting anything `tillr view` says.
+trusting anything `tillr view` says. Its report's `log` says how large the write-ahead
+log (SQLite's `state.db-wal`) has grown.
+
+The store's recent work lives in `state.db-wal`, not in `state.db`: never copy, hash or
+hand over `state.db` alone. To make that one file current, run `tillr store checkpoint`
+with no drain loop running (it refuses while one runs, because the loop checkpoints on
+its own). A log file left large by a long run without a loop shrinks only with
+`tillr store checkpoint --truncate`, which refuses while any other process has the store
+open. Otherwise copy through SQLite (`.backup` or `VACUUM INTO` on a read-only
+connection). The supported ways are listed in tillr-store's README, under "Backing up or
+copying the store".
 
 ## 7. Audit — inspect recorded status and events
 `tillr view events`

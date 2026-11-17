@@ -63,7 +63,17 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 			}
 		}
 	}
-	t.Cleanup(func() { release(); os.Stderr = original; writer.Close(); <-copied; reader.Close() })
+	// Queued records are delivered before the pipe closes (see stalledSQLiteStderr).
+	t.Cleanup(func() {
+		release()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _ = FlushSQLiteTrace(ctx)
+		os.Stderr = original
+		writer.Close()
+		<-copied
+		reader.Close()
+	})
 	return block, release, read
 }
 

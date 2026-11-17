@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,23 +65,15 @@ func openWritable(t *testing.T, path string) *store.Store {
 // rowsInDatabaseFile answers how many meta rows whose key starts with prefix the database
 // file holds on its own: it copies only that file, not the log, and counts in the copy.
 // A row is there only once a checkpoint has copied it out of the log.
+//
+// The copy is made by another process (cp): SQLite's locks on the database file are POSIX
+// record locks, which belong to the process, so this process closing a descriptor of its
+// own on that file would drop the locks its open handles hold there.
 func rowsInDatabaseFile(t *testing.T, path, prefix string) int {
 	t.Helper()
 	copyPath := filepath.Join(t.TempDir(), "alone.sqlite3")
-	src, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer src.Close()
-	dst, err := os.Create(copyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		t.Fatal(err)
-	}
-	if err := dst.Close(); err != nil {
-		t.Fatal(err)
+	if out, err := exec.Command("cp", path, copyPath).CombinedOutput(); err != nil {
+		t.Fatalf("copying the database file: %v: %s", err, out)
 	}
 	db, err := sql.Open("sqlite", "file:"+copyPath)
 	if err != nil {
@@ -89,7 +81,13 @@ func rowsInDatabaseFile(t *testing.T, path, prefix string) int {
 	}
 	defer db.Close()
 	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM meta WHERE key LIKE ?`, prefix+"-%").Scan(&n); err != nil {
+	err = db.QueryRow(`SELECT count(*) FROM meta WHERE key LIKE ?`, prefix+"-%").Scan(&n)
+	if err != nil && strings.Contains(err.Error(), "no such table") {
+		// The database file alone does not hold even the schema yet: nothing has copied
+		// the log's frames into it since the store was created.
+		return 0
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -145,25 +143,22 @@ func TestAHandleLeavesCheckpointsToTheOwnerWhileOneRuns(t *testing.T) {
 	}
 }
 
-// With no checkpoint owner, a handle checkpoints as SQLite does by default, so command-line
-// writes with no loop running still bound the log. That includes a handle that was open
-// while an owner ran and outlived it.
-func TestAHandleCheckpointsItselfWhenNoOwnerRuns(t *testing.T) {
+// With no checkpoint owner, command-line writes with no loop running still bound the log:
+// the handle's close checkpoints it past CheckpointFrames. That includes a handle that was
+// open while an owner ran and outlived it.
+func TestAHandleCheckpointsAtCloseWhenNoOwnerRuns(t *testing.T) {
 	path := checkpointStore(t)
-	s := openWritable(t, path)
-	defer s.Close()
-	writePastTheThreshold(t, s, "alone")
-	if n := rowsInDatabaseFile(t, path, "alone"); n == 0 {
-		t.Error("with no checkpoint owner, a commit past the threshold was not checkpointed")
-	}
-
 	owner := ownCheckpoints(t, path)
+	s := openWritable(t, path)
 	if _, err := owner.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	writePastTheThreshold(t, s, "after")
-	if n := rowsInDatabaseFile(t, path, "after"); n == 0 {
-		t.Error("after the checkpoint owner closed, a handle it outlived no longer checkpointed")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := rowsInDatabaseFile(t, path, "after"); n != 1100 {
+		t.Errorf("after the checkpoint owner closed, the close of a handle it outlived left %d of 1100 rows in the database file", n)
 	}
 }
 

@@ -232,6 +232,83 @@ func TestHeartbeatContinuesDuringLongSynchronousStartup(t *testing.T) {
 	}
 }
 
+// checkpointHeartbeatSteps is a startup step that moves the Loop's clock one checkpoint
+// interval at its second tick, so that tick's heartbeat is the one that checkpoints, and
+// then sends two more.
+type checkpointHeartbeatSteps struct {
+	recordingSteps
+	store  string
+	t      *testing.T
+	clock  *manualClock
+	cycles *[]store.Checkpointed
+	mu     *sync.Mutex
+}
+
+func (s *checkpointHeartbeatSteps) Sync(ctx context.Context) (SyncOutcome, error) {
+	var thirdTick time.Time
+	for i, step := range []time.Duration{PassInterval, CheckpointInterval, PassInterval, PassInterval} {
+		s.clock.advance(step)
+		if i == 2 {
+			thirdTick = s.clock.Now()
+		}
+		select {
+		case s.clock.ticks <- s.clock.Now():
+		case <-ctx.Done():
+			s.t.Errorf("startup was cancelled while the heartbeat was still owed tick %d: %v", i+1, context.Cause(ctx))
+			return SyncOutcome{}, ctx.Err()
+		case <-time.After(heartbeatStallBound):
+			s.t.Errorf("the heartbeat took no tick %d: it is blocked", i+1)
+			return SyncOutcome{}, errors.New("heartbeat blocked")
+		}
+	}
+	// Tick 3 was taken only after tick 2's refresh and checkpoint returned, and tick 4 only
+	// after tick 3's refresh: the order of events says the cycle ran on tick 2's heartbeat,
+	// finished, and the heartbeat went on.
+	s.mu.Lock()
+	cycles := append([]store.Checkpointed(nil), *s.cycles...)
+	s.mu.Unlock()
+	if len(cycles) != 1 || !cycles[0].Restarted {
+		s.t.Errorf("the heartbeat ran %d checkpoint cycles across one checkpoint interval of the injected clock, want exactly one that restarted the log: %+v", len(cycles), cycles)
+	}
+	read := openFixture(s.t, s.store)
+	defer read.Close()
+	if err := read.ReadTx(ctx, func(r *store.Reader) error {
+		var refreshed int64
+		if err := r.QueryRow(`SELECT refreshed_at FROM drain_sessions`).Scan(&refreshed); err != nil {
+			return err
+		}
+		if refreshed < thirdTick.UnixMilli() {
+			s.t.Errorf("the heartbeat after the checkpoint did not refresh the session: refreshed at %d, tick 3 at %d", refreshed, thirdTick.UnixMilli())
+		}
+		return nil
+	}); err != nil {
+		s.t.Fatal(err)
+	}
+	return SyncOutcome{}, errors.New("fixture startup finished")
+}
+
+// The heartbeat's checkpoint is due by the Loop's injected clock, not the wall clock, and it
+// runs on the heartbeat's goroutine between two ticks: a test that moves the clock one
+// checkpoint interval sees exactly one cycle, on that tick, and the next tick taken only
+// once the cycle has returned. Nothing here waits on wall time.
+func TestTheHeartbeatCheckpointsByTheInjectedClockAndThenGoesOn(t *testing.T) {
+	f, l := passFixture(t)
+	clock := &manualClock{now: l.cfg.Now(), ticks: make(chan time.Time)}
+	l.cfg.Now = clock.Now
+	l.heartbeatClock = clock.heartbeat
+	var mu sync.Mutex
+	var cycles []store.Checkpointed
+	l.checkpointed = func(c store.Checkpointed) {
+		mu.Lock()
+		cycles = append(cycles, c)
+		mu.Unlock()
+	}
+	l.cfg.Steps = &checkpointHeartbeatSteps{store: f.storePath, t: t, clock: clock, cycles: &cycles, mu: &mu}
+	if _, err := l.Run(context.Background()); err == nil || err.Error() != "fixture startup finished" {
+		t.Fatalf("startup result: %v", err)
+	}
+}
+
 func TestHeartbeatDoesNotShortenAScheduledBackoff(t *testing.T) {
 	f, l := passFixture(t)
 	at := l.cfg.Now()

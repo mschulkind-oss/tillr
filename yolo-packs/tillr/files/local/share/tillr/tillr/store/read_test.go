@@ -138,6 +138,11 @@ func TestIntegrityDoesNotReportACorruptedStoreAsOK(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("closing the store failed: %v", err)
 	}
+	// The copy below is of the database file alone, so the log is copied into it first,
+	// through the supported face: no program's own work checkpoints.
+	if _, err := store.Checkpoint(context.Background(), path); err != nil {
+		t.Fatalf("checkpointing the store before copying it failed: %v", err)
+	}
 
 	corrupt := filepath.Join(dir, "corrupt.sqlite3")
 	copyFile(t, path, corrupt)

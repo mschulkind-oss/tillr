@@ -189,3 +189,21 @@ func TestABusyCheckpointWriteDoesNotFaultTheLoop(t *testing.T) {
 		t.Errorf("the loop did not report the skipped cycle:\n%s", out)
 	}
 }
+
+// When the owner's pin waits out SQLite's busy timeout (another connection held the store's
+// exclusive lock), the store answers PinBusy and no error (the store package's
+// TestABusyPinSkipsTheCycleWithoutAnError), so nothing faults the loop; the loop says why it
+// skipped and counts the cycle as a missed restart, and the next heartbeat tries again,
+// because restartPending is !Restarted.
+func TestABusyPinIsReportedAsASkippedCycle(t *testing.T) {
+	report := &lockedBuffer{}
+	l := &Loop{}
+	l.cfg.Report = report
+	l.reportCheckpoint(store.Checkpointed{PinBusy: true})
+	if out := report.String(); !strings.Contains(out, "read pin") || !strings.Contains(out, "tried again at the next heartbeat") {
+		t.Errorf("the loop did not report the busy pin as a skipped cycle:\n%s", out)
+	}
+	if l.missedRestarts != 1 {
+		t.Errorf("a busy pin counted %d missed restarts, want 1", l.missedRestarts)
+	}
+}

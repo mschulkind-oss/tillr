@@ -42,7 +42,18 @@ func stalledSQLiteStderr(t *testing.T) (block, release func()) {
 			}
 		}
 	}
-	t.Cleanup(func() { release(); os.Stderr = original; writer.Close(); reader.Close() })
+	// Records still queued for the pipe (a handle's close traces its own span) are
+	// delivered before the pipe closes: a record written to a closed pipe is a sink error
+	// in the process-wide observer, which a later test's capture reports as incomplete.
+	t.Cleanup(func() {
+		release()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _ = FlushSQLiteTrace(ctx)
+		os.Stderr = original
+		writer.Close()
+		reader.Close()
+	})
 	return block, release
 }
 
