@@ -17,7 +17,8 @@ func TestLegacyPassMigrationPreservesEveryColumnAndDoesNotOverwriteNewMeasuremen
 		t.Fatal(err)
 	}
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO drain_ticks VALUES
+		_, err := tx.Exec(`INSERT INTO drain_ticks (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
+         gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count) VALUES
 		 ('gen-1',100,1,2,3,4,5,0,110,'{"dispatch":1}',1,2),
 		 ('gen-2',200,6,7,8,9,10,1,220,'{"judge":1}',2,3)`)
 		return err

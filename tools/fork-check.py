@@ -1725,6 +1725,13 @@ GO_TOOL_DIRS = (
     "tools/tillr-cli",
 )
 GO_LANDING_SUITE_DIRS = ("tools/tillr",)
+# A wrong judge breaks every following landing. These paths always pay the
+# runner's own proof before publication, independently of the heavy-tier strategy.
+GATE_RUNNER_WATCHES = (
+    "tools/tillr-gate/", "tools/gate/",
+    "yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
+)
+RUNNER_PROOF_KINDS = {"gate-runner", "self-suite"}
 # Whole-suite wall seconds measured 2026-11-15, one module at a time with the shared
 # build cache warm and test-result caching disabled. Reproduce each entry with:
 #   cd <directory> && CGO_ENABLED=0 go test -count=1 -parallel 48 -timeout 0 ./...
@@ -4500,6 +4507,11 @@ def print_plan(record: Record, plan: Plan, base: str | None, head: str) -> None:
     tier would have cost from the durations it just measured. On a landing run it is the
     run's own floor; on a rolling run it is 0.0, because no landing-tier check ran.
 
+    `landing_class` separates ordinary landings from changes to the judge itself.
+    For a runner change, `landing` is zero and `runner_landing` reports that same
+    measured floor, with `runner_count=1`; ordinary runs report `runner_count=0`.
+    This is accounting, not a deadline or a verdict about the measured time.
+
     It is printed LAST on purpose: the board keeps the tail of a gate's output, and a
     line a consumer needs must survive that cut. The selection line (`print_selection`)
     is printed immediately above it for the same reason, so the two lines a consumer
@@ -4527,12 +4539,22 @@ def print_plan(record: Record, plan: Plan, base: str | None, head: str) -> None:
     owed = sorted({skip.kind for skip in plan.skips if skip.owed and skip.kind})
     landing_wall = round(s1_floor([check for check in plan.checks
                                    if check_tier(check.kind) == TIER_LANDING]), 1)
+    # The whole exceptional landing, not just its suite, belongs outside the
+    # ordinary distribution. Keep its measured floor visible and counted apart.
+    runner_count = int(any(check.kind in RUNNER_PROOF_KINDS
+                           for check in (*plan.checks, *plan.reused)) or
+                       any(skip.kind in RUNNER_PROOF_KINDS and skip.planned
+                           for skip in plan.skips))
+    runner_wall = landing_wall if runner_count else 0.0
+    if runner_count:
+        landing_wall = 0.0
     print(f"fork-check: plan base={base or '-'} head={head} ran={ran} notrun={not_run} "
           f"seconds={spent:.1f} full={full:.1f} saved={saved:.1f} priced={priced} "
           f"integrity={integrity} checks={','.join(planned) or '-'} "
           f"required={','.join(required) or '-'} reused={','.join(reused) or '-'} "
           f"tier={plan.tier or 'full'} owed={','.join(owed) or '-'} "
-          f"landing={landing_wall:.1f}")
+          f"landing={landing_wall:.1f} landing_class={'runner' if runner_count else 'ordinary'} "
+          f"runner_count={runner_count} runner_landing={runner_wall:.1f}")
 
 
 def plan_kinds(plan: Plan) -> tuple[list[str], list[str]]:
@@ -4749,6 +4771,7 @@ CHECK_KIND_GROUP = {
     # lands, while the other behavior suites roll (docs/design/landing-velocity.md).
     "go-tool": KIND_VERDICT,
     "go-substrate": KIND_VERDICT,
+    "gate-runner": KIND_VERDICT,
     # The seat-profile encoding's own tests: a suite that fails is a verdict about the
     # change, like every other assertion above. It arrived from a lane that could not
     # see this table -- it planned the step and left the kind unclassified, and the audit
@@ -4845,6 +4868,7 @@ CHECK_TIER = {
     # batch of one and carries the gate's own audit suite (invariant I3). The step is
     # conditional on the diff, as it already was; the tier is not.
     "self-suite": TIER_LANDING,
+    "gate-runner": TIER_LANDING,
     # The heavy diff-scoped suites the design names as rolling: a behavior red is repaired
     # by revert with no data loss, and each is 20-100s or more. Rule 2 and rule 3 both say
     # no. `go-tool` is above, beside its build half.
@@ -4951,6 +4975,7 @@ CHECK_COST_ESTIMATE = {
     # declared member rather than inheriting a deleted monolith's price.
     "go-tool": max(cost for directory, cost in GO_TOOL_COST_ESTIMATE.items()
                    if directory not in GO_LANDING_SUITE_DIRS),
+    "gate-runner": GO_TOOL_COST_ESTIMATE["tools/tillr-gate"],
     "go-substrate": max(GO_TOOL_COST_ESTIMATE[directory]
                         for directory in GO_LANDING_SUITE_DIRS),
     "steering-timer": 2.0,
@@ -6657,14 +6682,19 @@ def build_plan(
     # Build and test compilation moved to the whole-tree go-build declaration.
     # This planner still selects the full behavior suite of each changed module.
     for directory in GO_TOOL_DIRS:
-        suite_kind = "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool"
-        watches = (directory + "/",)
+        runner = directory == "tools/tillr-gate"
+        suite_kind = ("gate-runner" if runner else
+                      "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool")
+        watches = GATE_RUNNER_WATCHES if runner else (directory + "/",)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
         if go_tool and shutil.which("go"):
             plan.checks.append(
                 Check(suite_kind, f"{directory}'s whole suite passes",
-                      ["sh", "-c", go_tool_command(directory)],
-                      f"a path under {directory}/ changed", GO_TOOL_TIMEOUT,
+                      ["sh", "-c", go_tool_command(directory) + (
+                          " && cd ../.. && python3 tools/gate/change-gate.test.py"
+                          " && python3 tools/gate/runner-first.test.py" if runner else "")],
+                      ("the gate runner or its wrapper changed" if runner else
+                       f"a path under {directory}/ changed"), GO_TOOL_TIMEOUT,
                       watches=watches, selected_by=tuple(go_tool),
                       cost=GO_TOOL_COST_ESTIMATE[directory],
                       drop=("LAND_BATCH_LIMIT",))

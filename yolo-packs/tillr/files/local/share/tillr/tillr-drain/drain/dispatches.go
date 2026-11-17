@@ -154,7 +154,10 @@ func init() {
 	}
 	for name, definition := range map[string]string{
 		"ended_at": "INTEGER", "decision_counts": "TEXT", "applied_count": "INTEGER",
-		"gate_count": "INTEGER",
+		"gate_count":        "INTEGER",
+		"runner_gate_count": "INTEGER NOT NULL DEFAULT 0",
+		"runner_gate_ms":    "INTEGER NOT NULL DEFAULT 0",
+		"runner_land_ms":    "INTEGER NOT NULL DEFAULT 0",
 	} {
 		for _, table := range []string{"drain_ticks", "drain_passes"} {
 			if err := store.RegisterColumn("drain", table, name, definition); err != nil {
