@@ -461,7 +461,16 @@ export interface RunDetail {
   cost_usd: number | null;
 }
 
+export interface SavedWork {
+  index_ref?: string;
+  ref: string;
+  summary: string;
+  reason: string;
+  pruned?: boolean;
+}
+
 export interface RunData {
+  preserved_work?: SavedWork[];
   run: RunDetail;
   stages: StageView[];
   claim_checks: ClaimView[];

@@ -381,7 +381,7 @@ func trunkHistoryRef(ref string) bool { return ref == observedTrunkRef || ref ==
 // (refs/tillr/landed/<run_id>), which is how a retry finds a landing whose receipt was
 // lost. A sibling lane's landing writes both while this bracket's run is in flight.
 func landerRef(ref string) bool {
-	return strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/")
+	return strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, preservedPrefix)
 }
 
 // runRefExcused answers whether a ref may move without convicting this run.

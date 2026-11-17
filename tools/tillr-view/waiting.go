@@ -403,6 +403,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		out = append(out, row)
 	}
 	addConflictHistory(out, conflicts)
+	if err := addPreservedHistory(r, out); err != nil {
+		return nil, err
+	}
 	windows, err := waitingBackendWindows(r, time.Now())
 	if err != nil {
 		return nil, err

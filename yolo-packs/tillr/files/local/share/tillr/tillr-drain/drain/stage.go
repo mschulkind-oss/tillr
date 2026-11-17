@@ -389,6 +389,19 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 		}
 	}
+	earlier, err := preservedFacts(ctx, s.Store, spec)
+	if err != nil {
+		return err
+	}
+	for i := range values {
+		if values[i].placeholder == "FACTS" && earlier != "" {
+			if strings.HasPrefix(values[i].text, "None carried:") {
+				values[i].text = strings.TrimSpace(earlier)
+			} else {
+				values[i].text += earlier
+			}
+		}
+	}
 	brief, err := renderBrief(s.Template, recorded.ItemID, values)
 	if err != nil {
 		return err

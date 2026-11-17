@@ -10,6 +10,7 @@ import { InterToolExchangeView } from "./InterToolExchangeView";
 import { ClaimAuditBanner } from "./ClaimAuditBanner";
 import { PayloadInspectorDrawer } from "./PayloadInspectorDrawer";
 import { RefusalState, refusalCode } from "./RefusalState";
+import { PreservedWork } from "./PreservedWork";
 
 export function foldedDecisions(decisions: DispatchView[]) {
   const folds: { decision: DispatchView; count: number; since: number }[] = [];
@@ -52,6 +53,7 @@ export function RunPage({ id, route, live, paused }: { id: string; route: string
   return <main className="entity-page" aria-label="Run page"><h1>Run <EntityLink kind="run" id={id} /></h1>
     {!data ? <p>Reading the run…</p> : <><p><EntityLink kind="item" id={data.run.item_id} /> · <EntityLink kind="lane" id={data.run.lane_id} /> · {data.run.backend} · {data.run.state} · exit {data.run.exit_code ?? "not recorded"}</p>
       <p>Cost {data.cost.cost_total_usd === null ? "not recorded" : `$${data.cost.cost_total_usd}`} · {data.cost.tokens ?? "unrecorded"} tokens · {data.cost.turns ?? "unrecorded"} turns</p>
+      <PreservedWork records={data.preserved_work ?? []} />
       <nav aria-label="Run artifacts">{["brief", "fence", "base_sha", "request", "gate.verdict", "land.attempt"].map(kind => <button key={kind} onClick={() => navigate("artifact", kind)}>Open {kind}</button>)}</nav>
       {timeline.error ? <p role="alert">Timeline refused: {timeline.error.message}</p> : !timeline.data ? <p>Reading timeline spans…</p> : null}
       {gate.error ? <p role="alert">Gate refused: {gate.error.message}</p> : !gate.data ? <p>Reading gate spans…</p> : null}

@@ -144,10 +144,17 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 	// No spend is counted here. A run found terminal by the plan is a record an earlier
 	// loop left, and this pass judged nothing; a run found terminal during its settlement
 	// was already counted by that settlement.
+	var stop string
 	if found.Landed {
-		l.abandon(ctx, d.LaneID, "", "")
+		stop = l.abandon(ctx, d.LaneID, "", "")
 	} else {
-		l.abandon(ctx, d.LaneID, runID, head)
+		stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
+	}
+	if stop != "" {
+		return Externalf("lane %s retained after preservation failed", d.LaneID)
+	}
+	if err := l.prunePreservedWork(ctx); err != nil {
+		return err
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {

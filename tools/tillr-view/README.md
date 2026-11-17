@@ -24,6 +24,18 @@ writes nothing anywhere, so it is safe to point at the live store while writers 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
 
+## Earlier uncommitted work
+
+The run detail API includes `preserved_work`, the loop's saved-edit settlement
+records. The run page displays the saved Git ref, file and line-count summary,
+and why the earlier run stopped. A pruned record says the ref was removed rather
+than suggesting it can still be inspected. Both the current-planner and
+recorded-history waiting views append this evidence to the item's reason, so it
+also appears in terminal output and browser waiting tables. These are read-only
+projections of events; the view neither creates nor deletes refs. The
+[drain's preservation and retention rule](../tillr-drain/README.md#earlier-uncommitted-work)
+explains how the loop saves this work and when it removes the ref.
+
 ## State invariants
 
 - **It writes nothing, ever.** No store is opened read-write and no migration runs; a view

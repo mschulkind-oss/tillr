@@ -278,7 +278,9 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
 			return true, err
 		}
-		l.abandon(ctx, d.LaneID, rec.RunID, head)
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "read-only workflow node changed its target"); stop != "" {
+			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+		}
 		return true, l.markExamined(ctx, d)
 	}
 	if rec.ExitCode == nil || *rec.ExitCode != 0 || rec.State != run.StateExited || reportFooter(log) != "done" {
@@ -290,7 +292,9 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				return true, err
 			}
 		}
-		l.abandon(ctx, d.LaneID, rec.RunID, head)
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
+			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+		}
 		return true, l.markExamined(ctx, d)
 	}
 	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
