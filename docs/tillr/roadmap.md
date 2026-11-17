@@ -1716,6 +1716,58 @@ The delivered copies under `yolo-packs/tillr/` are regenerated with `just pack-s
 re-apply, not merged by hand. The before and after wall times in the report are measured again
 on the new base, since the suites changed, and the planner's estimates follow those numbers.
 
+**Ruling, 2026-11-17 (answers the fourth and fifth runs):** two more runs stopped, again for
+reasons outside this design. c1 to c9 stand as written, and c10 and c11 are added below. Where
+this ruling and the one above disagree, this one holds.
+
+The fourth run built the whole item again and the gate refused it on one check,
+`observatory-dev`, which is `python3 tests/observatory-dev.test.py`. Every candidate for this item
+meets that suite, because the gate selects it when `.justfile` or the gate's own code changes.
+The suite is red in any fresh lane worktree with no change applied: its supervision cases run the
+real recipe with a stub `npm` whose `ci` does nothing, and the recipe then writes a platform stamp
+into a `node_modules` directory that nothing made. The repair is also criterion c8 of "Add the
+landing gate's whole-tree checks to just done and rolling", which has not landed. This item
+cannot land without the suite passing, so it carries the same repair as c10, in the same words,
+and whichever of the two items lands second finds the suite already green and leaves it alone.
+The builder runs the suite on the staged base first. If it passes there, c10 is already met and
+the change does not touch `tests/observatory-dev.test.py`. `tools/observatory/run.sh` is right
+about a real `npm ci` and is not changed either way.
+
+The fifth run stopped before building anything, because one test in the `tools/tillr` module is
+red on the trunk: `TestEveryStoreProgramFlushesTheSQLiteTraceOnExit`, in the `store` package. The
+test allows a store program exactly one `os.Exit`, the one in `main` that follows the trace
+flush. Commit `89afe7e39` added a second in the drain module, in the `init` function of
+`tools/tillr-drain/drain/heavy_supervisor.go`, which is the entry a drain binary re-executes
+itself through to supervise a heavy judge. The run was right that this is not its change. It is
+not this item's to repair either: the repair is a choice about the heavy runner's entry or about
+the trace contract, and both belong to a trunk fixer. This item does not edit
+`tools/tillr/store/` or `tools/tillr-drain/drain/heavy_supervisor.go`.
+
+That red test does not stop this item, because no criterion needs it green. c2 compares names on
+the drain module, which does not contain the test. In c5's table the `tools/tillr` module runs
+with the test failing under both commands, and the comparison of passing names is still exact.
+The builder reproduces the failure on the staged base before any edit. If the command below
+fails with only that test, the builder records it under c11 and carries on to `RESULT: done`. If
+it passes, the trunk was repaired and nothing is recorded. Any other failure on the staged base
+is a new reason to stop. This is not a waiver for the gate: if the gate refuses the candidate on
+that test, the refusal is the trunk's and goes to a fixer, and the candidate is kept.
+
+```bash
+cd tools/tillr && CGO_ENABLED=0 go test ./store -run '^TestEveryStoreProgramFlushesTheSQLiteTraceOnExit$' -count=1
+```
+
+The fourth run's candidate replaces the second run's as the starting point. It already holds what
+the ruling above asked for: both skill paragraphs, the two-tier worker guidance, the native
+commands without `-count=1`, a report that passes the `scratch` check, and a fix for a package
+that holds only benchmarks, whose `TestMain` the runner skipped until then.
+- [unlanded] commit `96b303849`, the first parent of the tip of `refs/tillr/runs/run-item-shard-the-tillr-go-suites-a4`, holds that candidate. The tip itself only retires this block and is not re-applied.
+
+The builder re-applies that commit on the new base, regenerates the delivered copies with
+`just pack-sync`, and measures again. One thing changed in the measurements between the fourth
+run's two passes: `tillr-run` was faster under the runner in one and slower in the other. A
+module whose two walls are within ten percent of each other stays on its native command, so the
+planner's choice does not flip from run to run.
+
 - **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
 - **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
 - **c3:** The runner exits non-zero when any test fails, when a shard cannot start, or when a shard exits without reporting every test assigned to it. A test per case asserts the exit code and a message that names the shard.
@@ -1725,6 +1777,8 @@ on the new base, since the suites changed, and the planner's estimates follow th
 - **c7:** The worker brief and the `tillr-operating` skill tell workers how to run the sharded runner and when to prefer a targeted `-run`.
 - **c8:** The report records the drain suite's wall time before and after, as command, result and date. No test asserts elapsed time.
 - **c9:** `python3 tools/gate/checks/scratch.py`, run from the repository root on the committed tree, prints nothing and exits 0. The report gives that command and its output. No tracked Markdown file the change adds or edits names the durable scratch directory, by variable or by path, outside a fenced block.
+- **c10:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree. When the suite already passes on the staged base, the change leaves `tests/observatory-dev.test.py` alone and the report says so.
+- **c11:** The report names every test that was red on the staged base before any edit, each with its command, exit code and date, or says there was none. The change includes no file under `tools/tillr/store/` and does not include `tools/tillr-drain/drain/heavy_supervisor.go`.
 
 **Agent details:**
 
@@ -1733,6 +1787,10 @@ on the new base, since the suites changed, and the planner's estimates follow th
 - **Evidence:** 2026-11-16, sharding with a test binary built once per package and balanced on recorded durations: K=6 took 13.7 to 14.5 s, K=8 took 14.5 s, K=4 took 17.9 s, at load 7 to 30. The only failures were three tests that need the `config/` directory, absent from the exported copy.
 - **Evidence:** 2026-11-16, `t.Parallel()` trial on the 127 of 247 root tests that do not call `t.Setenv`: root wall unchanged at 55.0 s. `t.Setenv` appears at 43 call sites in the root package and 17 in `drain`, and the stub adapters read `GATE_ROOT`, `STUB_ROOT`, `RETIRE_*` and `PASS_*` from the environment.
 - **Evidence:** the cost estimate was recorded at 30.9 s on 2026-11-15; `rg -n 'COST_ESTIMATE|30\.9' tools/fork-check.py` finds it (2026-11-17).
+- **Evidence (c10):** 2026-11-17, run `run-item-shard-the-tillr-go-suites-a4`: the gate ran seven checks and failed one, `observatory-dev`, after 4 min 40 s, with seven failed cases and the line `observatory-dev: npm ci (there are no node_modules)`. `ls tools/tillr-view/web/node_modules` in a lane worktree at `fb90b1a96` on the same day reports no such directory.
+- **Where (c10):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`; `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
+- **Evidence (c11):** 2026-11-17, in a lane worktree at `fb90b1a96` with no change applied, the command in the ruling exited 1 with `../../tillr-drain: the program calls os.Exit 2 times outside tests; only main's flushed exit may`. `rg -n 'os\.Exit' tools/tillr-drain --glob '*.go' --glob '!*_test.go'` finds the call in `main.go` and the one in `drain/heavy_supervisor.go`.
+- **Evidence (c11):** 2026-11-17, `tillr-item list` on the repository's store showed six `fixer-main-*` items, all closed at 09:19 UTC, before `89afe7e39` was authored at 09:48 UTC. No open fixer names this test.
 
 ### Route the slowest drain and store tests through injected clocks
 
