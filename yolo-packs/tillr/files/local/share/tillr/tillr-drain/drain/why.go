@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -95,6 +96,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	if err != nil {
 		return answer, err
 	}
+	windows, err := readBackendWindows(r, at)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	busy, err := readLanes(r, at)
 	if err != nil {
 		return answer, err
@@ -178,6 +183,15 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.WaitingOn = append(row.WaitingOn, d.RunRequest.RunID)
 		case (d.Reason == ReasonRetryJudged || d.Reason == ReasonRetryUnjudged || d.Reason == ReasonRetryStale) && d.SupersedesRunID != "":
 			row.WaitingOn = append(row.WaitingOn, d.SupersedesRunID)
+		}
+		if d.Reason == ReasonBackendWindow && d.ConflictID != "" && policy != nil {
+			seat := d.Seat
+			for _, name := range policy.seatList(seat) {
+				if reset, shut := windows[name]; shut {
+					row.WaitingOn = append(row.WaitingOn, name+" reopens "+reset.Format(time.RFC3339))
+				}
+			}
+			row.Why += ": seat " + seat + "; " + strings.Join(row.WaitingOn, ", ")
 		}
 		if len(row.WaitingOn) > 0 {
 			row.Mover = strings.Join(row.WaitingOn, ", ")

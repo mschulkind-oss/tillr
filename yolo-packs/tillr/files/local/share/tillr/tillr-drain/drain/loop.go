@@ -1244,6 +1244,22 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if orphaned {
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
 	}
+	// A usage refusal says nothing about the conflict. Release it for the next
+	// planner pass instead of leaving the claimed design run awaiting forever.
+	if decision.BlockConflict != nil {
+		if _, _, _, refused := refusedWindow(record); refused {
+			if err := l.recordBackendWindow(ctx, record); err != nil {
+				return laneOutcome{err: err}
+			}
+			c := *decision.BlockConflict
+			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+			c.Text += "\n\nDesign run " + record.RunID + " refused by backend quota on " + record.Backend
+			if err := l.saveBlockConflict(ctx, c); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+		}
+	}
 	class := ClassifyAttempt(record, log)
 	if class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {

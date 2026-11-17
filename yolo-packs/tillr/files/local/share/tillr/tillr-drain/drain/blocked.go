@@ -19,8 +19,8 @@ const (
 )
 
 // conflictDecision gives the design seat exactly one dispatch for a raised report.
-// The pending-work record takes over after claim; any unanswered terminal attempt
-// stays on that seat rather than spending another run.
+// The pending-work record takes over after claim. A quota refusal raises the
+// conflict again; other unanswered terminal attempts keep their disposition.
 func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	d := Decision{ItemID: row.ItemID, Seat: c.WaitingOn, ConflictID: c.ConflictID, Attempt: len(p.priors[row.ItemID]) + 1, From: "held", Action: ActionHold, Reason: ReasonConflictDesign}
 	switch {
@@ -36,16 +36,31 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case p.fixerOpen != "":
 		d.Reason = ReasonTrunkBroken
 		d.DeferredBy = p.fixerOpen
-	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
-		d.Reason = ReasonNoLane
 	default:
+		// Unlike ordinary failover, a single design backend must not spill
+		// onto the build preference. Only this seat's declared backends qualify.
+		backend := ""
+		for _, name := range p.policy.seatList("design") {
+			if !p.shut[name] {
+				backend = name
+				break
+			}
+		}
+		if backend == "" {
+			d.Reason = ReasonBackendWindow
+			break
+		}
+		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {
+			d.Reason = ReasonNoLane
+			break
+		}
 		if lane, ok := p.freeLane(); ok {
 			p.assigned[lane] = true
 			p.dispatched++
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 			d.Seat = "design"
 			d.BlockConflict = &c
-			d.RunRequest = p.request(row.ItemID, lane, p.policy.seatList("design")[0])
+			d.RunRequest = p.request(row.ItemID, lane, backend)
 		} else {
 			d.Reason = ReasonNoLane
 		}
