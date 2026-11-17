@@ -2570,3 +2570,40 @@ one that is hours old.
 - **Where:** `HeavyRunner.Run` and `firstRed` in `tools/tillr-drain/drain/heavy.go`, where the bisect over recorded landings already exists; `startHeavy` in `tools/tillr-drain/drain/heavy_loop.go`, whose `heavyAttempted` is held in memory and so forgotten at a restart; `heavyStatusLine` in the same file; `HeavyStatus` in `tools/tillr-drain/heavy/status.go`, which carries `GreenCommit` and no time.
 - **Dropped from the first draft:** a criterion to bisect a red batch before filing a fixer. `firstRed` does that now, and `drain/heavy_attribution_test.go` covers it. The unattributable cases in c4 are the part it does not handle: it returns an error there.
 - **Evidence:** 2026-11-17, `rg -n 'heavyAttempted' tools/tillr-drain/drain` finds the field only in memory on the `Loop`, with no stored copy. `rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go` shows the bisect, and its two `Externalf` returns for a range with no landing and for a tip that is red where the last landing is green.
+
+## Filed 2026-11-17: refs that outlive their run
+
+The owner reads history in `tig`, and on 2026-11-17 he said: "shouldn't the refs disappear as the
+commits land on main? that's what is cluttered. let's file an item for this."
+
+### Drop a run's refs once its change has landed
+
+Every run leaves a ref behind, and the loop never removes one once the change is on the trunk. The
+repository held 736 refs under `refs/tillr` on 2026-11-17: 564 run pins, 153 landing markers, 8
+saved edits, 7 held candidates, 2 recovery refs, and the fixed pointers for the green commit and
+the trunk history. A history viewer draws every one of them as a label, so the log the owner reads
+is buried under labels for work that finished days ago. A run pin exists to keep an unlanded
+candidate reachable, and a landing marker exists to let the lander's retry find a landing whose
+receipt was lost, so each is needed only until the store holds the landing. After that, they are
+clutter. The loop should delete them as part of recording the landing, and a one-time sweep should
+clear what has built up. Neither may delete a commit that a live lane, a held candidate or a
+retry still needs.
+
+<!-- tillr: item id="item-run-refs-dropped-once-landed" paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When an item's landing is recorded, every run pin of that item's runs, including every earlier attempt and each conflict-fix run, is deleted in the same settle step, after the landing record is durable. The landed commit stays reachable from the trunk. A test lands an item that had two attempts and asserts both pins are gone and the commit is on the trunk.
+- **c2:** The landing markers no longer accumulate. Either the lander stops writing one, or the loop deletes it once the store holds a `landed` row for that run, whichever the readers listed in the details allow. The tillr-land README states which. A test asserts a marker is gone after a recorded landing and is still present while the row is missing, so a crashed landing's retry still finds it.
+- **c3:** A squash landing is recognized by the store's landing record for the run's item and not by Git ancestry, because the run commit is not an ancestor of the trunk after a squash. A test lands by squash and asserts the pin is deleted although the run commit is not an ancestor.
+- **c4:** When an item closes, is dropped or resolves elsewhere, its run pins are deleted. Saved-edit refs keep the retention rule the drain README already states. Held candidates and the pins of an item that can still be retried are kept, and the README gives an age or count bound for what it keeps. A test holds a candidate, finishes other items, and asserts the held pin survives.
+- **c5:** A one-time sweep removes today's backlog under the same rules. It is idempotent, has a dry-run mode, and prints what it removed and what it kept with the reason for each. Before it deletes a ref it checks that no live lane, held candidate or retryable run names that commit. A test runs it twice and asserts the second run removes nothing, and another asserts a ref a live lane needs survives.
+- **c6:** After a drained queue, `git for-each-ref refs/tillr` lists only refs for items still in flight or held, plus the fixed pointers for the green commit and the trunk history. A test drains a small queue and asserts the listing.
+- **c7:** The drain README's namespace table states the lifetime of each of runs, landed, preserved, held, recovery, green and trunk-history, and the sections that now say nothing deletes these refs are corrected.
+
+**Agent details:**
+
+- **Ref:** `tools/tillr-drain/README.md`, the boundary table of refs a run may move and the saved-edit retention rule; `tools/tillr-land/README.md`, the landing marker and the section "Known cases the marker does not settle"; [the landing principles](../design/landing-principles.md).
+- **Where:** `landerRef` and the landed-marker check in `tools/tillr-drain/drain/boundary.go`, which treat `refs/tillr/runs/` and `refs/tillr/landed/` as ignored and read a moved marker as a sibling's fork-series landing; `landedMarkerRef` in `tools/tillr-land/land/trunk.go` and the retry paths in `tools/tillr-land/land/landing.go`; `prunePreservedWork` in `tools/tillr-drain/drain/preserved.go`, the one deletion that exists and the shape to follow; the settle and landing steps in `tools/tillr-drain/drain/loop.go` and `pass.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
+- **Landed markers have two live readers.** The lander's retry reads the marker to recognize a landing whose receipt it did not record (`tools/tillr-land/README.md`). The drain's boundary check reads a marker written during a bracket to tell a sibling's fork-series landing from a stray move of a patch branch. Deleting a marker only after the store holds the `landed` row keeps the first. The second needs the marker only during the bracket, so the deletion must come after the bracket's check. The item states how the order is kept.
+- **Evidence:** 2026-11-17, `git for-each-ref refs/tillr | wc -l` printed 736, and `git for-each-ref refs/tillr --format='%(refname)' | awk -F/ '{print $3}' | sort | uniq -c` printed runs 564, landed 153, preserved 8, held 7, recovery 2, green 1 and trunk-history 1. About 15:00Z the same commands had printed 727.
+- **Evidence:** 2026-11-17, `rg -n 'update-ref -d|prune' tools/tillr-drain/drain --glob '!*_test.go'` finds one ref deletion, in `prunePreservedWork`, which deletes only `refs/tillr/preserved/*` once the item is finished or removed (commit `6221148e5`). The other matches prune worktree registrations. Nothing deletes a run pin, a landing marker, a held ref or a recovery ref, and `tools/tillr-land/README.md` says so for the first two.
+- **Evidence:** 2026-11-17, a loop over `git for-each-ref refs/tillr/runs` with `git merge-base --is-ancestor <sha> main` found 291 of the 564 run pins are ancestors of `main`. Ancestry undercounts, because a squash landing leaves the run commit off the trunk. Matching each run to its item in the store, 536 of the 564 belong to an item with a `landed` row in `landings`, and 544 belong to an item that has a `landed` row or is in the state `landed` or `closed`. The store holds 248 `landed` rows, 88 `squash-conflict` and 4 `refused`.
