@@ -926,6 +926,257 @@ def test_ingest_twice_leaves_the_first_index_alone(work):
     return "two ingests left the first index untouched and the default root unwritten"
 
 
+def loop_corpus(work, name, run_ids):
+    """A store and a loop directory holding every artifact kind for each run."""
+    store = work / f"{name}-repo" / ".tillr" / "state.db"
+    for number, run_id in enumerate(run_ids, start=1):
+        loop_dir = store.parent / "loop" / run_id
+        loop_dir.mkdir(parents=True)
+        write_log(loop_dir / f"{run_id}.log", run_id, [
+            turn_end(1, "Ran the suite.\nRESULT: done", ts_ms=1794510845000 + number)])
+        (loop_dir / "proc-exec.jsonl").write_text(json.dumps(proc(
+            "2026-11-12T19:20:02.000Z", ["go", "test", "./..."], "tools/tillr-store")) + "\n")
+        (loop_dir / "git-trace2.jsonl").write_text("\n".join(json.dumps(row) for row in [
+            {"event": "start", "sid": f"{run_id}/1", "time": "2026-11-12T19:20:03.000Z",
+             "argv": ["/bin/git", "commit", "-m", "the fix"]},
+            {"event": "region_enter", "sid": f"{run_id}/1", "label": "noise"},
+            {"event": "exit", "sid": f"{run_id}/1", "time": "2026-11-12T19:20:03.100Z",
+             "t_abs": 0.1, "code": 0},
+        ]) + "\n")
+        (loop_dir / "base_sha").write_text("a" * 40 + "\n")
+        (loop_dir / "gate.plan.json").write_text(json.dumps({
+            "record_version": 1, "kind": "gate.plan", "id": f"gate-plan-{number}",
+            "created_at": "2026-11-12T19:20:04Z", "payload": {
+                "plan_id": f"plan-{number}", "checks": [{"check_id": "store-test"}]}}))
+    make_store(store, [{"run_id": run_id, "item_id": "574", "lane_id": "lane-1"}
+                       for run_id in run_ids])
+    return work / f"{name}-trace", store
+
+
+def table_scans(index_path, statements):
+    """The statements among `statements` that would walk the whole obs_events table."""
+    conn = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    scans = []
+    try:
+        for sql in statements:
+            head = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+            if head not in ("SELECT", "DELETE", "UPDATE") or "obs_events" not in sql:
+                continue
+            steps = [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)]
+            # A walk is a `SCAN`, or a `SEARCH` that names no index: the planner reports
+            # `MAX(col)` over an unindexed column as `SEARCH obs_events`.
+            if any("obs_events" in step and (step.startswith("SCAN") or "USING" not in step)
+                   for step in steps):
+                scans.append((sql, " | ".join(steps)))
+    finally:
+        conn.close()
+    return scans
+
+
+class traced_connections:
+    """Record every statement any sqlite connection the indexer opens executes."""
+
+    def __init__(self):
+        self.statements = []
+        self.original = sqlite3.connect
+
+    def __enter__(self):
+        original, statements = self.original, self.statements
+
+        def connect(*args, **kwargs):
+            conn = original(*args, **kwargs)
+            conn.set_trace_callback(statements.append)
+            return conn
+
+        tillr_trace.sqlite3.connect = connect
+        return self
+
+    def __exit__(self, *exc):
+        tillr_trace.sqlite3.connect = self.original
+        return False
+
+
+def test_ingest_cost_follows_what_is_new(work):
+    """A sync that appends one line walks no table whole, and leaves unchanged runs unread.
+
+    Measured on 2026-11-17: the live index held 27 million obs rows (32 GB), and every
+    sync read the highest `seq` with a full scan and deleted a dirty run's gate rows with
+    `DELETE ... WHERE source = ?`, which has no index. Each was a pass over the whole
+    table per sync, so a sync's cost followed the index's size instead of what was new.
+    The query planner is asked, so no clock is involved.
+    """
+    root, store = loop_corpus(work, "scans", ["run-scan-1", "run-scan-2"])
+    index = tillr_trace.Index(root, store)
+    assert index.sync() == "rebuilt"
+
+    log = store.parent / "loop" / "run-scan-1" / "run-scan-1.log"
+    with open(log, "a") as handle:
+        handle.write(json.dumps(turn_end(2, "again", ts_ms=1794510855000)) + "\n")
+    calls = []
+    original = tillr_trace.parse_gate_record
+    tillr_trace.parse_gate_record = lambda *args, **kwargs: calls.append(args[0]) or original(
+        *args, **kwargs)
+    try:
+        with traced_connections() as traced:
+            assert index.sync() == "rebuilt"
+    finally:
+        tillr_trace.parse_gate_record = original
+    assert calls == [], f"unchanged gate records were parsed again: {calls}"
+    scans = table_scans(root / "index.db", traced.statements)
+    assert scans == [], "a sync walked the whole obs_events table:\n" + "\n".join(
+        f"  {sql}\n    -> {plan}" for sql, plan in scans)
+    llm = [row for row in index_rows(root) if row[2] == "llm.turn"]
+    assert len(llm) == 3, llm
+    return f"{len(traced.statements)} statements, none of them a whole-table walk"
+
+
+def test_an_ingest_killed_mid_write_is_resumed_not_rebuilt(work):
+    """A writer killed mid-transaction leaves an index the next sync resumes from.
+
+    Measured on 2026-11-17: a jail relaunch killed an ingest mid-transaction and left a
+    hot rollback journal. The next sync's read-only open of the index failed on it
+    ("attempt to write a readonly database"), was read as "no index", and started a
+    whole-corpus rebuild that ran for half an hour. Every kill of that rebuild left
+    another hot journal, so each later ingest started the same rebuild again.
+    """
+    root, store = loop_corpus(work, "killed", ["run-killed-1", "run-killed-2"])
+    index = tillr_trace.Index(root, store)
+    assert index.sync() == "rebuilt"
+    before = index_rows(root)
+
+    killed = subprocess.run([sys.executable, "-I", "-c", (
+        "import os, sqlite3, sys\n"
+        "conn = sqlite3.connect(sys.argv[1])\n"
+        "conn.execute('PRAGMA cache_size = 1')\n"
+        "conn.execute('BEGIN IMMEDIATE')\n"
+        "conn.execute('DELETE FROM obs_events')\n"
+        "conn.execute('DELETE FROM ingested_files')\n"
+        "conn.executemany('INSERT INTO ingested_files (path, mtime_ns, size_bytes)'\n"
+        "                 ' VALUES (?, 0, 0)', [(str(n) * 400,) for n in range(2000)])\n"
+        "os._exit(9)\n"), str(root / "index.db")], capture_output=True, text=True)
+    assert killed.returncode == 9, killed.stderr
+
+    calls = []
+    parsers = {name: getattr(tillr_trace, name) for name in (
+        "parse_run_log", "parse_proc_exec", "parse_git_trace2", "parse_gate_record")}
+    for name, parser in parsers.items():
+        setattr(tillr_trace, name, lambda *args, _parser=parser, **kwargs: calls.append(
+            args[0]) or _parser(*args, **kwargs))
+    try:
+        state = index.sync()
+    finally:
+        for name, parser in parsers.items():
+            setattr(tillr_trace, name, parser)
+    assert calls == [], f"a sync after a killed writer re-parsed the corpus: {calls}"
+    assert state == "reused", state
+    assert index_rows(root) == before, "the killed writer's half-done work reached the index"
+    return "a killed writer's transaction was discarded and nothing was re-parsed"
+
+
+def test_a_failure_part_way_keeps_the_runs_already_indexed(work):
+    """Each run is committed as it is derived, so a stop loses one run, not the build.
+
+    The whole sync was one transaction: an ingest stopped after deriving most of the
+    corpus kept none of it, and the next one began again from nothing.
+    """
+    root, store = loop_corpus(work, "partial", ["run-part-1", "run-part-2"])
+    index = tillr_trace.Index(root, store)
+    original = tillr_trace.parse_proc_exec
+
+    def failing(path, trace, **kwargs):
+        if trace.get("run_id") == "run-part-2":
+            raise RuntimeError("stopped part way")
+        return original(path, trace, **kwargs)
+
+    tillr_trace.parse_proc_exec = failing
+    try:
+        index.sync()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("the injected failure did not stop the sync")
+    finally:
+        tillr_trace.parse_proc_exec = original
+
+    calls = []
+    log_parser = tillr_trace.parse_run_log
+    tillr_trace.parse_run_log = lambda *args, **kwargs: (
+        calls.append(str(args[0])) or log_parser(*args, **kwargs))
+    try:
+        assert index.sync() == "rebuilt"
+    finally:
+        tillr_trace.parse_run_log = log_parser
+    assert all("run-part-1" not in path for path in calls), calls
+    assert any("run-part-2" in path for path in calls), calls
+    conn = sqlite3.connect(str(root / "index.db"))
+    try:
+        runs = {row[0] for row in conn.execute("SELECT run_id FROM obs_events")}
+    finally:
+        conn.close()
+    assert {"run-part-1", "run-part-2"} <= runs, runs
+    return "the run derived before the stop was kept and not parsed again"
+
+
+def test_the_log_the_run_record_names_is_indexed(work):
+    """A run's log is read from where its record says, in the record's own spelling.
+
+    The run record names its log as `{"kind": "log", "ref": <path>}` in a lane directory,
+    not in the loop directory. The indexer read the key as `Ref`, found nothing, and
+    looked in the loop directory instead: measured on 2026-11-17, all 789 runs in the
+    live index read `log_state = missing`, and the index held no model turn at all.
+    """
+    store = work / "named-log-repo" / ".tillr" / "state.db"
+    run_id = "run-named-log"
+    lane_log = work / "named-log-repo" / ".tillr" / "lanes" / "lane-1" / f"{run_id}.log"
+    lane_log.parent.mkdir(parents=True)
+    write_log(lane_log, run_id, [turn_end(1, "done", ts_ms=1794510845000)])
+    (store.parent / "loop" / run_id).mkdir(parents=True)
+    make_store(store, [{"run_id": run_id, "item_id": "574", "lane_id": "lane-1",
+                        "artifact_refs": [{"kind": "lane-root", "ref": str(lane_log.parent)},
+                                          {"kind": "log", "ref": str(lane_log)}]}])
+    root = work / "named-log-trace"
+    assert tillr_trace.Index(root, store).sync() == "rebuilt"
+    conn = sqlite3.connect(str(root / "index.db"))
+    try:
+        log_path, log_state = conn.execute(
+            "SELECT log_path, log_state FROM runs_index WHERE run_id = ?", (run_id,)).fetchone()
+        turns = conn.execute(
+            "SELECT COUNT(*) FROM obs_events WHERE kind = 'llm.turn'").fetchone()[0]
+    finally:
+        conn.close()
+    assert (log_path, log_state) == (str(lane_log), "ok"), (log_path, log_state)
+    assert turns == 1, turns
+    return "the lane log the run record names was read, and its turn indexed"
+
+
+def test_a_second_ingest_does_not_wait_for_a_running_one(work):
+    """An ingest that finds another one writing answers `busy` at once.
+
+    Two writers of one index either wait on each other's lock or both parse the same new
+    bytes. The writer holds an exclusive lock beside the index for its whole sync, and a
+    second one answers without touching the index: the running one, or the next one,
+    picks up what is new.
+    """
+    import fcntl
+
+    root, store = loop_corpus(work, "busy", ["run-busy-1"])
+    first = cli("--trace-root", str(root), "--store", str(store), "ingest")
+    assert first.returncode == 0, first.stderr
+    before = index_rows(root)
+    log = store.parent / "loop" / "run-busy-1" / "run-busy-1.log"
+    with open(log, "a") as handle:
+        handle.write(json.dumps(turn_end(2, "again", ts_ms=1794510855000)) + "\n")
+    with open(root / "index.db.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        second = cli("--trace-root", str(root), "--store", str(store), "ingest")
+    assert second.returncode == 0, second.stderr
+    assert "busy" in second.stdout, second.stdout
+    assert index_rows(root) == before, "a second writer changed the index"
+    third = cli("--trace-root", str(root), "--store", str(store), "ingest")
+    assert "rebuilt" in third.stdout, third.stdout
+    return "a second ingest answered busy at once, and the next one caught up"
+
+
 
 def main():
     if not DURABLE.is_dir():
@@ -959,6 +1210,11 @@ def main():
             ("stream", lambda: test_ingest_streams_a_large_source(work)),
             ("vanish", lambda: test_ingest_drops_a_run_its_sources_no_longer_hold(work)),
             ("twice", lambda: test_ingest_twice_leaves_the_first_index_alone(work)),
+            ("scans", lambda: test_ingest_cost_follows_what_is_new(work)),
+            ("killed", lambda: test_an_ingest_killed_mid_write_is_resumed_not_rebuilt(work)),
+            ("partial", lambda: test_a_failure_part_way_keeps_the_runs_already_indexed(work)),
+            ("namedlog", lambda: test_the_log_the_run_record_names_is_indexed(work)),
+            ("busy", lambda: test_a_second_ingest_does_not_wait_for_a_running_one(work)),
         ]
         for name, case in cases:
             try:
