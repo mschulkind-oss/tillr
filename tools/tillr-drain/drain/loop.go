@@ -2424,8 +2424,16 @@ func (l *Loop) snapshot(ctx context.Context, targets, watched []string) (*Bounda
 	// Only the lanes this tick is not dispatching are watched. A lane whose own run is in
 	// flight writes in its own worktree, and a sibling bracket that watched it would convict
 	// the sibling's own work as a write into it.
+	//
+	// A pass computes its watched set from the lanes idle when it began, and a lane refusal
+	// can re-plan an item onto one of them in the same pass (stageDispatches). That lane is
+	// then this bracket's own target, and a run's own worktree is never a lane it watches:
+	// naming it as both is a usage error TakeBoundary refuses, which stopped the loop on
+	// 2026-11-17. A later sibling start on a watched lane is the epoch check's to excuse.
 	for _, lane := range watched {
-		spec.Lanes = append(spec.Lanes, l.lanePath(lane))
+		if path := l.lanePath(lane); !isTarget(targets, path) {
+			spec.Lanes = append(spec.Lanes, path)
+		}
 	}
 	for _, lane := range l.cfg.Lanes {
 		if !isTarget(targets, l.lanePath(lane)) {

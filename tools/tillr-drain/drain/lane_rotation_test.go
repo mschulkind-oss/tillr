@@ -211,3 +211,42 @@ func TestARestartedLoopDoesNotRecordAnUnchangedLaneConditionAgain(t *testing.T) 
 		t.Fatalf("a restarted loop recorded the unchanged condition again: %d events, %q", n, report.String())
 	}
 }
+
+// On 2026-11-17 at 19:34:32Z a lane refusal re-planned item-oa-idea-design-turn from lane-5
+// onto lane-6, a lane that was idle when the pass began and so was in the pass's watched set.
+// The run's bracket then named lane-6 both as its target and as a lane to watch, the
+// snapshot refused that as a usage error, and the loop stopped with a fault. A run's own
+// lane is never one it watches, however it came to be chosen.
+func TestAnItemReplannedOntoAnIdleLaneRunsThereWithoutAFault(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	worktree := laneWorktree(f, "lane-1")
+	writeForkFile(t, worktree+"/unlanded.txt", "nobody landed this\n")
+	runGit(t, worktree, "add", "unlanded.txt")
+	runGit(t, worktree, "commit", "-qm", "an unlanded change")
+	steps := &laneSteps{}
+	stager := &laneRefusingStager{t: t, f: f, lane: "lane-1"}
+	l := f.loop(t, steps, stager)
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	if err := l.stageLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runGit(t, worktree, "log", "-1", "--format=%s"); got != "an unlanded change" {
+		t.Fatalf("fixture: lane-1 lost its commit: %s", got)
+	}
+	if p := mustPlan(t, l); len(p) == 0 || p[0].decision.LaneID != "lane-1" {
+		t.Fatalf("fixture: item-a is not planned on lane-1 first: %+v", p)
+	}
+	var result LoopResult
+	if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
+		t.Fatalf("the pass stopped: %q/%v", stop, err)
+	}
+	for len(l.active) > 0 {
+		c := <-l.completions
+		if stop, err := l.takeCompletion(c, &result); err != nil || stop != "" {
+			t.Fatalf("the re-planned run stopped the loop: %q/%v (%s)", stop, err, result.Detail)
+		}
+	}
+	if got := steps.ranOn("item-a"); len(got) != 1 || got[0] != "lane-2" {
+		t.Fatalf("item-a ran on %v, want lane-2", got)
+	}
+}

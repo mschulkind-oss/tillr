@@ -943,6 +943,9 @@ offered that lane would be refused the same way. There are two such conditions:
 
 The loop takes such a lane **out of rotation** for the session. That means no plan offers
 it an item, and the item it was offered is offered the next free lane in the same pass.
+That lane may have been idle when the pass began, and so be one the pass watches. The run's
+own boundary bracket never watches its own lane, so the re-planned run is checked like any
+other.
 The loop writes one `drain.lane-refused` event, whose object is the lane, and prints one
 line naming the lane, the reason and the remedy. A lane-owned refusal does not count
 toward the infrastructure-failure streak that stops the loop.
