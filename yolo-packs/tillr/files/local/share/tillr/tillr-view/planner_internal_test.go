@@ -129,9 +129,19 @@ func TestCheckPlannerBuild(t *testing.T) {
 
 // whyFixture is a current-schema store, initialized by the real planner, holding two
 // unlanded items and one lane: the TestWhyAPIAndWaitingBeforeAnyPass fixture.
+// gitRoot makes dir a repository. The planner reads refs/tillr/green under --root, and
+// git exits 128 (a fault, not an absent pointer) outside a repository.
+func gitRoot(t *testing.T, dir string) {
+	t.Helper()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+}
+
 func whyFixture(t *testing.T, drainBin string) (dir, path string) {
 	t.Helper()
 	dir = t.TempDir()
+	gitRoot(t, dir)
 	path = filepath.Join(dir, "state.db")
 	input := filepath.Join(dir, "pass.json")
 	raw := `{"record_version":1,"kind":"drain.pass","id":"fixture","producer":{"system":"tillr","utility":"drain","version":"0.1.0"},"created_at":"2026-11-16T00:00:00Z","payload":{}}`

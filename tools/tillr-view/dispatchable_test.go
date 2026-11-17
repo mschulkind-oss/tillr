@@ -245,6 +245,7 @@ func planDecisions(t *testing.T, path string) []plannedDecision {
 			"policy_ref":      policyPath,
 		},
 	})
+	gitRoot(t, dir)
 	out := filepath.Join(dir, "decisions.json")
 	cmd := exec.Command(bin, "plan", "--store", path, "--input", tickPath, "--output", out,
 		"--root", dir, "--questions-cmd", "/bin/true")

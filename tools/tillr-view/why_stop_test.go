@@ -13,6 +13,7 @@ import (
 
 func TestWaitingDefaultStoppedRunKeepsPlannerAnswer(t *testing.T) {
 	dir := t.TempDir()
+	gitRoot(t, dir)
 	drainBin := filepath.Join(dir, "tillr-drain")
 	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", drainBin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build drain: %v %s", err, out)
