@@ -14,7 +14,7 @@ import { RefusalState, refusalCode } from "./RefusalState";
 import type { RefusalSentence } from "./RefusalState";
 
 import { TranscriptView } from "./TranscriptView";
-import { money } from "../models/board";
+import { RunUsageFigures } from "./Usage";
 import type {
   ArtifactData,
   Exchange,
@@ -146,7 +146,7 @@ export function InspectPane(props: InspectPaneProps) {
                     </span>
                     <span>· {run.run.backend}</span>
                     <span>· lane {run.run.lane_id || "unrecorded"}</span>
-                    <span>· {money(run.cost.cost_total_usd ?? run.run.cost_usd)}</span>
+                    <RunUsageFigures usage={run.usage} />
                   </>
                 ) : (
                   <span>reading the run…</span>

@@ -3,6 +3,7 @@ import { analyzeSpans, barStyle, duration, windowOf, type TimeWindow, type Viewe
 import { EntityLink, type EntityKind } from "./EntityLink";
 import { EpistemicBadge } from "./EpistemicBadge";
 import { useScreenHash } from "./ObservatoryShell";
+import { latency, rate } from "./Usage";
 import { URL_CHANGE_EVENT } from "../models/url";
 
 const HEIGHT = 420, ROW = 36;
@@ -119,7 +120,7 @@ export function SpanViewer({ spans, initialComplete = true, paused = false }: { 
             return <div key={s.id} data-span-id={s.id} role="treeitem" aria-level={depth + 1} aria-selected={selected?.id === s.id} aria-expanded={children ? !collapsed.has(s.id) : undefined}
               className={`span-row ${duration(rendered) === null ? "span-row--missing" : ""} ${analysis.critical.has(s.id) ? "span-row--critical" : ""}`} style={{ position: "absolute", top: (start + i) * ROW, height: ROW, width: "100%" }}>
               <div className="span-label" style={{ paddingLeft: depth * 16 }}>{children ? <button aria-label={`${collapsed.has(s.id) ? "Expand" : "Collapse"} ${s.name}`} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(s.id)) next.delete(s.id); else next.add(s.id); return next; })}>{collapsed.has(s.id) ? "▸" : "▾"}</button> : null}
-                <button aria-label={`Select ${s.name}`} onClick={() => select(s.id)}>{analysis.critical.has(s.id) ? "★ " : ""}{s.name}</button><EpistemicBadge state={s.state} /></div>
+                <button aria-label={`Select ${s.name}`} onClick={() => select(s.id)}>{analysis.critical.has(s.id) ? "★ " : ""}{s.name}</button><EpistemicBadge state={s.state} />{s.attributes.category === "llm_turn" ? <small> First output {latency(s.attributes.first_output_ms)} · {rate(s.attributes.output_tokens_per_second)}</small> : null}</div>
               <div className="span-track" title={s.reason}>{duration(rendered) === null ? <span className="waterfall__gap-notice">{s.reason}</span> : bar ? <span data-clock={s.open ? "viewer" : "recorded"} className={`waterfall__bar waterfall__bar--${s.open ? "derived_clock" : s.state}`} style={bar} title={`${s.name}: ${time(duration(rendered))}${s.open ? " so far — viewer's clock; finish not recorded" : ""}`} /> : <span>outside time window</span>}</div>
             </div>;
           })}

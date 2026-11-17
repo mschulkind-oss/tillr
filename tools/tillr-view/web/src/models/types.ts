@@ -95,6 +95,19 @@ export interface WaitingRow {
   class_source: string;
 }
 
+export interface ModelUsage {
+  backend: string; model: string | null; tokens?: number | null;
+  input?: number | null; output?: number | null; cache_read?: number | null; cache_write?: number | null;
+}
+export interface UsageSum {
+  tokens: number | null; models: ModelUsage[]; unrecorded_runs: number; lower_bound: boolean;
+}
+export interface RunUsage {
+  backend: string; tokens: number | null; models: ModelUsage[];
+  turns: (ModelUsage & { id: string })[];
+  first_output_ms?: number; output_tokens_per_second?: number;
+}
+
 export interface PerformanceCheck {
   check_id: string; count: number; sample_count: number;
   median_ms: number | null; p95_ms: number | null; max_ms: number | null;
@@ -102,6 +115,7 @@ export interface PerformanceCheck {
 }
 
 export interface PerformanceItem {
+  usage?: UsageSum;
   item_id: string; run_count: number; usage_tokens: number | null; cost_usd: number | null;
   lower_bound: boolean; unrecorded_runs: number;
   tokens_unrecorded_runs: number; cost_unrecorded_runs: number;
@@ -180,6 +194,7 @@ export interface ItemView {
 }
 
 export interface LaneRow {
+  usage?: UsageSum;
   lane_id: string;
   state: "idle" | "running" | "settling";
   state_since_ms: number | null;
@@ -404,6 +419,7 @@ export interface VerdictView {
 }
 
 export interface ItemData {
+  usage?: UsageSum;
   comments?: CommentItemView;
   item: ItemDetail;
   verdicts: VerdictView[];
@@ -470,6 +486,7 @@ export interface SavedWork {
 }
 
 export interface RunData {
+  usage?: RunUsage;
   preserved_work?: SavedWork[];
   run: RunDetail;
   stages: StageView[];

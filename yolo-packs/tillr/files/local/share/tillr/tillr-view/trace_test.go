@@ -215,7 +215,9 @@ func TestTraceFormats(t *testing.T) {
 				t.Fatal(err)
 			}
 			a, _ := json.Marshal(httpBody)
-			b, _ := json.Marshal(cliBody)
+			// The HTTP observatory is deliberately price-free; the CLI retains
+			// its recorded trace attributes for terminal analysis.
+			b, _ := json.Marshal(stripPrices(cliBody))
 			if !bytes.Equal(a, b) {
 				t.Fatalf("CLI and route disagree\n%s\n%s", a, b)
 			}

@@ -2,17 +2,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "../src/App";
+import type { LaneRow } from "../src/models/types";
 import { envelope, snapshotData } from "./fixtures";
 
 class SilentSocket { close() {} }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
-function mount(refused = false) {
+function mount(refused = false, lanes: LaneRow[] = []) {
   window.history.replaceState(null, "", "/#/");
   vi.stubGlobal("WebSocket", SilentSocket);
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     switch (String(input)) {
-      case "/api/v1/lanes": return new Response(JSON.stringify(envelope([])));
+      case "/api/v1/lanes": return new Response(JSON.stringify(envelope(lanes)));
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/designs": return new Response(JSON.stringify(envelope({designs:[{path:"docs/design.md",last_designer:null}],arrivals:{within_lifetime:2,after_lifetime:1,no_session:1,unmeasured:0}})));
       case "/api/v1/questions": return new Response(JSON.stringify(envelope({ items: [], unknown: [], missing: [], counts: { items: 0, questions: 0, holds: 0 }, state: "questions-ok" })));
@@ -47,7 +48,7 @@ test("Home shell reads snapshot, passes and the planner's why rows; nav and paus
   await waitFor(() => expect(fetch.mock.calls.length).toBeGreaterThan(reads));
 });
 
-test.each(["#/lane/lane-1", "#/question/OQ-1", "#/doc/docs%2Fa.md", "#/unknown", "#/lane/%broken"])("an unavailable destination names its route instead of displaying the old board: %s", async hash => {
+test.each(["#/question/OQ-1", "#/doc/docs%2Fa.md", "#/unknown"])("an unavailable destination names its route instead of displaying the old board: %s", async hash => {
   const { container } = mount();
   await screen.findAllByRole("link", { name: "item-held" });
   window.location.hash = hash;
@@ -57,6 +58,25 @@ test.each(["#/lane/lane-1", "#/question/OQ-1", "#/doc/docs%2Fa.md", "#/unknown",
   expect(container.querySelector(".board")).toBeNull();
   fireEvent.keyDown(window, { key: "j" });
   expect(window.location.hash).toBe(hash);
+});
+
+test.each(["lane-1", "%broken"])("a missing lane names its id on the Lane page: %s", async id => {
+  mount();
+  await screen.findAllByRole("link", { name: "item-held" });
+  window.location.hash = `#/lane/${id}`;
+  fireEvent(window, new Event("hashchange"));
+  await screen.findByRole("heading", { name: `Lane ${id}` });
+  expect((await screen.findByRole("alert")).textContent).toContain(`Lane ${id} is not recorded.`);
+});
+
+test("a Lane page shows its usage sum and opens model kinds", async () => {
+  const { container } = mount(false, [{lane_id:"lane-1",state:"idle",state_since_ms:null,run_id:"",item_id:"",seat:"",backend:"pi",attempt:0,outcome:"",last_step:"",last_step_at_ms:null,latest_action:{kind:"unrecorded",text:"",at_ms:null,clock:"no_clock"},log_grew_at_ms:null,usage:{tokens:100,models:[{backend:"pi",model:"m",input:10,output:20,cache_read:70,cache_write:0}],unrecorded_runs:1,lower_bound:true}}]);
+  await screen.findAllByRole("link", { name: "item-held" });
+  window.location.hash = "#/lane/lane-1"; fireEvent(window, new Event("hashchange"));
+  await screen.findByRole("heading", { name: "Lane lane-1" });
+  expect(screen.getByText("≥ 100 tokens · 1 unrecorded runs")).toBeTruthy();
+  fireEvent.click(screen.getByText("Usage by model and backend"));
+  expect(container.textContent).toContain("pi · m: input 10 · output 20 · cache read 70 · cache write 0");
 });
 
 test("Designs navigation opens the list and a document's designer page", async () => {

@@ -127,7 +127,7 @@ export function PassSpend({ pass }: { pass: PassRow }) {
     ["Spend started in this loop", pass.spend_started_in_loop],
     ["Spend carried over from earlier loops", pass.spend_carried_over],
   ] as const).map(([label, total]) => <p key={label}>{label}: {total ?
-    `${total.cost_unreported || total.tokens_unreported ? "lower bound: " : ""}$${total.cost_usd.toFixed(6)}, ${total.tokens} tokens · ${total.unreported} unreported runs; ${total.tokens_unreported} token-unreported, ${total.cost_unreported} cost-unreported` : "not recorded"}</p>)}</>;
+    `${total.tokens_unreported ? "≥ " : ""}${total.tokens} tokens · ${total.tokens_unreported} unrecorded runs` : "not recorded"}</p>)}</>;
 }
 
 function answer(pass: PassRow): string {

@@ -31,6 +31,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import report  # noqa: E402  (the shared report shape lives one directory up)
+import usage as measurements  # noqa: E402
 
 # The counters a `turn_end` usage block can carry, and the one total pi sometimes adds
 # alongside them. A cache read is billed, so it counts toward the total.
@@ -107,6 +108,7 @@ def dialect(stream_text):
     else:
         text = "".join(snapshots.values())
     return {
+        "usage_details": measurements.details(records, "pi"),
         "text": text,
         "session": session,
         "started": report.micros_to_rfc3339(first_at),

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchCheck, fetchPassRange, fetchPerformanceChecks, fetchPerformanceItems } from "../models/api";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { ApiEnvelope, PassRow, SnapshotData } from "../models/types";
+import { UsageSummary } from "./Usage";
 import { EntityLink } from "./EntityLink";
 import { RefusalState, refusalCode } from "./RefusalState";
 
@@ -81,7 +82,7 @@ export function PerformanceView({ route, snapshot, snapshotError = null, paused 
       </EntityLink></li>)}</ul>}
     </Section>
     <Section name="Items" error={items.error} pending={items.isPending} retry={() => void items.refetch()}>
-      {itemRows.length === 0 ? <EmptyRange available={(wideItems.data?.data.items.length ?? 0) > 0} error={range === "all" ? null : wideItems.error} loading={range !== "all" && wideItems.isPending} /> : <table><thead><tr><th>Item</th><th>Runs</th><th>Tokens</th><th>Cost</th><th>Unreported runs</th></tr></thead><tbody>{itemRows.map(row => <tr key={row.item_id}><td><EntityLink kind="item" id={row.item_id} /></td><td>{row.run_count}</td><td>{row.usage_tokens === null ? "unrecorded" : `${row.lower_bound || row.tokens_unrecorded_runs > 0 ? "≥ " : ""}${row.usage_tokens.toLocaleString()}`}</td><td>{row.cost_usd === null ? "unrecorded" : `${row.lower_bound || row.cost_unrecorded_runs > 0 ? "≥ " : ""}$${row.cost_usd.toFixed(2)}`}</td><td>{row.unrecorded_runs} wholly · {row.tokens_unrecorded_runs} tokens · {row.cost_unrecorded_runs} cost</td></tr>)}</tbody></table>}
+      {itemRows.length === 0 ? <EmptyRange available={(wideItems.data?.data.items.length ?? 0) > 0} error={range === "all" ? null : wideItems.error} loading={range !== "all" && wideItems.isPending} /> : <table><thead><tr><th>Item</th><th>Runs</th><th>Usage</th></tr></thead><tbody>{itemRows.map(row => <tr key={row.item_id}><td><EntityLink kind="item" id={row.item_id} /></td><td>{row.run_count}</td><td><UsageSummary usage={row.usage ?? {tokens: row.usage_tokens, models: [], unrecorded_runs: row.tokens_unrecorded_runs, lower_bound: row.tokens_unrecorded_runs > 0}} /></td></tr>)}</tbody></table>}
     </Section>
   </main>;
 }

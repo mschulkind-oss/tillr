@@ -21,12 +21,13 @@ import (
 // laneRow describes only recorded states. A completed command is not evidence that
 // the next command is in progress; LastStep is deliberately the last finished step.
 type laneRow struct {
-	LaneID       string `json:"lane_id"`
-	State        string `json:"state"`
-	StateSinceMS *int64 `json:"state_since_ms"`
-	RunID        string `json:"run_id"`
-	ItemID       string `json:"item_id"`
-	Seat         string `json:"seat"`
+	Usage        usageSum `json:"usage"`
+	LaneID       string   `json:"lane_id"`
+	State        string   `json:"state"`
+	StateSinceMS *int64   `json:"state_since_ms"`
+	RunID        string   `json:"run_id"`
+	ItemID       string   `json:"item_id"`
+	Seat         string   `json:"seat"`
 	// SeatSource says where Seat was read: "dispatch" (the seat the planner recorded on the
 	// decision that started this run), "item" (the item's current seat, for a run whose
 	// decision predates the dispatch column), or "none" — the item asked for no seat, and
@@ -146,6 +147,22 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 	phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
+	}
+	runs, err := readUsageRuns(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	for i := range rows {
+		selected := []storeRun{}
+		for _, run := range runs {
+			if run.LaneID == rows[i].LaneID {
+				selected = append(selected, run)
+			}
+		}
+		rows[i].Usage, err = sumUsage(r, selected)
+		if err != nil {
+			return nil, unreadable(err)
+		}
 	}
 	return rows, nil
 }

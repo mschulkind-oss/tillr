@@ -110,7 +110,7 @@ func TestPerformanceItemsLowerBounds(t *testing.T) {
 		t.Fatalf("items = %v", items)
 	}
 	item := items[0].(map[string]any)
-	for key, want := range map[string]any{"item_id": "item-seed-02", "run_count": float64(3), "usage_tokens": float64(1244), "cost_usd": float64(.25), "unrecorded_runs": float64(1), "tokens_unrecorded_runs": float64(1), "cost_unrecorded_runs": float64(2), "lower_bound": true} {
+	for key, want := range map[string]any{"item_id": "item-seed-02", "run_count": float64(3), "usage_tokens": float64(1244), "unrecorded_runs": float64(1), "tokens_unrecorded_runs": float64(1), "lower_bound": true} {
 		if item[key] != want {
 			t.Errorf("%s = %v, want %v", key, item[key], want)
 		}
@@ -120,7 +120,7 @@ func TestPerformanceItemsLowerBounds(t *testing.T) {
 		t.Fatalf("unrecorded = %v", item)
 	}
 	item = performanceData(t, h, "/api/v1/perf/items?from_ms=2000&to_ms=3000")["items"].([]any)[0].(map[string]any)
-	if item["usage_tokens"] != float64(0) || item["cost_usd"] != float64(0) {
+	if item["usage_tokens"] != float64(0) {
 		t.Fatalf("recorded zero = %v", item)
 	}
 }

@@ -9,11 +9,10 @@ export function DesignerCard({ designer }: { designer: DesignerView | null | und
       <div><dt>Session</dt><dd>{designer.session_id}</dd></div>
       <div><dt>Cache</dt><dd>{designer.state === "warm" ? `warm until ${designer.warm_until}` : designer.state}</dd></div>
       <div><dt>Context</dt><dd>{designer.context_tokens === null ? "context size not recorded" : `${designer.context_tokens.toLocaleString()} tokens`}</dd></div>
-      <div><dt>Summed cost</dt><dd><span>{designer.cost_usd === null ? `summed cost not recorded: ${designer.missing_costs} runs have no cost measurement` : `${designer.missing_costs > 0 ? "≥ " : ""}$${designer.cost_usd.toFixed(4)}`}</span> · {designer.missing_costs} cost-unreported runs</dd></div>
     </dl>
     <h4>Batches handled</h4>
     {designer.batches.length === 0 ? <p>no batches recorded</p> : <ul>{designer.batches.map(batch => <li key={batch.run_id}>
-      <a href={`#/item/${encodeURIComponent(batch.item_id)}`}>{batch.item_id}</a> · <a href={`#/run/${encodeURIComponent(batch.run_id)}`}>{batch.run_id}</a> · {batch.reason} · {batch.cost_usd === null ? "cost not recorded" : `$${batch.cost_usd.toFixed(4)}`}
+      <a href={`#/item/${encodeURIComponent(batch.item_id)}`}>{batch.item_id}</a> · <a href={`#/run/${encodeURIComponent(batch.run_id)}`}>{batch.run_id}</a> · {batch.reason}
     </li>)}</ul>}
   </section>;
 }

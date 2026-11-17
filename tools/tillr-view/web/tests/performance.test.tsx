@@ -52,7 +52,7 @@ test("25 gated passes use only the 20 served budgets and recorded shapes, with l
  expect(within(view.getByRole("region",{name:"Phases per pass"})).getAllByRole("link")).toHaveLength(25);
  expect(view.getByRole("link",{name:/go-test:tillr/}).getAttribute("href")).toBe("#/check/go-test%3Atillr");
  expect(view.getByRole("link",{name:/item-a/}).getAttribute("href")).toBe("#/item/item-a");
- expect(view.getByText(/≥ \$0.10/)).toBeTruthy();
+ expect(view.getByText("≥ 100 tokens · 1 unrecorded runs")).toBeTruthy();
  expect(view.getByText(/p95 unavailable/)).toBeTruthy();
  const requests = view.fetch.mock.calls.map(([p]) => new URL(p,"http://localhost"));
  expect(requests.every(u => !u.pathname.includes("perf/passes"))).toBe(true);
@@ -63,11 +63,11 @@ test("25 gated passes use only the 20 served budgets and recorded shapes, with l
  view.client.clear();
 });
 
-test("reported item usage remains a served lower bound even with zero missing-run counts", async () => {
+test("complete item usage is not marked as a lower bound", async () => {
  const view=setup("#/performance?range=24h",false,false,false,true);
  const section=within(view.getByRole("region",{name:"Items"}));
- await section.findByText("≥ $0.10");
- expect(section.getByText("≥ 100")).toBeTruthy();
+ await section.findByText("100 tokens · 0 unrecorded runs");
+ expect(section.queryByText(/≥/)).toBeNull();
  view.client.clear();
 });
 

@@ -208,6 +208,12 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			if err := json.Unmarshal(body, &finish); err != nil {
 				return record.Envelope{}, false, Internalf("reading spend reason: %v", err)
 			}
+			if finish.Usage != nil && finish.Usage.Details != nil {
+				if payload.Usage == nil {
+					payload.Usage = &Usage{}
+				}
+				payload.Usage.Details = finish.Usage.Details
+			}
 			payload.SpendNote = finish.SpendNote
 			payload.SettledAt = finish.SettledAt
 			payload.HarnessEndedAt = finish.HarnessEndedAt
