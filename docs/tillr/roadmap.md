@@ -1784,3 +1784,66 @@ lies in how tillr runs pi. It is the second-largest saving that the model-tierin
 - **Evidence:** 2026-11-17, a per-turn read of the 227 Sol logs: cache writes cost $126.06 in all. Turns after the first that read nothing from the cache and wrote more than 50k tokens cost $30.18. They occur in 13 logs, starting at a context between 63k and 264k tokens, with a median of 132k. In `run-item-obs2-shell-home-a3`, turns 89 to 108 each read 0 and wrote between 132k and 149k tokens.
 - **Evidence:** 2026-11-17, the same read: turns whose cache read equals the previous turn's while they write more than 15k tokens cost $20.53. In `run-item-drain-stop-keeps-runs-a3`, turns 34 to 53 each read exactly 92,262 tokens while their writes grew from 20,862 to 48,266, and from turn 54 every turn read nothing.
 - **Evidence:** 2026-11-16, the design's own read: turns that started five or more minutes after the previous one carry under 2% of the cache writes, so idle expiry is not the cause. The largest Fable run, of `item-design-gate-rework`, wrote 1.695M tokens to the cache against a largest context of 256k.
+
+## Filed 2026-11-17: what five lanes showed
+
+A drain pass on five lanes, watched on 2026-11-17, showed two defects that cost lane time or put
+the queue's own ranking method at risk. Neither stops the drain, so each goes through the queue.
+
+### Prevent a settled worker that never exits from keeping its lane
+
+A worker can finish its work, commit it and write its report, and still not end. The run face
+waits only for the harness process to exit, so a harness that is finished but idle keeps its lane
+for as long as it stays alive. On 2026-11-17 this held lane-4 for 54 minutes: the loop could not
+examine the candidate, no other item could use the lane, and nothing in the run's record said
+why. The stream already shows when a session has settled, and the report already ends in a
+`RESULT:` footer, so the run face has what it needs to tell a finished harness that lingers from
+one that is still working. It must end only the harness, never the lane's other processes, and it
+must never end a harness that has not settled, because a stall in unsettled work is a different
+problem that a stall watchdog owns. The Pi adapter in print mode is worth fixing at its own end
+too, so that it exits once its session settles.
+
+<!-- tillr: item id="item-run-end-settled-harness" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-run-commit-before-ending" prose="2" -->
+
+- **c1:** A harness whose stream shows the session settled, whose report ends in a `RESULT:` footer, and that has produced no output and used no CPU for a stated number of consecutive samples of an injected clock is ended by the run face. The sample interval and the count are one constant each, pinned by a test. A test with a stub harness that settles and then lingers asserts the run ends after that many samples and not before.
+- **c2:** The run face ends the harness process and its helper children, and no other process of the lane. A test starts a sibling process in the lane that is not a child of the harness and asserts it is still alive afterward, and that a child of the harness is gone.
+- **c3:** A harness that has not settled is never ended this way, however long it is silent. A test with a stub harness that has not settled and stays silent for ten times the count asserts it is not ended. A harness that has settled but whose report has no `RESULT:` footer is not ended either, and a test asserts it.
+- **c4:** A harness that produces output or uses CPU after it settled restarts the count. A test asserts a harness that prints one line between samples is not ended.
+- **c5:** The run is recorded as finished by the run face, not as a failure, and the loop judges its candidate: the attempt is classed as answered. The run record states when the session settled, when the run face ended the harness, and why, in one new end cause. A test asserts all three facts in the record and the class.
+- **c6:** A harness that exits by itself, before or after it settled, is recorded exactly as before, and the run face never reads the clock for it. A test with a stub that settles and exits at once asserts an unchanged record.
+- **c7:** The Pi adapter in print mode exits after its session settles, if the adapter can do so; the item says where the fix belongs, and makes it there or states why it cannot be made there. The run face's rule in c1 holds in either case, because other harnesses can linger the same way.
+- **c8:** No test asserts elapsed time, and the run face's README and the drain's README state the rule and its record.
+
+**Agent details:**
+
+- **Ref:** `tools/tillr-run/README.md`, the run face's exit handling and its pause face; `item-run-commit-before-ending`, which changes how a run that ends without a candidate is settled in the same exit handling, so this item waits for it; `item-drain-hold-repeatedly-orphaned`, whose run is the evidence.
+- **Where:** `Exec` and `waitForPause` in `tools/tillr-run/run/exec.go` and `tools/tillr-run/run/pause.go` (the wait that returns only when `cmd.Wait` does, and the process group the child leads); the end causes in `tools/tillr-run/run/schema.go`; `ClassifyAttempt` and `ReportFooter` in `tools/tillr-drain/drain/failover.go`; the stream's `agent_settled` event, which `tools/tillr-view/transcript_test.go` shows in a transcript; the Pi adapter `tools/tillr-run/backends/pi/run-pi`, which ends in `exec pi --print --mode json` so that the harness is the run's process, and the Pi fork's patch series under `yolo-packs/pi-fork/patches` if the exit belongs in print mode itself.
+- **Evidence:** 2026-11-17, lane-4, run `run-item-drain-hold-repeatedly-orphaned-a3-cfix`: the stream wrote `agent_settled` and the report ended `RESULT: done` at 05:20:48Z, and the change was committed. The `pi` process did not exit, and for 54 minutes the run never finished, the loop could not examine the candidate, and the lane was occupied.
+- **Evidence:** 2026-11-17, the same run: `pi` was idle, its CPU time did not advance, and its only children were two idle MCP helper servers. Ending the helpers did not make it exit. A SIGTERM to `pi` alone at 06:14:55Z ended it with exit 143, the run was recorded `normal-exit` with code 143, and the loop then judged the candidate and the gate passed.
+- **Evidence:** 2026-11-17, `rg -n 'cmd.Wait' tools/tillr-run/run/pause.go`: `waitForPause` waits only on the harness's exit, so nothing in the run face ends a harness that has settled. `rg -n 'ReportFooter' tools/tillr-drain/drain/failover.go`: `ClassifyAttempt` judges an exited run whose log carries the `RESULT:` footer even when the exit code is not zero, except 124 and 2, which is why the candidate was judged once the process was ended by hand.
+
+### Prevent a rank-only seed from clearing an item's workflow
+
+`tillr item seed` is today the only command that writes a queue rank. When it re-ranks an item
+that already exists, it reads the stored item, swaps in the new rank and writes the item back. The
+read does not include the item's workflow, so the write sets the workflow to empty. No live item
+has a workflow yet, so the 92 items ranked on 2026-11-17 came to no harm, but the method becomes
+unsafe as soon as workflows are in use. A rank change must change the rank and the bookkeeping
+fields and nothing else, for every item, and the ranking procedure must not need a rule that
+says to skip items with a workflow.
+
+<!-- tillr: item id="item-seed-rank-keeps-workflow" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A rank-only seed of an item that has a workflow leaves the workflow as it was. A test stores an item with the workflow `scout-then-build@v1`, seeds a new rank for it, and asserts the stored workflow is unchanged.
+- **c2:** The same test reads every stored column and every criterion and edge of the item before and after the seed, and asserts that only the rank, `updated_at` and `event_seq` differ.
+- **c3:** The test fails on the code as it stands, because the stored-item read leaves the workflow out. The fix reads the workflow where the stored item is read, so that every later write of the item carries it.
+- **c4:** An item with no workflow re-ranks exactly as before. A test asserts an unchanged result for it.
+- **c5:** The README of `tillr-item` and the pack's `tillr-operating` skill no longer tell an operator to skip items that have a workflow when ranking, if they say so, and say that a rank-only seed changes the rank alone.
+
+**Agent details:**
+
+- **Ref:** `item-seed-retire` in [the convergence design](../design/tillr-convergence.md#retire-the-seed-file-and-its-command) and `item-oa-move-to-top` in [the observatory actions design](../design/observatory-actions.md) rework how a rank is written, and both are queued. This item is small and should land first, so the ranking method is safe for every item until they land; both wait for it.
+- **Where:** `storedItem` in `tools/tillr-item/item/seed.go`, whose `SELECT` lists the columns it reads and omits `workflow`; `planSeed`, which builds the re-rank payload from that stored item (`rerank := held`) and so writes whatever `storedItem` left empty; `sameDefinition` in the same file, which compares only definition fields and is not the cause. The itemPayload type, and the apply path that writes it, carry the workflow field.
+- **Evidence:** 2026-11-17, on a throwaway store: an item with `workflow` `scout-then-build@v1` came back with an empty workflow after a rank-only `tillr item seed`.
+- **Evidence:** 2026-11-17, `rg -n 'workflow' tools/tillr-item/item/seed.go` finds nothing, and `storedItem` there reads `item_id, title, body_ref, state, design_doc, allowed_paths, rank, seat, prose` from `items`, so `planSeed` re-applies an item with no workflow. `Workflow` is a field of the payload in `tools/tillr-item/item/apply.go`, which the apply path writes.
+- **Evidence:** 2026-11-17, the day's ranking run re-ranked 92 items one seed each and skipped none for carrying a workflow, so no live item has one yet and nothing was cleared.
