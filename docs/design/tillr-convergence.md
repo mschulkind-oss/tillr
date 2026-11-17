@@ -261,6 +261,7 @@ The seed's retirement and re-admission on a changed input are item blocks the dr
 
 <!-- tillr: item
      id="item-seed-retire"
+     blocked_by="item-seed-rank-keeps-workflow"
      paths="config/tillr/,tools/tillr-item/,tools/tillr-drain/,tools/tillr-cli/,tools/tillr-view/,tools/fork-check.py,tests/fork-check.test.py,docs/,yolo-packs/tillr/"
 -->
 
