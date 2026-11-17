@@ -1111,15 +1111,18 @@ files it with the apply face and lets triage write the block.
 
 ### Add the spend of killed runs to the record
 
-When a loop exits on a fault, the workers it launched are killed, and a killed worker never writes
-the report that carries its cost. The cost of that run is then recorded as unknown, so the total
-the queue shows is lower than what was spent. The error grows with the number of faults: on
+A run that is ended before it finishes can leave no cost in the record. The loop's totals then
+show less than was spent, and the error grows with the number of runs that are ended. On
 2026-11-16 the drain recorded `item-drain-recover-commands` at $10.70 over three runs and
-`item-sync-design-without-item` at $0.67 over seven runs, and the killed runs in both recorded
-nothing. A second effect follows. A new loop that settles a run an earlier loop started counts
-that run's spend in its own pass record, so a pass looks more expensive than the work it did. The
-record should have a number for every run however it ended, and should say which spend a loop
-inherited.
+`item-sync-design-without-item` at $0.67 over seven runs, and the runs that were killed in both
+recorded nothing. Since then a loop that stops or exits on a fault leaves its workers running:
+each one finishes and writes its own record, cost included, and the next loop settles it. Two
+gaps remain. An operator who stops the loop and asks it to end the running workers gets records
+with no cost, because the cost is read with a request that the stop has already canceled. A
+worker whose runner dies outright leaves no record at all. A second effect is now the ordinary
+case: a new loop that settles a run an earlier loop started counts that run's spend in its own
+pass record, so a pass looks more expensive than the work it did. The record should have a number
+for every run however it ended, and should say which spend a loop inherited.
 
 <!-- tillr: item id="item-drain-record-killed-run-spend" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
@@ -1132,16 +1135,37 @@ token ceiling, and two tests in `tools/tillr-drain` hold that line:
 replaced by a criterion about measurement only. This item adds no ceiling, no hold, no setting and
 no stop; it makes the totals complete, whoever reads them. c1 to c3 are unchanged.
 
-- **c1:** A run that ends because its loop stopped records the spend its backend can report for the work done so far, or records that the backend could not report it, and never leaves the field empty. A test kills a fixture worker that has produced usage output and asserts the recorded spend equals that output.
-- **c2:** When no spend can be read for a killed run, the record says `unreported` for that run, and every total the views print states how many runs were unreported. A test asserts a total over one reported and one unreported run reads as a lower bound.
-- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. A test settles a run started by a previous loop and asserts its cost appears only on the carried-over line.
-- **c4:** Every spend total the loop and the views print counts a killed run's recorded spend the same way as a finished run's, so a loop that keeps being killed cannot spend unseen. Nothing in this item compares a total against a limit or holds an item because of one. A test kills two fixture workers in two successive loops, each after usage output, and asserts that the next loop's spend line and the view's total for the item both include the spend of both killed runs and that neither line names a ceiling.
+**Ruling, 2026-11-17 (answers the third run's conflict):** the third run stopped because the
+criteria assumed that a loop which stops or faults kills its workers. It does not. The loop
+starts each run face outside its own context and process group, a stop or a fault ends only the
+loop's wait, and the next loop settles the run from its terminal record; `launchRun` in
+`tools/tillr-drain/drain/pass.go` and `ProcessSteps.Run` in `tools/tillr-drain/drain/steps.go`
+both say so. That behavior stays, and this item must not make a loop stop or a fault signal a
+worker. A run is ended early in exactly two ways, and the criteria below are rewritten to name
+them. This ruling replaces the sentence above that left c1 to c3 unchanged.
+
+- **An operator's end.** `tillr drain stop --end-runs` is the only drain command that signals a
+  run face (`EndRuns` in `tools/tillr-drain/drain/stop.go`). The face writes its terminal record
+  on a context detached from the canceled one, but reads the spend on the canceled one
+  (`readSpend(ctx, ...)` in `tools/tillr-run/run/exec.go`), so the extractor is canceled with
+  the run. The third run read this in the code and did not reproduce it; c1's test is the
+  reproduction, written first.
+- **A dead run face.** A face that is killed outright, or lost with its host, writes no terminal
+  record. The next loop finds the claim's process gone and records the run as orphaned
+  (`reapDeadLoopRuns` in `tools/tillr-drain/drain/orphan.go`). Such a run is `unreported`. This
+  item does not make the loop run an extractor over a dead face's log.
+
+- **c1:** A run that an operator ends with `tillr drain stop --end-runs` records the spend its backend can report for the work done so far. The run face reads that spend on a context the stop has not canceled, within the extractor's existing time bound, and the same holds for any other cancellation of the face. A test cancels a fixture run after its worker has produced usage output and asserts that the terminal record's spend equals that output; it fails before the change.
+- **c2:** A run's spend is never left empty without a reason. When no spend can be read for a run that was ended early, or the run face died and left no terminal record, the record says `unreported` for that run, and every total the loop and the views print states how many runs were unreported. A test asserts that a total over one reported run and one unreported run reads as a lower bound, and a second test reaps a run whose face left no terminal record and asserts it counts as unreported.
+- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. The carried-over line is where a worker that outlived a stopped or faulted loop appears. A test stops a loop while a fixture worker is still running, lets the worker finish, settles it in a second loop, and asserts that its cost appears only on the second loop's carried-over line.
+- **c4:** Every spend total the loop and the views print counts an ended run's recorded spend the same way as a finished run's, so runs that keep being ended cannot spend unseen. Nothing in this item compares a total against a limit or holds an item because of one. A test ends two fixture runs of one item with `--end-runs` in two successive loops, each after usage output, and asserts that the next loop's spend line and the view's total for the item both include the spend of both ended runs and that neither line names a ceiling.
+- **c5:** A loop that stops or exits on a fault still signals no worker. A test stops a loop without `--end-runs` while a fixture worker is running and asserts that the worker finishes and that its terminal record carries its spend.
 
 **Agent details:**
 
 - **Ref:** the consumers of these totals are the loop's spend line (`spendLine` in `tools/tillr-drain`) and the spend lines in `tools/tillr-view/`. `item-drain-spend-ceiling` in this document is not a consumer this item builds for: it asks for a ceiling the momentum principle forbids, and that contradiction is that item's to settle, not this one's.
-- **Where:** the usage capture and run-finish records in `tools/tillr-drain/drain/` and `tools/tillr-run/`; the pass record and the spend lines in `tools/tillr-view/`.
-- **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed.
+- **Where:** the spend read in `tools/tillr-run/run/exec.go` (`readSpend` and its caller, beside the detached `writeCtx`); the run-finish and orphan records in `tools/tillr-drain/drain/` (`EndRuns` in `stop.go`, `reapDeadLoopRuns` in `orphan.go`); the pass record and the spend lines in `tools/tillr-view/`; the pack's copy under `yolo-packs/tillr/`.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed. These figures were recorded before the loop stopped signaling its workers, so they are the history behind the item and not a description of the tree; a fixture must not reproduce a loop fault that kills a worker. The loop's current behavior is stated in `tools/tillr-drain/README.md`: "`tillr drain stop --end-runs` is the only drain command that ends a run."
 
 ### Hold an item whose runs keep being orphaned
 
