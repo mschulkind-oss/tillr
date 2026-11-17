@@ -85,7 +85,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted during landing"); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
-	if err := l.resetLane(ctx, candidate.LaneID); err != nil {
+	if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
 	// Reapply only the worker's change. The pinned prepared head above retains

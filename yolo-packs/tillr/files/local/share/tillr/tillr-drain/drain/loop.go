@@ -2346,21 +2346,25 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 // log lives in the lane directory, and deleting a run's evidence to tidy a lane is not a
 // reset's job.
 func (l *Loop) resetLane(ctx context.Context, lane string) error {
+	return l.resetLaneTo(ctx, lane, TrunkRef)
+}
+
+func (l *Loop) resetLaneTo(ctx context.Context, lane, revision string) error {
 	path := l.lanePath(lane)
 	if strings.HasPrefix(lane, "desk-") {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return nil
 		}
-		if _, err := l.git(ctx, path, "reset", "--hard", TrunkRef); err != nil {
+		if _, err := l.git(ctx, path, "reset", "--hard", revision); err != nil {
 			return err
 		}
 		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
 		return err
 	}
-	if _, err := l.git(ctx, path, "checkout", "--force", "-B", LaneBranch(l.cfg.LaneRoot, lane), TrunkRef); err != nil {
+	if _, err := l.git(ctx, path, "checkout", "--force", "-B", LaneBranch(l.cfg.LaneRoot, lane), revision); err != nil {
 		return err
 	}
-	if _, err := l.git(ctx, path, "reset", "--hard", TrunkRef); err != nil {
+	if _, err := l.git(ctx, path, "reset", "--hard", revision); err != nil {
 		return err
 	}
 	return nil

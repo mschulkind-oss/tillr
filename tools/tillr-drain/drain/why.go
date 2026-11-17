@@ -27,14 +27,19 @@ type WhyRow struct {
 	ClassSource string   `json:"class_source"`
 	WaitingOn   []string `json:"waiting_on"`
 	Decision    Decision `json:"decision"`
+	LaneStatus  string   `json:"lane_status,omitempty"`
+	LaneReason  string   `json:"lane_reason,omitempty"`
 }
 
 type WhySummary struct {
-	LanesBusy    int            `json:"lanes_busy"`
-	LanesOffered int            `json:"lanes_offered"`
-	Running      int            `json:"running"`
-	CouldRun     int            `json:"could_run"`
-	Held         map[string]int `json:"held"`
+	LanesBusy      int            `json:"lanes_busy"`
+	LanesReserved  int            `json:"lanes_reserved"`
+	LanesWorkers   int            `json:"lanes_workers"`
+	LanesExamining int            `json:"lanes_examining"`
+	LanesOffered   int            `json:"lanes_offered"`
+	Running        int            `json:"running"`
+	CouldRun       int            `json:"could_run"`
+	Held           map[string]int `json:"held"`
 }
 
 type WhyAnswer struct {
@@ -109,7 +114,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		return answer, err
 	}
 	for _, work := range works {
-		if !work.Done {
+		if !work.Done && !work.LaneReleased {
 			busy[work.Decision.LaneID] = true
 		}
 	}
@@ -135,12 +140,31 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			return answer, readFailure(err)
 		}
 	}
+	leases, err := activeLeases(r, at, offered)
+	if err != nil {
+		return answer, err
+	}
+	workers, examining := map[string]bool{}, map[string]bool{}
+	for _, lease := range leases {
+		if lease.LeasedUntil != nil {
+			workers[lease.LaneID] = true
+		} else {
+			examining[lease.LaneID] = true
+		}
+	}
 	seen := map[string]bool{}
 	for _, lane := range offered {
 		if !seen[lane] {
 			answer.Summary.LanesOffered++
 			if busy[lane] {
 				answer.Summary.LanesBusy++
+				if workers[lane] {
+					answer.Summary.LanesWorkers++
+				} else if examining[lane] {
+					answer.Summary.LanesExamining++
+				} else {
+					answer.Summary.LanesReserved++
+				}
 			}
 			seen[lane] = true
 		}
@@ -221,6 +245,24 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.Mover = "the owner; close the item or answer the conflict"
 			} else {
 				row.Mover = "triage on the design seat"
+			}
+		}
+		if work := works[it.ItemID]; work != nil && !work.Done && d.Action == ActionHold {
+			row.LaneStatus = "kept"
+			if work.LaneReleased {
+				row.LaneStatus = "released"
+			} else {
+				row.LaneReason = work.LaneKeepReason
+				if row.LaneReason == "" {
+					row.LaneReason = candidateKeepReason(work, d.Reason)
+				}
+				if row.LaneReason == "" {
+					row.LaneReason = "candidate awaits pin verification and lane release"
+				}
+			}
+			row.Why += "; lane " + row.LaneStatus
+			if row.LaneReason != "" {
+				row.Why += ": " + row.LaneReason
 			}
 		}
 		if d.Workflow != nil {
@@ -318,5 +360,5 @@ func (s WhySummary) String() string {
 	for _, reason := range keys {
 		counts = append(counts, fmt.Sprintf("%s=%d", reason, s.Held[reason]))
 	}
-	return fmt.Sprintf("summary: lanes %d/%d busy; running %d; could run now %d; held [%s]", s.LanesBusy, s.LanesOffered, s.Running, s.CouldRun, strings.Join(counts, ", "))
+	return fmt.Sprintf("summary: lanes %d/%d busy; reserved %d; workers %d; examining %d; running %d; could run now %d; held [%s]", s.LanesBusy, s.LanesOffered, s.LanesReserved, s.LanesWorkers, s.LanesExamining, s.Running, s.CouldRun, strings.Join(counts, ", "))
 }

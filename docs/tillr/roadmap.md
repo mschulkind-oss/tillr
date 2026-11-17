@@ -2377,7 +2377,6 @@ run in. The drain should release such a lane once the pinned ref is confirmed re
 the candidate back on whatever lane is free when the hold is cleared. A hold that really needs the
 worktree keeps its lane, and the waiting view should say so and why.
 
-<!-- tillr: item id="item-held-candidate-frees-its-lane" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the second failed attempt):** three runs stopped, and none of them
 found a fault in this design. The criteria c1 to c6 stand as written. What stopped the runs was
@@ -2423,13 +2422,6 @@ its tree. On 2026-11-17, `git merge-tree --write-tree 964802787` against that co
 conflict. After re-applying, the builder runs `just pack-sync` again, so the pack copies are
 derived from the merged sources and not carried over from the old tree.
 
-- **c1:** For the holds that wait on an operator or on another item (an item fault, a gate stall, a held conflict repair), the drain releases the lane once it has pinned the candidate under `refs/tillr/runs/<run>` and read the pinned commit back. If the pin cannot be read back, the lane stays reserved. A test asserts a released lane is offered to a ready item in the same pass, and a second test asserts the unreadable-pin case keeps the lane.
-- **c2:** Clearing the hold retries the candidate from its pinned ref: the drain stages the commit onto any free lane and gates or lands it there, not onto the lane it first ran in. A test holds a candidate, takes its old lane for another item, clears the hold, and asserts the retry runs on a different lane with the same head commit.
-- **c3:** Holds that need the worktree itself keep their lane. A test names each hold class in `retainLane` and asserts the release or keep decision for it; the builder decides the kept classes from the code and lists them in the README, with the reason beside each. A conflict repair that owns the pending transition is one candidate for that list.
-- **c4:** The waiting view says, for each held item, whether its lane was released or kept, and for a kept lane names the reason.
-- **c5:** The `summary:` line of `tillr drain why` counts lanes reserved for a held candidate separately from lanes with a running worker, so `lanes 10/10 busy` no longer reads as ten running workers. A test builds a store with two reserved-idle lanes and asserts the summary names both numbers.
-- **c6:** The drain README sentences that say a retained candidate keeps its lane reserved with no worker lease describe the new rule, and name the classes that still keep a lane.
-- **c7:** The view suite is green. The five tests named in the ruling above pass because each fixture's root is a Git repository, with the planner's refusal of a root that is not one left unchanged, and `go test ./...` passes in both `tools/tillr-view` and `tools/tillr-drain`.
 
 **Agent details:**
 
