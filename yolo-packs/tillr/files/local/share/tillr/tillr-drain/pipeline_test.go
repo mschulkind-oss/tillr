@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/testinputs"
 	"github.com/mschulkind-oss/tillr-run/run"
 )
 
@@ -20,6 +21,9 @@ import (
 // with a weaker case.
 func sibling(t *testing.T, name string) string {
 	t.Helper()
+	if err := testinputs.Track("."); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(binDir, "tillr-"+name)
 	siblingMu.Lock()
 	defer siblingMu.Unlock()

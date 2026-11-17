@@ -646,7 +646,24 @@ def case_designer_session_selection_documented():
     ok("session selection and the Pi compact step are documented")
 
 
+def case_cache_safe_working_loop_documented():
+    brief = ROOT / "tools/tillr-run/backends/brief-template.md"
+    for path in (brief, SKILL):
+        text = text_of(path)
+        for instruction in ("targeted `-run`", "full suite once before committing",
+                            "drop `-count=1`"):
+            if instruction not in text:
+                fail(f"{path.relative_to(ROOT)} omits cache-safe test guidance: {instruction}")
+    readme = text_of(ROOT / "tools/tillr-drain/README.md")
+    for evidence in ("test binary declares the sibling sources", "cache_test.py",
+                     "siblings.txt"):
+        if evidence not in readme:
+            fail(f"drain README omits its cache mechanism or regression check: {evidence}")
+    ok("worker brief and operating skill use targeted tests and cache-safe full verification")
+
+
 def main():
+    case_cache_safe_working_loop_documented()
     cleanup_tests = subprocess.run(
         [sys.executable, str(ROOT / "tests/tillr-scratch.test.py")],
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},

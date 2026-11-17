@@ -167,6 +167,13 @@ One candidate, one lane, one record of what the run cost. `tillr run lanes`, `st
 `release` inspect and clean up the lanes a pass left behind; a lane released is not a
 candidate retried.
 
+While working on Go code, use a targeted `-run` for the behavior being changed. Run the
+full suite once before committing. In the drain module, drop `-count=1` for the working
+loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
+sibling change reruns tests and an unchanged tree still caches. The drain README explains
+the mechanism and names the permanent cache regression check. A worker runs tests, not
+the landing gate (`just done`); the gate owns its landing lock.
+
 ## 4. Judge — evaluate the candidate against the gate
 `tillr gate run`
 

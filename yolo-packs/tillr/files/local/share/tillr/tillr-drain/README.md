@@ -778,3 +778,28 @@ and lane restoration are separate operator actions, not performed by this test.
 
 `go test ./...` in this directory builds the binary and drives each face against a scratch
 store and scratch lane roots; the drain package's own suite pins the decision rules.
+
+The test binary declares the sibling sources as inputs that Go's test-result cache can
+see. A child `go build` does not record its reads in the parent's test log, and Go ignores
+logged file reads outside the test's module. The tests therefore open the sibling Go
+sources and module files through an ignored, module-local symlink to the parent directory.
+They read each directory too, so adding or removing a source or package invalidates the
+saved result. These reads happen inside tests, not before `m.Run()` in `TestMain`, where
+Go has not started recording inputs. The symlink stays after the test exits so Go can
+check those inputs; it is not a copied source tree or a private build cache. An existing
+path that is not the expected symlink is an error, never silently replaced.
+
+The one sibling list lives in [siblings.txt](internal/testinputs/siblings.txt). A permanent
+test checks it against the tests' child-build calls and rejects each omitted program.
+The [cache regression check](cache_test.py) uses an isolated clone, warms the result with
+`go test ./...`, confirms an unchanged tree reports `(cached)`, then inserts an immediate
+exit into each sibling's main function and requires a noncached failure. It also checks
+that both packages with child builds rerun and that a restored tree caches again.
+
+```bash
+python3 tools/tillr-drain/cache_test.py  # from the repository root; uses YOLO_DURABLE_DIR
+```
+
+This check exercises Go's actual file-input handling, rather than assuming that it sees
+sibling builds. Keep it when upgrading Go. It shares the normal Go build cache and never
+uses `-count=1`; ordinary Go source compilation still controls the compiled-code cache.

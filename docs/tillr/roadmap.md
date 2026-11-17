@@ -1648,13 +1648,7 @@ cannot see those sources. A change to one of them can therefore leave the drain'
 and it is the reason workers are told to pass `-count=1` every time, which makes the slow suite
 slower still. Once the cache is trustworthy, workers can use it.
 
-<!-- tillr: item id="item-test-cache-sees-sibling-programs" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-run/,tools/tillr-land/,tools/tillr-gate/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** After a behavior change in any of the five sibling programs, `go test ./...` in the drain module without `-count=1` re-runs the affected package and does not report `(cached)`. A check reproduces the experiment under Evidence below, once per sibling, and asserts the package is not cached.
-- **c2:** On an unchanged tree the same command still reports `(cached)`. A check asserts it.
-- **c3:** The README of the drain module states the mechanism in plain words, for example that the test binary declares the sibling sources as inputs the cache can see.
-- **c4:** The sibling build inputs are listed in one place, and a test fails when a sibling program's package directory is missing from that list.
-- **c5:** The worker brief and the `tillr-operating` skill say: use a targeted `-run` while working, run the full suite once before committing, and drop `-count=1` for the working loop. They say this only after c1 and c2 hold.
 
 **Agent details:**
 

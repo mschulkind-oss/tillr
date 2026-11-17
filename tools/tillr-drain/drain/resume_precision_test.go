@@ -17,6 +17,7 @@ import (
 func continuationRunBin(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(scratchUnderDurable(t), "tillr-run")
+	declareSiblingInputs(t)
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = filepath.Join("..", "..", "tillr-run")
 	if out, err := cmd.CombinedOutput(); err != nil {

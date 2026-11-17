@@ -282,6 +282,7 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	bin := filepath.Join(root, "tillr-land")
+	declareSiblingInputs(t)
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Dir = filepath.Join("..", "..", "tillr-land")
 	if out, err := build.CombinedOutput(); err != nil {
