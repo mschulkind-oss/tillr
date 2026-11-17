@@ -927,6 +927,15 @@ the queue already holds.
 
 <!-- tillr: item id="item-agent-default-bmad-superpowers-skills" paths="yolo-packs/,config/yolo-jail/,tag-personal/config/yolo-jail/,tag-work/config/yolo-jail/,tests/,docs/" blocked_by="" prose="2" -->
 
+**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because this
+document held no section under the heading above and no text about either skill. That was true
+of the commit it was staged from, `094c6c322d`, which predates the commit that restored this
+block, `8814931dc`. The section now exists at the anchor the run's brief names, with the same
+id, paths and criteria the queue holds, so the brief and the tree agree and nothing in the
+criteria changes. The next run builds from this block as written. It needs no wider paths: the
+packs, the three configuration directories, `tests/` and `docs/` are all inside the item's paths
+already.
+
 - **c1:** The default selected packs expose BMAD Advanced Elicitation and Superpowers Brainstorming to their supported agents without a separate per-project installation.
 - **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting src/core-skills/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
 - **c3:** Each selected skill keeps the supporting assets, scripts, and relative references it needs; unrelated upstream frameworks and startup hooks are not imported automatically.
