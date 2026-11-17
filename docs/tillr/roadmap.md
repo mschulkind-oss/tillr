@@ -1217,14 +1217,15 @@ route to the next backend; it does not need a continuation handoff.
   - Pause runs that have no alternative backend and show when they can resume.
   - Keep each continuation within the original attempt and judge its result once.
 
-<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Agent Details**
 
 - **Ref:** [The restart design](../design/tillr-restart.md) for stopping a session;
   [the quota probe item](#add-direct-quota-checks-with-a-reserve) for backend windows;
   the numbered criteria below for the continuation contract.
-- **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `yolo-packs/tillr/`, and `docs/`.
+- **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `tools/tillr-view/` (the waiting face),
+  `yolo-packs/tillr/`, and `docs/`.
 - **Verify:** Cut a stub run after it writes two files and check that its replacement session
   finds both in the same lane and worktree, within the same attempt. Check that the first
   message identifies the quota interruption, old transcript, any report, and uncommitted
@@ -1232,6 +1233,25 @@ route to the next backend; it does not need a continuation handoff.
   twice; that a run with no alternative pauses and resumes on the original backend with its
   reopening time visible; and that an initial refusal routes onward without a continuation
   message.
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped before
+editing because c3 changes the waiting face, and the waiting face is built in `tools/tillr-view/`,
+which the item's paths did not name. The run was right to stop. `tools/tillr-view/` is added to
+this item's paths, and the delivered copy under `yolo-packs/tillr/` is synced in the same commit.
+Three points settle how c3 is met there:
+
+1. **A paused run is a row of its own.** Today `waitingBackendQuotas` in
+   `tools/tillr-view/waiting_quota.go` writes one row per backend and says nothing about which
+   runs wait on it. c3 adds one row per paused run, naming the run's item, the backend it waits
+   on, and the reopening time. The backend rows stay as they are.
+2. **The view reads the pause; it does not infer it.** The drain records that a run is paused
+   and on which backend, in the store. The view shows that record. It does not decide a run is
+   paused by comparing a running run against a shut window.
+3. **One reopening time.** The paused run's row takes its reopening time from the same quota
+   reading the backend's row uses, so the two rows cannot disagree. When that reading gives no
+   time, the row says the reopening time is unknown, as the backend's row does.
+
+No criterion changes.
 
 - **c1:** When a backend's window shuts while runs are on it, each of those runs is stopped as [the restart design](../design/tillr-restart.md) stops a session, and continued on the next backend in its seat's list: a fresh session in the same lane and worktree, as the same attempt, whose first message says the earlier session ran out of quota and names the old transcript, the report if any, and the uncommitted work in the worktree.
 - **c2:** Nothing the first session did is repeated by the loop: the worktree is not reset, no retry is spent, and the candidate is judged once. A test cuts a stub run after it has written two files and asserts the continuing session finds both.
