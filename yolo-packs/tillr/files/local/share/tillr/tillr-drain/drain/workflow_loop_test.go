@@ -232,6 +232,7 @@ func TestWorkflowForkContinuationKeepsItsOwnReservation(t *testing.T) {
 	})
 	steps.fork = fork
 	base := runGit(t, fork, "rev-parse", "HEAD")
+	runGit(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
 	result := &LoopResult{}
 	for i := 0; i < 3; i++ {
 		if _, err := l.pass(context.Background(), result); err != nil {

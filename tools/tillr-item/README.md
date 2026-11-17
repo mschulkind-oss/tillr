@@ -21,7 +21,10 @@
 decisions a board records, the mail deliveries a lane is sent, the sign-off grants a
 delegation runs under, and the verdicts a judge records. It also writes a whole seed
 document's items in one transaction, and `sync` materializes the item blocks of the
-repository's tracked documents — the only intake from documents.
+repository's tracked documents — the only intake from documents. A fence entry
+under `.forks/lanes/<lane>/<fork>/` names a checkout staging materializes for the
+assigned lane, so `sync` does not warn that it is missing even on a fresh repository.
+Other absent paths still receive the ordinary `path-missing` warning.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).

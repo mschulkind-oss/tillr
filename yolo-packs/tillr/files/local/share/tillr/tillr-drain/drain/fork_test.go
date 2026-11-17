@@ -56,11 +56,11 @@ func TestForkTargetReadsTheCheckoutRootForASubdirectory(t *testing.T) {
 	}
 }
 
-// A fence naming another lane's checkout is not this lane's fork: the lane id in the path
-// is what keeps two lanes from staging the same checkout.
-func TestForkTargetIgnoresAnotherLanesCheckout(t *testing.T) {
-	if _, ok, err := forkTarget("/repo", "lane-1", []string{".forks/lanes/lane-2/pi"}); err != nil || ok {
-		t.Fatalf("another lane's checkout answered ok=%v err=%v, want ok=false", ok, err)
+// A filed lane id is a placeholder, not a reservation of that writer's checkout.
+func TestForkTargetUsesTheDispatchedLane(t *testing.T) {
+	target, ok, err := forkTarget("/repo", "lane-3", []string{".forks/lanes/lane-1/pi/src/"})
+	if err != nil || !ok || target.Path != ".forks/lanes/lane-3/pi" || target.Ref != "refs/heads/patch/pi" {
+		t.Fatalf("dispatch to lane-3 answered target=%+v ok=%v err=%v", target, ok, err)
 	}
 }
 
@@ -179,6 +179,14 @@ func TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath(t *testing.T) {
 	}
 	if !strings.Contains(escape, ".forks/lanes/lane-1/pi/src/foo.ts") {
 		t.Fatalf("the escape does not name the repo-relative path: %q", escape)
+	}
+	// A lane-3 dispatch's rebound fence does not authorize a candidate in lane-1.
+	if err := os.WriteFile(filepath.Join(laneDir, FenceFile), []byte(".forks/lanes/lane-3/pi/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	escape, err = loop.fenceViolation(context.Background(), candidate)
+	if err != nil || !strings.Contains(escape, ".forks/lanes/lane-1/pi/src/foo.ts") {
+		t.Fatalf("a sibling checkout escaped the rebound fence check: escape=%q error=%v", escape, err)
 	}
 }
 
