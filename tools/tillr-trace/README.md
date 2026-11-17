@@ -18,7 +18,7 @@ rebuildable:
 | item, lane, run, candidate, decision, dispatch state | `.tillr/state.db` | opens it **read-only** (`mode=ro` + `query_only`) and attaches nothing |
 | staged brief, fence, base/tree/head sha | `runs/<run-id>/` under the trace root, or `.tillr/loop/<run-id>/` | copies them into the index |
 | what the model saw, spent, and called | `<run-id>.log` (`pi --mode json`) | parses `llm.turn` and `tool.call` rows |
-| what actually ran | `proc-exec.jsonl`, `git-trace2.jsonl` | parses `proc.exec` and `git.trace2` rows |
+| what actually ran | `proc-exec.jsonl` | parses `proc.exec` rows |
 | what the gate planned and judged | `.tillr/loop/<run-id>/gate.{plan,verdict}.json` | parses `gate.plan` and `gate.verdict` rows |
 
 ## Where a run's records are read from
@@ -28,7 +28,7 @@ Two directories hold one run's artifacts, and both are read:
 - `<trace-root>/runs/<run-id>/` — the recorder directory of
   [design §3.2](../../docs/design/session-recording.md#32-concrete-directory-layout);
 - `<root>/.tillr/loop/<run-id>/` — the drain's per-run record directory, which is where
-  `run-pi`'s emitters write (`proc-exec.jsonl`, `git-trace2.jsonl`), where staging keeps
+  `run-pi`'s emitters write (`proc-exec.jsonl`), where staging keeps
   the run's own `brief.md` / `fence.txt` / `base_sha`, and where the gate leaves
   `gate.plan.json` and `gate.verdict.json`.
 
@@ -44,17 +44,24 @@ store at `<root>/.tillr/state.db` means `<root>/.tillr/loop`.
 and appends one line per shell command to `$TILLR_TRACE_DIR/proc-exec.jsonl`. The pack
 ships this whole directory (`just pack-sync` mirrors it), and `run-pi` resolves it as
 `../../../tillr-trace`: `~/.local/share/tillr/tillr-trace` from a pack install, the
-sibling directory from this checkout. The `GIT_TRACE2_EVENT` half is git's own and needs
-no code here — `run-pi` points it at `$TILLR_TRACE_DIR/git-trace2.jsonl`.
+sibling directory from this checkout.
 
-Both are fail-open
+There is no git recorder. The design's second emitter, git's `GIT_TRACE2_EVENT`, was removed
+on 2026-11-17 by the owner's ruling: every test suite a run starts inherits it, and one run
+recorded 918,054 git commands, 906 runs held about 82 GB, and the index built from them was
+32 GB. The indexer no longer reads `git-trace2.jsonl` and writes no `git.trace2` row; a file
+left on disk by the old recorder is ignored. Index layout 4 is the first without those rows,
+and an index of layout 3 is deleted and rebuilt on the next sync. `runs_index.git_path` and
+`git_state` remain only because `tillr-view` selects them by name: the path is always NULL
+and the state is always `retired`.
+
+The shim is fail-open
 ([§7.1](../../docs/design/session-recording.md#71-four-mechanical-fail-open-guarantees)):
 the shim uses shell builtins only (no `date`, no `jq`, no fork per command, which is how
 the ≤ 1.5 ms budget is held), saves `$?` as the trap's first instruction and returns it
 from the EXIT trap, caps each line's command text at 512 bytes, and swallows every write
 failure. A shell with no `TILLR_TRACE_DIR`, or a directory it cannot write, records
-nothing and behaves exactly as it would without the shim. `runs_index.proc_state` and
-`git_state` are computed from what is on disk, so a run recorded this way reads `ok` and
+nothing and behaves exactly as it would without the shim. `runs_index.proc_state` is computed from what is on disk, so a run recorded this way reads `ok` and
 one without the emitter still reads `missing` — and so does one whose `proc-exec.jsonl`
 exists but is empty: a writer that touched the path is not a run that ran nothing.
 
@@ -79,7 +86,7 @@ rows), a tick cost 69 s of re-parsing that had nothing new in it.
   source file's stamp plus the row's ordinal in that file. A run with nothing new parses
   nothing.
 - **A per-source carry crosses the boundary.** A tool call's start can land in one build
-  and its end in the next, and so can a git command's start and exit; the args, the last
+  and its end in the next, and so can a command's start and exit; the args, the last
   clock, the last turn number, the session id and the running token totals travel in the
   source's `carry` so neither a pair nor a total is lost or double counted.
 - **A source that shrank is re-read from zero.** Its rows are deleted first, so a

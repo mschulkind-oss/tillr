@@ -100,9 +100,11 @@ fi
 #
 # The same seam run-pi opens, for the same reason (docs/design/session-recording.md §2.2):
 # this adapter is the parent of everything the run spawns, so `BASH_ENV` records every
-# shell command the harness's Bash tool starts and `GIT_TRACE2_EVENT` records every git
-# call, both into the run's own record directory. Every guard is fail-open (§7.1): with no
+# shell command the harness's Bash tool starts, into the run's own record directory. Every guard is fail-open (§7.1): with no
 # run id, no shim, or a directory that cannot be made, the emitters are simply absent.
+# Git trace2 recording was removed on 2026-11-17 (owner ruling); see run-pi. Never set
+# here, never passed through from the loop's environment.
+unset GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID GIT_TRACE2 GIT_TRACE2_PERF
 trace_dir=${TILLR_TRACE_DIR:-}
 repo_root=
 # A linked worktree's git common directory is the main checkout's `.git`, whose parent is
@@ -119,10 +121,8 @@ if trace_parent=$(cd -- "$SELF_DIR/../../../tillr-trace" 2>/dev/null && pwd -P);
 fi
 if [ -n "$trace_dir" ] && [ -r "$shim" ] && mkdir -p -- "$trace_dir" 2>/dev/null && [ -w "$trace_dir" ]; then
     TILLR_TRACE_DIR=$trace_dir
-    GIT_TRACE2_EVENT=$trace_dir/git-trace2.jsonl
-    GIT_TRACE2_PARENT_SID=${TILLR_RUN_ID:-$$}
     BASH_ENV=$shim
-    export TILLR_TRACE_DIR GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID BASH_ENV
+    export TILLR_TRACE_DIR BASH_ENV
     if [ -n "$repo_root" ]; then
         TILLR_REPO_ROOT=$repo_root
         export TILLR_REPO_ROOT

@@ -73,7 +73,7 @@ actually ran at is only in the stream.
 The adapter is also the parent of everything a run spawns, so it is where
 [`docs/design/session-recording.md`](../../../../docs/design/session-recording.md)
 [§2.2](../../../../docs/design/session-recording.md#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy)
-puts the two emitters. When `TILLR_RUN_ID` is in the environment (staging's run id,
+puts the emitters. When `TILLR_RUN_ID` is in the environment (staging's run id,
 which `tillr-run exec` puts there) and the record directory can be created, `run-pi`
 exports, for `pi` and every child it starts:
 
@@ -81,9 +81,13 @@ exports, for `pi` and every child it starts:
 | :--- | :--- |
 | `TILLR_TRACE_DIR` | `<root>/.tillr/loop/<run-id>/` — the directory staging keeps this run's brief, fence and base sha in |
 | `BASH_ENV` | `tools/tillr-trace/bash-shim.sh`, which appends one `proc.exec` line per shell command to `$TILLR_TRACE_DIR/proc-exec.jsonl` |
-| `GIT_TRACE2_EVENT` | `$TILLR_TRACE_DIR/git-trace2.jsonl`, git's own event stream |
-| `GIT_TRACE2_PARENT_SID` | the run id, which git prefixes onto every `sid` it emits |
 | `TILLR_REPO_ROOT` | the repository root, so a shim row can name a repo-relative cwd |
+
+`run-pi` records no git commands. Git trace2 recording was removed on 2026-11-17 by the
+owner's ruling: the `GIT_TRACE2_EVENT` variable it set is inherited by every test suite the
+run starts, and one run recorded 918,054 git commands. `run-pi` unsets `GIT_TRACE2_EVENT`,
+`GIT_TRACE2_PARENT_SID`, `GIT_TRACE2` and `GIT_TRACE2_PERF` so a run does not inherit them
+from the loop's environment either; `tools/tillr-run/backends_trace_env_test.go` pins that.
 
 `<root>` is derived from the lane worktree the way `tillr-loop` derives it — a linked
 worktree's git common directory is the main checkout's `.git` — so the adapter, the gate

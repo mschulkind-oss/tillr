@@ -85,13 +85,18 @@ fi
 #
 # docs/design/session-recording.md §2.2 puts the two missing observation seams here,
 # in the parent of everything a run spawns: `BASH_ENV` records every shell command a
-# run's `bash` tool starts, and `GIT_TRACE2_EVENT` records every git call. Both append
+# run's `bash` tool starts. It appends
 # to the run's own record directory — `<root>/.tillr/loop/<run-id>/`, the directory
 # staging keeps this run's brief, fence and base sha in and `tillr-trace` indexes.
 #
 # Every guard below is fail-open (§7.1): a run with no run id, no shim, or a record
 # directory that cannot be created proceeds with the emitter silently absent — never a
 # failed run, never an exit code recording caused.
+# Git trace2 recording was removed on 2026-11-17 (owner ruling): its variables would be
+# inherited by every test suite the run starts and recorded hundreds of thousands of git
+# calls per run. They are never set here and never passed through from the loop's own
+# environment either.
+unset GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID GIT_TRACE2 GIT_TRACE2_PERF
 trace_dir=${TILLR_TRACE_DIR:-}
 repo_root=
 # A linked worktree's git common directory is the main checkout's `.git`, whose parent
@@ -113,10 +118,8 @@ if trace_parent=$(cd -- "$SELF_DIR/../../../tillr-trace" 2>/dev/null && pwd -P);
 fi
 if [ -n "$trace_dir" ] && [ -r "$shim" ] && mkdir -p -- "$trace_dir" 2>/dev/null && [ -w "$trace_dir" ]; then
     TILLR_TRACE_DIR=$trace_dir
-    GIT_TRACE2_EVENT=$trace_dir/git-trace2.jsonl
-    GIT_TRACE2_PARENT_SID=${TILLR_RUN_ID:-$$}
     BASH_ENV=$shim
-    export TILLR_TRACE_DIR GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID BASH_ENV
+    export TILLR_TRACE_DIR BASH_ENV
     if [ -n "$repo_root" ]; then
         TILLR_REPO_ROOT=$repo_root
         export TILLR_REPO_ROOT
