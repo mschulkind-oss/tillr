@@ -228,6 +228,17 @@ the hand-driven path.
 
 ## What it refuses
 
+- **A record from another system** — `producer.system` must be `tillr`. Any other
+  value is refused as a record from another system, with exit 2, before opening the
+  store. The producer's utility need not be `item`: tillr's other programs also
+  produce item records.
+- **An unknown item payload field** — `apply` refuses fields outside the item record's
+  supported payload shape, including fields inside criteria, with exit 1 and an
+  `item.rejection` record whose rule is `unknown-field` and whose reason names the
+  field. For example, `"kind": "finding"` inside the payload is refused, not silently
+  discarded. The refusal changes no item, criterion, dependency, request or event,
+  even when the record repeats an already applied request's idempotency key (the key
+  that makes a repeated request return its original result without another write).
 - **A state move the item's own state machine does not allow** — refused, with the item
   unchanged and no event.
 - **A verdict with no criteria to move** — refused: an item with no criterion retires
