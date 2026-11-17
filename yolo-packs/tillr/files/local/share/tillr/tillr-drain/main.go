@@ -276,7 +276,8 @@ func onceFace(args []string) int {
 }
 
 // retryFace records one operator's authorization to re-dispatch a run the harness refused,
-// and echoes it as a drain.retry record. It is the one write a retry needs: `plan` reads the
+// or to raise an item's conflict again for one more design run, and echoes it as a
+// drain.retry (or drain.retry.design) record. It is the one write a retry needs: `plan` reads the
 // authorization and decides, and AuthorizeRetry is where the claim's structural and
 // judgment checks live, so the face itself adds no rule of its own.
 //
@@ -284,15 +285,39 @@ func onceFace(args []string) int {
 // opens one, but a path that does not exist is refused before the store is opened: a retry
 // names an item and a run in a store that already exists, and creating one to hold a claim
 // about nothing is the shape this refusal removes.
+// retryHelp is the retry face's own help, ahead of its flags.
+const retryHelp = `Usage: tillr drain retry --store <path> --item <id> --run <id> --by <who> --why <reason> --now <RFC3339> [--acknowledge gate-failed|unjudged]
+
+Records one operator's authorization, with who asked and why. Two forms, chosen by the run:
+
+  A build retry names the item's latest finished run. The plan re-dispatches the item,
+  superseding that run. A run the gate judged needs --acknowledge gate-failed, and a run
+  a wall cut short needs --acknowledge unjudged.
+
+  A design retry names the design run that ended without answering the item's conflict,
+  now held for the owner (conflict-owner). It raises the item's conflict again for one
+  more design run, and records a drain.retry.design event; it writes no build retry. If
+  that design run also ends without answering, the conflict returns to the owner. A
+  design run the conflict no longer names is refused, naming the current one.
+
+Every refusal names the exact command it would accept, or says that none exists and who
+moves instead.
+
+`
+
 func retryFace(args []string) int {
 	fs := newFlagSet("retry")
 	path := fs.String("store", "", "the store to record the authorization in")
 	itemID := fs.String("item", "", "the item whose run is retried")
-	runID := fs.String("run", "", "the run the retry supersedes")
+	runID := fs.String("run", "", "the run the retry supersedes, or the item's unanswered design run")
 	by := fs.String("by", "", "who asked for the retry")
 	why := fs.String("why", "", "why the retry is authorized")
 	acknowledge := fs.String("acknowledge", "", "the outcome the retry acknowledges: gate-failed or unjudged (default: neither)")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), retryHelp)
+		fs.PrintDefaults()
+	}
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
