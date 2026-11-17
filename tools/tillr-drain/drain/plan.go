@@ -65,6 +65,8 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
+	// Designer is the row read when the session choice was made, not a later reread.
+	Designer          *lastDesigner  `json:"-"`
 	DesignerSessionID string         `json:"designer_session_id,omitempty"`
 	DesignerReason    string         `json:"designer_reason,omitempty"`
 	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
@@ -627,6 +629,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		if item.Designer != nil {
 			previousAdapter = p.policy.Backends[item.Designer.Backend].Adapter
 		}
+		decision.Designer = item.Designer
 		decision.DesignerSessionID, decision.DesignerReason = chooseDesigner(item.Designer, decision.RunRequest, p.at, previousAdapter)
 	}
 	identifyDecision(&decision)
