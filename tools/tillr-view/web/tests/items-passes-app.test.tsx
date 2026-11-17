@@ -1,11 +1,43 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "../src/App";
 import { envelope, snapshotData } from "./fixtures";
 
 class SilentSocket { close() {} }
+class OrderSocket {
+  static current: OrderSocket;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  constructor() { OrderSocket.current = this; }
+  close() {}
+}
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
+
+test.each(["focus", "scroll"])("socket order changes wait behind the Items control while %s holds the table", async heldBy => {
+  window.history.replaceState(null, "", "/#/items?state=unlanded");
+  vi.stubGlobal("WebSocket", OrderSocket);
+  let changed = false;
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    const rows = ["a", "b"].map(id => ({ item_id: id, rank: changed && id === "b" ? "0" : id, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }));
+    return new Response(JSON.stringify(envelope(path === "/api/v1/why" ? { rows } : path === "/api/v1/snapshot" ? snapshotData : [])));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  await screen.findByRole("link", { name: "b" });
+  const order = () => [...view.container.querySelectorAll("tbody tr")].map(row => row.getAttribute("data-row-id"));
+  if (heldBy === "focus") fireEvent.focus(view.container.querySelector('[data-row-id="b"]')!);
+  else fireEvent.scroll(screen.getByTestId("stable-list"), { target: { scrollTop: 100 } });
+  changed = true;
+  act(() => OrderSocket.current.onmessage?.({ data: JSON.stringify({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["snapshot"] }) }));
+  await screen.findByRole("button", { name: "order changed ↑" });
+  expect(order()).toEqual(["a", "b"]);
+  fireEvent.click(screen.getByRole("button", { name: "order changed ↑" }));
+  expect(order()).toEqual(["b", "a"]);
+  expect(fetch.mock.calls.filter(([path]) => path === "/api/v1/why").length).toBeGreaterThan(1);
+  view.unmount(); client.clear();
+});
 test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than the legacy board or placeholder", async hash => {
   window.history.replaceState(null, "", `/${hash}`);
   vi.stubGlobal("WebSocket", SilentSocket);

@@ -115,11 +115,12 @@ describe("the live channel invalidates the cache the panels already read", () =>
       event_head_seq: 49,
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
-    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledTimes(6);
     expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["items", "item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["runs", "run-item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] });
   });
 
   test("log growth also refreshes the Home lane strip", () => {
