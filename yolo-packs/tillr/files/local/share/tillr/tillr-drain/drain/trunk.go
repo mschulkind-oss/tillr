@@ -207,7 +207,8 @@ type RollingOutcome struct {
 	Known bool
 	// ExitCode is the rolling program's exit code, or -1 when it could not start.
 	ExitCode int
-	// Detail names a program start failure, when there was no exit code to report.
+	// Detail is why the run did not judge: the program's stderr tail for any exit that is not
+	// a verdict, or the start failure when there was no exit code to report.
 	Detail string
 	// FailingChecks is the checks that failed, when the program named them. A red run that
 	// named none is Known=false: the loop files no fixer against a guess.
@@ -350,6 +351,34 @@ func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out Rolli
 		}
 		return nil
 	})
+}
+
+// rollingUnknownStreak is how many of the newest rolling runs in a row ended without a judgment.
+// A store that cannot be read answers 0: the count only decorates a line, and a loop must not
+// stop because it could not decorate one.
+func (l *Loop) rollingUnknownStreak(ctx context.Context) int {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return 0
+	}
+	defer s.Close()
+	streak := 0
+	_ = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT outcome FROM rolling_runs ORDER BY at DESC, run_id DESC`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var outcome string
+			if err := rows.Scan(&outcome); err != nil || outcome != "unknown" {
+				break
+			}
+			streak++
+		}
+		return nil
+	})
+	return streak
 }
 
 // bumpLandings advances the landing count the rolling trigger reads. It is called once per
@@ -625,10 +654,27 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	if !out.Known || (!out.Green && len(out.FailingChecks) == 0) {
 		out.Known = false
 		state.LastOutcome = "unknown"
-		l.reportf("loop: the rolling run over %s..%s could not judge (exit %d); the watermark stays at %s; continuing dispatch. %s\n",
-			shortSHA(base), shortSHA(mainSHA), out.ExitCode, shortSHA(state.WatermarkSHA), out.Detail)
 		if err := l.recordRollingRun(ctx, base, mainSHA, out); err != nil {
 			return err
+		}
+		// The streak is read back from the log just written, so it counts across loop
+		// restarts. A tier that has never judged is the one an operator needs to see: it
+		// advances nothing and files nothing, so a red trunk would go unnoticed behind it.
+		streak := l.rollingUnknownStreak(ctx)
+		where := "the watermark stays at " + shortSHA(state.WatermarkSHA)
+		span := shortSHA(base) + ".." + shortSHA(mainSHA)
+		if base == "" {
+			where = "there is no watermark yet, because no rolling run has judged the trunk"
+			span = "the whole tree up to " + shortSHA(mainSHA)
+		}
+		l.reportf("loop: the rolling run over %s could not judge (exit %d); %s; continuing dispatch. %s\n",
+			span, out.ExitCode, where, strings.TrimSpace(out.Detail))
+		if streak > 1 || (streak == 1 && base == "") {
+			noun := "runs have"
+			if streak == 1 {
+				noun = "run has"
+			}
+			l.reportf("loop: %d consecutive rolling %s not judged the trunk, so the rolling tier is giving no protection until one does\n", streak, noun)
 		}
 		return l.saveRollingState(ctx, state)
 	}

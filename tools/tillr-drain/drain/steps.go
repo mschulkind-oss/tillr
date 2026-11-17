@@ -241,9 +241,9 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	// did not declare would be refused before the gate ever saw it. `fork-check.py` reads
 	// `TILLR_GATE_SPANS_OUT` when it is given no `--spans-out`, so the flag stays the
 	// gate's own explicit spelling and the environment is the drain's hand-off.
-	var env []string
+	env := s.forkRootEnv()
 	if s.Root != "" {
-		env = []string{"TILLR_GATE_SPANS_OUT=" + filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile)}
+		env = append(env, "TILLR_GATE_SPANS_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile))
 	}
 	program := s.GateProgram
 	if IsTrunkFixer(candidate.ItemID) && s.FixerGateProgram != "" {
@@ -310,7 +310,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	if candidate.WorkerHeadSHA != "" {
 		extra = append(extra, "--message-from", candidate.WorkerHeadSHA)
 	}
-	code, out, _, err := s.program(ctx, "land", ".", s.LandProgram, candidate, extra...)
+	code, out, span, err := s.program(ctx, "land", ".", s.LandProgram, candidate, extra...)
 	if err != nil {
 		return LandOutcome{}, err
 	}
@@ -321,7 +321,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	case record.ExitNegative:
 		outcome.Result = LandRefused
 	default:
-		return LandOutcome{}, Externalf("the land program answered exit %d for %s", code, candidate.ItemID)
+		return LandOutcome{}, Externalf("the land program answered exit %d for %s%s", code, candidate.ItemID, stderrReason(span))
 	}
 	if strings.TrimSpace(out) == "" {
 		return outcome, nil
@@ -353,12 +353,12 @@ func (s *ProcessSteps) Verdict(ctx context.Context, candidate Candidate, verdict
 	// The store is passed explicitly because the verdict program records against the item's
 	// frozen criteria, and it must read the same store the loop planned from: a verdict
 	// recorded into a default path the loop never touched is a verdict nobody will find.
-	code, _, _, err := s.program(ctx, "verdict", ".", s.VerdictProgram, candidate, "--store", s.Store, "--verdict", verdict)
+	code, _, span, err := s.program(ctx, "verdict", ".", s.VerdictProgram, candidate, "--store", s.Store, "--verdict", verdict)
 	if err != nil {
 		return err
 	}
 	if code != record.ExitOK {
-		return Externalf("the verdict program answered exit %d for %s (%s)", code, candidate.ItemID, verdict)
+		return Externalf("the verdict program answered exit %d for %s (%s)%s", code, candidate.ItemID, verdict, stderrReason(span))
 	}
 	return nil
 }
@@ -459,6 +459,30 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		return 0, "", span, Externalf("running %q in %s: %v: %s", argv[0], dir, err, stderr.String())
 	}
 	return cmd.ProcessState.ExitCode(), string(out), span, nil
+}
+
+// forkRootEnv is the repository root a step that drives `bin/pi-forks` must be told. `.forks/`
+// is one gitignored directory at the main checkout, absent from every linked worktree, and the
+// driver refuses to run from a linked worktree unless PI_FORKS_ROOT names the checkout that owns
+// it. The rolling, replay and fixer-gate programs run in a linked worktree (a detached scratch
+// worktree, or a candidate's lane), so the loop hands them its own repository, as `tillr-loop
+// gate` does for the ordinary gate. It is set outright rather than inherited: a value left in
+// the loop's shell must not point a run at another tree's checkouts. The driver's refusal stays:
+// a lane still cannot run fork steps against a root nobody gave it.
+func (s *ProcessSteps) forkRootEnv() []string {
+	if s.Root == "" {
+		return nil
+	}
+	return []string{"PI_FORKS_ROOT=" + s.Root}
+}
+
+// stderrReason is the tail a failed step's error carries: why the program said it failed, from
+// the same stderr tail its span records. A program that said nothing adds nothing.
+func stderrReason(span StepSpan) string {
+	if reason := strings.TrimSpace(span.StderrTail); reason != "" {
+		return ": " + reason
+	}
+	return ""
 }
 
 // stepSpan assembles one finished command's span. FinishedAtMS is read here rather than at the
@@ -585,6 +609,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), s.forkRootEnv()...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
@@ -692,7 +717,7 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	_ = os.Remove(spans)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = append(append(os.Environ(), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
@@ -707,11 +732,12 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	case 1:
 		failing, watches := readFailingSpans(spans)
 		if len(failing) == 0 {
-			return RollingOutcome{Known: false, ExitCode: code}, nil
+			return RollingOutcome{Known: false, ExitCode: code,
+				Detail: "it named no failing check. " + stderr.String()}, nil
 		}
 		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches}, nil
 	default:
-		return RollingOutcome{Known: false, ExitCode: code}, nil
+		return RollingOutcome{Known: false, ExitCode: code, Detail: stderr.String()}, nil
 	}
 }
 
