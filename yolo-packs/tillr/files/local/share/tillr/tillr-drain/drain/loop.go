@@ -448,6 +448,9 @@ type Loop struct {
 	heavyMu                     sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
+	heavyLandingCounts          []int
+	landLockHolds               []int64
+	landLockUnmeasured          int
 	heavyWanted, heavyAttempted string
 	cfg                         LoopConfig
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
@@ -1904,6 +1907,15 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	landStart := time.Now()
 	landed, err := l.cfg.Steps.Land(ctx, candidate)
+	if err == nil {
+		l.mu.Lock()
+		if hold, ok := landed.LockObservation.holdNS(); ok {
+			l.landLockHolds = append(l.landLockHolds, hold)
+		} else {
+			l.landLockUnmeasured++
+		}
+		l.mu.Unlock()
+	}
 	if timing != nil {
 		l.mu.Lock()
 		timing.addLandTime(time.Since(landStart).Milliseconds(), runnerChange)

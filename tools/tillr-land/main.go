@@ -108,6 +108,7 @@ func passFace(args []string) int {
 		ItemID: *item, RunID: *run, BaseRef: ref, BaseSHA: *base, HeadSHA: *head,
 		Verdict: verdict, At: at, LockPath: *lockPath, LockWait: *lockWait,
 		MessageFrom: *messageFrom, RunDir: *runDir, ObservedTrunk: *observed,
+		ObserveLock: os.Getenv("TILLR_LAND_OBSERVE") == "1",
 	}
 	landed, err := land.Land(ctx, s, trunk, req)
 	if err != nil {

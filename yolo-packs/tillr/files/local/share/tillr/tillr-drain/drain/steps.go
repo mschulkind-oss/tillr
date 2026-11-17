@@ -316,10 +316,11 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 // git reported rather than a list of bare paths. A conflict-fix run's brief names both the
 // paths that can be parsed out of those lines and the lines themselves.
 type LandOutcome struct {
-	RedCap        *redcap.Hold
-	Result        string
-	Reason        string
-	ConflictPaths []string
+	LockObservation *LandObservation
+	RedCap          *redcap.Hold
+	Result          string
+	Reason          string
+	ConflictPaths   []string
 }
 
 // Land runs the land program in the repository and maps its answer: 0 is a landing, 1 is a
@@ -329,7 +330,7 @@ type LandOutcome struct {
 // to its exit code, which is what a stub is.
 func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutcome, error) {
 	extra := landArgs(candidate)
-	code, out, span, err := s.program(ctx, "land", ".", s.LandProgram, candidate, extra...)
+	code, out, span, err := s.programWithEnv(ctx, "land", ".", s.LandProgram, candidate, []string{"TILLR_LAND_OBSERVE=1"}, extra...)
 	if err != nil {
 		return LandOutcome{}, err
 	}
@@ -350,10 +351,11 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 		return LandOutcome{}, Internalf("reading the land record for %s: %v", candidate.ItemID, err)
 	}
 	var landing struct {
-		RedCap        *redcap.Hold `json:"red_cap"`
-		Result        string       `json:"result"`
-		Reason        string       `json:"reason"`
-		ConflictPaths []string     `json:"conflict_paths"`
+		LockObservation *LandObservation `json:"lock_observation"`
+		RedCap          *redcap.Hold     `json:"red_cap"`
+		Result          string           `json:"result"`
+		Reason          string           `json:"reason"`
+		ConflictPaths   []string         `json:"conflict_paths"`
 	}
 	if err := json.Unmarshal(env.Payload, &landing); err != nil {
 		return LandOutcome{}, Internalf("reading the land payload for %s: %v", candidate.ItemID, err)
@@ -364,6 +366,10 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	outcome.RedCap = landing.RedCap
 	outcome.Reason = landing.Reason
 	outcome.ConflictPaths = landing.ConflictPaths
+	outcome.LockObservation = landing.LockObservation
+	if err := s.saveLandObservation(candidate.RunID, landing.LockObservation); err != nil {
+		return LandOutcome{}, landingMeasurementError(err)
+	}
 	return outcome, nil
 }
 

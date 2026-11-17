@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 )
 
 // startHeavy is a trigger, not a gate on dispatch or a synchronous landing step.
@@ -30,6 +32,15 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.heavyMu.Unlock()
 			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: step.JudgeHeavy, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+				landings, countErr := heavy.Landings(ctx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
+				if countErr != nil {
+					l.reportf("loop: landings per heavy run=unavailable: %v\n", countErr)
+				} else {
+					l.heavyMu.Lock()
+					l.heavyLandingCounts = append(l.heavyLandingCounts, len(landings))
+					l.heavyMu.Unlock()
+					l.reportf("loop: heavy %s landings per heavy run=%d\n", shortSHA(run.TipSHA), len(landings))
+				}
 				for _, check := range run.Checks {
 					if check.OverBudgetMS > 0 {
 						l.reportf("loop: heavy %s over budget: measured %d ms, declared %d ms; keeps %s verdict\n", check.CheckID, check.DurationMS, check.BudgetMS, check.Result)
