@@ -10,11 +10,26 @@ sections 1 to 4; the adapter contract every backend shares is
 | :--- | :--- |
 | `run-claude` | The adapter. A `run.request`'s `Command[0]` names it. |
 | `extract-report` | The dialect: the harness's stream of JSON lines in, `report.md` out. |
+| [`quota`](./quota) | One authenticated usage GET, no model tokens; five-hour and seven-day fractions used and UTC reset times. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete stream, written by hand to the measured line shapes, ending in a `result` line whose text ends in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer and its `result` line — the negative control. |
 
 The fixtures carry invented ids and no account data. They were written from the line
 shapes measured on Claude Code 2.1.325, not captured from a run.
+
+## Reading quota without starting work
+
+Set a backend row's `quota` to the command's argument list and optionally set
+`reserve` (default 0) to the fraction kept for the owner. The loop refreshes readings
+older than 60 seconds before choosing and claiming work; it never cancels a claimed
+dispatch after staging. A refusal still holds a backend without a quota command.
+The [quota admission contract](../../../tillr-drain/README.md#backend-quota-admission)
+explains errors, recorded readings, and the waiting view.
+
+The command uses `CLAUDE_CODE_OAUTH_TOKEN` or Claude Code's existing credentials,
+never a model prompt or credential refresh as a fallback. The
+[reading method and measured cost](../../../../docs/design/tillr-claude-backend.md#direct-readings-and-the-owners-reserve)
+record the endpoint and live verification.
 
 ## What the adapter does
 

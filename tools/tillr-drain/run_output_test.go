@@ -38,14 +38,18 @@ func TestRunOutputSurvivesLoopProcessExit(t *testing.T) {
 	// Assert both descriptors are regular files before exec; stdout must not be
 	// left as a pipe either, even though it only prints a record at the end.
 	wrapper := stub(t, "run-wrapper", `if [ ! -f /proc/self/fd/1 ] || [ ! -f /proc/self/fd/2 ]; then
- echo pipes > "`+ready+`"
+ echo pipes > "`+ready+`.writing"
+ mv "`+ready+`.writing" "`+ready+`"
  exit 4
 fi
-echo files > "`+ready+`"
+echo files > "`+ready+`.writing"
+mv "`+ready+`.writing" "`+ready+`"
 while [ ! -f "`+release+`" ]; do sleep 0.01; done
 "`+sibling(t, "run")+`" "$@"
 status=$?
-echo "$status" > "`+finished+`"
+# Delay the payload to exercise a reader observing the publication boundary.
+{ sleep 0.1; echo "$status"; } > "`+finished+`.writing"
+mv "`+finished+`.writing" "`+finished+`"
 exit "$status"`)
 	req := f.loop.policy.Backends["pi"].Request(f.item, "lane-1", f.runID, "pi")
 	raw, err := json.Marshal(req)

@@ -991,7 +991,6 @@ reserved, and when work can resume, so the owner can understand why a backend is
 - Hold new work when usage reaches the owner's reserve threshold.
 - Show usage, reserves, and reopening times in the waiting view.
 
-<!-- tillr: item id="item-policy-quota-probe" paths="tools/tillr-run/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/design/tillr-claude-backend.md" prose="2" -->
 
 **Agent Details:**
 
@@ -1089,10 +1088,6 @@ unblock held item blocks". Four points settle it:
    these changes a criterion, and point 1 of the ruling above still holds: a claimed dispatch
    always starts.
 
-- **c1:** A backend row may name a `quota` command. The claude adapter ships one that answers the five-hour and seven-day windows as fractions used with their reset times. The commit states how it reads them and what one reading costs; a way that spends no model tokens is used if one exists, and if none does the design document says so with the measurement.
-- **c2:** The loop reads a backend's quota before dispatching to it when its last reading is older than a named interval, and records each reading. A backend with no `quota` command is never probed and is treated as always open.
-- **c3:** A backend row may set `reserve`, a fraction of the window the loop leaves unused. With `reserve = 0.2` the loop sends no new work to that backend once a window is 80 percent used, so the owner's own sessions keep room. The default is 0.
-- **c4:** The waiting face shows each backend with a quota: the fraction used, the reserve, and when it reopens.
 
 ### Add backend shares to distribute seat work
 
@@ -1144,7 +1139,7 @@ route to the next backend; it does not need a continuation handoff.
   - Pause runs that have no alternative backend and show when they can resume.
   - Keep each continuation within the original attempt and judge its result once.
 
-<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-policy-quota-probe" prose="2" -->
+<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Agent Details**
 

@@ -77,6 +77,12 @@ func TestThePiAdapterDeliversLargeBriefsWithoutArgvLimits(t *testing.T) {
 	base := scratch(t, "large-pi-brief")
 	bin := filepath.Join(base, "bin")
 	input := filepath.Join(base, "input.txt")
+	resumePrompt := filepath.Join(base, "enclosing-resume.txt")
+	if err := os.WriteFile(resumePrompt, []byte("enclosing continuation, not the fixture brief"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_RESUME_PROMPT_FILE", resumePrompt)
+	t.Setenv("TILLR_SESSION_MODE", "resume")
 	writeExecutable(t, filepath.Join(bin, "pi"), "#!/bin/sh\ncat > \"$STUB_INPUT\"\n")
 	worktree := filepath.Join(base, "lane", "worktree")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
@@ -88,7 +94,14 @@ func TestThePiAdapterDeliversLargeBriefsWithoutArgvLimits(t *testing.T) {
 	}
 	cmd := exec.Command(adapter, "--backend", "pi", "--model", "fixture-model", "--effort", "medium")
 	cmd.Dir = worktree
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_INPUT="+input)
+	// This fixture starts fresh even when its enclosing worker is a continuation.
+	// Keep the parent's environment intact and remove only continuation inputs.
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "TILLR_RESUME_PROMPT_FILE=") && !strings.HasPrefix(entry, "TILLR_SESSION_MODE=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_INPUT="+input)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		stderr, _ := os.ReadFile(filepath.Join(base, "lane", "stream.err"))
 		t.Fatalf("large brief failed to launch: %v: %s %s", err, out, stderr)

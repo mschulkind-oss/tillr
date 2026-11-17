@@ -469,6 +469,48 @@ another restart.
   backends; the check refuses the policy otherwise and names the seat
   ([the claude backend design](../../docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
 
+## Backend quota admission
+
+A backend row can name `quota`, an argument list for a command that reads remaining
+quota without starting work, and `reserve`, the fraction of every window kept for
+the owner (default 0, valid range 0 through 1). A row without `quota` is never
+probed or held by a reading or reserve; a run's refusal still holds it until reset.
+With reserve 0.2, a window at 0.8 used closes admission;
+a window at 0.79 remains open. The loop walks the seat's normal fallback order.
+
+```json
+"quota": ["tools/tillr-run/backends/claude/quota"],
+"reserve": 0.2
+```
+
+The command runs from the drained repository root and answers one JSON document:
+
+```json
+{"windows":[{"kind":"five_hour","fraction":0.8,"reset_at":"2026-11-19T13:00:00Z"}]}
+```
+
+Windows must have unique kinds, nonnegative fractions, and future reset times.
+An idle window with fraction 0 may have a null reset. Before planning dispatches
+and choosing a failover, the loop probes readings older than 60 seconds, changed
+commands, and reached resets. Missing, malformed, failed, or stale readings hold
+that backend instead of assuming unlimited quota. Every probe is stored in
+`backend_quota_readings`; `backend_quota` holds the latest observation for planning
+and the waiting face. A restart reuses a fresh reading. Commands are limited to
+15 seconds and 64 KiB of output; stderr is not retained. Reserve changes apply
+without a new probe. Removing a command clears its latest observation on the next
+pass, not its history. Checks happen while choosing and claiming a backend, never
+after staging; a claimed dispatch always starts. Reserve is a threshold on the
+last reading, not a guarantee against runs overshooting it within one interval.
+Already-running work is not stopped. A failed designer resume remains unsettled
+until a replacement backend is open, before staging its new session.
+
+The [Claude quota command](../tillr-run/backends/claude/quota) uses one authenticated
+HTTP GET, not a Claude model session. Its authentication, live measurement, and
+zero-model-token cost are recorded in the
+[Claude backend design](../../docs/design/tillr-claude-backend.md#direct-readings-and-the-owners-reserve).
+`tillr view waiting` shows each probed backend, both fractions, reserve, and when
+it reopens, including open backends and explicit failed/stale readings.
+
 ## Document-fed workflow prerequisite
 
 **An item needs a document block before it is built.** This prerequisite belongs

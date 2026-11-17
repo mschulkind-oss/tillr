@@ -242,6 +242,16 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 const designerCompactedKind = "drain.designer-compacted"
 
 func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.Record, mainSHA, tick string, at time.Time, result *LoopResult, timing *PassTiming, watched []string, deferJudge bool) laneOutcome {
+	backend, open, err := l.quotaReplacementBackend(ctx, old.RunRequest.Backend, old.Seat)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	if !open {
+		l.reportf("loop: failed designer resume %s waits for backend quota\n", rec.RunID)
+		// Keep the original terminal run pending. Planning holds it by quota, and
+		// reopening retries this same replacement without another failed resume.
+		return laneOutcome{}
+	}
 	next := old
 	next.Action = ActionDispatch
 	next.Attempt++
@@ -250,6 +260,14 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	next.DesignerSessionID = ""
 	req := *old.RunRequest
 	req.RunID = attemptRunID(old.ItemID, next.Attempt)
+	if backend != req.Backend {
+		replacement := l.currentPolicy().request(old.ItemID, old.LaneID, req.RunID, backend)
+		if replacement == nil {
+			return laneOutcome{err: Usagef("designer replacement backend %s has no request", backend)}
+		}
+		replacement.CorrelationID = req.CorrelationID
+		req = *replacement
+	}
 	req.Resume = false
 	next.RunRequest = &req
 	identifyDecision(&next)

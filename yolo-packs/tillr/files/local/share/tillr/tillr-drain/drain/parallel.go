@@ -20,6 +20,29 @@ func parallelNodes(d Decision) []Decision {
 	return append([]Decision{primary}, d.Parallel...)
 }
 
+// dispatchQuotaOpen checks only requests this dispatch will start. Retained
+// parallel groups keep completed results; those backends cannot block a retry.
+func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool) (bool, error) {
+	for _, node := range parallelNodes(d) {
+		if node.RunRequest == nil || node.RunRequest.Backend == "command" {
+			continue
+		}
+		if len(d.Parallel) > 0 {
+			rec, err := terminalRecord(r, node.RunRequest.RunID)
+			if err != nil {
+				return false, err
+			}
+			if rec != nil {
+				continue
+			}
+		}
+		if shut[node.RunRequest.Backend] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // claimParallel chooses the ready readers from the same store transaction as the
 // item's claim. A writer always keeps the lane to itself.
 func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
@@ -36,7 +59,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 	}
 	indices := []int{d.NodeIndex}
 	candidates := []int{}
-	shut, err := readShutBackends(tx.Reader(), l.cfg.Now())
+	shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
 	if err != nil {
 		return err
 	}

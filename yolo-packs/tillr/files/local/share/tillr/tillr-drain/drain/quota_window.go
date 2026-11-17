@@ -86,6 +86,9 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 }
 
 func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, string, bool, error) {
+	if err := l.refreshQuotas(ctx); err != nil {
+		return nil, "", false, err
+	}
 	policy := l.currentPolicy()
 	next, degraded, ok := policy.nextBackend(failed, seat)
 	if !ok {
@@ -97,7 +100,11 @@ func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, 
 	}
 	defer s.Close()
 	var shut map[string]bool
-	err = s.ReadTx(ctx, func(r *store.Reader) error { var err error; shut, err = readShutBackends(r, l.cfg.Now()); return err })
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		shut, err = readQuotaShutBackends(r, l.cfg.Now(), policy)
+		return err
+	})
 	if err != nil {
 		return nil, "", false, err
 	}

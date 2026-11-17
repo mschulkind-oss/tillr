@@ -508,6 +508,7 @@ type Loop struct {
 	// It is written by staging and read by passPlans on the pass goroutine, so it
 	// needs no lock.
 	held           map[string]heldItem
+	quotaMu        sync.Mutex
 	policyMu       sync.RWMutex
 	policyState    PolicyState
 	policyRecorded bool
