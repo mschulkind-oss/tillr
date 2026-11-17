@@ -1044,6 +1044,51 @@ Five points settle it:
    commit as this item's work. If the full suite then fails in some other test this item did not
    touch, the run reports `trunk-broken` with the test's name, and does not stop as blocked.
 
+**Ruling, 2026-11-17 (answers the conflict raised by `run-item-policy-quota-probe-a13`):** the work is built, and no criterion or
+earlier ruling changes. Runs `run-item-policy-quota-probe-a12` and `run-item-policy-quota-probe-a13`
+each reported done with one commit, and each was refused by the gate on the `documents` check
+alone. That check named two dead section links in this roadmap, in the blocks of two other items,
+and nothing in either candidate. No other check that ran failed for either. The links
+were dead at the base both runs were staged from, `f1647cf10`, because two headings had been
+renamed, this item's among them. Landing a candidate also removes its item block from this file,
+so the check read the whole roadmap for a change that had touched no document. Measured on
+2026-11-17: `uvx vantage-check docs/tillr/roadmap.md` at `f1647cf10` reported those two
+`link/dead-section-anchor` errors and no other, and the same command on the trunk of that evening
+reported nothing to fix, after the trunk commit "docs(tillr): repair renamed-heading links and
+unblock held item blocks". Four points settle it:
+
+1. **The next run is staged from a trunk that holds the link repair, and is not staged from
+   `f1647cf10`.** A candidate on the older base fails the same check whatever it contains. The
+   commit that carries this ruling repairs the same two links with the trunk's own two lines, so
+   that it can pass that check from the older base; they merge with the trunk's as no change.
+2. **Start from the second candidate and do not write the item again.** It is the commit below the
+   tip of `refs/tillr/runs/run-item-policy-quota-probe-a13`, titled "feat(tillr): probe backend
+   quotas with owner reserves". The tip above it only removes this block and is not carried. Apply
+   that one commit to the new base, regenerate the pack copy with `just pack-sync` and do not
+   resolve it by hand, and give the new commit its own message, which keeps the reading method
+   and its cost as c1 asks. On 2026-11-17 `git merge-tree --write-tree --name-only` of that commit
+   against the trunk of that evening reported no conflict. A file that merges without a conflict
+   can still be wrong against the newer trunk, so the full suites of the three modules decide.
+   The first candidate, below the tip of `refs/tillr/runs/run-item-policy-quota-probe-a12`, is
+   evidence only.
+3. **The candidate's change to designer retirement is dropped, and the trunk's is kept.** The
+   second run met a failure in `TestDesignerCompactRunsOnlyAtColdDispatch` and made
+   `retireDesigners` in `tools/tillr-drain/drain/designer.go` return early while the loop has
+   active work, with a test in `designer_retire_test.go`. The trunk has since repaired that race
+   itself, in "fix(tillr-drain): keep a designer row while a landing rewrites its document". The
+   next run keeps the trunk's `retireDesigners` and its tests as they are and leaves out the
+   candidate's early return and the test added for it. The candidate's other changes in
+   `designer.go`, which hold a failed designer's replacement while its backends are shut, are
+   point 3 of the ruling above and stay. If that test or `TestCommentPathTwice` still fails in the
+   full suite on the new base, the run reports `trunk-broken` with the test's name.
+4. **The two repairs the reviews asked for stay, and so does the fixture repair.** A parallel
+   workflow's sibling readers pass the same quota and reserve check as the primary request, so a
+   sibling is not claimed on a backend that a reading or a reserve has shut. A cached reading whose
+   values have not changed writes nothing to the store. The large-brief test fixture in
+   `tools/tillr-run/` no longer inherits the enclosing session's continuation prompt. None of
+   these changes a criterion, and point 1 of the ruling above still holds: a claimed dispatch
+   always starts.
+
 - **c1:** A backend row may name a `quota` command. The claude adapter ships one that answers the five-hour and seven-day windows as fractions used with their reset times. The commit states how it reads them and what one reading costs; a way that spends no model tokens is used if one exists, and if none does the design document says so with the measurement.
 - **c2:** The loop reads a backend's quota before dispatching to it when its last reading is older than a named interval, and records each reading. A backend with no `quota` command is never probed and is treated as always open.
 - **c3:** A backend row may set `reserve`, a fraction of the window the loop leaves unused. With `reserve = 0.2` the loop sends no new work to that backend once a window is 80 percent used, so the owner's own sessions keep room. The default is 0.
