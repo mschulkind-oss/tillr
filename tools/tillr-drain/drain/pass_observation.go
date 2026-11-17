@@ -74,6 +74,11 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if err != nil {
 		return err
 	}
+	// The presence file is held before the session is recorded, so a loop in another
+	// process domain never sees this session open with no writer behind it.
+	if err := holdLoopPresence(l.cfg.Store); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(owner)
 	if err != nil {
 		return err

@@ -22,6 +22,14 @@ func (s *ProcessSteps) runOutputDir(runID string) string {
 	return filepath.Join(s.LaneRoot, ".runs", runID)
 }
 
+// runOutputFiles is where Run puts the face's two streams (runStreamLocator). Run
+// creates both before it starts the face, and the face and every descendant that
+// inherits them hold them open for writing while they live.
+func (s *ProcessSteps) runOutputFiles(runID string) []string {
+	dir := s.runOutputDir(runID)
+	return []string{filepath.Join(dir, RunRecordFile), filepath.Join(dir, RunStderrFile)}
+}
+
 // runOutputTail reads only the bounded end of the diagnostics. Older launchers
 // recorded none; only that absence is normal, not other filesystem failures.
 func runOutputTail(dir string) (string, error) {
