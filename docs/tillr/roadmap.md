@@ -1038,9 +1038,39 @@ lane belongs to one item while it is worked, and the queue must not suffer prior
 When every lane is busy with long low-priority runs and something the owner is waiting on
 arrives, such as review comments on a design, it starts at once.
 
-### Run owner-facing work on lanes outside the cap
+### Add dedicated lanes for owner-facing work
 
-<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" -->
+When long-running work occupies every ordinary lane, an idea the owner saves should not have
+to wait for that work to finish. Give the drain planner a separately configured group of lanes
+for saved ideas and other explicitly marked work. These extra lanes do not interrupt active
+workers or replace the dedicated lanes where designers answer review comments. Show both groups
+separately so the owner can see which capacity is busy. While verifying this change, also repair
+the designer-retirement race: a document briefly missing during a landing must not end its
+designer's session.
+
+**Outcomes:**
+
+- Start owner-facing work even when all ordinary lanes are busy, without stopping active work.
+- Show the extra lanes separately and keep review comments at their document's dedicated lane.
+- Keep designer sessions alive while a landing rewrites their documents.
+
+<!-- tillr: item id="item-drain-express-lanes" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+**Agent Details:**
+
+- **Ref:** [Item-graph decision ledger](../design/tillr-item-graphs.md#71-decision-ledger),
+  [saved-idea actions](../design/observatory-actions.md#53-the-item-that-is-created), and the
+  designer-session rules for [the desk](../design/tillr-designer-sessions.md#the-desk) and
+  [keeping sessions warm](../design/tillr-designer-sessions.md#the-keep-warm-rule).
+- **Where:** [Settings reader](../../tools/tillr/settings/),
+  [item reader](../../tools/tillr-item/item/sync.go),
+  [drain planner](../../tools/tillr-drain/drain/plan.go),
+  [designer retirement](../../tools/tillr-drain/drain/designer.go), and
+  [view](../../tools/tillr-view/); regenerate [the pack copy](../../yolo-packs/tillr/).
+  The candidate to reuse and conflict-resolution instructions are preserved in the rulings below.
+- **Verify:** Check the five criteria below: configuration and item classification, dispatch
+  with ordinary lanes occupied, lane eligibility and waiting, separate display counts, and
+  designer retirement before and after a committed deletion.
 
 **Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
 needs two readers the fence left out. The settings file is read by `tools/tillr/settings/`, which
