@@ -99,8 +99,8 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 	}
 	byID := map[string]map[string]any{}
 	for _, row := range got {
-		if len(row) != 9 {
-			t.Fatalf("want seven columns plus class_source and waited: %v", row)
+		if len(row) != 10 || row["document"] != "" {
+			t.Fatalf("want seven columns plus class_source, waited and an empty document on item rows: %v", row)
 		}
 		if row["class_source"] != "rule" {
 			t.Fatalf("unrecorded class: %v", row)

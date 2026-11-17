@@ -58,6 +58,43 @@ type syncRecord struct {
 	} `json:"payload"`
 }
 
+func TestSyncFaceDesignWithoutItemIsWarning(t *testing.T) {
+	repo := syncRepo(t, map[string]string{
+		"docs/roadmap.md":        "# Roadmap\n[Design](design/example.md)\n",
+		"docs/design/example.md": "---\nstage: DESIGN\n---\n# Design\n",
+	})
+	db := filepath.Join(scratch(t, "sync-design-warning"), "state.db")
+	for _, extra := range [][]string{{"--dry-run"}, {}} {
+		args := append([]string{"sync", "--store", db, "--root", repo, "--json"}, extra...)
+		code, out := run(t, args...)
+		if code != 0 {
+			t.Fatalf("warning exited %d: %s", code, out)
+		}
+		var record struct {
+			Payload struct {
+				Warnings []struct {
+					File, Roadmap, Rule string
+					Line                int
+				} `json:"warnings"`
+				Findings []any    `json:"findings"`
+				Created  []string `json:"created"`
+				Updated  []string `json:"updated"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(out, &record); err != nil {
+			t.Fatal(err)
+		}
+		p := record.Payload
+		if len(p.Warnings) != 1 || p.Warnings[0].Rule != "design-without-item" || p.Warnings[0].File != "docs/design/example.md" || p.Warnings[0].Roadmap != "docs/roadmap.md" || p.Warnings[0].Line != 2 || len(p.Findings)+len(p.Created)+len(p.Updated) != 0 {
+			t.Fatalf("warning record: %s", out)
+		}
+	}
+	code, out := run(t, "sync", "--store", db, "--root", repo)
+	if code != 0 || !strings.Contains(string(out), "warning:") || !strings.Contains(string(out), "design-without-item") || !strings.Contains(string(out), "docs/roadmap.md:2") {
+		t.Fatalf("text warning: exit %d: %s", code, out)
+	}
+}
+
 func TestSyncFaceRefusesCloneOfHeldItem(t *testing.T) {
 	repo := syncRepo(t, map[string]string{"docs/original.md": syncGood})
 	db := filepath.Join(scratch(t, "sync-clone-store"), "state.db")

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PassRow, SnapshotData, WaitingRow } from "../models/types";
 import { URL_CHANGE_EVENT } from "../models/url";
+import { waitingIdentity, waitingOrder } from "../models/waiting";
 import { ClassState, EntityLink } from "./EntityLink";
 import { EntityText, newestPasses, passCounts, passStamp } from "./Home";
 import { useScreenHash } from "./ObservatoryShell";
@@ -98,10 +99,10 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
       mover: "—", since: "not recorded", class_source: "state",
     })) : waiting ?? [];
     return source.filter(row => (preset !== "not-moving" || !["ready", "moving"].includes(row.class)) && (!klass || row.class === klass) && (!reason || row.why === reason))
-      .sort((a, b) => !a.rank ? (b.rank ? 1 : a.item_id.localeCompare(b.item_id)) : !b.rank ? -1 : a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.item_id.localeCompare(b.item_id));
+      .sort(waitingOrder);
   }, [waiting, snapshot, preset, klass, reason]);
-  const list = useStableList(rows, row => row.item_id, `${preset}|${klass}|${reason}`);
-  useRowKeys(list.visible.map(row => row.item_id), list.focused, list.focus, id => `#/item/${encodeURIComponent(id)}`);
+  const list = useStableList(rows, waitingIdentity, `${preset}|${klass}|${reason}`);
+  useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.document ? window.location.hash : `#/item/${encodeURIComponent(id)}`);
   const options = preset === "landed" ? rows : waiting ?? [];
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Items</h1>
@@ -114,8 +115,9 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
     {error ? <p role="alert">Items refused: {error.message}</p> : (preset === "landed" ? snapshot === undefined : waiting === undefined) ? <p role="status">Reading items…</p> : list.visible.length === 0 ? <p>No items match these filters.</p> :
       <table><thead><tr>{["Rank", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
         const item = snapshot?.items.find(item => item.item_id === row.item_id);
-        return <tr key={row.item_id} data-row-id={row.item_id} tabIndex={0} data-focused={list.focused === row.item_id} onFocus={() => list.focus(row.item_id)}>
-          <td>{row.rank || "unranked"}</td><td><EntityLink kind="item" id={row.item_id} /></td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td>
+        const identity = waitingIdentity(row);
+        return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}>
+          <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
         </tr>;
       })}</tbody></table>}

@@ -25,6 +25,7 @@ import (
 type waitingRow struct {
 	Rank        string `json:"rank"`
 	ItemID      string `json:"item_id"`
+	Document    string `json:"document"`
 	Class       string `json:"class"`
 	Where       string `json:"where"`
 	Why         string `json:"why"`
@@ -189,6 +190,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 		}
 		return record.Envelope{}, exitFor(err)
 	}
+	sortWaitingDocuments(rows)
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
 	} else {
@@ -229,6 +231,7 @@ func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFa
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)
 	}
+	sortWaitingDocuments(rows)
 	return rows, nil
 }
 
@@ -505,7 +508,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(out, windows...), extra...), laneRows...), nil
+	return appendWaitingDesigns(r, append(append(append(out, windows...), extra...), laneRows...))
 }
 
 // Window rows are optional on old stores, and disappear at (not after) reset.
@@ -701,7 +704,11 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		if row.Waited != "" {
 			why += " (waited " + row.Waited + ")"
 		}
-		cells := []string{rank, row.ItemID, row.Class, row.Where, why, row.Mover, row.Since}
+		identity := row.ItemID
+		if row.Document != "" {
+			identity = row.Document
+		}
+		cells := []string{rank, identity, row.Class, row.Where, why, row.Mover, row.Since}
 		for i, cell := range cells {
 			cells[i] = strings.NewReplacer("\t", "\\t", "\n", "\\n", "\r", "\\r").Replace(cell)
 		}

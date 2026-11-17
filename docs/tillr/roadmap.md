@@ -552,7 +552,6 @@ that is held on its open questions. The check below keeps the next design from s
 
 ### Warn when a roadmap design has no item block
 
-<!-- tillr: item id="item-sync-design-without-item" paths="tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/" -->
 
 **Ruling, 2026-11-16 (answers the second run's fence conflict):** the second run stopped because
 c3 changes the waiting face, whose source is `tools/tillr-view/waiting.go`, and that directory
@@ -579,9 +578,6 @@ finding therefore goes into the store, and the face reads it there:
   row shows its id. A test in `tools/tillr-view/` covers a store with one such row, one with
   none, and one without the table.
 
-- **c1:** `tillr item sync` reports a `design-without-item` finding for a document under `docs/design/` that a roadmap links to, whose frontmatter stage is not built or done, and that holds no item block and is not named as the design document of any item that is not landed.
-- **c2:** The finding names the document and the roadmap line that links it. It is a warning and changes no item. A test covers a design with a block, one without, and one whose only items are landed.
-- **c3:** The waiting face lists such a document under "needs you" with the reason `design-without-item`, so it is visible until someone files its item.
 
 
 ## Filed 2026-11-15: other people and other agents change the repository while the drain runs

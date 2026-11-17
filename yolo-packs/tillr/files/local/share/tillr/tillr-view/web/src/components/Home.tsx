@@ -2,6 +2,7 @@ import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
 import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
+import { waitingIdentity, waitingOrder } from "../models/waiting";
 
 export function passStamp(ms: number): string {
   return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -67,7 +68,7 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
     if (decision.lane_id) known.set(decision.lane_id, "lane");
     if (decision.run_id) known.set(decision.run_id, "run");
   }
-  for (const row of rows) known.set(row.item_id, "item");
+  for (const row of rows) if (row.item_id) known.set(row.item_id, "item");
   for (const item of snapshot?.items ?? []) {
     known.set(item.item_id, "item");
     if (item.latest_run) known.set(item.latest_run.run_id, "run");
@@ -102,18 +103,14 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
             the header and the loop summary, and it does not depend on the planner. */}
         <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="#/items">all → Items</a></h2>
         {waitingError ? <p role="alert">The planner could not be asked, so which items are waiting is unknown (the loop's own state is in the header, and does not depend on it): {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
-          const group = rows.filter(row => row.class === value).sort((a, b) => {
-            if (!a.rank) return b.rank ? 1 : a.item_id.localeCompare(b.item_id);
-            if (!b.rank) return -1;
-            return a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.item_id.localeCompare(b.item_id);
-          });
+          const group = rows.filter(row => row.class === value).sort(waitingOrder);
           if (!group.length) return null;
           return <section key={value} data-class={value}>
             <h2><ClassState value={value} /> · {group.length}</h2>
             <table><thead><tr><th>Rank</th><th>Item</th><th>Class</th><th>Where</th><th>Why</th><th>Since</th></tr></thead>
-              <tbody>{group.slice(0, 8).map(row => <tr key={row.item_id}>
+              <tbody>{group.slice(0, 8).map(row => <tr key={waitingIdentity(row)}>
                 <td>{row.rank || "unranked"}</td>
-                <td><EntityLink kind="item" id={row.item_id} state={row.class} />
+                <td>{row.document || <EntityLink kind="item" id={row.item_id} state={row.class} />}
                   <div className="home__mover">mover: <EntityText value={row.mover} snapshot={snapshot} rows={rows} passes={passes} /></div></td>
                 <td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td><td>{row.since}{row.waited ? ` · waited ${row.waited}` : ""}</td>
               </tr>)}</tbody></table>
