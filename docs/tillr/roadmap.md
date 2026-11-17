@@ -2039,6 +2039,36 @@ fault. The lane that is blocked should wait and the rest should run.
 - **Where:** `stageLanes` in `tools/tillr-drain/drain/loop.go`, and `refuseBranchHeld` and `branchHolder` it calls.
 - **Evidence:** 2026-11-17, `rg -n 'refuseBranchHeld' tools/tillr-drain/drain/loop.go` finds the refusal returned from `stageLanes`, and `rg -n 'stageLanes' tools/tillr-drain/drain/loop.go` finds the call at loop start returning its error.
 
+### Add the failing check's own sources to a trunk fixer's fence
+
+When the trunk goes red, the drain files one fixer item, fenced to the paths it may edit. The fence
+is meant to cover the breakage. On 2026-11-17 it did not. The failing check was the whole test
+suite of `tillr-item`, and the cause was a test in that package whose starting assumption an
+earlier change had made false. The fixer's fence listed the files that the red range had changed,
+but the stale test file had not been changed by any commit in the range, so it sat outside the
+fence. Each fixer found the cause, reported that the fix lay outside its fence, and stopped. That
+report left the item waiting on the owner, so the queue stayed held, and the next trunk tip filed a
+new fixer with the same fence. Six fixers in a row, about $0.20 each, could not succeed, and 43
+items waited behind them. A fixer must be able to touch the thing its check runs, and one that
+finds it cannot must widen or escalate once rather than repeat.
+
+<!-- tillr: item id="item-trunk-fixer-fence-covers-failing-check" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A trunk fixer's fence includes the failing check's own sources and tests, meaning the files its plan declares it reads, and not only the paths it recorded writing. A test files a fixer for a failing check whose test file no commit in the range touched, and asserts that file is in the fence.
+- **c2:** The fence also includes the paths of every commit in the red range, not only the tip's. A test with a culprit commit two commits below the tip asserts the culprit's paths are in the fence.
+- **c3:** The gate's own code stays outside the fence, as it is now. A test asserts that widening the fence does not add it.
+- **c4:** A fixer that reports its fix lies outside its fence widens the fence once, to the failing check's whole watched tree, or escalates to the owner with the paths it needs named. A test asserts one of the two happens and the fixer is not left as an unanswered conflict.
+- **c5:** A new trunk tip filed while a fixer for the same failing check is unresolved attaches to that fixer rather than filing another with the same fence. A test advances the tip three times and asserts one open fixer.
+- **c6:** The `tillr view waiting` row for a held queue names the fixer, the check it was filed for and whether it is waiting on the owner. A test asserts the text.
+
+**Agent details:**
+
+- **Ref:** the fixer description at the top of `tools/tillr-drain/drain/trunk.go`, and the rolling-run branch that files it.
+- **Where:** the rolling red branch in `tools/tillr-drain/drain/trunk.go` (`suspect`, `watch`, `fileTrunkFixer`, `trunkFixerPaths`); `readSpansWithStatus` in `tools/tillr-drain/drain/gate_spans.go`, which takes a failing check's watch set from the `writes` attribute of its span; `conflictDecision` in `tools/tillr-drain/drain/blocked.go`.
+- **Evidence:** 2026-11-17, `go test -run TestSyncDryRunFreshStore ./...` in `tools/tillr-item` failed because change `b0c26afac` made store init create every item table, and landed fix `b87a2a97e` edited only `tools/tillr-item/sync_test.go` and its pack mirror.
+- **Evidence:** 2026-11-17, the keeper log's six `filed fixer-main-` lines, one per trunk tip, each listed `tools/tillr-item/` sources changed in the range and `tools/tillr-store/main.go`, and none listed `tools/tillr-item/sync_test.go`.
+- **Evidence:** 2026-11-17, `rg -n 'suspect = l.rangePaths' tools/tillr-drain/drain/trunk.go` finds the range paths used only when the failing check names no paths, so a check that names any path gets only those.
+
 ## Filed 2026-11-17: the run record's spend, corrected before it is compared
 
 Principle: a routing decision is a comparison of what runs cost, so the record of what they cost
