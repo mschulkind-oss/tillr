@@ -52,6 +52,49 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 		return nil, nil, &plannerError{Kind: plannerUnavailable,
 			Msg: fmt.Sprintf("the planner %s answered why without rows or a summary", program)}
 	}
+	if len(answer.Rows) > 0 {
+		s, err := store.OpenRead(ctx, path)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer s.Close()
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			conflicts, err := waitingConflicts(r)
+			if err != nil {
+				return err
+			}
+			addConflictHistory(answer.Rows, conflicts)
+			return nil
+		}); err != nil {
+			return nil, nil, err
+		}
+		// Preserve planner-only fields and exact JSON numbers; waitingRow is only
+		// the shared display subset, not a replacement for the planner's answer.
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, nil, err
+		}
+		var rows []map[string]json.RawMessage
+		if err := json.Unmarshal(document["rows"], &rows); err != nil {
+			return nil, nil, err
+		}
+		for i := range rows {
+			why, err := json.Marshal(answer.Rows[i].Why)
+			if err != nil {
+				return nil, nil, err
+			}
+			rows[i]["why"] = why
+		}
+		encoded, err := json.Marshal(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		document["rows"] = encoded
+		raw, err = json.Marshal(document)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	return json.RawMessage(raw), answer.Rows, nil
 }
 
