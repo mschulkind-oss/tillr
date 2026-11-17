@@ -20,6 +20,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-drain/stop"
+	"github.com/mschulkind-oss/tillr-item/workflowmeta"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -1184,11 +1185,13 @@ type verdictView struct {
 }
 
 type itemDetail struct {
-	ItemID       string   `json:"item_id"`
-	Title        string   `json:"title"`
-	BodyRef      string   `json:"body_ref"`
-	DesignDoc    string   `json:"design_doc"`
-	AllowedPaths []string `json:"allowed_paths"`
+	SelectedWorkflow string   `json:"selected_workflow,omitempty"`
+	WorkflowSource   string   `json:"workflow_source,omitempty"`
+	ItemID           string   `json:"item_id"`
+	Title            string   `json:"title"`
+	BodyRef          string   `json:"body_ref"`
+	DesignDoc        string   `json:"design_doc"`
+	AllowedPaths     []string `json:"allowed_paths"`
 	// Rank is the item's place in the queue's order, the same token the board carries and
 	// sorts by: an item's dossier has to say which item comes first.
 	Rank      string         `json:"rank"`
@@ -1236,6 +1239,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		Decisions:      []dispatchView{},
 		Attempts:       []attemptView{},
 		ClosedBlockers: []string{},
+	}
+	out.Item.SelectedWorkflow, out.Item.WorkflowSource, _, err = workflowmeta.ReadSelection(r, id)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	out.Comments, err = readCommentItem(r, id)
 	if err != nil {

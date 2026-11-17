@@ -409,6 +409,8 @@ export interface AttemptView {
 }
 
 export interface ItemDetail {
+  selected_workflow?: string;
+  workflow_source?: string;
   item_id: string;
   title: string;
   body_ref: string;

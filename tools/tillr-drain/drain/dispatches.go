@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS dispatches (
   seat          TEXT,
   pass_id       TEXT
 );
+CREATE TABLE IF NOT EXISTS workflow_selections (
+ item_id TEXT PRIMARY KEY,
+ workflow TEXT NOT NULL,
+ source TEXT NOT NULL,
+ graph TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS node_runs (
  item_id TEXT NOT NULL,
  attempt INTEGER NOT NULL,

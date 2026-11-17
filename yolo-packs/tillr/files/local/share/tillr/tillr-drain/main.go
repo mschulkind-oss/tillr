@@ -135,6 +135,11 @@ func planFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	repositorySettings, err := settings.Read(*root)
+	if err != nil {
+		return fail(drain.Usagef("%v", err))
+	}
+	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
 	// The policy is loaded before the store is read, so a tick naming an unreadable
 	// policy is refused as malformed input rather than silently holding every item with
 	// `no-policy`.
@@ -204,6 +209,11 @@ func onceFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	repositorySettings, err := settings.Read(*root)
+	if err != nil {
+		return fail(drain.Usagef("%v", err))
+	}
+	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
 	policy, err := readPolicy(tick.PolicyRef)
 	if err != nil {
 		return fail(err)
@@ -713,7 +723,7 @@ func loopFace(args []string) int {
 		Lanes: laneIDs(*laneCount), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
-		Comments: repositorySettings.Comments,
+		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
 	})
 	if err != nil {
 		return failStartup(err)

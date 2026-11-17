@@ -100,6 +100,9 @@ func Once(ctx context.Context, s *store.Store, tick Pass, policy *Policy, questi
 			if decision.Action != ActionDispatch && decision.Action != ActionRetry {
 				continue
 			}
+			if err := recordWorkflowSelection(tx, decision); err != nil {
+				return err
+			}
 			request, err := requestEnvelope(decision, at)
 			if err != nil {
 				return err
