@@ -206,6 +206,7 @@ export interface LaneHistoryRun {
 }
 export interface LaneNode { node_id: string; run_id: string; attempt: number; state: "running" | "passed" | "failed" | "skipped" }
 export interface LaneRow {
+  running_nodes?: number;
   nodes?: LaneNode[] | null;
   workflow_ref?: string;
   pipeline?: PipelineStep[] | null;

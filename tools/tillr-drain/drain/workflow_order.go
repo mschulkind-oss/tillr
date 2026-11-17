@@ -74,12 +74,18 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 	var node, outcome string
 	err := r.QueryRow(`SELECT n.node_id,n.outcome FROM node_runs n JOIN runs r ON r.run_id=n.run_id
  WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
- AND n.outcome IN ('failed','fault') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome)
+ AND n.outcome IN ('failed','fault','refused','unjudged') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
+	}
+	if outcome == "unjudged" {
+		return ReasonRunUnjudged, nil
+	}
+	if outcome == "refused" {
+		return ReasonBoundaryScopeEscape, nil
 	}
 	if outcome == "fault" {
 		return ReasonInfraExhausted, nil

@@ -41,6 +41,20 @@ func (l *Loop) recordSettlementSpend(ctx context.Context, passID, origin string,
 	}
 	carried := origin == "" || origin != l.sessionID
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		// A retried reader settles alongside finished siblings. Their original
+		// accounting belongs to its first pass, not every subsequent group pass.
+		var prior int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM drain_pass_spend WHERE run_id=? AND pass_id!=? AND EXISTS(SELECT 1 FROM read_only_runs WHERE run_id=?)`, rec.RunID, passID, rec.RunID).Scan(&prior); err != nil {
+			return err
+		}
+		if prior > 0 {
+			// Refresh changed cumulative usage under the loop that settled the
+			// continuation, without adding a second charge. An unchanged sibling
+			// keeps its previous attribution and is not charged to this loop.
+			_, err := tx.Exec(`UPDATE drain_pass_spend SET usage_tokens=?,usage_cost_usd=?,carried_over=?,settled_loop=?
+ WHERE run_id=? AND (usage_tokens IS NOT ? OR usage_cost_usd IS NOT ?)`, tokens, cost, carried, l.sessionID, rec.RunID, tokens, cost)
+			return err
+		}
 		_, err := tx.Exec(`INSERT INTO drain_pass_spend(pass_id,run_id,carried_over,settled_loop,usage_tokens,usage_cost_usd) VALUES(?,?,?,?,?,?)
    ON CONFLICT(pass_id,run_id) DO UPDATE SET carried_over=excluded.carried_over,
    settled_loop=excluded.settled_loop,usage_tokens=excluded.usage_tokens,usage_cost_usd=excluded.usage_cost_usd`, passID, rec.RunID, carried, l.sessionID, tokens, cost)

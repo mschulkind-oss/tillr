@@ -21,7 +21,7 @@ export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[
         const quiet = row.state === "running" && row.log_grew_at_ms !== null && now - row.log_grew_at_ms >= LANE_QUIET_MS;
         const action = row.latest_action;
         return <li key={row.lane_id} data-state={row.state}>
-          <div><EntityLink kind="lane" id={row.lane_id} state={row.state === "running" ? "moving" : "not known"} /> · {row.state}
+          <div><EntityLink kind="lane" id={row.lane_id} state={row.state === "running" ? "moving" : "not known"} /> · {row.state}{row.running_nodes ? ` · ${row.running_nodes} nodes running` : ""}
             {row.state_since_ms !== null ? <span title="Elapsed since the recorded state began"> · ~{age(now - row.state_since_ms)}</span> : " · since —"}
             {quiet ? <strong className="lane-strip__quiet"> · quiet {age(now - row.log_grew_at_ms!)}</strong> : null}</div>
           {row.run_id ? <div>{row.state === "idle" ? "last: " : ""}

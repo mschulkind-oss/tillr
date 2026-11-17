@@ -85,6 +85,7 @@ type storeEdge struct {
 
 // storeLane is one row of lanes.
 type storeLane struct {
+	ActiveNodes   []string
 	LaneID        string
 	State         string
 	RunID         string
@@ -426,7 +427,36 @@ func readLanes(r *store.Reader) ([]storeLane, error) {
 		}
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	exists, err := hasTable(r, "read_only_runs")
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		members, err := r.Query(`SELECT lane_id,run_id FROM read_only_runs WHERE settled=0 ORDER BY run_id`)
+		if err != nil {
+			return nil, err
+		}
+		defer members.Close()
+		for members.Next() {
+			var lane, id string
+			if err = members.Scan(&lane, &id); err != nil {
+				return nil, err
+			}
+			for i := range out {
+				if out[i].LaneID == lane && out[i].State == laneStateLeased {
+					out[i].ActiveNodes = append(out[i].ActiveNodes, id)
+				}
+			}
+		}
+		if err = members.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // readRuns answers every run, ordered by start so a caller's list reads as a history.

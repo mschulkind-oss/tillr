@@ -456,6 +456,12 @@ func TestPlanDispatchesAQueuedItemOntoAnAvailableLane(t *testing.T) {
 // An edge is read, not assumed: the same item holds while its blocker is unfinished and
 // dispatches once the blocker lands.
 func TestPlanHoldsAnItemBlockedByAnUnlandedItem(t *testing.T) {
+	// This tests item edges, not the invoking checkout's proved-trunk pointer.
+	// A private repository with no pointer exercises the bootstrap case equally
+	// in a lane and a fresh clone; lane-base tests cover proof requirements.
+	root := fixtureRepo(t)
+	git(t, root, "init", "-b", "main")
+	git(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
 	policyPath := policy(t, "/bin/true")
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)
 
@@ -464,7 +470,7 @@ func TestPlanHoldsAnItemBlockedByAnUnlandedItem(t *testing.T) {
 			itemRecord("item_007", "not-started"),
 			itemRecord("item_042", "in-queue", "item_007"),
 		)
-		got := decisionFor(t, plan(t, storePath, tickPath), "item_042")
+		got := decisionFor(t, planFrom(t, storePath, tickPath, root, indexStub(t)), "item_042")
 		if got.Action != drain.ActionHold || got.Reason != drain.ReasonBlocked {
 			t.Fatalf("the decision is %q / %q, want hold / blocked", got.Action, got.Reason)
 		}

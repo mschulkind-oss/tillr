@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -160,12 +161,33 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 	// its lease was reaped cannot free the lane a newer run now holds — the guarded clear
 	// is the whole of that rule, and it is why the release is here rather than in the
 	// runner.
+	leaseID := payload.RunID
+	var groupID string
+	groupErr := tx.Reader().QueryRow(`SELECT group_id FROM read_only_runs WHERE run_id=?`, payload.RunID).Scan(&groupID)
+	if groupErr != nil && groupErr != sql.ErrNoRows {
+		return record.Envelope{}, groupErr
+	}
+	if groupErr == nil {
+		if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, payload.RunID); err != nil {
+			return record.Envelope{}, err
+		}
+		var remaining int
+		if err := tx.Reader().QueryRow(`SELECT COUNT(*) FROM read_only_runs WHERE group_id=? AND settled=0`, groupID).Scan(&remaining); err != nil {
+			return record.Envelope{}, err
+		}
+		// Only the last member releases the item's lane.
+		if remaining == 0 {
+			leaseID = groupID
+		} else {
+			leaseID = ""
+		}
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO lanes (lane_id, state, run_id, leased_until) VALUES (?, ?, NULL, NULL)
 		 ON CONFLICT(lane_id) DO UPDATE SET
 		   state = ?, run_id = NULL, leased_until = NULL
 		 WHERE lanes.run_id = ?`,
-		payload.LaneID, LaneStateIdle, LaneStateIdle, payload.RunID,
+		payload.LaneID, LaneStateIdle, LaneStateIdle, leaseID,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the lane: %v", err)
 	}

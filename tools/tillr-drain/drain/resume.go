@@ -132,6 +132,9 @@ func Resume(ctx context.Context, cfg ResumeConfig, spec ResumeSpec) (ResumeResul
 	}
 	laneDir := filepath.Join(cfg.LaneRoot, row.LaneID)
 	worktree := filepath.Join(laneDir, WorktreeDir)
+	if row.ReadOnlyGroup != "" {
+		laneDir = run.NodeDir(laneDir, spec.RunID)
+	}
 	// The lane layout is read before the session: a lane whose brief is gone is not a lane a
 	// resume can continue, and saying so is cheaper than the adapter's failure later.
 	if _, err := os.Stat(filepath.Join(laneDir, BriefFile)); err != nil {
@@ -221,10 +224,11 @@ func StoreLanes(ctx context.Context, storePath string) ([]string, error) {
 
 // resumeRun is one run's row as a resume reads it: what it belongs to, and what it ran on.
 type resumeRun struct {
-	LaneID  string
-	ItemID  string
-	Backend string
-	State   string
+	ReadOnlyGroup string
+	LaneID        string
+	ItemID        string
+	Backend       string
+	State         string
 }
 
 // readRunForResume answers the row of the run a resume continues, refusing a run the store
@@ -241,9 +245,20 @@ func readRunForResume(ctx context.Context, storePath, runID string) (resumeRun, 
 	var row resumeRun
 	var itemID *string
 	err = r.ReadTx(ctx, func(reader *store.Reader) error {
-		return reader.QueryRow(
-			`SELECT lane_id, item_id, backend, state FROM runs WHERE run_id = ?`, runID,
-		).Scan(&row.LaneID, &itemID, &row.Backend, &row.State)
+		if err := reader.QueryRow(`SELECT lane_id,item_id,backend,state FROM runs WHERE run_id=?`, runID).Scan(&row.LaneID, &itemID, &row.Backend, &row.State); err != nil {
+			return err
+		}
+		var exists bool
+		if err := reader.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_only_runs')`).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			err := reader.QueryRow(`SELECT group_id FROM read_only_runs WHERE run_id=?`, runID).Scan(&row.ReadOnlyGroup)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+		}
+		return nil
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return resumeRun{}, Usagef("the store holds no run %s: a resume continues a run the store can name, and a run killed before it wrote a terminal record becomes resumable once the reaper has closed it (`tillr-run release`, or the loop's own reap)", runID)

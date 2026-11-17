@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,6 +99,13 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
+			// Every sibling belongs to this pending set. Standalone continuation
+			// may name any one of them, not just the primary dispatch run.
+			for _, node := range parallelNodes(work.Decision) {
+				if node.RunRequest != nil {
+					byRun[node.RunRequest.RunID] = &work
+				}
+			}
 		case GateVerdictKind:
 			if e.ObjectType == "run" {
 				judged[*e.ObjectID] = true
@@ -152,6 +160,12 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				continue
 			}
 			req := work.Decision.RunRequest
+			for _, node := range parallelNodes(work.Decision) {
+				if node.RunRequest != nil && node.RunRequest.RunID == *e.ObjectID {
+					req = node.RunRequest
+					break
+				}
+			}
 			if segment.RunID != req.RunID || segment.ItemID != req.ItemID || segment.LaneID != work.Decision.LaneID || segment.Backend != req.Backend || !run.IsSessionID(segment.SessionID) || segment.ResumedAt == "" {
 				continue
 			}
@@ -330,7 +344,24 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
-	if d.Workflow != nil && work.Orphaned && !work.BoundaryFailed {
+	if len(d.Parallel) > 0 && work.Orphaned && !work.BoundaryFailed {
+		leases, err := activeLeases(r, at, []string{d.LaneID})
+		if err != nil {
+			return Decision{}, err
+		}
+		if len(leases) == 0 {
+			restarted, changed, err := restartParallel(r, d)
+			if err != nil {
+				return Decision{}, err
+			}
+			if changed {
+				copy := *work
+				copy.Decision, copy.Ready, copy.Orphaned = restarted, true, false
+				return pendingDecision(r, &copy, at, inputs, template, policy, shut, gates)
+			}
+		}
+	}
+	if d.Workflow != nil && len(d.Parallel) == 0 && work.Orphaned && !work.BoundaryFailed {
 		rec, err := terminalRecord(r, d.RunRequest.RunID)
 		if err != nil {
 			return Decision{}, err
@@ -352,9 +383,23 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if work.Ready {
+		if len(d.Parallel) > 0 {
+			rec, err := terminalRecord(r, d.RunRequest.RunID)
+			if err != nil {
+				return Decision{}, err
+			}
+			if rec != nil {
+				d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+				d.Inputs = inputs
+				identifyDecision(&d)
+				return d, nil
+			}
+		}
 		if commandStage(d) {
 			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+			group := d.RunRequest.ReadOnlyGroup
 			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, d.RunRequest.RunID)
+			d.RunRequest.ReadOnlyGroup = group
 			d.Inputs = inputs
 			identifyDecision(&d)
 			return d, nil
@@ -380,6 +425,10 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			}
 			if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 				request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
+			}
+			if len(d.Parallel) > 0 {
+				request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
+				request.NodeID = d.RunRequest.NodeID
 			}
 			d.RunRequest = request
 			if degraded != "" {
@@ -451,7 +500,14 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		if err != nil {
 			return Decision{}, err
 		}
-		if rec != nil {
+		finished := rec != nil
+		if len(d.Parallel) > 0 {
+			finished, err = parallelTerminal(r, d)
+			if err != nil {
+				return Decision{}, err
+			}
+		}
+		if finished {
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
 		}
 	}
@@ -855,15 +911,29 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if d.Workflow != nil && d.NodeBaseSHA == "" {
 				d.NodeBaseSHA = base
 			}
-			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
-			if _, err := run.ClaimLease(ctx, tx, *d.RunRequest, d.LaneID, at); err != nil {
+			if err := l.claimParallel(tx, &d); err != nil {
 				return err
 			}
 			if err := recordWorkflowSelection(tx, d); err != nil {
 				return err
 			}
-			if err := startNode(tx, d); err != nil {
-				return err
+			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
+			for _, node := range parallelNodes(d) {
+				if len(d.Parallel) > 0 {
+					rec, err := terminalRecord(tx.Reader(), node.RunRequest.RunID)
+					if err != nil {
+						return err
+					}
+					if rec != nil {
+						continue
+					}
+				}
+				if _, err := run.ClaimLease(ctx, tx, *node.RunRequest, node.LaneID, at); err != nil {
+					return err
+				}
+				if err := startNode(tx, node); err != nil {
+					return err
+				}
 			}
 			if err := appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, at); err != nil {
 				return err
@@ -950,9 +1020,13 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 	if err != nil {
 		return err
 	}
-	marked, err := liveRunWorkers(l.cfg.Store, d.RunRequest.RunID, here)
-	if err != nil {
-		return err
+	var marked []*runFaceOwner
+	for _, node := range parallelNodes(d) {
+		workers, err := liveRunWorkers(l.cfg.Store, node.RunRequest.RunID, here)
+		if err != nil {
+			return err
+		}
+		marked = append(marked, workers...)
 	}
 	var strays []string
 	for _, p := range marked {
@@ -1064,7 +1138,11 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		local := LoopResult{}
 		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
 		if err == nil {
-			_, _, err = l.cfg.Steps.Run(ctx, *d.RunRequest)
+			if len(d.Parallel) > 0 {
+				err = l.runParallel(ctx, d)
+			} else {
+				_, _, err = l.cfg.Steps.Run(ctx, *d.RunRequest)
+			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
 			}
@@ -1284,7 +1362,45 @@ plans:
 				d = work.Decision
 			}
 			l.laneRefusedNow = false
-			staged, err := l.stageDispatches(ctx, []Decision{d}, base, result)
+			var staged []Decision
+			var err error
+			owned := ""
+			if len(d.Parallel) > 0 && d.WorkflowRestart {
+				owned, err = l.stagedNodeRun(d)
+				if err != nil {
+					return "", err
+				}
+			}
+			if owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
+				if d.NodeIndex == 0 && d.NodeStartRunID == "" {
+					raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
+					if err != nil {
+						return "", err
+					}
+					d.NodeBaseSHA = strings.TrimSpace(string(raw))
+					d.NodeStartRunID = owned
+				}
+				if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+					base = stagedBase
+				}
+				head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+				if err != nil {
+					return "", err
+				}
+				dirty, err := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
+				if err != nil {
+					return "", err
+				}
+				if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
+					if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
+						return "", err
+					}
+					continue
+				}
+				staged = []Decision{d}
+			} else {
+				staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
+			}
 			if err != nil {
 				result.StopItemID, result.StopStep = d.ItemID, "stage"
 				return "", err
@@ -1314,7 +1430,11 @@ plans:
 				}
 				continue
 			}
-			l.launchRun(ctx, staged[0], at, watched, result)
+			parallel, err := l.stageParallel(ctx, staged[0], base)
+			if err != nil {
+				return "", err
+			}
+			l.launchRun(ctx, parallel, at, watched, result)
 		case ActionSettle, ActionJudge:
 			l.launchExamination(ctx, d, work, at, timing, watched)
 		}
@@ -1397,6 +1517,8 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				err = l.markExamined(ctx, work.Decision)
 			}
 			completion.outcome.err = err
+		} else if d.Action == ActionSettle && len(work.Decision.Parallel) > 0 {
+			completion.outcome = l.settleParallel(ctx, work, local, &timing, watched)
 		} else if d.Action == ActionSettle {
 			s, err := store.OpenRead(ctx, l.cfg.Store)
 			var rec *run.Record

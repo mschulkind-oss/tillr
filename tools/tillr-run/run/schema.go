@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS lanes (
   leased_until INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS read_only_runs (
+ run_id TEXT PRIMARY KEY,
+ group_id TEXT NOT NULL,
+ item_id TEXT NOT NULL,
+ lane_id TEXT NOT NULL REFERENCES lanes(lane_id),
+ settled INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS read_only_group_members ON read_only_runs(group_id,settled);
+CREATE INDEX IF NOT EXISTS read_only_active_lanes ON read_only_runs(lane_id,run_id) WHERE settled=0;
+
 CREATE TABLE IF NOT EXISTS runs (
   run_id        TEXT PRIMARY KEY,
   item_id       TEXT,

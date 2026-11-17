@@ -15,6 +15,13 @@ const lanes: LaneRow[] = Array.from({ length: 10 }, (_, i) => ({
 }));
 afterEach(cleanup);
 
+test("Home keeps parallel readers on one lane and names the running node count", () => {
+  const { container } = render(<Home lanes={[{ ...lanes[0], running_nodes: 4 }]} now={now} />);
+  expect(container.textContent).toContain("1 of 1 running");
+  expect(container.textContent).toContain("4 nodes running");
+  expect(container.querySelectorAll(".lane-strip li")).toHaveLength(1);
+});
+
 test("Home renders every lane and counts exactly the same ten rows", () => {
   const { container } = render(<Home lanes={lanes} now={now} />);
   const strip = container.querySelector(".lane-strip")!;

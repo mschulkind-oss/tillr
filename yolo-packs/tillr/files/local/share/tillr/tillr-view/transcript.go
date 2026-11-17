@@ -97,6 +97,10 @@ func runLogPath(laneRoot, laneID, runID string) string {
 	if laneRoot == "" || laneID == "" || runID == "" {
 		return ""
 	}
+	nodeDir := filepath.Join(laneRoot, laneID, "nodes", runID)
+	if info, err := os.Stat(nodeDir); err == nil && info.IsDir() {
+		return filepath.Join(nodeDir, runID+".log")
+	}
 	return filepath.Join(laneRoot, laneID, runID+".log")
 }
 
