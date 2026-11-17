@@ -6,10 +6,11 @@ The term and the name **git-landing** are placeholders coined in
 [the direction document](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md#the-words-this-document-uses);
 the owner has not chosen the final names.
 
-This package reads and validates that data. **No utility consumes it yet.** It does
-not open a store, dispatch work, check a prerequisite, run a program, or change the
-existing queue's behavior. The consumer column below names the intended reader
-when the later integration work lands, not something this change has wired in.
+This package reads and validates that data and answers an open store's declaration.
+The store utility records and reports it; item validation and drain behavior do not
+consume its vocabulary yet. It does not open a store, dispatch work, check a
+prerequisite, or run a program. The consumer column below names the intended
+reader when the later integration work lands.
 
 ## Reading a file
 
@@ -22,9 +23,34 @@ The sole Go spelling of the placeholder name is `GitLandingName`.
 
 The reader rejects unknown keys, including keys inside transitions and hooks;
 key spelling is case-sensitive, and duplicate object keys are refused rather than
-merged. It rejects wrong JSON types, unsupported versions, duplicate or empty state names,
-and state references that are not declared. An error names the offending key.
+merged. It rejects invalid UTF-8 instead of accepting a string whose bytes would
+change when stored. It also rejects wrong JSON types, unsupported versions, duplicate
+or empty state names, and state references that are not declared. An error names the
+offending key or invalid encoding.
 The package recognizes version 1 only.
+
+## A store's definition
+
+`ForStore(ctx, store)` is the shared reader for an already open store. It returns a
+`Record`: name, version, exact source content as a string, lowercase SHA-256 of
+that content, and a `Default` flag. Its `Parsed` field carries the validated
+`Definition` for Go consumers and is omitted from JSON. The store utility prints
+this same record as its `store.definition` payload.
+
+The declaration is one JSON record at key `store.definition` in the existing `meta`
+table. An absent row means the embedded Git-landing definition (`Default: true`);
+there is no new table or schema version. Reading a legacy store requires no migration.
+An invalid declaration or metadata that disagrees with its content is an error,
+never a reason to use the default.
+
+`Set(ctx, store, content)` validates bytes before starting a write transaction, then
+checks all current item states, replaces the declaration, and appends
+`store.definition.set` atomically. The event names `old_sha256` and `new_sha256`;
+the old hash names the embedded content when there was no declaration.
+`OccupiedStatesError` names every item and current state the replacement would
+drop. A store predating the item table has no items to check. No file, Git, or
+process work runs under SQLite's write lock. See the
+[store utility's usage and refusal behavior](https://github.com/mschulkind-oss/tillr/blob/main/tillr-store/README.md#the-stores-definition).
 
 ## Keys, types, defaults, and readers
 
@@ -86,7 +112,8 @@ such as a close reason, the saved reopen state, or block metadata.
 This snapshot therefore includes moves out of `landed` and `resolved-elsewhere`.
 That permissiveness is the defect addressed by
 [the separate terminal-state item](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md#prevent-raw-writes-from-reopening-a-landed-or-resolved-item),
-not an endorsement of reopening landed work. No consumer is wired to this file,
-and adopting a stricter lifecycle must update its snapshot and literal-value test
+not an endorsement of reopening landed work. Store declarations use this file as
+the default; item lifecycle behavior is not wired to it yet. Adopting a stricter
+lifecycle must update its snapshot and literal-value test
 together. Legacy read-only states (`abandoned`, `deleted`, `in-progress`) are not
 writable vocabulary in the definition.

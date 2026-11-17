@@ -223,15 +223,7 @@ where the declaration lives; the direction document records it for him to confir
 **Agent details:** the reader every utility uses lives in the definition package; no utility parses
 the stored content itself.
 
-<!-- tillr: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr store init --definition <file>` validates the file with the definition package and records its name, version, content and SHA-256 in the store, with an event. An invalid file is refused with exit 2, and no store is created.
-- **c2:** `tillr store definition --store <path>` prints the recorded definition as a record. A store with none recorded answers the embedded Git-landing definition, marked as the default. A test reads a store created before this change.
-- **c3:** `tillr store definition --store <path> --set <file>` replaces the definition, with an event naming the old and the new SHA-256. It refuses a definition that drops a state some item in the store holds, and names those items.
-- **c4:** The definition package offers one function that answers a store's definition, and a test asserts it returns the same definition the face prints.
-- **c5:** No Git, file or process work runs inside a SQLite write transaction.
-- **c6:** Every existing test of the store utility passes unchanged, and a store created before this change opens and drains as before.
-- **c7:** The store utility's README documents the flag and the face.
 
 ### Add a face that lists a store's items
 
@@ -288,7 +280,7 @@ and [lifecycle.go](../../tools/tillr-item/item/lifecycle.go), and `terminalState
 [sync.go](../../tools/tillr-item/item/sync.go). The legacy frozen states (`abandoned`, `deleted`,
 `in-progress`) stay readable and unwritable under every definition.
 
-<!-- tillr: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-store-definition,item-def-apply-unknown-fields" prose="2" -->
+<!-- tillr: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-apply-unknown-fields" prose="2" -->
 
 - **c1:** `tillr item state`, `apply`, `close` and `reopen` take the states, the finished states, the ready, blocked and closed roles, and the allowed moves from the store's definition through the definition package, and no longer from constants in the item utility.
 - **c2:** A move the definition does not list is refused as `transition-not-allowed`, naming the two states and the definition. A move out of a finished state is allowed only where the definition lists it, requires `--reason` and `--by`, and is recorded as an event that carries both.

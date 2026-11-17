@@ -148,7 +148,7 @@ func TestGitLandingLiteralValues(t *testing.T) {
 	}
 }
 
-func TestNameOnlyInOneConstantAndNoConsumers(t *testing.T) {
+func TestNameOnlyInOneConstantAndOnlyStoreConsumes(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locating source")
@@ -178,8 +178,9 @@ func TestNameOnlyInOneConstantAndNoConsumers(t *testing.T) {
 			}
 			for _, imp := range parsed.Imports {
 				value, _ := strconv.Unquote(imp.Path.Value)
-				if value == "github.com/mschulkind-oss/tillr/definition" {
-					t.Errorf("utility imports definition: %s", path)
+				if value == "github.com/mschulkind-oss/tillr/definition" &&
+					filepath.Base(module) != "tillr-store" && filepath.Dir(path) != filepath.Dir(file) {
+					t.Errorf("utility other than store imports definition: %s", path)
 				}
 			}
 			if n == 0 {

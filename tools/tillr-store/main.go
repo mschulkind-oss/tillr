@@ -24,6 +24,7 @@ import (
 	_ "github.com/mschulkind-oss/tillr-land/land"
 	_ "github.com/mschulkind-oss/tillr-run/run"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -66,6 +67,8 @@ func run(args []string) int {
 	switch face {
 	case "init":
 		env, code = initFace(rest)
+	case "definition":
+		env, code = definitionFace(rest)
 	case "seed":
 		env, code = seedFace(rest)
 	case "check":
@@ -98,7 +101,7 @@ func run(args []string) int {
 	return code
 }
 
-// report is the payload of the store's one stdout record kind, store.report. Every
+// report is the payload of store.report. Except for definition, each
 // face emits the same shape describing the store as it stands after the face ran,
 // and action says which face produced it: a consumer that reads schema_version does
 // not have to know which face wrote the record.
@@ -157,6 +160,7 @@ func initFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("init")
 	path := fs.String("store", "", "the store to create")
 	fixture := fs.Bool("fixture", false, "mark the store as a fixture, which is what makes it seedable")
+	definitionPath := fs.String("definition", "", "validated definition file to record in the store")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -164,6 +168,15 @@ func initFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, usagef("init needs --store <path>")
 	}
 
+	// Validate before any directory or store is created.
+	var content []byte
+	if *definitionPath != "" {
+		var err error
+		content, err = readDefinitionFile(*definitionPath)
+		if err != nil {
+			return record.Envelope{}, usagef("%v", err)
+		}
+	}
 	ctx := context.Background()
 	if env, code := schemaGate(ctx, *path, "init"); code != record.ExitOK {
 		return env, code
@@ -182,6 +195,11 @@ func initFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, openFailure(err)
 	}
 	defer s.Close()
+	if *definitionPath != "" {
+		if _, err := definition.Set(ctx, s, content); err != nil {
+			return record.Envelope{}, definitionFailure(err)
+		}
+	}
 	return describe(s, "init")
 }
 
@@ -606,7 +624,7 @@ func newID() string {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "init, seed, check, recover, checkpoint or events"
+const faceList = "init, definition, seed, check, recover, checkpoint or events"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
