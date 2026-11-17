@@ -148,54 +148,26 @@ func runProcessEnvironment(dir string, uid uint32) ([]byte, error) {
 // procScans counts full process-table scans, so a test can pin how many a pass makes.
 var procScans atomic.Int64
 
-func liveRunProcess(storePath, runID string) (bool, error) {
-	storePath, err := processStoreIdentity(storePath)
-	if err != nil {
-		return false, err
-	}
-	procScans.Add(1)
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return false, err
-	}
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == os.Getpid() {
-			continue
-		}
-		env, err := runProcessEnvironment(filepath.Join("/proc", entry.Name()), uint32(os.Geteuid()))
-		if processGone(err) {
-			continue
-		}
-		if err != nil {
-			return false, fmt.Errorf("checking process %d before recovering %s: %w", pid, runID, err)
-		}
-		values := bytes.Split(env, []byte{0})
-		hasRun, hasStore := false, false
-		for _, v := range values {
-			hasRun = hasRun || string(v) == "TILLR_RUN_ID="+runID
-			hasStore = hasStore || string(v) == "TILLR_LOOP_STORE="+storePath
-		}
-		if hasRun && hasStore {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // liveRunIDs answers, from one process-table scan, every run ID a live process
 // carries for this store: run faces and their adapters inherit both markers.
 func liveRunIDs(storePath string) (map[string]bool, error) {
-	storePath, err := processStoreIdentity(storePath)
+	live, _, err := liveRunProcessIDs(storePath)
+	return live, err
+}
+
+// liveRunProcessIDs is liveRunIDs and, from the same scan, the run IDs whose run face
+// itself is alive (isRunFaceArgv), as opposed to only an adapter or a stray child of one.
+func liveRunProcessIDs(storePath string) (live, faces map[string]bool, err error) {
+	storePath, err = processStoreIdentity(storePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	procScans.Add(1)
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	live := map[string]bool{}
+	live, faces = map[string]bool{}, map[string]bool{}
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid == os.Getpid() {
@@ -206,7 +178,7 @@ func liveRunIDs(storePath string) (map[string]bool, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("checking process %d before recovering runs: %w", pid, err)
+			return nil, nil, fmt.Errorf("checking process %d before recovering runs: %w", pid, err)
 		}
 		runID, hasStore := "", false
 		for _, v := range bytes.Split(env, []byte{0}) {
@@ -215,11 +187,22 @@ func liveRunIDs(storePath string) (map[string]bool, error) {
 			}
 			hasStore = hasStore || string(v) == "TILLR_LOOP_STORE="+storePath
 		}
-		if hasStore && runID != "" {
-			live[runID] = true
+		if !hasStore || runID == "" {
+			continue
+		}
+		live[runID] = true
+		if !faces[runID] {
+			argv, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+			if processGone(err) {
+				continue
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("checking process %d before recovering runs: %w", pid, err)
+			}
+			faces[runID] = isRunFaceArgv(argv)
 		}
 	}
-	return live, nil
+	return live, faces, nil
 }
 
 // reapEvidence is the process-table evidence a pass reaps from, gathered before its
@@ -228,6 +211,13 @@ func liveRunIDs(storePath string) (map[string]bool, error) {
 type reapEvidence struct {
 	dead map[LoopOwner]bool
 	live map[string]bool
+	// stuck is each examined run whose lane is still leased to it with no expiry and
+	// whose run face is gone (stuckExaminationLease), keyed by run ID to its lane. The
+	// write re-verifies every one before it reclaims it.
+	stuck map[string]string
+	// reclaimed collects the lines the write's reclaims print once its transaction has
+	// closed: no report is written inside a write transaction.
+	reclaimed *[]string
 }
 
 func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
@@ -238,14 +228,27 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, stuck: map[string]string{}, reclaimed: &[]string{}}
 	var owners []LoopOwner
+	stuck := map[string]*pendingWork{}
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		works, err := readPending(r)
 		if err != nil {
 			return err
 		}
+		unbounded, err := leasesWithNoExpiry(r)
+		if err != nil {
+			return err
+		}
 		for _, work := range works {
+			if work.Done && work.Decision.RunRequest != nil && !l.active[work.Decision.RunRequest.RunID] {
+				if unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
+					stuck[work.Decision.RunRequest.RunID] = work
+					if work.Examiner != nil {
+						owners = append(owners, *work.Examiner)
+					}
+				}
+			}
 			if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 				continue
 			}
@@ -276,12 +279,69 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		ev.dead[owner] = dead
 		anyDead = anyDead || dead
 	}
-	if anyDead {
-		if ev.live, err = liveRunIDs(l.cfg.Store); err != nil {
+	if anyDead || len(stuck) > 0 {
+		var faces map[string]bool
+		if ev.live, faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
+		}
+		for id, work := range stuck {
+			if stuckExaminationLease(work, faces[id], here, ev) {
+				ev.stuck[id] = work.Decision.LaneID
+			}
 		}
 	}
 	return ev, nil
+}
+
+// leasesWithNoExpiry answers every lane leased with no expiry, keyed by the run it is
+// leased to: the shape an examination's claim leaves, which ReapExpiredLeases never
+// reclaims.
+func leasesWithNoExpiry(r *store.Reader) (map[string]string, error) {
+	rows, err := r.Query(`SELECT run_id, lane_id FROM lanes WHERE state = ? AND run_id IS NOT NULL AND leased_until IS NULL`, run.LaneStateLeased)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	leases := map[string]string{}
+	for rows.Next() {
+		var runID, lane string
+		if err := rows.Scan(&runID, &lane); err != nil {
+			return nil, err
+		}
+		leases[runID] = lane
+	}
+	return leases, rows.Err()
+}
+
+// stuckExaminationLease answers whether an examined run's lease is stranded: its
+// examination is recorded done, no examination in this loop holds it (the caller excluded
+// l.active), its examiner is absent, dead or this loop, and its run face is gone. A stray
+// child of the run's adapter is not a face and does not keep the lease; a live face — a
+// continuation resuming the run — does, and releases it itself when it ends.
+func stuckExaminationLease(work *pendingWork, faceLive bool, here *LoopOwner, ev reapEvidence) bool {
+	if faceLive {
+		return false
+	}
+	examiner := work.Examiner
+	return examiner == nil || ev.ownerDead(examiner) || (examiner.PID == here.PID && examiner.Start == here.Start && examiner.Domain == here.Domain)
+}
+
+// reclaimStuckLease releases an examined run's stranded lane (stuckExaminationLease), guarded
+// by the exact lease the evidence saw, and records it as drain.lane-released with cause reap.
+func (l *Loop) reclaimStuckLease(tx *store.Tx, work *pendingWork, at time.Time, ev reapEvidence) error {
+	id, lane := work.Decision.RunRequest.RunID, work.Decision.LaneID
+	res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ? AND state = ? AND leased_until IS NULL`, run.LaneStateIdle, lane, id, run.LaneStateLeased)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if err := appendEffect(tx, laneReleasedKind, id, laneReleased{LaneID: lane, Cause: laneReleaseReap}, at); err != nil {
+		return err
+	}
+	*ev.reclaimed = append(*ev.reclaimed, fmt.Sprintf("loop: reclaimed lane %s: run %s was examined but its lane was still leased to it, and its run face is gone\n", lane, id))
+	return nil
 }
 
 // reapDeadLoopRuns closes only proven-dead loop-owned claims. Foreign/legacy
@@ -295,6 +355,13 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		return err
 	}
 	for _, work := range works {
+		if work.Done && work.Decision.RunRequest != nil {
+			if lane, ok := ev.stuck[work.Decision.RunRequest.RunID]; ok && lane == work.Decision.LaneID {
+				if err := l.reclaimStuckLease(tx, work, at, ev); err != nil {
+					return err
+				}
+			}
+		}
 		if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 			continue
 		}

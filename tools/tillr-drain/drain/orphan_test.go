@@ -196,7 +196,7 @@ func TestDeadLoopNeverReclaimsASurvivingWorker(t *testing.T) {
 	if err := os.Symlink(f.storePath, alias); err != nil {
 		t.Fatal(err)
 	}
-	if live, err := liveRunProcess(alias, p.decision.RunRequest.RunID); err != nil || !live {
+	if live, err := liveRunIDs(alias); err != nil || !live[p.decision.RunRequest.RunID] {
 		t.Fatalf("store alias hid surviving worker: %v %v", live, err)
 	}
 	replacement := f.loop(t, &recordingSteps{}, &itemContentStager{})

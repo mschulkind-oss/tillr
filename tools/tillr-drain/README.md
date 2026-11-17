@@ -207,6 +207,21 @@ Only a proven-dead owner with no live worker is reclaimed. Foreign or legacy cla
 without that evidence remain protected. A normal offline finish is still judged;
 a worker signal without evidence of supervisor interruption is not exempted.
 
+An examination (the loop's settle or judge of a finished run) leases the run's lane with
+no expiry while it works, and releases that lease once it ends, on every path. The write
+that records the run examined (`drain.examined`) also releases the lane. Only a live run
+face keeps the lease, because a face is a continuation that releases the lane itself when
+it finishes. A run face is the `tillr-run exec` process the loop started. A process that
+merely carries the run's markers, such as an MCP server the adapter left behind, does not
+keep the lease. The loop reports such strays on one `loop: run <id> ended, but
+process(es) ...` line and leaves them running, because `tillr drain stop --end-runs` is the
+drain's only run-ending path. Each release writes one `drain.lane-released` event, for
+every run and not only a workflow node. The event names the lane and its cause:
+`examined`, `examination-ended`, or `reap`. The last cause is the safety net. A pass's reap
+reclaims a lane that is leased with no expiry to a run whose examination is recorded done,
+when no examination in this loop holds the lane, its examiner is absent, dead or this loop,
+and its run face is gone. The reap prints one `loop: reclaimed lane ...` line for it.
+
 ## Owner edits and waiting landings
 
 Uncommitted content in the main checkout belongs to the owner, including edits
