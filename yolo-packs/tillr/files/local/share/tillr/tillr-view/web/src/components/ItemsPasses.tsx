@@ -5,7 +5,7 @@ import { waitingIdentity, waitingOrder } from "../models/waiting";
 import { ClassState, EntityLink } from "./EntityLink";
 import { EntityText, newestPasses, passCounts, passStamp } from "./Home";
 import { useScreenHash } from "./ObservatoryShell";
-import { moveItemToTop } from "../models/api";
+import { placeItem, type ItemPlacement } from "../models/api";
 
 function useListParams() {
   const hash = useScreenHash();
@@ -36,6 +36,21 @@ function useStableList<T>(incoming: T[], identity: (row: T) => string, scope: st
   const newer = pinned ? ids.filter(id => !accepted.ids.includes(id)).length : 0;
   const removed = pinned ? accepted.ids.filter(id => !ids.includes(id)).length : 0;
   const updates = newer + removed;
+  // Ignore the old server order during our own optimistic move, but not a later
+  // order from another writer. Compare common rows so arrivals stay 'newer'.
+  const localBase = useRef<string | null>(null);
+  const signature = ids.join("\n");
+  const common = new Set(ids.filter(id => accepted.ids.includes(id)));
+  const orderChanged = pinned && localBase.current !== signature &&
+    ids.filter(id => common.has(id)).join("\n") !== accepted.ids.filter(id => common.has(id)).join("\n");
+  useEffect(() => {
+    if (localBase.current !== signature) localBase.current = null;
+  }, [signature]);
+  const setOrder = (next: string[], optimistic = false) => {
+    localBase.current = optimistic ? signature : null;
+    setAccepted({ scope, ids: next });
+    setHeld(true);
+  };
   useEffect(() => {
     if (!pinned) setAccepted({ scope, ids });
     if (!sameScope) { setHeld(false); setFocused(null); }
@@ -55,6 +70,7 @@ function useStableList<T>(incoming: T[], identity: (row: T) => string, scope: st
   }, [focused]);
   const focus = (id: string) => { setHeld(true); setFocused(id); };
   const accept = () => {
+    localBase.current = null;
     setAccepted({ scope, ids });
     setHeld(false);
     setFocused(null);
@@ -64,15 +80,20 @@ function useStableList<T>(incoming: T[], identity: (row: T) => string, scope: st
     // jsdom does not implement scrollTo; a real browser does.
     if (window.scrollY > 0) window.scrollTo(0, 0);
   };
-  return { visible, newer, updates, focused, focus, accept, listRef };
+  const refreshed = () => { localBase.current = null; };
+  return { visible, newer, updates, orderChanged, setOrder, refreshed, focused, focus, accept, listRef };
 }
 
-function useRowKeys(ids: string[], focused: string | null, focus: (id: string) => void, href: (id: string) => string) {
+function useRowKeys(ids: string[], focused: string | null, focus: (id: string) => void, href: (id: string) => string, move?: (id: string, delta: number) => void) {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const target = event.target;
       if (event.metaKey || event.ctrlKey || event.altKey || (target instanceof HTMLElement &&
-        (target.matches("input, textarea, select, button, summary") || target.isContentEditable))) return;
+        (target.matches("input, textarea, select, summary") || target.isContentEditable))) return;
+      if (move && focused && ["J", "K"].includes(event.key)) {
+        event.preventDefault(); move(focused, event.key === "J" ? 1 : -1); return;
+      }
+      if (target instanceof HTMLElement && target.matches("button")) return;
       if (event.key === "u") { event.preventDefault(); window.location.hash = "#/"; return; }
       if (!["j", "k", "Enter", "[", "]"].includes(event.key) || !ids.length) return;
       event.preventDefault();
@@ -85,58 +106,115 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [ids.join("\n"), focused, focus, href]);
+  }, [ids.join("\n"), focused, focus, href, move]);
 }
 
 const CLASSES = ["needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
 export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onMoved }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null; writesEnabled?: boolean; onMoved?: () => Promise<unknown> }) {
   const [moving, setMoving] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const moveLock = useRef(false);
+  const dragged = useRef<string | null>(null);
   const { params, set } = useListParams();
   const preset = params.get("state") || "not-moving";
   const klass = params.get("class") || "";
   const reason = params.get("reason") || "";
+  const sort = params.get("sort") === "item" ? "item" : "place";
   const rows = useMemo(() => {
     const source: WaitingRow[] = preset === "landed" ? (snapshot?.items ?? []).filter(item => item.projected_state.state === "landed").map(item => ({
       item_id: item.item_id, rank: item.rank ?? "", class: "landed", where: "trunk", why: item.latest_decision?.reason ?? "not recorded",
       mover: "—", since: "not recorded", class_source: "state",
     })) : waiting ?? [];
     return source.filter(row => (preset !== "not-moving" || !["ready", "moving"].includes(row.class)) && (!klass || row.class === klass) && (!reason || row.why === reason))
-      .sort(waitingOrder);
-  }, [waiting, snapshot, preset, klass, reason]);
-  const list = useStableList(rows, waitingIdentity, `${preset}|${klass}|${reason}`);
-  useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.document ? window.location.hash : `#/item/${encodeURIComponent(id)}`);
-  const move = async (id: string) => {
-    setMoving(id); setMoveError(null);
+      .sort(sort === "place" ? waitingOrder : (a, b) => waitingIdentity(a).localeCompare(waitingIdentity(b)));
+  }, [waiting, snapshot, preset, klass, reason, sort]);
+  const list = useStableList(rows, waitingIdentity, `${preset}|${klass}|${reason}|${sort}`);
+  const canMove = (row: WaitingRow) => writesEnabled && !row.document && preset !== "landed" &&
+    !["not-started", "landed", "closed", "resolved-elsewhere"].includes(snapshot?.items.find(item => item.item_id === row.item_id)?.projected_state.raw_state ?? "");
+  const orderedMoves = sort === "place" && writesEnabled && preset !== "landed";
+  const movable = list.visible.filter(canMove);
+  const move = async (id: string, destination: ItemPlacement) => {
+    if (moveLock.current || !list.visible.some(row => row.item_id === id && canMove(row))) return;
+    const previous = list.visible.map(waitingIdentity);
+    const next = previous.filter(value => value !== id);
+    const anchor = "before" in destination ? destination.before : "after" in destination ? destination.after : null;
+    if (anchor === id || (anchor !== null && !movable.some(row => row.item_id === anchor))) return;
+    const index = anchor === null ? ("to" in destination && destination.to === "last" ? next.length : 0) : next.indexOf(anchor) + ("after" in destination ? 1 : 0);
+    next.splice(index, 0, id);
+    moveLock.current = true;
+    setMoving(id); setMoveError(null); setRefreshError(null);
+    if (sort === "place") list.setOrder(next, true);
     try {
-      await moveItemToTop(id);
-      // The reader's own confirmed move must not wait behind the focused-list pin.
-      list.accept();
-      await onMoved?.();
-    } catch (error) { setMoveError(`${id}: ${error instanceof Error ? error.message : String(error)}`); }
-    finally { setMoving(null); }
+      await placeItem(id, destination);
+    } catch (error) {
+      if (sort === "place") list.setOrder(previous);
+      setMoveError(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+      moveLock.current = false; setMoving(null); return;
+    }
+    // A failed read after a confirmed write is not a refused move: keep the new order.
+    try {
+      if (onMoved) {
+        await onMoved();
+        // A second writer may restore the old order before this read. A fresh
+        // answer is authoritative even when its IDs equal the pre-move answer.
+        list.refreshed();
+      }
+    }
+    catch (error) { setRefreshError(`Order saved, but refresh failed: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { moveLock.current = false; setMoving(null); }
+  };
+  useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.document ? window.location.hash : `#/item/${encodeURIComponent(id)}`, (id, delta) => {
+    if (!orderedMoves || moveLock.current) return;
+    const at = list.visible.findIndex(row => row.item_id === id);
+    const anchor = at >= 0 ? list.visible[at + delta] : undefined;
+    if (anchor && canMove(anchor)) void move(id, delta < 0 ? { before: anchor.item_id } : { after: anchor.item_id });
+  });
+  const dropAt = (anchor: string, after = false) => {
+    const id = dragged.current; dragged.current = null;
+    if (id && orderedMoves) void move(id, after ? { after: anchor } : { before: anchor });
   };
   const options = preset === "landed" ? rows : waiting ?? [];
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Items</h1>
     {!writesEnabled ? <p>This server is read-only.</p> : null}
     {moveError ? <p role="alert">Move refused: {moveError}</p> : null}
+    {refreshError ? <p role="alert">{refreshError}</p> : null}
     <div className="ledger__filters">
       {[["not-moving", "not moving"], ["unlanded", "all unlanded"], ["landed", "landed"]].map(([value, label]) => <button key={value} type="button" aria-pressed={preset === value} onClick={() => set("state", value)}>{label}</button>)}
+      <label>Sort <select aria-label="Sort" value={sort} onChange={event => set("sort", event.target.value)}><option value="place">place</option><option value="item">item</option></select></label>
       <label>Class <select aria-label="Class" value={klass} onChange={event => set("class", event.target.value)}><option value="">any</option>{[...new Set([...CLASSES, ...options.map(row => row.class), ...(klass ? [klass] : [])])].map(value => <option key={value}>{value}</option>)}</select></label>
       <label>Reason <select aria-label="Reason" value={reason} onChange={event => set("reason", event.target.value)}><option value="">any</option>{[...new Set([...options.map(row => row.why), ...(reason ? [reason] : [])])].sort().map(value => <option key={value}>{value}</option>)}</select></label>
     </div>
-    <div className="ledger__newer">{list.updates ? <button type="button" onClick={list.accept}>{list.newer ? `${list.newer} newer ↑` : `${list.updates} updates ↑`}</button> : null}</div>
+    <details><summary>Keys</summary><p>j / k: focus next / previous row · Enter: open row · u: Home</p><p>J: move down one visible row · K: move up one visible row (writes on, sorted by place)</p></details>
+    <div className="ledger__newer">{list.updates ? <button type="button" disabled={moving !== null} onClick={list.accept}>{list.newer ? `${list.newer} newer ↑` : `${list.updates} updates ↑`}</button> : null}{list.orderChanged && moving === null ? <button type="button" onClick={list.accept}>order changed ↑</button> : null}</div>
     {error ? <p role="alert">Items refused: {error.message}</p> : (preset === "landed" ? snapshot === undefined : waiting === undefined) ? <p role="status">Reading items…</p> : list.visible.length === 0 ? <p>No items match these filters.</p> :
       <table><thead><tr>{["Rank", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run", ...(writesEnabled ? ["Order"] : [])].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
         const item = snapshot?.items.find(item => item.item_id === row.item_id);
         const identity = waitingIdentity(row);
-        return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}>
+        return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}
+          onDragOver={event => { if (orderedMoves && dragged.current && canMove(row) && !moveLock.current) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+          onDrop={event => {
+            if (!orderedMoves || !canMove(row) || !dragged.current || moveLock.current) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            const below = event.clientY > rect.top + rect.height / 2;
+            const next = movable[movable.findIndex(value => value.item_id === row.item_id) + 1];
+            if (below && next) dropAt(next.item_id);
+            else dropAt(row.item_id, below);
+          }}>
           <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
-          {writesEnabled ? <td>{!row.document && preset !== "landed" && !["not-started", "landed", "closed", "resolved-elsewhere"].includes(item?.projected_state.raw_state ?? "") ? <button type="button" aria-label={`Move ${row.item_id} to top`} disabled={moving !== null} onClick={() => void move(row.item_id)}>Move to top</button> : null}</td> : null}
+          {writesEnabled ? <td>{canMove(row) ? <>
+            {orderedMoves ? <button type="button" className="ledger__drag" aria-label={`Drag ${row.item_id}`} disabled={moving !== null} draggable={moving === null}
+              onDragStart={event => { dragged.current = row.item_id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", row.item_id); list.focus(identity); }}
+              onDragEnd={() => { dragged.current = null; }}>↕</button> : null}
+            <button type="button" aria-label={`Move ${row.item_id} to top`} disabled={moving !== null} onClick={() => void move(row.item_id, { to: "first" })}>Move to top</button>
+          </> : null}</td> : null}
         </tr>;
-      })}</tbody></table>}
+      })}</tbody>{orderedMoves && movable.length ? <tfoot><tr><td colSpan={9}
+        onDragOver={event => { if (dragged.current && !moveLock.current) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+        onDrop={event => { event.preventDefault(); dropAt(movable[movable.length - 1].item_id, true); }}>Drop here to move below the last row</td></tr></tfoot> : null}</table>}
   </main>;
 }
 

@@ -176,6 +176,7 @@ export function useObservatorySocket(
         if (frame.changed.some(name => name === "snapshot" || name.startsWith("runlog:") || name.startsWith("runs:"))) {
           refreshLanes();
         }
+        if (frame.changed.includes("snapshot")) void client.invalidateQueries({ queryKey: queryKeys.waiting() });
         for (const name of frame.changed) {
           const key = invalidationKey(name);
           if (key !== null) void client.invalidateQueries({ queryKey: key });

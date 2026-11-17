@@ -47,5 +47,6 @@ test.each([false, true, "refused"])("Items move-to-top with writes=%s against a 
     expect(order()).toEqual(["first", "second"]);
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Move second to top" }).disabled).toBe(false);
   } else await waitFor(() => expect(order()).toEqual(["second", "first"]));
-  expect(requests).toEqual([{ path: "/api/v1/items/second/place", body: '{"to":"first"}', type: "application/json" }]);
+  await waitFor(() => expect(requests).toEqual([{ path: "/api/v1/items/second/place", body: '{"to":"first"}', type: "application/json" }]));
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Move second to top" }).disabled).toBe(false));
 });

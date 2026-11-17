@@ -41,10 +41,14 @@ export class ApiError extends Error {
   }
 }
 
-export async function moveItemToTop(id: string): Promise<void> {
+export type ItemPlacement = { to: "first" | "last" } | { before: string } | { after: string };
+
+export const moveItemToTop = (id: string) => placeItem(id, { to: "first" });
+
+export async function placeItem(id: string, destination: ItemPlacement): Promise<void> {
   const response = await fetch(`/api/v1/items/${encodeURIComponent(id)}/place`, {
     method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ to: "first" }),
+    body: JSON.stringify(destination),
   });
   const body = await response.json() as ApiFailure;
   if (!response.ok) throw new ApiError(body.error?.code ?? "http_error", body.error?.message ?? `${response.status} ${response.statusText}`, response.status);
