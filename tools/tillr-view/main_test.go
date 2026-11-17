@@ -80,9 +80,20 @@ func fixture(t *testing.T) string {
 	return path
 }
 
+// A seed fixture must not depend on another test registering its event kinds first.
+func TestSeedRegistersItsRecordKinds(t *testing.T) {
+	path := fixture(t)
+	seed(t, path, envelope(t, "view-test.independent-seed", "r-independent", nil))
+}
+
 // seed imports records into a fixture store through the substrate's own seed path.
 func seed(t *testing.T, path string, records ...record.Envelope) {
 	t.Helper()
+	for _, r := range records {
+		if err := event.Register(r.Kind, "view-test"); err != nil {
+			t.Fatalf("registering seed kind %q: %v", r.Kind, err)
+		}
+	}
 	raw, err := json.Marshal(records)
 	if err != nil {
 		t.Fatalf("encoding the seed records: %v", err)

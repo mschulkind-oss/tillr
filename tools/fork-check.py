@@ -1734,24 +1734,24 @@ GATE_RUNNER_WATCHES = (
     "yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
 )
 RUNNER_PROOF_KINDS = {"gate-runner", "self-suite"}
-# Whole-suite wall seconds measured 2026-11-15, one module at a time with the shared
-# build cache warm and test-result caching disabled. Reproduce each entry with:
-#   cd <directory> && CGO_ENABLED=0 go test -count=1 -parallel 48 -timeout 0 ./...
-# These are module costs, not the deleted board monolith's build/integration price.
-# Drain also measured 30.87/30.94/30.98s with three concurrent independent copies of
-# the same command (three testing lanes, no source writers). Both the single-suite
-# and concurrent readings exceed section 4.3 rule 3's 30s line, so drain stays rolling.
+# Whole-suite wall seconds measured 2026-11-17 with the standard shared Go build
+# cache; test-result caching disabled. From the repository root:
+#   CGO_ENABLED=0 python3 tools/go-test-shards.py <directory> -k 6 --events <report.jsonl>
+# Native measurement: cd <directory> && CGO_ENABLED=0 go test -json ./... -count=1
+# Readings and selection: docs/pi/tillr-go-shards-2026-11-17.md.
+# Drain measured 171.24s native and 40.31s sharded, and remains rolling.
+# Measurements include discovery and linking, not just test execution.
 GO_TOOL_COST_ESTIMATE = {
-    "tools/pi-profiler": 0.71,
-    "tools/tillr": 0.94,
-    "tools/tillr-store": 0.87,
-    "tools/tillr-item": 1.76,
-    "tools/tillr-run": 1.64,
-    "tools/tillr-gate": 2.18,
-    "tools/tillr-view": 5.36,
-    "tools/tillr-land": 4.42,
-    "tools/tillr-drain": 32.30,
-    "tools/tillr-cli": 0.44,
+    "tools/pi-profiler": 0.71,  # Unchanged native measurement, 2026-11-15.
+    "tools/tillr": 3.01,
+    "tools/tillr-store": 3.99,
+    "tools/tillr-item": 8.07,
+    "tools/tillr-run": 3.01,
+    "tools/tillr-gate": 4.46,
+    "tools/tillr-view": 15.14,
+    "tools/tillr-land": 8.09,
+    "tools/tillr-drain": 40.31,
+    "tools/tillr-cli": 0.43,
 }
 # The suite's tests are I/O-bound subprocess cases, so the default GOMAXPROCS cap
 # leaves the suite waiting: measured 2026-10-24 at 12 parallel 24s, 32 parallel 17s, and
@@ -1766,12 +1766,24 @@ GO_TEST_TIMEOUT = "0"
 
 
 
-def go_tool_command(directory: str) -> str:
-    """The whole behavior suite for one Go tool directory, run from this checkout.
+# Measured module selection: docs/pi/tillr-go-shards-2026-11-17.md.
+# Landing/rolling membership is unchanged; only the suite execution changes.
+GO_SHARD_DIRS = ("tools/tillr-store", "tools/tillr-item", "tools/tillr-run",
+                 "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
+                 "tools/tillr-drain")
+GO_SHARD_INPUTS = ("tools/go-test-shards.py", "tools/go-test-durations.json")
 
-    The build is the `go-build` step's job, so this command does not repeat it: a module
-    that does not compile is already a red before this step is read.
-    """
+
+def go_tool_watches(directory: str) -> tuple[str, ...]:
+    watches = GATE_RUNNER_WATCHES if directory == "tools/tillr-gate" else (directory + "/",)
+    return watches + (GO_SHARD_INPUTS if directory in GO_SHARD_DIRS else ())
+
+
+def go_tool_command(directory: str) -> str:
+    """Complete suite: shards run fresh; native commands retain Go result caching."""
+    if directory in GO_SHARD_DIRS:
+        return (f"CGO_ENABLED=0 python3 tools/go-test-shards.py {shlex.quote(directory)} "
+                f"-k 6 --timeout {GO_TEST_TIMEOUT}")
     return (f"cd {directory} && CGO_ENABLED=0 go test -parallel {GO_TOOL_PARALLEL} "
             f"-timeout {GO_TEST_TIMEOUT} ./...")
 
@@ -6713,16 +6725,17 @@ def build_plan(
         runner = directory == "tools/tillr-gate"
         suite_kind = ("gate-runner" if runner else
                       "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool")
-        watches = GATE_RUNNER_WATCHES if runner else (directory + "/",)
+        watches = go_tool_watches(directory)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
         if go_tool and shutil.which("go"):
             plan.checks.append(
                 Check(suite_kind, f"{directory}'s whole suite passes",
                       ["sh", "-c", go_tool_command(directory) + (
-                          " && cd ../.. && python3 tools/gate/change-gate.test.py"
-                          " && python3 tools/gate/runner-first.test.py" if runner else "")],
-                      ("the gate runner or its wrapper changed" if runner else
-                       f"a path under {directory}/ changed"), GO_TOOL_TIMEOUT,
+                          (("" if directory in GO_SHARD_DIRS else " && cd ../..")
+                           + " && python3 tools/gate/change-gate.test.py"
+                           " && python3 tools/gate/runner-first.test.py") if runner else "")],
+                      ("the gate runner or its suite inputs changed" if runner else
+                       f"a suite input for {directory}/ changed"), GO_TOOL_TIMEOUT,
                       watches=watches, selected_by=tuple(go_tool),
                       cost=GO_TOOL_COST_ESTIMATE[directory],
                       drop=("LAND_BATCH_LIMIT",))

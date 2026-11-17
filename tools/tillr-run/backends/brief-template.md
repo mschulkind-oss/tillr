@@ -100,6 +100,26 @@ mechanism.
 
 {{METHOD}}
 
+For the full suite before committing, use the sharded runner on modules the gate
+runs through it, as listed in the repository's verification report
+`docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent test process
+with its own scratch and git global configuration. The runner executes tests fresh,
+without Go's test result cache:
+
+```bash
+python3 tools/go-test-shards.py tools/tillr-drain -k 6
+```
+
+Replace the module path for another tillr suite. Set `TMPDIR` to this run's scratch
+or pass `--scratch` there. During a focused edit, prefer a targeted test first:
+
+```bash
+cd tools/tillr-drain && go test ./... -run '^TestName$'
+```
+
+Run the full applicable suite before committing; never run `just done` in a lane.
+If this repository has no runner, use its documented test command instead.
+
 ## Verification commands
 
 Run each of these and paste its output in your report. Never run the full gate

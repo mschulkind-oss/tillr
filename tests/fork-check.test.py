@@ -482,6 +482,14 @@ def build_stubs(base: Path):
     """
     stubs = base / "stubs"
     stubs.mkdir()
+    # Routing fixtures preserve their Go stub's result through the shard command.
+    python = stubs / "python3"
+    python.write_text(
+        '#!/bin/sh\nif [ "$1" = "tools/go-test-shards.py" ]; then\n'
+        '  exec go test -count=1 ./...\nfi\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    python.chmod(0o755)
     # A stand-in for the installed Pi's package root. The gate resolves one and hands it to
     # every node step that drives the installed Pi, so a plan made here must find one -- in
     # the subprocess environment below and in this process, because `build_plan` reads
@@ -2793,7 +2801,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert set(module.GO_LANDING_SUITE_DIRS) <= set(tool_dirs), module.GO_LANDING_SUITE_DIRS
     assert set(module.GO_TOOL_COST_ESTIMATE) == set(tool_dirs), module.GO_TOOL_COST_ESTIMATE
     assert all(cost > 0 for cost in module.GO_TOOL_COST_ESTIMATE.values())
-    assert module.GO_TOOL_COST_ESTIMATE["tools/tillr-drain"] > 30.0
+    assert "tools/tillr-drain" in module.GO_SHARD_DIRS
+    for directory in module.GO_SHARD_DIRS:
+        command = module.go_tool_command(directory)
+        assert "tools/go-test-shards.py" in command and "-k 6" in command, command
+        assert set(module.GO_SHARD_INPUTS) <= set(module.go_tool_watches(directory))
+    for directory in set(tool_dirs) - set(module.GO_SHARD_DIRS):
+        command = module.go_tool_command(directory)
+        assert "go test -parallel" in command and "-count=1" not in command, command
+    shard_planned = module.build_plan(
+        repo, [], module.Record(base / "shard-plan-state.json"),
+        ["tools/go-test-shards.py"], None, True)
+    shard_suites = {check.label for check in shard_planned.checks if check.kind in GO_KINDS}
+    assert shard_suites == {f"{directory}'s whole suite passes" for directory in module.GO_SHARD_DIRS}, shard_suites
+    gate_suite = next(check for check in shard_planned.checks if check.kind == 'gate-runner')
+    assert '&& cd ../..' not in gate_suite.argv[-1], gate_suite.argv
+    assert set(module.GATE_RUNNER_WATCHES) <= set(gate_suite.watches), gate_suite.watches
+    assert 'python3 tools/gate/runner-first.test.py' in gate_suite.argv[-1], gate_suite.argv
     assert module.CHECK_COST_ESTIMATE["go-substrate"] == max(
         module.GO_TOOL_COST_ESTIMATE[directory] for directory in module.GO_LANDING_SUITE_DIRS
     )
@@ -2842,7 +2866,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 )
                 module.apply_tier(plan, tier)
                 selected = [check.kind for check in plan.checks
-                            if check.watches == (f"{directory}/",)]
+                            if check.watches == module.go_tool_watches(directory)]
                 expected = []
                 if tier == suite_tier:
                     expected.append(expected_suite_kind)
@@ -2865,14 +2889,14 @@ with tempfile.TemporaryDirectory() as tmp:
             # the other step's job, so this command does not repeat it.
             command = module.go_tool_command(directory)
             if directory == "tools/tillr-gate":
-                command += (" && cd ../.. && python3 tools/gate/change-gate.test.py"
+                command += (("" if directory in module.GO_SHARD_DIRS else " && cd ../..")
+                            + " && python3 tools/gate/change-gate.test.py"
                             " && python3 tools/gate/runner-first.test.py")
             assert checks[0].argv == ["sh", "-c", command], checks[0].argv
             assert "-short" not in checks[0].argv[-1], checks[0].argv
             assert "go build" not in checks[0].argv[-1], checks[0].argv
             for check in checks:
-                expected_watches = (module.GATE_RUNNER_WATCHES if directory == "tools/tillr-gate"
-                                    else (f"{directory}/",))
+                expected_watches = module.go_tool_watches(directory)
                 assert check.watches == expected_watches, check.watches
             assert checks[0].timeout == module.GO_TOOL_TIMEOUT, checks[0].timeout
             assert checks[0].cost == module.GO_TOOL_COST_ESTIMATE[directory], checks[0].cost
