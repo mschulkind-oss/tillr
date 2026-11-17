@@ -22,15 +22,22 @@ import (
 	"strings"
 )
 
+// greenRevision is supplied by just tillr-build's linker from the pinned proof ref.
+// This proof identity is separate from ordinary VCS metadata; never infer it from
+// the runtime checkout.
+var greenRevision string
+
 // BuildStamp is the build a drain process is running. Every field is best-effort: a binary
 // built outside a repository has no VCS information, and that absence is reported as empty
 // rather than filled with a guess.
 type BuildStamp struct {
-	// Revision is the commit the binary was built from (`vcs.revision`), empty when the
-	// build carried none. A binary the pack launcher builds from the rendered pack tree is
-	// the common case: that tree is not a git checkout, so the launched build has no
-	// revision while a `just tillr-build` build does.
+	// Revision is the source commit: the linker-pinned green commit for archived builds,
+	// otherwise `vcs.revision`, or empty when neither was supplied. Pack-rendered sources
+	// have no Git metadata and do not imply a proof commit.
 	Revision string `json:"revision"`
+	// GreenCommit is the proof commit pinned by the green-tree build recipe. Empty
+	// means a build made by another path, not an assertion that the checkout is green.
+	GreenCommit string `json:"green_commit,omitempty"`
 	// Time is when that commit was made (`vcs.time`), RFC 3339, empty when unknown.
 	Time string `json:"time"`
 	// Modified is true when the working tree had uncommitted changes at build time, which
@@ -78,14 +85,18 @@ func (b BuildStamp) String() string {
 	if exe == "" {
 		exe = "unknown-exe"
 	}
-	return fmt.Sprintf("%s (%s) digest %s exe %s", rev, at, digest, exe)
+	green := b.GreenCommit
+	if green == "" {
+		green = "unknown"
+	}
+	return fmt.Sprintf("%s (%s) green %s digest %s exe %s", rev, at, green, digest, exe)
 }
 
 // ReadBuildStamp reads the running program's stamp. It never fails: a build with no module
 // or VCS information answers an empty revision, because a loop that refuses to say what it
 // is running answers the question by not answering at all.
 func ReadBuildStamp() BuildStamp {
-	stamp := BuildStamp{}
+	stamp := BuildStamp{Revision: greenRevision, GreenCommit: greenRevision}
 	exe, err := os.Executable()
 	if err == nil {
 		stamp.Executable = exe

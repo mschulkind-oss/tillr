@@ -274,12 +274,9 @@ pack-sync:
         mirror "$module" "$root/yolo-packs/tillr/files/local/share/tillr/$module"
     done
 
-# Build the tillr programs from THIS tree into $YOLO_DURABLE_DIR/bin, so a change to tools/tillr*
-# can be run in the launch you are in instead of waiting for the next render. The launcher the pack
-# puts on PATH rebuilds from `~/.local/share/tillr` on first call after a change, but that tree is
-# the pack's RENDERED copy, written at launch: `just pack-sync` only rewrites the repository's
-# yolo-packs copy, and a host render is what puts it in the launch's home. This recipe is the
-# working tree's own build.
+# Build the eight tillr programs from refs/tillr/green (the last trunk commit proved by
+# the heavy runner), never from the newer tip or working tree. The pack's rendered copy
+# is a separate owner-run deployment and is not changed here.
 #
 # The output directory must be prepended to PATH for the loop AND its children, not just used by
 # name: `tillr` resolves `tillr-<noun>` through PATH and `ProcessSteps` resolves `tillr-run` and
@@ -294,8 +291,25 @@ pack-sync:
 tillr-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    out="${YOLO_DURABLE_DIR:-${TMPDIR:-/tmp}}/bin"
-    mkdir -p "$out"
+    if ! green=$(git rev-parse --verify 'refs/tillr/green^{commit}'); then
+        printf 'tillr-build: no valid refs/tillr/green; the heavy run at `tillr drain loop` startup (with after-merge checks enabled) creates it after proving the trunk\n' >&2
+        exit 1
+    fi
+    durable="${YOLO_DURABLE_DIR:?tillr-build needs YOLO_DURABLE_DIR for build output and scratch}"
+    mkdir -p "$durable"
+    durable=$(cd "$durable" && pwd)
+    out="$durable/bin"
+    work=$(mktemp -d "$durable/tillr-build-XXXXXXXX")
+    trap 'rm -rf "$work"' EXIT
+    # This independent, sparse clone borrows read-only objects, not the source's refs
+    # or index. Its detached HEAD pins one green commit even if the proof ref moves.
+    # Keeping Git metadata preserves native build stamps in older source trees and
+    # in every sibling program; the view uses that revision to reject stale planners.
+    git clone --shared --no-checkout --quiet . "$work/source"
+    git -C "$work/source" sparse-checkout set --cone tools
+    git -C "$work/source" checkout --detach --quiet "$green"
+    mkdir -p "$work/bin"
+    printf 'tillr-build: green %s\n' "$green"
     # `tillr-cli` builds the dispatcher named `tillr`; the shared library module of that name is
     # not a program, so it is built through its dependents rather than emitted here.
     for module in tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view; do
@@ -307,14 +321,19 @@ tillr-build:
             # "this binary carries no built front end". Embed the front end when there is one
             # to embed, and say which line to run when there is not, so the message arrives
             # here rather than from a browser a day later.
-            if [ -f "tools/tillr-view/web/dist/index.html" ]; then
+            if [ -f "$work/source/tools/tillr-view/web/dist/index.html" ]; then
                 tags="-tags observatory"
             else
-                printf 'tillr-build: %s carries no front end: run `npm --prefix tools/tillr-view/web ci && npm --prefix tools/tillr-view/web run build`, then this recipe again (or pass --web-dist to its serve face)\n' "$name"
+                printf 'tillr-build: %s carries no front end in green %s; pass --web-dist to its serve face for external assets\n' "$name" "$green"
             fi
         fi
-        ( cd "tools/$module" && CGO_ENABLED=0 go build $tags -o "$out/$name" . )
-        printf 'tillr-build: %s\n' "$out/$name"
+        ( cd "$work/source/tools/$module" && CGO_ENABLED=0 go build -buildvcs=true $tags -ldflags "-X github.com/mschulkind-oss/tillr-drain/drain.greenRevision=$green" -o "$work/bin/$name" . )
+    done
+    # Keep the existing install untouched until all eight builds succeed.
+    mkdir -p "$out"
+    for program in "$work/bin/"*; do
+        mv "$program" "$out/"
+        printf 'tillr-build: %s/%s\n' "$out" "${program##*/}"
     done
     printf 'tillr-build: prepend %s to PATH for the loop and its children: PATH=%s:$PATH\n' "$out" "$out"
 
