@@ -1,0 +1,6 @@
+{
+  "pack-sync": {
+    "argv": ["just", "pack-sync"],
+    "flags": {}
+  }
+}

@@ -75,6 +75,12 @@ const ReportFooter = "RESULT:"
 // exit and no footer and would otherwise be indistinguishable from a harness that never
 // started.
 func ClassifyAttempt(rec run.Record, log string) AttemptClass {
+	if rec.Backend == "command" {
+		if rec.State == run.StateExited && rec.ExitCode != nil && (*rec.ExitCode == 0 || *rec.ExitCode == 1) {
+			return AttemptAnswered
+		}
+		return AttemptInfrastructure
+	}
 	switch rec.State {
 	case run.StateFailedToStart:
 		// There was no process: the CLI could not start (binary absent, auth expired),

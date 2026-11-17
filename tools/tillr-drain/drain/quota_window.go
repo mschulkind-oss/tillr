@@ -64,6 +64,9 @@ func refusedWindow(rec run.Record) (kind string, fraction float64, reset time.Ti
 }
 
 func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
+	if rec.Backend == "command" {
+		return nil
+	}
 	kind, fraction, reset, ok := refusedWindow(rec)
 	if !ok || !reset.After(l.cfg.Now()) {
 		return nil

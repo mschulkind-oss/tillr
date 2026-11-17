@@ -36,7 +36,11 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   the number answers to the thing that spent it. After an operator ends the face,
   extraction still runs outside the canceled request, with its own existing time bound.
   Usage emitted before cancellation therefore remains measurable. A record with neither
-  tokens nor cost says `spend_status: unreported` and carries a `spend_note` explaining why.
+  tokens nor cost says `spend_status: unreported` and carries a `spend_note` explaining why,
+  except a registered command: backend `command` has no model, skips report extraction
+  and completed-session detection, and records `spend_status: not-applicable` with no usage,
+  note, or model route. The drain owns the command's exit-code meaning; see
+  [registered command nodes](../tillr-drain/README.md#registered-command-nodes).
   Reclaiming a dead face's lease records that it left no terminal record; it does not
   extract its log or invent a price. Partial measurements retain their missing fields.
 - **The backends are the boundary.** A pi, muse or other adapter's dialect never leaks into

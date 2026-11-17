@@ -21,6 +21,7 @@ const SettledIdleSamples = 5
 type settledEnd struct{ settledAt, endedAt string }
 
 type settledMonitor struct {
+	disabled                                           bool
 	log, stderr, backendDir, adapter, backend, durable string
 	offset, startOffset                                int64
 	partial                                            []byte
@@ -196,6 +197,9 @@ func (m *settledMonitor) activity(pid int) (string, error) {
 }
 
 func (m *settledMonitor) sample(ctx context.Context, pid int) bool {
+	if m.disabled {
+		return false
+	}
 	if m.observe() != nil || !m.reportReady(ctx) {
 		m.idle = 0
 		m.lastActivity = ""

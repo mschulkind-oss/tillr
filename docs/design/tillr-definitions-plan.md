@@ -531,7 +531,7 @@ to that block, because that block is ready and may be dispatched at any time.
 **Agent details:** the run request's `node_id` field comes from the run-environment item; the drain
 sets it here for every workflow node.
 
-<!-- tillr: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-ig-command-node,item-def-finish-on-hook" prose="2" -->
+<!-- tillr: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-finish-on-hook" prose="2" -->
 
 - **c1:** A command node of an item whose definition does not land runs through `tillr run exec` in the item's plain lane directory. Under Git landing it still runs in the item's worktree, as the command-node block's c2 says.
 - **c2:** Every workflow node's run request carries `node_id`, so its program sees `TILLR_NODE_ID` beside `TILLR_ITEM_ID`.

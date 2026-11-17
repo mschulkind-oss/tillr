@@ -1427,14 +1427,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// A run that answers `blocked` is the model's own statement that the item cannot be
 	// done as written: a spec conflict, not a failing candidate. The item is blocked for a
 	// person to decide, its criteria are left as they were, and nothing is judged.
-	if footer := reportFooter(log); footer == "blocked" {
+	if footer := reportFooter(log); request.Backend != "command" && footer == "blocked" {
 		l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
 		if err := l.reportedBlock(ctx, decision, log); err != nil {
 			return laneOutcome{err: err}
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked")}
 	}
-	if item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
+	if request.Backend != "command" && item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: l.laneTarget(lane), HeadSHA: l.headOf(ctx, lane)}
 		candidate.RefusalDetail = "comment run did not report RESULT: done"
 		if err := l.refuse(ctx, candidate, result, RefusalGate); err != nil {

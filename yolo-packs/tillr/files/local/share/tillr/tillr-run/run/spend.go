@@ -3,6 +3,10 @@ package run
 // DescribeSpend makes the absence of a backend measurement explicit without
 // inventing a number. Partial measurements retain their individual nil fields.
 func DescribeSpend(rec *Record) {
+	if rec.Backend == "command" {
+		rec.Usage, rec.SpendStatus, rec.SpendNote = nil, "not-applicable", ""
+		return
+	}
 	if rec.Usage != nil {
 		rec.SpendStatus = "reported"
 		rec.SpendNote = ""

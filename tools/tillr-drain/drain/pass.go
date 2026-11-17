@@ -309,6 +309,13 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if work.Ready {
+		if commandStage(d) {
+			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, d.RunRequest.RunID)
+			d.Inputs = inputs
+			identifyDecision(&d)
+			return d, nil
+		}
 		if policy == nil {
 			d.Action, d.Reason, d.From, d.To = ActionHold, ReasonNoPolicy, "running", ""
 			d.RunRequest = nil
@@ -324,6 +331,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
+			}
+			if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
+				request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
 			}
 			d.RunRequest = request
 			if degraded != "" {
