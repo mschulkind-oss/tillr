@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
@@ -25,17 +26,43 @@ func TestOneTickIndexesTheRunItRecorded(t *testing.T) {
 	steps.TraceBin = traceIndexer(t)
 	steps.TraceRoot = traceRoot
 
-	loop := f.newLoop(t, 1, steps)
-	result, err := loop.Run(context.Background())
+	// The loop asks for the index and runs it in the background, and a stop cancels it, so
+	// a loop that stopped at the drained queue could stop before the ingest finished. This
+	// loop idles once the queue is drained and is stopped once an ingest has indexed a run.
+	index := filepath.Join(traceRoot, "index.db")
+	watch := &indexWatch{ProcessSteps: steps, index: index, indexed: make(chan struct{})}
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
+		Policy: f.policy, Steps: watch, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Now: steps.Now, Report: os.Stderr,
+	})
 	if err != nil {
-		t.Fatalf("the loop failed: %v", err)
+		t.Fatalf("building the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained {
-		t.Fatalf("the loop stopped %q, want %q: %s", result.Stop, drain.StopQueueDrained, result.Detail)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		result drain.LoopResult
+		err    error
+	}
+	ended := make(chan outcome, 1)
+	go func() {
+		result, err := loop.Run(ctx)
+		ended <- outcome{result, err}
+	}()
+	// A loop that never indexes the run leaves this receive waiting, which the suite's own
+	// -timeout reports with every goroutine's stack.
+	<-watch.indexed
+	cancel()
+	stopped := <-ended
+	if stopped.err != nil {
+		t.Fatalf("the loop failed: %v", stopped.err)
+	}
+	if stopped.result.Stop != drain.StopOperatorStop {
+		t.Fatalf("the loop stopped %q, want %q: %s", stopped.result.Stop, drain.StopOperatorStop, stopped.result.Detail)
 	}
 
 	runID := theRunID(t, f.store)
-	index := filepath.Join(traceRoot, "index.db")
 	db, err := sql.Open("sqlite", index)
 	if err != nil {
 		t.Fatalf("opening the trace index %s failed: %v", index, err)
@@ -48,6 +75,31 @@ func TestOneTickIndexesTheRunItRecorded(t *testing.T) {
 	if got != runID {
 		t.Fatalf("the trace index names run %q, want %q", got, runID)
 	}
+}
+
+// indexWatch is the real step set with its index step observed: it signals once an ingest
+// has finished with at least one run in the index.
+type indexWatch struct {
+	*drain.ProcessSteps
+	index   string
+	indexed chan struct{}
+	once    sync.Once
+}
+
+func (w *indexWatch) Index(ctx context.Context) error {
+	if err := w.ProcessSteps.Index(ctx); err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", "file:"+w.index+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var runs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runs_index`).Scan(&runs); err == nil && runs > 0 {
+		w.once.Do(func() { close(w.indexed) })
+	}
+	return nil
 }
 
 // traceIndexer is the real tillr-trace entry point beside this module, not a stub: the

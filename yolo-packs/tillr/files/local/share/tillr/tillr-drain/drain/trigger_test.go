@@ -112,6 +112,9 @@ func TestOneThousandEmptyPassesWriteNothing(t *testing.T) {
 	if steps.indexed != 0 {
 		t.Fatalf("empty passes invoked the file-writing index %d times", steps.indexed)
 	}
+	if requested := l.indexer.requests.Load(); requested != 0 {
+		t.Fatalf("empty passes asked for an index %d times", requested)
+	}
 	if got := loopFiles(t, f.root); !reflect.DeepEqual(files, got) {
 		t.Fatalf("files changed: %v -> %v", files, got)
 	}
@@ -415,7 +418,8 @@ type finalIndexSteps struct {
 	storePath     string
 	launchIndexed chan struct{}
 	launchOnce    sync.Once
-	seenFinal     bool
+	finalIndexed  chan struct{}
+	finalOnce     sync.Once
 }
 
 func (s *finalIndexSteps) Index(ctx context.Context) error {
@@ -434,7 +438,7 @@ func (s *finalIndexSteps) Index(ctx context.Context) error {
 		return err
 	}
 	if done > 0 {
-		s.seenFinal = true
+		s.finalOnce.Do(func() { close(s.finalIndexed) })
 	}
 	if judged > 0 && done == 0 {
 		s.launchOnce.Do(func() { close(s.launchIndexed) })
@@ -464,8 +468,12 @@ func TestFinalExaminationIsIndexedAfterItsLaunchPass(t *testing.T) {
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		return applyTerminal(tx, run.Record{RunID: plan.decision.RunRequest.RunID, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), ArtifactRefs: []run.ArtifactRef{}})
 	})
-	steps := &finalIndexSteps{persistentSteps: persistentSteps{store: f.storePath, gated: make(chan struct{}), gateRelease: make(chan struct{})}, storePath: f.storePath, launchIndexed: make(chan struct{})}
+	steps := &finalIndexSteps{persistentSteps: persistentSteps{store: f.storePath, gated: make(chan struct{}), gateRelease: make(chan struct{})}, storePath: f.storePath, launchIndexed: make(chan struct{}), finalIndexed: make(chan struct{})}
 	l.cfg.Steps = steps
+	// The indexer runs in the background and a stop cancels it, so a loop that stopped at
+	// the drained queue could stop before the final request was served. The loop idles
+	// instead, and the operator stops it once the final outcome has been indexed.
+	l.cfg.ExitWhenDrained = false
 	ctx, cancel := context.WithCancel(context.Background())
 	ended := make(chan struct{})
 	var result LoopResult
@@ -485,16 +493,13 @@ func TestFinalExaminationIsIndexedAfterItsLaunchPass(t *testing.T) {
 		t.Fatal("gate never started")
 	}
 	release()
-	select {
-	case <-ended:
-	case <-time.After(5 * time.Second):
-		t.Fatal("loop did not stop after final gate")
-	}
-	if loopErr != nil || result.Stop != StopQueueDrained {
+	// A loop that never indexes the final outcome leaves this receive waiting, which the
+	// suite's own -timeout reports with every goroutine's stack.
+	<-steps.finalIndexed
+	cancel()
+	<-ended
+	if loopErr != nil || result.Stop != StopOperatorStop {
 		t.Fatalf("loop: %+v / %v", result, loopErr)
-	}
-	if !steps.seenFinal {
-		t.Fatal("final examination outcome was never indexed after its launch pass")
 	}
 }
 

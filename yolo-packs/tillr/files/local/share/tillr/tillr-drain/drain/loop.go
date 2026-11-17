@@ -288,7 +288,9 @@ type Steps interface {
 	// It is not a judgment about a candidate: it turns the records a tick already wrote
 	// into the rows the observatory reads, so a completed tick is visible without a human
 	// running the indexer by hand. A step set with no indexer answers nil, which is a
-	// caller that has not named one rather than a tick that guessed.
+	// caller that has not named one rather than a tick that guessed. The loop calls it off
+	// the pass goroutine and cancels ctx when it stops, so an implementation must return
+	// once ctx is done rather than finish its work (index_background.go).
 	Index(ctx context.Context) error
 }
 
@@ -563,6 +565,9 @@ type Loop struct {
 	syncedSHA    string
 	syncClearSeq int64
 	questions    *VantageQuestions
+
+	// indexer runs the trace indexer off the pass goroutine (index_background.go).
+	indexer *backgroundIndex
 }
 
 // heldItem is one item the loop holds, and the clock reading the hold was taken at. The
@@ -646,6 +651,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		return nil, err
 	}
 	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
+	l.indexer = newBackgroundIndex(func(ctx context.Context) error { return l.cfg.Steps.Index(ctx) }, l.reportf)
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -685,6 +691,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}()
 	defer l.closeWALKeeper()
 	defer l.endSession()
+	defer l.indexer.start()()
 	l.keepWALWhileRunning()
 	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
 		return faultResult(result, Usagef("the loop has no usable policy"))
@@ -977,18 +984,14 @@ func (l *Loop) backOff(ctx context.Context) (bool, error) {
 	}
 }
 
-// index rebuilds the trace index from what the tick recorded. The index is derived — the
-// artifacts and the store are authoritative — so a failure is reported and does not turn a
-// completed tick into a stop: the next tick, or an operator's `tillr-trace ingest`, can
-// rebuild it. A tick that never invoked it is the defect this exists to close (the
-// acceptance run's index held no `runs_index` row until a human ran the indexer).
-func (l *Loop) index(ctx context.Context) {
-	if ctx.Err() != nil {
-		ctx = context.WithoutCancel(ctx)
-	}
-	if err := l.cfg.Steps.Index(ctx); err != nil {
-		l.reportf("loop: the trace index was not updated after this tick: %v\n", err)
-	}
+// index asks for the trace index to be brought up to date with what the tick recorded, and
+// returns at once: the indexer runs in the background (index_background.go), so it can hold
+// up neither the tick, its dispatch nor the stop. The index is derived — the artifacts and
+// the store are authoritative — so a failure is reported and is not a stop. A tick that
+// never asked is the defect this exists to close (the acceptance run's index held no
+// `runs_index` row until a human ran the indexer).
+func (l *Loop) index() {
+	l.indexer.request()
 }
 
 // planNothing is the tick's stop check: a full tick that dispatched nothing is either the

@@ -434,10 +434,12 @@ func (s *ProcessSteps) ItemState(ctx context.Context, itemID, runID, state strin
 	return nil
 }
 
-// Index rebuilds the trace index from the artifacts the tick's runs left. `tillr-trace
+// Index brings the trace index up to date with the artifacts the tick's runs left. `tillr-trace
 // ingest` is the write half of the read model: it syncs `index.db` from the store and the
 // loop's run directories and answers where the index is. It is not a judgment, so a failure
-// is answered to the caller rather than classified as a verdict about a candidate.
+// is answered to the caller rather than classified as a verdict about a candidate. The loop
+// runs it in the background and cancels ctx when it stops, which kills the ingest; the
+// ingest commits each run as it goes, so the next one resumes where this one was killed.
 func (s *ProcessSteps) Index(ctx context.Context) error {
 	if s.TraceBin == "" {
 		return nil
