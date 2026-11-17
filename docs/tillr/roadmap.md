@@ -534,7 +534,17 @@ goes to the cheap seat with the guide in its brief, and the original waits until
 
 ### File a rewrite for an item that fails the prose check, ahead of the item itself
 
-<!-- tillr: item id="item-prose-rewrite-before-build" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,.tillr.toml,docs/" blocked_by="" -->
+<!-- tillr: item id="item-prose-rewrite-before-build" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,.tillr.toml,docs/" blocked_by="" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c5
+needs a reader the fence left out. The settings file is read by `tools/tillr/settings/`, which
+refuses any table other than `roll`, `push` and `comments`, so it refuses `[prose]` and the loop
+would not start with this repository's file in place. `tools/tillr/` is added to this item's
+paths, with its tests. The work extends that one reader to take `prose.rewrite`, a boolean that
+defaults to false, refuses any other key in the `prose` table as it refuses unknown keys in the
+other tables, and adds no second reader of the settings file inside the sync, the loop or the
+view. This repository has no settings file yet, so the work creates `.tillr.toml` at the
+repository root holding only that table and key. The criteria below are unchanged.
 
 - **c1:** When sync records a `prose-unmarked` or `prose-shape` finding for an item that is not landed, it creates one rewrite item for it, `rewrite-<item id>`, on the cheap seat, fenced to the document that holds the block, ranked ahead of every item that is not itself a rewrite or a trunk fixer. A second sync creates no second rewrite.
 - **c2:** The original item is held with the reason `awaits-rewrite` and its mover is the rewrite item, until the rewrite lands or the block passes the check on its own. The waiting face shows both.
