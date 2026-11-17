@@ -2500,18 +2500,54 @@ below stand as written and nothing in the shutdown design is reopened. Three poi
   item did not write, the failure is the trunk's: report `trunk-broken`, naming the finding and
   the base, and do not report done.
 
+**Ruling, 2026-11-17 (answers the conflict the sixth run raised):** the sixth run rebuilt c1 to
+c4 and stopped because the leak survives on the path the loop really uses, and closing it needs
+a file outside the item's fence. The finding is correct, so the fence gains `tools/tillr-loop/`
+and the item gains c5. The shutdown design in the drain and in `tools/fork-check.py` is not
+reopened.
+
+- **What the run found.** The loop does not start `tools/fork-check.py` itself when the loop
+  adapter is configured. It starts `tools/tillr-loop/tillr-loop rolling` or `replay`, and
+  `revision_check` in that program runs `fork-check.py` as a child with `subprocess.run` and no
+  signal handling. The built change sends SIGTERM to the program the loop started, which is the
+  adapter. The adapter dies at once, and the group SIGKILL that follows ends `fork-check.py`
+  before it can cancel the checks it placed in other sessions. Read on 2026-11-17 at
+  `a1fdff636`: `rg -n 'subprocess.run\(\["python3", "tools/fork-check.py"' tools/tillr-loop/tillr-loop`
+  finds that one call, and `rg -n 'signal' tools/tillr-loop/tillr-loop` finds nothing.
+- **The fix is settled: the adapter becomes the check runner.** For the `rolling` and `replay`
+  steps the adapter flushes its output and replaces itself with
+  `python3 tools/fork-check.py <flags>` using `os.execvp`, so the process the loop signals is
+  `fork-check.py`. The argv, the working directory, the environment, the output and the exit
+  status stay what they are today, and an `OSError` from the call is still refused as "cannot
+  run revision check". Do not build signal forwarding in the adapter: a parent that forwards and
+  waits is a second shutdown sequence to keep correct, and replacing the process needs none. The
+  adapter's other steps are not touched.
+- **The adapter has a committed copy.** After editing `tools/tillr-loop/tillr-loop`, run
+  `python3 tools/tillr-loop/sync-adapter.py`, which rewrites the copy the drain embeds at
+  `tools/tillr-drain/drain/tillr-loop.py`, and then `just pack-sync`. Run
+  `python3 tools/tillr-loop/test.py` beside the drain and `fork-check` suites.
+- **Start from the sixth run's work.** Its uncommitted change is kept at
+  `refs/tillr/preserved/run-item-loop-stop-ends-rolling-checks-a6`, made on `a1fdff636`: the
+  runner, the drain shutdown, their tests, the drain README and the pack copies, eight files.
+  Its targeted tests and its c4 check passed; its full suites were interrupted and decide
+  nothing. Carry those eight files forward, add the adapter change and the c5 tests, and run the
+  full suites. This replaces the starting point named in the ruling above; that ruling's other
+  two points still hold.
+
 **Outcomes:**
 
 - End all rolling checks before removing their temporary checkout.
 - Give the check runner time to cancel its children before forcing it to exit.
 - Apply the same shutdown behavior to replay checks.
+- Do the same when the loop reaches the check runner through its step adapter.
 
-<!-- tillr: item id="item-loop-stop-ends-rolling-checks" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-loop-stop-ends-rolling-checks" paths="tools/tillr-drain/,tools/tillr-loop/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A loop stop during a rolling run ends every check the run started, including checks that `tools/fork-check.py` placed in their own session, before the loop removes the rolling worktree. A test starts a check whose child calls `setsid`, stops the run, and asserts that no process from that tree is alive afterward.
 - **c2:** `tools/fork-check.py` ends its running checks when it receives SIGTERM, and the loop sends SIGTERM to the program and waits briefly for it before it sends SIGKILL. A test sends SIGTERM to the program and asserts that its children are gone.
 - **c3:** The replay step that also runs checks in a scratch worktree ends its checks the same way. A test covers it with the same `setsid` child.
 - **c4:** The regression test for c1 fails when the SIGTERM step is removed.
+- **c5:** c1 and c3 hold when the loop starts its checks through `tools/tillr-loop/tillr-loop rolling` and `replay`, the configured step adapter, and not only when it starts `tools/fork-check.py` directly. A test for each step starts the adapter in the way the loop does, with a check whose child calls `setsid`, stops the run, and asserts that no process from that tree is alive afterward. Each test fails against the adapter as it stands at `a1fdff636`.
 
 **Agent Details:**
 
@@ -2520,11 +2556,15 @@ below stand as written and nothing in the shutdown design is reopened. Three poi
 - **Where:** `runCheckGroup` and `endProcessGroup` in
   [`steps.go`](../../tools/tillr-drain/drain/steps.go); `_run_cancellable`,
   `_kill_process_group` and `Cancellation.cancel` in
-  [`fork-check.py`](../../tools/fork-check.py).
+  [`fork-check.py`](../../tools/fork-check.py); `revision_check` in
+  [`tillr-loop`](../../tools/tillr-loop/tillr-loop), with its embedded copy
+  `tools/tillr-drain/drain/tillr-loop.py`.
 - **Verify:** For c1 and c3, use a child that calls `setsid` to create a separate session
   and assert that every process in the check's tree exits before worktree removal. For c2,
   send SIGTERM to the runner and assert its children exit; check that the loop waits briefly
   before SIGKILL. For c4, remove the SIGTERM step and confirm the c1 regression test fails.
+  For c5, run the c1 and c3 tests through the adapter's `rolling` and `replay` steps, and
+  confirm each fails when `revision_check` is put back to `subprocess.run`.
 - **Evidence:** At 05:17 on 2026-11-17, an orphaned `go test -parallel 48` continued for
   about two minutes after a stop. That day, `rg -n 'start_new_session' tools/fork-check.py`
   found `_run_cancellable` starting each check in its own session, while
