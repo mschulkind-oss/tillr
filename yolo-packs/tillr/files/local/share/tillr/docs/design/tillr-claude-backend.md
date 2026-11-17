@@ -18,7 +18,7 @@ vantage:
 
 # A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent
 
-> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. The adapter and Claude-first policy dispatched and landed
 `item-scratch-claude-build` in a lane-owned scratch clone, not on the real trunk or store:

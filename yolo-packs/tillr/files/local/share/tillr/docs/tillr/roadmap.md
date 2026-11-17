@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -49,20 +49,28 @@ says so in its design and is the owner's to overturn.
 5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md) carries
+[What tillr will change for Product QA](../design/tillr-separable-parts.md) carries
 eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
-[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
-AutoQA's requests with that proposal, and which of its small changes are filed before the drain
-proof. All eight wait for the reply from AutoQA's agent, and the proposal marks
-[`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) and
-[`OQ-SP6`](../design/tillr-separable-parts.md#OQ-SP6) as worth answering before the second round.
+[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers the
+Product QA pipeline's requests with that proposal, and which of its small changes are filed. The
+pipeline's second-round reply is recorded as received in
+[Product QA's reply](../design/tillr-product-qa-requests.md), and on 2026-11-17 the owner said to build:
+the answer is [the build plan](../design/tillr-definitions-plan.md), whose items hold no question.
+None of the eight holds the build; [`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) still
+decides the proposal's documentation items. (The first round called the pipeline "AutoQA", which is
+[tillr's own exploratory-testing design](../design/tillr-autoqa.md), a different thing.)
 
 [The core and the landing definition](../design/tillr-core-and-git-landing.md)
 writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5), the naming question, which is worth
-settling first. The other four wait for the reply from AutoQA's agent; none of them needs an answer before
-the second round of conversation with it, which is the owner's stated order.
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). Since the owner's go-ahead of
+2026-11-17, [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1),
+[`OQ-CG2`](../design/tillr-core-and-git-landing.md#OQ-CG2),
+[`OQ-CG3`](../design/tillr-core-and-git-landing.md#OQ-CG3) and
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5) each have a working
+choice the build rests on, which he confirms or changes after the next round with the Product QA
+pipeline's agent; [`OQ-CG4`](../design/tillr-core-and-git-landing.md#OQ-CG4) can wait.
+That document also lists the owner's statements as the pipeline reported them, for him to confirm.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
@@ -370,11 +378,13 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### A change to the gate's own runner lands only after the runner's suite passes
 
+A change to the gate's own runner can break the gate for every lane, so the runner's suite proves such a change before it lands rather than after. Criterion c3 was aligned on 2026-11-17 with the owner's ruling on time limits ([`D-GR15`](../design/gate-rework.md#decision-ledger), [Section 6.5](../design/gate-rework.md#65-ten-seconds-is-a-failing-test)): a measured time is counted and reported and fails nothing.
+
 <!-- inert copy of a tillr directive: item id="item-gate-runner-pays-first" paths="tools/gate/,tools/tillr-loop/,tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** A candidate that changes a path under the runner's own directory has the runner's suite added to its landing checks, whatever `landing_strategy` says, and does not land while that suite is red.
 - **c2:** The same holds for `tools/fork-check.py` and its suite for as long as that file exists.
-- **c3:** Such a landing is left out of the ten-second budget measurement and is counted separately, so it cannot make the budget test fail or hide a slow ordinary landing.
+- **c3:** Such a landing's time is left out of the ten-second measurement of ordinary landings and is counted and reported separately, so the distribution of ordinary landings stays honest and a slow one is not hidden. A measured time fails no test and no landing.
 - **c4:** A test lands one candidate that changes the runner and one that does not, and asserts the first ran the suite before the merge and the second did not.
 
 ## Filed 2026-11-15: a gate test that fails only under load
@@ -690,12 +700,7 @@ run was right not to guess. It is ruled here so the next run does not stop on it
 
 ### Add commands for the recoveries that were done by hand
 
-<!-- inert copy of a tillr directive: item id="item-drain-recover-commands" paths="tools/tillr-drain/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** `tillr drain acquit --run <id> --why <text>` closes a conviction against a run that an operator says was not the run's doing, keeps the conviction's record, and makes the run's candidate eligible to be judged. It refuses a run that has no conviction.
-- **c2:** `tillr drain examine --run <id>` gates, lands and records one candidate that is sitting in its lane, exactly as the loop would, and refuses when a loop holds the lane. A test lands a fixture candidate with it and asserts the records equal the loop's.
-- **c3:** `tillr drain set-aside --item <id> --why <text>` moves an unlandable candidate out of its lane to a named ref, frees the lane, and holds the item for rework, in one transaction with the record that says so. A test asserts a following loop start does not stop on the missing candidate.
-- **c4:** No recovery in the operating skill needs a script, a direct edit of the store or a `git reset` in a lane. A test fails when the skill's recovery section names any of the three.
 
 ## Filed 2026-11-15: a design conversation keeps its designer
 
@@ -732,10 +737,30 @@ one resumed session end to end.
 
 <!-- inert copy of a tillr directive: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** The settings file takes `spend.ceiling_usd` and `spend.window_hours`, both off by default. With them set, the loop dispatches nothing new once the recorded cost of runs started in the window reaches the ceiling, holds every ready item with the reason `spend-ceiling`, and resumes by itself when the window has moved on.
-- **c2:** Runs in flight are not ended by the ceiling, and a run that reported no cost is counted in a separate line and never as zero.
-- **c3:** The waiting face and the loop's start line show the ceiling, the amount spent in the window and when dispatch resumes.
-- **c4:** A resumed or retried run that produced no new model output adds nothing to the total. A test asserts a retry of an interrupted run does not inherit the earlier attempt's cost.
+**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because every
+criterion here asked for a spend ceiling, and
+[the momentum principle](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/momentum-principle.md#what-this-forbids) forbids one: "A budget
+that stops good work is a wall an operator has to debug at 3am." Two tests in `tools/tillr-drain`
+hold that line. `TestTheSpendLineNamesTheMeasurement` fails a spend line that names a ceiling, and
+`TestTheLoopCommandRefusesTheDeletedBudgets` refuses the deleted budget flags. The principle
+stands and this item does not reopen it. The ceiling is withdrawn, and what remains is the
+measurement an operator needs in order to decide for themselves whether to stop the loop or take
+work out of the pile. Those two acts are the only throttles the principle recognizes.
+
+The heading and the item id are kept so that links and the queue still find this item. They name
+what was asked for, not what is built: this item builds no ceiling.
+
+- **c1:** This item adds no ceiling. It adds no setting, flag or environment variable that names an amount of spend, no hold whose reason is spend, and no comparison of a spend total against a number. Dispatch does not depend on spend in any way. `TestTheSpendLineNamesTheMeasurement` and `TestTheLoopCommandRefusesTheDeletedBudgets` pass with their assertions unchanged, and a new test dispatches a ready fixture item in a store whose recorded spend is far above any plausible limit.
+- **c2:** The loop's start line and the waiting face each show the recorded cost of runs started in the last 24 hours, labeled as a measurement with its window, such as `spend, last 24h: $41.20 over 37 runs`. The window is fixed at 24 hours and has no setting. A test builds a store with one run started inside the window and one started before it, and asserts that both places show only the first run's cost.
+- **c3:** A run in the window that reported no cost is counted on that line as a number of runs without a cost, and never as zero dollars. A test asserts that a window holding one run with a cost and one without shows the first run's cost and `1 run reported no cost`.
+- **c4:** A resumed or retried run that produced no new model output adds nothing to the windowed total. A test asserts a retry of an interrupted run does not inherit the earlier attempt's cost.
+
+**Agent details:**
+
+- **Ref:** the ruling is [the momentum principle](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/momentum-principle.md), sections *What this forbids* and *The one legitimate stop*. The existing measurement is `spendLine` in `tools/tillr-drain/main.go`, which totals one loop's spend when the loop ends; this item adds a windowed total at the loop's start and in the view, and leaves that line as it is.
+- **Where:** the loop's start line in `tools/tillr-drain/main.go`; the waiting face and its spend reads in `tools/tillr-view/` (`serve.go`, `serveread.go`); the pack's copy under `yolo-packs/tillr/`.
+- **Not this item:** how an ended or orphaned run's spend is recorded belongs to *Add the spend of killed runs to the record* (`item-drain-record-killed-run-spend`). This item reads whatever cost a run's record carries and does not wait on that one.
+- **Evidence:** at `2532d9b8`, `rg -n 'window_hours|ceiling_usd' tools/tillr-drain tools/tillr-view` returns nothing, so no part of the withdrawn ceiling is in the tree to remove.
 
 ### Turn the after-merge check back on
 
@@ -857,12 +882,36 @@ needs two readers the fence left out. The settings file is read by `tools/tillr/
 refuses any table other than `roll` and `push`, so it refuses `[lanes]`. An item block is read by
 `tools/tillr-item/item/sync.go`, which refuses `express` as an unknown attribute. Both directories
 are added to this item's paths. The work extends those two readers and adds no second reader of
-either file inside the loop or the view. The criteria below are unchanged.
+either file inside the loop or the view.
 
-- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an item on the design seat that answers review comments, an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)), and any item whose block sets `express="true"`.
+**Ruling, 2026-11-17 (answers the third run's conflict on designer sessions):** the third run moved
+review-comment work off its document's desk and onto the express lanes, and then stopped because a
+comment turn that changes lane cannot find its designer's session: the pi adapter opens a session
+by id in the lane's own directory (`pi --help`: "Use the current directory's existing session with
+the ID, creating it otherwise"), so the turn starts cold while the record says `resumed-warm`. That
+move was never asked for, and it is withdrawn. Three points settle it:
+
+1. **Review-comment work stays at its document's desk.** A desk, defined in
+   [the designer sessions design](../design/tillr-designer-sessions.md#the-desk), is the lane that
+   belongs to one design document. It is already outside the lane cap, a comment run already starts
+   without waiting for a numbered lane, and at most `comments.max_running` of them run at once.
+   That is the behavior this item's principle asks for, and the session is found again because the
+   desk never moves. This item changes nothing about desks, comment dispatch or session choice, and
+   a comment item never takes an express lane or counts against `lanes.express`.
+2. **The pi adapter is not changed, and `tools/tillr-run/` stays outside this item's paths.** With
+   comment work at its desk no item changes lane between turns, so no session lookup across lanes
+   is needed.
+3. **Whether an item is express is read from the item itself, before workflow routing.** The third
+   run's failing test showed that a saved idea lost its express lane once the first workflow node
+   replaced its seat with `scout`. The loop decides express from the item's own stored definition,
+   and a later change of seat by a workflow node does not change the answer.
+
+c1 and c4 are reworded below to say this. c2 and c3 are unchanged.
+
+- **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)) and any item whose block sets `express="true"`. An item that answers review comments is not express work in this sense: it runs at its document's desk, as it does today. Whether an item is express is decided from the item's own definition, and a test asserts that a saved idea whose first workflow node names another seat is still dispatched on an express lane.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
-- **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express".
+- **c4:** The waiting face and the lane strip show express lanes apart from the cap: "7 of 10 running, 1 of 2 express". Desk runs are shown as they are today and are counted in neither number.
 
 ## Filed 2026-11-16: two decided designs are cut into build items
 
@@ -1094,28 +1143,61 @@ files it with the apply face and lets triage write the block.
 
 ### Add the spend of killed runs to the record
 
-When a loop exits on a fault, the workers it launched are killed, and a killed worker never writes
-the report that carries its cost. The cost of that run is then recorded as unknown, so the total
-the queue shows is lower than what was spent. The error grows with the number of faults: on
+A run that is ended before it finishes can leave no cost in the record. The loop's totals then
+show less than was spent, and the error grows with the number of runs that are ended. On
 2026-11-16 the drain recorded `item-drain-recover-commands` at $10.70 over three runs and
-`item-sync-design-without-item` at $0.67 over seven runs, and the killed runs in both recorded
-nothing. A second effect follows. A new loop that settles a run an earlier loop started counts
-that run's spend in its own pass record, so a pass looks more expensive than the work it did. The
-record should have a number for every run however it ended, and should say which spend a loop
-inherited.
+`item-sync-design-without-item` at $0.67 over seven runs, and the runs that were killed in both
+recorded nothing. Since then a loop that stops or exits on a fault leaves its workers running:
+each one finishes and writes its own record, cost included, and the next loop settles it. Two
+gaps remain. An operator who stops the loop and asks it to end the running workers gets records
+with no cost, because the cost is read with a request that the stop has already canceled. A
+worker whose runner dies outright leaves no record at all. A second effect is now the ordinary
+case: a new loop that settles a run an earlier loop started counts that run's spend in its own
+pass record, so a pass looks more expensive than the work it did. The record should have a number
+for every run however it ended, and should say which spend a loop inherited.
 
 <!-- inert copy of a tillr directive: item id="item-drain-record-killed-run-spend" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A run that ends because its loop stopped records the spend its backend can report for the work done so far, or records that the backend could not report it, and never leaves the field empty. A test kills a fixture worker that has produced usage output and asserts the recorded spend equals that output.
-- **c2:** When no spend can be read for a killed run, the record says `unreported` for that run, and every total the views print states how many runs were unreported. A test asserts a total over one reported and one unreported run reads as a lower bound.
-- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. A test settles a run started by a previous loop and asserts its cost appears only on the carried-over line.
-- **c4:** The spend ceiling counts a killed run's recorded spend, so a loop that keeps being killed cannot spend past the ceiling unseen.
+**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because c4 asked
+a spend ceiling to count killed runs, and the tree has no ceiling.
+[The momentum principle](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/momentum-principle.md#what-this-forbids) forbids a spend or
+token ceiling, and two tests in `tools/tillr-drain` hold that line:
+`TestTheSpendLineNamesTheMeasurement` fails a spend line that names a ceiling, and
+`TestTheLoopCommandRefusesTheDeletedBudgets` refuses the deleted budget flags. c4 is therefore
+replaced by a criterion about measurement only. This item adds no ceiling, no hold, no setting and
+no stop; it makes the totals complete, whoever reads them. c1 to c3 are unchanged.
+
+**Ruling, 2026-11-17 (answers the third run's conflict):** the third run stopped because the
+criteria assumed that a loop which stops or faults kills its workers. It does not. The loop
+starts each run face outside its own context and process group, a stop or a fault ends only the
+loop's wait, and the next loop settles the run from its terminal record; `launchRun` in
+`tools/tillr-drain/drain/pass.go` and `ProcessSteps.Run` in `tools/tillr-drain/drain/steps.go`
+both say so. That behavior stays, and this item must not make a loop stop or a fault signal a
+worker. A run is ended early in exactly two ways, and the criteria below are rewritten to name
+them. This ruling replaces the sentence above that left c1 to c3 unchanged.
+
+- **An operator's end.** `tillr drain stop --end-runs` is the only drain command that signals a
+  run face (`EndRuns` in `tools/tillr-drain/drain/stop.go`). The face writes its terminal record
+  on a context detached from the canceled one, but reads the spend on the canceled one
+  (`readSpend(ctx, ...)` in `tools/tillr-run/run/exec.go`), so the extractor is canceled with
+  the run. The third run read this in the code and did not reproduce it; c1's test is the
+  reproduction, written first.
+- **A dead run face.** A face that is killed outright, or lost with its host, writes no terminal
+  record. The next loop finds the claim's process gone and records the run as orphaned
+  (`reapDeadLoopRuns` in `tools/tillr-drain/drain/orphan.go`). Such a run is `unreported`. This
+  item does not make the loop run an extractor over a dead face's log.
+
+- **c1:** A run that an operator ends with `tillr drain stop --end-runs` records the spend its backend can report for the work done so far. The run face reads that spend on a context the stop has not canceled, within the extractor's existing time bound, and the same holds for any other cancellation of the face. A test cancels a fixture run after its worker has produced usage output and asserts that the terminal record's spend equals that output; it fails before the change.
+- **c2:** A run's spend is never left empty without a reason. When no spend can be read for a run that was ended early, or the run face died and left no terminal record, the record says `unreported` for that run, and every total the loop and the views print states how many runs were unreported. A test asserts that a total over one reported run and one unreported run reads as a lower bound, and a second test reaps a run whose face left no terminal record and asserts it counts as unreported.
+- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. The carried-over line is where a worker that outlived a stopped or faulted loop appears. A test stops a loop while a fixture worker is still running, lets the worker finish, settles it in a second loop, and asserts that its cost appears only on the second loop's carried-over line.
+- **c4:** Every spend total the loop and the views print counts an ended run's recorded spend the same way as a finished run's, so runs that keep being ended cannot spend unseen. Nothing in this item compares a total against a limit or holds an item because of one. A test ends two fixture runs of one item with `--end-runs` in two successive loops, each after usage output, and asserts that the next loop's spend line and the view's total for the item both include the spend of both ended runs and that neither line names a ceiling.
+- **c5:** A loop that stops or exits on a fault still signals no worker. A test stops a loop without `--end-runs` while a fixture worker is running and asserts that the worker finishes and that its terminal record carries its spend.
 
 **Agent details:**
 
-- **Ref:** `item-drain-spend-ceiling` in this document is the consumer of these totals.
-- **Where:** the usage capture and run-finish records in `tools/tillr-drain/drain/` and `tools/tillr-run/`; the pass record and the spend lines in `tools/tillr-view/`.
-- **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed.
+- **Ref:** the consumers of these totals are the loop's spend line (`spendLine` in `tools/tillr-drain`) and the spend lines in `tools/tillr-view/`. `item-drain-spend-ceiling` in this document is not a consumer this item builds for: it asks for a ceiling the momentum principle forbids, and that contradiction is that item's to settle, not this one's.
+- **Where:** the spend read in `tools/tillr-run/run/exec.go` (`readSpend` and its caller, beside the detached `writeCtx`); the run-finish and orphan records in `tools/tillr-drain/drain/` (`EndRuns` in `stop.go`, `reapDeadLoopRuns` in `orphan.go`); the pass record and the spend lines in `tools/tillr-view/`; the pack's copy under `yolo-packs/tillr/`.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed. These figures were recorded before the loop stopped signaling its workers, so they are the history behind the item and not a description of the tree; a fixture must not reproduce a loop fault that kills a worker. The loop's current behavior is stated in `tools/tillr-drain/README.md`: "`tillr drain stop --end-runs` is the only drain command that ends a run."
 
 ### Hold an item whose runs keep being orphaned
 
@@ -1246,12 +1328,7 @@ no-op, so a person reading "green" believes the trunk was checked when it was no
 watermark should audit the whole tree, or the watermark should record only what was proven, and
 the loop's line should say how much actually ran.
 
-<!-- inert copy of a tillr directive: item id="item-drain-rolling-watermark-proves-what-ran" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A rolling run with no watermark runs every check in the rolling tier against the trunk tip, whatever baseline the repo gate last verified. A test seeds a gate baseline equal to the tip, runs the first rolling run, and asserts no rolling check is skipped as unchanged.
-- **c2:** A green rolling run that skipped checks advances the watermark only over what those checks cover, or records the skipped checks with the watermark, so a reader can tell a full audit from a partial one. A test asserts the record names the skipped checks.
-- **c3:** The loop's rolling line states how many checks ran, how many were answered from cache and how many were skipped. A test asserts the three counts on a fixture run.
-- **c4:** The drain's README states what a rolling run with no watermark audits, in one sentence a reader can check against the record.
 
 **Agent details:**
 
@@ -1377,6 +1454,18 @@ criteria are written in those terms.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Question for the builder, answered in its report and not a criterion:** whether the presence of an editor swap or lock file for a landed path, a sign the file is open and may hold unsaved changes, should appear in the landing's log line as information for the owner. It must not pause the landing, because the owner ruled that a predicted conflict is the only pause.
 - **Evidence:** 2026-11-17, `Trunk.Move` runs `git -c merge.autoStash=false merge --ff-only` in the main checkout, so git itself refuses when the move would overwrite uncommitted content and otherwise advances only the changed paths; git's fast-forward keeps staged entries on untouched paths, but no test pins it. `TestALandingLeavesUncommittedContentOnAnUntouchedPathAlone` (untracked file only) and `TestALandingIsRefusedWhenTheTrunkWorktreeHoldsUncommittedContentOnALandedPath` in `tools/tillr-land/main_test.go`, and `TestUnrelatedDirtyPathDoesNotDelayLanding` in `tools/tillr-drain/drain/dirty_hold_test.go`, pin the two cases. `rg -n -i 'MERGE_HEAD|rebase-merge' tools/tillr-land tools/tillr-drain --glob '*.go'` returns nothing, so no code names an in-progress merge or rebase. `TestLockedLandingAcceptsFastForwardBeyondObservedTip` in `tools/tillr-land/trunk_history_test.go` pins the forward move, and `TestTheDrainLandsThroughTheRealAdapterAndTheRealLander` in `tools/tillr-drain/drain/step_argv_contract_test.go` pins `trunk-rewritten`. `rg -n -i dirty yolo-packs/tillr/skills/tillr-operating/` returns nothing (2026-11-17).
+
+## Filed 2026-11-17: tillr becomes a core with Git landing as its first definition
+
+The owner said on 2026-11-17 to build as much of the new tillr as possible, so that the Product QA
+pipeline can try the real thing and comment on it in the next round.
+[The build plan](../design/tillr-definitions-plan.md) holds the eighteen items: the foundations
+the pipeline asked for, the definition file and the store that records it, the item lifecycle and
+the planner read from the definition, the hook program contract, a store that does not land, and a
+worked example that lands nothing. The blocks live in that plan rather than in
+[the direction](../design/tillr-core-and-git-landing.md), because the direction still carries open
+questions and the drain would hold its items. The plan's next tranche is written in prose and is
+filed when the first has landed.
 
 ## Filed 2026-11-17: make the Go suites fast and trustworthy
 
@@ -1565,3 +1654,44 @@ leaves behind when it ends, is killed, or is orphaned.
 - **Evidence:** 2026-11-17, the drain operator's notes: run `run-item-conflict-transition-not-duplicate-a1` (Pi build seat, 7 min 41 s, 5,280,378 tokens, $1.02) reported blocked with about 19 files modified and nothing committed. When the loop settled it, `refs/tillr/runs/run-item-conflict-transition-not-duplicate-a1` pointed at the base commit, the lane was reset (reflog `reset: moving to HEAD`), and `git status` was empty. The diff was lost; the report and test logs remained.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` ($9.89) implemented the change and ended without committing; see `item-run-commit-before-ending`.
 - **Evidence:** 2026-11-17, `rg -n 'update-ref -d|prune' tools/tillr-drain/drain --glob '!*_test.go'` finds no ref deletion: nothing tillr keeps under `refs/tillr/` is ever dropped today, so this item states a retention rule instead of inheriting one.
+
+## Filed 2026-11-17: fork work on a drain with several lanes
+
+Three items filed on 2026-11-17 from [the usage ledger's request](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/usage-recording-request.md)
+change the Pi and pi-subagents forks. Those are the first items to fence a fork checkout at all, and
+reading how the drain would run them turned up two ways they would collide with the other lanes.
+
+### Prevent a fork item from colliding with sibling lanes
+
+The drain can already stage an item whose change lives in a fork rather than in this repository.
+When the item's fence (the set of paths its worker may change) names a lane's fork checkout,
+`.forks/lanes/<lane>/<fork>`, the worker edits that checkout and the lander moves the fork's patch
+branch. Two things stop such items from being safe on a drain that runs several lanes. First,
+staging reads only the checkout of the lane the item was dispatched to, while the planner gives the
+item whichever lane is free. An item fenced to lane 1's checkout but given lane 3 is therefore staged
+as an ordinary item, with nothing in its fence that it can edit. Second, the fork procedure ends with
+`bin/pi-forks export`, which moves `refs/heads/patch/<fork>` in this repository while the worker is
+still running. The run boundary then convicts every other run open at that moment, because the only
+other-lane patch-branch move it excuses is one the lander has marked. A moved patch branch also
+reaches every host at its next launch once it is pushed, so it should move only after the gate has
+built it. The three usage-recording fork items wait on this one.
+
+<!-- inert copy of a tillr directive: item id="item-drain-fork-lane-safety" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-item/,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** An item whose fence names `.forks/lanes/<lane>/<fork>/` for any lane id is staged against the dispatched lane's own checkout of that fork, materialized if it is missing, with that fork's patch branch as the delivery. An item filed with `lane-1` in its fence therefore runs on whichever lane it is given. A test dispatches such an item to `lane-3` and asserts the staged target, patch ref and base.
+- **c2:** The brief and the fence check both name the dispatched lane's checkout, and a write to another lane's checkout is outside the fence. A test asserts both.
+- **c3:** A fork run's delivery never convicts a sibling run. One way is for the lander to be the only mover of the patch branch, with its landed marker, and for the fork brief to tell the worker not to run `bin/pi-forks export`. The other is for the run boundary to excuse a move made by a fork run the loop registered. A test runs a fork item and an ordinary item on two lanes, delivers the fork, and asserts that neither run is convicted.
+- **c4:** The patch branch moves only after a gate verdict that built the candidate head with the pack's build command. The builder records which gate step does that for a patch-branch fork today, and adds one if none does. A test gives a candidate whose build fails and asserts that it is refused and the branch is unmoved.
+- **c5:** After a fork landing, the shared cache's `main` is at the landed tip. `bin/pi-forks check --fork <fork>` then passes from the main checkout, and the next item for the same fork starts from that tip. A test lands two fork items one after the other and asserts that the second's base is the first's head.
+- **c6:** The drain README and the `tillr-operating` skill each give one paragraph on how to file a fork item: the fence spelling, what the worker commits, and who moves the patch branch.
+- **c7:** The item sync reads a fence entry under `.forks/lanes/<lane>/<fork>/` as a fork checkout that staging materializes, and does not warn that the path is missing. A test syncs a block with such a fence on a repository with no `.forks` directory and asserts that no `path-missing` warning is printed.
+
+**Agent details:**
+
+- **Ref:** AGENTS.md, "Landing a lane: shared forks, verified candidates" and "Patching an upstream tool: patch series first"; [the fork guide](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/forks.md); the run-boundary table in [the drain README](../../tillr-drain/README.md).
+- **Where:** `forkTarget` and `ensureForkCheckout` in `tools/tillr-drain/drain/stage.go`; `freeLane`, `forkOf` and `forkHeldBy` in `tools/tillr-drain/drain/plan.go`; `liveForks` in `tools/tillr-drain/drain/pass.go`; `landedPatchMove` in `tools/tillr-drain/drain/boundary.go`; `PatchRef` with the patch-branch refusals in `tools/tillr-land/land/`; and the `path-missing` warning in `tools/tillr-item/item/sync.go`.
+- **Evidence (what already protects):** 2026-11-17, `rg -n 'ReasonForkHeld' tools/tillr-drain/drain/plan.go`: two items that deliver the same fork never run together. The hold counts this pass's dispatches, live leases and unfinished examinations (`liveForks`), whatever lane each is on. Commit `35a4d848d` added fork staging, the boundary's excuse for a run's own patch ref, and the lander's patch-branch move with its rewind refusal.
+- **Evidence (c1):** `forkTarget` keeps only fence entries under `.forks/lanes/` followed by the dispatched lane's id, and `TestForkTargetIgnoresAnotherLanesCheckout` pins that. `freeLane` returns the first free lane in id order and never reads the fence.
+- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and says that "any other patch-branch move still convicts". AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
+- **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
+- **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.

@@ -15,7 +15,7 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 # A goal monitor: a scheduled check-in that inspects the board and files what it finds
 
-> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-14. Design in review; nothing built. Read against the tree at `cb3488a8`: the four documents named in `depends-on` were read in full, and the symbols this design changes were read where they live. Line numbers are anchors at that commit. Two questions remain for the owner ([OQ-GM1](#OQ-GM1), [OQ-GM2](#OQ-GM2)); everything else here is ruled.
 

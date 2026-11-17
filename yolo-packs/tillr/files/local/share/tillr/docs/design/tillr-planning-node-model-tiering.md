@@ -19,7 +19,7 @@ depends-on:
 
 # Plan first, then give each node the cheapest seat whose check it can pass
 
-> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `20c3847b83` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. This is a proposal, and none of it is built. The evidence is the loop's event log at event 4343 (generated 2026-11-17 03:33 UTC) and 334 pi run logs, read against the tree at `424cc9db0`. Every figure is marked **measured**, with its source, or **estimated**, with its assumption.
 
