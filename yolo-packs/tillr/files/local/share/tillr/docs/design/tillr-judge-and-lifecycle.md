@@ -23,7 +23,7 @@ depends-on:
 
 # The Item Judge and Lifecycle in Tillr
 
-> **Delivered copy.** This is `docs/design/tillr-judge-and-lifecycle.md` from this repository at commit `bdc40d858b` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-judge-and-lifecycle.md` from this repository at commit `3e13e0da80` (2026-11-16), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. Decided, and cut into the [build order](#8-build-order) that ends this page. Sections 1 to 5 were verified on 2026-11-14 against `tools/tillr-item/`, `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `tools/tillr-loop/tillr-loop`, and `config/tillr/seed-items.json` as the tree stood that day. The tree has moved since: [Section 7](#7-what-the-tree-already-holds) measures what is built at `bdd6b3c82`, and where it and an earlier section disagree about a name or a mechanism, Section 7 and the build order are what a builder follows.
 

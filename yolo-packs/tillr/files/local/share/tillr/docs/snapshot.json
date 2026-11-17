@@ -1,6 +1,6 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "bdc40d858b50a430a2f598e2dadd71f174c3d09f",
+  "commit": "3e13e0da808b86935b111e89af9faee6c26308aa",
   "date": "2026-11-16",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
@@ -12,7 +12,7 @@
     },
     {
       "source": "tools/tillr-loop/README.md",
-      "blob": "8c5d7a0c40655c3cd21614a59348df737776f84a",
+      "blob": "36fd6950828a8d10673b02eb60f9671692b0bee3",
       "delivered": "tillr-loop/README.md"
     },
     {
@@ -32,7 +32,7 @@
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "cc5c2e60855a1d0d3ed1d00e1a965007ce8b891d",
+      "blob": "97c70e99203e3dffcd2df083d8f47076414792a5",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
@@ -87,7 +87,7 @@
     },
     {
       "source": "docs/design/tillr-designer-sessions.md",
-      "blob": "8528fef0f299ad6f41eb9c968c3d9f6691a6e45c",
+      "blob": "2ba77fd6e128ec26cd8efbd408d5c7ed09a070e1",
       "delivered": "docs/design/tillr-designer-sessions.md"
     },
     {
