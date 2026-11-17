@@ -117,7 +117,7 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
         const item = snapshot?.items.find(item => item.item_id === row.item_id);
         const identity = waitingIdentity(row);
         return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}>
-          <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}</td>
+          <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
         </tr>;
       })}</tbody></table>}

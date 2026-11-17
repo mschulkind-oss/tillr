@@ -23,18 +23,19 @@ import (
 // waitingRow is shared by the terminal and HTTP faces. Since is an absolute UTC
 // time, or the explicit absence of a decision; it is not the item's update time.
 type waitingRow struct {
-	Rank        string `json:"rank"`
-	ItemID      string `json:"item_id"`
-	Document    string `json:"document"`
-	Class       string `json:"class"`
-	Where       string `json:"where"`
-	Why         string `json:"why"`
-	Mover       string `json:"mover"`
-	Since       string `json:"since"`
-	Waited      string `json:"waited"`
-	ClassSource string `json:"class_source"`
-	LaneStatus  string `json:"lane_status,omitempty"`
-	LaneReason  string `json:"lane_reason,omitempty"`
+	GraphChanges []string `json:"graph_changes,omitempty"`
+	Rank         string   `json:"rank"`
+	ItemID       string   `json:"item_id"`
+	Document     string   `json:"document"`
+	Class        string   `json:"class"`
+	Where        string   `json:"where"`
+	Why          string   `json:"why"`
+	Mover        string   `json:"mover"`
+	Since        string   `json:"since"`
+	Waited       string   `json:"waited"`
+	ClassSource  string   `json:"class_source"`
+	LaneStatus   string   `json:"lane_status,omitempty"`
+	LaneReason   string   `json:"lane_reason,omitempty"`
 }
 
 type waitingRule struct{ class, where, mover string }
@@ -174,7 +175,10 @@ func waitingFace(args []string) (record.Envelope, int) {
 				rows = append(rows, extra...)
 				lanes, e := waitingLaneConditions(r)
 				rows = append(rows, lanes...)
-				return e
+				if e != nil {
+					return e
+				}
+				return addGraphRevisionHistory(r, rows)
 			})
 			s.Close()
 		}
@@ -508,7 +512,14 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
-	return appendWaitingDesigns(r, append(append(append(out, windows...), extra...), laneRows...))
+	all, err := appendWaitingDesigns(r, append(append(append(out, windows...), extra...), laneRows...))
+	if err != nil {
+		return nil, err
+	}
+	if err := addGraphRevisionHistory(r, all); err != nil {
+		return nil, err
+	}
+	return all, nil
 }
 
 // Window rows are optional on old stores, and disappear at (not after) reset.
@@ -701,6 +712,9 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		}
 		// Quote control characters supplied by store text so one item stays one row.
 		why := row.Why
+		for _, change := range row.GraphChanges {
+			why += "; " + change
+		}
 		if row.Waited != "" {
 			why += " (waited " + row.Waited + ")"
 		}

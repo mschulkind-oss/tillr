@@ -84,6 +84,7 @@ export interface ApiFailure {
 }
 
 export interface WaitingRow {
+  graph_changes?: string[];
   rank: string;
   item_id: string;
   document?: string;
@@ -470,7 +471,21 @@ export interface StateMoveView {
   actor: string;
 }
 
+export interface GraphRevisionView {
+  revision_id: number;
+  proposing_run: string;
+  proposing_node: string;
+  target: string;
+  workflow: string;
+  rule: string;
+  detail: string;
+  before_nodes: number;
+  after_nodes: number;
+  recorded_at_ms: number;
+}
+
 export interface ItemData {
+  graph_revisions?: GraphRevisionView[];
   usage?: UsageSum;
   comments?: CommentItemView;
   item: ItemDetail;

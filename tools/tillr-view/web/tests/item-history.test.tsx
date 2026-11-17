@@ -5,6 +5,19 @@ import { dispatchedItemData as itemData } from "./fixtures";
 
 afterEach(cleanup);
 
+test("item history shows graph changes and refused proposals with the proposing run", () => {
+  const item = { ...itemData, graph_revisions: [
+    { revision_id: 1, proposing_run: "plan-run", proposing_node: "open", target: "write", workflow: "replacement@v1", rule: "", detail: "", before_nodes: 4, after_nodes: 5, recorded_at_ms: 1000 },
+    { revision_id: 2, proposing_run: "second-run", proposing_node: "plan-again", target: "write", workflow: "replacement@v1", rule: "proposal-target-started", detail: "write has a run", before_nodes: 5, after_nodes: 5, recorded_at_ms: 2000 },
+  ] };
+  render(<ItemTimeline item={item} />);
+  const history = screen.getByRole("region", { name: "Item history" });
+  expect(history.textContent).toContain("Graph changed by open: 4 → 5 nodes");
+  expect(history.textContent).toContain("Graph proposal refused by proposal-target-started: write has a run");
+  expect(within(history).getByRole("link", { name: "plan-run" }).getAttribute("href")).toContain("plan-run");
+  expect(within(history).getByRole("link", { name: "second-run" })).toBeTruthy();
+});
+
 test("same-millisecond state moves follow their numeric event sequence", () => {
   const item = { ...itemData, state_moves: [
     { event_seq: 10, kind: "item.update", at_ms: 1000, from: "closed", to: "in-queue", action: "reopen", reason: "wanted again", actor: "owner" },

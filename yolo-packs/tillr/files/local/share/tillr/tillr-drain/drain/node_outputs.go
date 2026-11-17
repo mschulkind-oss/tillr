@@ -25,7 +25,9 @@ func outputNameValid(name string) bool {
 	}
 	return true
 }
-func outputTypeValid(typ string) bool { return typ == "markdown" || typ == "json" || typ == "patch" }
+func outputTypeValid(typ string) bool {
+	return typ == "markdown" || typ == "json" || typ == "patch" || typ == "graph.proposal"
+}
 func sortedNames[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {
@@ -133,6 +135,14 @@ func checkNodeOutputs(root string, d Decision) ([]nodeArtifact, error) {
 	dir := nodeOutputsDir(root, d.RunRequest.RunID)
 	for _, name := range sortedNames(stage.Outputs) {
 		path := filepath.Join(dir, name)
+		if stage.Outputs[name] == "graph.proposal" {
+			if _, err := os.Lstat(path); os.IsNotExist(err) {
+				continue
+			}
+			if len(stage.MayReplace) == 0 {
+				return nil, fmt.Errorf("proposal-not-allowed: %s", stage.ID)
+			}
+		}
 		// No symlinks or special files: an output is the producer's regular file.
 		info, err := os.Lstat(dir)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -215,6 +225,11 @@ func uniqueJSON(raw []byte) error {
 // Acceptance and the passed outcome share a transaction. A crash cannot leave
 // a passed node whose declared artifacts were never recorded.
 func (l *Loop) acceptNodeOutputs(ctx context.Context, d Decision, artifacts []nodeArtifact) error {
+	return l.acceptNodeSettlement(ctx, &d, artifacts)
+}
+
+func (l *Loop) acceptNodeSettlement(ctx context.Context, decision *Decision, artifacts []nodeArtifact) error {
+	d := *decision
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
@@ -234,7 +249,13 @@ func (l *Loop) acceptNodeOutputs(ctx context.Context, d Decision, artifacts []no
 				return fmt.Errorf("node artifact %s.%s already recorded with different contents", d.Workflow.Stages[d.NodeIndex].ID, a.Name)
 			}
 		}
+		if err := l.settleProposal(tx, &d, artifacts); err != nil {
+			return err
+		}
 		_, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE run_id=?`, d.RunRequest.RunID)
+		if err == nil {
+			*decision = d
+		}
 		return err
 	})
 }
