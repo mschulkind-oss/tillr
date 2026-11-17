@@ -995,12 +995,20 @@ already counts these items as `unshared_open`, and on that day `tillr-item sync 
 `unshared_open: 3`, but nothing acts on the count. The loop should hold such an item with a reason
 a person can read, and the count should appear where the operator already looks.
 
+On 2026-11-17 the scope was narrowed pending the owner's ruling on [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in
+the separable-parts design. Another project, AutoQA, files its
+items with the apply face into a store of its own that has no documents and that nobody syncs, so
+there the apply face is the only intake and holding every undeclared item would hold everything.
+The hold below therefore applies only to a store that documents feed, which is tillr's own. If the
+owner rules otherwise, the first criterion changes again.
+
 <!-- tillr: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The planner does not dispatch an open item that no document block declares. It holds the item with the reason `no-document-block`, which names the document the item's body reference points to. A test stores an item with no block and a ready item with one, plans both, and asserts the first is held with that reason and the second is dispatched.
+- **c1:** In a store that documents feed, the planner does not dispatch an open item that no document block declares. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner holds the undeclared item with the reason `no-document-block`, which names the document the item's body reference points to. A test stores an item with no block and a ready item with one, plans both, and asserts the first is held with that reason and the second is dispatched.
 - **c2:** The hold lifts by itself in the pass after a sync imports a block for the item, with no command from the operator. A test adds the block, syncs, plans again, and asserts the item is dispatched.
 - **c3:** The waiting face shows the held item as waiting on a person, with the reason `no-document-block` and the command that fixes it (add the block, or close the item). The loop's start line and the status face print the `unshared_open` count, so it is no longer visible only in a sync report.
 - **c4:** An item that is closed or landed is never counted as unshared and never held for this reason. A test asserts both.
+- **c5:** A store that no sync has written to is not held for lacking a document block. A test stores open items that no document block declares, with no declared item anywhere in the store, plans, and asserts every one is dispatched when otherwise ready and none carries the reason `no-document-block`.
 
 **Agent details:**
 
