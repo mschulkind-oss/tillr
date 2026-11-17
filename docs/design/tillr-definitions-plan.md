@@ -492,6 +492,71 @@ a second use copies.
 
 **Product QA can try:** reading one real hook program, tillr-loop, as the model for their own.
 
+**What the stopped run settled:** a run on 2026-11-17 stopped before editing and reported that the
+hook contract was not in its tree. It was right to stop. That run was staged one commit before the
+contract landed. The contract is on the trunk now, in the commit titled
+`feat(tillr): negotiate definition hooks at loop startup`, and nothing in this item changes
+because of that report. Reading the landed contract against this item did find one criterion that
+cannot be met inside this item's paths. c2 is reworded for it, and the rulings below say how the
+rest read.
+
+- **Check the base first.** From the worktree's root, run:
+
+  ```sh
+  rg -n '^## Hook program contract' tools/tillr/definition/README.md
+  ```
+
+  One match means the contract is present. No match means the base is older than the contract:
+  report blocked and name the base. Do not write the contract here, and do not change the drain.
+- **The contract is settled, and the drain's side of it is built.** It is the "Hook program
+  contract" section of the definition package's [README](../../tools/tillr/definition/README.md).
+  The flags the drain requires of each hook are `hookFlags` in `tools/tillr-drain/drain/hooks.go`. This item writes the program that answers the contract. It
+  changes no drain file, and it does not change the contract's text.
+- **The embedded definition keeps `hooks` unset in this item (c2, reworded).** The drain runs
+  `describe` at start whenever the store's definition names a hook program, including when every
+  step flag is given, and it runs it at the loop's root. Many of the drain's loop tests start a
+  loop at a fixture root that has no `tools/tillr-loop/tillr-loop`. Measured on 2026-11-17: with
+  the trunk's `tools/` tree copied out at the contract's commit and `hooks` in
+  [landing.json](../../tools/tillr/definition/landing.json) set to
+  `{"argv": ["python3", "tools/tillr-loop/tillr-loop"], "names": [the six steps]}`, `go test .` in
+  `tools/tillr-drain` failed 19 tests, and its log printed
+  `configuration fault: hook describe [python3 tools/tillr-loop/tillr-loop] failed` twelve times.
+  With the file as the trunk has it, the same command in the same copy failed 4 of those 19, which
+  are therefore the copy's and not the change's. So naming the program in the embedded definition breaks 15
+  drain tests, c5 asks for those suites to pass, and the drain is outside this item's paths. This
+  item therefore ships the program and proves it against the contract, and the embedded definition
+  is not edited. Naming `tillr-loop` there is left to an item whose paths include the drain,
+  because the drain's fixture roots need a hook program first, or its start check needs to change.
+  That item is not written yet, and filing it is the owner's call.
+- **The program's argument vector.** Wherever this item writes the definition's `hooks` value (the
+  c2 test and the README), `argv` is `["python3", "tools/tillr-loop/tillr-loop"]` and `names` is
+  `gate`, `land`, `verdict`, `replay`, `rolling`, `fixer-gate`, in that order. The path is relative
+  for the reason `DefaultFixerGateProgram` gives: a gate runs in the candidate's worktree.
+- **`fixer-gate` becomes a face of its own (c1).** In the flag form the fixer gate is the `gate`
+  face given `--all` or `--since`. A hook is called as `<argv> <name> <flags>`, so `tillr-loop`
+  gains a `fixer-gate` face that does what `gate` does with one of those two flags. `gate` keeps
+  accepting them, which is what keeps the keeper's command working for c4.
+- **`replay` and `rolling` take the contract's flags, not the default programs' (c1).** The drain
+  calls `replay --only <ids>` and `rolling --all` or `rolling --since <sha>`. The `replay` face
+  runs `python3 tools/fork-check.py --replay --only <ids>` and the `rolling` face runs
+  `python3 tools/fork-check.py --tier rolling` with the range flag it was given. Each adds
+  `--replay` or `--tier rolling` itself, passes its environment through unchanged, and exits with
+  the program's exit code.
+- **What `describe` prints.** One JSON object whose only key is `hooks`; the drain refuses any
+  other key. For each of the six names it lists every flag the contract lists, including the three
+  optional `land` flags and both range flags. `describe` reads no store and needs no other flag.
+- **Where c3's test lives and what it compares.** It is in
+  [test.py](../../tools/tillr-loop/test.py), beside the test that already replays
+  `drain-argv.json`. For each case the hook name is the case's face, except that the two cases
+  named `fixer-gate-…` use `fixer-gate`. The test gives the case's arguments to that hook face and
+  asserts it parses them to the same values as the flag form. The file has no `replay` or
+  `rolling` case, and none is added: the drain's own test writes that file, so this item does not
+  edit it. A second test covers those two faces with a stand-in for `fork-check.py` that records
+  its arguments.
+- **If a drain suite fails for c5, stop.** Run the drain's suites as c5 says. With the embedded
+  definition unchanged they should pass as they do on the base. A failure there is outside this
+  item's paths: report it with the test's name, and do not edit the drain.
+
 **Agent details:** the replay and rolling programs the drain defaults to today are
 `DefaultReplayProgram` and `DefaultRollingProgram` in the drain; the fixer gate is
 `DefaultFixerGateProgram` in [trunk.go](../../tools/tillr-drain/drain/trunk.go). The flag-form cases
@@ -500,7 +565,7 @@ are [drain-argv.json](../../tools/tillr-loop/drain-argv.json).
 <!-- tillr: item id="item-def-tillr-loop-hooks" paths="tools/tillr-loop/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr-loop describe` prints the hooks it answers and their flags, in the contract's shape: `gate`, `land`, `verdict` and `fixer-gate` as today, and `replay` and `rolling` as faces that run the programs the drain defaults to today.
-- **c2:** The embedded Git-landing definition names `tillr-loop` as its hook program and lists those six hooks.
+- **c2:** A test takes the embedded Git-landing definition, sets its `hooks` to `tillr-loop` as the program and those six hooks, and asserts that the definition package accepts it. The embedded definition itself keeps `hooks` unset.
 - **c3:** A test asserts that, for every case in `drain-argv.json`, the step a drain started with no step flags would run through the hook program receives the same flags as the flag form does today.
 - **c4:** The keeper's loop command, with its step flags, keeps working unchanged.
 - **c5:** `tools/tillr-loop/test.py` and the drain's loop suites pass.
