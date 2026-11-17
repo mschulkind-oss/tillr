@@ -113,6 +113,48 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 			return nil, nil, err
 		}
 	}
+	// Document warnings also appear when the planner has no items to answer.
+	// Preserve every planner-only field while extending its display rows.
+	s, err := store.OpenRead(ctx, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer s.Close()
+	var designs []waitingRow
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		designs, err = waitingDesignWithoutItems(r)
+		return err
+	}); err != nil {
+		return nil, nil, err
+	}
+	if len(designs) > 0 {
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, nil, err
+		}
+		var rows []json.RawMessage
+		if err := json.Unmarshal(document["rows"], &rows); err != nil {
+			return nil, nil, err
+		}
+		for _, design := range designs {
+			encoded, err := json.Marshal(design)
+			if err != nil {
+				return nil, nil, err
+			}
+			rows = append(rows, encoded)
+		}
+		encoded, err := json.Marshal(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		document["rows"] = encoded
+		raw, err = json.Marshal(document)
+		if err != nil {
+			return nil, nil, err
+		}
+		answer.Rows = append(answer.Rows, designs...)
+	}
 	return json.RawMessage(raw), answer.Rows, nil
 }
 

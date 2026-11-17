@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS items (
   closed_from TEXT NOT NULL DEFAULT ''
 );
 
+-- Sync warnings are document observations, not item state. Sync replaces this
+-- set atomically and keeps first_seen for a document until its warning clears.
+CREATE TABLE IF NOT EXISTS design_without_item (
+  document TEXT PRIMARY KEY,
+  roadmap TEXT NOT NULL,
+  roadmap_line INTEGER NOT NULL,
+  first_seen INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS item_criteria (
   item_id      TEXT NOT NULL REFERENCES items(item_id),
   criterion_id TEXT NOT NULL,

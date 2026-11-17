@@ -74,12 +74,14 @@ type SyncInput struct {
 }
 
 // SyncNote is one finding, warning or frozen definition, located where an author has to look:
-// the file, the nearest heading above the directive, and the directive's line.
+// the file, heading, and line. For design-without-item, File names the design while Roadmap
+// names the file containing the linking heading and line; other notes locate the directive.
 type SyncNote struct {
 	File    string `json:"file"`
 	Heading string `json:"heading"`
 	Line    int    `json:"line"`
 	ItemID  string `json:"item_id,omitempty"`
+	Roadmap string `json:"roadmap,omitempty"`
 	Rule    string `json:"rule"`
 	Message string `json:"message"`
 }
@@ -239,6 +241,9 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			return SyncReport{}, Internalf("releasing the savepoint for %s: %v", fw.file, err)
 		}
 	}
+	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli()); err != nil {
+		return SyncReport{}, err
+	}
 	return finishReport(report), nil
 }
 
@@ -356,6 +361,12 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			r = nil
 		}
 	}
+
+	stages, err := designStageRoles(in.Root)
+	if err != nil {
+		return syncPlan{}, err
+	}
+	report.Warnings = append(report.Warnings, designWithoutItems(in.Documents, held, stages)...)
 
 	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
 	// ids keep their definitions and history; sync does not retroactively rename them.
@@ -624,11 +635,12 @@ func orderFileWrites(perFile map[string]*fileWrites, order []string) ([]fileWrit
 // storedState is the part of a stored item the counters read.
 type storedState struct {
 	state     string
+	designDoc string
 	updatedAt int64
 }
 
 func readStoredStates(r *store.Reader) (map[string]storedState, error) {
-	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0) FROM items`)
+	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, '') FROM items`)
 	if err != nil {
 		return nil, Internalf("reading the stored items: %v", err)
 	}
@@ -637,7 +649,7 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 	for rows.Next() {
 		var id string
 		var st storedState
-		if err := rows.Scan(&id, &st.state, &st.updatedAt); err != nil {
+		if err := rows.Scan(&id, &st.state, &st.updatedAt, &st.designDoc); err != nil {
 			return nil, Internalf("reading a stored item: %v", err)
 		}
 		held[id] = st

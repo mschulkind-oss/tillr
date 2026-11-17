@@ -86,6 +86,7 @@ export interface ApiFailure {
 export interface WaitingRow {
   rank: string;
   item_id: string;
+  document?: string;
   class: string;
   where: string;
   why: string;
