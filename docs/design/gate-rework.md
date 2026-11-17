@@ -818,9 +818,29 @@ After a landing the trunk holds changes that only the heavy checks have judged, 
 -->
 
 - **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands.
-- **c2:** The test asserts from the recorded events that the number of gates in flight at once reached the lane count, and that the land lock was held only between a squash's start and its trunk move. It asserts no duration.
-- **c3:** The loop's summary prints the longest and the median land-lock hold and the number of landings per heavy run. The test asserts the fields are present.
+- **c2:** The test asserts from the recorded events that the number of gates in flight at once reached the lane count, and that the land lock was held for one landing transaction at a time and for nothing else: each hold begins after the gate verdict for its candidate was recorded, contains that landing's squash, trunk move and receipt and no other landing's, and no gate for that candidate starts or finishes inside it. It asserts no duration.
+- **c3:** The loop's summary prints the longest and the median land-lock hold, each measured from the lock's acquisition to its release, and the number of landings per heavy run. The test asserts the fields are present.
 - **c4:** No lane's gate reads or writes a file another lane's gate writes, other than the result store. The test asserts it from the declared `writes` of every check and from the files the run created.
+
+**The land lock's hold is the whole landing transaction, and this item leaves that boundary where
+it is.** Criterion c2 first said the lock was held "only between a squash's start and its trunk
+move". That is narrower than the lander, and a run stopped on it on 2026-11-17. Read that day in
+`Land` in `tools/tillr-land/land/landing.go`: the lock is acquired before `prepareLanding`, which
+reads the trunk tip and squashes onto it, and it is released by a deferred call after the store
+transaction that moves the trunk and writes the receipt has committed. A landing that is refused
+takes the same lock to pin the head and write its row. [Section 9](#9-what-this-costs-and-what-it-does-not-do)
+says this work does not change the land lock, and that stands, so c2 now states the boundary the
+lander has. What the criterion protects is unchanged: no gate runs under the lock, and the lock
+serializes one landing at a time. The hold c3 reports is acquisition to release, which is the
+quantity [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) calls "the whole hold" and leaves
+unmeasured. If the events recorded today do not carry the lock's acquisition and release, this
+item adds them. Recording the hold observes the lock and does not move its boundary.
+**Rejected:** narrowing the hold to the squash and the move, which would let a second landing
+read the trunk before the first one's receipt is committed, and which changes the lander in a
+slice that is a measurement; and keeping the first wording with a test that treats the receipt
+as outside the hold, which asserts something the tree does not do. Whether the hold should be
+shorter is a question for the numbers c3 prints, not for this slice. Settled by this design's
+seat on 2026-11-17; the owner may overturn it.
 
 ### Prevent a gate check from being stopped while it makes progress
 
