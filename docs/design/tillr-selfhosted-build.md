@@ -122,6 +122,9 @@ The seven queued observatory items move out of ranks `p` through `v` into two wa
 
    `just pack-sync` failed `just done` four times on 2026-11-13, and worker lanes fenced to `tools/tillr-<mod>/` cannot write `yolo-packs/tillr/` unless the mirror rule changes.
 
+   What the recipe is for, what it costs today, and which options are still live are in
+   [§6.3](#63-what-just-pack-sync-is-for-and-which-options-are-still-live).
+
    - **Option A — Mechanical per-module mirror in `tillr-loop` and commit recipes:** Before gating, `tillr-loop` syncs `tools/<mod>/` into `yolo-packs/tillr/files/local/share/tillr/<mod>/` and treats that module-disjoint mirror path as implied by `tools/<mod>/` in fence checks. Keeps every `main` commit ready for `yolo host apply` while preserving 2-lane parallelism.
    - **Option B — Demote the mirror to a publish snapshot (remove per-commit `pack-sync` from `just done`):** Keep `yolo pack lint` on pack edits, drop `tools/`-to-pack byte parity from `just done`, and run `just pack-sync` only when exporting pack updates to hosts. Cuts ~10-module mirror churn from git commits, at the cost that `yolo-packs/tillr` on `main` lags `tools/` between syncs.
 
@@ -131,6 +134,68 @@ The seven queued observatory items move out of ranks `p` through `v` into two wa
 
    **Answer:**
    > _(empty — fill in when decided)_
+
+### 6.3 What `just pack-sync` is for, and which options are still live
+
+Read against the tree on 2026-11-17.
+
+**What it is.** `just pack-sync` is a recipe in [`.justfile`](../../.justfile). It copies the Go
+source of the eleven tillr modules under `tools/` into
+`yolo-packs/tillr/files/local/share/tillr/<module>/`, the tree the `tillr` pack ships.
+[`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) fails when a copy differs from its
+source, and the gate runs that test as its fast `pack-sync` check
+([`tools/gate/checks/pack-sync.json`](../../tools/gate/checks/pack-sync.json)). Since 2026-11-16 a
+second recipe, `just pack-docs`, ships the design documents the same way, as a dated snapshot that
+is refreshed by hand and not on every landing.
+
+**Why it exists.** A pack ships source and never a compiled artifact
+([`yolo-packs/tillr/pack.json`](../../yolo-packs/tillr/pack.json),
+[its README](../../yolo-packs/tillr/README.md)). Each of the eight launchers builds its binary from
+the copy, once per source digest. `yolo-packs/` is deployed by `yolo host apply`, not by rcm
+([AGENTS.md](../../AGENTS.md)), and a pack reads real files from the repository, so the copy is
+committed. It is what puts `tillr` on PATH in a workspace that has no `tools/`.
+
+**What it costs today.**
+
+- **Every change is made twice.** From 2026-11-10 to 2026-11-17, commits added 167,274 lines under
+  `tools/tillr*` and 163,390 under the copy (`git log --numstat` over each path).
+- **Every worker must run it.** The build brief tells a lane that touches `tools/tillr*` to "run
+  `just pack-sync` in the target and commit the mirror in the same commit"
+  ([`tools/tillr-run/backends/brief-template.md`](../../tools/tillr-run/backends/brief-template.md)).
+  Before that line and the fence rule below existed, the check failed four times on 2026-11-13,
+  and on 2026-11-14 it cost `item-obs-archive`, whose lane ran the recipe and was refused for
+  writing outside its fence.
+- **No kept run shows it failing.** On 2026-11-17, 101 of the gate reports the drain keeps name
+  the check: 61 ran it and all 61 passed, and 40 skipped it because nothing it reads changed. It
+  takes about 0.24 s.
+
+**Is it still relevant?** Yes, but the question's premise has moved, and so have its options.
+
+- **The premise is half true.** The drain in this repository runs binaries built from `tools/`
+  (`just tillr-build`, and the roll command of [the restart design](./tillr-restart.md)), so it
+  does not depend on the copy. A plain `tillr` on this jail's PATH still runs the copy: the
+  launchers in `yolo-packs/tillr/programs/` build from `~/.local/share/tillr` only, because the
+  source launcher of Step 1 (`D-SH2`) is not built.
+- **Option A is half built.** The implied fence path exists: the drain adds each named module's
+  copy to a lane's fence (`fencePaths` in `tools/tillr-drain/drain/stage.go`, since 2026-11-14),
+  and that is what stopped the failures. The mechanical sync inside `tillr-loop` does not exist;
+  each lane runs the recipe because its brief says so. What A still offers is moving that step out
+  of the worker. It does not remove the doubled diff.
+- **Option B is still live, and it is the only option that removes the doubled diff.** Its cost
+  is the one it names: between syncs, the pack on `main` lags `tools/`. Another workspace that
+  relaunches gets the last published copy, and so does this jail's PATH `tillr`. `just pack-docs`
+  already works this way for the documents.
+- **Separating tillr's core from its Git-landing use** ([the core design](./tillr-core-and-git-landing.md))
+  divides definitions inside this repository. It changes nothing here.
+
+**This document as a whole is partly overtaken.** Step 3 is built: the planner holds an item as
+`question-open` from Vantage's index (`questionState` in `tools/tillr-drain/drain/plan.go`).
+[OQ-SH1](#61-settled-decisions) and [OQ-SH3](#61-settled-decisions) were answered by the restart design, which is accepted and owns the roll
+command. The status line, which still says nothing is built, and the item ranks in
+[§4](#4-sequence) are out of date. Step 1 (`D-SH1`, `D-SH2`) is not built: sibling binaries still
+resolve through PATH. The recommendation is to rule [OQ-SH2](#OQ-SH2) here, then reconcile this
+document against the tree before anything is built from it. What is left of Step 1 may belong in
+the restart design. Its stage is unchanged.
 
 ## 7. Out of Scope
 
