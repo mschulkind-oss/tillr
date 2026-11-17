@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -74,6 +75,14 @@ func checksFace(args []string) int {
 	}
 	verdict, runErr := Run(plan, *root, *logs)
 	if verdict.Kind != "" {
+		var payload VerdictPayload
+		if err := json.Unmarshal(verdict.Payload, &payload); err == nil {
+			// Prefixed with the face's name: the run face's triage keeps the lines a gate
+			// program marks as its own, so an overrun survives into the verdict's log_ref.
+			for _, note := range budgetNotes(payload) {
+				fmt.Fprintln(os.Stderr, "tillr-gate checks:", note)
+			}
+		}
 		body, err := encodeVerdictRecord(verdict)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

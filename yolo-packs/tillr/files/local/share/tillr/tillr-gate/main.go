@@ -365,6 +365,9 @@ func runFace(args []string) int {
 					fmt.Fprintf(os.Stderr, "%s: not remembered; %s differs from judged tree\n", check.CheckID, check.UnboundPath)
 				}
 			}
+			for _, note := range budgetNotes(verdict) {
+				fmt.Fprintln(os.Stderr, note)
+			}
 			fmt.Fprintf(os.Stderr, "checks: %d passed, %d remembered, %d unavailable, %d failed\n", passed, remembered, unavailable, failed)
 		}
 	}

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -54,9 +55,32 @@ class Changes(unittest.TestCase):
         self.bin = self.repo / "stubs"
         self.bin.mkdir()
         uvx = self.bin / "uvx"
-        uvx.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$RENDER_LOG"\n'
-                       'printf "%s" "${RENDER_OUT:-}"\nprintf "%s" "${RENDER_ERR:-}" >&2\n'
-                       'exit "${RENDER_RC:-0}"\n')
+        # The renderer stub answers `vantage-check version` and `vantage-check check
+        # --format json FILE...`, logging one line per file it was given. RENDER_FINDING is
+        # an error finding on each file in RENDER_FAIL (every file when unset),
+        # RENDER_UNCHECKED names files the report could not check, and exit 127 prints no
+        # report at all, as a missing tool does.
+        uvx.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
+env = os.environ.get
+args = sys.argv[2:]
+if args == ["version"]:
+    print("vantage-check " + env("RENDER_VERSION", "0.0.0"))
+    sys.exit(int(env("RENDER_VERSION_RC", "0")))
+files = [arg for arg in args if arg not in ("check", "--format", "json")]
+with open(env("RENDER_LOG"), "a") as log:
+    log.writelines("vantage-check " + name + "\\n" for name in files)
+rc = int(env("RENDER_RC", "0"))
+sys.stderr.write(env("RENDER_ERR", ""))
+if rc == 127:
+    sys.exit(rc)
+failing = env("RENDER_FAIL", "").split(",") if env("RENDER_FAIL") else files
+findings = [{"rule": "stub/finding", "severity": "error", "message": env("RENDER_FINDING"),
+             "file": name, "line": 1, "column": 1} for name in failing if env("RENDER_FINDING")]
+failures = [{"file": name, "message": "stub"} for name in env("RENDER_UNCHECKED", "").split(",") if name]
+print(json.dumps({"tool": "vantage-check", "version": env("RENDER_VERSION", "0.0.0"),
+                  "findings": findings, "failures": failures}))
+sys.exit(rc)
+''')
         uvx.chmod(0o755)
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.env["RENDER_LOG"] = str(self.repo / "render.log")
@@ -230,12 +254,12 @@ class Changes(unittest.TestCase):
     def test_renderer_findings_and_unavailable_tool_are_distinct(self):
         (self.repo / "README.md").write_text("# Changed\n")
         self.commit()
-        for rc, stdout, stderr, expected in (("1", "missing document target\n", "", 1),
+        for rc, finding, stderr, expected in (("1", "missing document target", "", 1),
                                              ("1", "", "resolver failed\n", 4),
-                                             ("3", "diagnostic\n", "", 4),
+                                             ("3", "diagnostic", "", 4),
                                              ("127", "", "uvx missing\n", 4)):
             with self.subTest(rc=rc, expected=expected):
-                self.env.update(RENDER_RC=rc, RENDER_OUT=stdout, RENDER_ERR=stderr)
+                self.env.update(RENDER_RC=rc, RENDER_FINDING=finding, RENDER_ERR=stderr)
                 result = self.check("documents")
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
@@ -249,6 +273,113 @@ class Changes(unittest.TestCase):
         self.env["RENDER_RC"] = "0"
         (self.repo / "README.md").write_text("# Dirty\n")
         self.assertEqual(self.check("documents").returncode, 4)
+
+    def renders(self):
+        log = self.repo / "render.log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def test_an_unchanged_document_pass_is_remembered(self):
+        (self.repo / "other.md").write_text("# Other\n\n## Target\n")
+        (self.repo / "README.md").write_text("# Fixture\n\nSee [other](other.md#target).\n")
+        self.git("add", "other.md")
+        head = self.commit()
+        first = self.check("documents", head="HEAD")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(sorted(self.renders()), ["vantage-check README.md", "vantage-check other.md"])
+        again = self.check("documents")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(len(self.renders()), 2, "a remembered pass was rendered again")
+        self.assertIn("documents: README.md: remembered pass at ", again.stderr)
+        self.assertIn("2 document(s): 0 rendered, 2 remembered", again.stderr)
+        # A later commit that touches neither document nor anything they name keeps both
+        # remembered: the memory is per document, not per tree.
+        (self.repo / "config/tillr/unrelated.json").write_text("{}\n")
+        self.commit()
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(self.renders()), 2, "an unrelated commit forgot a remembered pass")
+
+    def test_a_changed_document_or_a_changed_target_is_rendered_again(self):
+        (self.repo / "other.md").write_text("# Other\n\n## Target\n")
+        (self.repo / "README.md").write_text("# Fixture\n\nSee [other](other.md#target).\n")
+        self.git("add", "other.md")
+        self.commit()
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(self.renders()), 2)
+        # The document's own blob changed.
+        (self.repo / "README.md").write_text("# Fixture\n\nSee [other](other.md#target), again.\n")
+        self.commit()
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(self.renders()[2:], ["vantage-check README.md"])
+        # Only the link target changed: README's blob is the same, but the heading it
+        # names is gone, so its remembered pass is not its verdict any more.
+        (self.repo / "other.md").write_text("# Other\n\n## Renamed\n")
+        self.git("add", "other.md")
+        self.commit()
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(sorted(self.renders()[3:]), ["vantage-check README.md", "vantage-check other.md"])
+
+    def test_a_remembered_fail_is_never_reused_as_a_pass(self):
+        (self.repo / "README.md").write_text("# Fixture\n\nBroken.\n")
+        self.commit()
+        self.env.update(RENDER_RC="1", RENDER_FINDING="missing target")
+        self.assertEqual(self.check("documents").returncode, 1)
+        # The same blob, now rendered green: that run's pass is reported, but a key that
+        # ever failed is rendered every time, so neither verdict is reused.
+        self.env.update(RENDER_RC="0", RENDER_FINDING="")
+        for _ in range(2):
+            result = self.check("documents")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("remembered", result.stderr)
+        self.assertEqual(len(self.renders()), 3)
+        self.env.update(RENDER_RC="1", RENDER_FINDING="missing target")
+        self.assertEqual(self.check("documents").returncode, 1)
+
+    def test_a_pass_from_another_renderer_version_is_judged_again(self):
+        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
+        self.commit()
+        self.env["RENDER_VERSION"] = "1.0.0"
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(self.renders()), 1, "the same renderer's pass was not remembered")
+        self.env["RENDER_VERSION"] = "2.0.0"
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not from renderer 2.0.0", result.stderr)
+        self.assertEqual(len(self.renders()), 2)
+        # A renderer that cannot say its version cannot confirm a remembered pass either.
+        self.env["RENDER_VERSION_RC"] = "3"
+        self.assertEqual(self.check("documents").returncode, 0)
+        self.assertEqual(len(self.renders()), 3)
+
+    def test_a_report_without_a_version_remembers_nothing(self):
+        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
+        self.commit()
+        self.env["RENDER_VERSION"] = ""
+        for _ in range(2):
+            result = self.check("documents")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.renders()), 2)
+
+    def test_a_failing_run_remembers_only_what_it_judged(self):
+        (self.repo / "other.md").write_text("# Other\n")
+        (self.repo / "third.md").write_text("# Third\n")
+        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
+        self.git("add", "other.md", "third.md")
+        self.commit()
+        # README fails, other.md could not be checked, third.md has no finding.
+        self.env.update(RENDER_RC="1", RENDER_FINDING="finding", RENDER_FAIL="README.md",
+                        RENDER_UNCHECKED="other.md")
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("could not check", result.stdout)
+        self.assertEqual(len(self.renders()), 3)
+        # Next run: only third.md was a judged pass, so README (a fail) and other.md (not
+        # checked) are rendered again and third.md is remembered.
+        self.env.update(RENDER_RC="0", RENDER_FINDING="", RENDER_FAIL="", RENDER_UNCHECKED="")
+        result = self.check("documents")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(self.renders()[3:]), ["vantage-check README.md", "vantage-check other.md"])
+        self.assertIn("documents: third.md: remembered pass at ", result.stderr)
 
     def test_plan_union_preserves_the_old_fixture_kinds(self):
         shutil.copy(ROOT / "tools/fork-check.py", self.repo / "tools/fork-check.py")
@@ -329,7 +460,9 @@ class Changes(unittest.TestCase):
         verdict, remaining = result.stdout.splitlines()
         self.assertEqual(json.loads(verdict)["payload"]["base_sha"], self.base)
         self.assertEqual(remaining, "remaining program ran")
-        self.env["RENDER_RC"] = "3"
+        # The renderer is unavailable outright: it cannot check, and it cannot say which
+        # version it is, so the pass the first run remembered cannot be confirmed either.
+        self.env.update(RENDER_RC="3", RENDER_VERSION_RC="3")
         result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)

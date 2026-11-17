@@ -75,11 +75,32 @@ declared timeout produces no judgment (exit 4), not a failed check.
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget-test.json) reads only the check
 directory. The fast total is 8,950 milliseconds, including the admission check.
-A fast check is stopped at its declared budget. A tree check records `over-budget`
+A fast tree check is stopped at its declared budget and records `over-budget`
 (meaning its judgment is deferred to the heavy run) without failing an otherwise
-passing run; that outcome is never stored as a remembered pass. A change check
-that reaches its budget answers “could not judge” (exit 4), since no tree-only
-run can supply its missing judgment.
+passing run; that outcome is never stored as a remembered pass. No heavy runner
+exists yet, so today nothing judges a carried check until a later gate runs it
+again. A fast change check cannot be deferred, because no tree-only run has its
+base, so it is not stopped at its budget: it runs on to its ceiling, which is its
+`timeout_ms`, or the 9,000 millisecond tier cap when it declares none. One that
+answers by then keeps its verdict, and the verdict entry records
+`over_budget_ms`, how far past its budget it ran. Its log and the face's stderr
+name the check and the overrun; the `checks` face prefixes that line with
+`tillr-gate checks:`, so the run face's bounded triage of the gate program keeps
+it. Only a change check still running at its ceiling answers “could not judge”
+(exit 4). The rule and its measurement are in
+[design Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test).
+
+The `documents` change check remembers a pass for each changed document in the
+same result store as tree checks, under a key over the document's blob and every
+input the renderer reads for it: the files and directories it links to, the names
+beside it, the `.vantage.toml` and `.vantageignore` files, and the check's own
+code. A pass recorded by another renderer version is judged again, and a key that
+ever recorded a fail is always judged again. The documents still to judge go to
+one `uvx vantage-check` run. On 2026-11-16 the four-document change from the drain
+fault took 1.9 to 2.0 seconds with nothing remembered, about the same as before,
+and 0.42 to 0.52 seconds with all four remembered, at one, two and ten concurrent
+runs. The inputs are listed in
+[`change_common.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/change_common.py).
 
 ## Optional local refs
 
