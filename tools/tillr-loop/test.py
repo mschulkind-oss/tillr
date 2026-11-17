@@ -411,6 +411,78 @@ def test_land_forwards_message_source(tmp):
     assert "--message-from" not in passes[-1], passes
 
 
+def test_land_forwards_the_observed_trunk(tmp):
+    """The drain's observed trunk reaches the lander, which checks it under the land lock.
+
+    `tillr drain loop` appends `--observed-trunk <tip>` whenever its store holds a trunk
+    observation, and `tillr-land pass` refuses with `trunk-rewritten` when the locked trunk no
+    longer contains that tip. An adapter that refused the flag faulted every landing
+    (2026-11-17); one that swallowed it would land across a rewrite the loop had seen.
+    """
+    fixture = Fixture(tmp)
+    fixture.gate_verdict()
+    result = fixture.run_adapter("land", extra=["--observed-trunk", fixture.base])
+    assert result.returncode == LAND_LANDED, (result.returncode, result.stderr)
+    passes = [call for call in fixture.calls() if call.startswith("pass ")]
+    assert passes and f"--observed-trunk {fixture.base}" in passes[-1], passes
+    result = fixture.run_adapter("land")
+    assert result.returncode == LAND_LANDED, (result.returncode, result.stderr)
+    passes = [call for call in fixture.calls() if call.startswith("pass ")]
+    assert "--observed-trunk" not in passes[-1], passes
+
+
+def test_every_argv_the_drain_sends_is_accepted(tmp):
+    """Each argv `tillr drain loop` builds, replayed against the face it reaches.
+
+    `drain-argv.json` is written by the drain's own suite from its ProcessSteps code paths
+    (`TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter`), so it is the drain's
+    argument lists, not a second spelling of them here. A face that stops declaring a flag the
+    drain sends fails this case, at the landing tier, before a loop faults on it.
+    """
+    cases = json.loads((HERE / "drain-argv.json").read_text())
+    assert {case["face"] for case in cases} == {"gate", "land", "verdict"}, cases
+    fixture = Fixture(tmp)
+    store = fixture.tmp / "state.db"
+    env = fixture.env(TILLR_LOOP_REGISTRY=fixture.tmp / "registry.json")
+    for case in cases:
+        args = [word.replace("<worktree>", str(fixture.repo)).replace("<store>", str(store))
+                .replace("<root>", str(fixture.repo)) for word in case["args"]]
+        run_dir = fixture.repo / ".tillr" / "loop" / case["run"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "gate.verdict.json").write_text("{}\n")
+        fixture.log.write_text("")
+        result = subprocess.run([sys.executable, str(ADAPTER), case["face"], *args],
+                                cwd=str(fixture.repo), env=env, capture_output=True, text=True)
+        assert result.returncode == 0, (case["case"], result.returncode, result.stderr)
+        calls = [call for call in fixture.calls() if not call.startswith("env ")]
+        last = calls[-1] if calls else ""
+        want = {"gate": "run ", "land": "pass ", "verdict": "verdict record "}[case["face"]]
+        assert last.startswith(want), (case["case"], calls)
+        # Every flag the drain added after the candidate's own reaches the lander unchanged.
+        for flag in ("--observed-trunk", "--message-from", "--base-ref"):
+            if flag in args and case["face"] == "land":
+                value = args[args.index(flag) + 1]
+                assert f"{flag} {value}" in last, (case["case"], flag, last)
+
+
+def test_fixer_range_reaches_the_judge(tmp):
+    """A fixer's `--since`/`--all` widens the default judge, and refuses a named one."""
+    fixture = Fixture(tmp)
+    registry = ["--registry", str(fixture.tmp / "registry.json")]
+    for extra, want in ((["--since", fixture.base], f"--gate-arg --since --gate-arg {fixture.base}"),
+                        (["--all"], "--gate-arg --all")):
+        fixture.log.write_text("")
+        result = fixture.run_adapter("gate", registry + extra)
+        assert result.returncode == GATE_PASS, (extra, result.returncode, result.stderr)
+        run = [call for call in fixture.calls() if call.startswith("run ")]
+        assert run and run[-1].endswith(want), (extra, run)
+        assert "--gate-arg --tier" not in run[-1], run
+    result = fixture.run_adapter("gate", registry + ["--all", "--gate-program", "true"])
+    assert result.returncode == ADAPTER_REFUSED, (result.returncode, result.stderr)
+    result = fixture.run_adapter("gate", registry + ["--all", "--since", fixture.base])
+    assert result.returncode == ADAPTER_REFUSED, (result.returncode, result.stderr)
+
+
 def test_land_without_a_gate_verdict_refuses(tmp):
     """A landing against no verdict is a candidate nobody judged."""
     fixture = Fixture(tmp)
@@ -610,6 +682,9 @@ def main():
             test_gate_derives_the_change_with_the_gate_binary,
             test_land_exit_mapping,
             test_land_forwards_message_source,
+            test_land_forwards_the_observed_trunk,
+            test_every_argv_the_drain_sends_is_accepted,
+            test_fixer_range_reaches_the_judge,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,
             test_failing_verdict_is_a_usage_error,

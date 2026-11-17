@@ -7,14 +7,14 @@ end supplies them: three thin adapters that turn the loop's candidate argv into 
 `tillr-gate`, `tillr-land` and `tillr item` invocations, and translate those programs'
 exit codes onto the three contracts the loop reads.
 
-  tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] <candidate flags>
-  tools/tillr-loop/tillr-loop land    <candidate flags>
+  tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] [--since <sha> | --all] <candidate flags>
+  tools/tillr-loop/tillr-loop land    [--observed-trunk <sha>] [--base-ref <ref>] [--message-from <sha>] <candidate flags>
   tools/tillr-loop/tillr-loop verdict --verdict pass <candidate flags>
   tools/tillr-loop/tillr-loop self-check <candidate flags>   # prints, runs nothing
 
 The loop appends the candidate to whatever program string it is given (one flag per
-field: --item --lane --run --worktree --base --head, plus --verdict for the verdict
-step), so the loop's argv carries no judgment: every value that decides *what* is judged
+field: --item --lane --run --worktree --base --head --root, plus the optional flags each
+step's branches add), so the loop's argv carries no judgment: every value that decides *what* is judged
 comes from a flag of this adapter's own, and every value that can be derived from the
 candidate is derived here rather than defaulted to something convenient.
 
@@ -133,6 +133,7 @@ class Ctx:
     gate_program: str | None
     base_ref: str | None
     message_from: str | None
+    observed_trunk: str | None
     verdict: str | None
     gate_bin: str | None
     land_bin: str | None
@@ -417,6 +418,10 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
                 "--run-dir",
                 ctx.run_dir,
                 *(["--message-from", ctx.message_from] if ctx.message_from else []),
+                # The loop's last observed trunk tip, which the lander checks under the land
+                # lock: a trunk that no longer contains it refuses as `trunk-rewritten`. It is
+                # passed through unchanged, and absent when the loop observed nothing.
+                *(["--observed-trunk", ctx.observed_trunk] if ctx.observed_trunk else []),
             ],
             ctx.root,
         )
@@ -622,10 +627,21 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
         parser.add_argument("--gate-program", default=None,
                             help="the program `tillr-gate run --gate` runs (default: "
                                  f"{DEFAULT_GATE_PROGRAM})")
+        # A trunk fixer's full gate: the drain's `--fixer-gate` replaces `{green}` with one of
+        # these. They widen the default program's remaining checks to the untiered range
+        # since the last green trunk, or the whole tree when there is none.
+        full = parser.add_mutually_exclusive_group()
+        full.add_argument("--since", default=None, metavar="SHA",
+                          help="judge the untiered range since SHA, the fixer's last green trunk")
+        full.add_argument("--all", action="store_true",
+                          help="judge the whole tree untiered: a fixer with no green trunk behind it")
     if kind in ("land", "self-check"):
         parser.add_argument("--base-ref", default=None, help="the branch the base sha is on")
         parser.add_argument("--message-from", default=None,
                             help="the commit in base..head whose message and author date to land")
+        parser.add_argument("--observed-trunk", default=None, metavar="SHA",
+                            help="the loop's last observed trunk tip, handed to `tillr-land pass`, "
+                                 "which refuses with trunk-rewritten if the trunk no longer contains it")
     if kind == "verdict":
         # Required: the verdict is the loop's judgment, so a missing one is refused rather
         # than defaulted to a pass.
@@ -645,11 +661,23 @@ def gate_program(args: argparse.Namespace) -> str | None:
     """
     if not hasattr(args, "gate_program"):
         return None
+    full = ["--since", args.since] if args.since else (["--all"] if args.all else [])
+    if args.gate_program:
+        if full:
+            # A named program receives none of the adapter's own range words, so accepting
+            # the range would judge a narrower change than the caller asked for.
+            raise Refusal(
+                EXIT_USAGE,
+                f"{full[0]} widens the default gate program, and --gate-program names "
+                "another one: name the range inside that program instead",
+            )
+        return args.gate_program
     root = resolve_root(args.root, args.worktree)
     logs = Path(args.work_dir or str(Path(root) / ".tillr" / "loop")) / args.run / "change-logs"
-    return args.gate_program or DEFAULT_GATE_PROGRAM.format(
+    program = DEFAULT_GATE_PROGRAM.format(
         base=shlex.quote(args.base), head=shlex.quote(args.head),
         runner=shlex.quote(args.tillr_gate), logs=shlex.quote(str(logs)))
+    return " ".join([program, *(shlex.quote(word) for word in full)])
 
 
 def context(args: argparse.Namespace) -> Ctx:
@@ -671,6 +699,7 @@ def context(args: argparse.Namespace) -> Ctx:
         gate_program=gate_program(args),
         base_ref=getattr(args, "base_ref", None),
         message_from=getattr(args, "message_from", None),
+        observed_trunk=getattr(args, "observed_trunk", None),
         verdict=getattr(args, "verdict", None),
         gate_bin=args.tillr_gate,
         land_bin=args.tillr_land,
