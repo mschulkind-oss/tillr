@@ -3,6 +3,7 @@ import { useNow } from "../models/clock";
 import type { ItemData, LaneRow, PipelineStep } from "../models/types";
 import { EntityLink } from "./EntityLink";
 import { TranscriptView } from "./TranscriptView";
+import { DependencyLinks } from "./DependencyLinks";
 import { UsageSummary } from "./Usage";
 
 export interface GraphNode { id: string; label: string; runId?: string; state: string }
@@ -28,7 +29,6 @@ export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData
   const nodes: GraphNode[] = recorded.length ? current.map(node => ({id:node.node_id,label:node.node_id,runId:node.run_id,state:node.state})) : lane.run_id ? [{ id: lane.run_id, label: `${lane.seat || "worker"} · agent · ${lane.backend}`, runId: lane.run_id, state: lane.state === "running" ? "running" : lane.outcome === "landed" ? "passed" : "failed" }] : [];
   const attempts = recorded.length ? [...new Set(recorded.map(node => node.attempt))] : (item?.runs ?? []).map((_,index) => index+1);
   const runLink = (id: string) => {const run = item?.runs.find(run => run.run_id === id); return <span key={id}><EntityLink kind="run" id={id} /> {run?.lane_id ? <>· <EntityLink kind="lane" id={run.lane_id} /></> : null} · {run?.state ?? "run state not read"}</span>;};
-  const links = (ids: string[]) => ids.length ? ids.map(id => <span key={id}><EntityLink kind="item" id={id} /> </span>) : "nothing";
   return <>
     <h1>Lane <EntityLink kind="lane" id={lane.lane_id} /></h1>
     <p>{lane.state} · {lane.state_since_ms === null ? "start not recorded" : elapsed(lane.state_since_ms, now)} · {lane.outcome}</p>
@@ -37,7 +37,7 @@ export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData
     <section><h2>Pipeline</h2><PipelineRow steps={lane.pipeline ?? []} now={now} />{lane.pipeline_note ? <p>{lane.pipeline_note}</p> : !lane.pipeline ? <p>Pipeline timing was not recorded.</p> : null}</section>
     <section><h2>Graph</h2><p>{nodes.length} node{nodes.length === 1 ? "" : "s"} · {item?.item.selected_workflow || lane.workflow_ref || "no workflow recorded"} · run order as recorded</p><ItemGraph nodes={nodes} edges={[]} /></section>
     <section><h2>Criteria</h2><p>worker progress is not recorded</p>{item ? <ul>{item.criteria.map(c => <li key={c.criterion_id}>{c.criterion_id} · {c.state} · {c.text}</li>)}</ul> : <p>Criteria not read yet.</p>}</section>
-    <section><h2>Waits on</h2>{item ? links(item.blocked_by) : "Dependencies not read yet."}<h2>Unblocks</h2>{item?.unblocks ? links(item.unblocks) : "Unblocks not recorded by this server."}</section>
+    {item ? <DependencyLinks id={item.item.item_id} blockedBy={item.blocked_by} unblocks={item.unblocks} /> : <section><h2>Waits on</h2>Dependencies not read yet.<h2>Unblocks</h2>Unblocks not read yet.</section>}
     <section><h2>Now</h2><p>{lane.latest_action.kind === "unrecorded" ? "latest action not recorded" : lane.latest_action.text} · {lane.latest_action.kind === "liveness" ? "liveness signal, not an action" : lane.latest_action.kind}</p><p>child sessions: not recorded</p></section>
     <section><h2>Attempts on this item</h2>{item || recorded.length ? <ol>{attempts.map(number => <li key={number}>attempt {number} · {recorded.length ? recorded.filter(node => node.attempt === number).map(node => runLink(node.run_id)) : item?.runs[number-1] ? runLink(item.runs[number-1].run_id) : null}</li>)}</ol> : <p>Attempts not read yet.</p>}</section>
     <section><h2>Lane history</h2>{lane.history ? <ol>{lane.history.map(run => <li key={run.run_id}><EntityLink kind="item" id={run.item_id} /> · <EntityLink kind="run" id={run.run_id} /> · <EntityLink kind="lane" id={run.lane_id} /> · {run.state} · {run.started_at_ms ? new Date(run.started_at_ms).toISOString() : "start not recorded"}</li>)}</ol> : <p>Lane history not recorded by this server.</p>}</section>

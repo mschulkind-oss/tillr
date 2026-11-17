@@ -11,6 +11,7 @@ import { ClaimAuditBanner } from "./ClaimAuditBanner";
 import { PayloadInspectorDrawer } from "./PayloadInspectorDrawer";
 import { RefusalState, refusalCode } from "./RefusalState";
 import { RunUsageFigures, UsageSummary } from "./Usage";
+import { DependencyLinks } from "./DependencyLinks";
 import { PreservedWork } from "./PreservedWork";
 
 export function foldedDecisions(decisions: DispatchView[]) {
@@ -62,7 +63,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
   return <div className="entity-page" aria-label="Item page"><h1>Item <EntityLink kind="item" id={id} /></h1>
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => { window.location.hash = `#/run/${encodeURIComponent(run)}`; }} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
-    {item.data ? <><UsageSummary usage={item.data.data.usage} /><ItemTimeline item={item.data.data} /></> : null}
+    {item.data ? <><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} /><ItemTimeline item={item.data.data} /></> : null}
   </div>;
 }
 export function RunPage({ id, route, live, paused }: { id: string; route: string; live: boolean; paused: boolean }) {

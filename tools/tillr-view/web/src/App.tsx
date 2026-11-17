@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { DesignsPage } from "./components/Designers";
 import { LanePage } from "./components/LanePage";
 import { Home } from "./components/Home";
@@ -14,6 +14,8 @@ import { useLanesQuery, usePassesQuery, usePassHistoryQuery, useQuestionsQuery, 
 import { useObservatorySocket } from "./models/socket";
 import { RenderTimer, usePagePerf } from "./models/perfHooks";
 import { URL_CHANGE_EVENT } from "./models/url";
+
+const DependencyGraph = lazy(() => import("./components/DependencyGraph").then(module => ({ default: module.DependencyGraph })));
 
 /** Replace old inspection links, preserving their artifact/tab selection. The older
  * query-only item spelling is also accepted; it never opens a second board layout. */
@@ -53,7 +55,7 @@ export function App() {
   const range = params.get("range") || "24h";
   useEffect(() => setHistoryPages(1), [range]);
   const passHistory = usePassHistoryQuery(range, historyPages, passesOpen, paused);
-  const waiting = useWaitingQuery(home || items, paused), questions = useQuestionsQuery(questionsOpen, paused);
+  const waiting = useWaitingQuery(home || items || path === "#/graph", paused), questions = useQuestionsQuery(questionsOpen, paused);
   const designs = useDesignsQuery(designsOpen, paused);
   const lanes = useLanesQuery(home || kind === "lane", paused, kind === "lane");
   const trunk = useTrunkRoute();
@@ -65,6 +67,7 @@ export function App() {
   else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} />;
+  else if (path === "#/graph") screen = <Suspense fallback={<main className="entity-page"><h1>Dependency graph</h1><p>Loading graph…</p></main>}><DependencyGraph items={snapshot.data?.data.items} waiting={waiting.data?.data} selected={params.get("item") ?? undefined} error={waiting.error} /></Suspense>;
   else if (passesOpen) screen = <PassesView passes={passHistory.data?.data.rows} error={passHistory.error} more={passHistory.data?.data.more} loadingOlder={passHistory.isFetching} onOlder={() => setHistoryPages(value => value + 1)} />;
   else if (itemOpen && id) screen = <ItemPage key={id} id={id} live={live} paused={paused} row={snapshot.data?.data.items.find(item => item.item_id === id)} baseURL={snapshot.data?.snapshot.vantage_base_url ?? ""} />;
   else if (runOpen && id) screen = <RunPage key={id} id={id} route={hash} live={live} paused={paused} />;

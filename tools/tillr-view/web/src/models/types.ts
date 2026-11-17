@@ -180,6 +180,8 @@ export interface ItemProjection {
 }
 
 export interface ItemView {
+  /** All recorded dependency edges, including completed blockers; absent on older servers. */
+  blocked_by?: string[];
   item_id: string;
   title: string;
   projected_state: ItemProjection;
