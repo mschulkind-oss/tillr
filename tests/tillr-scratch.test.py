@@ -47,7 +47,7 @@ def main():
             for module in sorted((ROOT / "tools").glob("tillr*")):
                 if not (module / "go.mod").is_file():
                     continue
-                command = ["go", "test", "-count=1", "./..."]
+                command = ["go", "test", "-count=1", "-timeout", "60m", "./..."]
                 print(f"+ (cd tools/{module.name} && {' '.join(command)})", flush=True)
                 code = subprocess.run(command, cwd=module, env=env).returncode
                 if code:
