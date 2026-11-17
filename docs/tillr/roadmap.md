@@ -2432,6 +2432,29 @@ to end its checks before forcing it to exit. The replay step needs the same clea
 Rolling checks are currently disabled in the running loop; this gap matters when they are
 turned back on.
 
+**Ruling, 2026-11-17 (answers the conflict the second and third runs raised):** both runs built
+c1 to c4 and were refused at the gate for a reason that is not in their work, so the criteria
+below stand as written and nothing in the shutdown design is reopened. Three points settle it.
+
+- **The refusal was the trunk's.** The one failing check in both verdicts was `documents`, and
+  its two findings were `link/dead-section-anchor` errors at two links elsewhere in this roadmap,
+  whose target headings had been renamed without them. The roadmap already failed on the base
+  both runs were staged from: `uvx vantage-check` on the copy of this file at `f1647cf10`
+  reports exactly those two errors. Commit `e62113977` has since repaired both links on the
+  trunk, and `uvx vantage-check docs/tillr/roadmap.md` at `b1fb121d5` reports nothing to fix.
+  This ruling therefore changes no link, and the builder changes none either.
+- **Start from the built work.** The third run's candidate is kept at
+  `refs/tillr/runs/run-item-loop-stop-ends-rolling-checks-a3`. It holds the implementation, its
+  tests, the drain README section and the pack copy, and it reported the full drain and
+  `fork-check` suites passing. Carry that change onto the current base and do not write the item
+  again. Take this roadmap from the trunk and not from the candidate, then make only the edit
+  the brief asks of this block. Run `just pack-sync` and do not resolve a pack copy by hand. A
+  file that merges without a conflict can still be wrong against the newer trunk, so the full
+  suites decide and not the merge.
+- **A `documents` finding outside this item's change.** If the check again fails on a line this
+  item did not write, the failure is the trunk's: report `trunk-broken`, naming the finding and
+  the base, and do not report done.
+
 **Outcomes:**
 
 - End all rolling checks before removing their temporary checkout.
