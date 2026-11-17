@@ -176,7 +176,9 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	// number, rowid, breaks ties for legacy rows with no event sequence.
 	rows, err := r.Query(
 		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs
-		   FROM runs WHERE item_id IS NOT NULL ORDER BY item_id, started_at, event_seq, rowid`)
+		   FROM runs WHERE item_id IS NOT NULL AND NOT EXISTS
+              (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id)
+           ORDER BY item_id, started_at, event_seq, rowid`)
 	if err != nil {
 		return nil, readFailure(err)
 	}

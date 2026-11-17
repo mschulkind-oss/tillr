@@ -181,6 +181,15 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Rank: it.Rank, ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
+		if d.Reason == ReasonEvalFailed || d.Reason == ReasonJudgeUnreadable {
+			detail, err := judgeFailureDetail(r, it.ItemID, d.Reason)
+			if err != nil {
+				return answer, err
+			}
+			if detail != "" {
+				row.Why += ": " + detail
+			}
+		}
 		switch {
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
@@ -345,6 +354,12 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", "land", "correct the reported staging cause"
 	case ReasonConflictExhausted:
 		return "needs a cause", "land", "diagnose the retained candidate"
+	case ReasonJudgeGrantAbsent:
+		return "needs you", "queue", "issue a grant covering the item's criteria"
+	case ReasonJudgeUnreadable:
+		return "needs a cause", "judge", "inspect the judge run"
+	case ReasonEvalFailed:
+		return "waits on work", "judge", "amend the candidate against the judge's reason"
 	case ReasonGateFailed, ReasonRetryJudged:
 		return "needs you", "gate", "inspect the verdict; tillr drain retry --help"
 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:

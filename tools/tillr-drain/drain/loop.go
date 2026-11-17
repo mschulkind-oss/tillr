@@ -169,6 +169,7 @@ const ScopeEscape = "boundary-scope-escape"
 // carried here because the judgment events a step appends are correlated by run *and* tick,
 // and the step is handed nothing else that knows which tick it is serving.
 type Candidate struct {
+	Judge *JudgeReceipt `json:"judge,omitempty"`
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string         `json:"refusal_detail,omitempty"`
@@ -1733,6 +1734,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
 	}
+	if published, err := l.recoverJudgePublication(ctx, candidate, result); published || err != nil {
+		return "", published && err == nil, err
+	}
+	var accepted bool
+	var recoveryErr error
+	candidate, accepted, recoveryErr = l.recoverJudgeHandoff(ctx, candidate, result)
+	if recoveryErr != nil || !accepted {
+		return "", false, recoveryErr
+	}
 	if err := l.recoverSecondGateStall(ctx, candidate); err != nil {
 		return "", false, err
 	}
@@ -1855,6 +1865,13 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		c.Text += "\nDesign run " + candidate.RunID + " did not amend the blocked item block " + ref
 		return "", false, l.saveBlockConflict(ctx, c)
 	}
+	if candidate.BlockConflict == nil {
+		var accepted bool
+		candidate, accepted, err = l.judgeCandidate(ctx, candidate, result)
+		if err != nil || !accepted {
+			return "", false, err
+		}
+	}
 	// A design answer amends the block for the next worker; only a completed
 	// worker candidate retires it. Recovery checks the original worker above,
 	// not the loop-owned retirement commit.
@@ -1940,6 +1957,12 @@ func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) erro
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "land"); err != nil {
+		return "", false, err
+	}
+	if published, err := l.recoverJudgePublication(ctx, candidate, result); published || err != nil {
+		return "", published && err == nil, err
+	}
+	if err := l.checkLandingJudgeGrant(ctx, candidate); err != nil {
 		return "", false, err
 	}
 	// Retrying a durable verdict skips the gate, not the recorded-head guard.
@@ -2039,6 +2062,24 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		}
 		terminal.Landed = true
 		return "", false, terminal
+	}
+	if candidate.Judge != nil {
+		receipt := *candidate.Judge
+		receipt.Options.Landed = landed.TrunkAfter
+		if receipt.Options.Landed == "" {
+			ref := TrunkRef
+			if candidate.BaseRef != "" {
+				ref = candidate.BaseRef
+			}
+			receipt.Options.Landed, err = l.revParse(ctx, l.cfg.Root, ref)
+			if err != nil {
+				return "", false, err
+			}
+		}
+		candidate.Judge = &receipt
+		if err := appendJudgment(ctx, l.cfg.Store, judgeLandedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
+			return "", false, err
+		}
 	}
 	if err := l.completeItem(ctx, candidate); err != nil {
 		return "", false, err

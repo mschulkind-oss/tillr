@@ -362,22 +362,13 @@ A judge is an agent, and an agent's output is text that may be wrong, incomplete
 
 The gate proves the tree is healthy. It does not prove the change is what the item asked for, and for some items that is the question that matters. Such an item asks for a judge in its own block. The judge runs after the worker has committed and before the gate, so that work which misses the point costs neither the gate's time nor a landing. It reads and never writes. If it passes the work, the gate and the landing run as they do today, and only after the landing are the judge's rulings recorded, so the board never shows an item as judged done while its change is not on the trunk.
 
-<!-- tillr: item id="item-jl-judge-before-gate" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** For an item whose block sets `judge="agent"`, the loop starts one run on the review seat in the same lane after the worker's candidate passes the fence check and before the gate. Its brief carries the criteria and the candidate's diff and names the path where it must write its verdict file. A test with stub harnesses asserts the order: worker, judge, gate, landing.
-- **c2:** A judge run that commits or leaves the worktree changed is refused, and the worker's candidate is what it was. A test asserts the candidate's commit is unchanged.
-- **c3:** When the judge's outcome is `pass`, the gate and the landing run as for any item. After the landing the verdicts are recorded through the intake with the landed commit, the item becomes `landed`, and the mechanical verdict program is not run for this item.
-- **c4:** When the gate fails or the landing does not take after a judge's `pass`, no verdict is recorded and the item is held under the gate's or the landing's own reason.
-- **c5:** When the outcome is `not-done`, neither the gate nor the landing runs and no verdict is recorded. The item is held as `eval-failed`, the verdict file is kept with the judge run's records, and the waiting face shows the hold with the judge's first reason.
-- **c6:** An item that asks for a judge and has no unexpired grant covering it is held as `judge-grant-absent` before its worker is dispatched. A test asserts no run starts.
-- **c7:** A judge run that writes no verdict file, or one the intake refuses, holds the item as `judge-unreadable`, records no verdict, and counts as the judge's failed attempt and not the worker's.
-- **c8:** An item whose block does not ask for a judge gets no judge run. A test asserts one run for the item.
 
 ### Route a judge's blocked and defective findings to their states
 
 A judge can find more than "not yet done". It can find that a criterion cannot be judged until someone answers a question, or that the item's premise is false and no amount of work will satisfy it. Both are worth more than a failed attempt, because they say who must act. A blocked finding sends the item to the seat that can answer. A defective finding is a ruling: it is recorded, and the item is closed with the judge's reason, so the queue stops spending on work that was wrong from the start. This block finishes the judge step with those two outcomes.
 
-<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-jl-judge-before-gate" prose="2" -->
+<!-- tillr: item id="item-jl-judge-blocked-and-defective" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the judge's outcome is `blocked`, the item is moved to blocked with the waiter and the reason from the judge's entry. No verdict is recorded and the gate does not run.
 - **c2:** When the outcome is `defective`, the judge's verdicts are recorded through the intake and the item is closed with the reason `defective: <criterion>: <reason>`. The gate does not run and the lane is freed. A test asserts the trunk did not move.

@@ -51,6 +51,7 @@ type pendingWork struct {
 	Examining      bool           `json:"examining,omitempty"`
 	Ready          bool           `json:"ready,omitempty"`
 	Gated          bool           `json:"-"`
+	JudgeLanded    bool           `json:"-"`
 	ParentRunID    string         `json:"parent_run_id,omitempty"`
 	GateStall      *gateStallHold `json:"gate_stall,omitempty"`
 	DirtyHold      *dirtyHold     `json:"dirty_hold,omitempty"`
@@ -196,6 +197,16 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				c.Request = work.Decision.RunRequest
 				c.Seat = work.Decision.Seat
 				work.Candidate = &c
+			}
+		case judgeLandedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var c Candidate
+				if err := json.Unmarshal(e.Payload, &c); err != nil {
+					return nil, nil, err
+				}
+				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
+				work.Candidate, work.Gated, work.JudgeLanded = &c, true, true
+				work.DirtyHold, work.RedCapHold, work.RepairHold = nil, nil, nil
 			}
 		case candidateGatedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -455,7 +466,18 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			return d, nil
 		}
 	}
-	if work.Candidate != nil && work.Gated {
+	if work.Candidate != nil && work.Candidate.Judge != nil {
+		grant, err := judgeGrant(r, d.ItemID, at)
+		if err != nil {
+			return Decision{}, err
+		}
+		if grant == "" {
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonJudgeGrantAbsent
+			identifyDecision(&d)
+			return d, nil
+		}
+	}
+	if work.Candidate != nil && work.Gated && !work.JudgeLanded {
 		h, err := readTrunkHistory(r)
 		if err != nil {
 			return Decision{}, err

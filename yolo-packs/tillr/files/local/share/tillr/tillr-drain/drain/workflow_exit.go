@@ -168,6 +168,9 @@ func (l *Loop) completeItem(ctx context.Context, c Candidate) error {
 	if c.BlockConflict != nil {
 		return l.answerBlock(ctx, c)
 	}
+	if c.Judge != nil {
+		return l.recordLandedJudge(ctx, c)
+	}
 	if err := l.cfg.Steps.Verdict(ctx, c, VerdictPassed); err != nil {
 		return err
 	}
