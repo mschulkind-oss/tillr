@@ -12,7 +12,7 @@ tags:
   - landing
   - design
 summary: "A proposal that every act on a tillr item (build, rewrite, design answer, judge, gate, landing, revert, owner question, sub-agent) is a node in that item's graph, that a node is fixed once it starts and done once it ends, and that one pure function over the graph and a short list of facts adds whatever nodes are needed next. Counts, clocks, hash triggers and item-level holds are replaced by stated endings and named waits."
-next: "The owner rules OQ-GP1 to OQ-GP6; a link from the tillr roadmap is owed so the questions are routed; then a planner cuts the first slice, which moves every item onto the graph executor."
+next: "The owner ruled OQ-GP1, OQ-GP3, OQ-GP4 and OQ-GP5 on 2026-11-17. OQ-GP2 waits on a storage design that compares the structures on what is right; OQ-GP6 is narrowed to how an early landing works and moves to a design of its own. A link from the tillr roadmap is owed so the open questions are routed. None of this blocks the first slice: a planner cuts the first slice, which moves every item onto the graph executor."
 depends-on:
   - tillr-item-graphs.md
   - tillr-drain-successor.md
@@ -37,7 +37,7 @@ depends-on:
 
 **Start at [Section 5.3](#53-the-starting-rule-table)**, the rule table. The model before it exists to make that table safe, and everything after it is a consequence.
 
-**Needs your ruling:** [OQ-GP1](#OQ-GP1), [OQ-GP2](#OQ-GP2), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5), [OQ-GP6](#OQ-GP6).
+**Needs your ruling:** [OQ-GP2](#OQ-GP2) and [OQ-GP6](#OQ-GP6), each after a design of its own. **Ruled on 2026-11-17:** [OQ-GP1](#OQ-GP1), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5).
 
 **Reads with:** [item graphs](./tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](./tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against).
 
@@ -223,7 +223,7 @@ A running node is never interrupted because the trunk moved. The take-in happens
 | **A provisional design** | If the item is abandoned its branch never lands, and neither does the design on it |
 | **A lasting ruling** | Goes in the design document's ledger, outside the item's block, on the same branch. Retiring the block at landing would otherwise delete it |
 | **Another item that depends on the decision** | Gets an inter-item edge until this item lands. The design answer's ending may name the items it affects; the queue level adds the edges. No item reads another item's unlanded branch, because that would predicate work on something that may never land |
-| **A question for the owner** | Must be visible while the branch is unlanded. How is [OQ-GP6](#OQ-GP6); the recommendation is that the commit holding only the question lands by itself |
+| **A question for the owner** | Must be visible while the branch is unlanded. The owner ruled on 2026-11-17 that the question lands on the trunk, together with the design text that changed and that the question is about, so he reads both in Vantage. How that early landing works, and whether design edits should always land this way, is [OQ-GP6](#OQ-GP6) |
 
 ---
 
@@ -340,7 +340,7 @@ This is the rule table for this repository's landing definition. "Producer" mean
 | 10 | A land attempt ended `landed` | Nothing. The graph is complete | The landing record |
 | 11 | A land attempt or a take-in ended `conflict` | A resume, on the latest trunk, of the session that last wrote the conflicting paths, with the paths | One conflict-fix run per candidate, then `conflict-exhausted`; stale-base re-staging |
 | 12 | A node ended with an objection naming the design seat | A design answer that starts at the objector's head and forks the document's designer session; when it ends `answered`, a resume of the objector from the design's commit | A conflict row, a separate design run and landing, then a new worker from the trunk |
-| 13 | A node ended with an objection naming the owner, with its question | The steps that make the question visible ([OQ-GP6](#OQ-GP6)), then an owner question node; when it ends `answered`, a resume of the objector with the answer | The owner as default mover of unrecognized holds |
+| 13 | A node ended with an objection naming the owner, with its question | The steps that land the question and its changed design on the trunk ([OQ-GP6](#OQ-GP6)), then an owner question node; when it ends `answered`, a resume of the objector with the answer | The owner as default mover of unrecognized holds |
 | 14 | A node ended with an objection naming another item | A queue edge request; the objector resumes after that item lands and a take-in | Hash-based re-admission |
 | 15 | A node ended with an objection naming the tooling | A defect item filed through intake, a queue edge to it, and a resume after it lands | Second-failure routing to the owner |
 | 16 | A node ended `backend-closed` | A backend move on the seat's next open backend; with none open, a wait naming the backend and its reopening | The failover budget, then `run-infra-exhausted` |
@@ -445,7 +445,7 @@ An ending is an identical repeat when its cause and key equal those of **any** e
 
 **For an exception**, the same idea without a node: when a node's exception record repeats the earlier one with the same observation, the machinery is at fault. A defect item is filed through intake with both records, the node waits on it with the tooling as mover, and every other item proceeds.
 
-**The weakest point, stated plainly.** Nothing here stops a chain whose every ending is new. A producer that fails a different check each time, or a diagnosis that rewords the same useless instruction past the normalization, runs until someone objects. That is the cost of R1, and I think it is the right cost: every count the audit found stopped real work that was one message from done, and none of them diagnosed anything. What the design offers instead is information. The item page shows the chain. The "draining" list is ordered by spend against target, so a long chain is at the top. The owner is the third stop: he can object on any item at any time, which is an event like any other. Whether crossing the spend target should do more than move an item up that list is [OQ-GP3](#OQ-GP3).
+**The weakest point, stated plainly.** Nothing here stops a chain whose every ending is new. A producer that fails a different check each time, or a diagnosis that rewords the same useless instruction past the normalization, runs until someone objects. That is the cost of R1, and I think it is the right cost: every count the audit found stopped real work that was one message from done, and none of them diagnosed anything. What the design offers instead is information. The item page shows the chain. The "draining" list is ordered by spend, so a long chain is at the top. The owner is the third stop: he can object on any item at any time, which is an event like any other. There is no spend target for an item to cross, and nothing acts on spend ([OQ-GP3](#OQ-GP3)).
 
 The second weak point is the evidence key. A key that is too fine (raw output with timestamps) never repeats; one that is too coarse (check ids alone) calls real progress a repeat. The normalization for each check's output belongs with the check, and a key that proves wrong is fixed there. It is not compensated with a count.
 
@@ -503,10 +503,10 @@ The trunk's health is a set of facts written by proof nodes. Nothing else may ca
 
 **The remedies, in order.**
 
-1. **Revert L**, when it is safe and the setting allows it ([OQ-GP1](#OQ-GP1)). The lander builds the inverse of L on the tip. It lands, as a land attempt with no model in it, only when all of these hold: it applies cleanly; the fast gate passes on the tip with the revert; K passes on the tip with the revert; no landed item declares a dependency on L's item; and L is not itself a revert or a mechanic's landing. The third condition is the test that the attribution was right. The last prevents a remedy from being undone by a remedy.
+1. **Revert L**, when it is safe. tillr does this by itself ([OQ-GP1](#OQ-GP1)). The lander builds the inverse of L on the tip. It lands, as a land attempt with no model in it, only when all of these hold: it applies cleanly; the fast gate passes on the tip with the revert; K passes on the tip with the revert; no landed item declares a dependency on L's item; and L is not itself a revert or a mechanic's landing. The third condition is the test that the attribution was right. The last prevents a remedy from being undone by a remedy.
 2. **L's item gets its work back.** Row 22 resumes the session that built L with K's output. Its next gate run includes K, because the fast gate has shown it cannot see this failure. It lands again as one commit when it passes.
-3. **The mechanic**, when a revert is not the answer: the revert is unsafe by one of the conditions above; K still fails with L reverted; the red is unattributed; or the setting keeps reverts manual. The mechanic is an ordinary item with an ordinary graph. It starts from the tip, is given K's output and the attribution, and outranks every item that is not itself a remedy. Its gate run includes K. One mechanic exists per failing check and attribution; a later red tip for the same check joins the open one, as built.
-4. **How the two combine.** With reverts allowed, the mechanic is filed only when the revert path has ended in "not possible", so no model run is spent on a red that a revert clears. If a mechanic is already running when another candidate clears the red, its node finishes; its next take-in finds nothing left to do, and it says so.
+3. **The mechanic**, when a revert is not the answer: the revert is unsafe by one of the conditions above; K still fails with L reverted; or the red is unattributed. The mechanic is an ordinary item with an ordinary graph. It starts from the tip, is given K's output and the attribution, and outranks every item that is not itself a remedy. Its gate run includes K. One mechanic exists per failing check and attribution; a later red tip for the same check joins the open one, as built.
+4. **How the two combine.** The mechanic is filed only when the revert path has ended in "not possible", so no model run is spent on a red that a revert clears. If a mechanic is already running when another candidate clears the red, its node finishes; its next take-in finds nothing left to do, and it says so.
 5. **A mechanic that cannot proceed objects like any other actor.** It names the design seat, L's item, the tooling, or the owner with a question. It does not go to the owner by default, which today's code does and R3 forbids.
 
 **What may land while the trunk is red or unproven.**
@@ -575,7 +575,7 @@ A sub-agent is hoisted at one of three levels: **L1**, recorded after it ended; 
 
 - every sub-agent tillr can see is a node, inside its parent;
 - the row's three tests (planned, fenced or judged apart) no longer decide node or not-node. They decide dispatched or observed;
-- the row's cost argument stands for that choice: a dispatched child pays a staging and a settlement and starts without its parent's cache, which is why the recommendation in [OQ-GP5](#OQ-GP5) is not "dispatch everything";
+- the row's cost argument stands for that choice: a dispatched child pays a staging and a settlement and starts without its parent's cache, which is why the ruling in [OQ-GP5](#OQ-GP5) is not "dispatch everything";
 - its worked example survives: a designer may still ask, in its ending, for its remaining node to be replaced by scouts and a join. It may now also simply start scouts with its harness's own tool and have them dispatched on the scout seat.
 
 The trace of shell commands cannot tell one child's commands from another's, since children inherit the parent's run id. Nothing here depends on it doing so, and nothing depends on the git trace record (R12).
@@ -584,7 +584,7 @@ The trace of shell commands cannot tell one child's commands from another's, sin
 
 ## 10. Storage
 
-What follows is what the graph model needs from storage. Which structure provides it is [OQ-GP2](#OQ-GP2).
+What follows is what the graph model needs from storage. Which structure provides it is [OQ-GP2](#OQ-GP2). The owner directed on 2026-11-17 that the choice be the right structure and not the easy one, so it is made in a storage design that compares the structures against this table, with trials.
 
 | Need | Why |
 | :--- | :--- |
@@ -667,7 +667,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | [The judge and the lifecycle](./tillr-judge-and-lifecycle.md#return-a-design-runs-gate-refusal-to-its-own-session) | The gate refusal's return to its own session | Kept, and made the rule for every producer |
 | [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Withdrawn; replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk) |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |
-| | `D-GR6`, automatic revert off | Asked again as [OQ-GP1](#OQ-GP1) |
+| | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); an amendment to that document is owed |
 | [The retired board state machine](./board-state-machine.md#7-suspend-and-resume) | Suspend and resume by a tool result | The only written design for "done is a suspended tool call". It is retired with the board; its mechanism is the target form of [Section 3.3](#33-endings), rule 1 |
 
 ### 12.3 Mechanisms of the drain
@@ -880,7 +880,7 @@ When a worker reports that the design is unclear, the design seat answers today 
 
 | Risk | What is done about it |
 | :--- | :--- |
-| **A chain that never repeats and never objects** runs without limit | Shown at the top of "draining" by spend against target; the owner can object at any time. See [Section 7](#7-what-stops-repetition) and [OQ-GP3](#OQ-GP3) |
+| **A chain that never repeats and never objects** runs without limit | Shown at the top of "draining", which is ordered by spend; the owner can object at any time. There is no spend target. See [Section 7](#7-what-stops-repetition) and [OQ-GP3](#OQ-GP3) |
 | **Resumed sessions grow** until each turn is expensive | The scheduler may compact before a resume; a diagnosis may name a fresh start on a stronger seat. Cost is recorded per node, so the growth is visible |
 | **The rule table becomes a second program** as rows accumulate | Every row has a fixture, rows may not overlap, and a row can read only the graph and the listed facts. A row that needs a new fact is a design change |
 | **Adapters that cannot state an ending** leave everything `missing-output` | The first slice keeps today's footer as one source of the ending record for each adapter, replaced adapter by adapter |
@@ -894,7 +894,7 @@ When a worker reports that the design is unclear, the design seat answers today 
 
 ## Decision Ledger
 
-These are the designer's decisions of 2026-11-17, made so that the proposal is complete. Each is open to the owner's overturn. None is built.
+The `D-GP` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete; each is open to the owner's overturn. The `OQ-GP` rows are the owner's rulings on questions this document asked. None is built.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -913,26 +913,16 @@ These are the designer's decisions of 2026-11-17, made so that the proposal is c
 | `D-GP13` | The queue planner owns one class of inter-item edge and the rank. Its edges constrain only future claims. It runs on events that cross items. **Rejected:** a planner that may pause or re-plan running work. | 2026-11-17 | [Section 8.1](#81-the-queue-planner) | — |
 | `D-GP14` | Only an ended proof makes the trunk red. A candidate waits only when it changes the inputs of a failing check and does not make it pass. Proof outranks new work. **Rejected:** the red cap, which holds on elapsed time and on "unproven"; and no rule at all, which lets changes land into a failing check's inputs. | 2026-11-17 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
 | `D-GP15` | Migration records each act as a node before the rule table routes it, and moves mechanisms in by the runs they waste. **Rejected:** building the whole model beside the drain and switching over. | 2026-11-17 | [Section 13](#13-migration-order) | — |
+| `OQ-GP1` | **Owner ruling.** tillr reverts a landing by itself when the full suite proves it broke the trunk: the revert lands once it applies cleanly and the failing check passes with it, and the session that wrote the change gets the failure back. A mechanic is filed only when a revert is unsafe, does not repair, or the red is unattributed. This overturns `D-GR6` of the gate rework. | 2026-11-17 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
+| `OQ-GP3` | **Owner ruling.** There is no spend target. Spend is recorded for each node and orders the "draining" list; nothing acts on it. | 2026-11-17 | [Section 7](#7-what-stops-repetition) | — |
+| `OQ-GP4` | **Owner ruling.** The queue planner's agent runs on evidence that crosses items (a conflict between items, a worker naming another item) and on the owner's request, not at intake. | 2026-11-17 | [Section 8.1](#81-the-queue-planner) | — |
+| `OQ-GP5` | **Owner ruling.** tillr watches every sub-agent it can see and starts scouts and writers itself; the rest are watched only. | 2026-11-17 | [Section 9](#9-subagent-hoisting) | — |
 
 ---
 
 ## Open Questions
 
-1. 💬 **OQ-GP1: Should tillr revert a landing by itself when the full suite proves it broke the trunk?**
-
-   An item lands at 14:00. The full suite, which runs after landings, fails one check, and bisection names that landing. Today nothing is reverted without you: a repair item is filed and the trunk stays red until it lands. You ruled that on 2026-11-15, as a setting to start with, and on 2026-11-17 asked for a full remedy story.
-
-   - **A — Revert by itself.** The landing is reverted once the revert applies cleanly and the failing check passes with it. The session that wrote it gets the failure back. You see "reverted, back with its author". An unsafe revert falls to a mechanic.
-   - **B — Keep reverts manual.** A mechanic is filed at once. The trunk stays red until it lands, or until you revert.
-
-   <!-- vantage: question id=OQ-GP1 leaning="Revert by itself (A): the revert is mechanical, it is proven before it lands, and the session that wrote the change is the one that knows it." -->
-
-   _Leaning:_ Revert by itself (A): the revert is mechanical, it is proven before it lands, and the session that wrote the change is the one that knows it.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-2. 💬 **OQ-GP2: Should one process own every write to the store?**
+1. 💬 **OQ-GP2: Should one process own every write to the store?**
 
    The loop, the lander, each run and each command you type all write one SQLite file. A landing holds the write lock while git moves a ref, and your status command answers "database is locked". The file is about 36 MB, so size is not the cause; this was researched on 2026-11-17 without trials. Three usage faults get fixed either way.
 
@@ -940,66 +930,23 @@ These are the designer's decisions of 2026-11-17, made so that the proposal is c
    - **B — A log per item.** Each item's history is a file you can read and compare, and SQLite becomes an index rebuilt from the logs. It is the larger rewrite.
    - **C — Fix the faults only**, and measure before changing structure.
 
-   <!-- vantage: question id=OQ-GP2 leaning="One owner (A), after the three faults are fixed: it removes the contention with the least change, and keeping each item's records in order leaves the log per item open later." -->
+   <!-- vantage: question id=OQ-GP2 leaning="None yet: the owner directed on 2026-11-17 to do the right thing here, not the easy thing, so a storage design compares one owner against a log per item on the needs of Section 10, with trials, before this is asked again." -->
 
-   _Leaning:_ One owner (A), after the three faults are fixed: it removes the contention with the least change, and keeping each item's records in order leaves the log per item open later.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-GP3: When an item passes its spend target without repeating itself, should anything happen?**
-
-   A builder is sent back by the gate nine times. Each refusal differs from the last, so nothing is a repeat, and no one has objected. It has spent four times its target. Today a count would park it for you. Without counts, nothing stops it.
-
-   - **A — Show it.** The item rises to the top of the draining list with its chain and its spend. You step in when you choose to.
-   - **B — Send a diagnosis.** At the target, a design run reads the chain and must change the instruction, object, or report a defect. It costs a design run at each crossing, and it is a threshold that acts.
-
-   <!-- vantage: question id=OQ-GP3 leaning="Show it (A): a target that acts is a count under another name, and the list already puts the item in front of you." -->
-
-   _Leaning:_ Show it (A): a target that acts is a count under another name, and the list already puts the item in front of you.
+   _Leaning:_ None yet. The owner directed on 2026-11-17 to do the right thing here, not the easy thing. The earlier leaning toward one owner rested on "the least change", which is not a reason he accepts. A storage design compares one owner against a log per item on the needs of [Section 10](#10-storage), with trials, and this question is asked again from it.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-GP4: Should the planner that reads the whole queue also run when new items arrive?**
+2. 💬 **OQ-GP6: How do a question for you, and the design it is about, land ahead of their item?**
 
-   Two queued items both rewrite the same file. The first lands, the second's landing conflicts, and it goes back to its author. A planner reading the whole queue could have ordered them first. Overlap in the paths items declare is always checked mechanically; the question is when the planning agent runs.
+   A designer answering a worker's objection finds a choice only you can make, and writes it as an open question in the design document, on the item's branch. You ruled on 2026-11-17 that the question and the design text that changed land on the trunk, so you read both in Vantage. What is open is the operation: you suggested one that integrates the design into the trunk and then rebases the item's branch onto it, and that tillr might do this for every design edit, not only those with a question. Landing design edits early is what [Section 3.7](#37-the-item-branch-and-the-latest-trunk) moved away from (`D-GP9`), because a design that lands ahead of its work is how workers went stale, so the two have to be reconciled. You asked that this not block the rest: it gets a design of its own, and the first slices do not depend on it.
 
-   - **A — On evidence and on request.** It runs after a conflict between items, after a worker names another item, and when you ask. Some conflicts happen once before they are prevented.
-   - **B — Also at intake.** Each batch of new items gets a planning run. More is ordered before work starts, at a run for each batch, with dependencies added on thinner evidence.
+   - **A — Only when there is a question.** The design edit and its question land early through the gate; the item's branch is rebased onto them. Other design edits stay on the branch until the item lands.
+   - **B — Always.** Every design edit lands as soon as it passes the gate, and the item's branch is rebased. Designs are current on the trunk; an abandoned item leaves its design behind unless it is reverted.
 
-   <!-- vantage: question id=OQ-GP4 leaning="On evidence and on request (A): a conflict is cheap now that it returns to its author, and a dependency added on a guess delays work for nothing." -->
+   <!-- vantage: question id=OQ-GP6 leaning="None yet: a separate design works out the integrate-then-rebase operation and what always landing designs early would cost, and asks this from there." -->
 
-   _Leaning:_ On evidence and on request (A): a conflict is cheap now that it returns to its author, and a dependency added on a guess delays work for nothing.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-5. 💬 **OQ-GP5: Which sub-agents should tillr start itself, and which should it only watch?**
-
-   A pi builder starts two scouts and a worker. Today tillr records none of them. It can watch a sub-agent, which then appears in the item's graph on whatever model pi picked and is checked only with its parent. Or it can start it, which gives it tillr's choice of model and its own check, at the cost of a staging and of the parent's cached context.
-
-   - **A — Watch all, start some.** tillr starts scouts and writers, which gain from a cheaper model or a check of their own. The rest are watched.
-   - **B — Start every one it can.** The most control and the most cost.
-   - **C — Watch only.**
-
-   <!-- vantage: question id=OQ-GP5 leaning="Watch all, start some (A): every sub-agent becomes visible, and the cost of starting one is paid only where a cheaper model or a separate check repays it." -->
-
-   _Leaning:_ Watch all, start some (A): every sub-agent becomes visible, and the cost of starting one is paid only where a cheaper model or a separate check repays it.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-6. 💬 **OQ-GP6: Where do you read a question that an unlanded item raises for you?**
-
-   A designer answering a worker's objection finds a choice only you can make, and writes it as an open question in the design document, on the item's branch. You read questions in Vantage, which serves the trunk. The item has not landed, so you see nothing, and the item waits on you.
-
-   - **A — Land the question alone.** The one commit that adds the question goes through the gate to the trunk. You answer in Vantage as usual. The design itself stays on the branch.
-   - **B — Show it in tillr's view.** The question appears under "needs you" in tillr with its options, and you answer there. Nothing lands early, and you have a second place to answer questions.
-
-   <!-- vantage: question id=OQ-GP6 leaning="Land the question alone (A): Vantage is where you answer, the index that reads answers already exists, and a commit holding only a question carries no provisional design." -->
-
-   _Leaning:_ Land the question alone (A): Vantage is where you answer, the index that reads answers already exists, and a commit holding only a question carries no provisional design.
+   _Leaning:_ None yet. A separate design works out the integrate-then-rebase operation and what always landing designs early would cost, and asks this from there.
 
    **Answer:**
    > _(empty — fill in when decided)_
