@@ -190,4 +190,6 @@ Stop the loop and read the record, rather than retrying, when:
   a human, not for the loop. Two negative land answers are not stops. On a squash
   conflict the loop spends its one conflict-fix run and holds the item only if that run
   conflicts too. On `already-on-trunk` (the trunk already carries the whole change) the
-  loop records the verdict and settles the item as `resolved-elsewhere`.
+  loop records the verdict and settles the item as `resolved-elsewhere`. A pending run whose
+  item was already landed or closed by hand is not a stop either: the loop settles it as
+  `item-already-terminal`, which judges nothing and releases the lane.

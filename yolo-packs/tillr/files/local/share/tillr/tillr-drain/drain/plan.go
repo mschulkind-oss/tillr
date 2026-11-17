@@ -305,7 +305,18 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		} else if work := works[item.ItemID]; work != nil && !work.Done {
 			// An already dispatched attempt advances before readiness and retry
 			// rules: a terminal record is work to settle, not a retry to authorize.
-			decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut)
+			// An item already terminal by another route settles it unjudged instead
+			// (terminal_item.go); a workflow item is released below on the same fact.
+			settled := false
+			if terminalStates[item.State] && work.Decision.Workflow == nil {
+				decision, settled, err = terminalSettlement(r, work, at)
+				if err != nil {
+					return nil, readFailure(err)
+				}
+			}
+			if !settled {
+				decision, err = pendingDecision(r, work, at, inputs[item.ItemID], tick.BriefTemplate, policy, shut)
+			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
 				invalid := item.State != StateInQueue || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
 				before, now := work.Decision.Inputs, inputs[item.ItemID]

@@ -60,7 +60,14 @@ func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error { return item.RecordConflict(tx, c, l.cfg.Now().UTC()) })
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		// Recording a conflict moves the item to blocked, which item refuses for a
+		// terminal item. Such an item gets no conflict: its run is settled unjudged.
+		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "blocked-report"); err != nil {
+			return err
+		}
+		return item.RecordConflict(tx, c, l.cfg.Now().UTC())
+	})
 }
 
 func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error {
@@ -170,6 +177,10 @@ func (l *Loop) answerBlock(ctx context.Context, candidate Candidate) error {
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		// An answered conflict returns its item to the queue; a terminal item stays put.
+		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "conflict-answer"); err != nil {
+			return err
+		}
 		report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: l.cfg.Root, Documents: []item.SyncDocument{{Path: file, Content: []byte(raw)}}, At: l.cfg.Now().UTC()})
 		if err != nil {
 			return err

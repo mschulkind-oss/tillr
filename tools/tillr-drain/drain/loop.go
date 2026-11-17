@@ -1186,6 +1186,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			break
 		}
 	}
+	// A hand landing may have committed while this run was being taken up or continued.
+	if err := l.checkItemTerminal(ctx, request.ItemID, "settle"); err != nil {
+		return laneOutcome{err: err}
+	}
 	if decision.Workflow != nil {
 		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result)
 		if handled {
@@ -1437,6 +1441,9 @@ func (l *Loop) Verify(ctx context.Context, candidate Candidate, result *LoopResu
 func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	candidate := *prepared
 	defer func() { *prepared = candidate }()
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
+		return "", false, err
+	}
 	// A candidate reaching this point is a run that committed, and the count is taken here
 	// rather than at the dispatch so a run that produced no commit is never read as a
 	// candidate the loop refused.
@@ -1553,6 +1560,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		timing.GateMS += gate.DurationMS
 		l.mu.Unlock()
 	}
+	// The gate is the long step: an item landed by hand while it ran gets no verdict,
+	// refusal or fault from its answer.
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
+		return "", false, err
+	}
 	switch gate.Outcome {
 	case GatePassed:
 	case GateFailed:
@@ -1586,6 +1598,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "land"); err != nil {
+		return "", false, err
+	}
 	// Retrying a durable verdict skips the gate, not the recorded-head guard.
 	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
 	if err != nil {
@@ -1642,6 +1657,22 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 			return "", false, err
 		}
 		return "", false, nil
+	}
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "landed"); err != nil {
+		terminal := asItemTerminal(err)
+		if terminal == nil {
+			return "", false, err
+		}
+		// The trunk carries this run's change, but the item reached a terminal state by
+		// another route while the lander ran: its state and verdicts stay as they are.
+		l.mu.Lock()
+		result.Landed++
+		l.mu.Unlock()
+		if err := l.bumpLandings(ctx); err != nil {
+			l.reportf("loop: landed %s but could not record the landing count: %v\n", candidate.ItemID, err)
+		}
+		terminal.Landed = true
+		return "", false, terminal
 	}
 	if candidate.BlockConflict != nil {
 		if err := l.answerBlock(ctx, candidate); err != nil {

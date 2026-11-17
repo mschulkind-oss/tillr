@@ -21,6 +21,11 @@ const StateResolvedElsewhere = "resolved-elsewhere"
 // landed. The caller then marks the work examined and releases the lane, as after a
 // landing, and the lander has already pinned the head.
 func (l *Loop) settleAlreadyOnTrunk(ctx context.Context, candidate Candidate) error {
+	// A hand landing that put the change there may already have moved the item to a
+	// terminal state; it keeps that state, and no second verdict is recorded.
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "already-on-trunk"); err != nil {
+		return err
+	}
 	l.reportf("loop: %s is already on the trunk (%s): resolving it elsewhere\n", candidate.ItemID, candidate.HeadSHA)
 	if candidate.BlockConflict != nil {
 		return l.answerBlock(ctx, candidate)
@@ -28,5 +33,7 @@ func (l *Loop) settleAlreadyOnTrunk(ctx context.Context, candidate Candidate) er
 	if err := l.cfg.Steps.Verdict(ctx, candidate, VerdictPassed); err != nil {
 		return err
 	}
-	return l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateResolvedElsewhere)
+	// The state write rereads the item in its own transaction (resolveElsewhere), so a
+	// hand landing that commits after the check above is never overwritten.
+	return l.resolveElsewhere(ctx, candidate)
 }

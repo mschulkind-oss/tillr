@@ -219,6 +219,24 @@ When the owner commits the candidate's whole change, the lander finds it already
 there and refuses the landing as `already-on-trunk`. The drain records the passing
 verdict and moves the item to `resolved-elsewhere`; it does not hold the item as
 `land-refused`.
+
+An item can also reach a terminal state while one of its runs is still pending: it is
+landed or closed by hand, or resolved elsewhere, after a loop that was stopped or killed
+left the run unexamined. The terminal states are `landed`, `closed` and
+`resolved-elsewhere`. The next pass that can take the run's lane settles it with the decision
+reason `item-already-terminal` and judges nothing. It does not gate or land the candidate,
+and it records no fault, refusal or conflict against the item. The item's state and verdicts
+stay as they are. The pass pins the run's head under `refs/tillr/runs/<run>`, resets and
+releases the lane, and records one `drain.item-already-terminal` event that names the
+item's state. No retry or re-admission is spent.
+
+An item can also be landed by hand while its run is being examined. Every step that would
+record something against the item reads the item's state again first: the gate, the land,
+the blocked report, the conflict repair, and each fault, refusal and hold. The steps that
+write in their own transaction read it inside that transaction. If the lander then answers
+`already-on-trunk`, a hand-landed item stays `landed` instead of becoming
+`resolved-elsewhere`. If this run's own landing finishes after the item was closed, the
+landing is counted and the item stays closed.
 An unchanged wait is not a candidate refusal or a failing verdict. Even
 `--exit-when-drained` keeps
 waiting while this retained landing can reopen. If the dirty path set changes,
