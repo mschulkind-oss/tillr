@@ -602,7 +602,20 @@ def case_comment_intake_documented():
     ok("hand-driven comment intake is documented in the item README and operating skill")
 
 
+def case_designer_session_selection_documented():
+    for path in (ROOT / "tools/tillr-drain/README.md", SKILL):
+        text = text_of(path)
+        if "#choosing-at-dispatch" not in text or "40,000" not in text:
+            fail(f"{path.relative_to(ROOT)} omits the session selection policy")
+    adapter = ROOT / "tools/tillr-run/backends/pi/compact"
+    result = subprocess.run([str(adapter), "--help"], capture_output=True, text=True)
+    if result.returncode or "--session-id" not in result.stdout:
+        fail("the documented Pi compact step must answer --help and accept a session id")
+    ok("session selection and the Pi compact step are documented")
+
+
 def main():
+    case_designer_session_selection_documented()
     case_comment_intake_documented()
     case_recovery()
     case_rolling_guard_fixtures()

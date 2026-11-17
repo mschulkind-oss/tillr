@@ -76,6 +76,11 @@ policy. A missing or invalid declaration is refused before claiming the lane.
 The CLI always requires that declaration; the Go package's empty `BackendsDir`
 option is only for tests that execute raw commands without any adapter.
 
+For review-comment dispatches, the Pi adapter also ships a
+[compact step](./backends/pi/README.md#compacting-before-an-expired-resume). The drain calls it
+before an expired, large-session resume and records its token and cost receipt against the
+item; expiry itself runs nothing.
+
 A resumable adapter continues its session; a non-resumable one gets a fresh UUID
 in the same lane and worktree, plus a first prompt pointing to the prior run log,
 report when present, and uncommitted work. The staged brief is kept unchanged.

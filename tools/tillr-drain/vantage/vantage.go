@@ -134,6 +134,15 @@ func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
 	return DocumentQuestions{Present: true, Questions: questions}, nil
 }
 
+// Done shares the lazy index with question reads; retirement does not start a
+// second index subprocess for every pass at the same repository revision.
+func (v *VantageQuestions) Done(path string) (bool, error) {
+	if _, err := v.questions(path); err != nil {
+		return false, err
+	}
+	return v.index.Done(path)
+}
+
 // questions answers one document's questions from the index, reading the index first if this
 // is the first document asked about.
 func (v *VantageQuestions) questions(path string) ([]Question, error) {
@@ -159,8 +168,17 @@ var errIndexNotRead = errors.New("the question index was never read")
 // planner turns that refusal into `questions-unknown` — never into a dispatch.
 type VantageIndex struct {
 	documents map[string][]Question
+	done      map[string]bool
 	read      bool
 	err       error
+}
+
+// Done answers whether Vantage assigned the document's stage the done role.
+func (v VantageIndex) Done(path string) (bool, error) {
+	if _, err := v.Questions(path); err != nil {
+		return false, err
+	}
+	return v.done[cleanDocumentPath(path)], nil
 }
 
 // Questions answers one document's questions, keyed by its repository-relative path. A
@@ -234,6 +252,9 @@ func ReadVantageIndex(ctx context.Context, root string, command []string) Vantag
 func parseVantageIndex(raw []byte) (VantageIndex, error) {
 	var document struct {
 		Index *struct {
+			Config struct {
+				Stages map[string]string `json:"stages"`
+			} `json:"config"`
 			Refused   bool            `json:"refused"`
 			Documents json.RawMessage `json:"documents"`
 		} `json:"index"`
@@ -252,14 +273,18 @@ func parseVantageIndex(raw []byte) (VantageIndex, error) {
 	}
 	var entries []struct {
 		Path      string     `json:"path"`
+		Stage     string     `json:"stage"`
 		Questions []Question `json:"questions"`
 	}
 	if err := json.Unmarshal(document.Index.Documents, &entries); err != nil {
 		return VantageIndex{}, err
 	}
 	documents := make(map[string][]Question, len(entries))
+	done := make(map[string]bool)
 	for _, entry := range entries {
-		documents[cleanDocumentPath(entry.Path)] = entry.Questions
+		key := cleanDocumentPath(entry.Path)
+		documents[key] = entry.Questions
+		done[key] = document.Index.Config.Stages[entry.Stage] == "done"
 	}
-	return VantageIndex{documents: documents, read: true}, nil
+	return VantageIndex{documents: documents, done: done, read: true}, nil
 }

@@ -623,11 +623,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.From, decision.To = "queued", "running"
 	}
 	if itemIsComment(item.ItemID) && decision.RunRequest != nil {
-		decision.DesignerReason = "no-designer"
-		if d := item.Designer; d != nil {
-			decision.DesignerSessionID = d.SessionID
-			decision.DesignerReason = "resumed-warm"
+		previousAdapter := ""
+		if item.Designer != nil {
+			previousAdapter = p.policy.Backends[item.Designer.Backend].Adapter
 		}
+		decision.DesignerSessionID, decision.DesignerReason = chooseDesigner(item.Designer, decision.RunRequest, p.at, previousAdapter)
 	}
 	identifyDecision(&decision)
 	return decision

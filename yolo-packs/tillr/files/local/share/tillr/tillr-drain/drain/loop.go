@@ -1025,6 +1025,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			err = l.cfg.Stage.Stage(ctx, spec)
 		}
 		if err == nil {
+			err = l.compactDesigner(ctx, decision)
+		}
+		if err == nil {
 			if decision.Workflow != nil {
 				if decision.NodeIndex == 0 {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
@@ -1194,6 +1197,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// the continuing session until it answers. Keep pending work running.
 		prepared = true
 		return laneOutcome{}
+	}
+	if failed, err := failedDesignerResume(decision, record); err != nil {
+		return laneOutcome{err: err}
+	} else if failed {
+		prepared = true
+		return l.replaceFailedDesigner(ctx, decision, record, mainSHA, tick, at, result, timing, watched, deferJudge)
 	}
 	if err := l.recordDesigner(ctx, decision, record); err != nil {
 		return laneOutcome{err: err}

@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Compact an existing Pi session using its JSONL RPC protocol, without a prompt."""
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--backend", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--effort")
+    parser.add_argument("--timeout", type=int, default=0)
+    parser.add_argument("--session-id", required=True)
+    args = parser.parse_args()
+    if args.backend != "pi" and not args.backend.startswith("pi-"):
+        parser.error("--backend must name pi or a pi seat alias")
+    if args.timeout < 0:
+        parser.error("--timeout must be zero or positive")
+    argv = ["pi", "--mode", "rpc", "--session", args.session_id, "--model", args.model]
+    if args.effort:
+        argv += ["--thinking", args.effort]
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    def request(command):
+        process.stdin.write(json.dumps({"id": command, "type": command}).encode() + b"\n")
+        process.stdin.flush()
+        while line := process.stdout.readline():
+            event = json.loads(line)
+            if event.get("type") == "response" and event.get("id") == command:
+                if not event.get("success"):
+                    raise RuntimeError(event.get("error", "Pi refused " + command))
+                return event.get("data", {})
+        raise RuntimeError("Pi exited before answering " + command)
+
+    def timed_out(signum, frame):
+        raise RuntimeError("compaction exceeded the explicit timeout")
+
+    try:
+        if args.timeout:
+            signal.signal(signal.SIGALRM, timed_out)
+            signal.alarm(args.timeout)
+        state = request("get_state")
+        if state.get("sessionId") != args.session_id:
+            raise RuntimeError("Pi opened a different session; refusing to compact")
+        # Record the actual harness transcript and append boundary before mutation.
+        # The drain can reconcile a committed checkpoint even if this RPC response is lost.
+        journal_path = os.environ.get("TILLR_COMPACTION_JOURNAL")
+        if journal_path:
+            with open(journal_path, encoding="utf-8") as file:
+                journal = json.load(file)
+            transcript = state.get("sessionFile")
+            if not transcript:
+                raise RuntimeError("Pi did not report the session transcript")
+            journal["transcript"] = transcript
+            journal["offset"] = os.stat(transcript).st_size
+            with open(journal_path + ".next", "w", encoding="utf-8") as file:
+                json.dump(journal, file)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(journal_path + ".next", journal_path)
+        result = request("compact")
+        before = result.get("tokensBefore")
+        after = result.get("estimatedTokensAfter")
+        if before is None or after is None:
+            raise RuntimeError("Pi did not report compaction token measurements")
+        usage = result.get("usage") or {}
+        receipt = {"tokens_before": before, "tokens_after": after,
+                   "tokens": usage.get("totalTokens"),
+                   "cost_usd": (usage.get("cost") or {}).get("total")}
+        process.stdin.close()
+        code = process.wait()
+        if code:
+            raise RuntimeError("Pi exited with status " + str(code))
+        print(json.dumps(receipt))
+    finally:
+        signal.alarm(0)
+        if process.poll() is None:
+            process.terminate()
+            process.wait()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError) as error:
+        print("compact: " + str(error), file=sys.stderr)
+        sys.exit(1)

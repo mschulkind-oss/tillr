@@ -19,13 +19,16 @@ import (
 
 type commentSteps struct {
 	recordingSteps
-	t            *testing.T
-	f            refusalLoopFixture
-	mode         string
-	sessions     []string
-	requests     []run.Request
-	briefs       []string
-	gates, lands int
+	t                    *testing.T
+	f                    refusalLoopFixture
+	mode                 string
+	sessions             []string
+	requests             []run.Request
+	briefs               []string
+	gates, lands         int
+	resumeFailureSession string
+	replacementTerminal  chan struct{}
+	replacementReturn    <-chan struct{}
 }
 
 func (s *commentSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -48,6 +51,16 @@ func (s *commentSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		s.t.Errorf("not a desk: %s", req.LaneID)
 	}
 	target := filepath.Join(dir, WorktreeDir)
+	if session == s.resumeFailureSession {
+		log := filepath.Join(run.DurableDir(dir, req.RunID), "stream.jsonl")
+		if err := os.MkdirAll(filepath.Dir(log), 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		writeForkFile(s.t, log, "{\"type\":\"session\"}\n")
+		rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, Route: "fixture-model", State: run.StateExited, ExitCode: countPtr(1), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "log", Ref: log}}}
+		fixtureWrite(s.t, s.f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+		return rec, "", nil
+	}
 	if s.mode != "answered" && s.mode != "missing" && s.mode != "foreign" && s.mode != "no-round" && s.mode != "duplicate" {
 		writeForkFile(s.t, filepath.Join(target, "docs/design/example.md"), fmt.Sprintf("# Example design\n\n## Shape\n\nRevised %d.\n", len(s.requests)))
 		runGit(s.t, target, "add", "docs/design/example.md")
@@ -108,6 +121,14 @@ func (s *commentSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	}
 	defer st.Close()
 	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	if err == nil && s.replacementTerminal != nil && session != s.resumeFailureSession {
+		close(s.replacementTerminal)
+		select {
+		case <-s.replacementReturn:
+		case <-ctx.Done():
+			return rec, report, ctx.Err()
+		}
+	}
 	return rec, report, err
 }
 func (s *commentSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
