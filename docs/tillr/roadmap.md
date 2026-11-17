@@ -454,6 +454,8 @@ report that detection is unavailable rather than implying that the check is bein
 - **Ref:** [Gate design](../design/gate-rework.md) (stall detection and unavailable CPU accounting).
 - **Where:** `tools/tillr-gate/cpu_linux.go`, `tools/tillr-gate/watchdog.go`,
   `tools/tillr-gate/cpu_linux_test.go`, `tools/tillr-gate/watchdog_test.go`,
+  the verdict record in `tools/tillr-gate/run.go` and `tools/tillr-gate/gate.go` with their
+  tests,
   [`tools/fork-check.py`](../../tools/fork-check.py), `tests/fork-check.test.py`,
   [gate README](../../tools/tillr-gate/README.md), and the gate design's stall section.
 - **Evidence:** On 2026-11-17, the drain's gate logs in a rootless Podman jail with
@@ -467,6 +469,29 @@ report that detection is unavailable rather than implying that the check is bein
   and verdicts identify the source. Use accounting that includes exited children, such as
   control-group accounting, rather than partial process snapshots. Document the available
   sources and their precedence.
+
+**Ruling, 2026-11-17 (answers the third run's fence conflict):** the third run stopped before
+editing because c2 puts the CPU-accounting source in the verdict, and the verdict record is
+written by `tools/tillr-gate/run.go` and `tools/tillr-gate/gate.go`, which the item's paths did
+not name. The run was right to stop, and right not to carry the source in a field that means
+something else. Commit `e62113977` has since widened the paths to the whole `tools/tillr-gate/`
+directory, so both files and their tests are inside the fence, and the delivered copy under
+`yolo-packs/tillr/` is synced in the same commit. Three points settle how c2 is met:
+
+1. **The source is a field of its own.** The per-check verdict record (`VerdictCheck` in
+   `run.go`) gains one string field, `cpu_source`, left out when it is empty. Both places that
+   copy the watchdog's observations into that record set it: the single-check path in `run.go`
+   and the gate's path in `gate.go`.
+2. **One fixed name per source.** The field holds a short constant naming the source that
+   supplied the last CPU sample: one name for the kernel counter, one for the fallback. The
+   check log prints the same name, and `tools/fork-check.py` uses the same names in its log line
+   and in the stall record that already carries `cpu_time_ms`. When neither source can be read
+   the field is absent and `watchdog_unavailable` carries the reason, as it does today.
+3. **No reader outside the gate changes.** The drain reads the verdict in
+   `tools/tillr-drain/drain/gate_stall.go` and does not refuse a field it does not know, so the
+   new field needs no change there, and that directory stays outside the paths.
+
+The criteria below are unchanged.
 
 <!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
 
