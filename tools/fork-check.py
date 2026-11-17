@@ -1102,16 +1102,24 @@ FOOTER_STORYBOOK_INPUT = (
     re.compile(r"^yolo-packs/matt/patches/pi-archimedes/"),
 )
 # Each storybook step: input patterns that plan a check, the artifact directory it
-# regenerates into, and the reason the report names. A step writes only under the
-# durable artifact directory (or $TMPDIR), never the checkout, and its run.sh asserts
-# the rendered badge, so a storybook that renders wrong is a failure.
+# regenerates into, the reason the report names, and the source flags naming the fork
+# working copies it imports. A step writes only under the durable artifact directory (or
+# $TMPDIR), never the checkout, and its run.sh asserts the rendered badge, so a
+# storybook that renders wrong is a failure.
+#
+# The source flags are resolved through `forks_root()` and handed over explicitly. Left
+# to itself a renderer looks for `.forks/` beside its own script, which only the main
+# checkout has: in a lane worktree or the drain's detached heavy checkout the import
+# fails, and on 2026-11-17 that one failure kept every heavy run from proving the trunk.
 STORYBOOKS = (
     ("the pi-subagents roster storybook", STORYBOOK_INPUT, "roster-storybook",
      "the change can change what the roster renders",
-     "no roster or storybook tooling changed"),
+     "no roster or storybook tooling changed",
+     lambda forks: ["--source", str(forks / "pi-subagents"), "--pi-source", str(forks / "pi")]),
     ("the pi-archimedes footer storybook", FOOTER_STORYBOOK_INPUT, "footer-storybook",
      "the change can change what the footer renders",
-     "no footer or storybook tooling changed"),
+     "no footer or storybook tooling changed",
+     lambda forks: ["--source", str(forks / "pi-archimedes" / "packages" / "footer")]),
 )
 
 # The drain observatory's front end (tools/tillr-view/web): Vite 7 + React 19 + TypeScript +
@@ -6358,7 +6366,7 @@ def build_plan(
         plan.not_planned("waybar (module configuration, CPU appearance)",
                          "no Waybar input changed")
 
-    for name, inputs, artifact, why, skip in STORYBOOKS:
+    for name, inputs, artifact, why, skip, sources in STORYBOOKS:
         matched = [path for path in changed if any(pattern.match(path) for pattern in inputs)]
         storybook_runner = root / "tools" / artifact / "run.sh"
         if matched and shutil.which("node") and storybook_runner.is_file():
@@ -6371,7 +6379,7 @@ def build_plan(
             artifact_dir = str(Path(durable) / artifact)
             plan.checks.append(
                 Check("storybook", f"regenerate {name}",
-                      ["bash", str(storybook_runner), artifact_dir],
+                      ["bash", str(storybook_runner), artifact_dir, *sources(forks_root(root))],
                       why, STORYBOOK_TIMEOUT,
                       watches=tuple(matched) or (f"tools/{artifact}/",),
                       writes=(artifact_dir,))
