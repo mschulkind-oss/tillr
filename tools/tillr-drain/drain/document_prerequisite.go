@@ -114,7 +114,16 @@ func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error)
 		if err = json.Unmarshal(raw, &c); err != nil {
 			return Decision{}, err
 		}
-		if c.DesignRunID != "" {
+		if c.DesignRunID != "" && p.classes[c.DesignRunID] == AttemptInterrupted {
+			// The claim stamps its run on the conflict before the run starts, so a stamped
+			// run is not proof that triage ran. A run a loop stop interrupted is no attempt
+			// (failover.go): the version keeps its one triage run, including after an owner
+			// hold recorded from the stamp alone. A never-started claim is released before
+			// planning (releaseUnlaunchedClaims).
+			interrupted := c.DesignRunID
+			c.Status, c.WaitingOn, c.DesignRunID, c.RunID = "raised", "design", "", ""
+			c.Text = "Request has no document block; triage must declare it before it is built.\nTriage run " + interrupted + " was interrupted before it answered; an interrupted run is no attempt, so triage is dispatched again."
+		} else if c.DesignRunID != "" {
 			c.Status, c.WaitingOn = "owner", "owner"
 			if !strings.Contains(c.Text, "still has no document block") {
 				c.Text += "\nRequest still has no document block after triage; the owner must close it or answer the conflict."
