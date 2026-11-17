@@ -134,6 +134,19 @@ func waitingFace(args []string) (record.Envelope, int) {
 	} else {
 		_, rows, err = askPlanner(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd))
 	}
+	if err == nil && !*history {
+		s, e := store.OpenRead(ctx, *path)
+		if e != nil {
+			err = e
+		} else {
+			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				extra, e := waitingCommentIntake(r)
+				rows = append(rows, extra...)
+				return e
+			})
+			s.Close()
+		}
+	}
 	if err == nil {
 		rows, err = policyWaitingRows(*root, rows)
 	}
@@ -387,7 +400,11 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
-	return append(out, windows...), nil
+	extra, err := waitingCommentIntake(r)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, windows...), extra...), nil
 }
 
 // Window rows are optional on old stores, and disappear at (not after) reset.

@@ -708,6 +708,7 @@ func loopFace(args []string) int {
 		Lanes: laneIDs(*laneCount), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
+		Comments: repositorySettings.Comments,
 	})
 	if err != nil {
 		return failStartup(err)

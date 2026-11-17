@@ -15,6 +15,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -318,6 +319,7 @@ type LoopConfig struct {
 	// Empty values disable confirmation; this check never reads settings.
 	VantageURL  string
 	VantageRepo string
+	Comments    *settings.Comments
 	// ExitWhenDrained opts out of the default wait when nothing is dispatchable.
 	ExitWhenDrained bool
 	// Steps is what the loop drives.
@@ -497,9 +499,10 @@ type Loop struct {
 	beforeSessionOpen func(create bool)
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
-	waitingDetail string
-	hasAnswers    bool
-	pollOnly      bool // test seam: suppress accelerators, retain store polling
+	waitingDetail   string
+	nextCommentPoll time.Time
+	hasAnswers      bool
+	pollOnly        bool // test seam: suppress accelerators, retain store polling
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
 	heartbeatClock func() heartbeatTicker
@@ -554,6 +557,16 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	}
 	if cfg.Stage == nil {
 		return nil, Usagef("the loop needs a stager: nothing else writes a lane's brief, fence and base sha, and an adapter launched without them refuses in its preflight")
+	}
+	if c := cfg.Comments; c != nil {
+		cfg.VantageURL, cfg.VantageRepo = c.VantageURL, c.Repo
+		if cfg.VantageRepo == "" {
+			root, err := filepath.Abs(cfg.Root)
+			if err != nil {
+				return nil, Usagef("--root: %v", err)
+			}
+			cfg.VantageRepo = filepath.Base(root)
+		}
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -824,7 +837,27 @@ func (l *Loop) backOff(ctx context.Context) (bool, error) {
 	if err := l.refreshSession(ctx, l.cfg.Now().Add(delay)); err != nil {
 		return false, err
 	}
-	return waitFor(ctx, delay), nil
+	if l.cfg.Comments == nil {
+		return waitFor(ctx, delay), nil
+	}
+	// Keep infrastructure retry backoff intact while review intake remains awake.
+	deadline := time.Now().Add(delay)
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return true, nil
+		}
+		interval := time.Duration(l.cfg.Comments.PollSeconds) * time.Second
+		if left < interval {
+			interval = left
+		}
+		if !waitFor(ctx, interval) {
+			return false, nil
+		}
+		if err := l.intakeComments(ctx); err != nil {
+			return false, err
+		}
+	}
 }
 
 // index rebuilds the trace index from what the tick recorded. The index is derived — the

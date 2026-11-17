@@ -27,7 +27,9 @@ type ReviewComment struct {
 	CreatedAt float64 `json:"created_at"`
 	EditedAt  float64 `json:"edited_at,omitempty"`
 	Resolved  bool    `json:"resolved,omitempty"`
-	Anchor    *struct {
+	// BoxOpen is derived from Vantage's comment_sessions, not a persisted comment field.
+	BoxOpen bool `json:"-"`
+	Anchor  *struct {
 		SourceLine int `json:"source_line"`
 	} `json:"anchor,omitempty"`
 	CapturedBlock   string            `json:"captured_block,omitempty"`
@@ -47,7 +49,15 @@ type CommentBatch struct {
 func init() {
 	if err := store.RegisterDDL("item-comments", `CREATE TABLE IF NOT EXISTS comment_batches (
  item_id TEXT PRIMARY KEY REFERENCES items(item_id), document TEXT NOT NULL, batch TEXT NOT NULL
- );`); err != nil {
+ );
+ CREATE TABLE IF NOT EXISTS comment_taken (
+ document TEXT NOT NULL, comment_id TEXT NOT NULL, turns INTEGER NOT NULL, changed REAL NOT NULL,
+ PRIMARY KEY(document,comment_id,turns,changed));
+ CREATE TABLE IF NOT EXISTS comment_intake (
+ id INTEGER PRIMARY KEY CHECK(id=1), first_intake TEXT NOT NULL, last_answer TEXT NOT NULL DEFAULT '', unavailable INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS comment_intake_documents (
+ document TEXT PRIMARY KEY, older INTEGER NOT NULL DEFAULT 0);
+ `); err != nil {
 		panic(err)
 	}
 }
@@ -89,6 +99,10 @@ func ReadReview(ctx context.Context, base, repo, doc string) ([]ReviewComment, e
 	}
 	var review *struct {
 		Comments []ReviewComment `json:"comments"`
+		Sessions []struct {
+			CommentID string `json:"comment_id"`
+			State     string `json:"state"`
+		} `json:"comment_sessions"`
 	}
 	if err = json.NewDecoder(io.LimitReader(res.Body, 8<<20)).Decode(&review); err != nil {
 		return nil, Internalf("reading Vantage review JSON: %v", err)
@@ -96,7 +110,13 @@ func ReadReview(ctx context.Context, base, repo, doc string) ([]ReviewComment, e
 	if review == nil {
 		return nil, nil
 	}
-	for _, c := range review.Comments {
+	for i := range review.Comments {
+		c := &review.Comments[i]
+		for _, session := range review.Sessions {
+			if session.CommentID == c.ID && session.State == "open" {
+				c.BoxOpen = true
+			}
+		}
 		for _, raw := range c.Reactions {
 			var parsed reviewReaction
 			if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -196,6 +216,36 @@ func TakeComments(ctx context.Context, tx *store.Tx, root, doc string, comments 
 		return "", Usagef("reading document %s: %v", doc, err)
 	}
 	pending := []ReviewComment{}
+	// Older stores already hold batches from hand intake. Seed their identities
+	// in the same transaction rather than treating a new ledger as empty history.
+	rows, err := tx.Reader().Query("SELECT batch FROM comment_batches WHERE document=?", doc)
+	if err != nil {
+		return "", err
+	}
+	prior := []ReviewComment{}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return "", err
+		}
+		var batch CommentBatch
+		if err = json.Unmarshal([]byte(raw), &batch); err != nil {
+			rows.Close()
+			return "", err
+		}
+		prior = append(prior, batch.Comments...)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return "", err
+	}
+	for _, c := range prior {
+		if _, err = tx.Exec("INSERT INTO comment_taken(document,comment_id,turns,changed) VALUES(?,?,?,?) ON CONFLICT DO NOTHING", doc, c.ID, len(c.Reactions), ReviewChanged(c)); err != nil {
+			return "", err
+		}
+	}
 	seen := map[string]bool{}
 	lines := strings.Split(string(raw), "\n")
 	title := CommentDocumentName(doc)
@@ -206,7 +256,14 @@ func TakeComments(ctx context.Context, tx *store.Tx, root, doc string, comments 
 		}
 	}
 	for _, c := range comments {
-		if !PendingReview(c) {
+		if !PendingReview(c) || c.BoxOpen {
+			continue
+		}
+		var taken bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM comment_taken WHERE document=? AND comment_id=? AND turns=? AND changed=?)", doc, c.ID, len(c.Reactions), ReviewChanged(c)).Scan(&taken); err != nil {
+			return "", err
+		}
+		if taken {
 			continue
 		}
 		if c.ID == "" || seen[c.ID] {
@@ -315,5 +372,13 @@ func TakeComments(ctx context.Context, tx *store.Tx, root, doc string, comments 
 		return "", err
 	}
 	_, err = tx.Exec("INSERT INTO comment_batches(item_id,document,batch) VALUES(?,?,?)", id, doc, string(batch))
-	return id, err
+	if err != nil {
+		return "", err
+	}
+	for _, c := range pending {
+		if _, err = tx.Exec("INSERT INTO comment_taken(document,comment_id,turns,changed) VALUES(?,?,?,?)", doc, c.ID, len(c.Reactions), ReviewChanged(c)); err != nil {
+			return "", err
+		}
+	}
+	return id, nil
 }
