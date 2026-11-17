@@ -1122,7 +1122,14 @@ item is not the cause, and re-dispatching it fixes nothing until the fault is fi
 to see the count, and after a stated number of orphaned attempts the item should wait for a person,
 with the faults that killed its runs named, instead of being sent out again.
 
-<!-- tillr: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
+needs a reader the fence left out. The settings file is read by `tools/tillr/settings/`, which
+refuses any table other than `roll` and `push`, so it refuses `[orphan]`. That directory is added
+to this item's paths. The work extends that one reader to take `orphan.limit`, a whole number of
+at least one that defaults to three, and adds no second reader of the settings file inside the
+loop or the view. The criteria below are unchanged.
 
 - **c1:** The waiting face and the item's record show the number of orphaned attempts per item, and the loop's settings file takes `orphan.limit`, defaulting to three. A test asserts the count is shown for an item with two orphaned runs and for an item with none.
 - **c2:** When an item's orphaned attempts reach the limit, the planner holds it with the reason `orphan-limit`, which names each stopping loop's recorded fault, for example `fault: store: database is locked` or `gate-harness-error`. A test with three orphaned runs asserts the hold, the reason text and that nothing is dispatched.
@@ -1132,7 +1139,7 @@ with the faults that killed its runs named, instead of being sent out again.
 **Agent details:**
 
 - **Ref:** the interrupted-run rule in `tools/tillr-drain/README.md`; the loop stop records in `.tillr/loop/` carry each stop's fault text.
-- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`.
+- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`; the settings reader in `tools/tillr/settings/settings.go` for `orphan.limit`; the pack's copy under `yolo-packs/tillr/`.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: five `drain.orphaned` events for `item-sync-design-without-item`, the stops recorded as `fault` and `gate-harness-error`.
 
 ## Filed 2026-11-16: work the queue triage found stranded
