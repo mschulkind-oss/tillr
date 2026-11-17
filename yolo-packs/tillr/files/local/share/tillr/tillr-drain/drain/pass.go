@@ -419,16 +419,17 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	}
 	if work.Ready {
 		if len(d.Parallel) > 0 {
-			rec, err := terminalRecord(r, d.RunRequest.RunID)
+			open, err := dispatchQuotaOpen(r, d, shut)
 			if err != nil {
 				return Decision{}, err
 			}
-			if rec != nil {
-				d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
-				d.Inputs = inputs
-				identifyDecision(&d)
-				return d, nil
+			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+			if !open {
+				d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 			}
+			d.Inputs = inputs
+			identifyDecision(&d)
+			return d, nil
 		}
 		if commandStage(d) {
 			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
@@ -554,6 +555,19 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			}
 		}
 		if finished {
+			if rec != nil {
+				failed, err := failedDesignerResume(d, *rec)
+				if err != nil {
+					return Decision{}, err
+				}
+				if failed && policy != nil {
+					if _, _, open := policy.availableBackend(d.RunRequest.Backend, d.Seat, shut); !open {
+						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+						identifyDecision(&d)
+						return d, nil
+					}
+				}
+			}
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
 		} else if evaluatorNode(d) && rec == nil {
 			// Retry the judge's retained handoff, never allocate another evaluator id.
@@ -671,6 +685,10 @@ func (l *Loop) passPlans(ctx context.Context, at time.Time) ([]plannedApplicatio
 }
 
 func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
+	if err := l.refreshQuotas(ctx); err != nil {
+		return nil, nil, err
+	}
+	at = l.cfg.Now()
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return nil, nil, err
@@ -727,7 +745,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		// A lane a lane-owned staging refusal took out of rotation is offered to no item
 		// until a re-check puts it back (lane_rotation.go).
 		available := l.rotationLanes()
-		tick := Pass{WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
+		tick := Pass{WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -834,6 +852,12 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		})
 		return false, nil, err
 	}
+	// Refresh before claiming; a claimed dispatch is never checked after staging.
+	if (p.decision.Action == ActionDispatch || p.decision.Action == ActionRetry) && p.decision.RunRequest != nil {
+		if err := l.refreshQuotas(ctx); err != nil {
+			return false, nil, err
+		}
+	}
 	nextGeneration := *generation
 	correlate := func(tx *store.Tx, d *Decision) error {
 		if nextGeneration == "" {
@@ -871,6 +895,19 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			return nil
 		}
 		d := p.decision
+		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
+			shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
+			if err != nil {
+				return err
+			}
+			open, err := dispatchQuotaOpen(tx.Reader(), d, shut)
+			if err != nil {
+				return err
+			}
+			if !open {
+				return nil
+			}
+		}
 		if d.Action == ActionDispatch || d.Action == ActionRetry {
 			// A concurrent landing can publish an answered conflict after the pass
 			// refreshed documents. Item versions alone do not bind that new decision

@@ -31,7 +31,12 @@ func TestSettledLingeringHarnessEndsAsAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := filepath.Join(backend, "run-pi")
-	script := "#!/bin/sh\nsleep 60 & echo $! > child-pid\nprintf '%s\\n' '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"report\\nRESULT: done\\n\"}]}}' '{\"type\":\"agent_settled\"}'\nwait\n"
+	helperRelease := filepath.Join(lane, "release-helper")
+	helperReady := filepath.Join(lane, "late-child-pid")
+	// Publish settlement before the last helper starts. Process-group activity
+	// after the baseline observation must restart the idle sample count.
+	script := "#!/bin/sh\nsleep 60 & echo $! > child-pid\nprintf '%s\\n' '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"report\\nRESULT: done\\n\"}]}}' '{\"type\":\"agent_settled\"}'\n" +
+		"while [ ! -f '" + helperRelease + "' ]; do sleep 0.01; done\nsleep 60 & echo $! > '" + helperReady + "'\nwait\n"
 	if err := os.WriteFile(adapter, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -80,45 +85,66 @@ func TestSettledLingeringHarnessEndsAsAnswered(t *testing.T) {
 		}
 	}
 	awaitArm()
-	epoch := time.Date(2026, 11, 17, 1, 0, 0, 0, time.UTC)
-	for i := 1; i <= run.SettledIdleSamples; i++ {
+	if err := os.WriteFile(helperRelease, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the deliberately late helper without assuming startup wall time.
+	for {
+		if info, err := os.Stat(helperReady); err == nil && info.Size() > 0 {
+			break
+		}
 		select {
-		case ticks <- epoch.Add(time.Duration(i) * time.Second):
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("late helper did not start")
+		}
+	}
+	epoch := time.Date(2026, 11, 17, 1, 0, 0, 0, time.UTC)
+	var env record.Envelope
+	var endedAt time.Time
+	// Supply each observation the monitor asks for. Startup activity can reset
+	// the count; five ticks from the first baseline are not five idle samples.
+observations:
+	for i := 1; ; i++ {
+		endedAt = epoch.Add(time.Duration(i) * time.Second)
+		select {
+		case ticks <- endedAt:
 		case <-ctx.Done():
 			t.Fatal("sample stalled")
 		}
-		if i < run.SettledIdleSamples {
-			awaitArm()
-			select {
-			case <-done:
-				t.Fatal("ended before sample count")
-			default:
+		select {
+		case env = <-done:
+			if i <= run.SettledIdleSamples {
+				t.Fatal("late helper activity did not restart idle sample count")
 			}
+			break observations
+		case d := <-armed:
+			if d != run.SettledSampleInterval {
+				t.Fatalf("interval %v", d)
+			}
+		case <-ctx.Done():
+			t.Fatal("settled harness did not end")
 		}
-	}
-	var env record.Envelope
-	select {
-	case env = <-done:
-	case <-ctx.Done():
-		t.Fatal("settled harness did not end")
 	}
 	if err := <-errs; err != nil {
 		t.Fatal(err)
 	}
 	rec := recordOf(t, env)
-	if rec.EndCause != run.EndSettledIdle || rec.State != run.StateExited || rec.SettledAt == "" || rec.HarnessEndedAt != epoch.Add(5*time.Second).Format(time.RFC3339Nano) {
+	if rec.EndCause != run.EndSettledIdle || rec.State != run.StateExited || rec.SettledAt == "" || rec.HarnessEndedAt != endedAt.Format(time.RFC3339Nano) {
 		t.Fatalf("record: %+v", rec)
 	}
 	if err := syscall.Kill(sibling.Process.Pid, 0); err != nil {
 		t.Fatalf("sibling killed: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(lane, "child-pid"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A killed child may remain as a zombie until the container's init reaps it.
-	if rawStat, err := os.ReadFile(filepath.Join("/proc", strings.TrimSpace(string(raw)), "stat")); err == nil && !strings.Contains(string(rawStat), ") Z ") {
-		t.Fatalf("helper still running: %s", rawStat)
+	for _, pidFile := range []string{filepath.Join(lane, "child-pid"), helperReady} {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A killed child may remain as a zombie until the container's init reaps it.
+		if rawStat, err := os.ReadFile(filepath.Join("/proc", strings.TrimSpace(string(raw)), "stat")); err == nil && !strings.Contains(string(rawStat), ") Z ") {
+			t.Fatalf("helper still running: %s", rawStat)
+		}
 	}
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		status, found, err := run.StatusRecord(r, "settled")

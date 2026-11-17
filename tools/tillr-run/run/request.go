@@ -3,6 +3,7 @@ package run
 import (
 	"encoding/json"
 	"hash/fnv"
+	"math"
 	"strconv"
 	"time"
 
@@ -42,6 +43,10 @@ import (
 // takes no harness arguments refuses the separator as it refuses any argument it does not
 // know, so a row naming them for such an adapter fails at the adapter's preflight.
 type Backend struct {
+	// Quota is an optional argv that reads quota without starting a model session.
+	// Reserve is the fraction of every reported window left for the owner (default 0).
+	Quota          []string `json:"quota,omitempty"`
+	Reserve        float64  `json:"reserve,omitempty"`
 	Adapter        string   `json:"adapter"`
 	Model          string   `json:"model,omitempty"`
 	Models         []string `json:"models,omitempty"`
@@ -89,6 +94,14 @@ func (b Backend) Request(itemID, laneID, runID, backendName string) Request {
 // package's contract: the policy that names the values and the face that prints the record
 // both ask this, so neither can emit a request the runner refuses at claim.
 func (b Backend) Missing() string {
+	if math.IsNaN(b.Reserve) || math.IsInf(b.Reserve, 0) || b.Reserve < 0 || b.Reserve > 1 {
+		return "names reserve outside [0,1]: reserve is a fraction of each quota window"
+	}
+	for _, arg := range b.Quota {
+		if arg == "" {
+			return "names an empty quota argument: quota is a nonempty command argv"
+		}
+	}
 	if b.Adapter == "" {
 		return "names no adapter: the request's command[0] is the adapter program"
 	}

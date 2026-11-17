@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
+	"github.com/mschulkind-oss/tillr-drain/quota"
 	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -24,19 +25,21 @@ import (
 // waitingRow is shared by the terminal and HTTP faces. Since is an absolute UTC
 // time, or the explicit absence of a decision; it is not the item's update time.
 type waitingRow struct {
-	GraphChanges []string `json:"graph_changes,omitempty"`
-	Rank         string   `json:"rank"`
-	ItemID       string   `json:"item_id"`
-	Document     string   `json:"document"`
-	Class        string   `json:"class"`
-	Where        string   `json:"where"`
-	Why          string   `json:"why"`
-	Mover        string   `json:"mover"`
-	Since        string   `json:"since"`
-	Waited       string   `json:"waited"`
-	ClassSource  string   `json:"class_source"`
-	LaneStatus   string   `json:"lane_status,omitempty"`
-	LaneReason   string   `json:"lane_reason,omitempty"`
+	backendReset time.Time
+	Quota        *quota.QuotaStatus `json:"quota,omitempty"`
+	GraphChanges []string           `json:"graph_changes,omitempty"`
+	Rank         string             `json:"rank"`
+	ItemID       string             `json:"item_id"`
+	Document     string             `json:"document"`
+	Class        string             `json:"class"`
+	Where        string             `json:"where"`
+	Why          string             `json:"why"`
+	Mover        string             `json:"mover"`
+	Since        string             `json:"since"`
+	Waited       string             `json:"waited"`
+	ClassSource  string             `json:"class_source"`
+	LaneStatus   string             `json:"lane_status,omitempty"`
+	LaneReason   string             `json:"lane_reason,omitempty"`
 }
 
 type waitingRule struct{ class, where, mover string }
@@ -181,6 +184,11 @@ func waitingFace(args []string) (record.Envelope, int) {
 			err = e
 		} else {
 			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				quotas, e := waitingBackendQuotas(r, time.Now())
+				if e != nil {
+					return e
+				}
+				rows = append(rows, quotas...)
 				extra, e := waitingCommentIntake(r)
 				if e != nil {
 					return e
@@ -550,6 +558,21 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
+	quotas, err := waitingBackendQuotas(r, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	observed := map[string]bool{}
+	for _, q := range quotas {
+		observed[q.ItemID] = true
+	}
+	filtered := windows[:0]
+	for _, w := range windows {
+		if !observed[w.ItemID] {
+			filtered = append(filtered, w)
+		}
+	}
+	windows = append(filtered, quotas...)
 	extra, err := waitingCommentIntake(r)
 	if err != nil {
 		return nil, err
@@ -587,7 +610,7 @@ func waitingBackendWindows(r *store.Reader, now time.Time) ([]waitingRow, error)
 			return nil, err
 		}
 		reopens := time.UnixMilli(reset).UTC().Format(time.RFC3339)
-		out = append(out, waitingRow{ItemID: "backend:" + backend, Class: "waits on work", Where: "backend", Why: kind + " reopens " + reopens, Mover: "the reset time", Since: "—", ClassSource: "store"})
+		out = append(out, waitingRow{ItemID: "backend:" + backend, Class: "waits on work", Where: "backend", Why: kind + " reopens " + reopens, Mover: "the reset time", Since: "—", ClassSource: "store", backendReset: time.UnixMilli(reset).UTC()})
 	}
 	return out, rows.Err()
 }

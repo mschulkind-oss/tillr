@@ -190,7 +190,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err != nil {
 		return nil, err
 	}
-	shut, err := readShutBackends(r, at)
+	shut, err := readQuotaShutBackends(r, at, policy)
 	if err != nil {
 		return nil, readFailure(err)
 	}
