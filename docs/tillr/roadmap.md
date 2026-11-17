@@ -389,13 +389,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### Landing stops at the red cap and says which check is red
 
-<!-- tillr: item id="item-gate-red-cap" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** When the trunk is more landings, or more minutes, past the last green commit than `red_cap` allows, a landing is refused before the trunk moves, and the refusal names the red check and the open fixer item.
-- **c2:** The refused item is not convicted: it keeps its candidate, is held with a reason of its own that names the cap, and lands with no new run once the green pointer moves. A test lands a fixer and asserts the held candidate lands on the next pass.
-- **c3:** The fixer item itself is never refused by the cap.
-- **c4:** A `red_cap` of zero disables the refusal, and the loop's status line still counts landings since green.
-- **c5:** The `waiting` face shows items held by the cap as waiting on the fixer, by its item id.
 
 ### A new lane starts from the last green commit
 

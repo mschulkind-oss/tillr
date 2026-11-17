@@ -3,6 +3,8 @@ package main_test
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -79,6 +81,36 @@ func (f loopFixture) withSeats() loopFixture {
 	return f
 }
 
+// trunkStager also provisions desks that were not among the fixture's initial lanes.
+type trunkStager struct {
+	passStager
+	t    *testing.T
+	root string
+}
+
+func (s trunkStager) Stage(ctx context.Context, spec drain.StageSpec) error {
+	target := filepath.Join(s.laneRoot, spec.LaneID, "worktree")
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		git(s.t, s.root, "worktree", "add", "--detach", target, spec.BaseSHA)
+	} else if err != nil {
+		return err
+	}
+	return s.passStager.Stage(ctx, spec)
+}
+
+func TestTrunkStagerProvisionsNewFixerDesk(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
+	base := git(t, f.root, "rev-parse", "main")
+	target := filepath.Join(f.laneRoot, "desk-trunk-fixer", "worktree")
+	stager := trunkStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, t: t, root: f.root}
+	if err := stager.Stage(context.Background(), drain.StageSpec{LaneID: "desk-trunk-fixer", WorkingDir: "worktree", BaseSHA: base}); err != nil {
+		t.Fatal(err)
+	}
+	if head := git(t, target, "rev-parse", "HEAD"); head != base {
+		t.Fatalf("desk head=%s want=%s", head, base)
+	}
+}
+
 // runTrunkLoop drives the loop with the trunk capabilities stubbed, and answers the result
 // and the steps so a case can read what ran.
 func runTrunkLoop(t *testing.T, f loopFixture, steps *trunkSteps, report io.Writer) (drain.LoopResult, error) {
@@ -86,7 +118,7 @@ func runTrunkLoop(t *testing.T, f loopFixture, steps *trunkSteps, report io.Writ
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
 		Policy: f.policy, Steps: steps,
-		Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Stage: trunkStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, t: t, root: f.root},
 		Now:   steps.Now, Report: report,
 	})
 	if err != nil {

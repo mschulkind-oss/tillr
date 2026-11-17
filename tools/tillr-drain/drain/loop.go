@@ -444,6 +444,7 @@ type LoopResult struct {
 type Loop struct {
 	laneBootstrapReported       bool
 	gatePolicy                  GatePolicy
+	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	heavyMu                     sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
@@ -938,7 +939,7 @@ func (l *Loop) index(ctx context.Context) {
 func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
 	held := heldDetail(holds)
 	for _, d := range holds {
-		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") || strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") {
+		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") || strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") || strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 			result.Detail = held
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
@@ -1910,6 +1911,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if landed.Result == LandRefused && landed.Reason == ReasonRedCap {
+		return "", false, l.holdRedCap(ctx, candidate, landed.RedCap)
 	}
 	if landed.Result == LandRefused && landed.Reason == ReasonTrunkRewritten {
 		h, err := l.observeTrunk(ctx, candidate.ObservedTrunk)

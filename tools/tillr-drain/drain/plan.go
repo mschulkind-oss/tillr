@@ -270,9 +270,13 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 		if e != nil {
 			return nil, e
 		}
-		green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
-		if err != nil {
-			return nil, err
+		// This read-only face needs Git only to prove a landed dependency.
+		// The dispatch claim still validates the selected lane base before staging.
+		if hasLandedBlocker(states, edges) {
+			green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	unproved, err := unprovedBlockers(context.Background(), r, root, green, states, edges)
@@ -663,6 +667,12 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		lane, ok := p.freeLane()
 		if itemIsComment(item.ItemID) {
 			lane = commentDesk(item.DesignDoc)
+			ok = !p.held[lane] && !p.assigned[lane]
+		} else if !ok && IsTrunkFixer(item.ItemID) {
+			// Retained candidates can occupy every offered lane while waiting
+			// on this fixer. One serial repair desk breaks that dependency cycle
+			// without discarding their worktrees or admitting ordinary work.
+			lane = "desk-trunk-fixer"
 			ok = !p.held[lane] && !p.assigned[lane]
 		}
 		if !ok {

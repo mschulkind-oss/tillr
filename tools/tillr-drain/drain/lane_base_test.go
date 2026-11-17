@@ -11,6 +11,34 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestLaneBasePlannerRequiresGitForLandedBlockers(t *testing.T) {
+	f, l := passFixture(t, "blocker", "dependent")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`)
+		return err
+	})
+	// Observe the queued dependency with Git available: document triage also
+	// reads the repository. A landed dependency's proof must still fail
+	// explicitly when Git is unavailable.
+	plans := mustPlan(t, l)
+	for _, p := range plans {
+		if p.decision.ItemID == "dependent" && p.decision.Reason != ReasonBlocked {
+			t.Fatalf("queued blocker lost: %+v", p.decision)
+		}
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='blocker'`)
+		return err
+	})
+	t.Setenv("PATH", scratchUnderDurable(t))
+	if _, err := provedLaneBase(context.Background(), f.root, "green"); err == nil || !strings.Contains(err.Error(), "git") {
+		t.Fatalf("missing Git silently bypassed lane-base proof: %v", err)
+	}
+	if _, _, err := l.passPlans(context.Background(), l.cfg.Now()); err == nil || !strings.Contains(err.Error(), "git") {
+		t.Fatalf("missing Git silently bypassed proof: %v", err)
+	}
+}
+
 func TestLaneBasePolicyStagesAndRecordsSelectedCommit(t *testing.T) {
 	for _, mode := range []string{"green", "tip", "fixer", "bootstrap"} {
 		t.Run(mode, func(t *testing.T) {

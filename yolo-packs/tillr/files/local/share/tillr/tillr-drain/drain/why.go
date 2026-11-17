@@ -160,7 +160,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		switch {
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
-		case (d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken) && d.DeferredBy != "":
+		case (d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
@@ -245,6 +245,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 }
 
 func whyPresentation(d Decision) (class, where, mover string) {
+	if strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
+		return "waits on work", "land", "the heavy runner; prove trunk or file its fixer"
+	}
 	where = "queue"
 	if c := d.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "design" {
 		if d.From == "running" || d.From == "candidate" {

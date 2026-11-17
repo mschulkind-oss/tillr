@@ -58,21 +58,29 @@ verdict — every one was a patch-id mismatch, a git error, or a regeneration fa
 
 *Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/) for the landing transaction. The board
 pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are retired; in
-[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed nine-value set
+[`landing.go`](../../tools/tillr-land/land/landing.go), `Reasons()` is a closed ten-value set
 (`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `trunk-rewritten`, `patch-rewind`,
-`patch-at-head`, `item-not-landable`, `already-on-trunk`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
+`patch-at-head`, `item-not-landable`, `already-on-trunk`, `red-cap`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tools/tillr-land/land/conformance_test.go), and `squash-conflict`
 (`ResultSquashConflict`) is its own outcome rather than a refusal. `trunk-rewritten` is
 an infrastructure hold: the drain retains the already-gated candidate, records both tips,
 and waits for restored history without a failing candidate verdict or another gate.
+`red-cap` is likewise a repository hold: the configured limit on landings or minutes
+past the green pointer has been reached. Its record names the red checks and open
+fixer, keeps the already-gated candidate, and reopens landing after proof advances.
+The fixer itself is exempt; a pending proof with no known red check says so explicitly.
+A candidate already present on the trunk settles before the cap is applied. Held
+candidates are revisited when the trunk tip changes, so superseded work can exit
+without waiting for the green pointer. If retained candidates occupy every offered
+lane, one separate fixer worktree provides repair capacity without discarding them.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a trunk
 move between the gate and `pass` is squashed onto the moved tip by `Trunk.Squash`
 ([`trunk.go`](../../tools/tillr-land/land/trunk.go)) and recorded on `landings` with both
 `gated_tree` and `landed_tree`, never refused on patch-id or base drift. Every refusal in `Reasons()`
 names a specific fact about the verdict, the patch ref, uncommitted worktree paths, the
-owner's closed/resolved item disposition, or a trunk that already carries the change, and
-non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`, `already-on-trunk`) leave the
+owner's closed/resolved item disposition, a trunk that already carries the change, or the configured unproved-range cap, and
+non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`, `already-on-trunk`, `red-cap`) leave the
 verdict standing and pin `refs/tillr/runs/<run_id>` at the head.
 
 ## 2. Re-application preserves the change, not the patch
