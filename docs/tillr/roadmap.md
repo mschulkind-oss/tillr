@@ -725,10 +725,30 @@ one resumed session end to end.
 
 <!-- tillr: item id="item-drain-spend-ceiling" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** The settings file takes `spend.ceiling_usd` and `spend.window_hours`, both off by default. With them set, the loop dispatches nothing new once the recorded cost of runs started in the window reaches the ceiling, holds every ready item with the reason `spend-ceiling`, and resumes by itself when the window has moved on.
-- **c2:** Runs in flight are not ended by the ceiling, and a run that reported no cost is counted in a separate line and never as zero.
-- **c3:** The waiting face and the loop's start line show the ceiling, the amount spent in the window and when dispatch resumes.
-- **c4:** A resumed or retried run that produced no new model output adds nothing to the total. A test asserts a retry of an interrupted run does not inherit the earlier attempt's cost.
+**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because every
+criterion here asked for a spend ceiling, and
+[the momentum principle](../design/momentum-principle.md#what-this-forbids) forbids one: "A budget
+that stops good work is a wall an operator has to debug at 3am." Two tests in `tools/tillr-drain`
+hold that line. `TestTheSpendLineNamesTheMeasurement` fails a spend line that names a ceiling, and
+`TestTheLoopCommandRefusesTheDeletedBudgets` refuses the deleted budget flags. The principle
+stands and this item does not reopen it. The ceiling is withdrawn, and what remains is the
+measurement an operator needs in order to decide for themselves whether to stop the loop or take
+work out of the pile. Those two acts are the only throttles the principle recognizes.
+
+The heading and the item id are kept so that links and the queue still find this item. They name
+what was asked for, not what is built: this item builds no ceiling.
+
+- **c1:** This item adds no ceiling. It adds no setting, flag or environment variable that names an amount of spend, no hold whose reason is spend, and no comparison of a spend total against a number. Dispatch does not depend on spend in any way. `TestTheSpendLineNamesTheMeasurement` and `TestTheLoopCommandRefusesTheDeletedBudgets` pass with their assertions unchanged, and a new test dispatches a ready fixture item in a store whose recorded spend is far above any plausible limit.
+- **c2:** The loop's start line and the waiting face each show the recorded cost of runs started in the last 24 hours, labeled as a measurement with its window, such as `spend, last 24h: $41.20 over 37 runs`. The window is fixed at 24 hours and has no setting. A test builds a store with one run started inside the window and one started before it, and asserts that both places show only the first run's cost.
+- **c3:** A run in the window that reported no cost is counted on that line as a number of runs without a cost, and never as zero dollars. A test asserts that a window holding one run with a cost and one without shows the first run's cost and `1 run reported no cost`.
+- **c4:** A resumed or retried run that produced no new model output adds nothing to the windowed total. A test asserts a retry of an interrupted run does not inherit the earlier attempt's cost.
+
+**Agent details:**
+
+- **Ref:** the ruling is [the momentum principle](../design/momentum-principle.md), sections *What this forbids* and *The one legitimate stop*. The existing measurement is `spendLine` in `tools/tillr-drain/main.go`, which totals one loop's spend when the loop ends; this item adds a windowed total at the loop's start and in the view, and leaves that line as it is.
+- **Where:** the loop's start line in `tools/tillr-drain/main.go`; the waiting face and its spend reads in `tools/tillr-view/` (`serve.go`, `serveread.go`); the pack's copy under `yolo-packs/tillr/`.
+- **Not this item:** how an ended or orphaned run's spend is recorded belongs to *Add the spend of killed runs to the record* (`item-drain-record-killed-run-spend`). This item reads whatever cost a run's record carries and does not wait on that one.
+- **Evidence:** at `2532d9b8`, `rg -n 'window_hours|ceiling_usd' tools/tillr-drain tools/tillr-view` returns nothing, so no part of the withdrawn ceiling is in the tree to remove.
 
 ### Turn the after-merge check back on
 
