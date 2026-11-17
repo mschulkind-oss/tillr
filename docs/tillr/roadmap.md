@@ -907,3 +907,114 @@ when the commit belongs to an upstream project. It is implemented in
 location, so the reference says the rule moved and the record is left as written apart from its
 pointer. Reading those files needs no wider paths: the item writes only under `docs/`.
 
+## Filed 2026-11-16: two outside skills join the default agent skills
+
+### Add BMAD elicitation and Superpowers brainstorming skills
+
+The owner asked on 2026-11-16 for two skills from outside projects to be available to every
+agent that starts from the default packs, without a separate installation in each project. One
+helps an agent draw out what a person means before it builds, and the other runs a structured
+brainstorm. Both come from public repositories, and copying their files into this repository
+would leave two hand-kept copies to drift. So each is named by its Git address and the packs
+fetch it. The house brainstorming skill already exists and must keep working as it does today.
+Adding the outside one beside it must never replace it or leave two skills a person cannot tell
+apart.
+
+This item was filed into the queue on 2026-11-16 without a block in this document, so the loop
+dispatched it and its worker stopped after 34 seconds, reporting that the section its body names
+does not exist. The block below is that section, restored with the same id, paths and criteria
+the queue already holds.
+
+<!-- tillr: item id="item-agent-default-bmad-superpowers-skills" paths="yolo-packs/,config/yolo-jail/,tag-personal/config/yolo-jail/,tag-work/config/yolo-jail/,tests/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** The default selected packs expose BMAD Advanced Elicitation and Superpowers Brainstorming to their supported agents without a separate per-project installation.
+- **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting src/core-skills/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
+- **c3:** Each selected skill keeps the supporting assets, scripts, and relative references it needs; unrelated upstream frameworks and startup hooks are not imported automatically.
+- **c4:** The existing house brainstorming skill remains unchanged and discoverable. Superpowers receives a distinct discoverable name if the source names collide; no silent replacement or ambiguous duplicate selection is accepted.
+- **c5:** Permanent pack-composition/render tests verify both default discoveries, supporting resources, and collision handling. Every edited pack passes yolo pack lint, and an unavailable Git source produces a visible failure rather than omitting a skill silently.
+
+**Agent details:**
+
+- **Ref:** Owner request, 2026-11-16: add these two skills to the default pack-loaded set, using Git URLs.
+- **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/src/core-skills/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
+- **Where:** Inspect the default pack list and existing skill contributions in `config/yolo-jail/`, scoped configuration under `tag-personal/` and `tag-work/`, and `yolo-packs/`. Preserve host-config-synced prose and skills under `yolo-packs/matt/`; do not edit deployed home directories.
+- **Verify:** Resolve the supported Git locator syntax, test the default composition for supported agent renders, validate all auxiliary references, and lint each changed pack. Name the actual render and binary tested; in-jail lint is not proof of host rendering.
+
+## Filed 2026-11-16: defects the first observed drain pass turned up
+
+The first drain pass the owner watched on 2026-11-16 ran the queue as it stands and found three
+defects. None stops the drain from running, so they go through the queue like any other work.
+Each is a place where the loop does something a person watching would not expect, and where
+nothing tells the person it happened.
+
+### Hold an item that has no document block
+
+An item can reach the queue without a block in any tracked document, because the item tool's
+apply face writes the store directly. The loop then treats it like any other item, and its worker
+is sent to read a section that does not exist. On 2026-11-16 that happened to
+`item-agent-default-bmad-superpowers-skills`: it had been in the store alone since 2026-11-15, the
+loop dispatched it, and its worker reported blocked after 34 seconds. The item tool's sync face
+already counts these items as `unshared_open`, and on that day `tillr-item sync --dry-run` printed
+`unshared_open: 3`, but nothing acts on the count. The loop should hold such an item with a reason
+a person can read, and the count should appear where the operator already looks.
+
+<!-- tillr: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** The planner does not dispatch an open item that no document block declares. It holds the item with the reason `no-document-block`, which names the document the item's body reference points to. A test stores an item with no block and a ready item with one, plans both, and asserts the first is held with that reason and the second is dispatched.
+- **c2:** The hold lifts by itself in the pass after a sync imports a block for the item, with no command from the operator. A test adds the block, syncs, plans again, and asserts the item is dispatched.
+- **c3:** The waiting face shows the held item as waiting on a person, with the reason `no-document-block` and the command that fixes it (add the block, or close the item). The loop's start line and the status face print the `unshared_open` count, so it is no longer visible only in a sync report.
+- **c4:** An item that is closed or landed is never counted as unshared and never held for this reason. A test asserts both.
+
+**Agent details:**
+
+- **Ref:** `docs/design/queue-persistence-ruling.md` names the counter and its intent; the loop's start-up warning is the existing surface.
+- **Where:** `tools/tillr-item/item/sync.go` (the `unshared_open` count), the planner in `tools/tillr-drain/drain/plan.go`, the waiting face in `tools/tillr-view/waiting.go`.
+- **Evidence:** 2026-11-16, `tillr-item sync --dry-run --store .tillr/state.db` printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
+
+### Add the spend of killed runs to the record
+
+When a loop exits on a fault, the workers it launched are killed, and a killed worker never writes
+the report that carries its cost. The cost of that run is then recorded as unknown, so the total
+the queue shows is lower than what was spent. The error grows with the number of faults: on
+2026-11-16 the drain recorded `item-drain-recover-commands` at $10.70 over three runs and
+`item-sync-design-without-item` at $0.67 over seven runs, and the killed runs in both recorded
+nothing. A second effect follows. A new loop that settles a run an earlier loop started counts
+that run's spend in its own pass record, so a pass looks more expensive than the work it did. The
+record should have a number for every run however it ended, and should say which spend a loop
+inherited.
+
+<!-- tillr: item id="item-drain-record-killed-run-spend" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A run that ends because its loop stopped records the spend its backend can report for the work done so far, or records that the backend could not report it, and never leaves the field empty. A test kills a fixture worker that has produced usage output and asserts the recorded spend equals that output.
+- **c2:** When no spend can be read for a killed run, the record says `unreported` for that run, and every total the views print states how many runs were unreported. A test asserts a total over one reported and one unreported run reads as a lower bound.
+- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. A test settles a run started by a previous loop and asserts its cost appears only on the carried-over line.
+- **c4:** The spend ceiling counts a killed run's recorded spend, so a loop that keeps being killed cannot spend past the ceiling unseen.
+
+**Agent details:**
+
+- **Ref:** `item-drain-spend-ceiling` in this document is the consumer of these totals.
+- **Where:** the usage capture and run-finish records in `tools/tillr-drain/drain/` and `tools/tillr-run/`; the pass record and the spend lines in `tools/tillr-view/`.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: `item-drain-recover-commands` showed $10.16 and $0.54 over three runs, the third killed at 08:49:05 UTC by loop 459 and recording nothing; `item-sync-design-without-item` showed $0.14 and $0.53 over seven runs, five of them killed.
+
+### Hold an item whose runs keep being orphaned
+
+A run that a loop stop orphans spends no retry and no re-admission, by design: the worker did not
+fail, the loop did. The cost of that rule is that an item whose runs are killed again and again is
+sent out again every time, without limit. On 2026-11-16 `item-sync-design-without-item` had five
+orphaned attempts, each one a worker started and killed by a loop that was exiting on a fault. The
+item is not the cause, and re-dispatching it fixes nothing until the fault is fixed. A person needs
+to see the count, and after a stated number of orphaned attempts the item should wait for a person,
+with the faults that killed its runs named, instead of being sent out again.
+
+<!-- tillr: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** The waiting face and the item's record show the number of orphaned attempts per item, and the loop's settings file takes `orphan.limit`, defaulting to three. A test asserts the count is shown for an item with two orphaned runs and for an item with none.
+- **c2:** When an item's orphaned attempts reach the limit, the planner holds it with the reason `orphan-limit`, which names each stopping loop's recorded fault, for example `fault: store: database is locked` or `gate-harness-error`. A test with three orphaned runs asserts the hold, the reason text and that nothing is dispatched.
+- **c3:** `tillr drain retry` for that item clears the hold and starts a new count, and a run that ends on its own merits (a verdict, a refusal or a report) also starts a new count. A test asserts both.
+- **c4:** A held item is not hidden from the operator: the loop's start line lists items held for `orphan-limit` with their counts.
+
+**Agent details:**
+
+- **Ref:** the interrupted-run rule in `tools/tillr-drain/README.md`; the loop stop records in `.tillr/loop/` carry each stop's fault text.
+- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: five `drain.orphaned` events for `item-sync-design-without-item`, the stops recorded as `fault` and `gate-harness-error`.
