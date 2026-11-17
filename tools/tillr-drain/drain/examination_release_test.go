@@ -199,6 +199,114 @@ func TestAnOrdinaryRunsReleaseIsRecorded(t *testing.T) {
 	}
 }
 
+// On 2026-11-17 a loop recorded run-item-drain-restart-on-request-a3's candidate in
+// lane-5 and was stopped before it gated it. Its examination claim left lane-5 leased to
+// the run with no expiry. Every later loop proved that examiner dead, but its reap released
+// the lane only when no process carried the run's markers — and a test child the run had
+// started (`tillr-view restart --wait`) still did. The lane stayed leased, so the candidate
+// planned as no-lane behind its own lease for over three hours while ranked ready items
+// waited on the other lanes. Only a live run face keeps an examination's lease; a stray
+// child does not. The replacement loop judges the candidate in the lane it already holds,
+// and no other item is dispatched to that lane first.
+func TestADeadExaminersCandidateIsJudgedInItsOwnLaneDespiteAStrayChild(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b", "item-c")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	// item-a runs on lane-1 under a loop that then dies.
+	p := mustPlan(t, l)[0]
+	if p.decision.ItemID != "item-a" || p.decision.LaneID != "lane-1" {
+		t.Fatalf("fixture: the first dispatch is %s on %s, want item-a on lane-1", p.decision.ItemID, p.decision.LaneID)
+	}
+	deadOwnerClaim(t, f, l, p)
+	id := p.decision.RunRequest.RunID
+	dead, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.PID = 2147483647
+	// The recorded facts: the run ended 0, the dead loop claimed its examination (lane
+	// leased to the run, no expiry) and recorded its candidate, and was stopped there.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now().Format("2006-01-02T15:04:05Z07:00")
+		if err := applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit}); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, examinationOwnerKind, id, dead, l.cfg.Now()); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, id, "lane-1"); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, candidateReadyKind, id, Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: id, Worktree: filepath.Join(f.laneRoot, "lane-1", WorktreeDir), BaseSHA: base, HeadSHA: base}, l.cfg.Now()); err != nil {
+			return err
+		}
+		// item-c is ranked ahead of every other item and ready.
+		_, err := tx.Exec(`UPDATE items SET rank = 'a' WHERE item_id = 'item-c'`)
+		return err
+	})
+	// A child the run started outlives it, carrying its markers.
+	strayChild(t, l, id)
+	// The replacement loop. item-b holds the only other lane with a live run.
+	next := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	next.cfg.Policy.Backends = map[string]Backend{"fixture": {Adapter: "fixture"}}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := run.ClaimLease(context.Background(), tx, run.Request{RunID: "run-item-b-live", ItemID: "item-b", Backend: "fixture"}, "lane-2", next.cfg.Now())
+		return err
+	})
+	plans := mustPlan(t, next)
+	var judge *plannedApplication
+	for i := range plans {
+		d := plans[i].decision
+		if d.ItemID == "item-a" {
+			judge = &plans[i]
+		} else if d.Action != ActionHold && d.LaneID == "lane-1" {
+			t.Fatalf("%s was planned onto lane-1, which item-a's candidate holds: %+v", d.ItemID, d)
+		}
+	}
+	if judge == nil || judge.decision.Action != ActionJudge || judge.decision.LaneID != "lane-1" {
+		t.Fatalf("the dead examiner's candidate planned %+v, want judged on lane-1", judge)
+	}
+	if got := laneReleases(t, f, id); len(got) != 1 || got[0] != laneReleaseReap {
+		t.Fatalf("the dead examiner's lease release was recorded as %v, want one drain.lane-released with cause reap", got)
+	}
+	ok, _, err := next.applyPlan(context.Background(), *judge, base, next.cfg.Now())
+	if err != nil || !ok {
+		t.Fatalf("the replacement loop could not claim the candidate's examination: %v %v", ok, err)
+	}
+	if state, runID, _ := laneRow(t, f, "lane-1"); state != run.LaneStateLeased || runID != id {
+		t.Fatalf("the examination claim left lane-1 %s/%s, want leased to %s", state, runID, id)
+	}
+}
+
+// A dead examiner's lease whose run face is alive — a continuation resuming the run — is
+// kept: the face, not the reap, releases it when it ends.
+func TestADeadExaminersLeaseIsKeptWhileTheRunFaceIsAlive(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	p := mustPlan(t, l)[0]
+	deadOwnerClaim(t, f, l, p)
+	id := p.decision.RunRequest.RunID
+	dead, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.PID = 2147483647
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now().Format("2006-01-02T15:04:05Z07:00")
+		if err := applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: p.decision.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit}); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, examinationOwnerKind, id, dead, l.cfg.Now()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, id, p.decision.LaneID)
+		return err
+	})
+	fakeRunFace(t, l, id)
+	_ = mustPlan(t, f.loop(t, &recordingSteps{}, &itemContentStager{}))
+	if state, runID, _ := laneRow(t, f, p.decision.LaneID); state != run.LaneStateLeased || runID != id {
+		t.Fatalf("a dead examiner's lease with its run face alive is %s/%s after a pass, want kept", state, runID)
+	}
+}
+
 // The safety net: a lane leased with no expiry to a run whose examination is recorded
 // done, which no examination of this loop holds and whose run face is gone, is stuck. The
 // pass's reap reclaims it, with an event, so a release missed by any path cannot strand the

@@ -808,7 +808,7 @@ type laneReleased struct {
 const (
 	laneReleaseExamined = "examined"          // in the write that recorded the examination
 	laneReleaseEnded    = "examination-ended" // by the examination's end, examined or not
-	laneReleaseReap     = "reap"              // by a pass's reap: a stranded lease (stuckExaminationLease)
+	laneReleaseReap     = "reap"              // by a pass's reap: a stranded lease (stuckExaminationLease) or a dead examiner's
 )
 
 // releaseExamination releases the examination's lane once it has ended, on every path,
