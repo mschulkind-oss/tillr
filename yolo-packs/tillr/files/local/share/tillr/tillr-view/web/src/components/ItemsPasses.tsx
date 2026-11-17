@@ -5,6 +5,7 @@ import { waitingIdentity, waitingOrder } from "../models/waiting";
 import { ClassState, EntityLink } from "./EntityLink";
 import { EntityText, newestPasses, passCounts, passStamp } from "./Home";
 import { useScreenHash } from "./ObservatoryShell";
+import { moveItemToTop } from "../models/api";
 
 function useListParams() {
   const hash = useScreenHash();
@@ -88,7 +89,9 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
 }
 
 const CLASSES = ["needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
-export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null }) {
+export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onMoved }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null; writesEnabled?: boolean; onMoved?: () => Promise<unknown> }) {
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const { params, set } = useListParams();
   const preset = params.get("state") || "not-moving";
   const klass = params.get("class") || "";
@@ -103,9 +106,21 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
   }, [waiting, snapshot, preset, klass, reason]);
   const list = useStableList(rows, waitingIdentity, `${preset}|${klass}|${reason}`);
   useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.document ? window.location.hash : `#/item/${encodeURIComponent(id)}`);
+  const move = async (id: string) => {
+    setMoving(id); setMoveError(null);
+    try {
+      await moveItemToTop(id);
+      // The reader's own confirmed move must not wait behind the focused-list pin.
+      list.accept();
+      await onMoved?.();
+    } catch (error) { setMoveError(`${id}: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { setMoving(null); }
+  };
   const options = preset === "landed" ? rows : waiting ?? [];
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Items</h1>
+    {!writesEnabled ? <p>This server is read-only.</p> : null}
+    {moveError ? <p role="alert">Move refused: {moveError}</p> : null}
     <div className="ledger__filters">
       {[["not-moving", "not moving"], ["unlanded", "all unlanded"], ["landed", "landed"]].map(([value, label]) => <button key={value} type="button" aria-pressed={preset === value} onClick={() => set("state", value)}>{label}</button>)}
       <label>Class <select aria-label="Class" value={klass} onChange={event => set("class", event.target.value)}><option value="">any</option>{[...new Set([...CLASSES, ...options.map(row => row.class), ...(klass ? [klass] : [])])].map(value => <option key={value}>{value}</option>)}</select></label>
@@ -113,12 +128,13 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
     </div>
     <div className="ledger__newer">{list.updates ? <button type="button" onClick={list.accept}>{list.newer ? `${list.newer} newer ↑` : `${list.updates} updates ↑`}</button> : null}</div>
     {error ? <p role="alert">Items refused: {error.message}</p> : (preset === "landed" ? snapshot === undefined : waiting === undefined) ? <p role="status">Reading items…</p> : list.visible.length === 0 ? <p>No items match these filters.</p> :
-      <table><thead><tr>{["Rank", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
+      <table><thead><tr>{["Rank", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run", ...(writesEnabled ? ["Order"] : [])].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
         const item = snapshot?.items.find(item => item.item_id === row.item_id);
         const identity = waitingIdentity(row);
         return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}>
           <td>{row.rank || "unranked"}</td><td>{row.document || <EntityLink kind="item" id={row.item_id} />}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
+          {writesEnabled ? <td>{!row.document && preset !== "landed" && !["not-started", "landed", "closed", "resolved-elsewhere"].includes(item?.projected_state.raw_state ?? "") ? <button type="button" aria-label={`Move ${row.item_id} to top`} disabled={moving !== null} onClick={() => void move(row.item_id)}>Move to top</button> : null}</td> : null}
         </tr>;
       })}</tbody></table>}
   </main>;

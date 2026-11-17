@@ -29,6 +29,7 @@ import (
 // at (design §4.1), so a client can tell two responses apart and never renders one
 // request's items beside another request's runs.
 type serverSnapshot struct {
+	WritesEnabled    bool      `json:"writes_enabled"`
 	StorePath        string    `json:"store_path"`
 	SchemaVersion    int       `json:"schema_version"`
 	EventHeadSeq     int64     `json:"event_head_seq"`
@@ -71,10 +72,13 @@ type apiErrorBody struct {
 // trace index handle for its lifetime: opening per request would open a second reader of
 // a live store on every refresh, and neither handle can write.
 type server struct {
-	openMu    sync.Mutex
-	storePath string
-	store     *store.Store
-	schema    int
+	writeEnabled bool
+	itemFlag     string
+	writeMu      sync.Mutex
+	openMu       sync.Mutex
+	storePath    string
+	store        *store.Store
+	schema       int
 	// vantageBase is the configured base URL of the Vantage that serves this repository,
 	// or empty when the operator configured none. It is on the response envelope rather
 	// than in a document payload because the link belongs to the board, not to one route:
@@ -157,7 +161,8 @@ func frontEndLabel(web fs.FS, note string) string {
 	return "dir:" + note
 }
 
-// serveFace is `tillr-view serve`: the read-only HTTP API over one store.
+// serveFace is the HTTP API over one read-only store handle, with opt-in
+// placement delegated to the item command.
 func serveFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("serve")
 	storePath := fs.String("store", "", "the store to serve (required)")
@@ -174,6 +179,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop for /why (default: all store lanes)")
 	perfDir := fs.String("perf-log", os.Getenv("TILLR_VIEW_PERF_LOG"), "a directory for the performance log: a JSON line per request, WebSocket window and browser report, a startup record and a periodic summary (`off` or empty: no log; default $TILLR_VIEW_PERF_LOG). `just observatory` names one under the checkout; `tillr-view perf-log` reads it")
 	perfStartup := fs.String("perf-startup", os.Getenv("TILLR_VIEW_PERF_STARTUP"), "the recipe's startup phases for the log's startup record, as name=milliseconds pairs separated by commas; `recipe_start_ms=<unix ms>` dates the recipe's start, so the record can say how long the recipe took to listen")
+	writeEnabled := fs.Bool("write", false, "allow item placement through tillr-item; the server's store handle stays read-only")
+	itemFlag := fs.String("tillr-item", "", "the item writer (default: beside this executable, then PATH)")
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
@@ -187,6 +194,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	srv.policyRef = *policyRef
 	srv.offeredLanes = *lanesArg
 	srv.plannerFlag = *plannerFlag
+	srv.writeEnabled = *writeEnabled
+	srv.itemFlag = *itemFlag
 	web, webNote, code := openWebAssets(*webDist, *uiAt)
 	if code != record.ExitOK {
 		return record.Envelope{}, code
@@ -327,6 +336,7 @@ func (s *server) close() {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/snapshot", s.get(s.snapshotPayload))
+	mux.HandleFunc("POST /api/v1/items/{id}/place", s.placeHandler)
 	mux.HandleFunc("GET /api/v1/why", s.vantage.prefetch(s.getOutsideTx(s.whyPayload)))
 	mux.HandleFunc("GET /api/v1/waiting", s.vantage.prefetch(s.get(s.waitingPayload)))
 	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
@@ -373,11 +383,15 @@ func (s *server) routes() http.Handler {
 	// routing bug as a data bug.
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, req *http.Request) {
 		f := failure(codeUnknownRoute, "This page needs a newer server; restart with just observatory.")
-		f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase}
+		f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase, WritesEnabled: s.writeEnabled}
 		writeJSON(w, f.status, *f)
 	})
 	mux.Handle("GET /", s.webHandler())
 	return s.instrument(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v1/") && !s.writeEnabled {
+			s.writeFailure(w, codeReadOnly, "This server is read-only; restart tillr-view serve with --write to move items.")
+			return
+		}
 		if (req.Method != http.MethodGet && req.Method != http.MethodHead) || !strings.HasPrefix(req.URL.Path, "/api/v1/") {
 			mux.ServeHTTP(w, req)
 			return
@@ -401,7 +415,7 @@ func (s *server) routes() http.Handler {
 // storeProblem answers every API route while the store is not one this face can read.
 func (s *server) storeProblem(w http.ResponseWriter, req *http.Request) {
 	f := failure(s.problem.code, "%s", s.problem.note)
-	f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase}
+	f.Snapshot = serverSnapshot{StorePath: s.storePath, SchemaVersion: s.schema, GeneratedAt: time.Now().UTC(), Build: s.build, VantageBaseURL: s.vantageBase, WritesEnabled: s.writeEnabled}
 	writeJSON(w, f.status, *f)
 }
 
@@ -500,6 +514,7 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 				return err
 			}
 			cursor = serverSnapshot{
+				WritesEnabled:    s.writeEnabled,
 				StorePath:        s.storePath,
 				SchemaVersion:    s.schema,
 				EventHeadSeq:     head,

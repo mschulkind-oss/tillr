@@ -1,4 +1,4 @@
-# tillr-view — the board, read-only
+# tillr-view — the board, with opt-in item placement
 
 > [!WARNING]
 > **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
@@ -19,10 +19,34 @@
 
 `tillr-view` renders a board's status and event log from a store snapshot or from a stream
 of records, answers what is running right now, and serves the same answers over HTTP. It
-writes nothing anywhere, so it is safe to point at the live store while writers run.
+keeps its own store handle read-only, so reads remain safe while writers run.
+With `serve --write`, it also delegates item placement to the item command.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
+
+## Opt-in item placement
+
+`serve` defaults to read-only: every API POST returns 405 `read-only`, and every
+response snapshot includes `writes_enabled: false`. Start it with `--write` to
+show “Move to top” on eligible Items-page rows and enable
+`POST /api/v1/items/{id}/place`. The request body is exactly one of:
+
+```json
+{"to":"first"}
+{"to":"last"}
+{"before":"item-other"}
+{"after":"item-other"}
+```
+
+The server validates the origin, JSON content type, 1 MiB body limit and closed
+request shape, then runs `tillr-item place` as a separate process. Requests are
+serialized; the server never opens its store for writing. The writer is found
+beside this executable, including pack-cache siblings, then on PATH, or is named
+with `--tillr-item`. A missing writer is an explicit 503 `writer-unavailable`.
+The [observatory actions design](../../docs/design/observatory-actions.md#65-what-the-server-refuses)
+lists the refusal rules. Whoever can reach a write-enabled server can reorder
+items; there is no login. These requests never edit the repository or move a ref.
 
 ## Earlier uncommitted work
 
@@ -49,9 +73,9 @@ for the kept classes and pinned-commit retry behavior.
 
 ## State invariants
 
-- **It writes nothing, ever.** No store is opened read-write and no migration runs; a view
-  that could write would need a lock, and a reader that takes a lock is a reader that stops
-  a drain.
+- **Its store handle never writes.** No store is opened read-write by the view and
+  no migration runs through its reader. Opt-in placement runs the item writer in
+  a separate process; only that process takes the store's writer lock.
 - **The store is the source of truth, and the absence of a record is the answer.** Where a
   record was never emitted, "there is none" is reported as such and never reconstructed from
   memory.

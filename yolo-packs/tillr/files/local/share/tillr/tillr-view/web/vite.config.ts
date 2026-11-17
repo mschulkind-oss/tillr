@@ -22,7 +22,11 @@ const apiTarget = env.TILLR_VIEW_API ?? "http://127.0.0.1:4318";
 export default defineConfig({
   plugins: [react()],
   define: { __TILLR_PAGE_BUILD__: JSON.stringify(env.TILLR_VIEW_PAGE_BUILD ?? new Date().toISOString()) },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist", emptyOutDir: true,
+    // Keep the Markdown renderer and its dependencies out of the main page chunk.
+    rollupOptions: { output: { manualChunks: { markdown: ["react-markdown"] } } },
+  },
   server: {
     port: 5173,
     proxy: {

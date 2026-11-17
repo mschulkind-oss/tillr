@@ -29,6 +29,28 @@ Other absent paths still receive the ordinary `path-missing` warning.
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
 
+## Moving an item in the order
+
+`place` moves one item first, last, before another item, or after another item.
+The [observatory actions design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#4-the-order-is-one-list)
+defines the order: terminal and parked items are excluded. The command emits an
+`item.place` record with the item's position counted from 1, the count of items
+in the order, and the event sequence. A normal move updates only that item's
+order key and update receipt; an exhausted gap rewrites keys in the same
+transaction without changing the other items' relative order. Self-placement
+and a move to the position already occupied append no event.
+
+```sh
+tillr-item place --store /path/to/state.db --item item-example --to first
+tillr-item place --store /path/to/state.db --item item-example --to last
+tillr-item place --store /path/to/state.db --item item-example --before item-other
+tillr-item place --store /path/to/state.db --item item-example --after item-other
+```
+
+Unknown items or neighbors are refused as `unknown-item`; terminal or parked
+ones as `not-in-order`. Update events record `placed_by` and `placed_via`,
+defaulting to `owner` and `cli`. Run `tillr-item place --help` for all flags.
+
 ## State invariants
 
 Item states, finished states, the ready/blocked/closed roles, and allowed moves come

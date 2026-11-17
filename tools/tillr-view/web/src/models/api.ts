@@ -1,5 +1,5 @@
-// The one place the browser talks to the server. It reads `/api/v1/*` and nothing else:
-// no client in this tree writes, and no route outside that prefix exists (design §6.4).
+// The one place the browser talks to the server. Reads and the opt-in placement
+// action stay under /api/v1/ (observatory-actions.md, Section 6).
 
 import type {
   ApiEnvelope,
@@ -39,6 +39,15 @@ export class ApiError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+export async function moveItemToTop(id: string): Promise<void> {
+  const response = await fetch(`/api/v1/items/${encodeURIComponent(id)}/place`, {
+    method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ to: "first" }),
+  });
+  const body = await response.json() as ApiFailure;
+  if (!response.ok) throw new ApiError(body.error?.code ?? "http_error", body.error?.message ?? `${response.status} ${response.statusText}`, response.status);
 }
 
 export const fetchDesigns = (signal?: AbortSignal) => read<DesignsData>("/api/v1/designs", signal);
