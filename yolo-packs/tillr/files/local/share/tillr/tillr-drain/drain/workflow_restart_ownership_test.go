@@ -290,8 +290,10 @@ func TestWorkflowRestartBeforeStagingDoesNotClaimUnownedCommits(t *testing.T) {
 			next := replaceGraphLoop(t, f, l, steps)
 			graphPass(t, next, result)
 			if unowned {
-				if len(steps.runs) != 0 || result.InfraFailures != 1 {
-					t.Fatalf("unowned lane was reused: %+v %+v", steps.runs, result)
+				// The lane's own unlanded commit takes it out of rotation; it is not an
+				// infrastructure failure (lane_rotation.go).
+				if len(steps.runs) != 0 || result.InfraFailures != 0 || next.laneConditions["lane-1"] == nil || !next.laneConditions["lane-1"].out {
+					t.Fatalf("unowned lane was reused or not taken out of rotation: %+v %+v", steps.runs, result)
 				}
 				if !strings.Contains(runGit(t, target, "ls-files"), "unowned.txt") {
 					t.Fatal("unowned commit discarded")
