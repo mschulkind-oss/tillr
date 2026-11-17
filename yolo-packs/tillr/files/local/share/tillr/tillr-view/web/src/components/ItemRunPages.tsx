@@ -10,6 +10,7 @@ import { InterToolExchangeView } from "./InterToolExchangeView";
 import { ClaimAuditBanner } from "./ClaimAuditBanner";
 import { PayloadInspectorDrawer } from "./PayloadInspectorDrawer";
 import { RefusalState, refusalCode } from "./RefusalState";
+import { RunUsageFigures, UsageSummary } from "./Usage";
 import { PreservedWork } from "./PreservedWork";
 
 export function foldedDecisions(decisions: DispatchView[]) {
@@ -36,7 +37,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
   return <div className="entity-page" aria-label="Item page"><h1>Item <EntityLink kind="item" id={id} /></h1>
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => { window.location.hash = `#/run/${encodeURIComponent(run)}`; }} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
-    {item.data ? <ItemTimeline item={item.data.data} /> : null}
+    {item.data ? <><UsageSummary usage={item.data.data.usage} /><ItemTimeline item={item.data.data} /></> : null}
   </div>;
 }
 export function RunPage({ id, route, live, paused }: { id: string; route: string; live: boolean; paused: boolean }) {
@@ -52,7 +53,7 @@ export function RunPage({ id, route, live, paused }: { id: string; route: string
   if (run.error) return <main className="entity-page"><h1>Run <EntityLink kind="run" id={id} /></h1><RefusalState code={refusalCode(run.error)} message={run.error.message} onRetry={() => void run.refetch()} /></main>;
   return <main className="entity-page" aria-label="Run page"><h1>Run <EntityLink kind="run" id={id} /></h1>
     {!data ? <p>Reading the run…</p> : <><p><EntityLink kind="item" id={data.run.item_id} /> · <EntityLink kind="lane" id={data.run.lane_id} /> · {data.run.backend} · {data.run.state} · exit {data.run.exit_code ?? "not recorded"}</p>
-      <p>Cost {data.cost.cost_total_usd === null ? "not recorded" : `$${data.cost.cost_total_usd}`} · {data.cost.tokens ?? "unrecorded"} tokens · {data.cost.turns ?? "unrecorded"} turns</p>
+      <RunUsageFigures usage={data.usage} />
       <PreservedWork records={data.preserved_work ?? []} />
       <nav aria-label="Run artifacts">{["brief", "fence", "base_sha", "request", "gate.verdict", "land.attempt"].map(kind => <button key={kind} onClick={() => navigate("artifact", kind)}>Open {kind}</button>)}</nav>
       {timeline.error ? <p role="alert">Timeline refused: {timeline.error.message}</p> : !timeline.data ? <p>Reading timeline spans…</p> : null}

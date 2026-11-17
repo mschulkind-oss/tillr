@@ -498,6 +498,20 @@ func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logP
 	if parseErr != nil {
 		return nil, parseErr.Error()
 	}
+	if detailBody, err := os.ReadFile(reportPath + ".usage.json"); err == nil {
+		var details *UsageDetails
+		if err := json.Unmarshal(detailBody, &details); err != nil {
+			return usage, "reading usage details: " + err.Error()
+		}
+		if details != nil {
+			if usage == nil {
+				usage = &Usage{}
+			}
+			usage.Details = details
+		}
+	} else if !os.IsNotExist(err) {
+		return usage, "reading usage details: " + err.Error()
+	}
 	if runErr != nil && usage == nil {
 		return nil, "the extractor answered " + runErr.Error() + " and its report carries no spend"
 	}

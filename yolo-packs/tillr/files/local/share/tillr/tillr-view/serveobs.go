@@ -602,6 +602,10 @@ func (obs *observations) seams(runID string, row runIndex, indexed bool) []excha
 
 // span is one bar of the timeline waterfall (design §4.1).
 type span struct {
+	FirstOutputMS  *float64 `json:"first_output_ms,omitempty"`
+	OutputTPS      *float64 `json:"output_tokens_per_second,omitempty"`
+	Model          *string  `json:"model,omitempty"`
+	Backend        string   `json:"backend,omitempty"`
 	SpanID         string   `json:"span_id"`
 	ParentSpanID   *string  `json:"parent_span_id"`
 	LaneID         string   `json:"lane_id"`

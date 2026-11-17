@@ -35,7 +35,7 @@ func TestDesignAndCommentObservatoryRecords(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("designs %d %s", code, raw)
 	}
-	for _, want := range []string{`"within_lifetime":2`, `"after_lifetime":1`, `"no_session":1`, `"context_tokens":4200`, `"cost_usd":0.75`, `"state":"warm"`, `"session_id":"session"`, `"reason":"resumed-warm"`} {
+	for _, want := range []string{`"within_lifetime":2`, `"after_lifetime":1`, `"no_session":1`, `"context_tokens":4200`, `"state":"warm"`, `"session_id":"session"`, `"reason":"resumed-warm"`} {
 		if !strings.Contains(compactDesignerJSON(raw), want) {
 			t.Errorf("missing %s: %s", want, raw)
 		}

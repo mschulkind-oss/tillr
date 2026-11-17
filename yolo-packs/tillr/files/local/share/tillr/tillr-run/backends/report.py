@@ -260,6 +260,10 @@ def run(dialect, argv=None):
         if args.out:
             with open(args.out, "w", encoding="utf-8") as handle:
                 handle.write(report)
+            # Keep the fixed Markdown header compatible with all report consumers.
+            # The companion contains measurements only, never pricing.
+            with open(args.out + ".usage.json", "w", encoding="utf-8") as handle:
+                json.dump(found.get("usage_details"), handle)
         else:
             sys.stdout.write(report)
     except OSError as error:

@@ -22,10 +22,10 @@ func TestEndedRunsRemainInItemSpendAndMissingRunMakesLowerBound(t *testing.T) {
 		t.Fatalf("items: %v", items)
 	}
 	row := items[0].(map[string]any)
-	if row["cost_usd"] != .06 || row["usage_tokens"] != float64(3000) || row["unrecorded_runs"] != float64(1) || row["lower_bound"] != true {
+	if row["usage_tokens"] != float64(3000) || row["unrecorded_runs"] != float64(1) || row["lower_bound"] != true {
 		t.Fatalf("ended/unreported spend: %v", row)
 	}
-	// The snapshot header must disclose the same missing price, even with a known sum.
+	// The snapshot keeps the missing-run count but never exposes a price.
 	_, body, raw := h.get("/api/v1/snapshot")
 	if body["data"] == nil {
 		t.Fatalf("snapshot: %s", raw)
@@ -34,7 +34,7 @@ func TestEndedRunsRemainInItemSpendAndMissingRunMakesLowerBound(t *testing.T) {
 	if !ok {
 		t.Fatalf("snapshot has no drain summary: %s", raw)
 	}
-	if drain["total_cost_usd"] != .06 || drain["unreported_runs"] != float64(1) || drain["cost_unreported_runs"] != float64(1) {
+	if drain["unreported_runs"] != float64(1) || drain["total_cost_usd"] != nil || drain["cost_unreported_runs"] != nil {
 		t.Fatalf("header hides missing run: %v", drain)
 	}
 }

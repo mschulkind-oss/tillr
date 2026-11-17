@@ -551,10 +551,15 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 // package defines, so it is answered as a 500 rather than a truncated body.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	clean, err := withoutPrices(body)
+	if err != nil {
+		http.Error(w, "encoding the response failed", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", " ")
-	if err := enc.Encode(body); err != nil {
+	if err := enc.Encode(clean); err != nil {
 		fmt.Fprintf(os.Stderr, "tillr-view: encoding the response: %v\n", err)
 	}
 }
@@ -1142,6 +1147,7 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
+	Usage          usageSum         `json:"usage"`
 	Comments       *commentItemView `json:"comments,omitempty"`
 	Item           itemDetail       `json:"item"`
 	Criteria       []criterionView  `json:"criteria"`
@@ -1260,7 +1266,20 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		out.Attempts = append(out.Attempts, attempt)
 	}
 	var active *storeRun
-	itemRuns, _ := readItemRuns(r, id)
+	allUsageRuns, err := readUsageRuns(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	itemRuns := []storeRun{}
+	for _, run := range allUsageRuns {
+		if run.ItemID == id {
+			itemRuns = append(itemRuns, run)
+		}
+	}
+	out.Usage, err = sumUsage(r, itemRuns)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	for i := range itemRuns {
 		if itemRuns[i].State == "running" {
 			active = &itemRuns[i]
@@ -1292,7 +1311,8 @@ type runData struct {
 	Run           runDetail                 `json:"run"`
 	Stages        []stageView               `json:"stages"`
 	ClaimChecks   []claimView               `json:"claim_checks"`
-	Cost          costView                  `json:"cost"`
+	Cost          costView                  `json:"-"`
+	Usage         runUsage                  `json:"usage"`
 	Completeness  completenessView          `json:"completeness"`
 	PreservedWork []preserved.PreservedWork `json:"preserved_work,omitempty"`
 }
@@ -1360,6 +1380,10 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 		if p.RunID == id {
 			out.PreservedWork = append(out.PreservedWork, p)
 		}
+	}
+	out.Usage, err = readUsage(r, run)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	out.Stages = s.stages(r, run)
 	claims, _ := s.obs.trace.runClaims(id)
@@ -1536,6 +1560,27 @@ func (s *server) timelinePayload(r *store.Reader, req *http.Request) (any, *apiF
 	spans, err := s.runSpans(r, run)
 	if err != nil {
 		return nil, unreadable(err)
+	}
+	usage, err := readUsage(r, run)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	if len(usage.Turns) > 0 {
+		kept := spans[:0]
+		for _, sp := range spans {
+			if sp.Category != "llm_turn" {
+				kept = append(kept, sp)
+			}
+		}
+		spans = kept
+		parent := id + "/run"
+		for i, turn := range usage.Turns {
+			spans = append(spans, span{SpanID: fmt.Sprintf("%s/usage-turn/%d", id, i+1), ParentSpanID: &parent,
+				LaneID: run.LaneID, Category: "llm_turn", Label: "turn " + turn.ID,
+				StartedAtMS: usageClock(turn.StartedMS), FinishedAtMS: usageClock(turn.FinishedMS),
+				TSSource: "harness_stream", EpistemicState: stateObserved, Status: "recorded",
+				FirstOutputMS: turn.FirstOutputMS, OutputTPS: turn.OutputTPS, Model: turn.Model, Backend: run.Backend})
+		}
 	}
 	out := timelineData{Run: id, Spans: spans, Sources: s.sources()}
 	if s.obs.trace.db == nil {

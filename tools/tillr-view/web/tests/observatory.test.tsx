@@ -322,7 +322,7 @@ addCase("a cost the store did not report is not rendered as zero", () => {
       {...noFilter}
     />,
   );
-  expect(container.textContent).toContain("Cost: not reported");
+  expect(container.textContent).not.toContain("Cost:");
   expect(container.textContent).not.toContain("$0.0000");
   expect(container.textContent).toContain("Refresh Snapshot");
   expect(container.textContent).toContain("seq #48");

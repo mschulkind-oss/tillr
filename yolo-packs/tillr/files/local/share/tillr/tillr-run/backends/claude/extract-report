@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import report  # noqa: E402  (the shared report shape lives one directory up)
+import usage  # noqa: E402
 
 # The four counters a usage object carries. A cache read and a cache write are both billed,
 # so both count toward the total, as every dialect here counts them.
@@ -121,6 +122,7 @@ def dialect(stream_text):
         tokens = sum(message_usage.values())
     return {
         "window": window,
+        "usage_details": usage.details(records, "claude"),
         "text": text,
         "session": session,
         "model": model,

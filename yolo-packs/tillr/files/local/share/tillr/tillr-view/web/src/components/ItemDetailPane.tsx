@@ -12,7 +12,7 @@ import { EpistemicBadge } from "./EpistemicBadge";
 import { RefusalState, refusalCode } from "./RefusalState";
 import type { RefusalSentence } from "./RefusalState";
 import { StateGlyph } from "./StateGlyph";
-import { money, relativeTime, stateLabel } from "../models/board";
+import { relativeTime, stateLabel } from "../models/board";
 import type { DocumentPaneProps } from "./DocumentPane";
 import type { CriterionView, ItemData, ItemProjection, RunSummary } from "../models/types";
 
@@ -276,7 +276,7 @@ export function ItemDetailPane({
                   aria-pressed={latestRun.run_id === selectedRunId}
                 >
                   run <code>{latestRun.run_id}</code> · {latestRun.state} ·{" "}
-                  {money(latestRun.cost_usd)}
+                  {latestRun.usage_tokens ?? "unrecorded"} tokens
                 </button>
               ) : (
                 <span className="state-badge">no run</span>

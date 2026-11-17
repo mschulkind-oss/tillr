@@ -262,14 +262,13 @@ func (s *server) checkExecutionsPayload(r *store.Reader, req *http.Request) (any
 }
 
 type itemPerformance struct {
+	Usage                usageSum `json:"usage"`
 	ItemID               string   `json:"item_id"`
 	RunCount             int64    `json:"run_count"`
 	UsageTokens          *int64   `json:"usage_tokens"`
-	CostUSD              *float64 `json:"cost_usd"`
 	LowerBound           bool     `json:"lower_bound"`
 	UnrecordedRuns       int64    `json:"unrecorded_runs"`
 	TokensUnrecordedRuns int64    `json:"tokens_unrecorded_runs"`
-	CostUnrecordedRuns   int64    `json:"cost_unrecorded_runs"`
 }
 
 func (s *server) performanceItemsPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
@@ -277,37 +276,30 @@ func (s *server) performanceItemsPayload(r *store.Reader, req *http.Request) (an
 	if fail != nil {
 		return nil, fail
 	}
-	clause, args := bounds.predicate("started_at", "started_at")
-	rows, err := r.Query(`SELECT item_id, COUNT(*), SUM(usage_tokens), SUM(usage_cost_usd),
-  SUM(CASE WHEN usage_tokens IS NULL AND usage_cost_usd IS NULL THEN 1 ELSE 0 END),
-  SUM(CASE WHEN usage_tokens IS NULL THEN 1 ELSE 0 END),
-  SUM(CASE WHEN usage_cost_usd IS NULL THEN 1 ELSE 0 END)
-  FROM runs WHERE item_id IS NOT NULL AND item_id != ''`+clause+` GROUP BY item_id ORDER BY item_id`, args...)
+	runs, err := readUsageRuns(r)
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	defer rows.Close()
+	groups := map[string][]storeRun{}
+	for _, run := range runs {
+		if run.ItemID != "" && usageInRange(run.StartedAtMS, bounds) {
+			groups[run.ItemID] = append(groups[run.ItemID], run)
+		}
+	}
+	ids := []string{}
+	for id := range groups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	items := []itemPerformance{}
-	for rows.Next() {
-		item := itemPerformance{LowerBound: true}
-		var tokens sql.NullInt64
-		var cost sql.NullFloat64
-		if err := rows.Scan(&item.ItemID, &item.RunCount, &tokens, &cost, &item.UnrecordedRuns, &item.TokensUnrecordedRuns, &item.CostUnrecordedRuns); err != nil {
+	for _, id := range ids {
+		usage, err := sumUsage(r, groups[id])
+		if err != nil {
 			return nil, unreadable(err)
 		}
-		if tokens.Valid {
-			item.UsageTokens = &tokens.Int64
-		}
-		if cost.Valid {
-			if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
-				return nil, unreadable(fmt.Errorf("item %s cost total is not finite", item.ItemID))
-			}
-			item.CostUSD = &cost.Float64
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, unreadable(err)
+		items = append(items, itemPerformance{ItemID: id, RunCount: int64(len(groups[id])), Usage: usage,
+			UsageTokens: usage.Tokens, LowerBound: usage.LowerBound,
+			UnrecordedRuns: int64(usage.UnrecordedRuns), TokensUnrecordedRuns: int64(usage.UnrecordedRuns)})
 	}
 	return struct {
 		Range performanceRange  `json:"range"`

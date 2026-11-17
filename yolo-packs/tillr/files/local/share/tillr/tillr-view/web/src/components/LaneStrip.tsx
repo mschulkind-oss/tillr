@@ -1,4 +1,5 @@
 import type { LaneRow } from "../models/types";
+import { UsageSummary } from "./Usage";
 import { EntityLink } from "./EntityLink";
 
 /** A running worker is quiet when its stream has not grown for five minutes. */
@@ -34,6 +35,7 @@ export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[
             {action.kind === "liveness" ? action.at_ms !== null ? `log grew ${age(now - action.at_ms)} ago · liveness signal` : "log growth unrecorded · liveness signal"
               : action.kind === "action" ? <>{action.text}{action.at_ms !== null ? ` · ${action.clock === "derived_clock" ? "~" : ""}${age(now - action.at_ms)} ago` : " · time unrecorded"}</> : "action unrecorded"}
           </div> : null}
+          <UsageSummary usage={row.usage} />
           {row.note ? <small>{row.note}</small> : null}
         </li>;
       })}</ul>}

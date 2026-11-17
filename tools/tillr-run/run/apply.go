@@ -110,8 +110,9 @@ type Record struct {
 // the backends that report a cost fill it — pi does, muse and agy do not, so their runs
 // carry nil rather than a zero that would read as a free run.
 type Usage struct {
-	Tokens  *int64   `json:"tokens,omitempty"`
-	CostUSD *float64 `json:"cost_usd,omitempty"`
+	Details *UsageDetails `json:"details,omitempty"`
+	Tokens  *int64        `json:"tokens,omitempty"`
+	CostUSD *float64      `json:"cost_usd,omitempty"`
 }
 
 // Apply is run's one record→row mapping: it validates the record, writes the lane and
@@ -137,7 +138,7 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 	if payload.ArtifactRefs == nil {
 		payload.ArtifactRefs = []ArtifactRef{}
 	}
-	if payload.Usage != nil && payload.Usage.Tokens == nil && payload.Usage.CostUSD == nil {
+	if payload.Usage != nil && payload.Usage.Tokens == nil && payload.Usage.CostUSD == nil && payload.Usage.Details == nil {
 		// A usage block with neither number is not a measurement: it encodes to `{}`,
 		// which a reader cannot tell from a report that carried nothing. The absence is
 		// spelled by the field being null, so an empty block is refused rather than
