@@ -3,6 +3,7 @@
 package drain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,6 +42,12 @@ type heavyProcess struct {
 	state, start string
 }
 
+// heavyProcessDisappeared distinguishes a process that exited during observation
+// from a failure to inspect it. Both absent /proc entries and ESRCH mean it exited.
+func heavyProcessDisappeared(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH)
+}
+
 func readHeavyProcess(pid int) (heavyProcess, error) {
 	p := heavyProcess{pid: pid}
 	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
@@ -72,7 +79,7 @@ func heavyTree() ([]heavyProcess, error) {
 			continue
 		}
 		p, err := readHeavyProcess(pid)
-		if os.IsNotExist(err) || err == unix.ESRCH {
+		if heavyProcessDisappeared(err) {
 			continue
 		}
 		if err != nil {
@@ -112,7 +119,7 @@ func killHeavyProcess(p heavyProcess) error {
 	}
 	defer unix.Close(fd)
 	current, err := readHeavyProcess(p.pid)
-	if os.IsNotExist(err) || err == unix.ESRCH {
+	if heavyProcessDisappeared(err) {
 		return nil
 	}
 	if err != nil {

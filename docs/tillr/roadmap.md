@@ -2186,14 +2186,7 @@ new fixer with the same fence. Six fixers in a row, about $0.20 each, could not 
 items waited behind them. A fixer must be able to touch the thing its check runs, and one that
 finds it cannot must widen or escalate once rather than repeat.
 
-<!-- tillr: item id="item-trunk-fixer-fence-covers-failing-check" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A trunk fixer's fence includes the failing check's own sources and tests, meaning the files its plan declares it reads, and not only the paths it recorded writing. A test files a fixer for a failing check whose test file no commit in the range touched, and asserts that file is in the fence.
-- **c2:** The fence also includes the paths of every commit in the red range, not only the tip's. A test with a culprit commit two commits below the tip asserts the culprit's paths are in the fence.
-- **c3:** The gate's own code stays outside the fence, as it is now. A test asserts that widening the fence does not add it.
-- **c4:** A fixer that reports its fix lies outside its fence widens the fence once, to the failing check's whole watched tree, or escalates to the owner with the paths it needs named. A test asserts one of the two happens and the fixer is not left as an unanswered conflict.
-- **c5:** A new trunk tip filed while a fixer for the same failing check is unresolved attaches to that fixer rather than filing another with the same fence. A test advances the tip three times and asserts one open fixer.
-- **c6:** The `tillr view waiting` row for a held queue names the fixer, the check it was filed for and whether it is waiting on the owner. A test asserts the text.
 
 **Agent details:**
 

@@ -216,7 +216,7 @@ func viewBoardCounts(t *testing.T, path string) boardCounts {
 func planDecisions(t *testing.T, path string) []plannedDecision {
 	t.Helper()
 	bin := drainBinary(t)
-	dir := t.TempDir()
+	dir := plannerFixtureDir(t)
 	policyPath := filepath.Join(dir, "policy.json")
 	writeJSONFile(t, policyPath, map[string]any{
 		"default_backend": "fixture",

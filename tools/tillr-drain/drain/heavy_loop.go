@@ -62,8 +62,18 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				if l.gatePolicy.AutoRevert {
 					return Externalf("heavy %s is red at %s; automatic revert is not implemented; pointer held", strings.Join(ids, ","), sha)
 				}
-				paths := l.rangePaths(ctx, sha+"^", sha)
-				_, err := l.fileTrunkFixer(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches})
+				// Attribution names the culprit, but repair permissions cover every
+				// commit since the last proved green through the current tip.
+				green, err := heavyGreen(ctx, l.cfg.Root)
+				if err != nil {
+					return err
+				}
+				tip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+				if err != nil {
+					return err
+				}
+				paths := l.rangePaths(ctx, green, tip)
+				_, err = l.fileTrunkFixer(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches})
 				return err
 			}}
 			out, err := runner.Run(ctx)

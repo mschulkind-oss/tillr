@@ -28,7 +28,7 @@ func TestWaitingBrokenTrunkNamesTheFixer(t *testing.T) {
 		if row["item_id"] != "tree-red" {
 			continue
 		}
-		if row["class"] != "waits on work" || row["where"] != "trunk" || row["mover"] != "fixer-main-abcdef" {
+		if row["class"] != "waits on work" || row["where"] != "trunk" || row["mover"] != "fixer-main-abcdef; check not recorded; waiting on repair (not waiting on owner)" {
 			t.Fatalf("row=%v", row)
 		}
 		return

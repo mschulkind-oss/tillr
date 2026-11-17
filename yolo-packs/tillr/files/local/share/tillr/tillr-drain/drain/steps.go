@@ -839,15 +839,28 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	}
 	code := cmd.ProcessState.ExitCode()
 	coverage := readRollingCoverage(spans)
+	var declared map[string][]string
+	if code == 1 || code == 6 {
+		declared, err = legacyCheckWatches(ctx, dir)
+		if err != nil {
+			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+		}
+	}
 	switch code {
 	case 0:
 		return RollingOutcome{Green: true, Known: true, ExitCode: code, Coverage: coverage}, nil
 	case 6:
-		stalled, watches := readSpansWithStatus(spans, "STALLED")
+		stalled, watches, err := readSpansWithWatches(spans, "STALLED", declared)
+		if err != nil {
+			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+		}
 		return RollingOutcome{Stalled: len(stalled) > 0, Known: false, ExitCode: code,
 			FailingChecks: stalled, CheckWatches: watches, Coverage: coverage, Detail: stderr.String()}, nil
 	case 1:
-		failing, watches := readFailingSpans(spans)
+		failing, watches, err := readSpansWithWatches(spans, "FAIL", declared)
+		if err != nil {
+			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+		}
 		if len(failing) == 0 {
 			return RollingOutcome{Known: false, ExitCode: code, Coverage: coverage,
 				Detail: "it named no failing check. " + stderr.String()}, nil

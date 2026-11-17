@@ -90,11 +90,14 @@ var GateCodePaths = []string{
 	"tools/fork-check.py",
 	"tests/fork-check.test.py",
 	"tools/tillr-gate/",
+	"tools/gate/",
 	"tools/tillr-loop/",
 	"tools/gate/",
 	"tests/fast-tree-in-done.test.py",
 	"tools/preflight-declarations.json",
 	"tools/gate-timing-declarations.json",
+	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
+	"yolo-packs/tillr/files/local/share/tillr/tillr-loop/",
 }
 
 // TrunkFixerID answers the item id for one red sha: `fixer-main-<red_sha12>`.
@@ -161,7 +164,16 @@ func trunkFixerPaths(suspect []string, watches []string) ([]string, []string) {
 		if unsafe {
 			dropped = append(dropped, path)
 		} else if !GateCode(filepath.ToSlash(filepath.Clean(path))) {
-			fence = append(fence, path)
+			// A broad directory must not grant indirect permission to edit the gate.
+			containsGate := false
+			for _, gate := range GateCodePaths {
+				containsGate = containsGate || strings.HasPrefix(gate, filepath.ToSlash(filepath.Clean(path))+"/")
+			}
+			if containsGate {
+				dropped = append(dropped, path)
+			} else {
+				fence = append(fence, path)
+			}
 		}
 	}
 	sort.Strings(fence)
@@ -230,11 +242,10 @@ type RollingOutcome struct {
 	// FailingChecks is the checks that failed, when the program named them. A red run that
 	// named none is Known=false: the loop files no fixer against a guess.
 	FailingChecks []string
-	// CheckWatches maps a failing check to the paths its span recorded writing. It is the
-	// fixer's fence when the checks are named, and the range is only the fallback.
+	// CheckWatches maps a failing check to its declared read and write paths.
+	// The fence combines those paths with every commit in the red range.
 	CheckWatches map[string][]string
-	// SuspectPaths is the range the run examined. The fixer's fence falls back to it when
-	// the failing checks are not named.
+	// SuspectPaths is the range the run examined, combined with the check watches.
 	SuspectPaths []string
 }
 
@@ -508,6 +519,23 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate Candidate, g
 	if err != nil || !ok {
 		return false, err
 	}
+	// The candidate's diff starts at its red base; it cannot name the earlier
+	// commits that broke that base. Include the whole range since proved green.
+	var green string
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		var err error
+		green, err = heavyGreen(ctx, l.cfg.Root)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		state, err := l.loadRollingState(ctx)
+		if err != nil {
+			return false, err
+		}
+		green = state.WatermarkSHA
+	}
+	gate.SuspectPaths = append(gate.SuspectPaths, l.rangePaths(ctx, green, redSHA)...)
 	fixerID, err := l.fileTrunkFixer(ctx, redSHA, redChecks, gate)
 	if err != nil {
 		return false, err
@@ -540,30 +568,20 @@ func (l *Loop) recordTrunkRefusal(ctx context.Context, candidate Candidate, redS
 	}, l.cfg.Now().UTC())
 }
 
-// fileTrunkFixer files the one fixer for a red sha, and answers the item id. A sha that
-// already has a fixer — open or landed — answers that existing id and writes nothing: the
-// deduplication is the point, because a red trunk detected by ten lanes must not file ten
-// fixers that fight over one branch.
+// fileTrunkFixer creates a repair identified by its first red sha, or attaches a
+// later observation to an unresolved repair for that sha or failing check. Attachment
+// merges checks and paths without clearing owner holds. A terminal repair for the
+// exact sha is retained rather than reopened.
 //
 // The item is written through item.Apply, the item package's one record→row mapping, so a
 // fixer cannot be a state the item writer would refuse.
 func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []string, gate GateOutcome) (string, error) {
 	fixerID := TrunkFixerID(redSHA)
-	watches := CheckWatches(gate.CheckWatches, failing)
-	for i, path := range watches {
-		if path != "." {
-			continue
-		}
-		// A declaration's whole-tree read is not a root edit permission. Bind
-		// it to tracked files at the red revision, then exclude the judge below.
-		tracked, err := l.git(ctx, l.cfg.Root, "ls-tree", "-r", "--name-only", "-z", redSHA)
-		if err != nil {
-			return "", err
-		}
-		watches = append(append(watches[:i:i], watches[i+1:]...), strings.Split(tracked, "\x00")...)
-		break
+	paths, err := l.expandFixerPaths(ctx, redSHA, append(append([]string{}, gate.SuspectPaths...), CheckWatches(gate.CheckWatches, failing)...))
+	if err != nil {
+		return "", err
 	}
-	fence, dropped := trunkFixerPaths(gate.SuspectPaths, watches)
+	fence, dropped := trunkFixerPaths(paths, nil)
 	if len(fence) == 0 {
 		// A fixer with no reachable paths cannot repair anything and would be dispatchable
 		// forever. Refusing to file it is the honest answer; the trunk is still red and the
@@ -617,6 +635,80 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 	defer s.Close()
 	created := false
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		// Check identity outlives a red tip. Reuse an unresolved repair, preserving
+		// its blocked/owner state, and retain the newly observed tip as evidence.
+		rows, err := tx.Query(`SELECT i.item_id,i.state,i.allowed_paths,c.text FROM items i JOIN item_criteria c USING(item_id) WHERE i.item_id LIKE 'fixer-main-%' AND c.criterion_id='trunk-green' ORDER BY i.rank,i.item_id`)
+		if err != nil {
+			return err
+		}
+		var attached, oldFence, oldText string
+		for rows.Next() {
+			var id, state, paths, text string
+			if err := rows.Scan(&id, &state, &paths, &text); err != nil {
+				rows.Close()
+				return err
+			}
+			if terminalStates[state] {
+				continue
+			}
+			if id == fixerID {
+				attached, oldFence, oldText = id, paths, text
+			}
+			for _, old := range fixerChecks(text) {
+				for _, check := range failing {
+					if old == check {
+						attached, oldFence, oldText = id, paths, text
+					}
+				}
+			}
+			if attached != "" {
+				break
+			}
+		}
+		readErr := rows.Err()
+		rows.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if attached != "" {
+			fixerID = attached
+			var paths []string
+			if err := json.Unmarshal([]byte(oldFence), &paths); err != nil {
+				return err
+			}
+			paths = TrunkFixerFence(paths, fence)
+			raw, err := json.Marshal(paths)
+			if err != nil {
+				return err
+			}
+			seen := map[string]bool{}
+			checks := []string{}
+			for _, check := range append(fixerChecks(oldText), failing...) {
+				if !seen[check] {
+					checks = append(checks, check)
+					seen[check] = true
+				}
+			}
+			sort.Strings(checks)
+			text := oldText
+			if len(checks) > 0 {
+				label := "(red: " + strings.Join(checks, ", ") + ")"
+				start := strings.Index(oldText, "(red: ")
+				if start >= 0 && strings.Contains(oldText[start:], ")") {
+					end := strings.Index(oldText[start:], ")") + start + 1
+					text = oldText[:start] + label + oldText[end:]
+				} else {
+					text += " " + label
+				}
+			}
+			if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(raw), fixerID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE item_criteria SET text=? WHERE item_id=? AND criterion_id='trunk-green'`, text, fixerID); err != nil {
+				return err
+			}
+			return appendEffect(tx, FixerAttachedKind, fixerID, map[string]any{"fixer_item": fixerID, "red_sha": redSHA, "failing_checks": failing, "allowed_paths": paths}, l.cfg.Now())
+		}
 		var state string
 		scanErr := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, fixerID).Scan(&state)
 		switch {
@@ -783,11 +875,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	// the fallback for a run that named no path. A first run has no range at all, so the
 	// whole tree is the fence — and that is a broad fence deliberately, because a narrower
 	// guess would leave the actual breakage outside the one item allowed to repair it.
-	suspect := out.SuspectPaths
-	watch := CheckWatches(out.CheckWatches, fixerChecks)
-	if len(suspect) == 0 && len(watch) == 0 {
-		suspect = l.rangePaths(ctx, base, mainSHA)
-	}
+	suspect := append(out.SuspectPaths, l.rangePaths(ctx, base, mainSHA)...)
 	fixerGate := GateOutcome{SuspectPaths: suspect, FailingChecks: fixerChecks, CheckWatches: out.CheckWatches}
 	fixerID, fixerErr := l.fileTrunkFixer(ctx, mainSHA, fixerChecks, fixerGate)
 	if fixerErr != nil {
@@ -858,7 +946,7 @@ func (l *Loop) repeatedRollingStalls(ctx context.Context, base, tip string, chec
 // That is a broad fence and deliberately so — a narrower guess on the first run would
 // leave the actual breakage outside the one item allowed to repair it.
 func (l *Loop) rangePaths(ctx context.Context, base, tip string) []string {
-	args := []string{"diff", "--name-only", base + ".." + tip}
+	args := []string{"log", "--format=", "--name-only", "--no-renames", "--diff-merges=first-parent", base + ".." + tip}
 	if base == "" {
 		args = []string{"ls-tree", "-r", "--name-only", tip}
 	}

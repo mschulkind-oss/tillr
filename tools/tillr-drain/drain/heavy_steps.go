@@ -148,6 +148,10 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return nil, err
 	}
+	watches, err := legacyCheckWatches(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
 	for _, span := range file.CheckSpans {
 		if span.CheckID == "" {
 			continue
@@ -164,15 +168,28 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			verdict = "stalled"
 		}
 		var attrs struct {
-			Writes []string `json:"writes"`
+			Reads   []string `json:"reads"`
+			Watches []string `json:"watches"`
+			Writes  []string `json:"writes"`
 		}
 		if err := json.Unmarshal([]byte(span.AttributesJSON), &attrs); err != nil {
 			return nil, err
 		}
+		reads := append(append(attrs.Reads, attrs.Watches...), attrs.Writes...)
+		if watches != nil {
+			declared, ok := watches[span.CheckID]
+			if !ok {
+				declared, ok = watches[span.Kind+"\x00"+span.Label]
+			}
+			if !ok {
+				return nil, Externalf("legacy check %s has no declared watches", span.CheckID)
+			}
+			reads = declared
+		}
 		if span.Kind != "" && span.Label != "" {
 			s.heavyReplaySelectors.Store(span.CheckID, span.Kind+":"+span.Label)
 		}
-		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: attrs.Writes})
+		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads})
 	}
 	for _, skip := range file.SkippedChecks {
 		if skip.Owed || skip.CheckID == "" {

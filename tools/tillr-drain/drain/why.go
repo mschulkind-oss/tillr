@@ -265,6 +265,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.Why += ": " + row.LaneReason
 			}
 		}
+		if d.Reason == ReasonTrunkBroken && d.DeferredBy != "" {
+			detail, owner, err := TrunkFixerWait(r, d.DeferredBy)
+			if err != nil {
+				return answer, err
+			}
+			row.Why += ": " + detail
+			row.Mover = detail
+			if owner {
+				row.Class = "needs you"
+			}
+		}
 		if d.Workflow != nil {
 			row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
 			outcomes, err := workflowOutcomes(r, d.ItemID, d.Attempt)

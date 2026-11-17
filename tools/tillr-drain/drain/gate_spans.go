@@ -155,13 +155,18 @@ func readFailingSpans(path string) ([]string, map[string][]string) {
 }
 
 func readSpansWithStatus(path, status string) ([]string, map[string][]string) {
+	checks, watches, _ := readSpansWithWatches(path, status, nil)
+	return checks, watches
+}
+
+func readSpansWithWatches(path, status string, declared map[string][]string) ([]string, map[string][]string, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	var file gateSpansFile
 	if err := json.Unmarshal(body, &file); err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	checks := make([]string, 0, len(file.CheckSpans))
 	watches := map[string][]string{}
@@ -174,13 +179,29 @@ func readSpansWithStatus(path, status string) ([]string, map[string][]string) {
 		}
 		checks = append(checks, span.CheckID)
 		var attributes struct {
-			Writes []string `json:"writes"`
+			Reads   []string `json:"reads"`
+			Watches []string `json:"watches"`
+			Writes  []string `json:"writes"`
 		}
-		if err := json.Unmarshal([]byte(span.AttributesJSON), &attributes); err == nil && len(attributes.Writes) > 0 {
-			watches[span.CheckID] = attributes.Writes
+		if span.AttributesJSON != "" {
+			if err := json.Unmarshal([]byte(span.AttributesJSON), &attributes); err != nil {
+				return nil, nil, err
+			}
 		}
+		paths := append(append(attributes.Reads, attributes.Watches...), attributes.Writes...)
+		if declared != nil {
+			var ok bool
+			paths, ok = declared[span.CheckID]
+			if !ok {
+				paths, ok = declared[span.Kind+"\x00"+span.Label]
+			}
+			if !ok {
+				return nil, nil, Externalf("legacy check %s has no declared watches", span.CheckID)
+			}
+		}
+		watches[span.CheckID] = paths
 	}
-	return checks, watches
+	return checks, watches, nil
 }
 
 // RollingCoverage is the evidence retained with a rolling run, including skips.

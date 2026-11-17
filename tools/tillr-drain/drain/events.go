@@ -38,6 +38,8 @@ const (
 	// fence both exit 0 with a report — so the loop records the step, and the planner reads
 	// it to name the item's hold.
 	RefusalKind = "drain.refusal"
+	// FixerAttachedKind retains a new red tip attached to an unresolved repair.
+	FixerAttachedKind = "drain.fixer-attached"
 )
 
 // The two scopes a boundary bracket covers, as `boundary.check`'s payload names them. A
@@ -82,7 +84,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, RetryAckKind, "drain.graph-completed"} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, RetryAckKind, "drain.graph-completed", FixerAttachedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
