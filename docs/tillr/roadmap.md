@@ -53,7 +53,7 @@ eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 Product QA pipeline's requests with that proposal, and which of its small changes are filed. The
 pipeline's second-round reply is recorded as received in
 [Product QA's reply](../design/tillr-product-qa-requests.md), and on 2026-11-17 the owner said to build:
-the answer is [the build plan](../design/tillr-definitions-plan.md), whose items hold no question.
+the answer is a build plan, filed next, whose items hold no question.
 None of the eight holds the build; [`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) still
 decides the proposal's documentation items. (The first round called the pipeline "AutoQA", which is
 [tillr's own exploratory-testing design](../design/tillr-autoqa.md), a different thing.)
@@ -62,10 +62,13 @@ decides the proposal's documentation items. (The first round called the pipeline
 writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
 [`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). Since the owner's go-ahead of
-2026-11-17, `OQ-CG1`, `OQ-CG2`, `OQ-CG3` and `OQ-CG5` each have a working choice the build rests
-on, which he confirms or changes after the next round with the Product QA pipeline's agent;
-`OQ-CG4` can wait. That document also lists the owner's statements as the pipeline reported them,
-for him to confirm.
+2026-11-17, [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1),
+[`OQ-CG2`](../design/tillr-core-and-git-landing.md#OQ-CG2),
+[`OQ-CG3`](../design/tillr-core-and-git-landing.md#OQ-CG3) and
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5) each have a working
+choice the build rests on, which he confirms or changes after the next round with the Product QA
+pipeline's agent; [`OQ-CG4`](../design/tillr-core-and-git-landing.md#OQ-CG4) can wait.
+That document also lists the owner's statements as the pipeline reported them, for him to confirm.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
@@ -1454,7 +1457,7 @@ criteria are written in those terms.
 
 The owner said on 2026-11-17 to build as much of the new tillr as possible, so that the Product QA
 pipeline can try the real thing and comment on it in the next round.
-[The build plan](../design/tillr-definitions-plan.md) holds the eighteen items: the foundations
+The build plan, filed next, holds the eighteen items: the foundations
 the pipeline asked for, the definition file and the store that records it, the item lifecycle and
 the planner read from the definition, the hook program contract, a store that does not land, and a
 worked example that lands nothing. The blocks live in that plan rather than in
