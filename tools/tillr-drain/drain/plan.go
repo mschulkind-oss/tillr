@@ -303,7 +303,8 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			return nil, e
 		}
 		// This read-only face needs Git only to prove a landed dependency.
-		// The dispatch claim still validates the selected lane base before staging.
+		// The dispatch claim still validates the selected lane base before staging,
+		// and advances it to carry the item's own block (blockBase).
 		if hasLandedBlocker(states, edges) {
 			green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
 			if err != nil {
@@ -651,9 +652,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			attempt.backend = p.policy.firstBackend(item)
 		}
 	}
-	interrupted := false
+	interrupted, restaged := false, false
 	if priors := p.priors[item.ItemID]; len(priors) > 0 {
 		interrupted = priors[len(priors)-1].Class == AttemptInterrupted
+		restaged = priors[len(priors)-1].Restaged
 	}
 	if interrupted {
 		// Repeat the interrupted execution, not an authorized retry or a
@@ -795,6 +797,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		if interrupted {
 			decision.Reason = "earlier run orphaned by a loop stop"
+		}
+		if restaged {
+			decision.Reason = ReasonRestagedStaleBase
 		}
 		if decision.ConflictID != "" {
 			decision.Reason = ReasonConflictAnswered

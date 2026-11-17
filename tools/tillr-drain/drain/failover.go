@@ -140,6 +140,9 @@ type priorRun struct {
 	RunID   string
 	Backend string
 	Class   AttemptClass
+	// Restaged marks an interruption the loop made itself: the run was staged on a
+	// base that lacked what made its item ready (drain.stale-base).
+	Restaged bool
 }
 
 // readPriorRuns answers every item's terminal runs, oldest first, keyed by item id.
@@ -153,7 +156,7 @@ type priorRun struct {
 // store and what the store points at, and a log that is gone reads as "no report" rather
 // than as an error.
 func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
-	interrupted := map[string]bool{}
+	interrupted, restaged := map[string]bool{}, map[string]bool{}
 	events, err := r.Events(0)
 	if err != nil {
 		return nil, err
@@ -167,6 +170,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		switch e.Kind {
 		case loopOrphanedKind:
 			interrupted[*e.ObjectID] = true
+		case staleBaseKind:
+			// A stale base is the staging's failure, not the item's: like a loop stop,
+			// it ends the attempt without an outcome to hold the item on.
+			interrupted[*e.ObjectID], restaged[*e.ObjectID] = true, true
 		case run.ResumeKind:
 			delete(interrupted, *e.ObjectID)
 		}
@@ -207,9 +214,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 			class = AttemptInterrupted
 		}
 		priors[itemID] = append(priors[itemID], priorRun{
-			RunID:   rec.RunID,
-			Backend: rec.Backend,
-			Class:   class,
+			RunID:    rec.RunID,
+			Backend:  rec.Backend,
+			Class:    class,
+			Restaged: restaged[rec.RunID],
 		})
 	}
 	if err := rows.Err(); err != nil {

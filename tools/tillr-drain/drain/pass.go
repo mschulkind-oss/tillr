@@ -952,6 +952,20 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 						return nil
 					}
 					base = green
+					// Sync read the item's block at the tip. A proved commit carrying
+					// another version would brief the worker on a block its tree does
+					// not hold, so the lane starts from the oldest trunk commit that
+					// carries it instead of waiting for a proof.
+					if work == nil || !(work.Ready || d.WorkflowRestart) {
+						advanced, err := blockBase(ctx, tx.Reader(), l.cfg.Root, green, d.ItemID)
+						if err != nil {
+							return err
+						}
+						if advanced != green {
+							l.reportf("loop: %s's block is newer than green %s; cutting its lane from %s\n", d.ItemID, shortSHA(green), shortSHA(advanced))
+						}
+						base = advanced
+					}
 				} else if l.gatePolicy.LaneBase != "tip" && !l.laneBootstrapReported {
 					l.reportf("loop: no green pointer yet; cutting lanes from trunk tip\n")
 					l.laneBootstrapReported = true
@@ -1333,6 +1347,9 @@ planned:
 	}
 	if !l.nonLanding {
 		if err := l.releaseTrunkAcquittals(ctx); err != nil {
+			return "", err
+		}
+		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
 			return "", err
 		}
 	}

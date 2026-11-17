@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -119,4 +122,87 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 		}
 	}
 	return waits, nil
+}
+
+// blockSource is a cache of document blobs read from commits, keyed by
+// "<sha>:<path>". A missing path is cached as nil.
+type blockSource map[string]*string
+
+// blockBodyAt reads an item's definition as committed at sha, with the same values
+// item.DefinitionBody gives a working tree for a missing source. A body reference
+// outside the repository answers ok=false: no commit carries it.
+func blockBodyAt(ctx context.Context, root, sha, ref, itemID string, cache blockSource) (body string, ok bool, err error) {
+	if ref == "" {
+		return "body source not named", true, nil
+	}
+	file, _, _ := strings.Cut(ref, "#")
+	if filepath.IsAbs(file) || strings.HasPrefix(filepath.Clean(file), "..") {
+		return "", false, nil
+	}
+	key := sha + ":" + filepath.ToSlash(filepath.Clean(file))
+	raw, seen := cache[key]
+	if !seen {
+		if _, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", "--quiet", key); err == nil {
+			out, err := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", key).Output()
+			if err != nil {
+				return "", false, Externalf("reading %s: %v", key, err)
+			}
+			text := string(out)
+			raw = &text
+		} else if _, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", "--quiet", sha+"^{commit}"); err != nil {
+			return "", false, Externalf("reading %s: %s is not a commit: %v", key, sha, err)
+		}
+		cache[key] = raw
+	}
+	if raw == nil {
+		return "body source missing: " + ref, true, nil
+	}
+	return item.DefinitionBodyContent(ref, itemID, []byte(*raw)), true, nil
+}
+
+// blockBase answers the commit a new lane for itemID is cut from when the proved
+// commit is base: base itself when it carries the trunk tip's version of the item's
+// block, else the oldest trunk commit after base that does. Sync reads blocks at the
+// tip, so a lane cut from base alone would brief its worker on a definition its tree
+// does not hold. Advancing only as far as that commit keeps the rest of the unproved
+// range out of the lane, and the item never waits on a proof for its own block.
+func blockBase(ctx context.Context, r *store.Reader, root, base, itemID string) (string, error) {
+	if base == "" {
+		return base, nil
+	}
+	tip, err := heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
+	if err != nil || tip == base {
+		return base, err
+	}
+	var ref string
+	if err := r.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id=?`, itemID).Scan(&ref); err != nil {
+		return "", err
+	}
+	if ref == "" {
+		return base, nil
+	}
+	cache := blockSource{}
+	at, ok, err := blockBodyAt(ctx, root, base, ref, itemID, cache)
+	if err != nil || !ok {
+		return base, err
+	}
+	want, _, err := blockBodyAt(ctx, root, tip, ref, itemID, cache)
+	if err != nil || at == want {
+		return base, err
+	}
+	file, _, _ := strings.Cut(ref, "#")
+	list, err := heavyGitOutput(ctx, root, "rev-list", "--reverse", "--ancestry-path", base+".."+tip, "--", file)
+	if err != nil {
+		return "", err
+	}
+	for _, sha := range strings.Fields(list) {
+		body, _, err := blockBodyAt(ctx, root, sha, ref, itemID, cache)
+		if err != nil {
+			return "", err
+		}
+		if body == want {
+			return sha, nil
+		}
+	}
+	return tip, nil
 }
