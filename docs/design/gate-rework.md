@@ -433,35 +433,54 @@ checks run serially, and every one of them may run to its ceiling. There are 11 
 (six change checks and five tree checks), none declares `timeout_ms`, so each ceiling is the
 9,000 millisecond cap, and 11 x 9,000 = 99,000 milliseconds, about 99 seconds of checks, against
 the 8,950 milliseconds the budgets declare. The runner's own work and the landing tier of
-`tools/fork-check.py`, which runs after the fast tier, come on top. Before 2026-11-16 the bound
-was the 8,950 milliseconds of budgets; with change checks alone running to the ceiling it was
-6 x 9,000 + 5,050 (the tree budgets) = 59,050.
+`tools/fork-check.py`, which runs after the fast tier, come on top, and so does one warm-up
+described below, once per Go version on each machine. Before 2026-11-16 the bound was the 8,950
+milliseconds of budgets; with change checks alone running to the ceiling it was 6 x 9,000 + 5,050
+(the tree budgets) = 59,050.
+
+**`go-build` builds with `-trimpath`.** Without it, Go caches compiled packages by their absolute
+source path, so the first gate in every new checkout compiled from cold: 2.85 seconds alone, and
+past the 9 second ceiling, with every item held, when ten new checkouts gated at once. Trimmed,
+a new checkout reuses what any other checkout compiled (0.84 seconds). The flag is the gate's
+compile check's alone, passed in `GOFLAGS` so the builds its test binaries start are trimmed too:
+that check throws its output away, so trimmed paths change nothing that is kept, and recipes that
+build binaries people run keep full paths. The first trimmed build on a machine still compiles
+the standard library and every module from cold, 19.9 seconds measured, which would fault the
+first gate after this change on each machine. So the loop's gate program
+[`tools/gate/change-gate.py`](../../tools/gate/change-gate.py) runs the check once, unbounded and
+before the fast tier, for each Go version, recording that it did in the git common directory's
+`tillr-gate` store, so the cost lands on that first gate as time rather than as a fault. A Go
+upgrade pays it once more.
 
 **Measured on 2026-11-16**, on a candidate that changes Go and Markdown, with nothing
-remembered, each gate in its own checkout, at a machine load of 44 to 72 on 32 cores (the same
-run is the source of every number in this paragraph):
+remembered, each gate in its own checkout, at a machine load of 32 to 83 on 32 cores (the same
+run is the source of every number in this table). "Stable" checkouts are ten fixed paths that
+have each built once, as the drain's lanes live at fixed paths; "new" checkouts are paths never
+built before:
 
-| Concurrent gates | Fast tier wall time (s) | Checks over budget |
-| ---: | ---: | :--- |
-| 1 | 3.9 to 4.2 | none |
-| 2 | 4.1 | none |
-| 10 | 8.3 to 8.6 | `go-build` in every gate, 5.1 to 5.2 s against 2.7 |
-| 10, first gate in a new checkout | 12.4 | `go-build` reached its 9 s ceiling in every gate: exit 4 |
+| Concurrent gates | Checkouts | Fast tier wall time (s) | Checks over budget |
+| ---: | :--- | ---: | :--- |
+| 1 | stable | 4.0 to 4.4 | none |
+| 1 | new | 4.1 to 4.2 | none |
+| 2 | stable | 4.2 to 4.3 | none |
+| 2 | new | 3.9 to 4.4 | none |
+| 10 | stable | 7.9 to 8.7 | `go-build` in every gate, up to 5.1 s against 2.7 |
+| 10 | new | 8.0 to 9.0 | `go-build` in every gate, up to 5.3 s against 2.7 |
 
-`go-build` dominates. It compiles every Go module, and its compiled packages are cached by
-absolute source path, so the first gate in a new checkout compiles from cold (2.8 seconds alone,
-over 9 seconds beside nine others). The next cost is about 1.1 seconds spent outside any check
-(the wall time less the checks' own durations: the runner's planning and fingerprinting), then
-`documents` at 0.8 to 1.1 seconds. The cheapest lever, not
-pulled here, is building with `-trimpath`, which makes the cache entries independent of the
-checkout's path: in the same measurement a new checkout built in 0.84 seconds with it, against
-2.85 without. The budgets and the cap are unchanged.
+Before `-trimpath`, ten new checkouts took 12.4 seconds and every one stopped `go-build` at its
+ceiling: exit 4. Now no gate in any row reaches a ceiling. `go-build` still dominates at ten
+gates, now from contention for the processors rather than from a cold cache. The next costs are
+about 1.1 seconds spent outside any check (the wall time less the checks' own durations: the
+runner's planning and fingerprinting) and `documents` at 0.8 to 1.2 seconds. The budgets and the
+cap are unchanged.
 
 The alternative the owner could choose is **one ceiling for the whole fast run** instead of one
 per check: a fast run still going when it has used 9,000 milliseconds stops the check it is
 running and answers "could not judge". That restores a bound of about 9 seconds of checks, at the
-cost of load faults returning: in the measurement above, every gate of the cold ten-gate row
-would have been held as `gate-harness-error` for the machine's load.
+cost of load faults returning. In the measurement above the slowest gate's checks took about 7.9
+seconds (its 9.0 seconds of wall time less about 1.1 outside the checks), so no item would have
+been held; before `-trimpath`, every gate of ten new checkouts would have been. The margin is
+under a second, so heavier load than measured brings `gate-harness-error` back.
 
 **What happens to a check that outgrows its budget.** It stops holding landings the first time
 it overruns, and it is still judged, after the merge. The heavy runner then runs that check

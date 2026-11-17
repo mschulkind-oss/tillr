@@ -117,6 +117,25 @@ class TreeChecks(unittest.TestCase):
         with patch.object(go_build, "GO_TOOL_DIRS", (str(self.root / "missing"),)):
             self.assertEqual(go_build.main(), 4)
 
+    def test_go_build_trims_paths_in_every_go_command_it_starts(self):
+        # Every go command the check starts -- and every one those start, such as a test
+        # binary's TestMain building its tool -- trims source paths, so a new checkout
+        # reuses the shared cache's entries. The flag rides in GOFLAGS, added to the
+        # caller's own GOFLAGS, and the cache location is left exactly as the caller set it.
+        module = self.root / "tool"
+        module.mkdir()
+        calls = []
+        def recorded(args, **kwargs):
+            calls.append((args, kwargs["env"]))
+            return subprocess.CompletedProcess(args, 0, stdout="M", stderr="")
+        with patch.dict(os.environ, {"GOFLAGS": "-mod=mod"}), patch.object(go_build.subprocess, "run", recorded):
+            self.assertEqual(go_build.build_module(module, self.root)[0], 0)
+            expected_cache = os.environ.get("GOCACHE")
+        self.assertEqual([args[:2] for args, _ in calls], [["go", "list"], ["go", "build"], ["go", "test"]])
+        for args, env in calls:
+            self.assertEqual(env["GOFLAGS"].split(), ["-mod=mod", "-trimpath"], args)
+            self.assertEqual(env.get("GOCACHE"), expected_cache, args)
+
     def test_go_build_handles_library_missing_main_and_healthy_main(self):
         for name, source, expected in [("library", "package library\nfunc F() {}\n", 0),
                                        ("missing", "package main\nfunc helper() {}\n", 1),
