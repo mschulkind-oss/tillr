@@ -1138,7 +1138,7 @@ is built because this workflow lands changes in a Git repository from documents,
 prerequisite of that workflow and not of the queue itself, as
 [the core and the landing definition](../design/tillr-core-and-git-landing.md#2-the-workflow-the-landing-definition-wraps-as-it-runs-today)
 records. That is why it applies only to a store
-that documents feed, the narrowing made on 2026-11-17: AutoQA files its items with the apply face
+that documents feed, the narrowing made on 2026-11-17: Product QA files its items with the apply face
 into a store of its own that nobody syncs, and that store is left alone. Question
 [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in the separable-parts design stays open on
 one point only: whether AutoQA writes a block for each bug it files into tillr's own store, or
