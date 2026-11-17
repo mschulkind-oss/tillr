@@ -501,7 +501,12 @@ remains visible under `conflict-owner`. The owner accepts a duplicate or finishe
 verdict by closing the item, or rejects it by answering the conflict. Answering
 does not authorize another triage run for unchanged text: each version of the
 stored title, body reference, and criteria gets at most one run. Changing any of
-those fields permits one new run; changing rank or state does not. Waiting output
+those fields permits one new run; changing rank or state does not. A triage run
+that never ran does not count as that one run: one a loop stop interrupted (the
+next loop marks it `drain.orphaned`) is no attempt, so the request is triaged
+again, even when an owner hold was already recorded from it, and a claim that
+staging cancelled before the run started is released before the next plan (see
+"Lanes that staging refuses"). Waiting output
 names the design seat while triage is due or running, then the owner and the
 question or conflict. Startup sync output includes the `unshared_open` count.
 
