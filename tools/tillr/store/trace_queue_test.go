@@ -15,7 +15,9 @@ import (
 )
 
 // capturedStalledSQLiteStderr is stalledSQLiteStderr whose release keeps what the
-// delivery goroutine wrote after the stall, so a test can read the loss report.
+// delivery goroutine wrote after the stall. read finishes the capture: it flushes
+// queued trace records, closes the pipe, and waits for the copier to reach EOF
+// before returning the buffer. Call it only after trace producers have stopped.
 func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func() string) {
 	t.Helper()
 	reader, writer, err := os.Pipe()
@@ -24,9 +26,8 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 	}
 	original := os.Stderr
 	os.Stderr = writer
-	var mu sync.Mutex
 	var captured bytes.Buffer
-	var once sync.Once
+	var once, finished sync.Once
 	copied := make(chan struct{})
 	release = func() {
 		once.Do(func() {
@@ -35,9 +36,7 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 				buf := make([]byte, 64<<10)
 				for {
 					n, err := reader.Read(buf)
-					mu.Lock()
 					captured.Write(buf[:n])
-					mu.Unlock()
 					if err != nil {
 						return
 					}
@@ -45,14 +44,15 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 			}()
 		})
 	}
-	read = func() string { mu.Lock(); defer mu.Unlock(); return captured.String() }
 	block = func() {
 		fd := int(writer.Fd())
 		if err := syscall.SetNonblock(fd, true); err != nil {
 			t.Fatal(err)
 		}
 		defer syscall.SetNonblock(fd, false)
-		data := make([]byte, 4096)
+		// Delimit the filler so the first delivered line cannot be attached to it:
+		// a loss report can arrive before any queued phase record.
+		data := bytes.Repeat([]byte{'\n'}, 4096)
 		for {
 			_, err := syscall.Write(fd, data)
 			if err == syscall.EAGAIN {
@@ -63,18 +63,70 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 			}
 		}
 	}
-	// Queued records are delivered before the pipe closes (see stalledSQLiteStderr).
-	t.Cleanup(func() {
-		release()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, _ = FlushSQLiteTrace(ctx)
-		os.Stderr = original
-		writer.Close()
-		<-copied
-		reader.Close()
-	})
+	// A flush reaches the pipe, not necessarily the copier's buffer. Closing the
+	// writer gives the copier EOF; joining it makes the captured bytes safe to read.
+	finish := func() {
+		finished.Do(func() {
+			release()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, _ = FlushSQLiteTrace(ctx)
+			os.Stderr = original
+			writer.Close()
+			<-copied
+			reader.Close()
+		})
+	}
+	read = func() string {
+		finish()
+		return captured.String()
+	}
+	t.Cleanup(finish)
 	return block, release, read
+}
+
+func TestCapturedStalledSQLiteStderrReadDrainsAndClosesThePipe(t *testing.T) {
+	t.Setenv("TILLR_SQLITE_TRACE", "")
+	privateSQLiteTraceObserver(t, sqliteTraceQueueLimit)
+	original := os.Stderr
+	_, release, read := capturedStalledSQLiteStderr(t)
+	writer := os.Stderr
+	release()
+	want := strings.Repeat("capture fixture\n", 8192)
+	if _, err := writer.WriteString(want); err != nil {
+		t.Fatal(err)
+	}
+	got := read()
+	if _, err := writer.WriteString("after capture"); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("capture read left the pipe open: %v", err)
+	}
+	if os.Stderr != original {
+		t.Fatal("capture read did not restore stderr")
+	}
+	if got != want {
+		t.Fatalf("capture read returned %d bytes, want %d", len(got), len(want))
+	}
+	if again := read(); again != got {
+		t.Fatal("a repeated capture read changed the result")
+	}
+}
+
+func TestCapturedStalledSQLiteStderrKeepsFirstLineAfterStall(t *testing.T) {
+	t.Setenv("TILLR_SQLITE_TRACE", "")
+	privateSQLiteTraceObserver(t, sqliteTraceQueueLimit)
+	block, release, read := capturedStalledSQLiteStderr(t)
+	block()
+	release()
+	const want = "tillr-sqlite capture fixture"
+	if _, err := os.Stderr.WriteString(want + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(read(), "\n") {
+		if line == want {
+			return
+		}
+	}
+	t.Fatal("the stall filler hid the first captured line")
 }
 
 // privateSQLiteTraceObserver gives one test its own observer with a small queue, so
@@ -165,10 +217,6 @@ func TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss(t *testing.T) {
 	if stalled.DroppedRecords == 0 {
 		t.Fatalf("the full queue dropped nothing, so the overflow path did not run: %+v", stalled)
 	}
-	if read() != "" {
-		t.Fatalf("the stalled sink accepted output before release: %q", read())
-	}
-
 	release()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	final, err := FlushSQLiteTrace(ctx)
