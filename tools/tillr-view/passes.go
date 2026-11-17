@@ -26,6 +26,8 @@ type passRow struct {
 	DispatchedAtMS int64          `json:"dispatched_at_ms"`
 	Decisions      []passDecision `json:"decisions"`
 	Phases         *passPhases    `json:"phases"`
+	SpendStarted   *passSpend     `json:"spend_started_in_loop"`
+	SpendCarried   *passSpend     `json:"spend_carried_over"`
 	SessionID      string         `json:"session_id,omitempty"`
 	Stop           string         `json:"stop,omitempty"`
 	Detail         string         `json:"detail,omitempty"`
@@ -199,6 +201,10 @@ func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, e
 	for i := range out {
 		row := &out[i]
 		row.Decisions, err = readPassDecisions(r, row.DispatchedAtMS, ranks)
+		if err != nil {
+			return nil, err
+		}
+		row.SpendStarted, row.SpendCarried, err = readPassSpend(r, row.Decisions)
 		if err != nil {
 			return nil, err
 		}
@@ -497,6 +503,20 @@ func printPasses(w io.Writer, rows []passRow) error {
 				if _, err := fmt.Fprintf(w, "  %s: %s\n", phase.name, value); err != nil {
 					return err
 				}
+			}
+		}
+		for _, spend := range []struct {
+			label string
+			total *passSpend
+		}{
+			{"spend started in this loop", row.SpendStarted}, {"spend carried over from earlier loops", row.SpendCarried},
+		} {
+			value := "not recorded"
+			if spend.total != nil {
+				value = spend.total.String()
+			}
+			if _, err := fmt.Fprintf(w, "  %s: %s\n", spend.label, value); err != nil {
+				return err
 			}
 		}
 		if row.Stop != "" {

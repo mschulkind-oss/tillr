@@ -65,8 +65,7 @@ type ArtifactRef struct {
 // Usage is what the run's backend reported it spent, read from the report the backend's
 // extractor wrote beside the log. It is a pointer for the same reason ExitCode is: a run
 // whose report carries no usage at all is a different answer from one that spent zero,
-// and the drain loop's spend ceiling must not read "nobody could tell me" as "it was
-// free".
+// and a total must not read "nobody could tell me" as "it was free".
 type Record struct {
 	RunID   string `json:"run_id"`
 	ItemID  string `json:"item_id,omitempty"`
@@ -90,6 +89,8 @@ type Record struct {
 	EventSeq     int64         `json:"event_seq"`
 	ArtifactRefs []ArtifactRef `json:"artifact_refs"`
 	Usage        *Usage        `json:"usage,omitempty"`
+	SpendStatus  string        `json:"spend_status"`
+	SpendNote    string        `json:"spend_note,omitempty"`
 }
 
 // Usage is one run's spend, as its backend reported it. Each field is a pointer because
@@ -138,6 +139,7 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		// stored as one.
 		return record.Envelope{}, Usagef("a run.record's usage carries neither tokens nor cost: an unreported spend is no usage block at all, not an empty one")
 	}
+	DescribeSpend(&payload)
 	refs, err := json.Marshal(payload.ArtifactRefs)
 	if err != nil {
 		return record.Envelope{}, Internalf("encoding the artifact refs: %v", err)

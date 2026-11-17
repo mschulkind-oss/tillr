@@ -145,7 +145,7 @@ func (l *Loop) handoffRepair(ctx context.Context, original Candidate, decision D
 		if _, err := run.ClaimLease(ctx, tx, *decision.RunRequest, decision.LaneID, at); err != nil {
 			return err
 		}
-		work := pendingWork{Decision: decision, Owner: owner, BaseSHA: base, ParentRunID: original.RunID}
+		work := pendingWork{Decision: decision, Owner: owner, BaseSHA: base, ParentRunID: original.RunID, LoopID: l.sessionID}
 		if err := appendEffect(tx, dispatchStartedKind, decision.RunRequest.RunID, work, at); err != nil {
 			return err
 		}

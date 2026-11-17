@@ -778,14 +778,19 @@ func loopFace(args []string) int {
 // number is named rather than dropped: a total that omits it and says nothing reads as
 // complete.
 func spendLine(result drain.LoopResult) string {
-	line := fmt.Sprintf("loop: spend $%f, %d tokens", result.SpendUSD, result.Tokens)
+	line := fmt.Sprintf("loop: spend $%f, %d tokens; %d unreported run(s)", result.SpendUSD, result.Tokens, result.StartedSpend.Unreported+result.CarriedSpend.Unreported)
+	if result.SpendUnknown > 0 || result.CostUnknown > 0 {
+		line += "; lower bound"
+	}
 	if result.SpendUnknown > 0 {
 		line += fmt.Sprintf("; %d run(s) reported no token usage (first: %s)", result.SpendUnknown, result.SpendUnknownExample)
 	}
 	if result.CostUnknown > 0 {
 		line += fmt.Sprintf("; %d run(s) reported no cost (first: %s)", result.CostUnknown, result.CostUnknownExample)
 	}
-	return line
+	return line + "\nloop: spend started in this loop: " + result.StartedSpend.String() +
+		"\nloop: spend carried over from earlier loops: " + result.CarriedSpend.String() +
+		"\nloop: spend all recorded runs: " + result.RecordedSpend.String()
 }
 
 // resolveTraceBin answers the tillr-trace program the loop indexes with. The indexer is a

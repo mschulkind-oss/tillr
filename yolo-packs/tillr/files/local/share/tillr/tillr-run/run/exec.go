@@ -378,7 +378,10 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := os.Remove(reportPath); err != nil && !os.IsNotExist(err) {
 		return record.Envelope{}, Internalf("clearing the prior extracted report: %v", err)
 	}
-	payload.Usage, note = readSpend(ctx, opts.BackendsDir, req.Command[0], req.Backend, durableDir, logPath, payload.ExitCode)
+	// Final accounting must survive every cancellation of the face. readSpend still
+	// applies its own bounded timeout to this detached context.
+	payload.Usage, note = readSpend(context.WithoutCancel(ctx), opts.BackendsDir, req.Command[0], req.Backend, durableDir, logPath, payload.ExitCode)
+	payload.SpendNote = note
 	// The extracted report is run evidence, not the reusable lane's latest output.
 	// Keep a pinned artifact for settlement and history, and the conventional copy
 	// the lane driver reads. Never attach a report left by a previous extraction.
@@ -432,7 +435,7 @@ const SpendExtractorTimeout = 60 * time.Second
 // still carries the header and still writes the file.
 func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logPath string, exitCode *int) (*Usage, string) {
 	if backendsDir == "" {
-		return nil, ""
+		return nil, "no backend extractor was configured"
 	}
 	extractor := extractorFor(backendsDir, adapter)
 	if extractor == "" {
@@ -472,6 +475,9 @@ func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logP
 	}
 	if runErr != nil && usage == nil {
 		return nil, "the extractor answered " + runErr.Error() + " and its report carries no spend"
+	}
+	if usage == nil {
+		return nil, "the backend report carries no spend measurement"
 	}
 	return usage, ""
 }

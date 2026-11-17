@@ -597,20 +597,22 @@ func (s *server) sources() sourceStates {
 
 // drainSummary is the drain's own account of itself.
 type drainSummary struct {
-	Active         bool          `json:"active"`
-	Session        *loopSession  `json:"session"`
-	SessionNote    string        `json:"session_note"`
-	SessionGraceMS int64         `json:"session_grace_ms"`
-	RunningRuns    int           `json:"running_runs"`
-	Ticks          int           `json:"ticks"`
-	Dispatched     int           `json:"dispatched"`
-	Landed         int           `json:"landed"`
-	Rejected       int           `json:"rejected"`
-	InfraFailures  *int          `json:"infra_failures"`
-	TotalCostUSD   *float64      `json:"total_cost_usd"`
-	LastStopReason *string       `json:"last_stop_reason"`
-	StopNote       string        `json:"stop_note"`
-	LastDecision   *dispatchView `json:"last_decision"`
+	Active             bool          `json:"active"`
+	Session            *loopSession  `json:"session"`
+	SessionNote        string        `json:"session_note"`
+	SessionGraceMS     int64         `json:"session_grace_ms"`
+	RunningRuns        int           `json:"running_runs"`
+	Ticks              int           `json:"ticks"`
+	Dispatched         int           `json:"dispatched"`
+	Landed             int           `json:"landed"`
+	Rejected           int           `json:"rejected"`
+	InfraFailures      *int          `json:"infra_failures"`
+	TotalCostUSD       *float64      `json:"total_cost_usd"`
+	UnreportedRuns     int           `json:"unreported_runs"`
+	CostUnreportedRuns int           `json:"cost_unreported_runs"`
+	LastStopReason     *string       `json:"last_stop_reason"`
+	StopNote           string        `json:"stop_note"`
+	LastDecision       *dispatchView `json:"last_decision"`
 	// Build is the drain build that wrote the newest loop result, and BuildNote says why
 	// there is none. A record written before the stamp existed is a build that cannot be
 	// named, which the board draws as such rather than as a current build (build.go in
@@ -830,8 +832,15 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	}
 	runsByItem := map[string][]storeRun{}
 	var totalCost float64
+	var unreported, costUnreported int
 	costSeen := false
 	for _, run := range runs {
+		if run.CostUSD == nil {
+			costUnreported++
+		}
+		if run.CostUSD == nil && run.UsageTokens == nil {
+			unreported++
+		}
 		runsByItem[run.ItemID] = append(runsByItem[run.ItemID], run)
 		if run.CostUSD != nil {
 			totalCost += *run.CostUSD
@@ -924,18 +933,20 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		return nil, unreadable(err)
 	}
 	out.Drain = drainSummary{
-		Active:         active,
-		Session:        session,
-		SessionNote:    sessionNote,
-		SessionGraceMS: SessionGraceMS,
-		RunningRuns:    running,
-		Ticks:          tickCount,
-		Dispatched:     actionCounts["dispatch"],
-		Landed:         byResult["landed"],
-		Rejected:       byResult["isolated"] + byResult["refused"],
-		StopNote:       stopNote,
-		Build:          loopBuild,
-		BuildNote:      buildNote,
+		UnreportedRuns:     unreported,
+		CostUnreportedRuns: costUnreported,
+		Active:             active,
+		Session:            session,
+		SessionNote:        sessionNote,
+		SessionGraceMS:     SessionGraceMS,
+		RunningRuns:        running,
+		Ticks:              tickCount,
+		Dispatched:         actionCounts["dispatch"],
+		Landed:             byResult["landed"],
+		Rejected:           byResult["isolated"] + byResult["refused"],
+		StopNote:           stopNote,
+		Build:              loopBuild,
+		BuildNote:          buildNote,
 	}
 	if stopReason != "" {
 		out.Drain.LastStopReason = &stopReason

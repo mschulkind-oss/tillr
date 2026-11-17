@@ -686,8 +686,9 @@ export function ObservatoryHeaderBar({
         </div>
         <div className="head-meta__row">
           <span>
-            Cost: {money(drain.total_cost_usd)}
+            Cost: {(drain.cost_unreported_runs ?? 0) > 0 ? "≥ " : ""}{money(drain.total_cost_usd)}
             {drain.total_cost_usd === null ? " (no run reported a price)" : ""}
+            {` · ${drain.unreported_runs ?? "unknown"} unreported runs; ${drain.cost_unreported_runs ?? "unknown"} without a price`}
           </span>
           <span>·</span>
           <span>

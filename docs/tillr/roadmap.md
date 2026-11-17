@@ -1178,7 +1178,6 @@ case: a new loop that settles a run an earlier loop started counts that run's sp
 pass record, so a pass looks more expensive than the work it did. The record should have a number
 for every run however it ended, and should say which spend a loop inherited.
 
-<!-- tillr: item id="item-drain-record-killed-run-spend" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because c4 asked
 a spend ceiling to count killed runs, and the tree has no ceiling.
@@ -1209,11 +1208,6 @@ them. This ruling replaces the sentence above that left c1 to c3 unchanged.
   (`reapDeadLoopRuns` in `tools/tillr-drain/drain/orphan.go`). Such a run is `unreported`. This
   item does not make the loop run an extractor over a dead face's log.
 
-- **c1:** A run that an operator ends with `tillr drain stop --end-runs` records the spend its backend can report for the work done so far. The run face reads that spend on a context the stop has not canceled, within the extractor's existing time bound, and the same holds for any other cancellation of the face. A test cancels a fixture run after its worker has produced usage output and asserts that the terminal record's spend equals that output; it fails before the change.
-- **c2:** A run's spend is never left empty without a reason. When no spend can be read for a run that was ended early, or the run face died and left no terminal record, the record says `unreported` for that run, and every total the loop and the views print states how many runs were unreported. A test asserts that a total over one reported run and one unreported run reads as a lower bound, and a second test reaps a run whose face left no terminal record and asserts it counts as unreported.
-- **c3:** A pass record separates `spend started in this loop` from `spend carried over from an earlier loop's runs settled here`. The carried-over line is where a worker that outlived a stopped or faulted loop appears. A test stops a loop while a fixture worker is still running, lets the worker finish, settles it in a second loop, and asserts that its cost appears only on the second loop's carried-over line.
-- **c4:** Every spend total the loop and the views print counts an ended run's recorded spend the same way as a finished run's, so runs that keep being ended cannot spend unseen. Nothing in this item compares a total against a limit or holds an item because of one. A test ends two fixture runs of one item with `--end-runs` in two successive loops, each after usage output, and asserts that the next loop's spend line and the view's total for the item both include the spend of both ended runs and that neither line names a ceiling.
-- **c5:** A loop that stops or exits on a fault still signals no worker. A test stops a loop without `--end-runs` while a fixture worker is running and asserts that the worker finishes and that its terminal record carries its spend.
 
 **Agent details:**
 

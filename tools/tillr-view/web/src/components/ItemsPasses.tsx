@@ -122,10 +122,18 @@ export function ItemsView({ waiting, snapshot, error }: { waiting?: WaitingRow[]
   </main>;
 }
 
+export function PassSpend({ pass }: { pass: PassRow }) {
+  return <>{([
+    ["Spend started in this loop", pass.spend_started_in_loop],
+    ["Spend carried over from earlier loops", pass.spend_carried_over],
+  ] as const).map(([label, total]) => <p key={label}>{label}: {total ?
+    `${total.cost_unreported || total.tokens_unreported ? "lower bound: " : ""}$${total.cost_usd.toFixed(6)}, ${total.tokens} tokens · ${total.unreported} unreported runs; ${total.tokens_unreported} token-unreported, ${total.cost_unreported} cost-unreported` : "not recorded"}</p>)}</>;
+}
+
 function answer(pass: PassRow): string {
   const decisions = (pass.decisions ?? []).map(decision => [decision.item_id, decision.rank, decision.action, decision.reason, decision.lane_id ?? "", decision.run_id ?? ""]);
   decisions.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return JSON.stringify([decisions, pass.session_id ?? null, pass.stop ?? null, pass.detail ?? null, pass.phases ?? null]);
+  return JSON.stringify([decisions, pass.session_id ?? null, pass.stop ?? null, pass.detail ?? null, pass.phases ?? null, pass.spend_started_in_loop ?? null, pass.spend_carried_over ?? null]);
 }
 export function foldPasses(passes: PassRow[]) {
   const groups: { pass: PassRow; count: number; oldest: number }[] = [];
@@ -182,6 +190,7 @@ export function PassesView({ passes, error, more = false, loadingOlder = false, 
         <EntityLink kind="pass" id={id} /> · {passCounts(pass)} {count > 1 ? `· ×${count} passes since ${passStamp(group.oldest)}, same answer` : null}
         <p>changed: <EntityText value={changed(pass, older)} passes={passes} /></p>
         <p>phases {pass.phases ? Object.entries(pass.phases).map(([name, ms]) => `${name.replace("_ms", "")} ${ms === null ? "—" : `${ms}ms`}`).join(" · ") : "— · no timing row"}</p>
+        <PassSpend pass={pass} />
         <details open={index < 2 ? true : undefined}><summary>Decisions</summary><ul>{pass.decisions.filter(row => (!item || row.item_id === item) && (!action || row.action === action)).map((row, i) => <li key={`${row.item_id}-${i}`}>
           {row.action} · <EntityLink kind="item" id={row.item_id} /> · {row.reason} {row.lane_id ? <EntityLink kind="lane" id={row.lane_id} /> : null} {row.run_id ? <EntityLink kind="run" id={row.run_id} /> : null}
         </li>)}</ul></details>

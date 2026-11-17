@@ -112,7 +112,14 @@ export interface CheckExecution extends GateSpan {
   duration_ms: number | null;
 }
 
+export interface SpendTotals {
+  cost_usd: number; tokens: number; runs: number; unreported: number;
+  tokens_unreported: number; cost_unreported: number;
+}
+
 export interface PassRow {
+  spend_started_in_loop?: SpendTotals | null;
+  spend_carried_over?: SpendTotals | null;
   dispatched_at_ms: number;
   decisions: { item_id: string; rank: string; action: string; reason: string; lane_id?: string; run_id?: string }[];
   phases?: { stage_ms: number | null; dispatch_ms: number | null; gate_ms: number | null; land_ms: number | null } | null;
@@ -232,6 +239,8 @@ export interface DrainSummary {
   rejected: number;
   infra_failures: number | null;
   total_cost_usd: number | null;
+  unreported_runs?: number;
+  cost_unreported_runs?: number;
   last_stop_reason: string | null;
   stop_note: string;
   last_decision: DispatchView | null;

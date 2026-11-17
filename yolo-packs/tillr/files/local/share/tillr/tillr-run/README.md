@@ -32,7 +32,12 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
 - **A lane released is not a candidate retried.** Release reclaims the directory; the
   candidate's outcome is the store's.
 - **Spend is read from the backend's own report**, not reconstructed from a transcript, so
-  the number answers to the thing that spent it.
+  the number answers to the thing that spent it. After an operator ends the face,
+  extraction still runs outside the canceled request, with its own existing time bound.
+  Usage emitted before cancellation therefore remains measurable. A record with neither
+  tokens nor cost says `spend_status: unreported` and carries a `spend_note` explaining why.
+  Reclaiming a dead face's lease records that it left no terminal record; it does not
+  extract its log or invent a price. Partial measurements retain their missing fields.
 - **The backends are the boundary.** A pi, muse or other adapter's dialect never leaks into
   the record's shape; the adapters produce one report and this module owns the mapping.
 - **A backend row's `harness_args` reach the harness unchanged.** A policy row may list

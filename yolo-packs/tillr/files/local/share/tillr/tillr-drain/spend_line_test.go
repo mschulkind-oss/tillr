@@ -37,7 +37,7 @@ func TestTheSpendLineSaysWhatWasNotMeasured(t *testing.T) {
 		SpendUnknown: 2, SpendUnknownExample: "run-8 on agy",
 	})
 	for _, want := range []string{
-		"$0.500000", "100 tokens",
+		"$0.500000", "100 tokens", "lower bound",
 		"2 run(s) reported no token usage (first: run-8 on agy)",
 		"1 run(s) reported no cost (first: run-9 on muse)",
 	} {

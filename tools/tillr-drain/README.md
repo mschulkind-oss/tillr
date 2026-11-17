@@ -501,7 +501,17 @@ in one store transaction before execution starts. A loop stop or crash leaves th
 repair running; the next loop settles that existing repair's terminal record and
 commit, and never starts the same repair ID cold or truncates its transcript.
 Settlement and judgment use the ordinary pass transitions, so spend is counted once
-and the launching examination cannot race the repair's settlement. A repair ended by
+and the launching examination cannot race the repair's settlement.
+
+Spend reports distinguish work started in this loop from earlier loops' runs settled
+here. The dispatch records the launching loop's identity, so a replacement loop does
+not claim the cost of a surviving worker as new work. Pass records preserve those
+two groups separately. The loop also prints the sum of all recorded runs in this
+store, including runs ended with `--end-runs`, regardless of their exit state.
+Each sum counts unreported runs and missing token or price measurements; a sum that
+omits a measurement is labeled a lower bound, not an estimate of the missing spend.
+A final snapshot never waits for or signals a surviving worker: a terminal record
+written after the loop exits appears in the next loop's recorded-spend total. A repair ended by
 an explicit `tillr drain stop --end-runs` is different: it is recorded as
 interrupted, so the next loop pins its head (`refs/tillr/runs/<run-id>`), resets the
 lane and dispatches again without judging it, even when it left a commit. That commit
