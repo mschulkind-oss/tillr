@@ -1741,6 +1741,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, err
 	}
+	if err := l.candidateInItsLane(ctx, candidate); err != nil {
+		return "", false, err
+	}
 	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
 	if err != nil {
 		return "", false, l.candidateFault(ctx, candidate, err.Error())
@@ -1900,6 +1903,17 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	return l.landCandidate(ctx, candidate, result, timing)
 }
 
+// candidateInItsLane holds a recorded candidate whose checkout is not its lane's target.
+// A recorded candidate outlives the loop that recorded it, and one recorded while a reused
+// lane still read a fork item's leftover target (lane-9, 2026-11-17) names a trunk range
+// in a fork checkout that no git there can diff: a mismatch to hold, not a loop fault.
+func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) error {
+	if target := l.laneTarget(candidate.LaneID); candidate.Worktree != target {
+		return l.candidateFault(ctx, candidate, fmt.Sprintf("recorded candidate worktree %s is not lane %s's target %s", candidate.Worktree, candidate.LaneID, target))
+	}
+	return nil
+}
+
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
@@ -1907,6 +1921,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, err
 	}
 	// Retrying a durable verdict skips the gate, not the recorded-head guard.
+	if err := l.candidateInItsLane(ctx, candidate); err != nil {
+		return "", false, err
+	}
 	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
 	if err != nil {
 		return "", false, l.candidateFault(ctx, candidate, err.Error())

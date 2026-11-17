@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // A lane is reused across items, and a fork-series item leaves `target` and `patch_ref`
@@ -75,5 +78,57 @@ func TestALaneTargetTheFenceDoesNotNameIsNotTheLanesTarget(t *testing.T) {
 	writeForkFile(t, filepath.Join(laneDir, ItemFenceFile), ".forks/lanes/lane-9/pi/\n")
 	if got := loop.laneTarget("lane-9"); got != fork {
 		t.Fatalf("the item fence names the checkout, but the target read was %q", got)
+	}
+}
+
+// The candidate a loop records survives a restart, so the fix above cannot reach one
+// recorded while the lane still read the stale target: on 2026-11-17 the 919bb62ae loop
+// recorded run-item-ig-view-nodes-a3 with worktree .forks/lanes/lane-9/pi, a trunk base
+// and the fork's HEAD, and every later loop died on the fence diff of that range. A
+// recorded candidate outside its lane's target is a mismatched candidate: it is held
+// as a fault for inspection, and the loop goes on.
+func TestARecordedCandidateOutsideItsLaneTargetIsHeldNotFatal(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	steps := &dirtyPathSteps{t: t, root: f.root, store: f.storePath}
+	l.cfg.Steps = steps
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='in-queue',allowed_paths='["candidate.txt"]' WHERE item_id='item-a'`)
+		return err
+	})
+	plan := mustPlan(t, l)[0]
+	if ok, _, err := l.applyPlan(context.Background(), plan, base, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("dispatch: %v / %v", ok, err)
+	}
+	lane := l.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "candidate.txt\n")
+	writeForkFile(t, filepath.Join(lane, "candidate.txt"), "candidate\n")
+	runGit(t, lane, "add", "candidate.txt")
+	runGit(t, lane, "commit", "-qm", "candidate")
+
+	// A separate repository, as a fork checkout is: the trunk base is not an object in it.
+	fork := filepath.Join(scratchUnderDurable(t), "fork")
+	if err := os.MkdirAll(fork, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, fork, "init", "-q", "-b", "main")
+	runGit(t, fork, "-c", "user.email=f@example.invalid", "-c", "user.name=f", "commit", "--allow-empty", "-qm", "fork")
+	stale := Candidate{ItemID: "item-a", RunID: plan.decision.RunRequest.RunID, LaneID: "lane-1", Worktree: fork,
+		BaseRef: "refs/heads/patch/pi", BaseSHA: base, HeadSHA: runGit(t, fork, "rev-parse", "HEAD"), Request: plan.decision.RunRequest}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now().Format("2006-01-02T15:04:05Z07:00")
+		return applyTerminal(tx, run.Record{RunID: stale.RunID, ItemID: stale.ItemID, LaneID: stale.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, ArtifactRefs: []run.ArtifactRef{}})
+	})
+	if err := appendJudgment(context.Background(), f.storePath, candidateReadyKind, "run", stale.RunID, stale, l.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var result LoopResult
+	historyPass(t, l, &result)
+	if steps.lands != 0 || steps.gates != 0 {
+		t.Fatalf("a candidate outside its lane's target was judged: %+v", steps)
+	}
+	if d := mustPlan(t, l)[0].decision; d.Reason != ReasonCandidateMismatch {
+		t.Fatalf("the misplaced candidate was not held as a mismatch: %+v", d)
 	}
 }

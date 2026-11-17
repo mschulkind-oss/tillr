@@ -170,7 +170,12 @@ git -C "$root" merge --ff-only "$head" >/dev/null
 
 func TestPatchBranchRetirementDoesNotChangeTheExportedForkHead(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
-	fork := scratch(t, "fork-retirement")
+	// Staged as staging stages a fork item: the checkout under .forks/lanes/<lane>/<fork>,
+	// named by the lane's target and its fence, so the candidate is in its lane's target.
+	fork := filepath.Join(f.root, ".forks", "lanes", "lane-1", "fixture")
+	if err := os.MkdirAll(fork, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	git(t, fork, "init", "-b", "main")
 	if err := os.MkdirAll(filepath.Join(fork, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -184,9 +189,11 @@ func TestPatchBranchRetirementDoesNotChangeTheExportedForkHead(t *testing.T) {
 	git(t, fork, "add", "candidate.txt")
 	git(t, fork, "commit", "-m", "exported change")
 	head := git(t, fork, "rev-parse", "HEAD")
-	if err := writeFence(f.laneRoot, "lane-1", []string{"candidate.txt"}); err != nil {
+	if err := writeFence(f.laneRoot, "lane-1", []string{".forks/lanes/lane-1/fixture/"}); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(f.laneRoot, "lane-1", drain.TargetFile), fork+"\n")
+	writeFile(t, filepath.Join(f.laneRoot, "lane-1", drain.PatchRefFile), "refs/heads/patch/fixture\n")
 	fixtureAt(t, f.store, itemRecord("item-target", "in-queue"))
 	helper, err := os.ReadFile("fork-gate.py")
 	if err != nil {
