@@ -1613,14 +1613,23 @@ answer a failure that was never in its design. This item makes the two verifying
 gate sees, files a fixer when the trunk is red, and stops a red trunk from being charged to the
 candidate that happened to meet it.
 
-<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/gate/,tools/fork-check.py,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-whole-tree-checks-in-done-and-rolling" paths="tools/tillr-drain/,tools/tillr-view/,tools/gate/,tools/fork-check.py,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped before
+editing because c6 changes the waiting view, whose source is `tools/tillr-view/waiting.go`, and
+that directory was outside the item's paths. The run was right to stop. The directory is now
+inside the paths, with its tests, and its delivered copy under `yolo-packs/tillr/` is synced in
+the same commit. The run also looked for a waiting rule named `trunk-already-red` and found
+none. None is needed: `trunk-already-red` is the step name on the refusal record, and the hold
+that the waiting view shows is the existing reason `trunk-broken`. c4 and c6 are restated below
+to say so, and no new exported hold reason is added. The other criteria are unchanged.
 
 - **c1:** `just done` runs every fast-tier declaration under the gate's checks directory that has tree scope, through the same program the gate uses, over the range from the last verified trunk to HEAD. A test makes a temporary repository with a failing tree check and asserts `just done` exits non-zero and names the check.
 - **c2:** The set cannot drift. A test lists the fast tree declarations and fails when one is neither run by `just done` nor named in a short allowlist with a reason.
 - **c3:** The rolling run runs the same checks over the range it covers. A red tree check there is a red rolling run: the drain files one deduplicated trunk fixer naming the failing check ids, exactly as it does for a red fork-check, and the watermark does not advance. A test with a stub rolling program asserts the fixer and the unmoved watermark.
-- **c4:** A candidate refused only because a tree check is already red at its base is not charged. The loop records a trunk refusal naming the red commit and the checks, holds the item behind the fixer the same way a fork-check acquittal does, and gates it again after the fixer lands. A test asserts the hold names the fixer and carries no failing verdict and no design conflict.
+- **c4:** A candidate refused only because a tree check is already red at its base is not charged. The loop records the existing `trunk-already-red` refusal naming the red commit and the checks, holds the item behind the fixer with the existing reason `trunk-broken`, the same way a fork-check acquittal does, and gates it again after the fixer lands. A test asserts the hold names the fixer and carries no failing verdict and no design conflict.
 - **c5:** A candidate that is red on a tree check which passes on its base stays charged to the candidate. A test asserts the ordinary refusal.
-- **c6:** The drain README, the `tillr-operating` skill and the waiting view's rule for the hold say which checks run where, and an rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
+- **c6:** The drain README, the `tillr-operating` skill (`yolo-packs/tillr/skills/tillr-operating/`) and the waiting view's `trunk-broken` rule in `tools/tillr-view/waiting.go` say which checks run where. The waiting rule's third field, which reads `cause not recorded` today, names the trunk fixer as what the item waits on, and a test in `tools/tillr-view/` asserts it. An rg of those three for the old statement that the rolling run replaces the gate's tree checks returns nothing.
 - **c7:** The report names every fast tree check that the first run of the new `just done` found red on the trunk, as command, result and date, and says which were fixed.
 
 **Agent details:**
