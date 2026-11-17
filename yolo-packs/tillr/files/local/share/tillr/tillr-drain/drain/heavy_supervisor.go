@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 type heavyOwnershipKey struct{}
@@ -28,7 +30,10 @@ func cleanupLost(err error) bool                 { var lost *heavyCleanupUnconfi
 // It is not a public face: only the runner supplies its inherited lock and owner pipe.
 func init() {
 	if len(os.Args) > 1 && os.Args[1] == "--tillr-heavy-supervisor" {
-		os.Exit(superviseHeavy(os.Args[2:]))
+		defer store.FlushSQLiteTraceAtExit()
+		code := superviseHeavy(os.Args[2:])
+		store.FlushSQLiteTraceAtExit()
+		os.Exit(code)
 	}
 }
 func superviseHeavy(args []string) int {

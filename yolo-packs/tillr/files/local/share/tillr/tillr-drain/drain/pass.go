@@ -594,7 +594,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		// A lane a lane-owned staging refusal took out of rotation is offered to no item
 		// until a re-check puts it back (lane_rotation.go).
 		available := l.rotationLanes()
-		tick := Pass{GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
+		tick := Pass{WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -857,6 +857,9 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			}
 			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
 			if _, err := run.ClaimLease(ctx, tx, *d.RunRequest, d.LaneID, at); err != nil {
+				return err
+			}
+			if err := recordWorkflowSelection(tx, d); err != nil {
 				return err
 			}
 			if err := startNode(tx, d); err != nil {

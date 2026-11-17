@@ -68,11 +68,13 @@ type itemPayload struct {
 	// backend.
 	Seat string `json:"seat,omitempty"`
 	// Prose is the version of the prose guide recorded by the document author.
-	Prose     string `json:"prose,omitempty"`
-	Workflow  string `json:"workflow"`
-	JudgeMode string `json:"judge_mode"`
-	UpdatedAt string `json:"updated_at,omitempty"`
-	EventSeq  int64  `json:"event_seq,omitempty"`
+	Prose            string `json:"prose,omitempty"`
+	Workflow         string `json:"workflow"`
+	SelectedWorkflow string `json:"selected_workflow,omitempty"`
+	WorkflowSource   string `json:"workflow_source,omitempty"`
+	JudgeMode        string `json:"judge_mode"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
+	EventSeq         int64  `json:"event_seq,omitempty"`
 	// Questions and QuestionsSource are show's read-through of the design document
 	// the item points at. They are never stored: the document is the only copy.
 	Questions       []Question `json:"questions,omitempty"`

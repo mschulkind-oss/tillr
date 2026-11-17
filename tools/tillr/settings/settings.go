@@ -22,6 +22,8 @@ type Settings struct {
 	Roll     Roll
 	Push     Push
 	Comments *Comments
+	// WorkflowDefaults maps seats to workflow references; the drain validates files.
+	WorkflowDefaults map[string]string
 }
 
 // Comments configures automatic review intake. Seconds and hours are wall-clock units;
@@ -69,8 +71,8 @@ func Read(root string) (Settings, error) {
 	}
 	refuse := func(key, expected string) error { return fmt.Errorf("%s: %s: expected %s", path, key, expected) }
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" {
-			return Settings{}, refuse(table, "a known table (roll, push or comments)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments or workflows)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -83,6 +85,23 @@ func Read(root string) (Settings, error) {
 			value := values[key]
 			full := table + "." + key
 			switch full {
+			case "workflows.default":
+				defaults, ok := value.(map[string]any)
+				if !ok {
+					return Settings{}, refuse(full, "a table from seats to workflow strings")
+				}
+				s.WorkflowDefaults = map[string]string{}
+				for _, seat := range keys(defaults) {
+					key := full + "." + seat
+					if strings.TrimSpace(seat) == "" {
+						return Settings{}, refuse(key, "a nonempty seat name")
+					}
+					ref, ok := defaults[seat].(string)
+					if !ok || strings.TrimSpace(ref) == "" {
+						return Settings{}, refuse(key, "a nonempty string")
+					}
+					s.WorkflowDefaults[seat] = ref
+				}
 			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo":
 				str, ok := value.(string)
 				if !ok {
@@ -149,6 +168,9 @@ func Read(root string) (Settings, error) {
 				s.Push.AfterLanding = flag
 			default:
 				expected := "a known push key (after_landing, remote or ref)"
+				if table == "workflows" {
+					expected = "a known workflows key (default)"
+				}
 				if table == "roll" {
 					expected = "a known roll key (command, paths or pause_timeout_seconds)"
 				}
@@ -214,6 +236,10 @@ func (s Settings) StartupLine() string {
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
 		line += fmt.Sprintf(" comments.vantage_url=%s comments.repo=%s comments.paths=%s comments.quiet_seconds=%d comments.poll_seconds=%d comments.max_running=%d comments.compact_over_tokens=%d comments.refresh_hours=%d", strconv.Quote(c.VantageURL), strconv.Quote(c.Repo), paths, c.QuietSeconds, c.PollSeconds, c.MaxRunning, c.CompactOverTokens, c.RefreshHours)
+	}
+	if s.WorkflowDefaults != nil {
+		defaults, _ := json.Marshal(s.WorkflowDefaults)
+		line += " workflows.default=" + string(defaults)
 	}
 	return line
 }

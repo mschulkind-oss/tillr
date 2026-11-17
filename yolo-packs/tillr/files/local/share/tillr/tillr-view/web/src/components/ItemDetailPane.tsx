@@ -401,6 +401,11 @@ export function ItemDetailPane({
             )}
           </Section>
 
+          <Section title="Workflow">
+            {detail.selected_workflow ? (
+              <><code>{detail.selected_workflow}</code><p>Source: {detail.workflow_source || "not recorded"}</p></>
+            ) : <p className="empty">Workflow selection not recorded</p>}
+          </Section>
           {item?.comments && <CommentThreads data={item.comments} />}
           <Section title="Design document" note={detail.design_doc || "none named"}>
             <DocumentPane {...doc} />

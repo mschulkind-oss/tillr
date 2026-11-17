@@ -30,6 +30,8 @@ type Pass struct {
 	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
 	Build *BuildStamp `json:"-"`
+	// WorkflowDefaults comes from settings.Read, never from a caller-supplied pass.
+	WorkflowDefaults map[string]string `json:"-"`
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
 	// A standalone plan with no stager compares the retained template instead.
 	BriefTemplate  *string   `json:"-"`
@@ -81,6 +83,8 @@ type Decision struct {
 	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
 	Workflow          *Workflow      `json:"workflow,omitempty"`
+	SelectedWorkflow  string         `json:"selected_workflow,omitempty"`
+	WorkflowSource    string         `json:"workflow_source,omitempty"`
 	NodeIndex         int            `json:"node_index,omitempty"`
 	NodeBaseSHA       string         `json:"node_base_sha,omitempty"`
 	PreviousReport    string         `json:"previous_report,omitempty"`
@@ -449,11 +453,9 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				return nil, err
 			}
 		} else {
-			var w *Workflow
-			var loadErr error
+			w, selected, source, loadErr := selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
 			routed := item
-			if item.Workflow != "" && policy != nil {
-				w, loadErr = loadWorkflow(root, item.Workflow, policy)
+			if w != nil {
 				if loadErr == nil {
 					routed.Seat = w.Stages[0].Seat
 					if w.Stages[0].Kind == "command" {
@@ -487,6 +489,7 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: "workflow-invalid: " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
+				decision.SelectedWorkflow, decision.WorkflowSource = selected, source
 				if w != nil && decision.RunRequest != nil {
 					decision.Workflow = w
 					request := *decision.RunRequest

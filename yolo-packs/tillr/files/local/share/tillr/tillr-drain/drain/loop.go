@@ -325,9 +325,10 @@ type LoopConfig struct {
 	QuestionsCmd []string
 	// VantageURL and VantageRepo are handed over at startup for reply confirmation.
 	// Empty values disable confirmation; this check never reads settings.
-	VantageURL  string
-	VantageRepo string
-	Comments    *settings.Comments
+	VantageURL       string
+	VantageRepo      string
+	WorkflowDefaults map[string]string
+	Comments         *settings.Comments
 	// ExitWhenDrained opts out of the default wait when nothing is dispatchable.
 	ExitWhenDrained bool
 	// Steps is what the loop drives.
@@ -637,6 +638,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		}
 		l.cfg.Policy = p
 		l.policyState = PolicyState{Ref: cfg.PolicyRef, Hash: hash, DiskHash: hash, Content: string(raw)}
+	}
+	for _, diagnostic := range WorkflowDefaultDiagnostics(cfg.Root, cfg.WorkflowDefaults, l.cfg.Policy) {
+		l.reportf("workflow-invalid: %s\n", diagnostic)
 	}
 	return l, nil
 }
