@@ -47,20 +47,25 @@ says so in its design and is the owner's to overturn.
 5. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
-[What tillr will change for AutoQA](../design/tillr-separable-parts.md) carries
+[What tillr will change for Product QA](../design/tillr-separable-parts.md) carries
 eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
-[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers
-AutoQA's requests with that proposal, and which of its small changes are filed before the drain
-proof. All eight wait for the reply from AutoQA's agent, and the proposal marks
-[`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) and
-[`OQ-SP6`](../design/tillr-separable-parts.md#OQ-SP6) as worth answering before the second round.
+[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers the
+Product QA pipeline's requests with that proposal, and which of its small changes are filed. The
+pipeline's second-round reply is recorded as received in
+[Product QA's reply](../design/tillr-product-qa-requests.md), and on 2026-11-17 the owner said to build:
+the answer is [the build plan](../design/tillr-definitions-plan.md), whose items hold no question.
+None of the eight holds the build; [`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) still
+decides the proposal's documentation items. (The first round called the pipeline "AutoQA", which is
+[tillr's own exploratory-testing design](../design/tillr-autoqa.md), a different thing.)
 
 [The core and the landing definition](../design/tillr-core-and-git-landing.md)
 writes down the owner's direction of 2026-11-16 and carries five more,
 [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5), the naming question, which is worth
-settling first. The other four wait for the reply from AutoQA's agent; none of them needs an answer before
-the second round of conversation with it, which is the owner's stated order.
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). Since the owner's go-ahead of
+2026-11-17, `OQ-CG1`, `OQ-CG2`, `OQ-CG3` and `OQ-CG5` each have a working choice the build rests
+on, which he confirms or changes after the next round with the Product QA pipeline's agent;
+`OQ-CG4` can wait. That document also lists the owner's statements as the pipeline reported them,
+for him to confirm.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
@@ -368,11 +373,13 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### A change to the gate's own runner lands only after the runner's suite passes
 
+A change to the gate's own runner can break the gate for every lane, so the runner's suite proves such a change before it lands rather than after. Criterion c3 was aligned on 2026-11-17 with the owner's ruling on time limits ([`D-GR15`](../design/gate-rework.md#decision-ledger), [Section 6.5](../design/gate-rework.md#65-ten-seconds-is-a-failing-test)): a measured time is counted and reported and fails nothing.
+
 <!-- tillr: item id="item-gate-runner-pays-first" paths="tools/gate/,tools/tillr-loop/,tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" -->
 
 - **c1:** A candidate that changes a path under the runner's own directory has the runner's suite added to its landing checks, whatever `landing_strategy` says, and does not land while that suite is red.
 - **c2:** The same holds for `tools/fork-check.py` and its suite for as long as that file exists.
-- **c3:** Such a landing is left out of the ten-second budget measurement and is counted separately, so it cannot make the budget test fail or hide a slow ordinary landing.
+- **c3:** Such a landing's time is left out of the ten-second measurement of ordinary landings and is counted and reported separately, so the distribution of ordinary landings stays honest and a slow one is not hidden. A measured time fails no test and no landing.
 - **c4:** A test lands one candidate that changes the runner and one that does not, and asserts the first ran the suite before the merge and the second did not.
 
 ## Filed 2026-11-15: a gate test that fails only under load
@@ -1448,6 +1455,18 @@ criteria are written in those terms.
 - **Question for the builder, answered in its report and not a criterion:** whether the presence of an editor swap or lock file for a landed path, a sign the file is open and may hold unsaved changes, should appear in the landing's log line as information for the owner. It must not pause the landing, because the owner ruled that a predicted conflict is the only pause.
 - **Evidence:** 2026-11-17, `Trunk.Move` runs `git -c merge.autoStash=false merge --ff-only` in the main checkout, so git itself refuses when the move would overwrite uncommitted content and otherwise advances only the changed paths; git's fast-forward keeps staged entries on untouched paths, but no test pins it. `TestALandingLeavesUncommittedContentOnAnUntouchedPathAlone` (untracked file only) and `TestALandingIsRefusedWhenTheTrunkWorktreeHoldsUncommittedContentOnALandedPath` in `tools/tillr-land/main_test.go`, and `TestUnrelatedDirtyPathDoesNotDelayLanding` in `tools/tillr-drain/drain/dirty_hold_test.go`, pin the two cases. `rg -n -i 'MERGE_HEAD|rebase-merge' tools/tillr-land tools/tillr-drain --glob '*.go'` returns nothing, so no code names an in-progress merge or rebase. `TestLockedLandingAcceptsFastForwardBeyondObservedTip` in `tools/tillr-land/trunk_history_test.go` pins the forward move, and `TestTheDrainLandsThroughTheRealAdapterAndTheRealLander` in `tools/tillr-drain/drain/step_argv_contract_test.go` pins `trunk-rewritten`. `rg -n -i dirty yolo-packs/tillr/skills/tillr-operating/` returns nothing (2026-11-17).
 
+## Filed 2026-11-17: tillr becomes a core with Git landing as its first definition
+
+The owner said on 2026-11-17 to build as much of the new tillr as possible, so that the Product QA
+pipeline can try the real thing and comment on it in the next round.
+[The build plan](../design/tillr-definitions-plan.md) holds the eighteen items: the foundations
+the pipeline asked for, the definition file and the store that records it, the item lifecycle and
+the planner read from the definition, the hook program contract, a store that does not land, and a
+worked example that lands nothing. The blocks live in that plan rather than in
+[the direction](../design/tillr-core-and-git-landing.md), because the direction still carries open
+questions and the drain would hold its items. The plan's next tranche is written in prose and is
+filed when the first has landed.
+
 ## Filed 2026-11-17: make the Go suites fast and trustworthy
 
 A worker building one queue item on 2026-11-17 spent most of 35 minutes waiting on repeated full
@@ -1635,3 +1654,44 @@ leaves behind when it ends, is killed, or is orphaned.
 - **Evidence:** 2026-11-17, the drain operator's notes: run `run-item-conflict-transition-not-duplicate-a1` (Pi build seat, 7 min 41 s, 5,280,378 tokens, $1.02) reported blocked with about 19 files modified and nothing committed. When the loop settled it, `refs/tillr/runs/run-item-conflict-transition-not-duplicate-a1` pointed at the base commit, the lane was reset (reflog `reset: moving to HEAD`), and `git status` was empty. The diff was lost; the report and test logs remained.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` ($9.89) implemented the change and ended without committing; see `item-run-commit-before-ending`.
 - **Evidence:** 2026-11-17, `rg -n 'update-ref -d|prune' tools/tillr-drain/drain --glob '!*_test.go'` finds no ref deletion: nothing tillr keeps under `refs/tillr/` is ever dropped today, so this item states a retention rule instead of inheriting one.
+
+## Filed 2026-11-17: fork work on a drain with several lanes
+
+Three items filed on 2026-11-17 from [the usage ledger's request](../pi/usage-recording-request.md)
+change the Pi and pi-subagents forks. Those are the first items to fence a fork checkout at all, and
+reading how the drain would run them turned up two ways they would collide with the other lanes.
+
+### Prevent a fork item from colliding with sibling lanes
+
+The drain can already stage an item whose change lives in a fork rather than in this repository.
+When the item's fence (the set of paths its worker may change) names a lane's fork checkout,
+`.forks/lanes/<lane>/<fork>`, the worker edits that checkout and the lander moves the fork's patch
+branch. Two things stop such items from being safe on a drain that runs several lanes. First,
+staging reads only the checkout of the lane the item was dispatched to, while the planner gives the
+item whichever lane is free. An item fenced to lane 1's checkout but given lane 3 is therefore staged
+as an ordinary item, with nothing in its fence that it can edit. Second, the fork procedure ends with
+`bin/pi-forks export`, which moves `refs/heads/patch/<fork>` in this repository while the worker is
+still running. The run boundary then convicts every other run open at that moment, because the only
+other-lane patch-branch move it excuses is one the lander has marked. A moved patch branch also
+reaches every host at its next launch once it is pushed, so it should move only after the gate has
+built it. The three usage-recording fork items wait on this one.
+
+<!-- tillr: item id="item-drain-fork-lane-safety" paths="tools/tillr-drain/,tools/tillr-land/,tools/tillr-item/,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** An item whose fence names `.forks/lanes/<lane>/<fork>/` for any lane id is staged against the dispatched lane's own checkout of that fork, materialized if it is missing, with that fork's patch branch as the delivery. An item filed with `lane-1` in its fence therefore runs on whichever lane it is given. A test dispatches such an item to `lane-3` and asserts the staged target, patch ref and base.
+- **c2:** The brief and the fence check both name the dispatched lane's checkout, and a write to another lane's checkout is outside the fence. A test asserts both.
+- **c3:** A fork run's delivery never convicts a sibling run. One way is for the lander to be the only mover of the patch branch, with its landed marker, and for the fork brief to tell the worker not to run `bin/pi-forks export`. The other is for the run boundary to excuse a move made by a fork run the loop registered. A test runs a fork item and an ordinary item on two lanes, delivers the fork, and asserts that neither run is convicted.
+- **c4:** The patch branch moves only after a gate verdict that built the candidate head with the pack's build command. The builder records which gate step does that for a patch-branch fork today, and adds one if none does. A test gives a candidate whose build fails and asserts that it is refused and the branch is unmoved.
+- **c5:** After a fork landing, the shared cache's `main` is at the landed tip. `bin/pi-forks check --fork <fork>` then passes from the main checkout, and the next item for the same fork starts from that tip. A test lands two fork items one after the other and asserts that the second's base is the first's head.
+- **c6:** The drain README and the `tillr-operating` skill each give one paragraph on how to file a fork item: the fence spelling, what the worker commits, and who moves the patch branch.
+- **c7:** The item sync reads a fence entry under `.forks/lanes/<lane>/<fork>/` as a fork checkout that staging materializes, and does not warn that the path is missing. A test syncs a block with such a fence on a repository with no `.forks` directory and asserts that no `path-missing` warning is printed.
+
+**Agent details:**
+
+- **Ref:** AGENTS.md, "Landing a lane: shared forks, verified candidates" and "Patching an upstream tool: patch series first"; [the fork guide](../pi/forks.md); the run-boundary table in [the drain README](../../tools/tillr-drain/README.md).
+- **Where:** `forkTarget` and `ensureForkCheckout` in `tools/tillr-drain/drain/stage.go`; `freeLane`, `forkOf` and `forkHeldBy` in `tools/tillr-drain/drain/plan.go`; `liveForks` in `tools/tillr-drain/drain/pass.go`; `landedPatchMove` in `tools/tillr-drain/drain/boundary.go`; `PatchRef` with the patch-branch refusals in `tools/tillr-land/land/`; and the `path-missing` warning in `tools/tillr-item/item/sync.go`.
+- **Evidence (what already protects):** 2026-11-17, `rg -n 'ReasonForkHeld' tools/tillr-drain/drain/plan.go`: two items that deliver the same fork never run together. The hold counts this pass's dispatches, live leases and unfinished examinations (`liveForks`), whatever lane each is on. Commit `35a4d848d` added fork staging, the boundary's excuse for a run's own patch ref, and the lander's patch-branch move with its rewind refusal.
+- **Evidence (c1):** `forkTarget` keeps only fence entries under `.forks/lanes/` followed by the dispatched lane's id, and `TestForkTargetIgnoresAnotherLanesCheckout` pins that. `freeLane` returns the first free lane in id order and never reads the fence.
+- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and says that "any other patch-branch move still convicts". AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
+- **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
+- **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.
