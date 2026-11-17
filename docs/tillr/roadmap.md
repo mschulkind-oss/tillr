@@ -53,6 +53,12 @@ eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 AutoQA's requests with that proposal, and which of its small changes are filed before the drain
 proof.
 
+[The core and the landing definition](../design/tillr-core-and-git-landing.md#open-questions)
+writes down the owner's direction of 2026-11-16 and carries five more,
+[`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
+[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). None needs an answer before the
+second round of conversation with AutoQA's agent, which is the owner's stated order.
+
 [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) carries eight more,
 [`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
 [`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16: whether models
