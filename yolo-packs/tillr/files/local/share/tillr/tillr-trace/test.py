@@ -1052,13 +1052,15 @@ def test_a_failure_part_way_keeps_the_runs_already_indexed(work):
 
     def failing(path, trace, **kwargs):
         if trace.get("run_id") == "run-part-2":
-            raise RuntimeError("stopped part way")
+            # An interrupt, not a parser defect: a parser that raises an ordinary
+            # exception is skipped with a reason (test_one_unparseable_run_...).
+            raise KeyboardInterrupt("stopped part way")
         return original(path, trace, **kwargs)
 
     tillr_trace.parse_proc_exec = failing
     try:
         index.sync()
-    except RuntimeError:
+    except KeyboardInterrupt:
         pass
     else:
         raise AssertionError("the injected failure did not stop the sync")
@@ -1177,6 +1179,89 @@ def test_an_index_of_the_git_trace2_layout_is_rebuilt(work):
     return "a layout-3 index holding git.trace2 rows was deleted and rebuilt without them"
 
 
+def test_a_tool_result_shaped_as_text_is_still_a_row(work):
+    """Real `pi --mode json` logs carry `structuredContent` as a string for some tools.
+
+    Measured 2026-11-17 over the loop's own run logs: 2,091 of 5,316 `tool_execution_end`
+    events held a string there (a skill's text, for one). The parser read it as an object
+    and raised, which aborted every ingest. The row is kept, with the fields that are
+    present, and no exit code it cannot read.
+    """
+    root = work / "textshape-root"
+    run_dir = root / "runs" / "run-text"
+    run_dir.mkdir(parents=True)
+    write_log(run_dir / "run-text.log", "run-text", [
+        {"type": "tool_execution_start", "toolCallId": "c1", "toolName": "read",
+         "args": {"path": "/w/a.md"}},
+        {"type": "tool_execution_end", "toolCallId": "c1", "toolName": "read",
+         "result": {"content": [{"type": "text", "text": "x"}],
+                    "structuredContent": "---\nname: lane-work\n"},
+         "isError": False, "durationMs": 3},
+        {"type": "tool_execution_start", "toolCallId": "c2", "toolName": "bash",
+         "args": "ls"},
+        {"type": "tool_execution_end", "toolCallId": "c2", "toolName": "bash",
+         "result": "plain text result", "isError": True, "durationMs": 4},
+        {"type": "tool_execution_start", "toolCallId": "c3", "toolName": "bash",
+         "args": {"command": "ls"}},
+        {"type": "tool_execution_end", "toolCallId": "c3", "toolName": "bash",
+         "result": {"structuredContent": {"exit_code": 7}}, "isError": True,
+         "durationMs": 5},
+        turn_end(1, "done", ts_ms=1794510845000),
+    ])
+    store = work / "textshape-store" / ".tillr" / "state.db"
+    make_store(store, [{"run_id": "run-text", "item_id": "1", "lane_id": "lane-1"}])
+    result = cli("--trace-root", str(root), "--store", str(store), "ingest")
+    assert result.returncode == 0, result.stderr
+    conn = sqlite3.connect(str(root / "index.db"))
+    try:
+        calls = {json.loads(payload)["tool_call_id"]: json.loads(payload)
+                 for (payload,) in conn.execute(
+                     "SELECT payload FROM obs_events WHERE kind = 'tool.call'")}
+    finally:
+        conn.close()
+    assert set(calls) == {"c1", "c2", "c3"}, calls
+    assert calls["c1"]["target_path"] == "/w/a.md" and calls["c1"]["exit_code"] is None
+    assert calls["c2"]["is_error"] is True and calls["c2"]["exit_code"] is None, calls["c2"]
+    assert calls["c3"]["exit_code"] == 7, calls["c3"]
+    return "string-shaped structuredContent, args and result still produced tool.call rows"
+
+
+def test_one_unparseable_run_does_not_abort_the_ingest(work):
+    """A parser that raises on one run skips that run with a reason; the rest proceed."""
+    root = work / "poison-root"
+    for run_id in ("run-bad", "run-good"):
+        run_dir = root / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        write_log(run_dir / f"{run_id}.log", run_id, [turn_end(1, "done", ts_ms=1794510845000)])
+    store = work / "poison-store" / ".tillr" / "state.db"
+    make_store(store, [{"run_id": r, "item_id": "1", "lane_id": "lane-1"}
+                       for r in ("run-bad", "run-good")])
+    real = tillr_trace.parse_run_log
+
+    def poisoned(path, trace, *args, **kwargs):
+        if "run-bad" in str(path):
+            raise AttributeError("'str' object has no attribute 'get'")
+        return real(path, trace, *args, **kwargs)
+
+    tillr_trace.parse_run_log = poisoned
+    try:
+        assert tillr_trace.Index(root, store).sync() == "rebuilt"
+    finally:
+        tillr_trace.parse_run_log = real
+    conn = sqlite3.connect(str(root / "index.db"))
+    try:
+        turns = {run for (run,) in conn.execute(
+            "SELECT run_id FROM obs_events WHERE kind = 'llm.turn'")}
+        unreadable = [(run, json.loads(payload)) for run, payload in conn.execute(
+            "SELECT run_id, payload FROM obs_events WHERE kind = 'unreadable'")]
+    finally:
+        conn.close()
+    assert turns == {"run-good"}, turns
+    assert [run for run, _ in unreadable] == ["run-bad"], unreadable
+    assert "AttributeError" in json.dumps(unreadable[0][1]), unreadable
+    return "a run whose log parse raised was recorded unreadable and the other run indexed"
+
+
 def main():
     if not DURABLE.is_dir():
         DURABLE.mkdir(parents=True, exist_ok=True)
@@ -1196,6 +1281,8 @@ def main():
             ("unreadable", lambda: test_missing_artifact_is_unreadable_not_a_crash(work)),
             ("readonly", lambda: test_store_is_opened_read_only(work)),
             ("retired-layout", lambda: test_an_index_of_the_git_trace2_layout_is_rebuilt(work)),
+            ("textshape", lambda: test_a_tool_result_shaped_as_text_is_still_a_row(work)),
+            ("poison", lambda: test_one_unparseable_run_does_not_abort_the_ingest(work)),
             ("loopdir", lambda: test_loop_directory_supplies_proc_and_gate_records(work)),
             ("shim", lambda: test_bash_shim_records_a_command_and_keeps_the_exit_code(work)),
             ("tz", lambda: test_shim_stamps_utc_in_any_host_zone(work)),

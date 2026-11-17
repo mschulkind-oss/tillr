@@ -440,6 +440,17 @@ def _read_json(path):
 # ---------------------------------------------------------------- pi run log
 
 
+def _obj(value):
+    """`value` when it is a JSON object, else an empty one.
+
+    A pi log's tool events are not uniformly shaped: measured 2026-11-17, a tool result's
+    `structuredContent` was a string in 2,091 of 5,316 `tool_execution_end` events. A field
+    that is read for its keys is read through this, so a text where an object was expected
+    costs that field and never the row, or the run.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
     """Recover llm.turn and tool.call rows from `pi --mode json` output.
 
@@ -500,13 +511,13 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                 if event.get("timestamp") is not None:
                     anchor["ms"], anchor["derived"] = event["timestamp"], False
             elif kind == "tool_execution_start":
-                args_by_call[event.get("toolCallId")] = event.get("args") or {}
+                args_by_call[event.get("toolCallId")] = _obj(event.get("args"))
             elif kind == "tool_execution_end":
                 call_id = event.get("toolCallId")
-                args = args_by_call.pop(call_id, {})
+                args = _obj(args_by_call.pop(call_id, {}))
                 tool = event.get("toolName") or "unknown"
                 result = event.get("result") or {}
-                structured = result.get("structuredContent") or {}
+                structured = _obj(_obj(result).get("structuredContent"))
                 target = args.get("path")
                 command = args.get("command")
                 rows.add(
@@ -532,14 +543,14 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                 )
                 summary["tool_calls"] += 1
             elif kind == "turn_end":
-                message = event.get("message") or {}
+                message = _obj(event.get("message"))
                 if message.get("role") != "assistant":
                     continue
                 turn_no += 1
                 if message.get("timestamp") is not None:
                     anchor["ms"], anchor["derived"] = message["timestamp"], False
-                usage = message.get("usage") or {}
-                cost = (usage.get("cost") or {})
+                usage = _obj(message.get("usage"))
+                cost = _obj(usage.get("cost"))
                 provider = message.get("provider")
                 model = message.get("model")
                 thinking = message.get("thinkingLevel")
@@ -1260,7 +1271,16 @@ class Index:
             ordinal, carry = 0, {}
         else:
             ordinal, carry = row["rows_parsed"], _loads(row.get("carry"))
-        parsed = parser(path, trace, start=offset, ordinal=ordinal, carry=carry)
+        try:
+            parsed = parser(path, trace, start=offset, ordinal=ordinal, carry=carry)
+        except Exception as error:  # noqa: BLE001 - one source must not abort the ingest
+            # A parser that raises is a defect in the parser or a shape nobody has seen.
+            # Either way the other runs are still derivable, so this source is recorded
+            # as corrupt with the reason, its partial rows are dropped, and the run's
+            # `unreadable` row names it (§7.1: recording never costs the caller).
+            parsed = Parsed(Rows(Path(path).name), "corrupt",
+                            f"parser raised {error.__class__.__name__}: {error}",
+                            offset, carry)
         self._insert_rows(conn, parsed.rows)
         # The stat is read AFTER the parse: a run still writing appends while the build
         # reads, so the size recorded has to be the one the build actually consumed from,
