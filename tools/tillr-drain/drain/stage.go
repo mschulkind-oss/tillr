@@ -35,6 +35,10 @@ const (
 	FenceFile = "fence.txt"
 	// BaseSHAFile is the sha the run was staged from, pinned before launch.
 	BaseSHAFile = "base_sha"
+	// ItemBaseSHAFile and ItemFenceFile retain the whole-item boundary while
+	// base_sha and fence.txt describe the currently staged node.
+	ItemBaseSHAFile = "item_base_sha"
+	ItemFenceFile   = "item_fence.txt"
 	// TargetFile is the worktree the run's change lands in when it is not the lane
 	// worktree: a fork-series item's checkout under `.forks/lanes/<lane>/<fork>`. The
 	// lane worktree is still created and is still the boundary target, but the candidate
@@ -375,6 +379,38 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	// The brief names the same scratch directory `run exec` exports, so the two have to
 	// agree on the spelling: exec resolves the lane root to an absolute path, and a brief
 	// naming a relative one would point the worker at a directory that does not exist.
+	itemBaseSHA := baseSHA
+	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
+	if spec.Node != nil {
+		if spec.Continue {
+			raw, err := os.ReadFile(filepath.Join(laneDir, ItemBaseSHAFile))
+			if os.IsNotExist(err) {
+				// Before per-node scopes, base_sha retained the original item
+				// base across nodes. Migrate that recorded legacy boundary;
+				// never substitute the current trunk or target head.
+				raw, err = os.ReadFile(filepath.Join(laneDir, BaseSHAFile))
+			}
+			if err != nil {
+				return Externalf("reading the item's base: %v", err)
+			}
+			itemBaseSHA = strings.TrimSpace(string(raw))
+			head, err := s.git(ctx, target, "rev-parse", "HEAD")
+			if err != nil {
+				return err
+			}
+			baseSHA = strings.TrimSpace(head)
+		}
+		scope, err := spec.Node.scopePaths(itemAllowed)
+		if err != nil {
+			return err
+		}
+		for i, raw := range scope {
+			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
+				scope[i] = ".forks/lanes/" + spec.LaneID + "/" + name + suffix
+			}
+		}
+		recorded.AllowedPaths = scope
+	}
 	durableDir, err := filepath.Abs(run.DurableDir(laneDir, spec.RunID))
 	if err != nil {
 		return Internalf("resolving the run's scratch directory under %s: %v", laneDir, err)
@@ -459,6 +495,8 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		{BriefFile, brief},
 		{FenceFile, fenceText(recorded.AllowedPaths)},
 		{BaseSHAFile, baseSHA + "\n"},
+		{ItemBaseSHAFile, itemBaseSHA + "\n"},
+		{ItemFenceFile, fenceText(itemAllowed)},
 		{SessionIDFile, sessionID + "\n"},
 	}
 	if spec.BlockConflict != nil {

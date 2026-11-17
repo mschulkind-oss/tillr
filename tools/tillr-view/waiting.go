@@ -66,7 +66,8 @@ var waitingRules = map[string]waitingRule{
 	"blocked":                        {"waits on work", "queue", "cause not recorded"},
 	"not-ready":                      {"needs you", "queue", "the owner"},
 	"run-link-missing":               {"needs a cause", "lane", "cause not recorded"},
-	"boundary-scope-escape":          {"needs a cause", "fence", "cause not recorded"},
+	"boundary-scope-escape":          {"needs you", "fence", "inspect the named node and escaped path, then authorize a retry"},
+	"node-scope-outside-fence":       {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
 	"candidate-no-op":                {"needs a cause", "lane", "cause not recorded"},
 	"run-unjudged":                   {"needs a cause", "lane", "cause not recorded"},
 	"gate-failed":                    {"needs a cause", "gate", "cause not recorded"},
@@ -106,8 +107,10 @@ func waitingRuleFor(reason string) waitingRule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return waitingRules["workflow-invalid"]
 	}
-	if strings.HasPrefix(reason, "node-failed: ") {
-		return waitingRules["node-failed"]
+	for _, named := range []string{"node-failed", "node-scope-outside-fence", "boundary-scope-escape"} {
+		if strings.HasPrefix(reason, named+": ") {
+			return waitingRules[named]
+		}
 	}
 	if rule, ok := waitingRules[reason]; ok {
 		return rule

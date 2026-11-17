@@ -235,7 +235,11 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 	}
 	fence := work.HeldFence
 	if kept == "" && fence == "" {
-		raw, err := os.ReadFile(filepath.Join(l.laneDirPath(c.LaneID), FenceFile))
+		path, err := l.itemFencePath(c.LaneID)
+		var raw []byte
+		if err == nil {
+			raw, err = os.ReadFile(path)
+		}
 		if err != nil {
 			kept = "candidate fence cannot be saved: " + err.Error()
 		} else {
@@ -406,7 +410,7 @@ func (l *Loop) assignPinnedCandidate(tx *store.Tx, work *pendingWork, d *Decisio
 }
 
 // stagePinnedCandidate materializes the exact held commit, without a new worker
-// or another attempt. The saved fence is the one the original worker was given.
+// or another attempt. The saved fence covers the whole item, not only its last node.
 func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) error {
 	c := *work.Candidate
 	if err := l.pinnedCandidate(ctx, c); err != nil {
@@ -445,11 +449,16 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), BaseSHAFile), []byte(c.BaseSHA+"\n"), 0600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), FenceFile), []byte(work.HeldFence), 0600); err != nil {
-		return err
+	// A released lane may have belonged to another item since this candidate
+	// was pinned. Replace both legacy and whole-item metadata with the saved
+	// authority; no sibling base or fence may survive the restaging.
+	for name, body := range map[string]string{
+		BaseSHAFile: c.BaseSHA + "\n", ItemBaseSHAFile: c.BaseSHA + "\n",
+		FenceFile: work.HeldFence, ItemFenceFile: work.HeldFence,
+	} {
+		if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), name), []byte(body), 0600); err != nil {
+			return err
+		}
 	}
 	if head, err := l.revParse(ctx, c.Worktree, "HEAD"); err != nil || strings.TrimSpace(head) != c.HeadSHA {
 		return fmt.Errorf("staging candidate %s: head %s, want %s: %v", c.RunID, head, c.HeadSHA, err)
