@@ -7593,6 +7593,31 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "go-tool" in fields["checks"].split(","), fields
     assert float(fields["landing"]) <= float(fields["seconds"]) + 0.1, fields
 
+    # A first rolling audit asks --all even when the gate has already verified this tip.
+    # The remembered baseline must not turn the Go suite into a no-change skip.
+    tool = repo / "tools/tillr-drain"
+    tool.mkdir(parents=True, exist_ok=True)
+    (tool / "audit.go").write_text("package main\n")
+    commit(repo, "seed the drain suite for the first rolling audit")
+    state = record(repo)
+    baseline = {**state["baseline"],
+                "commit": sh(repo, "git", "rev-parse", "HEAD").stdout.strip(),
+                "tree": sh(repo, "git", "rev-parse", "HEAD^{tree}").stdout.strip()}
+    state["baseline"] = baseline
+    state["baselines"] = {sh(repo, "git", "symbolic-ref", "HEAD").stdout.strip(): baseline}
+    write_record(repo, state)
+    assert record(repo)["baseline"]["commit"] == \
+        sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    spans_path = base / "first-rolling-spans.json"
+    result = run(repo, env, "--tier", "rolling", "--all", "--spans-out", str(spans_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    spans = json.loads(spans_path.read_text())
+    rolling_suites = [span for span in spans["check_spans"] if span["kind"] == "go-tool"]
+    assert len(rolling_suites) == 2, spans
+    assert any("tillr-drain" in span["label"] for span in rolling_suites), spans
+    assert not any(module.CHECK_TIER.get(skip["kind"]) == module.TIER_ROLLING and "no " in skip["reason"]
+                   and "changed" in skip["reason"] for skip in spans["skipped_checks"]), spans
+
     # 59h. Gate code never proves itself late (invariant I3). A gate-code diff plans the
     #      audit suite in the landing tier, and the rolling tier plans nothing extra for
     #      it: `self-suite` is a landing kind, so a rolling run neither runs it nor owes
@@ -7648,6 +7673,14 @@ with tempfile.TemporaryDirectory() as tmp:
     plan_lines = [line for line in result.stdout.splitlines()
                   if line.startswith("fork-check: plan ")]
     assert len(plan_lines) == 1, result.stdout
+
+    # Diagnostics have no tier option, but --all must still plan the full gate.
+    preflight = sh(repo, sys.executable, str(repo / "tools/fork-check.py"),
+                   "--preflight", "--all", "--only", "file-size", "--explain", check=False, env=env)
+    assert preflight.returncode == 0, preflight.stdout + preflight.stderr
+    replay_green = run(repo, env, "--replay", "--only", "file-size")
+    assert replay_green.returncode == 0, replay_green.stdout + replay_green.stderr
+    assert "named check(s) green" in replay_green.stdout, replay_green.stdout
 
     # ── the base replay ─────────────────────────────────────────────────────
     #

@@ -1323,12 +1323,7 @@ no-op, so a person reading "green" believes the trunk was checked when it was no
 watermark should audit the whole tree, or the watermark should record only what was proven, and
 the loop's line should say how much actually ran.
 
-<!-- tillr: item id="item-drain-rolling-watermark-proves-what-ran" paths="tools/tillr-drain/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A rolling run with no watermark runs every check in the rolling tier against the trunk tip, whatever baseline the repo gate last verified. A test seeds a gate baseline equal to the tip, runs the first rolling run, and asserts no rolling check is skipped as unchanged.
-- **c2:** A green rolling run that skipped checks advances the watermark only over what those checks cover, or records the skipped checks with the watermark, so a reader can tell a full audit from a partial one. A test asserts the record names the skipped checks.
-- **c3:** The loop's rolling line states how many checks ran, how many were answered from cache and how many were skipped. A test asserts the three counts on a fixture run.
-- **c4:** The drain's README states what a rolling run with no watermark audits, in one sentence a reader can check against the record.
 
 **Agent details:**
 

@@ -176,6 +176,54 @@ func readFailingSpans(path string) ([]string, map[string][]string) {
 	return checks, watches
 }
 
+// RollingCoverage is the evidence retained with a rolling run, including skips.
+// Ran excludes cached verdicts; absent or unreadable spans never claim zero work.
+type RollingCoverage struct {
+	SpansState    string
+	Ran           int
+	Cached        int
+	SkippedChecks []gateSkip
+}
+
+func (coverage RollingCoverage) line() string {
+	if coverage.SpansState != GateSpansRead {
+		return "check counts unavailable (no readable spans)"
+	}
+	return fmt.Sprintf("%d ran, %d cached, %d skipped", coverage.Ran, coverage.Cached, len(coverage.SkippedChecks))
+}
+
+func readRollingCoverage(path string) RollingCoverage {
+	coverage := RollingCoverage{SpansState: GateSpansAbsent}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			coverage.SpansState = GateSpansUnreadable
+		}
+		return coverage
+	}
+	var file gateSpansFile
+	if json.Unmarshal(body, &file) != nil {
+		coverage.SpansState = GateSpansUnreadable
+		return coverage
+	}
+	coverage.SpansState = GateSpansRead
+	coverage.SkippedChecks = file.SkippedChecks
+	for _, span := range file.CheckSpans {
+		var attributes struct {
+			Cached bool `json:"cached"`
+		}
+		if span.AttributesJSON != "" && json.Unmarshal([]byte(span.AttributesJSON), &attributes) != nil {
+			return RollingCoverage{SpansState: GateSpansUnreadable}
+		}
+		if attributes.Cached {
+			coverage.Cached++
+		} else {
+			coverage.Ran++
+		}
+	}
+	return coverage
+}
+
 func hexDigest(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])

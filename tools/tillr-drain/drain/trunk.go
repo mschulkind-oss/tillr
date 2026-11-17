@@ -215,6 +215,8 @@ type ReplayStep interface {
 
 // RollingOutcome is one rolling run's answer.
 type RollingOutcome struct {
+	// Coverage preserves what was actually checked beside the judged tip.
+	Coverage RollingCoverage
 	// Green reports that every rolling check passed on the trunk range.
 	Green bool
 	// Known reports whether the rolling program reached a judgment. Unknown advances nothing.
@@ -268,6 +270,13 @@ CREATE TABLE IF NOT EXISTS rolling_runs (
   outcome        TEXT NOT NULL,
   failing_checks TEXT NOT NULL,
   at             INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rolling_coverage (
+  run_id         TEXT PRIMARY KEY REFERENCES rolling_runs(run_id),
+  spans_state    TEXT NOT NULL,
+  ran            INTEGER NOT NULL,
+  cached         INTEGER NOT NULL,
+  skipped_checks TEXT NOT NULL
 );
 `
 
@@ -348,6 +357,10 @@ func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out Rolli
 	if err != nil {
 		return Internalf("encoding the rolling failing checks: %v", err)
 	}
+	skipped, err := json.Marshal(out.Coverage.SkippedChecks)
+	if err != nil {
+		return Internalf("encoding the rolling skipped checks: %v", err)
+	}
 	outcome := "red"
 	if out.Green {
 		outcome = "green"
@@ -362,6 +375,13 @@ func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out Rolli
 			id, base, tip, outcome, string(checks), l.cfg.Now().UTC().UnixMilli(),
 		); err != nil {
 			return Internalf("recording the rolling run: %v", err)
+		}
+		if _, err := tx.Exec(
+			`INSERT OR REPLACE INTO rolling_coverage (run_id, spans_state, ran, cached, skipped_checks)
+			 VALUES (?, ?, ?, ?, ?)`,
+			id, out.Coverage.SpansState, out.Coverage.Ran, out.Coverage.Cached, string(skipped),
+		); err != nil {
+			return Internalf("recording the rolling coverage: %v", err)
 		}
 		return nil
 	})
@@ -681,8 +701,8 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 			where = "there is no watermark yet, because no rolling run has judged the trunk"
 			span = "the whole tree up to " + shortSHA(mainSHA)
 		}
-		l.reportf("loop: the rolling run over %s could not judge (exit %d); %s; continuing dispatch. %s\n",
-			span, out.ExitCode, where, strings.TrimSpace(out.Detail))
+		l.reportf("loop: the rolling run over %s could not judge (exit %d); %s; %s; continuing dispatch. %s\n",
+			span, out.ExitCode, where, out.Coverage.line(), strings.TrimSpace(out.Detail))
 		if streak > 1 || (streak == 1 && base == "") {
 			noun := "runs have"
 			if streak == 1 {
@@ -705,8 +725,8 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 		l.mu.Lock()
 		result.RollingGreen++
 		l.mu.Unlock()
-		l.reportf("loop: rolling run green over %s..%s; watermark advances to %s\n",
-			shortSHA(base), shortSHA(mainSHA), shortSHA(mainSHA))
+		l.reportf("loop: rolling run green over %s..%s; watermark advances to %s; %s\n",
+			shortSHA(base), shortSHA(mainSHA), shortSHA(mainSHA), out.Coverage.line())
 		return nil
 	}
 	// Red: file the fixer for the tip and leave the watermark where it was.
@@ -738,9 +758,9 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	result.RollingRed++
 	l.mu.Unlock()
 	if fixerErr == nil {
-		l.reportf("loop: rolling run RED over %s..%s (%s); watermark stays at %s and the queue is held behind %s\n",
+		l.reportf("loop: rolling run RED over %s..%s (%s); watermark stays at %s and the queue is held behind %s; %s\n",
 			shortSHA(base), shortSHA(mainSHA), strings.Join(out.FailingChecks, ", "),
-			shortSHA(state.WatermarkSHA), fixerID)
+			shortSHA(state.WatermarkSHA), fixerID, out.Coverage.line())
 	}
 	return nil
 }
