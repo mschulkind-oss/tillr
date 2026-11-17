@@ -210,29 +210,13 @@ exit 0
 	}
 }
 
-// A gate is slow, so its run is bounded, and an expired bound must not hang and must not
-// pass: the process group is killed and the verdict is `error`/4, because a gate that did
-// not finish judged nothing -- a `pass` there would certify a tree nothing checked.
-//
-// The assertion is the verdict and the recorded reason, never an elapsed time: a case that
-// measured wall clock would fail on a loaded machine for a run that behaved correctly.
-func TestAnExpiredGateBoundIsAnErrorNotAPass(t *testing.T) {
-	plan := planRecord(t, planIn{PlanID: "p-bound", BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "d-1"})
+// The compatibility flag is a target; the injected-clock wrapper test covers its overrun.
+func TestGateTimeoutFlagIsATarget(t *testing.T) {
+	plan := planRecord(t, planIn{PlanID: "p-target", BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "d-1"})
 	code, raw := runPlan(t, plan, tree(t), "--gate", "sh",
-		"--gate-arg", "-c", "--gate-arg", "sleep 30", "--gate-timeout", "200ms")
-	if code != 4 {
-		t.Fatalf("a gate program that outlived its bound exited %d, want 4: %s", code, raw)
-	}
-	got := decodeVerdict(t, raw)
-	if got.Payload.Result != "error" {
-		t.Fatalf("an expired bound produced verdict %q, want error", got.Payload.Result)
-	}
-	triage, err := os.ReadFile(got.Payload.Checks[0].LogRef)
-	if err != nil {
-		t.Fatalf("reading the verdict's evidence failed: %v", err)
-	}
-	if !strings.Contains(string(triage), "--gate-timeout") {
-		t.Fatalf("the verdict does not record why the run was killed:\n%s", triage)
+		"--gate-arg", "-c", "--gate-arg", "exit 0", "--gate-timeout", "1ns")
+	if code != 0 || decodeVerdict(t, raw).Payload.Result != "pass" {
+		t.Fatalf("target became a kill: code %d: %s", code, raw)
 	}
 }
 

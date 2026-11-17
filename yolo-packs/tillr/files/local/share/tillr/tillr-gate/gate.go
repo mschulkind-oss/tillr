@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -15,15 +13,16 @@ import (
 )
 
 // GateProgram is the gate a caller names for the run face to execute: one command, and
-// the bound it may run under.
+// its reporting target. Progress, not elapsed time, decides whether it may run on.
 //
 // There is one gate implementation, `tools/fork-check.py`, and this face does not own the
 // checks: it runs that program once and maps its exit onto the frozen verdict contract.
 // The program is named by the caller rather than hardcoded, so a test can substitute
 // `/bin/true` and a fixture can name a scripted refusal.
 type GateProgram struct {
-	Command []string
-	Timeout time.Duration
+	Command  []string
+	Timeout  time.Duration // reporting target, not a kill deadline
+	watchdog *watchSources
 }
 
 // The gate program's exits that are verdicts, as its own `verdict_of` documents them: 0
@@ -39,8 +38,8 @@ const (
 //
 // 0 is `pass` and 1 is `fail`. 2 is `error`, because "the harness could not judge" is not
 // "the code is bad", and collapsing the two is how a red gate stops being believed. Every
-// other code is `error` for the same reason: a program that exited 3, a signal, or a
-// timeout judged nothing.
+// other code except the reserved stall exit 6 is `error`: a program that exited 3
+// or was killed by a signal judged nothing.
 func gateResult(exit int) string {
 	switch exit {
 	case gateExitVerified:
@@ -106,11 +105,9 @@ type gateRun struct {
 
 // runGateProgram runs the program once and answers what the verdict records.
 //
-// The program leads its own process group and the bound kills the group, the same shape a
-// planned check runs under: a bound that reached only the process would leave a gate's
-// children building past its verdict. A bound that expires is `error`, never a `pass` -- a
-// gate that did not finish judged nothing -- and it is never a hang either, because the
-// group is killed rather than waited on.
+// The program leads its own process group and uses the planned checks' watchdog.
+// Its timeout is a reporting target. Only sixty silent, idle samples kill the
+// group; unavailable CPU accounting is explicit and never guesses a stall.
 func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	checkID := "gate:" + filepath.Base(program.Command[0])
 	out := gateRun{check: VerdictCheck{CheckID: checkID, Result: ResultError}}
@@ -128,13 +125,8 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	}
 	defer whole.Close()
 
-	ctx := context.Background()
-	if program.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, program.Timeout)
-		defer cancel()
-	}
-	cmd := exec.CommandContext(ctx, program.Command[0], program.Command[1:]...)
+	sources := sourcesFor(PlanCheck{watchdog: program.watchdog})
+	cmd := sources.Command(program.Command)
 	cmd.Dir = root
 	fastPath := os.Getenv("TILLR_FAST_VERDICT_OUT")
 	if fastPath == "" {
@@ -148,10 +140,17 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	cmd.Stdout = io.MultiWriter(whole, triage)
 	cmd.Stderr = cmd.Stdout
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-
-	started := time.Now()
-	if err := cmd.Start(); err != nil {
+	started := sources.Now()
+	var cpu io.Closer
+	if sources.Sample == nil {
+		sources.Sample, cpu, err = startAccountedCommand(cmd)
+	} else {
+		err = cmd.Start()
+	}
+	if cpu != nil {
+		defer cpu.Close()
+	}
+	if err != nil {
 		out.check.DurationMS = time.Since(started).Milliseconds()
 		triage.flush()
 		header := []string{gateHeader(program, root, "it could not be started", time.Since(started), 0, wholePath)}
@@ -162,19 +161,27 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 			strings.Join(program.Command, " "), err, triagePath)
 		return out
 	}
-	waitErr := cmd.Wait()
-	out.check.DurationMS = time.Since(started).Milliseconds()
+	waitErr, state := watchCommand(cmd, whole, sources)
+	elapsed := sources.Now().Sub(started)
+	out.check.DurationMS = elapsed.Milliseconds()
+	out.check.BudgetMS = int(program.Timeout.Milliseconds())
+	if out.check.BudgetMS > 0 && out.check.DurationMS > int64(out.check.BudgetMS) {
+		out.check.OverBudgetMS = out.check.DurationMS - int64(out.check.BudgetMS)
+	}
+	out.check.CPUTimeMS = state.previous.CPUTimeMS
+	out.check.LastOutputLine = state.previous.LastLine
+	out.check.SilentSamples = state.SilentSamples
+	out.check.WatchdogUnavailable = state.Unavailable
 	triage.flush()
 	// A process that exited normally carries its code; one killed by a signal answers -1.
-	// The bound is checked first, because our own SIGKILL is what ended it.
+	// Stall observations are checked first, because our own SIGKILL ended it.
 	exit := cmd.ProcessState.ExitCode()
 	how := fmt.Sprintf("exit %d", exit)
 	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		out.check.Result = ResultError
-		how = fmt.Sprintf("no exit: killed at the --gate-timeout bound of %s", program.Timeout)
-		out.failure = externalf("the gate program outlived its timeout of %s and was killed; "+
-			"nothing was judged, so the verdict is error and never a pass: %s", program.Timeout, triagePath)
+	case state.SilentSamples >= WatchdogSilentSamples:
+		out.check.Result = ResultStalled
+		how = stallNote(out.check)
+		out.failure = &exitError{code: ExitStalled, err: fmt.Errorf("%s; triage %s", how, triagePath)}
 	case exit < 0:
 		out.check.Result = ResultError
 		how = fmt.Sprintf("no exit: killed by a signal (%v)", waitErr)
@@ -202,7 +209,8 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 				"to judge, so the tree was neither passed nor failed: %s", exit, triagePath)
 		}
 	}
-	header := []string{gateHeader(program, root, how, time.Since(started), triage.seen, wholePath)}
+	header := []string{gateHeader(program, root, how, elapsed, triage.seen, wholePath)}
+	header = append(header, budgetNotes(VerdictPayload{Checks: []VerdictCheck{out.check}})...)
 	if writeTriage(&out, triagePath, triage, header) != nil {
 		return out
 	}

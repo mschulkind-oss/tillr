@@ -12,6 +12,12 @@ PROGRAM = Path(__file__).with_name("change-gate.py").resolve()
 
 class ChangeGateStallTest(unittest.TestCase):
     def test_stall_record_and_exit_survive_the_real_adapter(self):
+        self.run_stall_case(False)
+
+    def test_remaining_gate_stall_survives_the_real_adapter(self):
+        self.run_stall_case(True)
+
+    def run_stall_case(self, remaining):
         with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
             output = Path(directory) / "fast.json"
             harness = r'''
@@ -33,11 +39,16 @@ with patch.object(module,'warm_trimmed_go_cache'),patch.object(module.subprocess
  assert commands[-1][0]=='stub-checks'
  sys.exit(code)
 '''
+            if remaining:
+                harness = harness.replace("if args[0]=='stub-checks':return subprocess.CompletedProcess(args,6,stdout=record)",
+                    "if args[0]=='stub-checks':return subprocess.CompletedProcess(args,0,stdout=b'{}\\\\n')\n if args[0]==sys.executable:\n  assert '--lock-timeout' not in args\n  open(os.environ['TILLR_FAST_VERDICT_OUT'],'wb').write(record)\n  return subprocess.CompletedProcess(args,6)")
+                harness = harness.replace("assert commands[-1][0]=='stub-checks'", "assert commands[-1][0]==sys.executable")
             result = subprocess.run(["python3", "-c", harness, str(PROGRAM)],
                                     env=dict(os.environ, TILLR_FAST_VERDICT_OUT=str(output)),
                                     capture_output=True)
             self.assertEqual(result.returncode, 6, result.stderr)
-            self.assertEqual(result.stdout, output.read_bytes())
+            if not remaining:
+                self.assertEqual(result.stdout, output.read_bytes())
             check = json.loads(output.read_bytes())["payload"]["checks"][0]
             self.assertEqual(check["check_id"], "blocked")
             self.assertEqual(check["silent_samples"], 60)
