@@ -1211,6 +1211,24 @@ replacing an existing lease, so that the view can show "0 of 2 express" before t
 dispatch. That is accepted as part of c4. `retireDesigners` reads no lane rows, so it is not a
 suspect in the failure above.
 
+**Ruling, 2026-11-17 (answers the eleventh run's conflict on c5):** the eleventh run stopped
+because c5 asked for two things that cannot both hold. The `deleted` case of
+`TestRetireDesignerLeavesTranscript` in `tools/tillr-drain/drain/designer_retire_test.go` removes a
+committed document's file from the main checkout, does not commit the removal, and asserts the
+designer's row is gone. c5 requires that row to be kept in exactly that state, and it also said the
+test passes unchanged. The run's focused test showed the contradiction: with the test unchanged, the
+uncommitted removal still ended the session. The behavior in c5 is the ruling and the test's fixture
+was the mistake, so c5 no longer asks for that test to pass unchanged. Three points settle it:
+
+- **The `deleted` case commits the removal before the retirement runs.** That is the only change
+  this ruling permits to the existing test. Its `done` and `live` cases, the row assertion for each
+  of the three cases, and the assertion that the transcript is left in place all stay as they are.
+- **The uncommitted removal gets its own test.** The new test c5 describes covers the row that is
+  kept before the removal is committed and gone after. It is added beside the existing test and
+  does not replace it.
+- **`TestCommentPathTwice` still passes unchanged**, and nothing else in c1 to c5 moves. The rule
+  for which document counts as deleted is the one the ruling above states.
+
 - **c1:** The settings file takes `lanes.express`, a count of lanes that are not part of the lane cap and are offered only to express work. The default is 0. Express work is an idea the owner saved ([the observatory's first two actions](../design/observatory-actions.md#53-the-item-that-is-created)) and any item whose block sets `express="true"`. An item that answers review comments is not express work in this sense: it runs at its document's desk, as it does today. Whether an item is express is decided from the item's own definition, and a test asserts that a saved idea whose first workflow node names another seat is still dispatched on an express lane.
 - **c2:** With every ordinary lane leased, an express item is dispatched on an express lane in the next pass. A test fills two ordinary lanes with runs that do not end, files an express item, and asserts it is dispatched while both are still running.
 - **c3:** Ordinary work is never dispatched on an express lane, and an express item that finds no express lane free waits for one or for an ordinary lane, whichever frees first. No running work is stopped to make room.
