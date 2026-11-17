@@ -33,6 +33,14 @@ final line saying it was stopped by the operator. The runs are left alone on a
 signal, a fault, or any other ordinary exit. A restarted loop settles and judges
 those runs once, including ones that finished while it was absent.
 
+New lanes normally start at the last proved trunk commit, selected by the
+repository's `lane_base` gate setting. A `trunk-unproved` hold means a finished
+blocker's landing still needs proof from the heavy runner, not more work from
+the blocker. The `tip` setting opts out; a trunk fixer always starts at the tip.
+With no proved pointer yet, the loop uses the tip and says so once. The
+[lane-base contract](../../../../tools/tillr-drain/README.md#the-commit-a-new-lane-starts-from)
+explains recorded bases and safe reuse of idle lanes.
+
 Use the stop face for an explicit operator request:
 
 ```sh

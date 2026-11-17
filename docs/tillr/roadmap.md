@@ -399,12 +399,7 @@ them. These three items are those slices. Each reads its setting from the policy
 
 ### A new lane starts from the last green commit
 
-<!-- tillr: item id="item-gate-lane-base" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-loop/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** With `lane_base` set to `green`, a lane's worktree is cut from the green pointer, and its recorded base is that commit; with `tip` it is cut from the trunk tip as today.
-- **c2:** An item whose blocker landed after the green pointer is not dispatched until the pointer contains the blocker's landing, and its waiting reason says it waits on the trunk being proved, not on the blocker.
-- **c3:** The fixer item for a red trunk is always cut from the tip, whatever the setting, because the failure it fixes is not in the green commit.
-- **c4:** On a store with no green pointer yet, lanes are cut from the tip and the loop says so once.
 
 ### A change to the gate's own runner lands only after the runner's suite passes
 

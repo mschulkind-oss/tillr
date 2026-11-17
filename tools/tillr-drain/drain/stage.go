@@ -651,13 +651,14 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 	return nil
 }
 
-// refuseUnlandedCommit refuses a lane that holds a commit the base does not contain. It reads
+// refuseUnlandedCommit refuses a lane that holds a commit neither the base nor trunk contains. It reads
 // the worktree's HEAD where the worktree can be read and the lane's own branch always: a lane
 // whose directory was deleted still holds its commit on that branch, and that commit is the
 // only copy of work nobody has judged.
 //
-// A commit the base does contain is behind the trunk and is not refused: resetting to the
-// base loses nothing that is not already on it.
+// The selected base may be older than the idle lane's HEAD when lane_base is green.
+// A commit contained in trunk is safe to reset: its work is already retained there,
+// even when the green pointer has not caught up. Unlanded commits remain refused.
 func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, worktree string) error {
 	candidates := []string{}
 	if head, err := s.git(ctx, worktree, "rev-parse", "HEAD"); err == nil {
@@ -670,7 +671,17 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 		if sha == "" || sha == spec.BaseSHA {
 			continue
 		}
-		if _, err := s.git(ctx, s.Root, "merge-base", "--is-ancestor", sha, spec.BaseSHA); err == nil {
+		contained, err := containsCommit(ctx, s.Root, sha, spec.BaseSHA)
+		if err != nil {
+			return err
+		}
+		if !contained {
+			contained, err = containsCommit(ctx, s.Root, sha, TrunkRef)
+			if err != nil {
+				return err
+			}
+		}
+		if contained {
 			continue
 		}
 		return unlandedLaneRefusal(spec.LaneID, sha, spec.BaseSHA)

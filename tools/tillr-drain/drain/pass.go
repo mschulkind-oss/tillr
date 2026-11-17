@@ -709,6 +709,37 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if work != nil && !work.Done && !work.Ready && !d.WorkflowRestart {
 				return nil
 			}
+			base := mainSHA
+			if !IsTrunkFixer(d.ItemID) {
+				green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
+				if err != nil {
+					return err
+				}
+				if green != "" {
+					states := map[string]string{}
+					for _, row := range items {
+						states[row.ItemID] = row.State
+					}
+					edges, err := readEdges(tx.Reader())
+					if err != nil {
+						return err
+					}
+					waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, states, edges)
+					if err != nil {
+						return err
+					}
+					if waits[d.ItemID] {
+						return nil
+					}
+					base = green
+				} else if l.gatePolicy.LaneBase != "tip" && !l.laneBootstrapReported {
+					l.reportf("loop: no green pointer yet; cutting lanes from trunk tip\n")
+					l.laneBootstrapReported = true
+				}
+			}
+			if work != nil && (work.Ready || d.WorkflowRestart) {
+				base = work.BaseSHA
+			}
 			if err := correlate(tx, &d); err != nil {
 				return err
 			}
@@ -736,10 +767,6 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				if err := item.RecordConflict(tx, c, at); err != nil {
 					return err
 				}
-			}
-			base := mainSHA
-			if work != nil && (work.Ready || d.WorkflowRestart) {
-				base = work.BaseSHA
 			}
 			if d.Workflow != nil && d.NodeBaseSHA == "" {
 				d.NodeBaseSHA = base

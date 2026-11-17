@@ -73,6 +73,35 @@ drain-4-6.json  -> record id loop-4-6
 drain-0-0.json  -> no applied generation
 ```
 
+## The commit a new lane starts from
+
+The repository's `lane_base` gate setting defaults to `green`. A new dispatch
+records and stages the commit at `refs/tillr/green`, the
+[green pointer](../../docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+that names the last proved trunk commit. With `tip`, it records and stages the
+current trunk tip instead. A trunk-fixer item always starts from the tip: its
+failure is not in the older proved commit.
+
+A finished blocker's landing must be contained in the green pointer before a
+new dependent lane dispatches under `green`. The hold reason is `trunk-unproved`,
+not `blocked`: the work is finished, and the heavy runner must prove the trunk.
+A landed blocker without a recorded landing also waits rather than guessing
+that its work is in the selected base. Advancing the pointer releases the hold
+on the next pass; `tip` does not apply this proof requirement. A fork blocker
+instead needs its judged landing retained by its delivered patch branch: fork
+commits are not part of main's history, so main's green pointer cannot prove them.
+
+With no pointer yet, dispatch uses the tip and the loop reports that choice once.
+An invalid pointer or one outside trunk history is an error, not that bootstrap
+case. Existing workflow stages retain their recorded base. An idle lane already
+at a newer trunk commit can be reset to green because trunk retains its work;
+a commit neither the selected base nor trunk contains is still refused as
+unlanded work.
+
+The [lane-base regression tests](./drain/lane_base_test.go) cover the selected
+worktree commit, recorded base, blocker proof wait, fixer exception, and bootstrap
+notice.
+
 ## Registered command nodes
 
 A workflow stage with `kind: command` runs a registered program, not a model.

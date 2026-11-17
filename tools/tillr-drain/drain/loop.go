@@ -442,6 +442,7 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	laneBootstrapReported       bool
 	gatePolicy                  GatePolicy
 	heavyMu                     sync.Mutex
 	heavyWG                     sync.WaitGroup
