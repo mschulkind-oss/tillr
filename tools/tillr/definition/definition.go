@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -42,6 +43,17 @@ type Definition struct {
 	Retention     string       `json:"retention"`
 	BriefTemplate string       `json:"brief_template"`
 	Hooks         *Hooks       `json:"hooks"`
+}
+
+// HasState reports whether the definition declares the state.
+func (d Definition) HasState(state string) bool { return slices.Contains(d.States, state) }
+
+// IsFinished reports whether the state finishes the work under this definition.
+func (d Definition) IsFinished(state string) bool { return slices.Contains(d.Finished, state) }
+
+// Allows reports whether the definition lists the move. Same-state writes are not moves.
+func (d Definition) Allows(from, to string) bool {
+	return slices.Contains(d.Transitions, Transition{From: from, To: to})
 }
 
 // Transition is one allowed state move. Finished states may have outgoing moves.

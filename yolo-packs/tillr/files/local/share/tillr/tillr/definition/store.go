@@ -58,6 +58,16 @@ func ForStore(ctx context.Context, s *store.Store) (Record, error) {
 	return result, err
 }
 
+// ForReader reads the declaration in the caller's transaction, so state validation
+// and its write use the same declaration even during a concurrent replacement.
+// A nil reader uses the embedded definition for a not-yet-created store.
+func ForReader(r *store.Reader) (Record, error) {
+	if r == nil {
+		return fromContent(gitLandingJSON, true)
+	}
+	return readStore(r)
+}
+
 func readStore(r *store.Reader) (Record, error) {
 	var raw string
 	err := r.QueryRow(`SELECT value FROM meta WHERE key = ?`, storeKey).Scan(&raw)

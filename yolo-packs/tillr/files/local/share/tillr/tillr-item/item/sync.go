@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/mschulkind-oss/tillr-item/docshare"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -55,12 +56,6 @@ var roadmapDocuments = []string{"docs/roadmap.md", "docs/pi/roadmap.md", "docs/t
 // parkedSections are the roadmap section headings that park the documents they link to. A
 // heading counts when its text starts with one of these words, so `## Icebox 🧊` parks too.
 var parkedSections = []string{"Icebox", "Exploration"}
-
-// terminalStates are the item states no further work moves: an item in one of them is not
-// open, so it is never counted as unshared residue.
-var terminalStates = map[string]bool{
-	"landed": true, "resolved-elsewhere": true, "closed": true, "abandoned": true, "deleted": true,
-}
 
 // SyncDocument is one tracked Markdown file: its repo-relative slash path and its bytes.
 type SyncDocument = docshare.Document
@@ -275,6 +270,11 @@ func finishReport(report SyncReport) SyncReport {
 // planSync parses every document, validates every block, compares each with the store and
 // decides what to write. It writes nothing.
 func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
+	d, err := itemDefinition(r)
+	if err != nil {
+		return syncPlan{}, err
+	}
+	finished := func(state string) bool { return d.IsFinished(state) || frozenStates[state] }
 	report := SyncReport{
 		Root: in.Root, Documents: len(in.Documents),
 		Created: []string{}, Updated: []string{}, Unchanged: []string{}, Frozen: []SyncNote{},
@@ -387,7 +387,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			continue
 		}
 		original := match[1]
-		if st, exists := held[original]; exists && !terminalStates[st.state] {
+		// A legacy in-progress row still represents a held run for clone protection,
+		// even though sync treats frozen legacy rows as finished document residue.
+		if st, exists := held[original]; exists && (!finished(st.state) || st.state == "in-progress") {
 			report.Findings = append(report.Findings, note(b, "clone-of-held-item",
 				fmt.Sprintf("item %q copies held item %q in state %q; retry the original under its own id with tillr drain retry --item %s (see tillr drain retry --help)", id, original, st.state, original)))
 			bad[b.file] = true
@@ -463,7 +465,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	for id, st := range held {
 		states[id] = st.state
 	}
-	fed, missing := docshare.Sharing(in.Documents, states)
+	fed, missing := docshare.SharingWithFinished(in.Documents, states, finished)
 	report.DocumentFed = fed
 	unshared := make(map[string]bool, len(missing))
 	for _, id := range missing {
@@ -493,8 +495,13 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if oldestSet {
 		report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
 	}
+	// Only Git-landing promises to remove a landed item's block. Another use may
+	// declare that spelling as an unfinished state with ordinary document updates.
+	staleLanding := func(state string) bool {
+		return d.Name == definition.GitLandingName && state == "landed" && d.IsFinished(state)
+	}
 	for _, b := range blocks {
-		if st, ok := held[b.payload.ItemID]; ok && st.state == "landed" {
+		if st, ok := held[b.payload.ItemID]; ok && staleLanding(st.state) {
 			report.StaleDocBlockIDs = append(report.StaleDocBlockIDs, b.payload.ItemID)
 		}
 	}
@@ -509,7 +516,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		// A landed block is stale document residue, not a definition to apply.
 		// Skipping just this block lets its file's other items sync normally.
-		if st, ok := held[b.payload.ItemID]; ok && st.state == "landed" {
+		if st, ok := held[b.payload.ItemID]; ok && staleLanding(st.state) {
 			continue
 		}
 		desired := b.payload
@@ -529,8 +536,8 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		fw.heading[desired.ItemID] = note(b, "", "")
 		if !found {
-			desired.State = "in-queue"
-			if b.parked {
+			desired.State = d.Ready
+			if b.parked && d.HasState("not-started") {
 				desired.State = "not-started"
 			}
 			fw.payloads = append(fw.payloads, desired)
@@ -558,7 +565,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 				fmt.Sprintf("the block's %s differs from the store's, and criterion %q already carries the state %q, so the stored definition stands: a presented criterion is not rewritten", field, judged, criterionState(stored, judged))))
 			continue
 		}
-		if terminalState(stored.State) {
+		if finished(stored.State) && stored.State != d.Closed {
 			report.Frozen = append(report.Frozen, note(b, "state-terminal",
 				fmt.Sprintf("item %q is %q; its stored definition stands", stored.ItemID, stored.State)))
 			continue

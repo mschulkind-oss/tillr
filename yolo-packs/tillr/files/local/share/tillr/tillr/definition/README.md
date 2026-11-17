@@ -7,10 +7,10 @@ The term and the name **git-landing** are placeholders coined in
 the owner has not chosen the final names.
 
 This package reads and validates that data and answers an open store's declaration.
-The store utility records and reports it; item validation and drain behavior do not
-consume its vocabulary yet. It does not open a store, dispatch work, check a
-prerequisite, or run a program. The consumer column below names the intended
-reader when the later integration work lands.
+The store utility records and reports it. Item state, apply, close, reopen, and
+sync read its lifecycle vocabulary; drain integration remains separate work.
+This package does not open a store, dispatch work, check a prerequisite, or run a
+program. The consumer column below includes both current and intended readers.
 
 ## Reading a file
 
@@ -36,6 +36,12 @@ The package recognizes version 1 only.
 that content, and a `Default` flag. Its `Parsed` field carries the validated
 `Definition` for Go consumers and is omitted from JSON. The store utility prints
 this same record as its `store.definition` payload.
+
+`ForReader(reader)` reads the same declaration inside a caller's existing transaction.
+Item validation and writes therefore use one consistent declaration even when another
+writer replaces it. A nil reader uses the embedded default for a not-yet-created store.
+`HasState`, `IsFinished`, and `Allows` answer vocabulary membership and listed moves;
+a same-state write is not a move and need not have a listed self-transition.
 
 The declaration is one JSON record at key `store.definition` in the existing `meta`
 table. An absent row means the embedded Git-landing definition (`Default: true`);
@@ -102,18 +108,14 @@ The embedded file states the six writable states, `in-queue` as ready,
 and `closed` as finished. It completes through landing, keeps artifacts, supplies
 no brief template, and names no hook program.
 
-Its transitions capture the item utility at the staged base `bfb02cb3a`:
-raw apply permits every distinct move among the five nonclosed writable states.
-Close allows the three unfinished states to enter `closed`; reopen restores one
-of those three saved prior states. An unchanged state is not a move, so the file
-has no self-transitions. The file cannot express command-specific requirements
-such as a close reason, the saved reopen state, or block metadata.
+Its transitions preserve Git-landing's finished-item policy: neither `landed` nor
+`resolved-elsewhere` has an outgoing move. Close allows the three unfinished states
+to enter `closed`; reopen restores one of those three saved prior states. An unchanged
+state is not a move, so the file has no self-transitions. Command-specific requirements
+such as a close reason, the saved reopen state, and block metadata are enforced by
+the item utility in addition to the listed moves.
 
-This snapshot therefore includes moves out of `landed` and `resolved-elsewhere`.
-That permissiveness is the defect addressed by
-[the separate terminal-state item](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md#prevent-raw-writes-from-reopening-a-landed-or-resolved-item),
-not an endorsement of reopening landed work. Store declarations use this file as
-the default; item lifecycle behavior is not wired to it yet. Adopting a stricter
-lifecycle must update its snapshot and literal-value test
-together. Legacy read-only states (`abandoned`, `deleted`, `in-progress`) are not
+Other definitions may list outgoing moves from selected finished states. The item
+utility requires a reason and actor and records them in the event when such a move
+is made. Legacy read-only states (`abandoned`, `deleted`, `in-progress`) are not
 writable vocabulary in the definition.

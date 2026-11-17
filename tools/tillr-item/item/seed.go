@@ -245,7 +245,11 @@ func readSeedItem(index int, entry seedItem, seen map[string]bool) (itemPayload,
 	if entry.Title == "" {
 		return itemPayload{}, Usagef("seed entry %d (%s) has no title", pos, entry.ItemID)
 	}
-	if err := checkState(entry.ItemID, entry.State); err != nil {
+	d, err := itemDefinition(nil)
+	if err != nil {
+		return itemPayload{}, err
+	}
+	if err := checkState(d, entry.ItemID, entry.State); err != nil {
 		return itemPayload{}, annotate(err, entry.ItemID)
 	}
 	if len(entry.Criteria) == 0 {
