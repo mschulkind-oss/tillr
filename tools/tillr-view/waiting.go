@@ -68,6 +68,7 @@ var waitingRules = map[string]waitingRule{
 	"candidate-no-op":                {"needs a cause", "lane", "cause not recorded"},
 	"run-unjudged":                   {"needs a cause", "lane", "cause not recorded"},
 	"gate-failed":                    {"needs a cause", "gate", "cause not recorded"},
+	"red-cap":                        {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                   {"needs you", "land", "inspect the refused landing and authorize a retry"},
 	"no-policy":                      {"needs you", "queue", "the owner"},
 	"capacity":                       {"waits on work", "queue", "the next pass"},
@@ -113,6 +114,9 @@ func waitingRuleFor(reason string) waitingRule {
 	// in Why and recognize only the declared prefix, never arbitrary new reasons.
 	if strings.HasPrefix(reason, "trunk-rewritten: ") {
 		return waitingRules["trunk-rewritten"]
+	}
+	if strings.HasPrefix(reason, "red-cap: ") {
+		return waitingRules["red-cap"]
 	}
 	if strings.HasPrefix(reason, "trunk-path-dirty: ") {
 		return waitingRules["trunk-path-dirty"]

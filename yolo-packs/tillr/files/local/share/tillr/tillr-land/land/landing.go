@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -63,6 +64,8 @@ const (
 	// A retry of this run's own unrecorded landing is not this refusal: that is recorded as
 	// the landing it was.
 	ReasonAlreadyOnTrunk = "already-on-trunk"
+	// ReasonRedCap is a repository proof-range hold, not a candidate failure.
+	ReasonRedCap = redcap.Reason
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -77,6 +80,7 @@ func Reasons() []string {
 		ReasonItemNotLandable,
 		ReasonTrunkRewritten,
 		ReasonAlreadyOnTrunk,
+		ReasonRedCap,
 	}
 }
 
@@ -93,20 +97,21 @@ func Reasons() []string {
 // tree whose gate it chose to skip, and it is recorded on the row rather than inferred so a
 // reader never has to reconstruct a skip from a missing verdict.
 type Landing struct {
-	LandingID         string   `json:"landing_id"`
-	ItemID            string   `json:"item_id"`
-	RunID             string   `json:"run_id"`
-	VerdictID         string   `json:"verdict_id"`
-	Result            string   `json:"result"`
-	Reason            string   `json:"reason"`
-	BaseSHA           string   `json:"base_sha"`
-	HeadSHA           string   `json:"head_sha"`
-	TrunkBefore       string   `json:"trunk_before"`
-	TrunkAfter        string   `json:"trunk_after"`
-	GatedTree         string   `json:"gated_tree"`
-	LandedTree        string   `json:"landed_tree"`
-	ConflictPaths     []string `json:"conflict_paths"`
-	GateSkippedReason string   `json:"gate_skipped_reason"`
+	LandingID         string       `json:"landing_id"`
+	ItemID            string       `json:"item_id"`
+	RunID             string       `json:"run_id"`
+	VerdictID         string       `json:"verdict_id"`
+	Result            string       `json:"result"`
+	Reason            string       `json:"reason"`
+	BaseSHA           string       `json:"base_sha"`
+	HeadSHA           string       `json:"head_sha"`
+	TrunkBefore       string       `json:"trunk_before"`
+	TrunkAfter        string       `json:"trunk_after"`
+	GatedTree         string       `json:"gated_tree"`
+	LandedTree        string       `json:"landed_tree"`
+	ConflictPaths     []string     `json:"conflict_paths"`
+	GateSkippedReason string       `json:"gate_skipped_reason"`
+	RedCap            *redcap.Hold `json:"red_cap,omitempty"`
 }
 
 // Landed reports whether this landing moved the trunk ref.
@@ -177,6 +182,9 @@ type LandingRequest struct {
 	Verdict Verdict
 	// At is the clock the landing records and the squash dates its commit with.
 	At time.Time
+	// CapNow samples the minute cap after taking the landing lock. Nil uses the
+	// live clock; At remains the record clock, never landing authorization.
+	CapNow func() time.Time
 	// LockPath names another lander's lock file, for the migration; empty takes the
 	// repository's own land lock.
 	LockPath string
@@ -513,11 +521,32 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		if err != nil {
 			return p, err
 		}
+		// A cap limits trunk movement, not a finding that no movement is needed.
+		// Compute the squash first so superseded candidates settle even while red.
+		if !p.squash.Empty && !p.squash.Conflicted() {
+			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				clock := req.CapNow
+				if clock == nil {
+					clock = time.Now
+				}
+				hold, err := redcap.Check(ctx, r, t.repo, req.BaseRef, trunkBefore, req.ItemID, clock())
+				if err != nil {
+					return Externalf("checking red cap: %v", err)
+				}
+				if hold != nil {
+					p.landing.Result, p.landing.Reason, p.landing.RedCap = ResultRefused, ReasonRedCap, hold
+				}
+				return nil
+			})
+			if err != nil {
+				return p, err
+			}
+		}
 		if p.squash.Empty {
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonAlreadyOnTrunk
 		} else if p.squash.Conflicted() {
 			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, p.squash.Conflicts
-		} else {
+		} else if p.landing.Landed() {
 			p.landing.LandedTree = p.squash.Tree
 			clashing, err := t.ClashingPaths(req.BaseRef, trunkBefore, p.squash.Commit)
 			if err != nil {

@@ -2,7 +2,10 @@ module github.com/mschulkind-oss/tillr-land
 
 go 1.26.0
 
-require github.com/mschulkind-oss/tillr v0.0.0
+require (
+	github.com/mschulkind-oss/tillr v0.0.0
+	github.com/mschulkind-oss/tillr-drain v0.0.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
@@ -18,3 +21,5 @@ require (
 )
 
 replace github.com/mschulkind-oss/tillr => ../tillr
+
+replace github.com/mschulkind-oss/tillr-drain => ../tillr-drain

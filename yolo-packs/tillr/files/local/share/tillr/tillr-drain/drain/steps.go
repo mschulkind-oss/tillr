@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
@@ -315,6 +316,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 // git reported rather than a list of bare paths. A conflict-fix run's brief names both the
 // paths that can be parsed out of those lines and the lines themselves.
 type LandOutcome struct {
+	RedCap        *redcap.Hold
 	Result        string
 	Reason        string
 	ConflictPaths []string
@@ -348,9 +350,10 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 		return LandOutcome{}, Internalf("reading the land record for %s: %v", candidate.ItemID, err)
 	}
 	var landing struct {
-		Result        string   `json:"result"`
-		Reason        string   `json:"reason"`
-		ConflictPaths []string `json:"conflict_paths"`
+		RedCap        *redcap.Hold `json:"red_cap"`
+		Result        string       `json:"result"`
+		Reason        string       `json:"reason"`
+		ConflictPaths []string     `json:"conflict_paths"`
 	}
 	if err := json.Unmarshal(env.Payload, &landing); err != nil {
 		return LandOutcome{}, Internalf("reading the land payload for %s: %v", candidate.ItemID, err)
@@ -358,6 +361,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	if landing.Result != "" {
 		outcome.Result = landing.Result
 	}
+	outcome.RedCap = landing.RedCap
 	outcome.Reason = landing.Reason
 	outcome.ConflictPaths = landing.ConflictPaths
 	return outcome, nil

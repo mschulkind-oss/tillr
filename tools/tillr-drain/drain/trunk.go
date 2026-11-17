@@ -670,6 +670,15 @@ func trunkFixerOpen(items []itemRow) string {
 // could not judge — likewise advances nothing.
 func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, result *LoopResult) error {
 	if l.gatePolicy.LandingStrategy == "after-merge" {
+		status, err := ReadHeavyStatus(ctx, l.cfg.Root, l.cfg.Store)
+		if err != nil {
+			return err
+		}
+		line := heavyStatusLine(status)
+		if line != l.lastHeavyStatus {
+			l.reportf("loop: %s\n", line)
+			l.lastHeavyStatus = line
+		}
 		return l.startHeavy(ctx, mainSHA)
 	}
 	step, ok := l.cfg.Steps.(RollingStep)

@@ -53,6 +53,7 @@ type pendingWork struct {
 	ParentRunID    string         `json:"parent_run_id,omitempty"`
 	GateStall      *gateStallHold `json:"gate_stall,omitempty"`
 	DirtyHold      *dirtyHold     `json:"dirty_hold,omitempty"`
+	RedCapHold     *redCapHold    `json:"red_cap_hold,omitempty"`
 	RepairHold     *repairHold    `json:"repair_hold,omitempty"`
 	Decision       Decision       `json:"decision"`
 	Examiner       *LoopOwner     `json:"examination_owner,omitempty"`
@@ -203,6 +204,15 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case loopOrphanedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Orphaned = true
+			}
+		case redCapHeldKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var hold redCapHold
+				if err := json.Unmarshal(e.Payload, &hold); err != nil {
+					return nil, nil, err
+				}
+				hold.Candidate.Request, hold.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
+				work.RedCapHold, work.Candidate, work.Gated = &hold, &hold.Candidate, true
 			}
 		case dirtyHeldKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -375,6 +385,17 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonGateStallRerun
 		identifyDecision(&d)
 		return d, nil
+	}
+	if work.RedCapHold != nil {
+		cap, err := work.RedCapHold.current(context.Background(), r, at)
+		if err != nil {
+			return Decision{}, err
+		}
+		if cap != nil {
+			d.From, d.To, d.Action, d.Reason, d.DeferredBy = "candidate", "", ActionHold, cap.Reason(), cap.FixerItem
+			identifyDecision(&d)
+			return d, nil
+		}
 	}
 	if work.DirtyHold != nil {
 		paths, err := work.DirtyHold.paths(context.Background())
@@ -610,7 +631,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			})
 			return false, nil, err
 		}
-		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(p.decision.Reason, ReasonTrunkRewritten+": ") {
+		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(p.decision.Reason, ReasonTrunkRewritten+": ") && !strings.HasPrefix(p.decision.Reason, ReasonRedCap+": ") {
 			return false, nil, nil
 		}
 		s, err := store.Open(ctx, l.cfg.Store, true)
@@ -1367,7 +1388,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				// The item went terminal by another route during this examination.
 				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 			} else {
-				retainLane := errors.Is(err, errGateStallHeld) || errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errTrunkRewritten)
+				retainLane := errors.Is(err, errGateStallHeld) || errors.Is(err, errItemFaultHeld) || errors.Is(err, errRepairHeld) || errors.Is(err, errRepairPending) || errors.Is(err, errDirtyHeld) || errors.Is(err, errRedCapHeld) || errors.Is(err, errTrunkRewritten)
 				if retainLane {
 					err = nil
 				}

@@ -26,6 +26,36 @@ the head it pins when nothing lands.
 The design that splits this surface into `--help`, this README and the composition skill is
 [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
 
+## The red cap
+
+The [gate policy](../../docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+bounds the unproved trunk range under `after-merge`. With the landing lock held,
+landing refuses as `red-cap` when either enabled bound is reached: recorded
+landings since `refs/tillr/green`, or minutes since that commit's committer time,
+measured with a live clock after the gate and landing-lock wait. `--now` stamps
+records; it never freezes the minute cap. Library fixtures can inject the cap
+clock independently of the record timestamp.
+Owner commits do not count as landings. Each zero disables that bound;
+`before-merge` and fork patch deliveries do not apply the cap.
+
+The refusal's `red_cap` payload names the bound, known failing checks, and their
+open fixer item. When proof is pending rather than known red, it says that no red
+check or open fixer has been recorded. With no green pointer yet, there is no
+measured green range and bootstrap is not capped. Fixer items are always exempt.
+
+The drain records a separate hold, retaining the candidate and its passed gate.
+The next pass rechecks the live policy and proof pointer: once the cap no longer
+holds, the same candidate lands without another run or gate. A changed trunk tip
+also reopens the locked landing check, because another landing may now carry the
+candidate's change. An empty squash is found before the cap: work already on the
+trunk resolves elsewhere instead of waiting for proof.
+
+When retained candidates occupy every offered lane, the planner can dispatch one
+trunk fixer in `desk-trunk-fixer`, a separate worktree used by one fixer at a time.
+Ordinary items cannot use it, and the held candidates keep their original worktrees.
+`waiting` names the fixer item as the next mover; the loop still reports landings
+since green with both bounds disabled.
+
 ## State invariants
 
 - **The trunk moves only through a landing, and only for a verdict that passed.** A landing

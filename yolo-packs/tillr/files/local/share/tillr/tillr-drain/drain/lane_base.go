@@ -48,6 +48,20 @@ func provedLaneBase(ctx context.Context, root, mode string) (string, error) {
 	return green, nil
 }
 
+func hasLandedBlocker(states map[string]string, edges map[string][]string) bool {
+	for id, blockers := range edges {
+		if IsTrunkFixer(id) {
+			continue
+		}
+		for _, blocker := range blockers {
+			if states[blocker] == StateLanded {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, states map[string]string, edges map[string][]string) (map[string]bool, error) {
 	waits := map[string]bool{}
 	if green == "" {

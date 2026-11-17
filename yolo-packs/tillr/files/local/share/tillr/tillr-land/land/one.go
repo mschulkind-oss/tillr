@@ -29,6 +29,8 @@ type OneRequest struct {
 	// pipeline a drain composes, and judges nothing itself.
 	Gate []string
 	At   time.Time
+	// CapNow is the live landing-authorization clock, sampled after gate and lock wait.
+	CapNow func() time.Time
 	// LockPath names another lander's lock file, for the migration; empty takes the
 	// repository's own land lock.
 	LockPath string
@@ -82,6 +84,7 @@ func One(ctx context.Context, s *store.Store, t *Trunk, req OneRequest) (Landing
 		HeadSHA:  head,
 		Verdict:  verdict,
 		At:       req.At,
+		CapNow:   req.CapNow,
 		LockPath: req.LockPath,
 		LockWait: req.LockWait,
 	})
