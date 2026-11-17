@@ -85,6 +85,12 @@ rows), a tick cost 69 s of re-parsing that had nothing new in it.
   new lines justify; the rows already stored keep their ids, because an obs id is the
   source file's stamp plus the row's ordinal in that file. A run with nothing new parses
   nothing.
+- **One source cannot abort the ingest.** A parser that raises on a source leaves that
+  source `corrupt` with the exception named in its detail, drops that parse's partial rows,
+  and the run reads `unreadable` in the audit; every other run is still indexed. A tool
+  event whose `args`, `result` or `structuredContent` is text instead of an object keeps
+  its row and loses only the field it could not read (2,091 of 5,316 measured tool results
+  carried `structuredContent` as text on 2026-11-17).
 - **A per-source carry crosses the boundary.** A tool call's start can land in one build
   and its end in the next, and so can a command's start and exit; the args, the last
   clock, the last turn number, the session id and the running token totals travel in the
