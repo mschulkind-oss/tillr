@@ -71,6 +71,29 @@ it is ignored on fresh executions and also included when an adapter requires a f
 for the continuation. The drain uses it to ask an exited build worker to finish verification
 and commit existing fenced work, without changing the staged brief.
 
+## Child environment
+
+`exec` sets the following variables for every backend, including registered commands.
+Request identities replace inherited values; an omitted `node_id` removes any inherited
+node identity. A run with no item exports an empty item identity.
+
+```text
+TILLR_RUN_ID              Always: the request's run_id.
+TILLR_ITEM_ID             Always: the request's item_id, empty when omitted.
+TILLR_NODE_ID             Only when node_id is nonempty: the request's node_id; otherwise unset.
+TILLR_LANE_ID             Always: the resolved lane id (allocated if omitted).
+TILLR_SESSION_MODE        Always: new for fresh/non-resumable sessions, resume for resumable continuations.
+TILLR_RESUME_PROMPT_FILE  Always: the continuation prompt path, empty for a fresh execution.
+TILLR_PAUSE_REQUEST       Always: the request-file path in this run's scratch directory.
+YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
+```
+
+The optional Boolean request field `scratch_env` defaults to true, preserving the drain's
+existing scratch isolation. False opts out of setting the scratch-directory variable,
+not out of creating the run's directory. The terminal record's `artifact_refs` always
+includes a `scratch` entry naming that directory, also stored on the run row and returned
+by `status`. Logs, continuation prompts, and pause requests retain their normal locations.
+
 ## Ending a settled harness that lingers
 
 A top-level `agent_settled` stream event means the session has finished its work;

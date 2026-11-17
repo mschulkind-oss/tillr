@@ -436,13 +436,7 @@ Before committing, run the check that refused the second candidate, from the wor
 python3 tools/gate/checks/scratch.py
 ```
 
-<!-- tillr: item id="item-def-run-item-env" paths="tools/tillr-run/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** `tillr run exec` exports `TILLR_ITEM_ID` from the request beside `TILLR_RUN_ID`, and `TILLR_NODE_ID` when the request carries a new optional `node_id`. A test runs a stub adapter that prints its environment and asserts both.
-- **c2:** A request may set a new field, `scratch_env`, to `false`; then `run exec` leaves the scratch-directory variable it sets today as the caller passed it. A request that omits the field gets exactly today's environment, so the drain's runs are unchanged. A test covers both.
-- **c3:** The run record names the run's scratch directory whether or not the variable was set.
-- **c4:** The run utility's README lists every environment variable `run exec` sets and when, in one fenced block with a line per variable. No line outside a fenced block, in the README or any other Markdown file the change touches, names the scratch-directory variable, so the gate's `scratch` check passes.
-- **c5:** Every existing test of the run utility passes unchanged.
 
 ### Add every run, verdict, decision and state move to the item page
 
@@ -504,7 +498,7 @@ directory.
 template is the drain's `--brief-template` flag today, whose default is
 [brief-template.md](../../tools/tillr-run/backends/brief-template.md).
 
-<!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-def-loop-start-without-git,item-def-run-item-env" prose="2" -->
+<!-- tillr: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-def-loop-start-without-git" prose="2" -->
 
 - **c1:** When the definition does not complete on `landing`, staging creates the lane's working directory as a plain directory, with no worktree, no base sha and no fence file, and the run request names it.
 - **c2:** `tillr run exec` accepts that working directory for such a run, and still refuses any other directory for a run under Git landing.

@@ -672,7 +672,33 @@ def case_fork_filing_documented():
     ok("fork filing names the rebound fence, worker commit and lander-owned delivery")
 
 
+def case_run_environment_documented():
+    path = ROOT / "tools/tillr-run/README.md"
+    text = text_of(path)
+    blocks = FENCE.findall(text)
+    source = text_of(ROOT / "tools/tillr-run/run/exec.go")
+    variables = set(re.findall(r'"([A-Z][A-Z_]+)="', source))
+    environment_blocks = [block for block in blocks if "TILLR_ITEM_ID" in block]
+    if len(environment_blocks) != 1:
+        fail("run README must list the child environment in one fenced block")
+    lines = environment_blocks[0].splitlines()
+    listed = [line.split()[0] for line in lines if line.strip()]
+    if set(listed) != variables or len(listed) != len(variables):
+        fail(f"run README environment list {listed} differs from exec's {sorted(variables)}")
+    prose = FENCE.sub("", text)
+    if "YOLO_DURABLE_DIR" in prose:
+        fail("run README names the scratch-directory variable outside a fence")
+    for line in lines:
+        if ":" not in line:
+            fail(f"run README environment line omits when it is set: {line}")
+    for required in ("scratch_env", "artifact_refs", "`scratch`", "node_id"):
+        if required not in text:
+            fail(f"run README omits its request or scratch-record contract: {required}")
+    ok("run README lists every child environment variable once in one fence, with conditions")
+
+
 def main():
+    case_run_environment_documented()
     case_cache_safe_working_loop_documented()
     case_fork_filing_documented()
     cleanup_tests = subprocess.run(
