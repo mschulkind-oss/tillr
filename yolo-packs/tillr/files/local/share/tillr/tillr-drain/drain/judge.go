@@ -36,6 +36,9 @@ type JudgeReceipt struct {
 	Request       run.Request       `json:"request"`
 	WorkerBrief   []byte            `json:"worker_brief"`
 	WorkerSession []byte            `json:"worker_session"`
+	Writers       []JudgeWriter     `json:"writers,omitempty"`
+	Producers     []JudgeWriter     `json:"producers,omitempty"`
+	Inputs        map[string]string `json:"inputs,omitempty"`
 }
 
 // judgeGrant selects one unexpired grant covering every stored criterion class.
@@ -77,7 +80,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				break
 			}
 		}
-		if mode == "agent" {
+		if mode == "agent" || c.Evaluator != nil {
 			grant, err = judgeGrant(r, c.ItemID, l.cfg.Now())
 		}
 		return err
@@ -87,7 +90,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		return c, false, err
 	}
 	receiptPath := filepath.Join(RunDir(l.cfg.Root, c.RunID), judgeReceiptFile)
-	if mode != "agent" && c.Judge == nil {
+	if mode != "agent" && c.Evaluator == nil && c.Judge == nil {
 		if _, err := os.Stat(receiptPath); os.IsNotExist(err) {
 			return c, true, nil
 		} else if err != nil {
@@ -109,13 +112,21 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	}
 	if receipt == nil {
 		if grant == "" {
+			if c.Evaluator != nil {
+				// The pending node retains its run id across regrant. A transient
+				// grant hold must not consume that run's terminal refusal record.
+				return c, false, errJudgeGrantHeld
+			}
 			return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, "no unexpired grant covers the item's criteria", result)
 		}
-		seat := l.cfg.Policy.seatList("review")
-		if len(seat) == 0 {
-			return c, false, Usagef("agent judge requires the review seat")
+		req := c.Evaluator
+		if req == nil {
+			seat := l.cfg.Policy.seatList("review")
+			if len(seat) == 0 {
+				return c, false, Usagef("agent judge requires the review seat")
+			}
+			req = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
 		}
-		req := l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
 		if req == nil {
 			return c, false, Usagef("cannot build review request")
 		}
@@ -141,13 +152,26 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			return c, false, err
 		}
 		receipt = &JudgeReceipt{Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
+		receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
+		judged := c.Writers
+		if len(judged) == 0 {
+			judged = c.Producers
+		}
+		if len(judged) > 0 {
+			var runs, sessions []string
+			for _, writer := range judged {
+				runs = append(runs, writer.RunID)
+				sessions = append(sessions, writer.SessionID)
+			}
+			receipt.Options.JudgedActor = "run=" + strings.Join(runs, ",") + ";session=" + strings.Join(sessions, ",")
+		}
 		if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
 			return c, false, err
 		}
 		if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
 			return c, false, err
 		}
-		if err := appendJudgment(ctx, l.cfg.Store, judgeRequestKind, "run", req.RunID, map[string]any{"item_id": c.ItemID, "writer_run_id": c.RunID, "seat": "review", "request": req}, l.cfg.Now()); err != nil {
+		if err := appendJudgment(ctx, l.cfg.Store, judgeRequestKind, "run", req.RunID, map[string]any{"item_id": c.ItemID, "writer_run_id": judgeWriterRun(c), "seat": "review", "request": req}, l.cfg.Now()); err != nil {
 			return c, false, err
 		}
 		rec, _, runErr := l.cfg.Steps.Run(ctx, *req)
@@ -433,6 +457,18 @@ Write the verdict file, then report RESULT: done.
 ## Stop conditions
 Never change the worker's candidate.
 `, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, diffPath, criteria.String())
+	if len(receipt.Writers) == 0 {
+		for _, producer := range receipt.Producers {
+			brief += fmt.Sprintf("\nRead-only producer %s: run=%s; session=%s; backend=%s; route=%s\n", producer.NodeID, producer.RunID, producer.SessionID, producer.Backend, producer.Route)
+		}
+	}
+	for _, writer := range receipt.Writers {
+		brief += fmt.Sprintf("\nWriting node %s: run=%s; session=%s; backend=%s; route=%s\n", writer.NodeID, writer.RunID, writer.SessionID, writer.Backend, writer.Route)
+	}
+	for _, name := range sortedNames(receipt.Inputs) {
+		brief += fmt.Sprintf("\nInput %s: %s\n", name, receipt.Inputs[name])
+	}
+	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
 	if err := os.WriteFile(filepath.Join(dir, BriefFile), []byte(brief), 0644); err != nil {
 		return err
 	}
@@ -457,7 +493,7 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 	}
 	result.RefusedSteps[reason]++
 	l.mu.Unlock()
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": c.RunID, "step": reason, "detail": detail}, l.cfg.Now())
+	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": judgeWriterRun(c), "step": reason, "detail": detail}, l.cfg.Now())
 }
 func judgeFailureDetail(r *store.Reader, id, reason string) (string, error) {
 	rows, err := r.Query(`SELECT COALESCE(json_extract(payload,'$.detail'),'') FROM events

@@ -494,6 +494,13 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			routed := item
 			if w != nil {
 				if loadErr == nil {
+					if evaluatorSlot(w) != "" {
+						routed.JudgeMode = "agent"
+						routed.JudgeGrant, err = judgeGrant(r, item.ItemID, at)
+						if err != nil {
+							return nil, readFailure(err)
+						}
+					}
 					routed.Seat = w.Stages[0].Seat
 					if w.Stages[0].Kind == "command" {
 						routed.Command = &w.Stages[0]

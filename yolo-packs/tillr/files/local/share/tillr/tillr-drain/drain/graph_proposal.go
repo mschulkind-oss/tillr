@@ -337,6 +337,12 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 	if next.Exit == nil {
 		next.Exit = &WorkflowExit{RequiresNodes: requiredWorkflowNodes(w), RequiresCandidate: workflowCandidatePolicy(w)}
 	}
+	if evaluator := evaluatorSlot(inner); evaluator != "" {
+		if existing := evaluatorSlot(&next); existing != "" && !inGraphGroup(existing, target) {
+			return nil, fmt.Errorf("proposal-exit: workflow-evaluator-access: graph must have one evaluator run")
+		}
+		next.Exit.EvaluatorSlot = target + "/" + evaluator
+	}
 	keep := []string{}
 	replaceExit := false
 	for _, id := range next.Exit.RequiresNodes {

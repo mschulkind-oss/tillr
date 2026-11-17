@@ -38,6 +38,7 @@ type Workflow struct {
 
 // WorkflowExit names the stages required to pass; omission requires every stage.
 type WorkflowExit struct {
+	EvaluatorSlot     string                  `json:"evaluator_slot,omitempty"`
 	RequiresNodes     []string                `json:"requires_nodes"`
 	RequiresCandidate string                  `json:"requires_candidate,omitempty"`
 	Outputs           map[string]WorkflowPort `json:"outputs,omitempty"`
@@ -436,6 +437,9 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 }
 
 func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult) (bool, error) {
+	if evaluatorNode(d) {
+		return l.settleEvaluator(ctx, d, rec, base, result)
+	}
 	stage := d.Workflow.Stages[d.NodeIndex]
 	if stage.Kind == "command" {
 		if handled, err := l.replayCommandHold(ctx, d); handled || err != nil {
