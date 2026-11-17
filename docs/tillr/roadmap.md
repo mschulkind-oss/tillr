@@ -2462,3 +2462,60 @@ derived from the merged sources and not carried over from the old tree.
 - **Ref:** `docs/design/landing-principles.md`, the rule that a mechanism whose cost rises with trunk activity points the wrong way: a reserved lane costs more the longer a hold waits.
 - **Where:** `retainLane`, a local in the examination goroutine of `tools/tillr-drain/drain/pass.go`, is true for `errGateStallHeld`, `errItemFaultHeld`, `errRepairHeld`, `errRepairPending`, `errDirtyHeld` and `errTrunkRewritten`, and skips `abandon` for all six. `dirtyHold` in `drain/dirty_hold.go` reads the owner's checkout and the candidate's pinned head, not the lane, which suggests it can release too; confirm before moving it. `pinQuietly` in `drain/loop.go` pins and does not report failure, so c1 needs a pin that is read back. The summary line is built in `drain/why.go` from `LanesBusy`. The waiting rules are in `tools/tillr-view/waiting.go`.
 - **Evidence:** 2026-11-17 at 09:52Z, ten lanes: `tillr drain why` printed `lanes 10/10 busy; running 5; no-lane=28`; lanes 3 and 8 held no worker and were reserved for `item-def-apply-unknown-fields` and `item-gate-pinned-fork-inputs`, both held as `gate-harness-error`.
+
+## Filed 2026-11-17: the trunk and its proof should survive what touches them
+
+Two follow-ups from the night of 2026-11-17. A commit that no person or lander wrote reached the
+trunk with nothing in the way, and the heavy proof loses minutes of work whenever the loop restarts.
+
+### Hold landings when a trunk commit has a foreign author
+
+On 2026-11-17 at 08:08 -0500, commit `6f2d9d938` reached `main` as `fork-check test
+<test@example.invalid>` with the message `initial`. A test fixture had run its `git add -A` and
+`git commit` against the real repository and swept an agent's uncommitted drain work onto the
+trunk. Nothing stopped it, and nothing noticed it: `tests/git-identity.test.py` fails on the commit,
+but only when someone runs the gate, and the loop kept landing on top of it. The loop should read
+the trunk's new commits at every tick, tell the owner when one was written by anyone but the
+configured identity, and stop landing until the owner decides. Running work is not the problem and
+should continue. Only new landings wait, so that more commits do not pile onto a history the owner
+may want to rewrite.
+
+<!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** At each tick the loop checks every trunk commit since the last one it checked, and finds any whose author or committer is not the identity the repository's git config names. A test lands a commit by another identity and asserts it is found on the next tick.
+- **c2:** The waiting view names the commit, its author and the documented remedy: re-author it, or accept it by recording the commit's id. A test asserts the text.
+- **c3:** While such a commit is unanswered, the loop starts no landing. Runs already in progress continue, and their candidates wait to land. A test asserts a ready candidate is not landed and a running one is not stopped.
+- **c4:** Re-authoring the commit or recording its acceptance releases the hold at the next tick. A test asserts each path.
+- **c5:** A `pre-commit` hook in `hooks/`, installed by `just hooks-install`, refuses a commit on `main` whose identity differs from the configured one. The item states in its report what the hook cannot cover.
+- **c6:** A commit made with `git commit-tree`, `update-ref` or a private index, which skips hooks, is still found by c1. A test asserts it.
+
+**Agent details:**
+
+- **Ref:** `tests/git-identity.test.py`, the check that reports after the fact; the authorship rule in `AGENTS.md`; `hooks/README.md`, how hooks are installed.
+- **Where:** `Trunk.LandingIdentity` in `tools/tillr-land/land/trunk.go`, which already reads the configured identity from scopes a lane cannot write and is the reader to reuse; the per-tick trunk reads in `tools/tillr-drain/drain/trunk.go`; the waiting rules in `tools/tillr-view/waiting.go`; `hooks/` and `bin/hooks-install`.
+- **Hook limits, read 2026-11-17:** `hooks/` holds only `pre-push`, and `bin/hooks-install` copies each executable there into the shared hooks directory, so one hook covers the main checkout and every worktree. A hook runs only for `git commit`, `merge` and `am`. It does not run for `commit-tree` or `update-ref`, and `--no-verify` and a `core.hooksPath` override skip it, so the hook is a convenience and the loop's check in c1 is the guard.
+- **Evidence:** 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints `fork-check test <test@example.invalid> initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
+
+### Keep the heavy proof across a restart
+
+The heavy proof judges the whole trunk and takes three to eight minutes. On 2026-11-17 each loop
+restart threw away a proof that was part-way through, and the new loop began it again from nothing.
+The drain already narrows a red proof to the first landing that broke it, by bisecting the landings
+since the last green commit, so that part of the work is done. What is missing is smaller. The
+checks that had already passed on the tip are forgotten at a restart, and the loop's log and view
+name the green commit but not how long ago it was proved, so an owner cannot tell a fresh proof from
+one that is hours old.
+
+<!-- tillr: item id="item-heavy-restart-keeps-proof-and-names-red-landing" paths="tools/tillr-drain/,tools/tillr-view/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A heavy check that passed on a tip is recorded with that tip. After a restart the loop does not run it again for the same tip, and the log says which checks were reused. A test restarts a loop between two checks and asserts the first is not run twice.
+- **c2:** A restart starts the proof for the current tip at its first tick, without waiting for a new landing. A test asserts it, and the item records whether this already held.
+- **c3:** The loop's log line and the waiting view show the green commit and how long ago it was proved. A test asserts both.
+- **c4:** A red batch whose range cannot be narrowed, because the base is red or the last landing is green, files a fixer that names the first and last commit of the range, instead of ending the run with an error. A test asserts the fixer's text.
+
+**Agent details:**
+
+- **Ref:** `docs/design/landing-principles.md`, the rule that a mechanism whose cost rises with trunk activity points the wrong way.
+- **Where:** `HeavyRunner.Run` and `firstRed` in `tools/tillr-drain/drain/heavy.go`, where the bisect over recorded landings already exists; `startHeavy` in `tools/tillr-drain/drain/heavy_loop.go`, whose `heavyAttempted` is held in memory and so forgotten at a restart; `heavyStatusLine` in the same file; `HeavyStatus` in `tools/tillr-drain/heavy/status.go`, which carries `GreenCommit` and no time.
+- **Dropped from the first draft:** a criterion to bisect a red batch before filing a fixer. `firstRed` does that now, and `drain/heavy_attribution_test.go` covers it. The unattributable cases in c4 are the part it does not handle: it returns an error there.
+- **Evidence:** 2026-11-17, `rg -n 'heavyAttempted' tools/tillr-drain/drain` finds the field only in memory on the `Loop`, with no stored copy. `rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go` shows the bisect, and its two `Externalf` returns for a range with no landing and for a tip that is red where the last landing is green.
