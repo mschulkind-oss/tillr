@@ -150,13 +150,39 @@ def case_build_outputs():
 
 
 def files(root):
-    """Every regular file under root, by POSIX relative path."""
+    """Every regular file under root, by POSIX relative path, build outputs left out.
+
+    The same filter as the source side: an interpreter that runs a copied script writes
+    its bytecode cache beside it, and that cache is not drift (the gate failed a candidate
+    on 2026-11-17 over one `__pycache__/report.cpython-314.pyc` in the pack's copy).
+    """
     found = {}
     for path in sorted(root.rglob("*")):
         if path.is_dir():
             continue
-        found[path.relative_to(root).as_posix()] = path
+        relative = path.relative_to(root).as_posix()
+        if BUILD_OUTPUT.search(relative):
+            continue
+        found[relative] = path
     return found
+
+
+def case_copy_build_outputs():
+    """A bytecode cache on the pack side is not drift; a stray source file still is."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        copy = Path(raw)
+        (copy / "__pycache__").mkdir()
+        (copy / "__pycache__" / "x.cpython-314.pyc").write_bytes(b"\0")
+        (copy / "kept.py").write_text("x = 1\n")
+        assert set(files(copy)) == {"kept.py"}, (
+            "a __pycache__ file in the pack's copy must not be listed as a copied file"
+        )
+        (copy / "stray.py").write_text("y = 2\n")
+        assert set(files(copy)) - {"kept.py"} == {"stray.py"}, (
+            "a stray source file in the pack's copy must still be listed, so it reads as drift"
+        )
+    ok("a bytecode cache on the pack side is ignored, and a stray source file is not")
 
 
 def executable(path):
@@ -556,6 +582,7 @@ def main(argv=None):
     case_bytes(candidate=candidate)
     case_modes(candidate=candidate)
     case_build_outputs()
+    case_copy_build_outputs()
     case_launchers()
     case_docs_transform()
     case_docs_declaration()
