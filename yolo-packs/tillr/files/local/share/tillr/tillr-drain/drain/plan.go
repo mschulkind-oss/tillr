@@ -16,13 +16,21 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
+)
+
+const (
+	ReasonDeskCapacity     = "waits on a desk"
+	ReasonDocumentDeskBusy = "waits on the document's desk"
 )
 
 // Pass is the pure planner's input. The store supplies lanes when none are offered.
 // MaxDispatches optionally limits a simulation; the live loop never sets it.
 // Now optionally supplies observation metadata, never an identity.
 type Pass struct {
+	// Comments is the repository's shared settings, not a caller-supplied pass field.
+	Comments *settings.Comments `json:"-"`
 	// Operator examination considers one item's next step while still reading
 	// every existing lane reservation and readiness dependency. It must not
 	// allocate free lanes to sibling plans that this command will not execute.
@@ -78,6 +86,7 @@ type Decision struct {
 	// Parallel lists sibling readers claimed with this node; the item retains one pending owner.
 	Parallel []Decision `json:"parallel,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
+	DeskDocument      string         `json:"desk_document,omitempty"`
 	Designer          *lastDesigner  `json:"-"`
 	DesignerSessionID string         `json:"designer_session_id,omitempty"`
 	DesignerReason    string         `json:"designer_reason,omitempty"`
@@ -207,8 +216,8 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				return nil, err
 			}
 		}
-		if item.IsCommentItem(items[i].ItemID) {
-			items[i].Designer, err = readDesigner(r, items[i].DesignDoc)
+		if doc := deskDocument(items[i], tick.Comments); doc != "" {
+			items[i].Designer, err = readDesigner(r, doc)
 			if err != nil {
 				return nil, readFailure(err)
 			}
@@ -344,11 +353,16 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	deskOwners, err := readDeskOwners(r, lanes)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	// A terminal run released its lease, but its candidate still occupies the
 	// worktree until settlement and judgment have accounted for it.
 	for _, work := range works {
 		if !work.Done && !work.LaneReleased {
 			lanes[work.Decision.LaneID] = true
+			deskOwners[work.Decision.LaneID] = work.Decision.ItemID
 		}
 	}
 	conflicts, err := item.ReadConflicts(r)
@@ -388,7 +402,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		conflicts: conflicts,
 		shut:      shut,
 		forks:     forks,
-		tick:      tick, policy: policy, held: lanes, itemStates: states, history: history,
+		tick:      tick, policy: policy, held: lanes, deskOwners: deskOwners, itemStates: states, history: history,
 		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
 		trunkWaiters: trunkWaiters,
 		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
@@ -590,6 +604,7 @@ type planner struct {
 	tick           Pass
 	policy         *Policy
 	held           map[string]bool
+	deskOwners     map[string]string
 	itemStates     map[string]string
 	history        runHistory
 	priors         map[string][]priorRun
@@ -760,9 +775,21 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane(item.Express)
-		if itemIsComment(item.ItemID) {
-			lane = commentDesk(item.DesignDoc)
-			ok = !p.held[lane] && !p.assigned[lane]
+		if doc := deskDocument(item, p.tick.Comments); doc != "" {
+			lane = commentDesk(doc)
+			if p.held[lane] || p.assigned[lane] {
+				decision.Action, decision.Reason = ActionHold, ReasonDocumentDeskBusy
+				decision.DeferredBy = p.deskOwners[lane]
+				break
+			}
+			if p.tick.Comments != nil && countDocumentDesks(p.held, p.assigned) >= p.tick.Comments.MaxRunning {
+				decision.Action, decision.Reason = ActionHold, ReasonDeskCapacity
+				decision.DeferredBy = doc
+				break
+			}
+			decision.DeskDocument = doc
+			p.deskOwners[lane] = item.ItemID
+			ok = true
 		} else if !ok && IsTrunkFixer(item.ItemID) {
 			// Retained candidates can occupy every offered lane while waiting
 			// on this fixer. One serial repair desk breaks that dependency cycle
@@ -824,7 +851,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
 	}
-	if itemIsComment(item.ItemID) && decision.RunRequest != nil {
+	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""
 		if item.Designer != nil {
 			previousAdapter = p.policy.Backends[item.Designer.Backend].Adapter
@@ -841,7 +868,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 func identifyDecision(decision *Decision) {
 	// A resource deferral does not move an otherwise queued item into held.
 	// Pending runs and candidates retain their independently derived positions.
-	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonForkHeld) {
+	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonForkHeld || decision.Reason == ReasonDeskCapacity || decision.Reason == ReasonDocumentDeskBusy) {
 		decision.From = "queued"
 	}
 	decision.Position, decision.Transition = decision.From, decision.Action

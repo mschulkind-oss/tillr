@@ -18,6 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -101,6 +102,81 @@ func readDesigner(r *store.Reader, doc string) (*lastDesigner, error) {
 func itemIsComment(id string) bool  { return item.IsCommentItem(id) }
 func commentDesk(doc string) string { return "desk-" + item.CommentDocumentName(doc) }
 
+// deskDocument requires a literal Markdown file in the fence, not a directory
+// that could contain many designs. Hand-taken comment batches keep their desk
+// even when automatic intake is disabled.
+func deskDocument(row itemRow, comments *settings.Comments) string {
+	if item.IsCommentItem(row.ItemID) {
+		return row.DesignDoc
+	}
+	if row.Seat != "design" || comments == nil {
+		return ""
+	}
+	docs := map[string]bool{}
+	for _, allowed := range row.Allowed {
+		doc := filepath.ToSlash(filepath.Clean(allowed))
+		if filepath.IsAbs(doc) || doc == ".." || strings.HasPrefix(doc, "../") || strings.ContainsAny(doc, "*?[") || strings.HasSuffix(allowed, "/") || filepath.Ext(doc) != ".md" {
+			continue
+		}
+		for _, configured := range comments.Paths {
+			prefix := filepath.ToSlash(filepath.Clean(configured))
+			if doc == prefix || strings.HasPrefix(doc, prefix+"/") {
+				docs[doc] = true
+			}
+		}
+	}
+	if len(docs) == 1 {
+		for doc := range docs {
+			return doc
+		}
+	}
+	return ""
+}
+
+func readDeskOwners(r *store.Reader, held map[string]bool) (map[string]string, error) {
+	owners := map[string]string{}
+	for lane, busy := range held {
+		if !busy || !strings.HasPrefix(lane, "desk-") {
+			continue
+		}
+		var raw []byte
+		err := r.QueryRow("SELECT payload FROM events WHERE kind=? AND object_type='lane' AND object_id=? ORDER BY seq DESC LIMIT 1", run.AllocateKind, lane).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var allocation struct {
+			ItemID string `json:"item_id"`
+		}
+		if err := json.Unmarshal(raw, &allocation); err != nil {
+			return nil, err
+		}
+		owners[lane] = allocation.ItemID
+	}
+	return owners, nil
+}
+
+func documentDesk(lane string) bool {
+	return strings.HasPrefix(lane, "desk-") && lane != "desk-trunk-fixer"
+}
+
+func countDocumentDesks(held, assigned map[string]bool) int64 {
+	busy := map[string]bool{}
+	for lane, held := range held {
+		if held && documentDesk(lane) {
+			busy[lane] = true
+		}
+	}
+	for lane := range assigned {
+		if documentDesk(lane) {
+			busy[lane] = true
+		}
+	}
+	return int64(len(busy))
+}
+
 func (l *Loop) commentBatch(ctx context.Context, id string) (*item.CommentBatch, error) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -158,7 +234,9 @@ func (s *LaneStager) commentTask(ctx context.Context, spec StageSpec, durable st
 	moved, transcript := "new session; read the document", ""
 	if d != nil {
 		transcript = d.Transcript
-		if spec.SessionID == d.SessionID {
+		if spec.SessionID == d.SessionID && d.BlobID == "" {
+			moved = "no recorded document blob; read the document"
+		} else if spec.SessionID == d.SessionID {
 			old, e := s.git(ctx, s.Root, "cat-file", "blob", d.BlobID)
 			if e != nil {
 				return "", e
@@ -189,7 +267,7 @@ func (s *LaneStager) commentTask(ctx context.Context, spec StageSpec, durable st
 }
 
 func (l *Loop) stageComment(ctx context.Context, d *Decision, spec *StageSpec) error {
-	if !item.IsCommentItem(d.ItemID) {
+	if !item.IsCommentItem(d.ItemID) && d.DeskDocument == "" {
 		return nil
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -207,6 +285,9 @@ func (l *Loop) stageComment(ctx context.Context, d *Decision, spec *StageSpec) e
 		}
 		spec.SessionID = session
 		d.DesignerSessionID = session
+		if !item.IsCommentItem(d.ItemID) {
+			return nil
+		}
 		if _, err = tx.Exec("INSERT INTO comment_runs(run_id,item_id,session_id,reason) VALUES(?,?,?,?) ON CONFLICT(run_id) DO NOTHING", d.RunRequest.RunID, d.ItemID, session, d.DesignerReason); err != nil {
 			return err
 		}
@@ -217,21 +298,25 @@ func (l *Loop) stageComment(ctx context.Context, d *Decision, spec *StageSpec) e
 // recordDesigner reads only settled messages, never partial usage snapshots. Absent
 // provider measurements stay NULL; neither the wall clock nor settings invent them.
 func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Record) error {
-	if !item.IsCommentItem(rec.ItemID) {
+	doc := decision.DeskDocument
+	if item.IsCommentItem(rec.ItemID) {
+		batch, err := l.commentBatch(ctx, rec.ItemID)
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			return Internalf("comment item %s has no batch", rec.ItemID)
+		}
+		doc = batch.Document
+	}
+	if doc == "" {
 		return nil
-	}
-	batch, err := l.commentBatch(ctx, rec.ItemID)
-	if err != nil {
-		return err
-	}
-	if batch == nil {
-		return Internalf("comment item %s has no batch", rec.ItemID)
 	}
 	session, err := ReadSessionID(l.laneDirPath(rec.LaneID))
 	if err != nil {
 		return err
 	}
-	d := lastDesigner{Document: batch.Document, SessionID: session, Backend: rec.Backend, Model: rec.Route, Desk: rec.LaneID, RunID: rec.RunID, Compacted: decision.DesignerReason == "resumed-compacted"}
+	d := lastDesigner{Document: doc, SessionID: session, Backend: rec.Backend, Model: rec.Route, Desk: rec.LaneID, RunID: rec.RunID, Compacted: decision.DesignerReason == "resumed-compacted"}
 	if d.Model == "" && decision.RunRequest != nil {
 		d.Model = decision.RunRequest.Route()
 	}
@@ -310,18 +395,20 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 			return e
 		}
 	}
-	blob, err := l.revParse(ctx, l.laneTarget(rec.LaneID), "HEAD:"+batch.Document)
+	// A failed writing run can end before it creates its document. It still
+	// becomes the last designer; an absent blob remains unknown.
+	blob, err := l.git(ctx, l.laneTarget(rec.LaneID), "ls-tree", "--format=%(objectname)", "HEAD", "--", ":(literal)"+doc)
 	if err != nil {
 		return err
 	}
-	d.BlobID = blob
+	d.BlobID = strings.TrimSpace(blob)
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		previous, err := readDesigner(tx.Reader(), batch.Document)
+		previous, err := readDesigner(tx.Reader(), doc)
 		if err != nil {
 			return err
 		}
@@ -332,7 +419,7 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", batch.Document, string(raw))
+		_, err = tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", doc, string(raw))
 		return err
 	})
 }

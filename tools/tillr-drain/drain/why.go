@@ -202,7 +202,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		switch {
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
-		case (d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
+		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
@@ -374,6 +374,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", where, "the prose rewrite to land"
 	case ReasonBlocked:
 		return "waits on work", where, "the owner; clear the item's blocked state"
+	case ReasonDeskCapacity, ReasonDocumentDeskBusy:
+		return "waits on work", "desk", d.DeferredBy
 	case ReasonNoLane, ReasonForkHeld:
 		return "waits on work", where, "the next pass"
 	case ReasonTrunkBroken:

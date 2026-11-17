@@ -1485,6 +1485,18 @@ dispatch and writes it beside the brief as `session-id`; it never treats that fi
 next item's session. `resume` explicitly names the id it continues. Review-comment items
 instead reuse their document's recorded designer at a fixed
 [desk](../../docs/design/tillr-designer-sessions.md#the-desk), outside the numbered pool.
+A design-seat item also uses that desk when its fence names exactly one Markdown document
+under `comments.paths`; its completed run records the designer for later comments, even if
+the run failed. A directory fence does not identify a document. Zero or multiple eligible
+documents, or disabled comments settings, keep a design-seat item in the numbered pool and
+write no designer row.
+
+Desk reservations include live runs, unfinished candidates, and this pass's dispatches.
+`comments.max_running` bounds occupied document desks independently of the numbered pool.
+An item beyond that limit waits with `waits on a desk` and its document as the mover; an
+item whose own desk is occupied instead waits with `waits on the document's desk` and the
+occupying item as the mover. Hand-taken comment batches retain their desk when automatic
+intake is disabled.
 
 ## Hand-driven comment delivery
 

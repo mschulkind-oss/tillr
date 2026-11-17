@@ -183,6 +183,7 @@ func planFace(args []string) int {
 		return fail(drain.Usagef("%v", err))
 	}
 	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
+	tick.Comments = repositorySettings.Comments
 	// The policy is loaded before the store is read, so a tick naming an unreadable
 	// policy is refused as malformed input rather than silently holding every item with
 	// `no-policy`.
@@ -257,6 +258,7 @@ func onceFace(args []string) int {
 		return fail(drain.Usagef("%v", err))
 	}
 	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
+	tick.Comments = repositorySettings.Comments
 	policy, err := readPolicy(tick.PolicyRef)
 	if err != nil {
 		return fail(err)
