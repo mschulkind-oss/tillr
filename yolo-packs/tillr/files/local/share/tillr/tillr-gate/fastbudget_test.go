@@ -30,29 +30,44 @@ func TestRunPrintsTheOverrunOfASlowChangeCheck(t *testing.T) {
 
 // The child blocks until the runner signals it. These cases judge recorded state,
 // never elapsed time; timeout_ms deliberately differs from the fast budget.
+//
+// A fast check is stopped at its ceiling (its timeout_ms here) and answers exit 4: it
+// never answered. The one exception is a tree check when the caller asks for carrying
+// (`--tree-overrun carry`): it is stopped at its budget and recorded over-budget, its
+// judgment deferred to the heavy tier. Carrying is not the default, because no heavy
+// runner exists yet to take what is carried.
 func TestFastBudgetRecordsOverrunWithoutJudgingTree(t *testing.T) {
-	for _, scope := range []string{"tree", "change"} {
-		t.Run(scope, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope, overrun string
+		code                 int
+		result, check        string
+	}{
+		{"tree", "tree", "", 4, "error", "error"},
+		{"change", "change", "", 4, "error", "error"},
+		{"carried tree", "tree", "carry", 0, "pass", "over-budget"},
+		{"change under carry", "change", "carry", 4, "error", "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			remember := false
-			// A change check is not stopped at its budget; it is stopped at its ceiling,
-			// which is its own timeout_ms. A child that never answers reaches it.
-			timeout := 3000
-			if scope == "change" {
-				timeout = 200
+			// A carried tree check is stopped at its budget, so its timeout is never reached;
+			// every other case reaches its ceiling, 200 ms.
+			timeout := 200
+			if tc.overrun == "carry" && tc.scope == "tree" {
+				timeout = 3000
 			}
 			plan := planRecord(t, planIn{PlanID: "fast-budget", BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "registry",
-				Checks: []planCheck{{CheckID: "blocked", Scope: scope, Tier: "fast", BudgetMS: 100, TimeoutMS: timeout, Remember: &remember,
+				Checks: []planCheck{{CheckID: "blocked", Scope: tc.scope, Tier: "fast", BudgetMS: 100, TimeoutMS: timeout, Remember: &remember,
 					Command: []string{"python3", "-c", "import signal; signal.pause()"}},
 					{CheckID: "after", Command: []string{"true"}}},
 			})
-			code, raw := runPlan(t, plan, scratch(t, "fast-root"))
-			verdict := decodeVerdict(t, raw)
-			wantCode, wantResult, wantCheck := 0, "pass", "over-budget"
-			if scope == "change" {
-				wantCode, wantResult, wantCheck = 4, "error", "error"
+			var extra []string
+			if tc.overrun != "" {
+				extra = []string{"--tree-overrun", tc.overrun}
 			}
-			if code != wantCode || verdict.Payload.Result != wantResult || len(verdict.Payload.Checks) != 2 || verdict.Payload.Checks[0].Result != wantCheck || verdict.Payload.Checks[1].Result != "pass" {
-				t.Fatalf("fast %s deadline: exit %d: %s", scope, code, raw)
+			code, raw := runPlan(t, plan, scratch(t, "fast-root"), extra...)
+			verdict := decodeVerdict(t, raw)
+			if code != tc.code || verdict.Payload.Result != tc.result || len(verdict.Payload.Checks) != 2 || verdict.Payload.Checks[0].Result != tc.check || verdict.Payload.Checks[1].Result != "pass" {
+				t.Fatalf("fast %s deadline: exit %d: %s", tc.name, code, raw)
 			}
 			log, err := os.ReadFile(verdict.Payload.Checks[0].LogRef)
 			if err != nil {
@@ -62,8 +77,58 @@ func TestFastBudgetRecordsOverrunWithoutJudgingTree(t *testing.T) {
 				t.Fatalf("missing budget: %s", log)
 			}
 			// "deferred" is said only where judgment is deferred: a carried tree check.
-			if deferred := strings.Contains(string(log), "deferred"); deferred != (scope == "tree") {
-				t.Fatalf("fast %s deadline: deferral wording is wrong: %s", scope, log)
+			if deferred := strings.Contains(string(log), "deferred"); deferred != (tc.check == "over-budget") {
+				t.Fatalf("fast %s deadline: deferral wording is wrong: %s", tc.name, log)
+			}
+		})
+	}
+}
+
+// Until a heavy runner exists, carrying a tree check means dropping its judgment: the
+// verdict would stay pass and nothing would ever run the check again. So by default a
+// fast tree check that runs past its budget runs on to its ceiling and keeps its verdict,
+// as a change check does -- a failing one fails the gate -- and the overrun is recorded.
+// The 2026-11-16 review measured `go-build` at 5.6-5.7 s against its 2,700 ms budget at
+// ten concurrent gates: carried, a candidate that did not compile could land.
+func TestFastTreeOverrunKeepsItsVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name, exit, result string
+		code               int
+	}{{"pass", "0", "pass", 0}, {"fail", "1", "fail", 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			remember := false
+			plan := planRecord(t, planIn{PlanID: "slow-tree-" + tc.name, BaseSHA: "base", TreeSHA: "tree", RegistryDigest: "registry",
+				Checks: []planCheck{{CheckID: "slow", Scope: "tree", Tier: "fast", BudgetMS: 1, Remember: &remember,
+					Command: []string{"python3", "-c", "import sys, time; time.sleep(0.02); sys.exit(" + tc.exit + ")"}}},
+			})
+			code, raw := runPlan(t, plan, scratch(t, "slow-tree-root"))
+			var verdict struct {
+				Payload struct {
+					Result string `json:"result"`
+					Checks []struct {
+						Result       string `json:"result"`
+						DurationMS   int64  `json:"duration_ms"`
+						OverBudgetMS int64  `json:"over_budget_ms"`
+						LogRef       string `json:"log_ref"`
+					} `json:"checks"`
+				} `json:"payload"`
+			}
+			if err := json.Unmarshal(raw, &verdict); err != nil {
+				t.Fatalf("no verdict: %v: %s", err, raw)
+			}
+			if code != tc.code || verdict.Payload.Result != tc.result || len(verdict.Payload.Checks) != 1 {
+				t.Fatalf("slow tree check: exit %d: %s", code, raw)
+			}
+			check := verdict.Payload.Checks[0]
+			if check.Result != tc.result || check.OverBudgetMS <= 0 || check.OverBudgetMS != check.DurationMS-1 {
+				t.Fatalf("overrun not recorded against the check: %s", raw)
+			}
+			log, err := os.ReadFile(check.LogRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(log), "over its budget_ms 1") || strings.Contains(string(log), "deferred") {
+				t.Fatalf("overrun log wording: %s", log)
 			}
 		})
 	}
@@ -139,7 +204,7 @@ func TestFastOverrunDoesNotEraseAnotherFailure(t *testing.T) {
 		Checks: []planCheck{{CheckID: "failed", Command: []string{"false"}},
 			{CheckID: "blocked", Command: []string{"python3", "-c", "import signal; signal.pause()"}, Scope: "tree", Tier: "fast", BudgetMS: 100, TimeoutMS: 3000, Remember: &remember}},
 	})
-	code, raw := runPlan(t, plan, scratch(t, "mixed-root"))
+	code, raw := runPlan(t, plan, scratch(t, "mixed-root"), "--tree-overrun", "carry")
 	verdict := decodeVerdict(t, raw)
 	if code != 1 || verdict.Payload.Result != "fail" || verdict.Payload.Checks[1].Result != "over-budget" {
 		t.Fatalf("overrun erased failure: exit %d: %s", code, raw)

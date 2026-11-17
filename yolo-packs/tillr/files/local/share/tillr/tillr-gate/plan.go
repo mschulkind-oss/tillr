@@ -67,6 +67,10 @@ type PlanCheck struct {
 	Exclusive       bool              `json:"exclusive"`
 	ExclusiveReason string            `json:"exclusive_reason"`
 	Forced          string            `json:"forced"`
+
+	// carryOverrun is the run's tree overrun policy (RunOptions), set by the runner on
+	// each check it runs. It is not part of the plan record.
+	carryOverrun bool
 }
 
 // PlanInProcess is one in-process check the plan owes: a check the gate runs as its own

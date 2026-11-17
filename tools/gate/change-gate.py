@@ -4,6 +4,12 @@ import argparse
 import subprocess
 import sys
 
+# What a fast tree check still running at its budget becomes. `keep` runs it on to its
+# ceiling and keeps its verdict; `carry` stops it and defers it to the heavy tier. Carrying
+# is suspended until a heavy runner exists to judge what is carried: with none, a carried
+# check's judgment is dropped and the verdict stays pass (docs/design/gate-rework.md
+# Section 6.5). `item-gate-heavy-runner` turns carrying back on here, and only here.
+TREE_OVERRUN = "keep"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,6 +33,7 @@ def main():
             print("change-gate: could not judge: --head is not checked out", file=sys.stderr)
             return 4
         checked = subprocess.run([args.runner, "checks", "--fast-tree", "--base", args.base, "--head", args.head,
+                                  "--tree-overrun", TREE_OVERRUN,
                                   "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs])
         if checked.returncode:
             return checked.returncode

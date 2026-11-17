@@ -64,6 +64,26 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             result = subprocess.run(["python3", "-c", harness, str(PROGRAM), tmp], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_a_fast_ceiling_outside_its_budget_and_the_cap_is_refused(self):
+        # A fast check's timeout_ms is its ceiling: where the runner stops it once it has
+        # run past its budget. The runner clamps the ceiling to [budget_ms, LIMIT_MS], so a
+        # declaration outside that range says something the runner will not do.
+        scratch = os.environ.get("YOLO_DURABLE_DIR")
+        if not scratch:
+            self.fail("YOLO_DURABLE_DIR is required for fixture storage")
+        for timeout, code in [(None, 0), (1000, 0), (5000, 0), (9000, 0), (999, 1), (9001, 1), (600000, 1),
+                              (0, 4), (True, 4), ("5000", 4)]:
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory(dir=scratch, prefix="gate-budget-ceiling-") as tmp:
+                declaration = {"id": "ceiling", "tier": "fast", "budget_ms": 1000}
+                if timeout is not None:
+                    declaration["timeout_ms"] = timeout
+                (Path(tmp) / "ceiling.json").write_text(json.dumps(declaration))
+                result = subprocess.run(["python3", str(PROGRAM), tmp], capture_output=True, text=True)
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                if code:
+                    self.assertIn("ceiling.json", result.stdout + result.stderr)
+                    self.assertIn("timeout_ms", result.stdout + result.stderr)
+
     def test_invalid_cost_is_not_a_zero_budget(self):
         scratch = os.environ.get("YOLO_DURABLE_DIR")
         if not scratch:
