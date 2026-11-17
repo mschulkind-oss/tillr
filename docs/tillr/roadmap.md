@@ -3120,3 +3120,53 @@ This item waits on one prerequisite and builds on landed work for the rest. The 
 - **Evidence, the index:** `uvx vantage-check index --format json` lists open questions per document, and none of the six conflicts appears in it.
 - **The prerequisite is checked before any edit.** In the staged tree, `rg -n 'tillr-drain/vantage' tools -g '*.go'` and `rg -n 'func parseQuestions' tools/tillr-item` both return nothing once `item-qp-one-question-reader` has landed. If either prints a match, the lane was staged from a base without the prerequisite. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner. The worker reports it as such and does not move the reader itself, because `tools/tillr/` is outside this item's paths.
 - **Evidence, 2026-11-17 about 19:00Z:** a worker run staged for this item stopped before editing. `rg -n 'tillr-drain/vantage' tools/tillr-drain/drain/questions.go tools/tillr-view/waiting.go` printed one import in each file, `rg --files tools/tillr | rg '/vantage/'` printed nothing, and `rg -n 'func parseQuestions' tools/tillr-item/item/questions.go` printed the hand-written parser. The same three commands printed the same results when this block was amended later that day.
+
+## Filed 2026-11-17: the trace record grows with every git command a test runs
+
+On 2026-11-17 the drain loop stalled for more than 28 minutes inside one run of the trace
+indexer. The indexer's own defects were fixed that day: a sync no longer walks the whole event
+table, each run is committed on its own, a killed sync is resumed rather than rebuilt, and the
+loop asks for an index in the background instead of waiting on it. What is left is the volume
+itself, which needs a ruling on what the record keeps.
+
+### Isolate the trace record from the git commands test suites run
+
+Every worker run records each git command it starts, and that recording follows the command
+into every child process. A worker that runs the drain or lander test suites starts hundreds of
+thousands of git commands through those suites' repository fixtures, and each one lands in the
+run's git trace file and then as one row in the trace index. So the record of what a worker did
+is almost entirely the record of what its tests did. One run's trace file was 2.8 GB with
+nearly a million git commands in it, the loop's run directories held 82 GB, and the index built
+from them was 32 GB. Nothing is duplicated: the index holds one row per recorded git command.
+The index stays proportional to that volume, so neither it nor the run directories can stay
+small while the recording reaches into test suites, and nothing deletes either of them.
+
+The design wants git commands recorded so an audit can see a worker reset or rewrite something
+it should not have touched, and that purpose is served by the commands the worker itself starts
+from its shell. The commands a test binary starts against its own scratch repositories say
+nothing about the worker's lane. This item decides where the line falls and enforces it either
+where the recording is turned on or where the index reads it, and gives the recorded artifacts
+a retention rule. It needs the owner's ruling on which git commands the record must keep before
+it is built.
+
+**Outcomes:**
+
+- Record and index the git commands a worker starts itself, and leave out the ones its test suites start, or record those only as a count.
+- Keep the trace index and the run directories within a stated size as runs accumulate.
+- State in the trace README what the git record covers and how long a run's artifacts are kept.
+
+<!-- tillr: item id="item-trace-git-record-scope" paths="tools/tillr-run/,tools/tillr-trace/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** The rule for which git commands are recorded is written in `docs/design/session-recording.md` beside the `git.trace2` row of its event table, with the owner's ruling cited.
+- **c2:** A run whose test suite starts git commands against scratch repositories adds no per-command `git.trace2` row for them. A test runs a fixture suite that starts at least 100 git commands and asserts the index gains at most one summary row for them, while a `git commit` the worker's own shell starts is still indexed with its argv and exit code.
+- **c3:** The run directories under `.tillr/loop/` have a retention rule that the loop or the lander applies, and the drain README states it. A test asserts a finished run's large trace files are removed or compacted under that rule while a live run's are kept.
+- **c4:** After the change, ingesting a run like the measured one (about 900,000 git commands from its tests) adds rows proportional to the worker's own commands. A test asserts the row count, not a duration.
+- **c5:** The trace README states what the git record covers and what it leaves out.
+
+**Agent details:**
+
+- **Ref:** `docs/design/session-recording.md`, the `git.trace2` row of the event table and the claim-check definition; `tools/tillr-trace/README.md`, the section "How the index stays current".
+- **Where:** `GIT_TRACE2_EVENT` is exported for the whole run in `tools/tillr-run/backends/pi/run-pi` and `tools/tillr-run/backends/claude/run-claude`; `parse_git_trace2` in `tools/tillr-trace/tillr_trace.py`; each trace2 event carries `cmd_ancestry`, which names the parent processes (`package-0.test`, `go`, `pi`, ...) and is one way to tell a test's git from the worker's; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
+- **Evidence, 2026-11-17:** `du -sh .tillr/loop` printed 82G over 906 run directories. In `.tillr/loop/run-item-land-across-owner-edits-a18/`, `git-trace2.jsonl` was 2,855,777,588 bytes, and `rg -o '"event":"[a-z_]+"' git-trace2.jsonl | sort | uniq -c` counted 918,054 `start` and 941,490 `exit` events. Counting the `cmd_ancestry` lists, the most common parents were `package-0.test` (325,195), `package-1.test` (191,948) and `tillr-land.test` (73,057).
+- **Evidence, 2026-11-17:** the 32 GB index from before that day's fix, read with `immutable=1`, held 24,254,174 `git.trace2` rows and 3,181,679 `proc.exec` rows, and the `rows_parsed` totals in `ingested_files` summed to the same two counts, so no row was duplicated. The git trace files it was built from summed to 82,308,190,016 bytes.
+- **Evidence, 2026-11-17:** after the fix, a fresh ingest of the single 422 MB run `run-item-drain-restart-on-request-a3` took 9.7 s and wrote a 188 MB index (124,250 git rows, 31,740 proc rows), about 44 MB of source per second.
