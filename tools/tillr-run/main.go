@@ -51,6 +51,10 @@ func dispatch(args []string) int {
 		return execFace(rest)
 	case "pause":
 		return pauseFace(rest)
+	case "mark-copied-usage":
+		return markCopiedUsageFace(rest)
+	case "copied-usage":
+		return copiedUsageFace(rest)
 	case "request":
 		return requestFace(rest)
 	case "lanes":
@@ -461,7 +465,7 @@ func printRecord(env record.Envelope) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "exec, pause, request, lanes, status or release"
+const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage or copied-usage"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

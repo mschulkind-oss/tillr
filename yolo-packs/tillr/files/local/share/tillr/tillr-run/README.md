@@ -20,7 +20,8 @@
 `tillr-run` executes one run request to a terminal run record under a caller-named lane
 root, and reads the lane and run state back. `exec` is the run itself; `request` builds the
 request; `pause` requests a restart interruption; `lanes`, `status` and `release` inspect
-and clean up what a tick left behind.
+and clean up what a tick left behind. `copied-usage` detects repeated usage pairs;
+`mark-copied-usage` corrects one run whose usage came from an earlier run.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
@@ -149,6 +150,58 @@ usage while preserving the first attempt's measured usage. The real Pi extractor
 was also probed with an empty stream and exit code -1: it returned its documented
 incomplete-report exit 4 with `tokens: unknown` and `cost usd: unknown`. The leak
 was the shared report destination, not an empty stream reporting prior model usage.
+
+### Correcting old copied usage
+
+The per-attempt report fix prevents new leaks; it does not repair old stored usage.
+**This repository's store needs the correction once after this change lands.** The
+2026-11-17 inventory found 49 old runs carrying an earlier run's exact tokens and
+cost, totaling $133.65; this is the recorded inventory, not a count enforced by the
+command. The operator, not a lane, applies the correction to the live store.
+
+First inspect the detector's JSON list. Each entry names a run, the earliest
+strictly earlier run with equal nonzero tokens and cost, and the matching values.
+It excludes unknown or zero usage, equal start times, and the same run continued
+under its unchanged run id. Detection is read-only and writes no events.
+
+```sh
+# From this repository's root, using the newly rendered launcher:
+tillr run copied-usage --store .tillr/state.db
+# After checking that the listed matches are copied reports:
+tillr run copied-usage --store .tillr/state.db --apply --reason 'Old attempts reused the preceding report before per-attempt extraction'
+# Check again: after correction the list should be [].
+tillr run copied-usage --store .tillr/state.db
+```
+
+Use the actual store path if it differs. The standalone binary takes the same
+arguments after its face name:
+
+```sh
+tillr-run mark-copied-usage --store /path/to/state.db --run copied-run --source-run earlier-run --reason 'Preceding report reused'
+tillr-run copied-usage --store /path/to/state.db
+```
+
+Equal measurements alone do not prove copying: two independent runs can cost the
+same. Review the matches before applying, and use `mark-copied-usage` for selected
+runs when a whole-store correction is not justified. A single mark requires both
+known values to equal the named source's values and the source to have started
+strictly earlier. A continued run cannot name itself as its source. A missing run,
+unequal or unknown measurement, invalid ordering, or blank reason is refused
+without changing a run or appending an event.
+
+Each mark clears both stored measurements to unknown and appends one
+`run.usage.copied` event holding the old tokens and cost, the corrected run,
+the source run and the operator's reason. The row's event sequence points at this
+event. Batch detection and all its marks happen in one transaction; any failure
+rolls back all marks and events. The transaction does no Git, artifact-file or
+process work. An empty batch changes no rows and appends no events. Running it
+again after correction is therefore harmless.
+
+The observatory, item totals and historical pass spend still count corrected runs
+as runs, but no longer count their copied measurements. Missing-usage counts rise,
+and sums remain lower bounds, not a claim that the corrected runs spent zero.
+Historical pass snapshots retain their stored values; their displayed totals
+exclude pairs identified by the correction events.
 
 ## What it refuses
 
