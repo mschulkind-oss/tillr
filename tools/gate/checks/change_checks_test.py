@@ -631,14 +631,15 @@ sys.exit(rc)
         ran = self.runner_check("--base", self.base, "--head", "HEAD", "--checks", str(declarations))
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         migrated = {check["check_id"] for check in json.loads(ran.stdout)["payload"]["checks"]}
-        # Change checks remain disjoint from the legacy program. The two Markdown
-        # conventions and structural proof now belong to the tree declarations.
+        # Migrated change checks remain disjoint. The planner also schedules fast
+        # whole-tree declarations, so its execution inventory includes those kinds
+        # without reintroducing them as legacy implementations in the registry.
         before = {"file-size", "commit-identity", "seed-freeze", "citations",
                   "documents", "pipeline-evidence", "self-suite", "workflows"}
-        self.assertEqual(migrated | remaining, before)
-        self.assertFalse((IDS - {"file-size"}) & remaining)
         tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build"}
-        self.assertFalse(tree_ids & remaining)
+        self.assertEqual(migrated | remaining, before | tree_ids)
+        self.assertFalse((IDS - {"file-size"}) & remaining)
+        self.assertEqual(tree_ids & remaining, tree_ids)
         exported = subprocess.run(["python3", "tools/fork-check.py", "--registry-json"],
                                   cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(exported.returncode, 0, exported.stdout + exported.stderr)
@@ -648,8 +649,6 @@ sys.exit(rc)
         declaration_ids = {json.loads(path.read_text())["id"]
                            for path in (self.repo / "tools/gate/checks").glob("*.json")}
         self.assertFalse(legacy_ids & declaration_ids, legacy_ids & declaration_ids)
-        self.assertEqual(migrated | remaining | tree_ids,
-                         before | {"scratch", "design-citations", "structural", "pack-sync", "go-build"})
         for kind in tree_ids:
             declaration = json.loads((self.repo / "tools/gate/checks" / (kind + ".json")).read_text())
             self.assertEqual(declaration["scope"], "tree")

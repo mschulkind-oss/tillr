@@ -1684,7 +1684,6 @@ took the same suite to 13.7 to 14.5 seconds with six shards. The drain's rolling
 repository gate both pay the 64 seconds today, and the cost estimate the gate plans with still
 says 30.9 seconds.
 
-<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the second failed attempt):** two runs stopped, for two unrelated
 reasons, and neither reason is in this design. The criteria c1 to c8 stand as written.
@@ -1779,17 +1778,6 @@ run's two passes: `tillr-run` was faster under the runner in one and slower in t
 module whose two walls are within ten percent of each other stays on its native command, so the
 planner's choice does not flip from run to run.
 
-- **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
-- **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
-- **c3:** The runner exits non-zero when any test fails, when a shard cannot start, or when a shard exits without reporting every test assigned to it. A test per case asserts the exit code and a message that names the shard.
-- **c4:** Shards do not interfere: each gets its own scratch subdirectory and its own git global configuration file. A test runs two shards that write to the same relative name and asserts neither sees the other's file.
-- **c5:** The drain's rolling tier and `just done` run the drain suite through the runner, and the other tillr modules do too wherever the measured wall time drops. The report lists each module with its before and after wall time.
-- **c6:** The suite cost estimate in the gate's check planner is refreshed from a measurement of the runner, with the command and date in the comment beside it.
-- **c7:** The worker brief and the `tillr-operating` skill tell workers how to run the sharded runner and when to prefer a targeted `-run`.
-- **c8:** The report records the drain suite's wall time before and after, as command, result and date. No test asserts elapsed time.
-- **c9:** `python3 tools/gate/checks/scratch.py`, run from the repository root on the committed tree, prints nothing and exits 0. The report gives that command and its output. No tracked Markdown file the change adds or edits names the durable scratch directory, by variable or by path, outside a fenced block.
-- **c10:** `python3 tests/observatory-dev.test.py` passes in a checkout that has no `tools/tillr-view/web/node_modules`, such as a fresh lane worktree, and still passes in one that has it. The suite leaves that directory as it found it: absent when it was absent, and untouched when it was present, so a later real run of the recipe still installs its modules. The report gives the command, its result and the date for a run in the lane worktree. When the suite already passes on the staged base, the change leaves `tests/observatory-dev.test.py` alone and the report says so.
-- **c11:** The report names every test that was red on the staged base before any edit, each with its command, exit code and date, or says there was none. The change includes no file under `tools/tillr/store/` and does not include `tools/tillr-drain/drain/heavy_supervisor.go`.
 
 **Agent details:**
 

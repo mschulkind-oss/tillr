@@ -43,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKENDS = ROOT / "tools" / "tillr-run" / "backends"
@@ -216,6 +217,10 @@ class Workspace:
 
     def invoke(self, backend, lane, *args, stream=None, exit_code=0, path=None):
         env = os.environ.copy()
+        # These cases stage fresh dispatches, even when this suite runs in a resumed
+        # worker. The enclosing lane's continuation prompt is not a fixture input.
+        env.pop("TILLR_RESUME_PROMPT_FILE", None)
+        env.pop("TILLR_SESSION_MODE", None)
         env.update(
             PATH=path if path is not None else f"{self.bin}:{env.get('PATH', '')}",
             STUB_LOG=str(self.log),
@@ -623,6 +628,29 @@ def test_preflight(workspace):
                 not (lane / "stream.err").exists(),
                 f"{backend}: a refused dispatch left a stream.err",
             )
+
+
+def test_fixture_does_not_inherit_resume_prompt(workspace):
+    lane = workspace.lane()
+    prompt = workspace.root / "inherited-resume-prompt"
+    prompt.write_text("This belongs to the enclosing resumed worker, not the fixture.\n")
+    workspace.log.write_text("")
+    with patch.dict(os.environ, {"TILLR_RESUME_PROMPT_FILE": str(prompt),
+                                 "TILLR_SESSION_MODE": "resume"}):
+        result = workspace.invoke("muse", lane, "--backend", "muse", "--model",
+                                  "fixture-model-1", "--effort", "high")
+        check(result.returncode == 0, f"fresh dispatch fixture failed: {result.stderr}")
+        argv = args_of(workspace.calls()[-1])
+        check(argv[argv.index("--prompt-file") + 1] == "../brief.md",
+              f"fresh fixture inherited its enclosing worker's resume prompt: {argv}")
+        result = workspace.invoke("claude", lane, "--backend", "claude", "--model",
+                                  "fixture-model-claude", "--effort", "medium")
+        check(result.returncode == 0, f"fresh Claude fixture failed: {result.stderr}")
+        argv = args_of(workspace.calls()[-1])
+        check("--session-id" in argv and "--resume" not in argv,
+              f"fresh fixture inherited its enclosing worker's session mode: {argv}")
+    check(os.environ.get("TILLR_RESUME_PROMPT_FILE") != str(prompt),
+          "fixture probe leaked its temporary resume prompt")
 
 
 def test_adapter_argv(workspace):
@@ -1064,6 +1092,8 @@ def main():
         workspace = Workspace(root)
         test_preflight(workspace)
         print("ok: every adapter refuses a bad dispatch before its harness runs")
+        test_fixture_does_not_inherit_resume_prompt(workspace)
+        print("ok: fresh adapter fixtures do not inherit the enclosing worker's resume prompt")
         test_adapter_argv(workspace)
         print("ok: each adapter's argv carries the posture, the dialect and the wall it declares")
     finally:

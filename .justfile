@@ -434,8 +434,14 @@ observatory-dev port="4318" *args:
 # small change is quick once all earlier pending work is verified.
 # This program also imports every fast whole-tree declaration from tools/gate/checks/,
 # using tillr-gate checks over the same last-verified..HEAD range as the remaining suites.
+# The drain and measured faster tillr modules use go-test-shards; drain stays rolling,
+# and this complete gate includes that tier.
 done *args:
     @python3 tools/fork-check.py {{args}}
+
+# Whole-module execution; prefer targeted `go test -run` while editing.
+go-test-shards module="tools/tillr-drain" *args:
+    @python3 tools/go-test-shards.py {{module}} {{args}}
 
 # Run every check this change plans under the gate's own conditions -- HOME and
 # XDG_STATE_HOME scrubbed, BOARD_STORE_STRICT, this process's uid, one check at a time --

@@ -195,12 +195,38 @@ One candidate, one lane, one record of what the run cost. `tillr run lanes`, `st
 `release` inspect and clean up the lanes a pass left behind; a lane released is not a
 candidate retried.
 
+### Worker verification in this repository
+
 While working on Go code, use a targeted `-run` for the behavior being changed. Run the
 full suite once before committing. In the drain module, drop `-count=1` for the working
 loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
 sibling change reruns tests and an unchanged tree still caches. The drain README explains
 the mechanism and names the permanent cache regression check. A worker runs tests, not
 the landing gate (`just done`); the gate owns its landing lock.
+
+For the full suite before committing, use the repository's runner on modules the
+gate runs through it. The measured module list is in the
+[verification report](../../../../docs/pi/tillr-go-shards-2026-11-17.md).
+The runner always executes tests fresh; Go's test result cache does not apply.
+It builds each package's test binary once and runs up to six independent test
+processes per package, balancing recorded durations. New tests run in a fallback
+group; no duration entry is required to run a test. Each process has its own
+scratch directory and git global configuration file.
+
+```bash
+python3 tools/go-test-shards.py tools/tillr-drain -k 6 --scratch "$TMPDIR"
+```
+
+Replace the module path for another tillr module and point `--scratch` at the run's
+scratch directory. For a focused edit, prefer a targeted test before the full suite:
+
+```bash
+cd tools/tillr-drain && go test ./... -run '^TestName$'
+```
+
+Before committing, run the full suite for the modules the change reaches. Workers
+never run `just done`: the landing gate owns that check. In another repository,
+use that repository's documented test command, not this repository-specific runner.
 
 ## 4. Judge — evaluate the candidate against the gate
 `tillr gate run`

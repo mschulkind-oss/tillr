@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,44 @@ exec sleep 300`)
 	result, err := f.newLoop(t, 1, steps).Run(context.Background())
 	if err != nil || result.Landed != 1 || result.Dispatched != 0 {
 		t.Fatalf("replacement gate: %+v %v", result, err)
+	}
+}
+
+const shortWallRequest = `import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    request = json.load(f)
+payload = request['payload']
+if not payload.get('resume'):
+    assert payload['timeout_ms'] == 1000, payload
+    payload['timeout_ms'] = 100
+else:
+    payload['timeout_ms'] = 0
+with open(path, 'w') as f:
+    json.dump(request, f)
+`
+
+// Sharding must not turn a fixture's initial deadline into a deadline on its resume.
+func TestWallContinuationFixtureClearsTheResumeWall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "request.json")
+	writeFile(t, path, `{"payload":{"resume":true,"timeout_ms":100}}`)
+	if out, err := exec.Command("python3", "-c", shortWallRequest, path).CombinedOutput(); err != nil {
+		t.Fatalf("mutating request: %v: %s", err, out)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Payload struct {
+			TimeoutMS int `json:"timeout_ms"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Payload.TimeoutMS != 0 {
+		t.Fatalf("resumed fixture still has a wall: %d ms", request.Payload.TimeoutMS)
 	}
 }
 
@@ -60,17 +99,7 @@ fi`)
   previous=$arg
  done
  python3 - "$input" <<'PY'
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    request = json.load(f)
-payload = request['payload']
-if not payload.get('resume'):
-    assert payload['timeout_ms'] == 1000, payload
-    payload['timeout_ms'] = 100
-with open(path, 'w') as f:
-    json.dump(request, f)
-PY
+`+shortWallRequest+`PY
 fi
 exec "`+sibling(t, "run")+`" "$@"`)
 			cmd, out := startStopFixtureWithRun(t, f, 1, shortRun)
