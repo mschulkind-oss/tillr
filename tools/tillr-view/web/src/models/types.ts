@@ -44,6 +44,7 @@ export interface BuildStamp {
 }
 
 export interface ServerSnapshot {
+  writes_enabled?: boolean;
   store_path: string;
   schema_version: number;
   event_head_seq: number;

@@ -18,6 +18,15 @@ import (
 // The spelling is kebab-case: a code travels in URLs and log lines as well as in the JSON,
 // and none of them is a payload field, whose names here are snake_case.
 const (
+	codeReadOnly             = "read-only"
+	codeOriginRefused        = "origin-refused"
+	codeContentType          = "content-type"
+	codeTooLarge             = "too-large"
+	codeBadRequest           = "bad-request"
+	codeUnknownItem          = "unknown-item"
+	codeNotInOrder           = "not-in-order"
+	codeStoreBusy            = "store-busy"
+	codeWriterUnavailable    = "writer-unavailable"
 	codeStoreAbsent          = "store-absent"
 	codeStoreUnreadable      = "store-unreadable"
 	codeSchemaTooNew         = "schema-too-new"
@@ -58,6 +67,15 @@ type apiCode struct {
 //	500  the store answered, and something it points at could not be read.
 //	400  the request named something outside this face's closed set.
 var apiCodes = []apiCode{
+	{codeReadOnly, http.StatusMethodNotAllowed},
+	{codeOriginRefused, http.StatusForbidden},
+	{codeContentType, http.StatusUnsupportedMediaType},
+	{codeTooLarge, http.StatusRequestEntityTooLarge},
+	{codeBadRequest, http.StatusBadRequest},
+	{codeUnknownItem, http.StatusNotFound},
+	{codeNotInOrder, http.StatusConflict},
+	{codeStoreBusy, http.StatusServiceUnavailable},
+	{codeWriterUnavailable, http.StatusServiceUnavailable},
 	{codeStoreAbsent, http.StatusServiceUnavailable},
 	{codeStoreUnreadable, http.StatusServiceUnavailable},
 	{codeSchemaTooNew, http.StatusServiceUnavailable},

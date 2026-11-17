@@ -2,7 +2,7 @@
   "name": "tillr-observatory",
   "private": true,
   "version": "0.0.0",
-  "description": "The drain observatory: a read-only front end over tillr-view serve.",
+  "description": "The drain observatory: a read-only-by-default front end with opt-in item placement.",
   "type": "module",
   "scripts": {
     "dev": "vite",
