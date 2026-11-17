@@ -433,6 +433,88 @@ def test_land_forwards_the_observed_trunk(tmp):
     assert "--observed-trunk" not in passes[-1], passes
 
 
+def test_describe_answers_the_hook_contract(tmp):
+    adapter = runpy.run_path(str(ADAPTER))
+    result = subprocess.run([sys.executable, str(ADAPTER), "describe"], cwd=tmp,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    hooks = json.loads(result.stdout)["hooks"]
+    candidate = {"--item", "--lane", "--run", "--worktree", "--base", "--head", "--root"}
+    expected = {
+        "gate": candidate,
+        "land": candidate | {"--observed-trunk", "--base-ref", "--message-from"},
+        "verdict": candidate | {"--store", "--verdict"},
+        "fixer-gate": candidate | {"--all", "--since"},
+        "replay": {"--only"},
+        "rolling": {"--all", "--since"},
+    }
+    assert set(hooks) == set(expected), hooks
+    for name, required in expected.items():
+        assert required <= set(hooks[name]), (name, hooks[name])
+        # Capabilities must name real parser options, not an independent promise.
+        parser = adapter["parser_for"](name)
+        accepted = {flag for action in parser._actions for flag in action.option_strings}
+        assert set(hooks[name]) <= accepted, (name, hooks[name], accepted)
+    assert not list(Path(tmp).iterdir()), "describe wrote files"
+    result = subprocess.run([sys.executable, str(ADAPTER), "describe", "--all"],
+                            capture_output=True, text=True)
+    assert result.returncode == 2, result
+
+
+def test_revision_hooks_forward_defaults_and_exit_status(tmp):
+    fixture = Fixture(tmp)
+    stub = fixture.bin / "python3"
+    stub.write_text(PYTHON_STUB.replace("exit 0", '''
+log "fork-root: $PI_FORKS_ROOT"
+log "spans-out: $TILLR_GATE_SPANS_OUT"
+printf 'revision stdout\\n'
+printf 'revision stderr\\n' >&2
+exit "${STUB_REVISION:-0}"
+'''))
+    stub.chmod(0o755)
+    for name, flags, prefix in (
+        ("replay", ["--only", "test:one,test:two"], ["--replay"]),
+        ("rolling", ["--all"], ["--tier", "rolling"]),
+        ("rolling", ["--since", fixture.base], ["--tier", "rolling"]),
+    ):
+        for code in (0, 1, 2, 4, 6):
+            fixture.log.write_text("")
+            env = fixture.env(STUB_REVISION=code, PI_FORKS_ROOT=str(fixture.repo),
+                              TILLR_GATE_SPANS_OUT=str(fixture.tmp / "spans.jsonl"))
+            result = subprocess.run([sys.executable, str(ADAPTER), name, *flags],
+                                    cwd=fixture.repo, env=env, capture_output=True, text=True)
+            assert result.returncode == code, (name, flags, result.returncode, result.stderr)
+            assert result.stdout == "revision stdout\n" and result.stderr == "revision stderr\n", result
+            assert fixture.calls() == [
+                "python3-argv: " + " ".join(["tools/fork-check.py", *prefix, *flags]),
+                "python3-cwd: " + str(fixture.repo),
+                "fork-root: " + str(fixture.repo),
+                "spans-out: " + str(fixture.tmp / "spans.jsonl"),
+            ], fixture.calls()
+    for name, flags in (("replay", []), ("replay", ["--only", "x", "--replay"]),
+                        ("rolling", []), ("rolling", ["--all", "--since", fixture.base]),
+                        ("rolling", ["--tier", "rolling", "--all"])):
+        result = subprocess.run([sys.executable, str(ADAPTER), name, *flags],
+                                capture_output=True, text=True)
+        assert result.returncode == 2, (name, flags, result)
+
+
+def test_hook_dispatch_matches_drain_flag_cases(tmp):
+    # The fence excludes drain Go test files. Go's overlay compiles this permanent
+    # fixture as a drain-package test without writing anything into that module.
+    root = HERE.parent.parent
+    overlay = Path(tmp) / "overlay.json"
+    overlay.write_text(json.dumps({"Replace": {
+        str(root / "tools/tillr-drain/drain/tillr_loop_hooks_test.go"):
+            str(HERE / "testdata/drain-hooks_test.go"),
+    }}))
+    result = subprocess.run(
+        ["go", "test", "-overlay", str(overlay), "./drain", "-run",
+         "^TestTillrLoopDefinitionHookFlagParity$"],
+        cwd=root / "tools/tillr-drain", capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_every_argv_the_drain_sends_is_accepted(tmp):
     """Each argv `tillr drain loop` builds, replayed against the face it reaches.
 
@@ -822,6 +904,9 @@ def main():
             test_land_exit_mapping,
             test_land_forwards_message_source,
             test_land_forwards_the_observed_trunk,
+            test_describe_answers_the_hook_contract,
+            test_revision_hooks_forward_defaults_and_exit_status,
+            test_hook_dispatch_matches_drain_flag_cases,
             test_every_argv_the_drain_sends_is_accepted,
             test_check_argv_parses_without_reading_or_judging,
             test_fixer_range_reaches_the_judge,

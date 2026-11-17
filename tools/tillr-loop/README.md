@@ -1,14 +1,24 @@
 # tillr-loop
 
-The three programs `tillr drain loop` requires, so a person can start the loop with one
-command and nothing on its command line is a judgment.
+`tillr-loop` is the Git-landing definition's **hook program**: one executable that
+answers judgments the core cannot make, following the
+[hook program contract](../tillr/definition/README.md#hook-program-contract).
+It answers `describe`, `gate`, `land`, `verdict`, `fixer-gate`, `replay`, and `rolling`.
+It judges nothing itself: candidate steps derive the records the real utilities need
+and translate their exit codes; revision checks run the repository's existing checks.
 
-`tillr drain loop` refuses to run until `--gate`, `--land` and `--verdict` each name a
-program, because the loop owns the order and the stopping conditions and never a step's
-judgment. This directory supplies them: `tillr-loop` is one adapter with three faces, each
-a thin translation onto a real utility's own CLI. It judges nothing itself — it derives
-the records the real programs need from the candidate the loop names, refuses when it
-cannot, and translates the exit code onto the contract the loop reads.
+The embedded Git-landing definition keeps `hooks` unset. A store can opt in by setting
+its definition's `hooks` to the following object (the path is relative to the repository
+where the loop starts):
+
+```json
+{"argv":["python3","tools/tillr-loop/tillr-loop"],"names":["gate","land","verdict","fixer-gate","replay","rolling"]}
+```
+
+With that declaration, the drain selects all six steps without step flags and checks
+`describe` before the first pass. An explicit step flag still wins. Without hooks,
+`--gate`, `--land`, and `--verdict` must name programs as before; the keeper's existing
+command is unchanged.
 
 ```sh
 tillr drain loop --root /workspace --lanes 1 \
@@ -20,6 +30,20 @@ tools/tillr-loop/tillr-loop self-check \
   --item <id> --lane <id> --run <id> --worktree <lane-worktree> --base <sha> --head <sha>
 ```
 
+## Revision checks and the fixer gate
+
+`fixer-gate` uses the gate adapter with a required full-check range: either `--all`
+or `--since` the last proved commit. The legacy `gate` face still accepts these flags,
+so the drain's existing fixer-gate default keeps working.
+
+`replay` runs `python3 tools/fork-check.py --replay --only <check>`; `rolling` runs
+`python3 tools/fork-check.py --tier rolling` with either `--all` or `--since <sha>`.
+These are the programs the drain defaults to in flag mode. Both hooks retain the
+caller's working directory and environment, including `PI_FORKS_ROOT` and
+`TILLR_GATE_SPANS_OUT`, and return the check program's exit status without translating
+an unknown result into a judgment. The hook name selects the operation, so callers
+do not pass `--replay` or `--tier` to these faces.
+
 ## Step programs belong to the running build
 
 When a configured command names this repository's standard adapter under the loop's
@@ -28,6 +52,8 @@ applies to gate, fixer gate, land and verdict, including the keeper's `python3` 
 and direct script commands. Startup prints one line per step identifying the build's
 embedded adapter or an unchanged caller-configured program. Other scripts run exactly
 as configured; naming a different adapter path does not select the embedded copy.
+Definition hooks also run the exact declared executable, not the build's embedded
+adapter, even when the declaration names the standard adapter path.
 
 The copy is committed as [tillr-loop.py](../tillr-drain/drain/tillr-loop.py) and embedded
 in the drain binary. A landing that edits the source therefore does not change a running

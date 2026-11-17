@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""tillr-loop: the gate, land and verdict programs `tillr drain loop` requires.
+"""tillr-loop: the Git-landing definition's hook program.
 
-`tillr drain loop` refuses to start until the caller names three programs, because the
-loop owns the order and the stopping conditions and never a step's judgment. This front
-end supplies them: three thin adapters that turn the loop's candidate argv into the real
-`tillr-gate`, `tillr-land` and `tillr item` invocations, and translate those programs'
-exit codes onto the three contracts the loop reads.
+One executable answers the definition's hook program contract (see
+../tillr/definition/README.md). Candidate adapters turn the loop's argv into real
+`tillr-gate`, `tillr-land` and `tillr item` invocations and translate their exit codes.
+Revision hooks run the drain's default repository checks. The embedded definition
+leaves hooks unset; explicit step programs keep their existing behavior.
 
   tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] [--since <sha> | --all] <candidate flags>
   tools/tillr-loop/tillr-loop land    [--observed-trunk <sha>] [--base-ref <ref>] [--message-from <sha>] <candidate flags>
   tools/tillr-loop/tillr-loop verdict --verdict pass <candidate flags>
+  tools/tillr-loop/tillr-loop fixer-gate (--since <sha> | --all) <candidate flags>
+  tools/tillr-loop/tillr-loop replay --only <check>
+  tools/tillr-loop/tillr-loop rolling (--since <sha> | --all)
+  tools/tillr-loop/tillr-loop describe                       # capabilities, runs nothing
   tools/tillr-loop/tillr-loop self-check <candidate flags>   # prints, runs nothing
 
 The loop appends the candidate to whatever program string it is given (one flag per
@@ -684,10 +688,18 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=f"tillr-loop {kind}", allow_abbrev=False)
     parser.add_argument("--check-argv", action="store_true",
                         help="parse arguments only; tillr-step-argv-check-v1 (see drain README)")
+    if kind in ("replay", "rolling"):
+        if kind == "replay":
+            parser.add_argument("--only", required=True, help="the failing check identifier to replay")
+        else:
+            full = parser.add_mutually_exclusive_group(required=True)
+            full.add_argument("--all", action="store_true", help="judge all rolling checks")
+            full.add_argument("--since", metavar="SHA", help="judge rolling checks since SHA")
+        return parser
     add_candidate_flags(parser)
     add_common_flags(parser)
     add_binary_flags(parser)
-    if kind in ("gate", "self-check"):
+    if kind in ("gate", "fixer-gate", "self-check"):
         parser.add_argument("--registry", default=None,
                             help="the check registry tillr-gate plan reads (default: "
                                  f"${REGISTRY_ENV}, else a registry exported into the run's scratch)")
@@ -697,7 +709,7 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
         # A trunk fixer's full gate: the drain's `--fixer-gate` replaces `{green}` with one of
         # these. They widen the default program's remaining checks to the untiered range
         # since the last green trunk, or the whole tree when there is none.
-        full = parser.add_mutually_exclusive_group()
+        full = parser.add_mutually_exclusive_group(required=kind == "fixer-gate")
         full.add_argument("--since", default=None, metavar="SHA",
                           help="judge the untiered range since SHA, the fixer's last green trunk")
         full.add_argument("--all", action="store_true",
@@ -812,23 +824,55 @@ def print_self_check(ctx: Ctx) -> int:
     return EXIT_PASS
 
 
+HOOK_NAMES = ("gate", "land", "verdict", "fixer-gate", "replay", "rolling")
+
+
+def describe() -> int:
+    """Advertise accepted flags from the parsers that actually enforce them."""
+    hooks = {}
+    for name in HOOK_NAMES:
+        hooks[name] = [flag for action in parser_for(name)._actions
+                       for flag in action.option_strings if flag.startswith("--")
+                       and flag not in ("--help", "--check-argv")]
+    print(json.dumps({"hooks": hooks}))
+    return EXIT_PASS
+
+
+def revision_check(kind: str, args: argparse.Namespace) -> int:
+    """Run the drain's historical revision check in the supplied cwd and environment."""
+    if kind == "replay":
+        flags = ["--replay", "--only", args.only]
+    else:
+        flags = ["--tier", "rolling", *(["--all"] if args.all else ["--since", args.since])]
+    try:
+        return subprocess.run(["python3", "tools/fork-check.py", *flags]).returncode
+    except OSError as err:
+        raise Refusal(EXIT_EXTERNAL, f"cannot run revision check: {err}") from err
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
         return EXIT_PASS if argv else EXIT_USAGE
     kind, rest = argv[0], argv[1:]
-    if kind not in COMPOSERS and kind != "self-check":
-        print(f"tillr-loop: {kind!r} is not a step: want gate, land, verdict or self-check",
+    if kind == "describe":
+        argparse.ArgumentParser(prog="tillr-loop describe", allow_abbrev=False).parse_args(rest)
+        return describe()
+    if kind not in HOOK_NAMES and kind != "self-check":
+        print(f"tillr-loop: {kind!r} is not a step: want {', '.join(HOOK_NAMES)}, describe or self-check",
               file=sys.stderr)
         return EXIT_USAGE
     args = parser_for(kind).parse_args(rest)
     if args.check_argv:
         return EXIT_PASS
     try:
+        if kind in ("replay", "rolling"):
+            return revision_check(kind, args)
         ctx = context(args)
         if kind == "self-check":
             return print_self_check(ctx)
-        return execute(kind, COMPOSERS[kind](ctx, dry=False))
+        face = "gate" if kind == "fixer-gate" else kind
+        return execute(face, COMPOSERS[face](ctx, dry=False))
     except Refusal as refusal:
         print(f"tillr-loop {kind}: {refusal.message}", file=sys.stderr)
         return refusal.code
