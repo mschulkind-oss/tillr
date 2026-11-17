@@ -2290,13 +2290,7 @@ unsafe as soon as workflows are in use. A rank change must change the rank and t
 fields and nothing else, for every item, and the ranking procedure must not need a rule that
 says to skip items with a workflow.
 
-<!-- tillr: item id="item-seed-rank-keeps-workflow" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A rank-only seed of an item that has a workflow leaves the workflow as it was. A test stores an item with the workflow `scout-then-build@v1`, seeds a new rank for it, and asserts the stored workflow is unchanged.
-- **c2:** The same test reads every stored column and every criterion and edge of the item before and after the seed, and asserts that only the rank, `updated_at` and `event_seq` differ.
-- **c3:** The test fails on the code as it stands, because the stored-item read leaves the workflow out. The fix reads the workflow where the stored item is read, so that every later write of the item carries it.
-- **c4:** An item with no workflow re-ranks exactly as before. A test asserts an unchanged result for it.
-- **c5:** The README of `tillr-item` and the pack's `tillr-operating` skill no longer tell an operator to skip items that have a workflow when ranking, if they say so, and say that a rank-only seed changes the rank alone.
 
 **Agent details:**
 

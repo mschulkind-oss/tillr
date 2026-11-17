@@ -97,7 +97,10 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   and heading, and the face exits `1` after the other documents are applied. A path that
   does not exist yet is a warning, since the slice may create it.
 - **A seed is one transaction.** An item that cannot be written takes the batch with it,
-  rather than leaving half a document applied.
+  rather than leaving half a document applied. A rank-only seed changes the rank alone,
+  apart from `updated_at` and `event_seq` bookkeeping. It preserves every other stored
+  field, including `workflow` (the item's chosen sequence of work steps), criteria and
+  dependency edges. Items with a workflow do not need to be skipped when ranking.
 - **A mail delivery is acknowledged once, by a named session.** A second acknowledgement is
   a refusal and not a second row.
 
