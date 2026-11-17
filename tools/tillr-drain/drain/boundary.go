@@ -374,7 +374,9 @@ func tillrRef(ref string) bool {
 	return strings.HasPrefix(ref, "refs/heads/tillr/") || strings.HasPrefix(ref, "refs/heads/patch/") || strings.HasPrefix(ref, "refs/tillr/")
 }
 
-func trunkHistoryRef(ref string) bool { return ref == observedTrunkRef || ref == lostTrunkRef }
+func trunkHistoryRef(ref string) bool {
+	return ref == observedTrunkRef || ref == lostTrunkRef || strings.HasPrefix(ref, acceptedTrunkPrefix)
+}
 
 // landerRef names the refs tillr-land writes for every landing: the run pin at the head
 // (refs/tillr/runs/<run_id>) and the landed marker at the squash commit

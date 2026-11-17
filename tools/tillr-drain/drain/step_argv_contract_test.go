@@ -289,11 +289,8 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 		t.Fatalf("build: %v: %s", err, out)
 	}
 
-	for _, rewritten := range []bool{false, true} {
-		name := "observed-tip-on-trunk"
-		if rewritten {
-			name = "observed-tip-lost"
-		}
+	for _, name := range []string{"observed-tip-on-trunk", "observed-tip-lost", "rewrite-accepted"} {
+		rewritten, accepted := name == "observed-tip-lost", name == "rewrite-accepted"
 		t.Run(name, func(t *testing.T) {
 			repo := filepath.Join(root, name)
 			if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -303,6 +300,12 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 			writeForkFile(t, filepath.Join(repo, "base.txt"), "base\n")
 			runGit(t, repo, "add", ".")
 			runGit(t, repo, "commit", "-qm", "base")
+			if accepted {
+				// The lane is staged on a commit only the old history has.
+				writeForkFile(t, filepath.Join(repo, "second.txt"), "second\n")
+				runGit(t, repo, "add", ".")
+				runGit(t, repo, "commit", "-qm", "second")
+			}
 			base := runGit(t, repo, "rev-parse", "HEAD")
 			observed := base
 			if rewritten {
@@ -337,6 +340,16 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.Close()
+			if accepted {
+				// The trunk is re-authored after the lane was staged, and the operator
+				// accepts it: the loop's next observation is the rewritten tip.
+				current := reauthor(t, repo, base+"~1", base)
+				runGit(t, repo, "reset", "-q", "--hard", current)
+				if _, err := AcceptRewrite(context.Background(), AcceptRewriteRequest{Root: repo, Store: db, Lost: base, Current: current, By: "owner", Why: "re-authored", At: time.Now()}); err != nil {
+					t.Fatalf("accept: %v", err)
+				}
+				observed = current
+			}
 
 			run := "run-item-a-a1"
 			payload, err := json.Marshal(map[string]any{"verdict_id": "verdict-a", "plan_id": "plan-a", "registry_digest": "sha256:fixture", "base_sha": base, "tree_sha": tree, "result": "pass", "checks": []any{}})
@@ -365,7 +378,7 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 				}
 				return
 			}
-			if out.Result != LandLanded || tip == base {
+			if out.Result != LandLanded || tip == base || tip == observed {
 				t.Fatalf("the candidate did not land: %+v, trunk %s", out, tip)
 			}
 			if got := runGit(t, repo, "rev-parse", "main^{tree}"); got != tree {

@@ -749,8 +749,33 @@ waiting face names both tips and the mover `restore the trunk's history`.
 
 Restoring history means making the lost tip an ancestor of the trunk again. The
 next pass clears the lost tip and retries retained landings without another gate.
-The loop keeps waiting even with `--exit-when-drained`. There is no command here
-to accept a deliberate rewrite. The drain also passes its observed tip to the
+The loop keeps waiting even with `--exit-when-drained`.
+
+A deliberate rewrite that kept the content, such as re-authoring commits or editing
+their messages, is accepted instead of restored, with `tillr drain accept-rewrite`
+(its `--help` lists the flags). It names the lost tip, the commit on the trunk that
+replaces it, who accepts, and why. The command accepts only a rewrite it
+can prove kept the content. The lost tip must be the one the hold names. The
+replacing commit must be on the trunk (the tip or one of its ancestors). The two
+commits must have the same tree, and the commits only the lost tip reaches must
+number the same as the commits only the replacing commit reaches, so the rewrite replaced commits one for one rather than
+adding, dropping or squashing any. Anything else is refused with a message naming
+what differs, and nothing changes. The command also works when no pass has recorded
+the rewrite yet: an observed tip that the trunk no longer contains is the same
+rewrite, unrecorded. Accepting it pins the lost tip at
+`refs/tillr/trunk-history/accepted/<lost-tip>`, so the replaced history stays
+readable. It clears the lost tip, makes the replacing commit the observed tip, and records a
+`drain.trunk-rewrite-accepted` event that names who accepted the rewrite, why, and
+both tips. When the rewrite moved `refs/tillr/green` off the trunk, the command moves
+it to the commit that replaced it: the one as far below the replacing commit as the
+proved commit was below the lost tip, refused unless it has the same tree and as many
+commits beneath it. The heavy run cannot do that itself, because it refuses a proof
+pointer the trunk no longer contains, and lanes stage from that pointer. The next pass retries retained landings without another gate, as after
+a restoration: a gate verdict binds the candidate's base and tree, not the trunk.
+Run it while no landing is in flight, after stopping the loop. A lander that was
+already waiting with the old observed tip would record that tip as lost again.
+
+The drain also passes its observed tip to the
 lander with `--observed-trunk`; under the landing lock the lander refuses with
 `trunk-rewritten` if the trunk no longer contains it. The lander also reconciles
 the current durable observation and lost tip inside its locked store transaction:
