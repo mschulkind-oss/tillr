@@ -409,16 +409,39 @@ core should not impose one host's convention on every consumer.
 **Product QA can try:** reading the item id from the environment in their adapter, and keeping their
 own scratch variable.
 
-**Agent details:** the environment list is in [exec.go](../../tools/tillr-run/run/exec.go), and
-`DurableDir` names the directory. The request type is in
-[request.go](../../tools/tillr-run/run/request.go); it already carries `item_id`.
+**Agent details:** the environment list and the `Request` type are both in
+[exec.go](../../tools/tillr-run/run/exec.go), and `DurableDir` there names the directory. The
+request already carries `item_id`; [request.go](../../tools/tillr-run/run/request.go) builds one
+from the face's flags.
+
+Two candidates met the criteria as first written and were refused at the gate on 2026-11-17. This
+answers the conflict raised then; the design is unchanged, and only the form of the README's list
+in c4 is now stated.
+
+- The second candidate failed the gate's `scratch` check, which printed the README line that named
+  the scratch-directory variable in a table row, and the same line in the pack's copy. That check
+  (`scratch_citations` in [tree_common.py](../../tools/gate/checks/tree_common.py)) refuses any
+  tracked Markdown line that names the variable, wherever it appears outside a fenced block, and
+  its list of exceptions is a gate file outside this item's paths. A fenced block is skipped
+  whole, as a specimen. So c4's list is one fenced block, and the README's prose around it says
+  "the scratch-directory variable", as this block does. No gate file changes and no exception is
+  added. The same holds for every other Markdown file the change touches.
+- The first candidate failed `pack-sync` on an interpreter cache file in the pack's copy of the run
+  utility. Commit `864c56815` made that check ignore such files on both sides, so nothing in this
+  item answers it.
+
+Before committing, run the check that refused the second candidate, from the worktree's root:
+
+```sh
+python3 tools/gate/checks/scratch.py
+```
 
 <!-- tillr: item id="item-def-run-item-env" paths="tools/tillr-run/,yolo-packs/tillr/,docs/" prose="2" -->
 
 - **c1:** `tillr run exec` exports `TILLR_ITEM_ID` from the request beside `TILLR_RUN_ID`, and `TILLR_NODE_ID` when the request carries a new optional `node_id`. A test runs a stub adapter that prints its environment and asserts both.
 - **c2:** A request may set a new field, `scratch_env`, to `false`; then `run exec` leaves the scratch-directory variable it sets today as the caller passed it. A request that omits the field gets exactly today's environment, so the drain's runs are unchanged. A test covers both.
 - **c3:** The run record names the run's scratch directory whether or not the variable was set.
-- **c4:** The run utility's README lists every environment variable `run exec` sets and when.
+- **c4:** The run utility's README lists every environment variable `run exec` sets and when, in one fenced block with a line per variable. No line outside a fenced block, in the README or any other Markdown file the change touches, names the scratch-directory variable, so the gate's `scratch` check passes.
 - **c5:** Every existing test of the run utility passes unchanged.
 
 ### Add every run, verdict, decision and state move to the item page
