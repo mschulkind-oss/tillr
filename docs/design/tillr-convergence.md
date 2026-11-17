@@ -259,6 +259,29 @@ The seed's retirement and re-admission on a changed input are item blocks the dr
 
 ### Retire the seed file and its command
 
+Two attempts at this work built the retirement and neither produced a candidate the loop could
+gate, for reasons this section did not state. Both replaced this section with a "Built" note.
+The loop refuses that before the gate, as a worker editing its own item block, and it writes the
+retirement itself once the change has landed. Removing the block also orphaned the dependency
+that `item-oa-move-to-top` in [`observatory-actions.md`](observatory-actions.md) declares on
+this item, which is why document sync then failed. Criterion c6 states the boundary.
+
+The second attempt also stopped on test fallout from deleting the seed, and criterion c7 names
+it. The gate's change-check fixtures stage a `config` directory that exists only because they
+write a seed file into it, so the fixture's staging has to change with the fixture.
+
+One failure a worker meets in a lane is not this item's and is not a reason to stop. Measured on
+2026-11-17 at `919bb62ae`, in a lane's worktree with no change applied:
+`go test . -run '^TestPlanHoldsAnItemBlockedByAnUnlandedItem$'` in `tools/tillr-drain` fails its
+`blocker landed` case with `hold / trunk-unproved`. The test plans against the checkout it runs
+in, a lane shares the main checkout's proved-trunk pointer, and the gate's clean checkout has
+none, so the gate does not see it. Its repair is criterion c8 of `item-ig-parallel-readers` in
+[`tillr-item-graphs.md`](tillr-item-graphs.md). A worker that sees exactly that one case fail
+reports it and carries on; any other failure in the drain suite is a real finding. The same
+measurement ran `python3 tests/fork-check.test.py` to exit 0 on that commit, so a failure there
+belongs to the candidate. That test keeps its gate records under the shared git directory by
+design, which is not an edit outside the fence.
+
 <!-- tillr: item
      id="item-seed-retire"
      blocked_by=""
@@ -270,6 +293,8 @@ The seed's retirement and re-admission on a changed input are item blocks the dr
 - **c3:** The gate's legacy-seed intake freeze is gone with the file, where it lives today. The check was moved out of `tools/fork-check.py` into the gate's change declarations (the per-check files under `tools/gate/checks/`), so that directory is where it is removed: `tools/gate/checks/seed-freeze.json` and `tools/gate/checks/seed-freeze.py` are deleted; `tools/gate/checks/change_common.py` no longer defines `LEGACY_SEED` or `legacy_seed_findings` and has no `seed-freeze` branch; `tools/gate/checks/change_checks_test.py` and `tools/gate/checks/change-checks.test.py` no longer write a seed fixture or name the check, and a regression of theirs that exists only to judge the seed is deleted with it. `tools/fork-check.py` no longer describes `config/tillr/seed-items.json` (its step 8b), `tests/fork-check.test.py` no longer writes a seed fixture or names `seed-freeze`, and `tools/tillr-drain/seed_test.go` and its row-count pin are removed. `rg 'seed-freeze|LEGACY_SEED|legacy_seed_findings' tools/gate tools/fork-check.py tests/fork-check.test.py` returns nothing, and the suites under `tools/gate/` and `tests/fork-check.test.py` pass.
 - **c4:** The store keeps a way to set an item's rank after the seed is gone: `tillr item rank` sets the rank of one item the store already holds and changes nothing else about that item (its state, criteria, allowed paths and runs are as they were), refuses an item the store does not hold, and a test pins both.
 - **c5:** The board's unranked heading in `tools/tillr-view/web/src/components/QueueRail.tsx`, its tests and `tools/tillr-view/web/README.md` name `tillr item rank` as the command that records a priority, and no file under `tools/tillr-view/` outside test fixture item ids names `config/tillr/seed-items.json` or `tillr-item seed`.
+- **c6:** The change leaves this section of `docs/design/tillr-convergence.md` byte for byte as it was, from its heading to the next heading, and leaves every other item block's directive as it was, including the `blocked_by` of `item-oa-move-to-top` in `docs/design/observatory-actions.md`. The change does not mark this item built: the loop retires the block after landing. Outside this section the document may be brought up to date, which covers its `next` line, the two tables in Sections 1 and 2 and the rows for this ruling and for sync in the [Decision Ledger](#decision-ledger). A Markdown link in any tracked document to a file this change deletes becomes inline code naming the former path, and `uvx vantage-check` passes on each changed Markdown file, named one by one.
+- **c7:** No test fixture depends on the deleted seed. `commit()` in `tools/gate/checks/change_checks_test.py` stages only paths its fixture still writes, so it no longer names `config`, and a fixture that needs an unrelated tracked file puts it under a directory the fixture already tracks. `python3 tools/gate/checks/change_checks_test.py`, `python3 tools/gate/checks/tree_checks_test.py` and `python3 tests/tillr-docs.test.py` each exit 0, and so does `go test ./item -run '^TestSyncOverThisRepositorysDocuments$'` in `tools/tillr-item`.
 
 ### Re-admit a held item when an input it failed on changes
 
