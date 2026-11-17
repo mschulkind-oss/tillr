@@ -175,6 +175,8 @@ os.environ.pop("FORK_CHECK_PLAN_BASE", None)
 # in the 2026-11-15 drain. This process needs the strip too: `run_gate` reads
 # `os.environ` when its caller passes no `--spans-out`.
 os.environ.pop("TILLR_GATE_SPANS_OUT", None)
+for _repo_var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+    os.environ.pop(_repo_var, None)
 # The variable the gate supplies to a node step that drives the installed Pi, and the
 # fixture package root every plan in this suite resolves instead of the real build.
 PI_PACKAGE_NAME = "PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT"
@@ -208,13 +210,45 @@ ENV = {
 }
 
 
+# Variables that pick the repository a git command acts on. Inherited from a hook or a
+# harness, they aim every fixture `git add -A` / `git commit -m initial` at the REAL repository
+# (6f2d9d938 committed a lane's dirty working tree as `fork-check test` that way), so they are
+# removed from this process and from every fixture git command.
+REPO_SELECTING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                  "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+                  "GIT_PREFIX", "GIT_CEILING_DIRECTORIES")
+
+
+def fixture_env(cwd, env=None):
+    """The environment for a fixture git command: no inherited repository selection, and a
+    ceiling at the fixture's parent so git cannot walk up into an enclosing repository."""
+    merged = dict(env) if env else {**os.environ, **ENV}
+    for key in REPO_SELECTING:
+        merged.pop(key, None)
+    merged["GIT_CEILING_DIRECTORIES"] = str(Path(cwd).resolve().parent)
+    return merged
+
+
 def sh(cwd, *args, check=True, env=None):
     result = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True, env=env or {**os.environ, **ENV}
+        args, cwd=str(cwd), capture_output=True, text=True, env=fixture_env(cwd, env)
     )
     if check and result.returncode != 0:
         raise AssertionError(f"{' '.join(args)} failed in {cwd}:\n{result.stdout}{result.stderr}")
     return result
+
+
+def require_own_repo(path):
+    """Refuse a fixture directory that is not itself a repository root, before any add."""
+    top = sh(path, "git", "rev-parse", "--show-toplevel", check=False)
+    assert top.returncode == 0 and Path(top.stdout.strip()).resolve() == Path(path).resolve(), (
+        f"fixture {path} is not its own repository (toplevel: {top.stdout.strip()!r}{top.stderr.strip()})")
+
+
+def git_init(path, *args):
+    """`git init` a fixture and prove it is its own repository before anything is committed."""
+    sh(path, "git", "init", "--quiet", *args)
+    require_own_repo(path)
 
 
 def commit(cwd, message):
@@ -226,7 +260,7 @@ def upstream(base: Path, name: str):
     """A real repository the fingerprint is read from."""
     path = base / name
     path.mkdir()
-    sh(path, "git", "init", "--quiet", "--initial-branch=main")
+    git_init(path, "--initial-branch=main")
     (path / "src").mkdir()
     (path / "src" / "index.ts").write_text("export const x = 1;\n")
     commit(path, "first")
@@ -457,7 +491,7 @@ def build_repo(base: Path):
             ],
         }, indent=1) + "\n"
     )
-    sh(repo, "git", "init", "--quiet", "--initial-branch=main")
+    git_init(repo, "--initial-branch=main")
     commit(repo, "initial")
     return repo, releases, heads
 
@@ -610,6 +644,46 @@ def write_record(repo: Path, state: dict) -> None:
     path.write_text(json.dumps({"schema": 1, "kind": "snapshot",
                                 "at": "2026-11-15T00:00:00Z", "state": state}) + "\n")
 
+
+# Regression for 6f2d9d938: a run that inherits GIT_DIR/GIT_WORK_TREE (a hook or a harness
+# exporting them) pointed every fixture `git add -A` and `git commit -m initial` at the real
+# repository and committed its dirty working tree as `fork-check test`. The fixture helpers
+# must neither touch an enclosing repository nor accept a fixture that is not its own
+# repository. The outer repository here has a dirty tracked file and the variables aimed at it.
+with tempfile.TemporaryDirectory() as tmp:
+    outer = Path(tmp) / "outer"
+    outer.mkdir()
+    git_init(outer, "--initial-branch=main")
+    (outer / "tracked.txt").write_text("one\n")
+    commit(outer, "outer")
+    (outer / "tracked.txt").write_text("dirty\n")
+    outer_head = sh(outer, "git", "rev-parse", "HEAD").stdout
+    outer_index = sh(outer, "git", "ls-files", "-s").stdout
+    saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
+    os.environ["GIT_DIR"] = str(outer / ".git")
+    os.environ["GIT_WORK_TREE"] = str(outer)
+    (outer / "fixtures").mkdir()
+    try:
+        inner = upstream(outer / "fixtures", "fixture")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert sh(outer, "git", "rev-parse", "HEAD").stdout == outer_head, "fixture moved the outer HEAD"
+    assert sh(outer, "git", "ls-files", "-s").stdout == outer_index, "fixture changed the outer index"
+    assert sh(outer, "git", "log", "-1", "--format=%s").stdout.strip() == "outer"
+    assert sh(inner, "git", "rev-parse", "--show-toplevel").stdout.strip() == str(inner.resolve())
+    # A directory that is not itself a repository is refused before any add or commit.
+    (outer / "not-a-repo").mkdir()
+    refused = False
+    try:
+        require_own_repo(outer / "not-a-repo")
+    except AssertionError:
+        refused = True
+    assert refused, "a directory that is not itself a repository must be refused"
+print("fork-check fixture isolation: a throwaway repository cannot commit to the repository around it")
 
 PACK_CHECK = "pack series check yolo-packs/matt"
 
@@ -1727,7 +1801,7 @@ with tempfile.TemporaryDirectory() as tmp:
     spec.loader.exec_module(fingerprint_module)
     with tempfile.TemporaryDirectory() as tree_tmp:
         tree_repo = Path(tree_tmp)
-        sh(tree_repo, "git", "init", "--quiet")
+        git_init(tree_repo)
         (tree_repo / "a.txt").write_text("x\n")
         sh(tree_repo, "git", "add", ".")
         sh(tree_repo, "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
@@ -5461,6 +5535,11 @@ with tempfile.TemporaryDirectory() as tmp:
     # or the inner gate would skip checks the outer one was told to skip.
     assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "waybar"}), \
         module.environ({"FORK_CHECK_REUSE": "waybar"})
+    # The gate is the one boundary every check's environment passes through. A repository
+    # selection inherited by the gate (6f2d9d938: a fixture's `git commit -m initial` landed
+    # on the real main) must not reach any check, whoever added it.
+    selected = module.environ({"GIT_DIR": "/x/.git", "GIT_WORK_TREE": "/x", "GIT_INDEX_FILE": "/x/i"})
+    assert not [k for k in selected if k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")], selected
 
     # The landing path names the base it is gating (board item 299), so the plan's diff is
     # the batch's own rather than whatever verified baseline this history offers. The
@@ -6147,7 +6226,7 @@ def build_pinned_repo(base: Path):
     # through the checkout's objects. The gate's own fork steps run through the stub above.
     sh(base, "git", "clone", "--quiet", str(source), str(repo / ".forks" / "pi-session-search"))
     (repo / ".gitignore").write_text(".forks/\n")
-    sh(repo, "git", "init", "--quiet", "--initial-branch=main")
+    git_init(repo, "--initial-branch=main")
     commit(repo, "initial")
     return repo, source, pin
 
@@ -6588,7 +6667,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for fork in ("pi-subagents", "pi-background-tasks"):
         cand = repo / ".forks" / "candidate" / fork
         cand.mkdir(parents=True)
-        sh(cand, "git", "init", "--quiet", "--initial-branch=main")
+        git_init(cand, "--initial-branch=main")
         (cand / "src").mkdir()
         (cand / "src" / "index.ts").write_text("export const x = 1;\n")
         commit(cand, "candidate")
@@ -6741,7 +6820,7 @@ with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
     candidate = base / "candidate"
     candidate.mkdir()
-    sh(candidate, "git", "init", "--quiet", "--initial-branch=main")
+    git_init(candidate, "--initial-branch=main")
     (candidate / "src").mkdir()
     (candidate / "src" / "index.ts").write_text("export const x = 1;\n")
     commit(candidate, "candidate")
@@ -7445,7 +7524,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     candidate = repo / ".forks" / "candidate" / "pi-subagents"
     candidate.mkdir(parents=True)
-    sh(candidate, "git", "init", "--quiet", "--initial-branch=main")
+    git_init(candidate, "--initial-branch=main")
     (candidate / "src").mkdir()
     (candidate / "src" / "index.ts").write_text("export const x = 1;\n")
     commit(candidate, "candidate")
