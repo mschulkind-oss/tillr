@@ -677,7 +677,44 @@ with the reason on the record.
 move goes through the existing `ItemState` step in [steps.go](../../tools/tillr-drain/drain/steps.go)
 with the flags the receipts item added.
 
-<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+A first run of this item on 2026-11-17 built the hook path, passed its twelve targeted cases, and
+stopped before committing. Its review found two defects, and the fix for the first was in a file
+outside the item's paths. The run was right to stop. This answers the conflict it raised. c1 to c7
+stand as written and one criterion, c8, is appended: a presented criterion's text does not move,
+and a block holds at most eight criteria, so c8 carries both fixes and a test for each.
+
+- **The verdict check belongs to the move, not to the drain.** The first run had the drain read the
+  item's verdicts and then call the state step. `tillr item apply` can append a criterion between
+  those two steps, and the item would then finish with a criterion nobody judged, which is what c4
+  forbids. A check in the drain cannot close that gap, because the drain's read and the item
+  utility's write are separate transactions. So the check moves into the state move's own write
+  transaction: `tillr item state` gains a flag, `--require-verdicts`, and with it
+  `SetStateWithReceipt` in [state.go](../../tools/tillr-item/item/state.go) refuses the move,
+  with the named refusal `criteria-unjudged`, unless every criterion the item holds at that moment
+  has a recorded verdict. A criterion has a recorded verdict when an `item.verdict` event names
+  it with the hash of its stored text; `RecordVerdict` in
+  [verdict.go](../../tools/tillr-item/item/verdict.go) is the one writer of those. The drain
+  passes the flag on every move a `complete-item` answer causes and turns the refusal into c4's
+  hold. It keeps no second check of its own, so there is one rule in one place. That is why the
+  marker below now names `tools/tillr-item/`; the item's id and blocker are unchanged.
+- **The flag is opt-in.** Without `--require-verdicts` a move behaves exactly as today, so the
+  loop's move to `landed` and the owner's hand moves are untouched and the existing item suites
+  pass unchanged. The drain's start check asks the item program for the flag, as it does for
+  every step flag it will pass. Making the rule part of a definition, so that no move into a
+  finished state can skip it, is a later decision and not this item's.
+- **Restart after the move never enters Git.** The first run's recovery sent a hook-completed run
+  into the Git cleanup that preserves and resets a worktree, and a plain directory has neither.
+  Under a definition that completes on `hook`, recovery of an ended run takes no Git step at all.
+  It reads the item: if the item is already in a finished state, the move happened, so the drain
+  writes the end-of-run records that are missing and does not call the hook again. Otherwise it
+  runs the completion step again from the hook call. Calling the hook twice is safe on the item
+  utility's side: a verdict recorded twice is two events for the same answer, and a move to the
+  state an item already has appends nothing.
+
+The first run's partial work was not committed and is not on the trunk. A run of this item starts
+from the tree as it stands.
+
+<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
 - **c2:** When the hook exits 0 and prints a finished state, a reason and an optional pointer, the drain moves the item there with `--reason`, `--resolves-via` and `--by definition:<name>`.
@@ -686,6 +723,7 @@ with the flags the receipts item added.
 - **c5:** A test applies an item, runs one stub run in a plain directory, has the hook record a verdict and answer `confirmed`, and asserts the end state, the reason, the event, and that no Git command ran: the test puts a `git` on `PATH` that fails it.
 - **c6:** No Git, file or process work runs inside a SQLite write transaction.
 - **c7:** Under the Git-landing definition the end of a run is unchanged; the existing loop suites pass unchanged.
+- **c8:** The two gaps the first run's review found are closed, each with its test. `tillr item state --require-verdicts` refuses the move with `criteria-unjudged`, inside the move's own write transaction, unless every criterion the item holds has a recorded verdict for its stored text; the drain passes the flag on every move a `complete-item` answer causes; and a test in the item utility's suite appends a criterion after the others were judged and asserts the refusal and that the item did not move. A second test stops the drain after the hook's move is stored and before the run's end-of-run records are written, restarts it, and asserts that the item keeps its finished state, reason and single event, that the hook was not called again, that the missing records are written, and that no Git command ran.
 
 ### Route a command node into the lane directory and name its node
 
