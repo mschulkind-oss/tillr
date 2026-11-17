@@ -463,6 +463,12 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	if spec.Node != nil {
 		brief += "\n## Workflow node\n\nRun only node " + spec.Node.ID + " on the " + spec.Node.Seat + " seat; access: " + spec.Node.Access + ".\n"
+		if spec.Node.Prompt != "" {
+			brief += "\nNode task: " + spec.Node.Prompt + "\n"
+		}
+		if spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
+			brief += "\nThis node may write only these paths, within the item's fence:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
+		}
 		if spec.Node.Access == "read_only" {
 			brief += "Read only: do not change files in the target or commit. Write your findings in the report and finish with RESULT: done. The item criteria describe the whole workflow, not this node.\n"
 		}

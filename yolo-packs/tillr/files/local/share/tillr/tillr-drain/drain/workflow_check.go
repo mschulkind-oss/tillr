@@ -22,7 +22,9 @@ workflow-access, workflow-write-scope, workflow-write-scope-empty,
 workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcome,
 workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
-workflow-exit, workflow-file; command-registry, command-reference, command-flag,
+workflow-exit, workflow-file, workflow-output-promise, workflow-write-scope,
+workflow-argument-missing, workflow-argument-type, workflow-argument-most,
+workflow-argument-unknown, workflow-repeat; command-registry, command-reference, command-flag,
 command-value, command-path. Graph size is reported, never refused.`
 
 // workflowFields checks each object independently so every unsupported field has
@@ -45,7 +47,7 @@ func workflowFields(raw []byte) []error {
 			findings = append(findings, fmt.Errorf("workflow-unknown-field: %s: unknown field %q", stage, key))
 		}
 	}
-	check(object, "name version stages edges exit", "graph")
+	check(object, "name version stages edges exit args inputs", "graph")
 	for _, field := range []string{"stages", "edges"} {
 		var objects []map[string]json.RawMessage
 		if json.Unmarshal(object[field], &objects) != nil {
@@ -55,7 +57,7 @@ func workflowFields(raw []byte) []error {
 			stage := "graph"
 			if field == "stages" {
 				json.Unmarshal(obj["id"], &stage)
-				check(obj, "id kind seat access write_scope command_ref flags resolved_argv timeout_ms workflow inputs outputs", "stage="+stage)
+				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs args repeat prompt write_scope", "stage="+stage)
 			} else {
 				json.Unmarshal(obj["to_node"], &stage)
 				check(obj, "from_node to_node when_outcome from_output to_input", "stage="+stage)
@@ -70,7 +72,7 @@ func workflowFields(raw []byte) []error {
 	}
 	var exit map[string]json.RawMessage
 	if json.Unmarshal(object["exit"], &exit) == nil {
-		check(exit, "requires_nodes requires_candidate", "exit")
+		check(exit, "requires_nodes requires_candidate outputs", "exit")
 		if raw, present := exit["requires_candidate"]; present {
 			var candidate string
 			if json.Unmarshal(raw, &candidate) != nil || (candidate != "commit_required" && candidate != "commit_optional" && candidate != "no_commit") {
@@ -82,6 +84,14 @@ func workflowFields(raw []byte) []error {
 }
 
 func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Workflow, error) {
+	w, err := expandWorkflow(root, path, policy, stack, nil, nil)
+	if err == nil {
+		err = validateOutputWiring(w)
+	}
+	return w, err
+}
+
+func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, args map[string]any, symbols map[string]bool) (*Workflow, error) {
 	ref := strings.TrimSuffix(filepath.Base(path), ".json")
 	if stack[ref] {
 		return nil, fmt.Errorf("%s: workflow-expansion-cycle: graph: %s expands into itself", path, ref)
@@ -96,18 +106,35 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 	if err != nil {
 		return nil, fmt.Errorf("%s: workflow-file: graph: %w", path, err)
 	}
-	w, err := decodeWorkflow(raw, ref)
+	if findings := workflowFields(raw); len(findings) > 0 {
+		return nil, fmt.Errorf("%s: %w", path, errors.Join(findings...))
+	}
+	bound, err := bindWorkflow(root, raw, args)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	w, err := decodeWorkflow(bound, ref)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := removeEmptyRepeats(w, args); err != nil {
+		return nil, err
 	}
 	w.SHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
 	w.Sources = map[string]string{ref: w.SHA256}
 	entries, exits := map[string][]string{}, map[string][]string{}
 	composed := map[string]bool{}
+	inputPorts := map[string]map[string][]string{}
+	outputPorts := map[string]map[string]WorkflowPort{}
 	stages := []WorkflowStage{}
 	edges := []WorkflowEdge{}
 	var findings []error
 	for _, stage := range w.Stages {
+		for _, path := range stage.WriteScope.Paths {
+			if symbols[path] {
+				stage.WriteScope.symbolic = true
+			}
+		}
 		if stage.Kind == "workflow" {
 			composed[stage.ID] = true
 			rel := filepath.Join("config", "tillr", "workflows", stage.Workflow+".json")
@@ -116,10 +143,56 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 				findings = append(findings, fmt.Errorf("workflow-missing-reference: %s: no tracked workflow defines %s", stage.ID, stage.Workflow))
 				continue
 			}
-			inner, err := readWorkflow(root, filepath.Join(root, rel), policy, stack)
+			inner, err := expandWorkflow(root, filepath.Join(root, rel), policy, stack, stage.Args, symbols)
 			if err != nil {
 				findings = append(findings, fmt.Errorf("stage=%s: %w", stage.ID, err))
 				continue
+			}
+			if err := inheritWorkflowScope(inner, stage.WriteScope); err != nil {
+				return nil, err
+			}
+			if inner.ExpansionDepth+1 > w.ExpansionDepth {
+				w.ExpansionDepth = inner.ExpansionDepth + 1
+			}
+			inputPorts[stage.ID] = map[string][]string{}
+			outputPorts[stage.ID] = map[string]WorkflowPort{}
+			for name, typ := range stage.Inputs {
+				if inner.Inputs[name] != typ {
+					return nil, fmt.Errorf("workflow-input: %s: inner workflow does not declare %s", stage.ID, name)
+				}
+				for _, node := range inner.Stages {
+					if node.Inputs[name] == typ {
+						fed := false
+						for _, e := range inner.Edges {
+							if e.To == node.ID && e.ToInput == name {
+								fed = true
+							}
+						}
+						if !fed {
+							inputPorts[stage.ID][name] = append(inputPorts[stage.ID][name], stage.ID+"/"+node.ID)
+						}
+					}
+				}
+				if len(inputPorts[stage.ID][name]) == 0 {
+					return nil, fmt.Errorf("workflow-input: %s: unused inner input %s", stage.ID, name)
+				}
+			}
+			for name, typ := range stage.Outputs {
+				port, ok := inner.Exit.Outputs[name]
+				if !ok {
+					return nil, fmt.Errorf("workflow-output-promise: %s: inner exit does not export %s", stage.ID, name)
+				}
+				found := false
+				for _, node := range inner.Stages {
+					if node.ID == port.Node && node.Outputs[port.Output] == typ {
+						found = true
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf("workflow-output-promise: %s: inner output %s has wrong type", stage.ID, name)
+				}
+				port.Node = stage.ID + "/" + port.Node
+				outputPorts[stage.ID][name] = port
 			}
 			prefix := stage.ID + "/"
 			incoming := map[string]bool{}
@@ -138,6 +211,11 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 				if !incoming[node.ID] {
 					entries[stage.ID] = append(entries[stage.ID], prefix+node.ID)
 				}
+				if node.Parent == "" {
+					node.Parent = stage.ID
+				} else {
+					node.Parent = prefix + node.Parent
+				}
 				node.ID = prefix + node.ID
 				stages = append(stages, node)
 			}
@@ -155,22 +233,71 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 			} else if policy != nil && policy.Seats[stage.Seat] == "" {
 				findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy", stage.ID, stage.Seat))
 			}
-			entries[stage.ID] = []string{stage.ID}
-			exits[stage.ID] = []string{stage.ID}
-			stages = append(stages, stage)
+			copies := []WorkflowStage{stage}
+			if stage.Repeat != "" {
+				values, _ := args[stage.Repeat].([]any)
+				copies = nil
+				for i, value := range values {
+					node := stage
+					node.ID = fmt.Sprintf("%s-%d", stage.ID, i+1)
+					node.Prompt = strings.ReplaceAll(stage.Prompt, "${item}", value.(string))
+					node.Repeat = ""
+					copies = append(copies, node)
+				}
+			}
+			inputPorts[stage.ID] = map[string][]string{}
+			outputPorts[stage.ID] = map[string]WorkflowPort{}
+			for _, node := range copies {
+				entries[stage.ID] = append(entries[stage.ID], node.ID)
+				exits[stage.ID] = append(exits[stage.ID], node.ID)
+				for name := range node.Inputs {
+					inputPorts[stage.ID][name] = append(inputPorts[stage.ID][name], node.ID)
+				}
+				for name := range node.Outputs {
+					if len(copies) == 1 {
+						outputPorts[stage.ID][name] = WorkflowPort{Node: node.ID, Output: name}
+					}
+				}
+				stages = append(stages, node)
+			}
 		}
 	}
 	if len(findings) > 0 {
 		return nil, fmt.Errorf("%s: %w", path, errors.Join(findings...))
 	}
 	for _, edge := range w.Edges {
-		for _, from := range exits[edge.From] {
-			for _, to := range entries[edge.To] {
+		targets := entries[edge.To]
+		if edge.ToInput != "" {
+			targets = inputPorts[edge.To][edge.ToInput]
+		}
+		for _, to := range targets {
+			if edge.FromOutput != "" {
+				port, ok := outputPorts[edge.From][edge.FromOutput]
+				if !ok {
+					return nil, fmt.Errorf("workflow-output-promise: %s: output %s has no single producer", edge.From, edge.FromOutput)
+				}
+				expanded := edge
+				expanded.From = port.Node
+				expanded.FromOutput = port.Output
+				expanded.To = to
+				if composed[edge.From] && edge.WhenOutcome != "fail" {
+					expanded.RequiresPassed = append([]string(nil), exits[edge.From]...)
+				}
+				edges = append(edges, expanded)
+			}
+		}
+		barriers := map[string]bool{}
+		for _, to := range append(append([]string(nil), entries[edge.To]...), targets...) {
+			barriers[to] = true
+		}
+		for _, to := range sortedNames(barriers) {
+			for _, from := range exits[edge.From] {
 				expanded := edge
 				expanded.From, expanded.To = from, to
 				if composed[edge.From] && edge.WhenOutcome != "fail" {
 					expanded.RequiresPassed = append([]string(nil), exits[edge.From]...)
 				}
+				expanded.FromOutput, expanded.ToInput = "", ""
 				edges = append(edges, expanded)
 			}
 		}
@@ -179,9 +306,29 @@ func readWorkflow(root, path string, policy *Policy, stack map[string]bool) (*Wo
 	for _, id := range requiredWorkflowNodes(w) {
 		required = append(required, exits[id]...)
 	}
+	ports := map[string]WorkflowPort{}
+	if w.Exit != nil {
+		for name, port := range w.Exit.Outputs {
+			resolved, ok := outputPorts[port.Node][port.Output]
+			if !ok {
+				return nil, fmt.Errorf("workflow-output-promise: exit: %s names an absent output", name)
+			}
+			ports[name] = resolved
+		}
+	}
 	candidate := workflowCandidatePolicy(w)
-	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate}
+	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate, Outputs: ports}
+	ids := map[string]bool{}
+	for _, s := range w.Stages {
+		if ids[s.ID] {
+			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
+		}
+		ids[s.ID] = true
+	}
 	if err := validateWorkflowExit(w); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := validateTemplateWiring(w); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return w, nil
@@ -279,7 +426,21 @@ func CheckWorkflows(root, target string, out io.Writer) bool {
 	}
 	ok := true
 	for _, path := range paths {
-		w, err := readWorkflow(root, path, nil, map[string]bool{})
+		args, err := workflowCheckArguments(root, path)
+		var w *Workflow
+		if err == nil {
+			symbols := map[string]bool{}
+			for _, value := range args {
+				values, _ := value.([]any)
+				for _, value := range values {
+					path, ok := value.(string)
+					if ok && strings.HasPrefix(path, workflowCheckPathPrefix) {
+						symbols[path] = true
+					}
+				}
+			}
+			w, err = expandWorkflow(root, path, nil, map[string]bool{}, args, symbols)
+		}
 		if err != nil {
 			ok = false
 			for _, line := range strings.Split(err.Error(), "\n") {
@@ -287,7 +448,7 @@ func CheckWorkflows(root, target string, out io.Writer) bool {
 			}
 		} else {
 			nodes, depth, fanout := workflowSize(w)
-			fmt.Fprintf(out, "%s nodes=%d depth=%d fan-out=%d\n", path, nodes, depth, fanout)
+			fmt.Fprintf(out, "%s nodes=%d depth=%d fan-out=%d expansion-depth=%d\n", path, nodes, depth, fanout, w.ExpansionDepth)
 		}
 	}
 	return ok

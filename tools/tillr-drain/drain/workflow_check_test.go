@@ -164,12 +164,14 @@ func TestWorkflowCheckPreservesNamedOutputWiring(t *testing.T) {
 	}
 }
 
-func TestWorkflowWrapperRefusesNamedFiles(t *testing.T) {
-	for _, field := range []string{"inputs", "outputs"} {
-		raw := `{"name":"check","version":1,"stages":[{"id":"nested","kind":"workflow","workflow":"inner@v1","` + field + `":{"findings":"json"}}],"edges":[]}`
-		if _, err := decodeWorkflow([]byte(raw), "check@v1"); err == nil || !strings.Contains(err.Error(), "workflow-kind: nested:") {
-			t.Fatalf("wrapper %s accepted: %v", field, err)
-		}
+func TestWorkflowWrapperValidatesNamedFiles(t *testing.T) {
+	raw := `{"name":"check","version":1,"stages":[{"id":"nested","kind":"workflow","workflow":"inner@v1","inputs":{"findings":"json"}}],"edges":[]}`
+	if _, err := decodeWorkflow([]byte(raw), "check@v1"); err == nil || !strings.Contains(err.Error(), "workflow-input") {
+		t.Fatalf("unfed wrapper input: %v", err)
+	}
+	raw = `{"name":"check","version":1,"stages":[{"id":"nested","kind":"workflow","workflow":"inner@v1","outputs":{"findings":"json"}}],"edges":[]}`
+	if _, err := decodeWorkflow([]byte(raw), "check@v1"); err != nil {
+		t.Fatal(err)
 	}
 }
 

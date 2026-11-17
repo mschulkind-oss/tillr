@@ -127,6 +127,77 @@ current allowed paths; reloading an edited workflow cannot broaden its authority
 A held candidate saves the full item fence when it releases a lane. Restaging it
 restores that fence and its original base, replacing metadata left by a later item.
 
+## Stages that name workflows
+
+A `workflow` stage names a tracked file in
+[`config/tillr/workflows/`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/workflows). Before dispatch, the
+loader replaces it with the executable nodes inside that file. Their IDs are
+`<stage>/<inner id>`; `parent` records the containing stage, including nested
+parents. The containing stage never has a run. Cycles among files, untracked
+references, and outputs not exported by an inner exit are refused; depth and
+node count are measurements, not limits.
+
+A workflow's top-level `inputs` declares named file types. An incoming edge to
+its containing stage feeds every inner node with that same unfed input name.
+The inner `exit.outputs` maps each exported name to its producing node and
+output. An outgoing edge carries that producer's file and also waits for every
+node in the inner exit's `requires_nodes`. For example:
+
+```json
+{
+  "inputs": {"source": "markdown"},
+  "exit": {
+    "requires_nodes": ["read", "write"],
+    "outputs": {"result": {"node": "write", "output": "result"}}
+  }
+}
+```
+
+The top-level `args` declares required parameters. A containing stage passes
+values in its own `args`. Paths are repository-relative and cannot traverse
+outside it; strings have a declared `most`; commands name registered entries,
+never command lines. Missing, unknown, wrongly typed, and oversized arguments
+are refused before dispatch. A whole value spelled `${args.name}` substitutes
+that parameter's typed value, including when forwarding to another workflow.
+No expression is evaluated. Example declarations and a read-only repeated stage:
+
+```json
+{
+  "args": {
+    "prompts": {"type": "strings", "most": 8},
+    "paths": {"type": "paths"},
+    "check": {"type": "command"}
+  },
+  "stages": [{
+    "id": "scout", "kind": "agent", "seat": "scout",
+    "access": "read_only", "repeat": "prompts", "prompt": "${item}"
+  }]
+}
+```
+
+`repeat` makes one read-only run per string, numbered `scout-1` through
+`scout-N`; `${item}` in its prompt becomes that string. Empty repetitions make
+no runs and preserve ordering between the steps around them. A workflow must
+still contain executable nodes. A named output crossing a repeated stage must
+have a single producer, rather than silently choosing one copy's file.
+
+`write_scope` is either `"inherit"` (also the default) or a nonempty list of
+path prefixes. Every writing node inside a containing stage inherits its scope
+unless it declares a narrower one. A scope outside its container or the item's
+fence is refused before any run. Settlement checks each writing node's own
+change against its resolved scope; it does not judge earlier nodes' changes
+against the last node's scope.
+
+The stored graph contains the expanded nodes, parents, scopes, and SHA-256
+hashes of all contributing workflow files. Continuation and restart use this
+snapshot, not edited templates. The file check uses the same expansion and
+refusals, printing executable node count, dependency depth, outgoing edge count,
+and expansion depth. For a parameterized library checked on its own, it uses
+one representative string or registered command per parameter. Path parameters
+remain symbolic: their unknown scope is constrained by enclosing stages rather
+than rejected against an invented path. Each real invocation validates its
+concrete paths and reports its actual expansion.
+
 ## Registered command nodes
 
 A workflow stage with `kind: command` runs a registered program, not a model.
