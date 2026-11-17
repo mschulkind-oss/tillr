@@ -766,6 +766,21 @@ re-raise after an input change, the later re-raise from the owner, and the inter
 the [trunk-suspect tests](./drain/design_trunk_test.go) cover rule 3, including the records
 written before it.
 
+The settlement reads a design run's answer from the item's block, found by its id. A rewrite
+item's block carries the original item's id (the id without `rewrite-`), so an answer that
+retitles the block's section is still that block, amended. When the item's `body_ref`
+heading is missing on the run's base, because the run was staged before the heading was
+renamed, the settlement compares the block's own section between base and head, so a ruling
+written inside the block reads as an amendment. Before 2026-11-17 the first case read as
+"removed or renamed" and the second as "did not amend", and two committed design answers
+never reached the gate. At each pass the loop looks for such a hold: its conflict text ends
+with one of those two findings, the design run's recorded candidate holds a commit, and that
+commit amends the block under the reading above. It raises the conflict again for the design
+seat, with text naming the commit, so the answer is carried onto the current trunk rather
+than gated on its stale base. It writes a `drain.design-unanswered` record with `misread`
+true, which spends nothing. The [design answer tests](./drain/design_answer_test.go) cover
+both readings, the recovery, and a run that truly did not amend.
+
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
 no expiry while it works, and releases that lease once it ends, on every path. The write
 that records the run examined (`drain.examined`) also releases the lane. Only a live run

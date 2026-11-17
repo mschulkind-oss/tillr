@@ -1924,24 +1924,17 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 	}
 	if candidate.BlockConflict != nil {
-		file, _, _ := strings.Cut(ref, "#")
-		files, err := l.git(ctx, candidate.Worktree, "ls-tree", "--name-only", candidate.HeadSHA, "--", file)
+		exists, answered, err := l.designBlockAnswer(ctx, candidate, ref)
 		if err != nil {
 			return "", false, err
 		}
-		raw := ""
-		if strings.TrimSpace(files) != "" {
-			raw, err = l.git(ctx, candidate.Worktree, "show", candidate.HeadSHA+":"+file)
-			if err != nil {
-				return "", false, err
-			}
-		}
-		if !item.DefinitionBlockExists(file, candidate.ItemID, []byte(raw)) {
+		if !exists {
 			c := *candidate.BlockConflict
 			c.Status, c.WaitingOn = "owner", "owner"
 			c.Text += "\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref
 			return "", false, l.saveBlockConflict(ctx, c)
 		}
+		changed = answered
 	}
 	if candidate.BlockConflict != nil && !changed {
 		c := *candidate.BlockConflict
