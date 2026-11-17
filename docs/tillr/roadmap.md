@@ -3046,11 +3046,11 @@ rg -n 'func \(r HeavyRunner\) firstRed' -A40 tools/tillr-drain/drain/heavy.go
 The owner reads history in `tig`, and on 2026-11-17 he said: "shouldn't the refs disappear as the
 commits land on main? that's what is cluttered. let's file an item for this."
 
-### Prevent finished runs from cluttering history
+### Prevent old run labels from cluttering history
 
-When a worker finishes and its change lands on the main branch, the drain loop leaves behind
-named pointers to its commits and never removes them. History viewers display those pointers as
-labels, so the owner's history fills with labels for work that finished days ago. The repository
+Once a change reaches the main branch, the owner wants to read its history without sorting
+through labels for every attempt that led to it. History viewers display named commit pointers
+as labels, and the drain loop leaves those pointers behind after the work is complete. The repository
 held 736 of these pointers on 2026-11-17: 564 run pins, 153 landing markers, 8 saved edits, 7 held
 candidates, 2 recovery pointers, and the fixed pointers for the green commit and the trunk
 history. The drain loop should remove the pointers that finished work no longer needs, and a
