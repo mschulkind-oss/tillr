@@ -275,7 +275,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 		if err = recordPassDecision(tx, next, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
-		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
+		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID, LoopID: l.sessionID}, l.cfg.Now().UTC())
 	})
 	s.Close()
 	if err != nil {

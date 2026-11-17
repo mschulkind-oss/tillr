@@ -390,16 +390,20 @@ type LoopResult struct {
 	// all ticks, reset by a candidate. It is reported here and drives the backoff between
 	// attempts; it never stops the loop.
 	InfraFailures int `json:"infra_failures"`
-	// SpendUSD is what the loop's own runs reported spending, summed. It is a total of
-	// the runs that reported a cost and nothing else: CostUnknown says how many did not,
-	// and a caller must read both before believing the number.
-	SpendUSD float64 `json:"spend_usd"`
-	// Tokens is the token total the loop's own runs reported.
+	// SpendUSD sums work started in this loop and earlier work settled here.
+	// Only reported prices contribute; CostUnknown counts the missing prices.
+	// RecordedSpend separately sums every terminal run in the store.
+	SpendUSD      float64     `json:"spend_usd"`
+	StartedSpend  SpendTotals `json:"spend_started_in_loop"`
+	CarriedSpend  SpendTotals `json:"spend_carried_over"`
+	RecordedSpend SpendTotals `json:"spend_all_recorded_runs"`
+	spendRecords  map[string]run.Record
+	spendCarried  map[string]bool
+	// Tokens sums reported tokens in the started and carried groups.
 	Tokens int64 `json:"tokens"`
-	// SpendUnknown is the number of the loop's runs whose report carried no usage at all,
-	// and CostUnknown the number that reported tokens but no cost. Both name the first
-	// such run, so a stop says which backend could not be measured rather than only how
-	// many could not.
+	// SpendUnknown counts missing token measurements, and CostUnknown missing
+	// prices, including wholly unreported runs. Each example names one missing
+	// measurement instead of treating an absent measurement as zero.
 	SpendUnknown        int    `json:"spend_unknown"`
 	SpendUnknownExample string `json:"spend_unknown_example,omitempty"`
 	CostUnknown         int    `json:"cost_unknown"`
@@ -621,6 +625,11 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.recordResult(&result)
+	defer func() {
+		if spendErr := l.snapshotSpend(&result); spendErr != nil {
+			l.reportf("loop: spend snapshot unavailable: %v\n", spendErr)
+		}
+	}()
 	defer l.closeWALKeeper()
 	defer l.endSession()
 	l.keepWALWhileRunning()
@@ -1159,10 +1168,10 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 }
 
 // spendWords is one run's spend as a line reads it: what the backend reported, and
-// `unknown` for each number it did not report. It never prints a zero the backend did not
+// `unreported` for each number it did not report. It never prints a zero the backend did not
 // report, for the reason Usage's comment gives.
 func spendWords(usage *run.Usage) string {
-	tokens, cost := "unknown tokens", "unknown cost"
+	tokens, cost := "unreported tokens", "unreported cost"
 	if usage != nil && usage.Tokens != nil {
 		tokens = fmt.Sprintf("%d tokens", *usage.Tokens)
 	}
@@ -1232,22 +1241,11 @@ func (l *Loop) countSpend(result *LoopResult, rec run.Record) {
 	}
 	who := rec.RunID + " on " + rec.Backend
 	l.mu.Lock()
-	if rec.Usage == nil || rec.Usage.Tokens == nil {
-		result.SpendUnknown++
-		if result.SpendUnknownExample == "" {
-			result.SpendUnknownExample = who
-		}
-	} else {
-		result.Tokens += *rec.Usage.Tokens
+	if result.spendRecords == nil {
+		result.spendRecords = map[string]run.Record{}
 	}
-	if rec.Usage == nil || rec.Usage.CostUSD == nil {
-		result.CostUnknown++
-		if result.CostUnknownExample == "" {
-			result.CostUnknownExample = who
-		}
-	} else {
-		result.SpendUSD += *rec.Usage.CostUSD
-	}
+	result.spendRecords[rec.RunID] = rec
+	result.recountSpend()
 	l.mu.Unlock()
 	l.reportf("loop: %s spent %s\n", who, spendWords(rec.Usage))
 }
@@ -1555,6 +1553,13 @@ func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Req
 	// prompt forever. The loop knows it just resumed; it says so.
 	record.Resumed = true
 	l.countSpend(result, record)
+	origin := l.sessionID
+	if result.spendCarried[record.RunID] {
+		origin = ""
+	}
+	if err := l.recordSettlementSpend(context.WithoutCancel(ctx), tick, origin, record); err != nil {
+		return record, log, "", err
+	}
 	stop, err := l.closeAsyncBracket(ctx, Decision{LaneID: lane, RunRequest: &resumed}, at, before, result, watched, epochs)
 	if err != nil || stop != "" {
 		return record, log, stop, err

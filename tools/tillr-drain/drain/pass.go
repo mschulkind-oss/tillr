@@ -46,6 +46,7 @@ func init() {
 }
 
 type pendingWork struct {
+	LoopID         string      `json:"loop_id,omitempty"`
 	Examining      bool        `json:"examining,omitempty"`
 	Ready          bool        `json:"ready,omitempty"`
 	Gated          bool        `json:"-"`
@@ -697,7 +698,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if d.Workflow != nil && d.NodeBaseSHA == "" {
 				d.NodeBaseSHA = base
 			}
-			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner}
+			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
 			if _, err := run.ClaimLease(ctx, tx, *d.RunRequest, d.LaneID, at); err != nil {
 				return err
 			}
@@ -1200,7 +1201,10 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				err = fmt.Errorf("run %s lost its terminal record", d.RunRequest.RunID)
 			}
 			if err == nil {
-				l.countSpend(local, *rec)
+				err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
+			}
+			if err == nil {
+				l.countSettledSpend(local, *rec, work.LoopID)
 				log := logTail(rec.ArtifactRefs)
 				if rec.State == run.StatePaused {
 					resumed, resumedLog, stop, resumeErr := l.resumeAfterWall(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched)
@@ -1211,6 +1215,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 					} else {
 						rec, log = &resumed, resumedLog
 					}
+				}
+				if completion.outcome.err == nil && completion.outcome.stop == "" {
+					completion.outcome.err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
 				}
 				if completion.outcome.err == nil && completion.outcome.stop == "" {
 					completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
@@ -1278,6 +1285,8 @@ func mergeExamination(dst, src *LoopResult) {
 	dst.Rejected += src.Rejected
 	dst.Candidates += src.Candidates
 	dst.InfraFailures += src.InfraFailures
+	dst.StartedSpend.merge(src.StartedSpend)
+	dst.CarriedSpend.merge(src.CarriedSpend)
 	dst.SpendUSD += src.SpendUSD
 	dst.Tokens += src.Tokens
 	dst.SpendUnknown += src.SpendUnknown
@@ -1288,6 +1297,7 @@ func mergeExamination(dst, src *LoopResult) {
 	if dst.CostUnknownExample == "" {
 		dst.CostUnknownExample = src.CostUnknownExample
 	}
+	mergeSpendRecords(dst, src)
 	if dst.RefusedSteps == nil {
 		dst.RefusedSteps = map[string]int{}
 	}

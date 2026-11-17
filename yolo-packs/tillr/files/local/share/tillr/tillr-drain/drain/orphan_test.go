@@ -62,11 +62,21 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 		if rec == nil {
 			t.Fatal("recovery did not close the claim")
 		}
+		if rec.SpendStatus != "unreported" || !strings.Contains(rec.SpendNote, "no terminal record") {
+			t.Fatalf("reaped face has no spend reason: %+v", rec)
+		}
 		outcome := next.settle(context.Background(), work.Decision, *rec, "", work.BaseSHA, "tick", next.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
 		return outcome.err
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var measured LoopResult
+	if err := next.snapshotSpend(&measured); err != nil {
+		t.Fatal(err)
+	}
+	if measured.RecordedSpend.Unreported != 1 || measured.RecordedSpend.CostUnreported != 1 {
+		t.Fatalf("reaped run not counted unreported: %+v", measured.RecordedSpend)
 	}
 	if err := next.releaseExamination(context.Background(), p.decision); err != nil {
 		t.Fatal(err)

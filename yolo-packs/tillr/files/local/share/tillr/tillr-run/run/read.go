@@ -197,6 +197,21 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			payload.Usage.CostUSD = &value
 		}
 	}
+	if payload.Usage == nil && payload.EventSeq > 0 {
+		var body []byte
+		err := r.QueryRow(`SELECT payload FROM events WHERE seq = ? AND kind = ?`, payload.EventSeq, FinishKind).Scan(&body)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return record.Envelope{}, false, readFailure(err)
+		}
+		if err == nil {
+			var finish Record
+			if err := json.Unmarshal(body, &finish); err != nil {
+				return record.Envelope{}, false, Internalf("reading spend reason: %v", err)
+			}
+			payload.SpendNote = finish.SpendNote
+		}
+	}
+	DescribeSpend(&payload)
 	if err := json.Unmarshal([]byte(refs), &payload.ArtifactRefs); err != nil {
 		return record.Envelope{}, false, Internalf("reading the artifact refs of %q: %v", runID, err)
 	}

@@ -474,7 +474,18 @@ missing usage or a claim that the backend reported its full spend. A total is
 `null` if no run recorded that quantity; recorded zero remains zero.
 `unrecorded_runs` counts runs with neither tokens nor cost, while
 `tokens_unrecorded_runs` and `cost_unrecorded_runs` also expose partially reported
-runs. Runs with no item association are not assigned to an invented item.
+runs. Runs with no item association are not assigned to an invented item. Ended
+runs contribute their recorded usage just like finished runs; a face that left
+no terminal record contributes an unreported run after its lease is reclaimed.
+The snapshot header includes `unreported_runs` and `cost_unreported_runs`, and
+prints the latter beside the summed price even when some runs reported a price.
+Designer sums likewise disclose missing prices beside the reported sum.
+
+Pass responses and the passes command separate `spend_started_in_loop` from
+`spend_carried_over`: measurements from work this loop started, and from earlier
+loops' workers settled by this pass. Both carry a count of wholly unreported runs
+and field-specific missing counts. A legacy pass with no measurement remains
+`null`, rather than acquiring an invented zero.
 
 ## Designers and review replies
 
