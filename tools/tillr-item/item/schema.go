@@ -80,7 +80,10 @@ CREATE TABLE IF NOT EXISTS items (
   close_reason TEXT NOT NULL DEFAULT '',
   closed_at TEXT NOT NULL DEFAULT '',
   closed_by TEXT NOT NULL DEFAULT '',
-  closed_from TEXT NOT NULL DEFAULT ''
+  closed_from TEXT NOT NULL DEFAULT '',
+  lifecycle_reason TEXT NOT NULL DEFAULT '',
+  lifecycle_by TEXT NOT NULL DEFAULT '',
+  resolves_via TEXT NOT NULL DEFAULT ''
 );
 
 -- Sync warnings are document observations, not item state. Sync replaces this
@@ -217,7 +220,7 @@ func init() {
 		panic(err)
 	}
 	// Blocked metadata is additive; older rows retain their unrecorded waiter.
-	for _, column := range []string{"judge_mode", "workflow", "waiting_on", "underlying_state", "close_reason", "closed_at", "closed_by", "closed_from"} {
+	for _, column := range []string{"judge_mode", "workflow", "waiting_on", "underlying_state", "close_reason", "closed_at", "closed_by", "closed_from", "lifecycle_reason", "lifecycle_by", "resolves_via"} {
 		if err := store.RegisterColumn("item", "items", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			panic(err)
 		}

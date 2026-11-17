@@ -41,6 +41,31 @@ A distinct move must be listed in that definition; an unlisted move is refused a
 finished state additionally requires `--reason` and `--by` on `state` or `apply`;
 the update event records `lifecycle_reason` and `lifecycle_by`. The closed role still
 uses `close` and `reopen`, and a blocked-role state write still needs waiting metadata.
+
+On `state`, entering any finished state accepts three optional flags:
+
+- `--reason <text>` records why the item is finished as `lifecycle_reason`.
+- `--by <actor>` records who decided as `lifecycle_by`.
+- `--resolves-via <pointer>` records the evidence as `resolves_via`. The pointer is
+  `item:<id>` for an item this store holds, `commit:<sha>` with a hexadecimal SHA,
+  or `doc:<path>` with a nonblank path. Commit and document pointers do not require
+  the referenced object to exist locally. An unknown item is refused as `pointer-unknown`.
+
+The item row retains the most recent finished-state entry's values, `show` prints
+those values, and the same `item.update` event carries them with `lifecycle_action: state`.
+A subsequent finished-state entry replaces all three; omitted flags record empty values.
+Leaving a finished state records its reason and actor in the event without replacing
+that entry's stored evidence. Retrying the same state neither appends an event nor
+replaces the stored evidence. Old finished rows remain readable with no invented receipt.
+All three flags may be omitted, including on the loop's move to `landed`.
+
+A state flag that cannot be stored on the requested move is refused as `flag-not-stored`,
+naming the flag, even if its value is explicitly empty. `--reason` is supported for
+entering or leaving a finished state or entering the blocked role; `--by` for entering
+or leaving a finished state; `--resolves-via` only for entering a finished state;
+`--waiter` only for the blocked role. A same-state finished retry accepts its entry
+flags but leaves the original evidence intact.
+
 Legacy `abandoned`, `deleted`, and `in-progress` rows stay readable but cannot be
 written as destinations. Sync treats finished and legacy frozen rows as finished
 for document-sharing counts; legacy `in-progress` rows still protect held work from
