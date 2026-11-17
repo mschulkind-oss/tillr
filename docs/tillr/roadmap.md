@@ -208,7 +208,7 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 
 - **Prices on the observatory**, iceboxed 2026-11-15. The owner wants to see what work cost in
   dollars and ruled that the pricing cannot be computed accurately enough yet, so
-  [the pages show usage only](../design/observatory-redesign.md#66-what-a-run-used). Picking it up
+  the pages show usage only (section 6.6 of the observatory redesign). Picking it up
   means settling how a price is derived per backend, including a subscription that is not billed
   per run, cached tokens, and models whose price changes.
 
@@ -1018,3 +1018,89 @@ with the faults that killed its runs named, instead of being sent out again.
 - **Ref:** the interrupted-run rule in `tools/tillr-drain/README.md`; the loop stop records in `.tillr/loop/` carry each stop's fault text.
 - **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`.
 - **Evidence:** 2026-11-16, `tillr view events --since 0`: five `drain.orphaned` events for `item-sync-design-without-item`, the stops recorded as `fault` and `gate-harness-error`.
+
+## Filed 2026-11-16: work the queue triage found stranded
+
+A read-only triage of the whole queue on 2026-11-16 found thirteen items held as `conflict-design`
+with nothing able to move them, one held as `retry-stale` after its conflict was answered, and one
+item whose worker built the change seven times and never committed it. The conflicts were answered
+from their documents by hand that day. The three defects below are what let them strand, so the
+next loop does not strand them again.
+
+### Route design work past a design seat that is out of quota
+
+The model policy lists the design seats in order, and the drain planner always sends a conflict's
+design run to the first one. It does not check whether that seat's quota window is shut, and a
+design run that ends on a usage limit is treated like a design run that answered nothing. On
+2026-11-16 the first design seat was Claude, and Claude's weekly limit had been reached. Between
+07:55 and 08:22 UTC the drain sent thirteen design runs to it, each one ended at once with exit 1,
+and every one of the thirteen items then waited as `conflict-design` with its conflict marked as
+awaiting an answer that could never come. A second design seat, on Bedrock, was in the same policy
+and idle the whole time. A conflict should go to a design seat that can take it, and a design run
+refused by a limit should leave the conflict free to be sent again rather than awaiting forever.
+
+<!-- tillr: item id="item-drain-design-seat-quota-failover" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When the planner dispatches a conflict's design run, it skips every design seat whose quota window is recorded as shut and sends the run to the first one that is open. A test with two design seats, the first shut, asserts the run goes to the second.
+- **c2:** When every design seat's window is shut, the item is held as `backend-window`, the reason a build item gets when its seat is shut, naming the seat and the reset time, and no design run starts. A test asserts the hold and that nothing is dispatched.
+- **c3:** A design run that ends because its backend refused it for a usage limit records the seat's window as shut and returns its conflict to `raised`, so the next pass can send it to another seat. A test feeds a fixture run that exits on a weekly-limit message and asserts the conflict is `raised` and the window is shut.
+- **c4:** A conflict whose design run ended any other way without an answer keeps today's behavior. A test asserts that a design run that ends normally with no block change still moves the conflict to the owner.
+
+**Agent details:**
+
+- **Ref:** the design dispatch in `conflictDecision`, `tools/tillr-drain/drain/blocked.go`, which calls `p.policy.seatList("design")[0]` and holds every status other than `raised`; the quota windows the build dispatch already consults in `tools/tillr-drain/drain/plan.go`.
+- **Where:** `tools/tillr-drain/drain/blocked.go`, `tools/tillr-drain/drain/plan.go`, the design-run settle path in `tools/tillr-drain/drain/loop.go`; the waiting face in `tools/tillr-view/waiting.go` for the reason text.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: thirteen `run.finish` records on `claude-designer`, started 07:55:43 to 08:22:52 UTC, each `exit_code` 1 with `end_cause` `normal-exit`; each run's log ends `You've hit your weekly limit · resets Nov 19, 8am (America/New_York)`. `tillr drain why --store .tillr/state.db` then held all thirteen items as `conflict-design` with their conflicts `awaiting`, while `config/tillr/backend-policy.mixed.json` lists `pi-designer` as the second design seat.
+
+### Prevent an answered conflict from holding its item as retry-stale
+
+An operator's retry names the run it replaces, and the planner refuses a retry as `retry-stale` once
+a newer run exists, because the retry no longer describes the item's latest state. There is a guard
+for the case where the newer run is a design run that answered a conflict: the answer should win.
+The guard compares the retry against the run that raised the conflict, but the run that used up the
+retry can be a different, earlier run. On 2026-11-16 that left `item-jl-criterion-claim-class`, the
+first item of the judge-and-lifecycle chain, held as `retry-stale` with its conflict answered and
+its answer landed, so five items behind it could not start. The planner should send an item whose
+conflict is answered to its build, whatever retry its earlier runs used.
+
+<!-- tillr: item id="item-drain-answered-conflict-beats-stale-retry" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** An item whose latest conflict is `answered` is dispatched to its build even when an operator's retry for one of its earlier runs was used by a run before the one that raised the conflict. A test stores a retry used by run a7, a conflict raised by a7's conflict-fix run and answered by a design run, and asserts the plan dispatches rather than holding `retry-stale`.
+- **c2:** A retry that names a run older than the latest, with no answered conflict after it, is still refused as `retry-stale`. A test asserts it.
+- **c3:** `tillr drain why` names the answered conflict as the reason the item moves, so an operator can see why the retry no longer matters.
+
+**Agent details:**
+
+- **Ref:** `retryFor` in `tools/tillr-drain/drain/plan.go`, whose guard reads `p.inputDecisions[c.RunID]`, the conflict's raising run, instead of every run since the retry.
+- **Where:** `tools/tillr-drain/drain/plan.go` and its tests.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: retry `retry-item-jl-criterion-claim-class-run-item-jl-criterion-claim-class-a6` was used by run a7, which hit a squash conflict; conflict `conflict-run-item-jl-criterion-claim-class-a7-cfix` was raised by run a7-cfix and marked `answered` at seq 3414 after design run a9 landed (commit `60ea6e236`). `tillr drain why --store .tillr/state.db` then held the item as `retry-stale`, waiting on `run-item-jl-criterion-claim-class-a6`.
+
+### Prevent a build run from ending with passing work uncommitted
+
+A build worker is asked to commit one candidate in its lane, and the drain reads that commit as the
+run's result. When the worker ends its turn before committing, the run is recorded as a refusal
+with no candidate, and everything the worker built is thrown away when the lane is next staged. On
+2026-11-16 this happened to `item-obs2-stop-says-what-and-next` seven times, at a cost of $9.89.
+Its last run implemented the change, passed 300 browser tests and a production build, staged the
+files, and then ended its turn with the words "the drain suite is still running; I'll commit only
+after its result is known". The work was real and was lost. A run should not end as "no commit"
+when the lane holds uncommitted work that would pass.
+
+There are several ways to get there, and this item does not choose among them. The brief could
+say more plainly that the session ends only after the commit. The run face could notice a dirty
+lane when the worker exits and continue the same session with a message to finish and commit. Or
+the run could end with a pause-kind continuation, the way a paused run is resumed on the same
+attempt, so the next dispatch picks the session up instead of restaging the lane.
+
+<!-- tillr: item id="item-run-commit-before-ending" paths="tools/tillr-run/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A build run whose worker exits while its lane has uncommitted changes inside the fence is not settled as a no-commit refusal until the worker has been given a chance to commit them. A test with a fixture worker that edits a fenced file and exits without committing asserts the run does not end as `no-op` on that exit.
+- **c2:** When the worker then commits, the run is settled from that commit like any other candidate. A test asserts the candidate is the commit made after the first exit.
+- **c3:** When the worker still does not commit, the run ends as a refusal whose record names the uncommitted paths, so an operator can tell lost work from a run that did nothing. A test asserts the paths appear in the record.
+- **c4:** The design note for this item records which of the options in this section was chosen and why.
+
+**Agent details:**
+
+- **Ref:** the `pause` face and `pause-kind` in `tools/tillr-run/README.md`; the `candidate-no-op` reason in `tools/tillr-drain/drain/schema.go`.
+- **Where:** the run face in `tools/tillr-run/` (exit handling and the pi adapter), the candidate settle in `tools/tillr-drain/drain/`, and the worker brief the drain writes.
+- **Evidence:** 2026-11-16, `tillr view events --since 0`: seven runs of `item-obs2-stop-says-what-and-next` on `amazon-bedrock/global.openai.gpt-6.1-sol`, every one refused at step `no-op`, $9.89 in total, run a7 alone $7.61. The a7 run report recorded `complete: no` and ended with the worker's sentence quoted above.
