@@ -1015,6 +1015,35 @@ sync binds the stored item to it. When the request is too thin to shape without 
 run writes one question to the owner instead, so the item waits on a question a person can see
 and answer rather than on nobody.
 
+An item applied straight to the store is one of several ways work arrives, and the owner said on
+2026-11-17 how they fit together: "You can imagine a triage subgraph which has the same output
+shape as like a human half-baked triage has the same output shape as like an agent filed item,
+even though they go through different paths to get there. The downstream stuff doesn't care
+because it's ultimately aligned in the interface." An item an agent filed without reading the
+prose guide is another such door, handled by the queued
+[rewrite before build](#file-a-rewrite-for-an-item-that-fails-the-prose-check-ahead-of-the-item-itself),
+and a rough idea the owner dumps in conversation is a third. Another session is recording these
+intake doors in the design documents on 2026-11-17. This item builds only the door for an item
+with no block, and it defines that door by what it must hand on: the same ready-item shape every
+door ends in, which is what a build run needs today.
+
+- A block in a tracked document, with the item's own id. Its heading starts with a verb from the
+  prose guide's list and runs to at most twelve words, which the sync warns about otherwise.
+- A prose paragraph before the directive that says why. The sync warns when there is none, but it
+  checks only that a paragraph is there.
+- A fence of allowed paths. The sync refuses a block that has none or names an invalid path, and
+  the planner holds an item whose fence admits nothing.
+- Dependencies in `blocked_by` that name items. The sync refuses one that is not an item id, and
+  the planner holds the item until each one is finished.
+- Between one and eight criteria. The sync refuses a block with none or with an empty one, and it
+  warns about more than eight.
+- The prose guide's current mark, which the sync reports as `prose-unmarked` when it is missing.
+- No open question on the item's document, which the planner otherwise holds as `question-open`.
+
+Nothing checks yet that a criterion can be checked, that the paragraph really says why, or that
+the fence covers the files the work needs. Today a build run finds those out by stopping with a
+conflict.
+
 The owner said on the same day where a rule like this belongs: "I guess retention policy, item
 lifecycle, item prerequisites, that sort of thing should be part of this custom, this layer that
 describes your workflow use case, not the actual core." An item needs a document block before it
@@ -1031,8 +1060,8 @@ files it with the apply face and lets triage write the block.
 <!-- tillr: item id="item-sync-hold-unshared-items" paths="tools/tillr-drain/,tools/tillr-item/,tools/tillr-view/,config/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** In a store that documents feed, the planner never dispatches an open item that no document block declares to the build seat, whatever seat or workflow the item names. A store is fed by documents when at least one item in it, in any state, is declared by a document block under the repository root; this is the same comparison of store items against blocks that produces `unshared_open`, because the store keeps no separate record that a sync ran. The planner dispatches one triage run for the undeclared item on the design seat, with the reason `triage-no-block`, fenced to the document the item's body reference names. A test stores an undeclared item that names the build seat and a ready declared item, plans both, and asserts the first goes to the design seat with that reason and the second to its own seat.
-- **c2:** The triage run's brief carries the item's stored title, body reference and criteria as the request, and the prose guide, and asks for exactly one of three results. The first is a block for the item in that document: a heading, a why paragraph, the directive with the same id and its `paths` and `blocked_by`, and checkable criteria, landed through the gate like any design change. The second, for a request too thin to shape, is a block that declares the item together with a numbered question to the owner in the same document, saying exactly what is missing, so the item waits on the existing `question-open` hold. The third is a report that the item duplicates a named item or is already done. A test stages a triage run and asserts that its brief names the three results and that its fence admits only that document.
-- **c3:** After a triage run lands a block, the next sync binds the stored item to it by id, and the planner then sends the item to its own seat with no command from the operator. A test lands a fixture block, syncs, plans again, and asserts the item is dispatched to its seat.
+- **c2:** The triage run's brief carries the item's stored title, body reference and criteria as the request, and the prose guide, and asks for exactly one of three results. The first is a block for the item in that document in the ready-item shape listed above, with the same id, landed through the gate like any design change; one triage run may both tidy the request's wording and shape it into designable work. The second, for a request too thin to shape, is a block that declares the item together with a numbered question to the owner in the same document, saying exactly what is missing, so the item waits on the existing `question-open` hold. The third is a report that the item duplicates a named item or is already done. A test stages a triage run and asserts that its brief names the three results and that its fence admits only that document.
+- **c3:** A triage block passes the same checks as a block from any other door: the loop refuses a triage candidate, before the gate and naming the rule, when the sync would report any finding or warning on its block, including `prose-unmarked` and every `prose-shape` warning. After a triage block lands, the next sync binds the stored item to it by id, and the planner sends the item to its own seat with no command from the operator. A test refuses a fixture triage block that lacks the guide mark, then lands a well-formed one, syncs, asserts no finding or warning on it, plans, and asserts the item is dispatched to its seat.
 - **c4:** A triage run that reports a duplicate or finished item, or that ends blocked, is recorded as a conflict (`item.conflict`) waiting on the owner that carries the run's report, so the item is held `conflict-owner`. The owner accepts a duplicate or finished verdict by closing the item, or rejects it by answering the conflict. An undeclared item whose body reference names no document goes to the owner the same way, with no run. A test asserts both.
 - **c5:** Each undeclared item gets at most one triage run for each version of its request. When the item is still undeclared after its triage run settles and its stored title, body reference and criteria have not changed, the planner raises the owner conflict of c4 instead of a second run; a change to any of the three allows one new triage run. A test settles a triage run that landed nothing, plans twice, and asserts that no second run is staged and the item is held `conflict-owner`, then changes the item's title and asserts one new triage run.
 - **c6:** The waiting face shows each undeclared item with its next step and who takes it: triage on the design seat while that run is due or running, and the owner, with the question or the conflict text, once it reaches them. The loop's start line and the status face print the `unshared_open` count. A test asserts both lines of the waiting face and the count.
@@ -1043,6 +1072,7 @@ files it with the apply face and lets triage write the block.
 
 - **Ref:** the owner's two statements of 2026-11-17, quoted above. The design-seat conflict path this reuses is the one a worker's blocked report takes today; the idea pipeline's stage 2 already rules that a request too vague to split becomes a one-question document that holds on the owner ([the idea pipeline](../design/tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules)), and this item applies that disposition to an item already in the store. That pipeline's `intake` face and item kinds are not built, so nothing here waits on them. `docs/design/queue-persistence-ruling.md` names the `unshared_open` counter and its intent. The proposed `plan` seat in [planning and model tiering](../design/tillr-planning-node-model-tiering.md) is not in the seat vocabulary yet; if it lands first, the builder says whether triage belongs on it.
 - **Where:** `decide` in `tools/tillr-drain/drain/plan.go`; `conflictDecision` in `tools/tillr-drain/drain/blocked.go` (the design-seat dispatch, and the owner routing for an empty body reference or a design run that ends blocked); the conflict brief and its one-document fence in `tools/tillr-drain/drain/stage.go`; the `unshared_open` count in `tools/tillr-item/item/sync.go`; the waiting face in `tools/tillr-view/waiting.go`; the workflow files under `config/tillr/workflows/` if the prerequisite is expressed there; the pack's copy under `yolo-packs/tillr/`.
+- **Open point, one agent or two:** the owner has not said whether making a request well-formed and shaping rough text into designable work are one agent's job or two. This item lets one triage run on the design seat do both for this door and does not decide the question. The rewrite before build sends its rewrite to a cheap seat as a separate item instead, so whether the two doors share one rewriting seat belongs to the same open point. Both doors end in the same ready-item shape.
 - **Naming:** the owner asked on 2026-11-17 why the intake face is called `apply` and not `add`. Do not rename it in this item; report what a rename would touch: the face, its callers and tests, the docs and pack skills that name it, and AutoQA's design, which files with it.
 - **Evidence:** 2026-11-16, `tillr-item sync --dry-run` against this repository's store printed `unshared_open: 3`; run `run-item-agent-default-bmad-superpowers-skills-a1` ended `RESULT: blocked` after 34 s.
 
