@@ -1483,6 +1483,69 @@ worked example that lands nothing. The blocks live in that plan rather than in
 questions and the drain would hold its items. The plan's next tranche is written in prose and is
 filed when the first has landed.
 
+## Filed 2026-11-17: two red bases that held queue items
+
+Two queue items stopped on 2026-11-17 because a check that is red on `main`, and that the item
+did not touch, failed under them. Each worker stopped as its brief says, and the drain held the
+item. The two items below fix those checks, and each held item now waits on its fix.
+
+### Fix the flaky full-trace-queue test in the store
+
+The store has a test, `TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss`, that fails now and
+then on `main` with nothing changed. On 2026-11-17 it was red at the base of the run that was
+building the sharded-runner item, so that worker could not tell its own failures from this one,
+stopped, and the item was held. A test that fails at random also makes every other item's gate
+result doubtful, so it is worth fixing before more work is stacked on it.
+
+The race is in the test, not in the trace queue. The queue's delivery goroutine writes the loss
+report into the captured stderr pipe, and only then records the loss as reported, so once the
+flush returns the line is in the pipe. The test then reads its capture buffer at once, but a
+separate copier goroutine fills that buffer from the pipe, and under load it has not run yet. The
+test sees an empty capture and reports that the trace never reported its loss. The product code
+loses nothing, and the fix belongs in how the test waits for its own capture.
+
+<!-- tillr: item id="item-store-trace-queue-test-not-flaky" paths="tools/tillr/store/trace_queue_test.go,tools/tillr/store/trace.go" blocked_by="" prose="2" -->
+
+- **c1:** The commit message names the root cause: the test reads the captured stderr before the copier goroutine has moved the delivered loss report out of the pipe. The commit also says that the trace queue itself is unchanged.
+- **c2:** The test reads the capture only after everything written to the pipe has reached the buffer, for example by closing the write end and waiting for the copier to reach end of file. It uses no retry, no longer sleep, and no polling loop with a deadline.
+- **c3:** `go test -race -count=200 -run '^TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss$'` in `tools/tillr/store` passes. So does a run of the compiled test binary with `-test.count=100` in 24 processes at once, which failed in 14 of 24 processes before the fix. The report lists both commands, results and the date.
+- **c4:** The other tests that use the same capture helper, in `trace_exit_test.go`, still pass, and the whole `tools/tillr/store` package passes.
+
+**Agent details:**
+
+- **Where:** `capturedStalledSQLiteStderr` and the test body in `tools/tillr/store/trace_queue_test.go`; `reportLoss` and `FlushSQLiteTrace` in `tools/tillr/store/trace.go`, which this item reads and does not change.
+- **Evidence:** 2026-11-17, with the load average near 26 on a 32-core machine, 24 copies of the compiled test binary each ran the test 100 times, and 14 of the 24 failed. The failure line was `trace_queue_test.go:190: the trace never reported its loss (want a line ending "dropped spans=0 records=20 sink_errors=0"): []`. On the same machine, `go test -count=50` and `go test -race -count=200` of that one test, run alone, both passed, so the failure needs load.
+- **Evidence:** `reportLoss` in `tools/tillr/store/trace.go` flushes the report to the sink before it stores the reported count, and `FlushSQLiteTrace` waits for that count, so the product's order is correct. The test's `read` returns the buffer the copier goroutine fills, with no wait for that copier.
+
+### Make the cloud-usage mod pass strict plugin validation
+
+The cloud-usage mod keeps a journal of Claude Code's model usage. Its README, and the criteria of
+the item that adds channel and route intent to it, list `claude plugin validate --strict` among the
+checks that must pass. On 2026-11-17 that command fails on the untouched mod at `main` under the
+installed Claude Code. A worker building the channel-route item saw the same failure on an export of
+the base, so it stopped as its brief says and the item was held. Until the check passes on the
+base, no change to the mod can show that it did not break it.
+
+Every message is a TypeScript warning from the mod's hooks, and `--strict` treats warnings as
+errors. The mod's `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`, which Claude Code
+writes on first load and the repository ignores. That directory is absent here, so this is the
+leading suspect, and the other two mods fail the same way. That is not yet established, and the
+builder settles it.
+
+<!-- tillr: item id="item-mod-passes-strict-plugin-validate" paths="yolo-packs/matt-mods/mods/cloud-usage/,yolo-packs/matt-mods/README.md,tests/" blocked_by="" prose="2" -->
+
+- **c1:** `claude plugin validate --strict yolo-packs/matt-mods/mods/cloud-usage` exits 0 under the installed Claude Code. The report gives the command, the build from `claude --version`, and the date.
+- **c2:** The commit message names the root cause of the TypeScript warnings, and says whether the generated `.claude-plugin/types/` declarations were missing, the mod's own `tsconfig.json` or sources were wrong, or both. The fix removes that cause. It does not drop `--strict`, add suppression comments, or exclude the hooks from checking.
+- **c3:** A test in the repository's test directory runs the strict validation on the mod and asserts that it exits 0. It is `tests/cloud-usage-plugin-validate.test.py` unless the builder finds an existing test that already invokes the validator, which was not the case on 2026-11-17. When the `claude` binary is absent, the test skips and prints that reason. The report says whether the gate's environment has `claude`, and what runs there if it does not.
+- **c4:** The mod's README and the matt-mods README give the one validation command that works from a clean checkout, including any step that creates the declarations the check needs.
+- **c5:** `claude plugin test` on the mod and the existing cloud-usage Node and Python suites still pass, and `yolo pack lint yolo-packs/matt-mods` passes.
+
+**Agent details:**
+
+- **Where:** `yolo-packs/matt-mods/mods/cloud-usage/tsconfig.json`, `hooks/*.ts` and `tests/*.ts` in that mod; the "Develop and test" section of `yolo-packs/matt-mods/README.md`; the "Offline development" section of the mod's README.
+- **Evidence:** 2026-11-17, `claude plugin validate --strict yolo-packs/matt-mods/mods/cloud-usage` listed 22 warnings and ended `Validation failed (--strict treats warnings as errors)`: 12 TS5097 (an import path ending in `.ts` while `allowImportingTsExtensions` is off), 5 TS2345 and 4 TS2532 (possibly undefined values), and one TS2304 (`Cannot find name 'setTimeout'`). The same command also failed for `todo-cleanup` and `tok-stats`.
+- **Evidence:** 2026-11-17, `.claude-plugin/types/` is absent from the mod's checkout and from `~/.claude/mods/cloud-usage` in this jail, and `.gitignore` lists `/yolo-packs/matt-mods/mods/*/.claude-plugin/types/`. A copy of the mod validated outside the repository failed the same way. No test or recipe invokes the validator: `rg -n 'plugin validate' tests .justfile tools/fork-check.py` finds nothing outside the READMEs and docs.
+
 ## Filed 2026-11-17: make the Go suites fast and trustworthy
 
 A worker building one queue item on 2026-11-17 spent most of 35 minutes waiting on repeated full
@@ -1506,7 +1569,7 @@ took the same suite to 13.7 to 14.5 seconds with six shards. The drain's rolling
 repository gate both pay the 64 seconds today, and the cost estimate the gate plans with still
 says 30.9 seconds.
 
-<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="item-store-trace-queue-test-not-flaky" prose="2" -->
 
 - **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
 - **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
@@ -1712,7 +1775,7 @@ built it. The three usage-recording fork items wait on this one.
 - **Where:** `forkTarget` and `ensureForkCheckout` in `tools/tillr-drain/drain/stage.go`; `freeLane`, `forkOf` and `forkHeldBy` in `tools/tillr-drain/drain/plan.go`; `liveForks` in `tools/tillr-drain/drain/pass.go`; `landedPatchMove` in `tools/tillr-drain/drain/boundary.go`; `PatchRef` with the patch-branch refusals in `tools/tillr-land/land/`; and the `path-missing` warning in `tools/tillr-item/item/sync.go`.
 - **Evidence (what already protects):** 2026-11-17, `rg -n 'ReasonForkHeld' tools/tillr-drain/drain/plan.go`: two items that deliver the same fork never run together. The hold counts this pass's dispatches, live leases and unfinished examinations (`liveForks`), whatever lane each is on. Commit `35a4d848d` added fork staging, the boundary's excuse for a run's own patch ref, and the lander's patch-branch move with its rewind refusal.
 - **Evidence (c1):** `forkTarget` keeps only fence entries under `.forks/lanes/` followed by the dispatched lane's id, and `TestForkTargetIgnoresAnotherLanesCheckout` pins that. `freeLane` returns the first free lane in id order and never reads the fence.
-- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and says that "any other patch-branch move still convicts". AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
+- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and, as of `eadcebd7a`, lists an unassigned move of `refs/heads/patch/<fork>`, a fork export included, as Observed: `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go` records it and does not attribute it to the run, so no run is convicted for it. What remains open is that nothing shows or holds an observed move before a push, which is `item-patch-branch-move-held-visible`. AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
 - **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
 - **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.
 
