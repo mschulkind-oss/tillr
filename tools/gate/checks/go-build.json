@@ -9,10 +9,26 @@
   "tier": "fast",
   "budget_ms": 2700,
   "reads": [
-    "."
+    "tools/pi-profiler/",
+    "tools/tillr/",
+    "tools/tillr-store/",
+    "tools/tillr-item/",
+    "tools/tillr-run/",
+    "tools/tillr-gate/",
+    "tools/tillr-view/",
+    "tools/tillr-land/",
+    "tools/tillr-drain/",
+    "tools/tillr-cli/",
+    "tools/gate/checks/go-build.py",
+    "tools/gate/checks/change_common.py",
+    "tools/gate/checks/roadmap_sections.py",
+    "go.work",
+    "go.work.sum"
   ],
   "tools": [
     "python3",
-    "go"
+    "git",
+    "go",
+    "true"
   ]
 }

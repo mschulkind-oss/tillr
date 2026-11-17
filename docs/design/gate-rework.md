@@ -910,14 +910,7 @@ the whole tree, so a change to one Markdown file rebuilds all ten tools. Neither
 raised to make room, because the fast tier's budgets already sum to 8,950 of its 9,000
 milliseconds. This item finds what each check spends its time on and removes the waste.
 
-<!-- tillr: item id="item-gate-fast-checks-fit-budgets" paths="tools/gate/,tools/tillr-gate/,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The report states the measured cause for the documents check, as command, result and date: which documents dominate its time on recent landings, which part of the renderer's work costs that time for the tillr roadmap (start-up, a rule, link resolution or size), and why the remembered passes miss on an ordinary landing.
-- **c2:** The report states the same for `go-build`: which modules compile on an ordinary landing, and why its remembered tree pass is not reused.
-- **c3:** The documents check's median over a change that edits the tillr roadmap is under its 2,000 ms budget with no other gate running. The report records the median of five runs before and after. The fix is the implementer's choice among measured options, for example rendering only what the change can affect, or moving the roadmap's filed-item sections into documents that change less. If item blocks move, `tillr-item sync --dry-run` reports no item created, updated or dropped.
-- **c4:** `go-build`'s median over a change to one Go module is under its 2,700 ms budget with no other gate running; the report records the median of five runs before and after. A change that touches no Go module reuses `go-build`'s remembered pass: a test with a Markdown-only change asserts the check is reported remembered and starts no compile.
-- **c5:** Each check still catches what it caught before. A test plants a broken link in the roadmap and asserts the documents check fails, and plants a compile error in one module and asserts `go-build` fails.
-- **c6:** No `budget_ms` changes and the 9,000 ms cap is unchanged; `gate-budget` passes on the result. No test asserts elapsed time: the timing audit, case 53 of `tests/fork-check.test.py`, passes.
 
 **Agent details:**
 

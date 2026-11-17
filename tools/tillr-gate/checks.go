@@ -69,6 +69,12 @@ func checksFace(args []string) int {
 	changes := registry.Declarations[:0]
 	for _, check := range registry.Declarations {
 		if check.Scope == "change" || *fastTree && check.Scope == "tree" && check.Tier == "fast" {
+			// --fast-tree asks for a verdict on every admitted fast tree check,
+			// including a remembered pass when none of its inputs changed. Reads
+			// bounds the fingerprint, not this face's explicitly requested set.
+			if check.Scope == "tree" && check.Forced == "" {
+				check.Forced = "fast-tree"
+			}
 			changes = append(changes, check)
 		}
 	}
