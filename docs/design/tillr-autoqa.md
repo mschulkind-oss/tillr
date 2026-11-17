@@ -271,9 +271,33 @@ This design is in [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), and 
 the queue. While a question above is open the item is held and names that question as what it
 waits on, so while the design is parked the item waits on [OQ-AQ2](#OQ-AQ2) and is never dispatched.
 
-### Cut the AutoQA design into build items
+### Add a build order for AutoQA
 
-<!-- tillr: item id="item-design-autoqa-slices" seat="design" paths="docs/design/tillr-autoqa.md,docs/tillr/roadmap.md" -->
+The AutoQA design needs a clear handoff before implementation can begin. When the
+owner resumes the design, settle its remaining questions and turn the agreed
+behavior into small, testable build items. Start with the smallest working path
+through the system so later items can build on something that has already been
+proved, and make each item's dependencies explicit so workers know what must land
+first. This work prepares the build order; it does not implement AutoQA or resume
+the parked design on its own.
+
+**Outcomes:**
+
+- Settle the design's questions and record the decisions for future workers.
+- Order small, testable build items around a working end-to-end starting point.
+- Update the roadmap so it no longer holds the design for a ruling.
+
+**Agent Details:**
+
+- **Ref:** [Decisions and open questions](#6-decisions-open-questions-and-amendments-owed)
+  and [dogfood rollout](#52-dogfood-rollout-against-tillr).
+- **Where:** This document's frontmatter, decision ledger, and closing item blocks;
+  [the tillr roadmap](../tillr/roadmap.md).
+- **Verify:** Check the four criteria below, including each build item's path fence,
+  testable criteria, and `blocked_by` dependencies. Run `uvx vantage-check` on this
+  document after settling the questions.
+
+<!-- tillr: item id="item-design-autoqa-slices" seat="design" paths="docs/design/tillr-autoqa.md,docs/tillr/roadmap.md" prose="2" -->
 
 - **c1:** Every question in this document is answered and folded into its body and decision ledger, its frontmatter says `status: accepted` and `stage: DECIDED`, and `uvx vantage-check` on it reports nothing.
 - **c2:** The document ends with a build order of item blocks, each small enough for one run inside one path fence, each with criteria a test can check, and each naming the items it waits on in `blocked_by`.
