@@ -1643,6 +1643,47 @@ says 30.9 seconds.
 
 <!-- tillr: item id="item-shard-the-tillr-go-suites" paths="tools/,.justfile,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
+**Ruling, 2026-11-17 (answers the second failed attempt):** two runs stopped, for two unrelated
+reasons, and neither reason is in this design. The criteria c1 to c8 stand as written.
+
+The first run stopped on the store's flaky test `TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss`,
+which was red at its base. It was right to stop. That test is fixed on the trunk in commit
+`f4bbfaf26`, so it is no longer a reason to stop, and this item does not touch store tracing.
+
+The second run built the whole item, and the gate refused it on one check out of eleven. The
+whole-tree `scratch` check failed on line 64 of the run's report,
+`docs/pi/tillr-go-shards-2026-11-17.md`, where a sentence about shard isolation named the durable
+scratch directory's environment variable in inline code. The other ten checks passed. The
+repository forbids a tracked Markdown file from naming that directory, by its variable or by its
+path, outside a fenced block; the two spellings are listed in the root `AGENTS.md` under
+"Documents: state the evidence, never cite scratch". The report says "its own scratch directory"
+in prose, and puts any command that needs the variable in a fenced block. c9 below makes the
+builder run that check before committing. The check's exception list is not extended for this.
+
+The second run's candidate is the starting point, not something to rebuild from nothing:
+- [unlanded] commit `c5f377844`, reachable from `refs/tillr/runs/run-item-shard-the-tillr-go-suites-a2`, holds the runner, its duration record, its tests, the planner change and the report.
+
+The trunk has moved since that commit's base, so the builder re-applies it rather than reusing
+its tree. Three things differ on the trunk now, and each is settled here:
+
+- **The skill conflicts.** `git merge-tree` on 2026-11-17 reported one content conflict, in
+  `yolo-packs/tillr/skills/tillr-operating/SKILL.md`, because the trunk gained a paragraph on Go's
+  test result cache at the same place. Both texts stay. The worker brief
+  `tools/tillr-run/backends/brief-template.md` merged cleanly at the same paragraph and is read
+  again by hand for the same reason.
+- **The worker guidance has two tiers.** While editing, a worker uses a targeted `-run`, and in
+  the drain module leaves off `-count=1`, because the drain's result cache is now trustworthy.
+  For the one full run before committing, a worker uses the sharded runner on every module the
+  gate runs through it. The runner always runs tests fresh, since it executes the built test
+  binaries itself, and the guidance says so. c7 is read this way.
+- **The native command keeps the cache.** The second run added `-count=1` to the planner's
+  command for the modules that stay on `go test`. That is dropped: those commands stay as the
+  trunk has them. Only the modules listed in the report as faster under the runner change.
+
+The delivered copies under `yolo-packs/tillr/` are regenerated with `just pack-sync` after the
+re-apply, not merged by hand. The before and after wall times in the report are measured again
+on the new base, since the suites changed, and the planner's estimates follow those numbers.
+
 - **c1:** A runner under the tools directory builds each package's test binary once, then runs K concurrent shards of it, balanced on a recorded per-test duration file. Tests missing from that record go to a fallback shard, so a new test is never silently skipped. A test seeds a record that omits one test and asserts the test runs.
 - **c2:** The runner passes exactly the set of test names that `go test ./... -count=1` passes, per package. A test compares the two name lists on the drain module and asserts they are equal.
 - **c3:** The runner exits non-zero when any test fails, when a shard cannot start, or when a shard exits without reporting every test assigned to it. A test per case asserts the exit code and a message that names the shard.
@@ -1651,6 +1692,7 @@ says 30.9 seconds.
 - **c6:** The suite cost estimate in the gate's check planner is refreshed from a measurement of the runner, with the command and date in the comment beside it.
 - **c7:** The worker brief and the `tillr-operating` skill tell workers how to run the sharded runner and when to prefer a targeted `-run`.
 - **c8:** The report records the drain suite's wall time before and after, as command, result and date. No test asserts elapsed time.
+- **c9:** `python3 tools/gate/checks/scratch.py`, run from the repository root on the committed tree, prints nothing and exits 0. The report gives that command and its output. No tracked Markdown file the change adds or edits names the durable scratch directory, by variable or by path, outside a fenced block.
 
 **Agent details:**
 
