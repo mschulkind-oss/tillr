@@ -446,6 +446,8 @@ type plannedApplication struct {
 
 type runCompletion struct {
 	id      string
+	itemID  string
+	step    string
 	outcome laneOutcome
 	detail  string
 	result  *LoopResult
@@ -915,7 +917,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", result.Ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
 	go func() {
 		start := time.Now()
-		completion := runCompletion{id: id, timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
+		completion := runCompletion{id: id, itemID: d.ItemID, step: "run", timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
 		local := LoopResult{}
 		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
 		if err == nil {
@@ -926,6 +928,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		}
 		completion.outcome.err = err
 		completion.detail = local.Detail
+		if local.StopStep != "" {
+			completion.step = local.StopStep
+		}
 		completion.timing.DispatchMS = time.Since(start).Milliseconds()
 		l.completions <- completion
 	}()
@@ -948,11 +953,18 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	}
 	if c.timing != nil {
 		if err := l.recordPass(c.timing); err != nil {
+			result.StopItemID, result.StopStep = c.itemID, "record pass"
 			return "", err
 		}
 	}
 	if c.detail != "" {
 		result.Detail = c.detail
+	}
+	if c.outcome.stop != "" || c.outcome.err != nil {
+		result.StopItemID, result.StopStep = c.itemID, c.step
+		if c.result != nil && c.result.StopStep != "" {
+			result.StopStep = c.result.StopStep
+		}
 	}
 	return c.outcome.stop, c.outcome.err
 }
@@ -1100,6 +1112,7 @@ plans:
 		}
 		ok, work, err := l.applyPlanGeneration(ctx, p, mainSHA, at, &timing.TickID)
 		if err != nil {
+			result.StopItemID, result.StopStep = d.ItemID, "apply plan"
 			return "", err
 		}
 		if !ok {
@@ -1127,11 +1140,13 @@ plans:
 			l.laneRefusedNow = false
 			staged, err := l.stageDispatches(ctx, []Decision{d}, base, result)
 			if err != nil {
+				result.StopItemID, result.StopStep = d.ItemID, "stage"
 				return "", err
 			}
 			timing.StageMS += time.Since(start).Milliseconds()
 			if len(staged) == 0 {
 				if err := l.cancelStaging(ctx, d); err != nil {
+					result.StopItemID, result.StopStep = d.ItemID, "cancel staging"
 					return "", err
 				}
 				if l.laneRefusedNow && replans < len(l.cfg.Lanes) {
@@ -1195,7 +1210,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		defer l.examinations.Done()
 		local := &LoopResult{}
-		completion := runCompletion{id: d.RunRequest.RunID, result: local, timing: &timing}
+		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
 		if d.Reason == ReasonItemAlreadyTerminal {
 			// The plan read the terminal state and the claim's version check rebound it;
 			// the settling write rereads it for the record.

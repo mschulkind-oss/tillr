@@ -236,8 +236,19 @@ export interface DrainBuild {
   executable: string;
 }
 
+export interface StopExplanation {
+  reason: string;
+  at_ms: number;
+  item_id: string;
+  step: string;
+  sentence: string;
+  next: string;
+}
+
 export interface DrainSummary {
   active: boolean;
+  stop?: StopExplanation | null;
+  heartbeat_interval_ms?: number;
   session?: {
     session_id: string;
     started_at_ms: number;

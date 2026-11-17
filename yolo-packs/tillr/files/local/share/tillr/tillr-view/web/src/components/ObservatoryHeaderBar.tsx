@@ -4,6 +4,7 @@
 // absence, and a screen with no live channel says so before its numbers look current.
 
 import { EpistemicBadge } from "./EpistemicBadge";
+import { loopAlive } from "../models/loop";
 import { StateGlyph } from "./StateGlyph";
 import {
   FILTER_STATES,
@@ -93,15 +94,16 @@ function LiveChip({ live, paused }: { live: boolean; paused: boolean }) {
 
 /** The loop is alive only while its recorded session meets the next-pass deadline.
  * Runs and leases can outlive the loop and must never stand in for its heartbeat. */
-function LoopBand({ drain }: { drain: SnapshotData["drain_summary"] }) {
-  const now = useNow();
+export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["drain_summary"]; now?: number }) {
+  const clock = useNow();
+  const now = suppliedNow ?? clock;
   const session = drain.session;
-  const alive = session !== null && session !== undefined && session.ended_at_ms === null &&
-    now <= session.next_pass_at_ms + (drain.session_grace_ms ?? 0);
-  const label = !session ? "Loop unobserved" : session.ended_at_ms !== null ? "Loop stopped" :
-    alive ? "Loop alive" : "Loop heartbeat overdue";
+  const alive = loopAlive(drain, now);
+  const stop = alive ? null : drain.stop;
+  const label = alive ? "Loop alive" : "no loop is running";
   return <span className="loop-band" title={drain.session_note}>
-    {label}{session ? ` · next pass ${new Date(session.next_pass_at_ms).toLocaleTimeString()}` : " · no session recorded"}
+    {label}{alive && session ? ` · next pass ${new Date(session.next_pass_at_ms).toLocaleTimeString()}` : null}
+    {stop ? <> · stopped since {new Date(stop.at_ms).toISOString()} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? <> · {session?.ended_at_ms != null ? `Loop stopped since ${new Date(session.ended_at_ms).toISOString()}` : "Loop unobserved"} · stop explanation not recorded</> : null}
   </span>;
 }
 

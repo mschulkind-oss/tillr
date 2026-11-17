@@ -46,6 +46,7 @@ export function RefusalState({
   onRetry,
   retryLabel = "Read it again",
 }: RefusalStateProps) {
+  if (code === "unknown-route") return <p role="alert" data-refusal={code}>{message}</p>;
   const known = code === "" ? undefined : sentences[code];
   const tone = known?.tone ?? "notice--blocked";
   const retry = known?.retry ?? onRetry !== undefined;

@@ -11,6 +11,9 @@ import (
 // next-pass deadline. Beyond five seconds, the view reports a missed heartbeat.
 const SessionGraceMS int64 = 5000
 
+// HeartbeatIntervalMS matches the loop's one-second session refresh interval.
+const HeartbeatIntervalMS int64 = 1000
+
 type loopSession struct {
 	SessionID     string `json:"session_id"`
 	StartedAtMS   int64  `json:"started_at_ms"`
@@ -35,7 +38,8 @@ func readLoopSession(r *store.Reader, now time.Time) (*loopSession, bool, string
 		session.EndedAtMS = &ended.Int64
 		return &session, false, "the loop session has ended", nil
 	}
-	if now.UnixMilli() > session.NextPassAtMS && now.UnixMilli()-session.NextPassAtMS > SessionGraceMS {
+	if now.UnixMilli()-session.RefreshedAtMS > 2*HeartbeatIntervalMS ||
+		(now.UnixMilli() > session.NextPassAtMS && now.UnixMilli()-session.NextPassAtMS > SessionGraceMS) {
 		return &session, false, "the loop missed its recorded next-pass deadline", nil
 	}
 	return &session, true, "the loop session heartbeat is current", nil

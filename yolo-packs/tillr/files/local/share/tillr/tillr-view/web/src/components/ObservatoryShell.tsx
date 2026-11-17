@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ApiEnvelope, PassRow, SnapshotData } from "../models/types";
 import { LoopSummary } from "./Home";
+import { Glossary } from "./Glossary";
+import { refusalCode } from "./RefusalState";
 import { URL_CHANGE_EVENT } from "../models/url";
 
 export function useScreenHash(): string {
@@ -26,17 +28,17 @@ export function ObservatoryShell({ children, hash, snapshot, snapshotError, pass
   onPause: () => void; onRefresh: () => void;
 }) {
   const [clock, setClock] = useState(Date.now);
-  const [frozenAt, setFrozenAt] = useState<number | null>(null);
   useEffect(() => {
-    if (paused) { setFrozenAt(Date.now()); return; }
-    setFrozenAt(null);
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [paused]);
+  const snapshotMismatch = snapshotError != null && refusalCode(snapshotError) === "unknown-route";
+  const pageOwnsPassFailure = ["", "#/", "#/passes"].includes(hash.split("?")[0]);
+  const summaryError = passesError && refusalCode(passesError) === "unknown-route" && (pageOwnsPassFailure || snapshotMismatch) ? null : passesError;
   const generated = snapshot ? Date.parse(snapshot.snapshot.generated_at) : NaN;
   const age = Number.isFinite(generated) ? Math.max(0, Math.floor((clock - generated) / 1000)) : null;
-  return <div className="observatory-shell">
+  return <Glossary className="observatory-shell">
     <div className="observatory-shell__sticky">
       <header className="observatory-nav">
         <strong>tillr</strong><nav aria-label="Observatory">{NAV.map(([label, url]) => <a key={url} href={url}
@@ -45,9 +47,9 @@ export function ObservatoryShell({ children, hash, snapshot, snapshotError, pass
         <button type="button" onClick={onPause}>{paused ? "Resume updates" : "Pause updates"}</button>
         <button type="button" onClick={onRefresh}>Refresh</button>
       </header>
-      {snapshotError ? <p role="alert">Snapshot refused: {snapshotError.message}</p> : null}
-      <LoopSummary drain={snapshot?.data.drain_summary} snapshot={snapshot?.data} passes={passes} error={passesError} now={paused ? frozenAt ?? clock : clock} />
+      {snapshotError && !snapshotMismatch ? <p role="alert">Snapshot refused: {snapshotError.message}</p> : null}
+      <LoopSummary drain={snapshot?.data.drain_summary} snapshot={snapshot?.data} passes={passes} error={summaryError} now={clock} />
     </div>
     {children}
-  </div>;
+  </Glossary>;
 }

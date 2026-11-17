@@ -176,8 +176,9 @@ export function PassesView({ passes, error, more = false, loadingOlder = false, 
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Passes</h1>
     <div className="ledger__filters"><label>Range <select value={range} onChange={event => set("range", event.target.value)}>{["24h", "7d", "30d", "all"].map(value => <option key={value}>{value}</option>)}</select></label>
-      <label>Item <input value={item} onChange={event => set("item", event.target.value)} /></label><label>Action <input value={action} onChange={event => set("action", event.target.value)} /></label>
-      <label><input type="checkbox" checked={showHolds} onChange={event => set("holds", event.target.checked ? "" : "hide")} />show hold-only passes</label>
+      <label>Item <input title="Filters to passes that touched this item" value={item} onChange={event => set("item", event.target.value)} /></label>
+      <label>Action <select value={action} onChange={event => set("action", event.target.value)}><option value="">All actions</option>{[...new Set(ordered.flatMap(pass => pass.decisions.map(row => row.action)))].sort().map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label><input type="checkbox" checked={showHolds} onChange={event => set("holds", event.target.checked ? "" : "hide")} />show passes where nothing moved</label>
     </div>
     {more ? <p>Older passes have not been loaded; filters search the loaded history. <button type="button" disabled={loadingOlder} onClick={onOlder}>Load older passes</button></p> : null}
     {latest ? <p>Session {latest.session_id || "not recorded"} · {latest.stop || "stop not recorded"} · {latest.detail || "detail not recorded"}</p> : null}

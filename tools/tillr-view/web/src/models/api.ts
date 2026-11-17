@@ -27,6 +27,7 @@ import type {
   TranscriptEntryData,
 } from "./types";
 import { perf, resourceTiming } from "./perf";
+import { PAGE_BUILD } from "./pageBuild";
 
 /** An answer the server refused, carrying the cursor it refused at. */
 export class ApiError extends Error {
@@ -52,12 +53,20 @@ async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<
     path, request_id: response.headers.get("X-Request-Id") ?? "", ms: Math.round((performance.now() - started) * 10) / 10,
     bytes: text.length, status: response.status, ...resourceTiming(path),
   });
-  const body: unknown = JSON.parse(text);
+  let body: unknown;
+  try { body = JSON.parse(text); } catch (error) {
+    if (response.status !== 404) throw error;
+  }
+  const failure = body as ApiFailure | undefined;
+  if (response.status === 404 && (!failure?.error?.code || failure.error.code === "unknown-route")) {
+    const build = failure?.snapshot?.build;
+    const serverBuild = build?.revision || build?.digest || "not recorded";
+    throw new ApiError("unknown-route", `This page needs a newer server; server build: ${serverBuild}; page build: ${PAGE_BUILD}; restart with just observatory.`, 404);
+  }
   if (!response.ok) {
-    const failure = body as ApiFailure;
     throw new ApiError(
-      failure.error?.code ?? "http_error",
-      failure.error?.message ?? `${response.status} ${response.statusText}`,
+      failure?.error?.code ?? "http_error",
+      failure?.error?.message ?? `${response.status} ${response.statusText}`,
       response.status,
     );
   }

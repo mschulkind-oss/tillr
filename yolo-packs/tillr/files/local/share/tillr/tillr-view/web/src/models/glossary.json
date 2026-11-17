@@ -1,0 +1,13 @@
+{
+  "pass": "A pass is one loop review of the queue that records the actions chosen for its items.",
+  "hold": "A hold leaves an item waiting because its recorded condition does not yet allow the next step.",
+  "hold-only pass": "A hold-only pass is a queue review in which every recorded action left work waiting and nothing moved.",
+  "action": "An action is the next operation the loop chose for an item, such as dispatch, judge, settle, or hold.",
+  "lane": "A lane is an isolated working directory assigned to one piece of work at a time.",
+  "run": "A run is one recorded attempt by an agent to work on an item in a lane.",
+  "candidate": "A candidate is a committed result from a run that can be checked for landing.",
+  "gate": "A gate is the set of checks that judges whether a candidate is safe to land.",
+  "landing": "A landing is the recorded application of an accepted candidate to the repository's shared branch.",
+  "heartbeat": "A heartbeat is the loop's periodically refreshed record showing that its process is still alive.",
+  "session": "A session is one loop process lifetime, recorded from its start through its last heartbeat and stop."
+}

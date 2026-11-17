@@ -206,9 +206,8 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
 	}
 }
 
-// TestAnUnknownRouteNamesItselfOutOfTheRouteSet pins the message an operator acts on: a
-// routing mistake must say which routes exist, or the reader goes looking for a data bug.
-func TestAnUnknownRouteNamesItselfOutOfTheRouteSet(t *testing.T) {
+// A page newer than its server needs a restart, not an inventory of server routes.
+func TestAnUnknownRouteNamesTheRestartNotTheRouteSet(t *testing.T) {
 	h := newServeHarness(t)
 	status, body, raw := h.get("/api/v1/nope")
 	if status != http.StatusNotFound {
@@ -219,9 +218,13 @@ func TestAnUnknownRouteNamesItselfOutOfTheRouteSet(t *testing.T) {
 		t.Fatalf("an unknown route answered %v, want %s", failure, codeUnknownRoute)
 	}
 	message, _ := failure["message"].(string)
-	for _, route := range []string{"/api/v1/snapshot", "/api/v1/items/{id}", "/api/v1/runs/{id}", "/api/v1/ws"} {
-		if !strings.Contains(message, route) {
-			t.Fatalf("an unknown route's message does not name %s: %q", route, message)
-		}
+	if !strings.Contains(message, "This page needs a newer server") || !strings.Contains(message, "just observatory") {
+		t.Fatalf("unknown route lacks restart advice: %q", message)
+	}
+	if strings.Contains(message, "face") || strings.Contains(message, "/api/") || strings.Contains(message, "routes") {
+		t.Fatalf("unknown route leaks a route inventory: %q", message)
+	}
+	if body["snapshot"].(map[string]any)["build"] == nil {
+		t.Fatal("unknown-route response names no server build")
 	}
 }

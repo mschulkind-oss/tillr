@@ -21,6 +21,7 @@ const apiTarget = env.TILLR_VIEW_API ?? "http://127.0.0.1:4318";
 
 export default defineConfig({
   plugins: [react()],
+  define: { __TILLR_PAGE_BUILD__: JSON.stringify(env.TILLR_VIEW_PAGE_BUILD ?? new Date().toISOString()) },
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     port: 5173,

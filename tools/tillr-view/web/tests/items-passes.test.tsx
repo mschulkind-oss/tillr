@@ -12,6 +12,18 @@ const rows: WaitingRow[] = [
 const pass = (ms: number, reason = "blocked"): PassRow => ({ dispatched_at_ms: ms, decisions: [{ item_id: "item-a", rank: "a", action: "hold", reason }] });
 function route(hash: string) { window.history.replaceState(null, "", `/${hash}`); }
 
+test("Pass filters say what they do and offer only recorded actions", () => {
+  route("#/passes?range=all");
+  render(<PassesView passes={[pass(1000), { dispatched_at_ms: 2000, decisions: [{ item_id: "item-b", rank: "b", action: "dispatch", reason: "ready" }] }]} />);
+  const actions = screen.getByLabelText("Action");
+  expect(actions.tagName).toBe("SELECT");
+  expect([...actions.querySelectorAll("option")].map(option => option.value)).toEqual(["", "dispatch", "hold"]);
+  expect(screen.getByLabelText("Item").getAttribute("title")).toContain("touched");
+  fireEvent.change(screen.getByLabelText("Item"), { target: { value: "item-b" } });
+  expect(screen.getAllByTestId("pass-group")).toHaveLength(1);
+  expect(screen.getByLabelText("show passes where nothing moved")).toBeTruthy();
+});
+
 test("Items presets, class and reason persist in the URL on cold mount", () => {
   route("#/items");
   const view = render(<ItemsView waiting={rows} snapshot={snapshotData} />);
