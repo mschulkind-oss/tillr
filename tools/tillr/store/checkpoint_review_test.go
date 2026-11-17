@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -91,7 +92,10 @@ func TestTheOwnerReportsWhetherTheLogRestarted(t *testing.T) {
 // the loop that runs it.
 func TestABusyOwnerWriteSkipsTheCycleWithoutAnError(t *testing.T) {
 	path := checkpointStore(t)
-	owner := ownCheckpoints(t, path)
+	owner, err := store.OwnCheckpoints(context.Background(), path, store.WithBusyTimeout(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer owner.Close(context.Background())
 	face := openWritable(t, path)
 	writeOne(t, face, "busy-1")

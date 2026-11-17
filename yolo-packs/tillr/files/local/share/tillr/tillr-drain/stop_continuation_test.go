@@ -41,7 +41,7 @@ func TestStopDuringWallContinuation(t *testing.T) {
  while [ ! -f "$WALL_STOP/release" ]; do sleep 0.01; done
  `+committingAdapterBody+`printf 'RESULT: done\n'
 else
- sleep 3
+ exec sleep 300
 fi`)
 			f := newLoopFixture(t, adapter)
 			backend := f.policy.Backends["fixture"]
@@ -49,7 +49,31 @@ fi`)
 			f.policy.Backends["fixture"] = backend
 			fixtureAt(t, f.store, itemRecordWithFence("item_a", "in-queue", "candidate.txt"))
 			t.Cleanup(func() { writeFile(t, filepath.Join(markers, "release"), "finish") })
-			cmd, out := startStopFixture(t, f, 1)
+			// The production policy is in whole seconds; inject a millisecond wall
+			// through the existing run-bin seam, into the request the real face reads.
+			// Keep the resumed request unbounded, just as continuation normally does.
+			shortRun := stub(t, "short-wall-run", `if [ "$1" = exec ]; then
+ input=
+ previous=
+ for arg do
+  [ "$previous" = --input ] && input=$arg
+  previous=$arg
+ done
+ python3 - "$input" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    request = json.load(f)
+payload = request['payload']
+if not payload.get('resume'):
+    assert payload['timeout_ms'] == 1000, payload
+    payload['timeout_ms'] = 100
+with open(path, 'w') as f:
+    json.dump(request, f)
+PY
+fi
+exec "`+sibling(t, "run")+`" "$@"`)
+			cmd, out := startStopFixtureWithRun(t, f, 1, shortRun)
 			waitForFile(t, filepath.Join(markers, "resumed"), 10*time.Second)
 			if len(terminalRunRows(t, f.store)) != 1 {
 				t.Fatal("continuation test needs the previous terminal row")

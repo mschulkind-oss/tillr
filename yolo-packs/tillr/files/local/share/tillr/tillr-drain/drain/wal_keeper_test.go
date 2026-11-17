@@ -153,6 +153,7 @@ type heartbeatFailingSteps struct {
 	recordingSteps
 	store string
 	t     *testing.T
+	tick  func()
 }
 
 func (s *heartbeatFailingSteps) Sync(ctx context.Context) (SyncOutcome, error) {
@@ -160,6 +161,7 @@ func (s *heartbeatFailingSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	if err := os.Rename(s.store, aside); err != nil {
 		return SyncOutcome{}, err
 	}
+	s.tick()
 	select {
 	case <-ctx.Done():
 	case <-time.After(30 * time.Second):
@@ -176,8 +178,14 @@ func (s *heartbeatFailingSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 // SQLITE_BUSY with nothing saying the startup sync had been running.
 func TestAHeartbeatFailureIsReportedBesideTheStartupError(t *testing.T) {
 	f := newRefusalLoopFixture(t)
-	l := f.loop(t, &heartbeatFailingSteps{store: f.storePath, t: t}, &itemContentStager{})
-	l.cfg.Now = time.Now
+	clock := &manualClock{now: time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC), ticks: make(chan time.Time, 1)}
+	steps := &heartbeatFailingSteps{store: f.storePath, t: t, tick: func() {
+		clock.advance(PassInterval)
+		clock.ticks <- clock.Now()
+	}}
+	l := f.loop(t, steps, &itemContentStager{})
+	l.cfg.Now = clock.Now
+	l.heartbeatClock = clock.heartbeat
 	result, err := l.Run(context.Background())
 	if err == nil || result.Stop != StopFault {
 		t.Fatalf("result: %+v / %v", result, err)

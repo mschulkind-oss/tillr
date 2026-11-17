@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	sqliteTraceSlowSpan    = 2 * time.Second // Observation only, never cancellation.
-	sqliteTraceActiveLimit = 32
+	DefaultSQLiteTraceSlowSpan = 2 * time.Second // Observation only, never cancellation.
+	sqliteTraceActiveLimit     = 32
 	// One queue slot holds one phase record or one span's stack sample. A span queues
 	// each phase as it happens, so a WriteTx costs three slots: begin, acquired and end.
 	sqliteTraceQueueLimit = 1024
@@ -25,6 +25,25 @@ const (
 	// stack sample, short enough that a stalled one cannot hold a process at exit.
 	sqliteTraceExitFlush = 500 * time.Millisecond
 )
+
+// sqliteTraceSlowSpan is process-wide configuration. A span captures it at admission,
+// so changing it never changes the threshold of an operation already being observed.
+var sqliteTraceSlowSpan = func() *atomic.Int64 {
+	v := &atomic.Int64{}
+	v.Store(int64(DefaultSQLiteTraceSlowSpan))
+	return v
+}()
+
+// SetSQLiteTraceSlowSpan configures when new traced operations get a stack sample.
+// It affects observation only, never SQL cancellation or lock waits. The returned
+// function restores the previous threshold; tests use it to avoid real-second waits.
+func SetSQLiteTraceSlowSpan(wait time.Duration) (func(), error) {
+	if wait <= 0 {
+		return nil, fmt.Errorf("store: the SQLite trace threshold must be positive, got %s", wait)
+	}
+	previous := sqliteTraceSlowSpan.Swap(int64(wait))
+	return func() { sqliteTraceSlowSpan.Store(previous) }, nil
+}
 
 var sqliteTrace = newSQLiteTraceObserver(sqliteTraceQueueLimit)
 var writerSequence atomic.Uint64
@@ -46,6 +65,22 @@ var ErrIncompleteSQLiteTrace = errors.New("SQLite trace capture is incomplete")
 
 // SQLiteTraceDeliveryStatus observes bounded in-memory counters, never the sink.
 func SQLiteTraceDeliveryStatus() SQLiteTraceStatus { return sqliteTrace.status() }
+
+// SQLiteTraceSampleQueued answers whether an active operation at path has handed
+// its stack sample to the delivery queue. It inspects only the bounded active-span
+// map, never SQL or the sink. A selected but not yet collected sample, a dropped
+// handoff, and a finished operation all answer false.
+func SQLiteTraceSampleQueued(path, operation string) bool {
+	o := sqliteTrace
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, span := range o.active {
+		if span.path == path && span.operation == operation && span.sampleQueued {
+			return true
+		}
+	}
+	return false
+}
 
 // FlushSQLiteTrace is for a quiescent CLI/test capture boundary OUTSIDE all
 // application locks. No Store operation or Close calls it. It never starts SQL,
@@ -114,6 +149,8 @@ type sqliteTraceSpan struct {
 	sink            io.Writer
 	stage           string // Guarded by observer.mu: the sampler reads it.
 	sampled         bool
+	sampleQueued    bool // Guarded by observer.mu; true only after successful queue handoff.
+	slowSpan        time.Duration
 }
 type sqliteTraceSink struct{ w io.Writer }
 type sqliteTraceObserver struct {
@@ -152,7 +189,7 @@ func startSQLiteTrace(path, operation string) *sqliteTraceSpan {
 		o.noteLoss(sink, &o.droppedSpans)
 		return nil
 	}
-	s := &sqliteTraceSpan{observer: o, id: writerSequence.Add(1), path: path, operation: operation, started: time.Now(), sink: sink, stage: "begin"}
+	s := &sqliteTraceSpan{observer: o, id: writerSequence.Add(1), path: path, operation: operation, started: time.Now(), sink: sink, stage: "begin", slowSpan: time.Duration(sqliteTraceSlowSpan.Load())}
 	o.active[s.id] = s
 	o.pending.Add(1)
 	o.mu.Unlock()
@@ -202,12 +239,14 @@ func (s *sqliteTraceSpan) phaseRecord(at time.Time, phase string, err error) sql
 // enqueue hands one record, already counted in pending, to the delivery goroutine.
 // It never waits: a span's caller may hold the SQLite writer or an application
 // mutex, so a full queue is a counted, later-reported loss and never a stall.
-func (o *sqliteTraceObserver) enqueue(r sqliteTraceRecord) {
+func (o *sqliteTraceObserver) enqueue(r sqliteTraceRecord) bool {
 	select {
 	case o.queue <- r:
+		return true
 	default:
 		o.pending.Add(^uint64(0))
 		o.noteLoss(r.sink, &o.droppedRecords)
+		return false
 	}
 }
 
@@ -229,7 +268,7 @@ func (o *sqliteTraceObserver) sample() {
 		var due []sqliteTraceRecord
 		o.mu.Lock()
 		for _, s := range o.active {
-			if s.sampled || now.Sub(s.started) < sqliteTraceSlowSpan {
+			if s.sampled || now.Sub(s.started) < s.slowSpan {
 				continue
 			}
 			s.sampled = true
@@ -252,12 +291,20 @@ func (o *sqliteTraceObserver) sample() {
 		buf := make([]byte, sqliteTraceStackLimit)
 		n := runtime.Stack(buf, true)
 		snapshot, at := string(buf[:n]), time.Now()
+		queued := make([]uint64, 0, len(due))
 		for _, r := range due {
 			r.snapshot, r.at, r.truncated = snapshot, at, n == len(buf)
 			o.pending.Add(1)
-			o.enqueue(r)
+			if o.enqueue(r) {
+				queued = append(queued, r.id)
+			}
 		}
 		o.mu.Lock()
+		for _, id := range queued {
+			if span := o.active[id]; span != nil {
+				span.sampleQueued = true
+			}
+		}
 		o.collections--
 		o.mu.Unlock()
 	}

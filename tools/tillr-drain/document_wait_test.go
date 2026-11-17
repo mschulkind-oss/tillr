@@ -94,7 +94,7 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 			case err := <-done:
 				finished = true
 				t.Fatalf("default loop exited during idle polling: %v: %s", err, output.String())
-			case <-time.After(3 * drain.StorePollInterval):
+			case <-time.After(3 * drain.DefaultStorePollInterval):
 			}
 			if err := cmd.Process.Signal(signal); err != nil {
 				t.Fatal(err)
@@ -131,8 +131,10 @@ func TestDefaultLoopDispatchesADocumentCommittedDuringTriggerWait(t *testing.T) 
 	fixtureAt(t, f.store)
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	report := &triggerReport{wait: make(chan struct{}), dispatch: make(chan struct{})}
+	pollInterval := time.Millisecond
 	loop, err := drain.NewLoop(drain.LoopConfig{
-		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
+		StorePollInterval: pollInterval,
+		Root:              f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
 		Policy: f.policy, Steps: steps,
 		Stage:        passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		QuestionsCmd: strings.Fields(indexStub(t, map[string]any{"path": "docs/plan.md", "questions": []map[string]any{}})),
@@ -179,7 +181,7 @@ func TestDefaultLoopDispatchesADocumentCommittedDuringTriggerWait(t *testing.T) 
 	case out := <-finished:
 		exited = true
 		t.Fatalf("default loop exited during idle passes: %+v / %v", out.result, out.err)
-	case <-time.After(3 * drain.StorePollInterval):
+	case <-time.After(3 * pollInterval):
 	}
 	commitDocument(t, f, "docs/plan.md", "# Plan\n\n### Work during wait\n\n<!-- tillr: item id=\"item-during-wait\" paths=\"candidate.txt\" -->\n\n- **c1:** candidate.txt exists.\n")
 	select {

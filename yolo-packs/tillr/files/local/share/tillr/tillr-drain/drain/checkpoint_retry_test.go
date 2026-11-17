@@ -60,8 +60,9 @@ func checkpointCycleLoop(t *testing.T, done chan struct{}, first func(), cycles 
 	f := newRefusalLoopFixture(t)
 	var offset atomic.Int64
 	base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	ticks := make(chan time.Time, 1)
 	steps := &cyclesWaitingSteps{
-		advance: func() { offset.Add(int64(CheckpointInterval)) },
+		advance: func() { offset.Add(int64(CheckpointInterval)); ticks <- base.Add(time.Duration(offset.Load())) },
 		done:    done,
 		t:       t,
 	}
@@ -71,7 +72,15 @@ func checkpointCycleLoop(t *testing.T, done chan struct{}, first func(), cycles 
 	l.cfg.Report = report
 	var once sync.Once
 	l.beforeCheckpoint = func() { once.Do(first) }
-	l.checkpointed = cycles
+	l.heartbeatClock = func() heartbeatTicker { return heartbeatTicker{C: ticks, Stop: func() {}} }
+	l.checkpointed = func(c store.Checkpointed) {
+		cycles(c)
+		select {
+		case <-done:
+		default:
+			ticks <- l.cfg.Now()
+		}
+	}
 	return l, report
 }
 
@@ -179,6 +188,9 @@ func TestABusyCheckpointWriteDoesNotFaultTheLoop(t *testing.T) {
 			}
 		})
 	storePath = l.cfg.Store
+	l.keeperOpen = func(ctx context.Context, path string) (*store.CheckpointOwner, error) {
+		return store.CreateAndOwnCheckpoints(ctx, path, store.WithBusyTimeout(time.Millisecond))
+	}
 	if _, err := l.Run(context.Background()); err != nil {
 		t.Fatalf("a busy checkpoint write faulted the loop: %v", err)
 	}

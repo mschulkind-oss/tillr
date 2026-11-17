@@ -20,6 +20,11 @@ var traceFixtureSequence atomic.Uint64
 
 func captureSQLiteTrace(t *testing.T, enabled bool) (string, func() string) {
 	t.Helper()
+	restore, err := SetSQLiteTraceSlowSpan(time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
 	value := ""
 	if enabled {
 		value = "1"
@@ -182,18 +187,31 @@ func TestSlowWriterTraceCapturesHolderAndWaitingBegin(t *testing.T) {
 	defer finish()
 	// Both the acquired holder and the BEGIN waiter must have independent snapshots.
 	awaitSQLiteTrace(t, read, func(log string) bool {
-		ids := map[string]bool{}
+		holders, waiters := map[string]bool{}, map[string]bool{}
 		for _, line := range strings.Split(log, "\n") {
-			if !strings.HasPrefix(line, "tillr-sqlite-stack ") {
+			// Match the operation field, not a frame: every dump includes all goroutines.
+			if !strings.HasPrefix(line, "tillr-sqlite-stack ") || !strings.Contains(line, `operation="github.com/mschulkind-oss/tillr/store.TestSlowWriterTraceCapturesHolderAndWaitingBegin.`) {
 				continue
 			}
 			for _, part := range strings.Fields(line) {
 				if strings.HasPrefix(part, "tx=") {
-					ids[part] = true
+					if strings.Contains(line, ` stage="acquired" `) {
+						holders[part] = true
+					}
+					if strings.Contains(line, ` stage="begin" `) {
+						waiters[part] = true
+					}
 				}
 			}
 		}
-		return len(ids) >= 2
+		for holder := range holders {
+			for waiter := range waiters {
+				if holder != waiter {
+					return true
+				}
+			}
+		}
+		return false
 	})
 	before := read()
 	if !strings.Contains(before, "newTx") || !strings.Contains(before, ".(*Store).WriteTx") {
@@ -218,7 +236,7 @@ func TestSlowTraceDisabledAndErrorSecretsRemainPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.WriteTx(context.Background(), func(*Tx) error { time.Sleep(2100 * time.Millisecond); return nil }); err != nil {
+	if err := s.WriteTx(context.Background(), func(*Tx) error { time.Sleep(150 * time.Millisecond); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if log := read(); log != "" {

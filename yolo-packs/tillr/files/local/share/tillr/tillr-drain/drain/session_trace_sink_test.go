@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
+	"runtime"
 	"sync"
 	"syscall"
 	"testing"
@@ -17,6 +19,11 @@ import (
 
 func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	t.Setenv("TILLR_SQLITE_TRACE", "")
+	restore, err := store.SetSQLiteTraceSlowSpan(time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
 	f, l := passFixture(t, "item-a")
 	if err := l.refreshSession(context.Background(), l.cfg.Now().Add(PassInterval)); err != nil {
 		t.Fatal(err)
@@ -53,6 +60,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	defer release()
 	t.Cleanup(func() { release(); os.Stderr = original; writer.Close(); reader.Close() })
 	t.Setenv("TILLR_SQLITE_TRACE", "1")
+	operation := runtime.FuncForPC(reflect.ValueOf((*Loop).refreshSession).Pointer()).Name()
 	result := make(chan error, 1)
 	go func() { result <- l.refreshSession(context.Background(), l.cfg.Now().Add(PassInterval)) }()
 	<-entered
@@ -70,9 +78,19 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 		}
 	}
 	syscall.SetNonblock(fd, false)
-	// The existing observer threshold is observation only; ensure its snapshot has
-	// met a blocked sink before releasing the real session write.
-	time.Sleep(2200 * time.Millisecond)
+	// Wait for an actual snapshot handoff, not an estimate of how long sampling takes.
+	// The full pipe prevents delivery while the real session write remains blocked.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for !store.SQLiteTraceSampleQueued(f.storePath, operation) {
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("session trace never queued a stack sample")
+		}
+	}
 	t.Setenv("TILLR_SQLITE_TRACE", "")
 	unblock()
 	competitor := make(chan error, 1)
@@ -87,7 +105,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(heartbeatStallBound):
+	case <-time.After(5 * time.Second):
 		release()
 		<-competitor
 		<-result
@@ -97,7 +115,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	go func() { l.sessionMu.Lock(); l.sessionMu.Unlock(); close(free) }()
 	select {
 	case <-free:
-	case <-time.After(heartbeatStallBound):
+	case <-time.After(5 * time.Second):
 		release()
 		<-free
 		<-result
