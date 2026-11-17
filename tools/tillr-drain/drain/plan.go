@@ -549,6 +549,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 			identifyDecision(&decision)
 		}
+		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
+			request := *decision.RunRequest
+			request.WorkingDir = PlainDir
+			decision.RunRequest = &request
+		}
 		env, err := decisionEnvelope(decision, at)
 		if err != nil {
 			return nil, err

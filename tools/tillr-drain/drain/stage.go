@@ -322,6 +322,13 @@ type LaneStager struct {
 // without leaving a worktree behind, and a lane whose tree is somebody's unlanded work is
 // refused before the brief is written over the evidence.
 func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
+	def, err := s.readDefinition(ctx)
+	if err != nil {
+		return err
+	}
+	if def.Completes != "landing" {
+		return s.stagePlain(ctx, spec, def)
+	}
 	if spec.BaseSHA == "" {
 		return Usagef("staging %s needs a base sha: a run is staged from a sha pinned before launch, never from whatever the trunk says at launch time", spec.RunID)
 	}
