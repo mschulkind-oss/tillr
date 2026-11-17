@@ -302,6 +302,36 @@ earlier attempts' patches to `tests/fork-check.test.py` were cut from a tree wit
 helpers, so that file's edit is made by hand against the file as the lane has it and is not
 applied from a recovered patch.
 
+A fourth attempt built the retirement, passed every other suite and an independent review, and
+stopped without committing because the full drain suite failed once: `TestCommentPathTwice` in
+`tools/tillr-drain/drain/comments_test.go` reported `designer <nil>`. Criterion c10 rules on it.
+The failure is not the retirement's. Under `tools/tillr-drain` that attempt's change deletes
+`seed_test.go`, which is a test of the module's root package, and nothing in the `drain` package;
+`git diff --name-only b44fa0fd 6efed6151 -- tools/tillr-drain/drain/comments.go
+tools/tillr-drain/drain/comments_test.go tools/tillr-drain/drain/designer.go` prints nothing, so
+the code that attempt ran is the code the trunk has now. Measured on 2026-11-17 at `6efed6151`
+in a lane's worktree with no change applied:
+`python3 tools/go-test-shards.py tools/tillr-drain -k 6` passed all 1393 tests in each of two
+runs, and the compiled `drain` test binary run as
+`-test.run '^TestCommentPathTwice$' -test.count=12` in sixteen processes at once passed all 192
+times. The failure was not reproduced, and its cause is not established.
+
+What the same measurement did establish is that the test is not hermetic. Its fixture sets no
+question index command, so the loop runs the real `uvx vantage-check index --format json` in
+the fixture repository, and the loop drops a document's designer record when that index reports
+the document's stage as done. With a `uvx` first on `PATH` that answers such an index for
+`docs/design/example.md`, the test fails at the same line with the same `designer <nil>`; with
+one that exits 3 it fails differently, as a loop fault that names the command. That is one way
+to produce the message and not a finding that it is what happened. Making the test hermetic and
+finding the cause are repairs to the comment path's tests. They are not this item's work, and
+no item tracks them yet: that is the owner's to file, and this section does not stand in for it.
+
+The fourth attempt's tree is also older than the trunk. It was cut at `b44fa0fd`, and ten of
+its 59 paths have changed on the trunk since, among them `tools/tillr-item/main.go`,
+`tools/tillr-item/item/apply.go`, `tools/fork-check.py` and `tests/fork-check.test.py`. A
+worker that recovers it replays its change onto the lane's base path by path and does not copy
+those files from the preserved tree, which would undo the trunk's edits to them.
+
 <!-- tillr: item
      id="item-seed-retire"
      blocked_by=""
@@ -317,6 +347,7 @@ applied from a recovered patch.
 - **c6:** The change leaves this section of `docs/design/tillr-convergence.md` byte for byte as it was, from its heading to the next heading, and leaves every other item block's directive as it was, including the `blocked_by` of `item-oa-move-to-top` in `docs/design/observatory-actions.md`. The change does not mark this item built: the loop retires the block after landing. Outside this section the document may be brought up to date, which covers its `next` line, the two tables in Sections 1 and 2 and the rows for this ruling and for sync in the [Decision Ledger](#decision-ledger). A Markdown link in any tracked document to a file this change deletes becomes inline code naming the former path, and `uvx vantage-check` passes on each changed Markdown file, named one by one.
 - **c7:** No test fixture depends on the deleted seed. `commit()` in `tools/gate/checks/change_checks_test.py` stages only paths its fixture still writes, so it no longer names `config`, and a fixture that needs an unrelated tracked file puts it under a directory the fixture already tracks. `python3 tools/gate/checks/change_checks_test.py`, `python3 tools/gate/checks/tree_checks_test.py` and `python3 tests/tillr-docs.test.py` each exit 0, and so does `go test ./item -run '^TestSyncOverThisRepositorysDocuments$'` in `tools/tillr-item`.
 - **c9:** Removing the seed fixture from `tests/fork-check.test.py` removes no repository setup. In `build_repo()` the deletion ends at the call that writes `config/tillr/seed-items.json`, and the line after it that initializes the fixture repository, followed by `commit(repo, "initial")`, stays as the lane's base has it. Every call that initializes a fixture repository in that file before the change is there after it: `rg -c 'git_init\(|"git", "init"' tests/fork-check.test.py` prints the number that `git show HEAD:tests/fork-check.test.py | rg -c 'git_init\(|"git", "init"'` printed before the first edit. That count is taken and matches before `python3 tests/fork-check.test.py` is first run, and the report states both numbers.
+- **c10:** One failure of the full drain suite does not stop the commit, and it is the only one. When `python3 tools/go-test-shards.py tools/tillr-drain -k 6` fails and its sole failing test is `TestCommentPathTwice` with the message `designer <nil>`, the worker runs `go test ./drain -run '^TestCommentPathTwice$' -count=10` in `tools/tillr-drain` on the candidate. If all ten pass, the worker commits the candidate, and the report quotes the failing shard's lines for that test, gives the result of the ten runs and says the failure was seen and not explained; the gate judges the candidate at landing. If any of the ten fails, or the suite fails on any other test or with any other message, that is a finding against the candidate and the worker stops as before. The change edits nothing under `tools/tillr-drain/drain/`, so it neither repairs that test nor changes the designer record: `git diff --name-only HEAD~1 HEAD -- tools/tillr-drain/drain/` prints nothing after the commit.
 
 ### Re-admit a held item when an input it failed on changes
 
