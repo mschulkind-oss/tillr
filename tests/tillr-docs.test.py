@@ -594,6 +594,14 @@ def recovery_errors(text):
         errors.append("Recovery must retry the failed item under its own id")
     if re.search(r"\bitem-[a-z0-9-]+-v2\b", body):
         errors.append("Recovery names a cloned -v2 item id")
+    forbidden = (
+        (r"\bscript\w*\b|\b(?:python\d*|bash|sh)\s+[^\n`]+|\S+\.(?:py|sh)\b", "a recovery script"),
+        (r"\bsqlite\w*\b|\b(?:edit|update|modify|write)\b[^\n.]*\bstore\b|\b(?:UPDATE|DELETE FROM|INSERT INTO)\b", "a direct store edit"),
+        (r"\bgit\s+reset\b", "git reset in a lane"),
+    )
+    for pattern, operation in forbidden:
+        if re.search(pattern, body, re.I):
+            errors.append(f"Recovery names {operation}; use a supported tillr face")
     return errors
 
 
@@ -603,10 +611,19 @@ def case_recovery():
         fail("same-id recovery fixture was refused")
     if not recovery_errors(specimen + "Use `item-failed-v2`.\n"):
         fail("recovery guard accepted a cloned -v2 item id")
+    for instruction in (
+        "Run a recovery script.",
+        "Use `python3 recover.py`.",
+        "Edit the store directly.",
+        "Run `sqlite3 state.db 'UPDATE lanes SET state=idle'`.",
+        "Run `git reset --hard main` in the lane.",
+    ):
+        if not recovery_errors(specimen + instruction + "\n"):
+            fail(f"recovery guard accepted an unsupported hand operation: {instruction}")
     errors = recovery_errors(text_of(SKILL))
     if errors:
         fail("\n".join(errors))
-    ok("Recovery retries the failed item under its own id; cloned-id fixture refused")
+    ok("Recovery uses supported commands under the same item id; cloned ids, scripts, store edits and git reset fixtures refused")
 
 
 def case_comment_intake_documented():

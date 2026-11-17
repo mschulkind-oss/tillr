@@ -688,12 +688,7 @@ run was right not to guess. It is ruled here so the next run does not stop on it
 
 ### Add commands for the recoveries that were done by hand
 
-<!-- tillr: item id="item-drain-recover-commands" paths="tools/tillr-drain/,tools/tillr-cli/,yolo-packs/tillr/,docs/" blocked_by="" -->
 
-- **c1:** `tillr drain acquit --run <id> --why <text>` closes a conviction against a run that an operator says was not the run's doing, keeps the conviction's record, and makes the run's candidate eligible to be judged. It refuses a run that has no conviction.
-- **c2:** `tillr drain examine --run <id>` gates, lands and records one candidate that is sitting in its lane, exactly as the loop would, and refuses when a loop holds the lane. A test lands a fixture candidate with it and asserts the records equal the loop's.
-- **c3:** `tillr drain set-aside --item <id> --why <text>` moves an unlandable candidate out of its lane to a named ref, frees the lane, and holds the item for rework, in one transaction with the record that says so. A test asserts a following loop start does not stop on the missing candidate.
-- **c4:** No recovery in the operating skill needs a script, a direct edit of the store or a `git reset` in a lane. A test fails when the skill's recovery section names any of the three.
 
 ## Filed 2026-11-15: a design conversation keeps its designer
 
