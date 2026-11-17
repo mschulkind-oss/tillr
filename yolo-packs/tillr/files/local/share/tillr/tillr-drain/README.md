@@ -149,6 +149,26 @@ another restart.
   backends; the check refuses the policy otherwise and names the seat
   ([the claude backend design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
 
+## Rolling trunk audits
+
+With no watermark (the tip last judged green by the rolling checks), the default rolling
+run audits every tracked path at the trunk tip with every applicable rolling-tier check,
+regardless of the repository gate's remembered baseline.
+The rolling tier is the group of slower checks deferred from individual landings;
+a matching cached verdict may answer a check without executing it again.
+Later runs select checks over the range since the watermark.
+
+A green run advances the watermark, but that alone does not claim full coverage:
+`rolling_runs` binds the outcome to its base and tip, and `rolling_coverage`, joined
+by `run_id`, retains the fresh execution count (`ran`), reused verdict count (`cached`),
+and every skipped check's identity and reason (`skipped_checks`). Skips include
+checks assigned to the other tier as well as unchanged or unavailable checks.
+`spans_state` says whether the program supplied readable evidence; older runs have
+no coverage row, and absent or unreadable evidence is not an empty audit.
+The loop's rolling line prints separate ran, cached, and skipped counts, or explicitly
+says counts are unavailable when the program supplies no readable evidence.
+Red or unknown runs do not advance the watermark.
+
 ## Automatic second attempts after an input changes
 
 A held item's next pass compares its current item definition (including the referenced

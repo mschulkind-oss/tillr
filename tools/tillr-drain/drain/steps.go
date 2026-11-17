@@ -760,18 +760,19 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 			Detail: fmt.Sprintf("rolling program did not start: %v: %s", runErr, stderr.String())}, nil
 	}
 	code := cmd.ProcessState.ExitCode()
+	coverage := readRollingCoverage(spans)
 	switch code {
 	case 0:
-		return RollingOutcome{Green: true, Known: true, ExitCode: code}, nil
+		return RollingOutcome{Green: true, Known: true, ExitCode: code, Coverage: coverage}, nil
 	case 1:
 		failing, watches := readFailingSpans(spans)
 		if len(failing) == 0 {
-			return RollingOutcome{Known: false, ExitCode: code,
+			return RollingOutcome{Known: false, ExitCode: code, Coverage: coverage,
 				Detail: "it named no failing check. " + stderr.String()}, nil
 		}
-		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches}, nil
+		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches, Coverage: coverage}, nil
 	default:
-		return RollingOutcome{Known: false, ExitCode: code, Detail: stderr.String()}, nil
+		return RollingOutcome{Known: false, ExitCode: code, Detail: stderr.String(), Coverage: coverage}, nil
 	}
 }
 

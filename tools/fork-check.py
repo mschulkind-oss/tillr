@@ -8147,7 +8147,12 @@ def plan_gate(root: Path, options) -> GatePlan:
     # baseline, the upstream and input audits and the run's scope are unchanged, because
     # this is still the landing's verdict rather than a range diagnostic.
     landed_base = "" if options.all or since is not None else os.environ.get(PLAN_BASE_ENV, "").strip()
-    if since is not None:
+    if options.all and getattr(options, "tier", None) == TIER_ROLLING:
+        # The drain has no watermark yet: audit the tracked tree, not the gate's
+        # remembered diff. force_all alone only forces fork series; path-selected
+        # rolling suites otherwise disappear when the baseline already equals HEAD.
+        changed = [path for path in git(root, "ls-files", "-z").split("\0") if path]
+    elif since is not None:
         resolved = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--verify", f"{since}^{{commit}}"],
             capture_output=True, text=True,
