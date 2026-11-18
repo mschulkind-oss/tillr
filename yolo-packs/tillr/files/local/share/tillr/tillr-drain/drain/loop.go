@@ -2053,12 +2053,14 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			// A commit that removes the block leaves no item for the worker to build, so it
 			// cannot be the answer: it goes back to the design seat, naming the commit, and
 			// never to the owner (the owner's ruling of 2026-11-17).
+			// An identical repeat (the same conflict, given the same block) goes to the owner
+			// instead (design_repeat.go).
 			l.pinQuietly(ctx, candidate.RunID, candidate.HeadSHA)
-			c := *candidate.BlockConflict
-			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-			c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
-			l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s removed its item block\n", c.ItemID, c.ConflictID, candidate.RunID)
-			return "", false, l.saveBlockConflict(ctx, c)
+			return "", false, l.settleDesignStatement(ctx, *candidate.BlockConflict, candidate.RunID, designCauseBlockRemoved, "removed its item block", func(c *item.Conflict) {
+				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+				c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
+				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s removed its item block\n", c.ItemID, c.ConflictID, candidate.RunID)
+			})
 		}
 		changed = answered
 		if !triage && designReadingOf(true, exists, "") == designAmended {

@@ -339,7 +339,9 @@ evidence, so the next run has the failure named in its brief, and nothing in tha
 clock. A repeat is established by observation: an ending whose producer, cause and normalized
 evidence equal an earlier ending of the item goes to the design seat to be diagnosed, with both
 records (`repeatedEnding` in `tools/tillr-drain/drain/returned.go`, table-tested in
-`returned_test.go`). The same ruling removed re-admission on a changed input hash, so a "named
+`returned_test.go`). The design seat's own endings are compared the same way: a design ending that
+repeats an earlier one goes to the owner as an objection the loop raises, with a question written
+from both records (`designRepeatOf` in `tools/tillr-drain/drain/design_repeat.go`). The same ruling removed re-admission on a changed input hash, so a "named
 change" in the sense above is now an event that names the item: an operator's retry, a design answer,
 or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the
 fingerprint store of the design below; the one infrastructure failover with its
