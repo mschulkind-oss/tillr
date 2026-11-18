@@ -17,7 +17,10 @@ type faultSteps struct {
 
 func (s *faultSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
 	if c.ItemID == "item-a" && s.fault == "gate" {
-		return GateOutcome{Outcome: GateErrored}, nil
+		// The gate STEP failed: the drain could not run the gate or record its answer.
+		// That is the operator-held case; a gate that ran and answered "error" is re-gated
+		// instead (gate_no_verdict_test.go).
+		return GateOutcome{}, Externalf("the gate step could not start")
 	}
 	return s.recordingSteps.Gate(ctx, c)
 }

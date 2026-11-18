@@ -5130,12 +5130,24 @@ def reads_upstream(check: "Check") -> bool:
 
 # The phrase each invariant kind's driver prints when it is refusing the change rather
 # than failing to answer. A kind in this table is a KIND_INVARIANT in CHECK_KIND_GROUP.
+# A kind may name several phrases; any one of them is the refusal.
+#
+# `build` runs `bin/pi-forks candidate --build`, which never prints the series phrase. It
+# refuses a tree in two words of its own: `FAILED: build` (the compile failed) and npm's
+# lockfile refusal (`npm ci` will not install a package-lock.json that does not satisfy the
+# series' package.json). Both are facts of the tree and repeat on any machine, so both are
+# verdicts. An install the network broke (`FAILED: dependency install` with no lockfile
+# refusal) or a missing checkout says nothing about the tree and stays "could not answer".
+# Until 2026-11-18 `build` named only the series phrase, so every build red was "no verdict":
+# a candidate pinning a fork commit with a stale typebox lock was held for an operator,
+# and gating it again could only answer the same.
 INVARIANT_PHRASES = {
-    "patch-branch-inv2": "conflicts with",
-    "patch-branch-inv3": "is not the export of",
-    "series": "does not take the patch series",
-    "forks-check": "does not take the patch series",
-    "build": "does not take the patch series",
+    "patch-branch-inv2": ("conflicts with",),
+    "patch-branch-inv3": ("is not the export of",),
+    "series": ("does not take the patch series",),
+    "forks-check": ("does not take the patch series",),
+    "build": ("does not take the patch series", "FAILED: build",
+              "can only install packages when your package.json and package-lock.json"),
 }
 
 # The exit statuses that mean a runner did not answer at all: 124 its timeout, 125 and 126
@@ -5544,7 +5556,7 @@ class Check:
                 return False
             return self.rc != 0
         if group == KIND_INVARIANT:
-            return INVARIANT_PHRASES[self.kind] in self.output
+            return any(phrase in self.output for phrase in INVARIANT_PHRASES[self.kind])
         return self.rc != 0
 
 

@@ -24,15 +24,20 @@ var Unknown = Rule{"needs a cause", "queue", "add a history rule for this record
 // Rules maps an exact reason spelling to its rule. Entries that no drain pass writes
 // any more stay, because a recorded decision that carries one is history.
 var Rules = map[string]Rule{
-	"words-missing":               {"needs a cause", "fence", "inspect the missing words file and authorize a retry"},
-	"words-altered":               {"needs a cause", "fence", "restore the saved words unchanged and authorize a retry"},
-	"idea-no-outcome":             {"needs a cause", "fence", "add item blocks carrying from the idea and authorize a retry"},
-	"Vantage not answering":       {"needs a cause", "queue", "check Vantage availability"},
-	"node-output-missing":         {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
-	"workflow-invalid":            {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
-	"node-failed":                 {"needs you", "lane", "inspect the named node and authorize a retry"},
-	"gate-stall-rerun":            {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
-	"gate-stalled":                {"needs you", "gate", "diagnose the stalled check and clear the fault"},
+	"words-missing":         {"needs a cause", "fence", "inspect the missing words file and authorize a retry"},
+	"words-altered":         {"needs a cause", "fence", "restore the saved words unchanged and authorize a retry"},
+	"idea-no-outcome":       {"needs a cause", "fence", "add item blocks carrying from the idea and authorize a retry"},
+	"Vantage not answering": {"needs a cause", "queue", "check Vantage availability"},
+	"node-output-missing":   {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
+	"workflow-invalid":      {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
+	"node-failed":           {"needs you", "lane", "inspect the named node and authorize a retry"},
+	"gate-stall-rerun":      {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
+	"gate-stalled":          {"needs you", "gate", "diagnose the stalled check and clear the fault"},
+	// A gate that ran and reached no verdict judged nothing: the next pass gates the same
+	// candidate again, uncounted, with no operator.
+	"gate-no-verdict": {"waits on the loop", "gate", "the next pass gates the same candidate again on its lane"},
+	// Now only the gate STEP failing (the drain could not run the gate or read or record
+	// what it answered, an Externalf from Steps.Gate), and holds recorded before 2026-11-18.
 	"gate-harness-error":          {"needs you", "gate", "diagnose the gate and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"land-harness-error":          {"needs you", "land", "repair what the lander refused and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"host-boundary-violation":     {"needs you", "fence", "inspect the recorded violation and clear the fault"},

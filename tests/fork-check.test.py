@@ -6018,6 +6018,21 @@ for kind, text, is_verdict in (
     ("patch-branch-inv2", "could not resolve the upstream a launch would build", False),
     ("series", "upstream v9 does not take the patch series", True),
     ("series", "could not fetch the upstream", False),
+    # `build` runs `bin/pi-forks candidate --build`, which never prints the series phrase:
+    # its refusals are a compile that failed and a lockfile that does not match the
+    # series' own package.json. Both are facts of the tree, so both are verdicts. On
+    # 2026-11-18 a candidate that pinned a fork commit with a stale typebox lock reached
+    # "no verdict" here and was held for an operator instead of going back to its worker.
+    ("build", "   npm run build\n   BUILD FAILED\n   FAILED: build\n", True),
+    ("build", "   npm ci --ignore-scripts\nnpm error code EUSAGE\nnpm error `npm ci` can only "
+              "install packages when your package.json and package-lock.json or "
+              "npm-shrinkwrap.json are in sync.\n"
+              "   INSTALL FAILED -- npm ci did not complete (an install problem, not a build)\n"
+              "   FAILED: dependency install (npm ci), not the build\n", True),
+    # An install the network broke says nothing about the tree.
+    ("build", "   npm ci --ignore-scripts\nnpm error code ETIMEDOUT\n"
+              "   FAILED: dependency install (npm ci), not the build\n", False),
+    ("build", "   FAILED: no shared checkout at /x to build the candidate from\n", False),
 ):
     check = verdict.Check(kind, "label", ["true"], "why", 60)
     check.rc, check.output = 1, text

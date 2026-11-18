@@ -175,7 +175,7 @@ not a verdict about the candidate.
 
 | Adapter | Underlying | Adapter answers | The loop does |
 |---|---|---|---|
-| `gate` | `tillr-gate run`: 0 pass, 1 fail, 6 stalled, 2/3/4/5 no verdict | 0, 1, 4, or 6 | 0 → `pass`; 1 → `fail`; 6 → `stalled` (retained as `gate-stall-rerun`, or second stall `gate-stalled`); 4 → `gate-harness-error` |
+| `gate` | `tillr-gate run`: 0 pass, 1 fail, 6 stalled, 2/3/4/5 no verdict | 0, 1, 4, or 6 | 0 → `pass`; 1 → `fail`; 6 → `stalled` (retained as `gate-stall-rerun`, or second stall `gate-stalled`); 4 → `error`, retained as `gate-no-verdict` and gated again on the next pass |
 | `land` | `tillr-land pass`: 0 landed, 1 not landed, 2/3/4/5 no attempt | 0, 1, or 4 | 0 → `landed`; 1 → `refused` (isolated/declined candidate, a completed negative answer); 4 → step failure, halt |
 | `verdict` | `tillr-item verdict record`: 0 recorded, non-zero refused | 0, or the refused code | 0 → recorded; non-zero → step failure, halt (a landed candidate whose item was not retired is landed work the board cannot see) |
 | item state | `tillr-item state`: 0 moved or already there, 1 refused, 2/3/5 no answer | the code itself | 0 → the board moved; non-zero → step failure, halt (a landed candidate whose item is still queued is the board disagreeing with the trunk) |
@@ -195,7 +195,7 @@ becomes `true`.
 - **A registry that cannot be exported** (gate) — a gate with no registry would pass
   everything, so with none named (`--registry`, else `$TILLR_LOOP_REGISTRY`) the adapter
   exports one from the tree's own `tools/fork-check.py`. A tree where that cannot run is exit
-  4 and the loop stops with `gate-harness-error`, never a pass.
+  4: no verdict, never a pass, and the drain gates the same candidate again.
 - **No gate verdict** (land) — a landing against no verdict record.
 - **Detached root** (land) — no branch to land onto, and `--base-ref` was not named.
 - **No criteria** (verdict) — an item whose store holds no criterion retires nothing.

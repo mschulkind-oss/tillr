@@ -19,7 +19,8 @@ type rebasedFaultSteps struct {
 func (s *rebasedFaultSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
 	s.gates++
 	if s.errored {
-		return GateOutcome{Outcome: GateErrored}, nil
+		// The gate step failing holds an operator fault; an "error" answer is re-gated.
+		return GateOutcome{}, Externalf("the gate step could not start")
 	}
 	return GateOutcome{Outcome: GatePassed}, nil
 }
