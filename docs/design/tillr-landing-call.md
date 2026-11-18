@@ -10,29 +10,28 @@ tags:
   - pi
   - design
 summary: "A worker ends its run by calling one tool, land. The commit on its branch at that moment is the offer. The harness ends the process with the call unanswered; the gate, the judge and the lander work without it; and a refusal, a conflict or a later revert comes back as that call's result in the same session. A landing that holds never wakes the session. Decides the contract, the record, the pi mechanism (replay of the unanswered call, three fork patches, one capability), the form for harnesses that cannot suspend, and the build order."
-next: "The owner rules OQ-LC1, which step 5 of the build order waits on. Steps 1, 2, 3, 4 and 6 are filed in the tillr roadmap, which routes OQ-LC1. The replay experiment ran on 2026-11-18 and held; Section 11.1 records it."
+next: "Land step 4, the land tool: its item is in the queue and not landed. Step 5 follows it and waits on no ruling; OQ-LC1 is blocked until worktrees belong to items. The designer's decisions D-LC1 to D-LC11 await the owner's review."
 depends-on:
-  - tillr-graph-is-the-path.md
   - landing-principles.md
 ---
 
 # A landing is a suspended tool call: the worker offers a commit and hears back only when it has something to fix
 
-**Status:** 2026-11-18. A proposal; none of it is built. Written to the owner's direction of 2026-11-18, restated in [Section 1](#1-the-direction-and-what-exists). Facts about the tree, the pi fork and the retired board were gathered by a scout on 2026-11-18 and are stated with the document heading, code symbol or commit they came from; I read no code myself. What nobody ran is listed in [Section 11.1](#111-what-the-design-leans-on-that-nobody-ran).
+**Status:** 2026-11-18. Three of the seven build steps are landed: a revert and a squash conflict return to the worker's own session (step 1); the call record and the answer chooser exist, with every adapter declaring `footer` (step 2); and the park patch is on this repository's `patch/pi` branch, not yet delivered to the host (step 3). No worker ends its run with `land` yet. [Section 10](#10-build-order) has the state of each step. The `D-LC` rows of the ledger are the designer's decisions and await the owner's review. The design is written to the owner's direction of 2026-11-18, restated in [Section 1](#1-the-direction-and-what-exists). Facts about the tree, the pi fork and the retired board were gathered by a scout on 2026-11-18 and are stated with the document heading, code symbol or commit they came from. What nobody ran is listed in [Section 11.1](#111-what-the-design-leans-on-that-nobody-ran).
 
 > **In short.** The worker's last act is a tool call, and the call is the whole of what it knows about landing. tillr answers it only when the worker has something to fix, as the result of that same call in that same session; a change that lands and holds costs no further turn.
 
-**Why it matters.** Today a run's ending is read from the last line of its report, a refusal arrives as a new user message that tells the worker it has "a new run record in your existing session", and a reverted landing or a squash conflict starts a worker that has never seen the change. On 2026-11-18, 19 of 61 drain runs ended with a result word nobody had defined an answer for.
+**Why it matters.** A run's ending is read from the last line of its report, and a refusal arrives as a new user message that tells the worker it has "a new run record in your existing session". The worker has to compose the one line the machinery reads, and the machinery has to guess when it is missing: on the morning of 2026-11-18, before the worker's endings were closed to a set, 19 of 61 drain runs ended with a result word nobody had defined an answer for.
 
 **The shape.** Four parts: a tool, `land`, registered in the worker's harness; a **call record** in tillr's store that says what was offered and what came of it; the pi fork's replay of an unanswered tool call, which makes the stored answer the call's result when the session is opened again; and an **ending capability** each harness adapter declares, so a harness that cannot suspend keeps today's report footer.
 
-**Cost.** Three patches to the pi fork and a delivery to the host before any of it can be switched on. A second form of everything for harnesses that cannot suspend. An item's worktree is held until its landing is proven, not until it lands ([OQ-LC1](#OQ-LC1)).
+**Cost.** Three patches to the pi fork and a delivery to the host before any of it can be switched on. A second form of everything for harnesses that cannot suspend. While worktrees are a fixed set of lanes, a worktree is released when its item lands, so a late revert can find it taken ([Section 5.2](#52-states)).
 
 **Start at [Section 3](#3-the-contract-from-the-workers-seat)**, the contract. [Section 4](#4-landed-and-proven-one-call-two-events) and [Section 6](#6-the-mechanism-on-pi) are the two decisions that carry the rest.
 
-**Needs your ruling:** [OQ-LC1](#OQ-LC1).
+**Needs your ruling:** None open. **Blocked:** [OQ-LC1](#OQ-LC1), until worktrees belong to items.
 
-**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the accepted direction: every act is a node; this document fills in the "target form" of its Section 3.3, rule 1), [the landing principles](./landing-principles.md) (the rulings a landing change is checked against), [the retired board state machine](./board-state-machine.md#7-suspend-and-resume) (the only earlier design of this idea; a record, not current machinery), [the pi adapter's guide](../../tools/tillr-run/backends/pi/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
+**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction this follows: every act is a node; rule 1 of its Section 3.3 names this document's two tools), [the vocabulary](./tillr-vocabulary.md) (proposes that a worktree belongs to its item), [the landing principles](./landing-principles.md) (the rulings a landing change is checked against), [the retired board state machine](./board-state-machine.md#7-suspend-and-resume) (the only earlier design of this idea; a record, not current machinery), [the pi adapter's guide](../../tools/tillr-run/backends/pi/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
 
 ---
 
@@ -59,14 +58,14 @@ The rulings of [the graph design, Section 1](./tillr-graph-is-the-path.md#1-the-
 | The built form was not a harness suspension. The agent ran a command-line verb through its shell tool, its turn ended, and the drain later appended a tool result to the session file from outside | The same file: `deliverLandingAnswer`, `landingAnswerEntry` |
 | Whether it ever ran with a real model is not known. Its tests drove a stand-in process | The board plan's build status |
 | The landing principles that superseded the board documents say nothing for or against it | `rg -n -i 'suspend\|tool call' docs/design/landing-principles.md` returned nothing relevant |
-| The graph design names it as the target form of a stated ending | [Its Section 3.3](./tillr-graph-is-the-path.md#33-endings), rule 1, and Section 12.2 |
+| The graph design makes the call the form of a stated ending | [Its Section 3.3](./tillr-graph-is-the-path.md#33-endings), rule 1 |
 
 **What tillr does today at a run's end**, which [Section 9](#9-what-this-replaces) maps onto the new form:
 
 - The worker's brief ends with a report whose last line is `RESULT: done` or `RESULT: blocked` ([the brief template](../../tools/tillr-run/backends/brief-template.md), "Report shape").
 - On pi, the extension [`keep-going.ts`](../../tools/tillr-run/backends/pi/keep-going.ts) answers a worker that stops without a commit or a footer, inside the same session, with no count.
 - The drain then examines the run: fence, optional judge, gate, lander. A refusal dispatches the item again as `returned-with-evidence`, in the worker's own session when the adapter can resume it, with the evidence as a new user message ([the drain's guide](../../tools/tillr-drain/README.md#a-refused-run-goes-back-to-its-worker)).
-- A squash conflict and a reverted landing record no worker session, so their worker starts fresh ([`recordRefusal`](../../tools/tillr-drain/drain/events.go) skips the capture for a conflict; the revert's payload in [`heavy_revert.go`](../../tools/tillr-drain/drain/heavy_revert.go) carries none).
+- A squash conflict and a reverted landing return to the session that wrote the change, as a new user message, when its lane and session remain. Otherwise a fresh session starts with the evidence and the reason is recorded: `lane-unavailable`, `session-missing` or `seat-changed`. This is step 1 of [Section 10](#10-build-order), landed on 2026-11-18.
 
 ## 2. The words
 
@@ -145,9 +144,9 @@ Rules that hold for every answer:
 | Outcome | Why the worker is not told | What happens instead |
 | :--- | :--- | :--- |
 | **Landed** | The work is finished, and a turn to say so buys nothing | Recorded on the call. The session is not opened |
-| **Proven** | The same | The call closes and the item's worktree is released |
+| **Proven** | The same | The call closes |
 | The trunk moved and was taken in cleanly | Not a question the worker can answer ([landing principle 3](./landing-principles.md#3-gate-what-will-be-the-tip-once)) | A field on any later answer |
-| A check could not complete, the gate stalled, the trunk's worktree was dirty, a red-cap hold | A statement about the machinery, not the offer ([landing principle 1](./landing-principles.md)) | A wait that names its mover; the same offer is tried again |
+| A check could not complete, the gate stalled, the trunk's worktree was dirty, a red-cap hold | A statement about the machinery, not the offer ([landing principle 1](./landing-principles.md)) | A wait that names its mover; the same offer is tried again. The drain already does this for a gate that returns no verdict: the wait is `gate-no-verdict`, and its mover is the loop |
 | The change is already on the trunk | Supersession is a verdict about the trunk | The call closes as `superseded` |
 | The owner closed the item | — | The call closes as `withdrawn` |
 
@@ -216,7 +215,7 @@ The two alternatives were to return `landed` and end the session, delivering a l
 
 **What a reverted item's worker receives** is the `reverted` answer of [Section 3.3](#33-what-can-come-back), in its own session, in place of today's fresh session with the evidence in a new brief. When that session cannot be opened, the fallback and its recorded reason are those of [Section 5.3](#53-delivery-forms).
 
-**A proof that never comes** (an unattributed red, a fixer still working) leaves the call open and the worktree held. That is a wait on a red check whose mover is the fixer item, shown as such; nothing times it out.
+**A proof that never comes** (an unattributed red, a fixer still working) leaves the call open. That is a wait on a red check whose mover is the fixer item, shown as such; nothing times it out. Whether the worktree is held through it is [Section 5.2](#52-states).
 
 ## 5. The record
 
@@ -251,7 +250,7 @@ stateDiagram-v2
 - **One answer.** The store refuses a second answer for a call id. The chooser is a pure function of the landing nodes' endings; writing the answer is the effect.
 - **An answer is immutable** once chosen. Delivering it twice delivers the same text.
 - **After delivery the call is finished.** The worker's next `land` is a new call with a new id.
-- **A worktree is released when no call of its item is open or answered** and the item has no node that needs it. That is the garbage-collection event this design gives the worktree lifecycle; the lifecycle itself is not designed here. Whether the hold applies between landed and proven while lanes are still a fixed set is [OQ-LC1](#OQ-LC1); where the worktree was released early, a later answer takes the `fresh-session` form of [Section 5.3](#53-delivery-forms) unless the worktree is free.
+- **When the worktree is released.** For now, at the landing (`D-LC11`). Lanes are a fixed set, and holding one through a long red would take it from new work exactly when the trunk needs repair. A later answer is delivered in the worker's own session when its worktree and session remain, and takes the `fresh-session` form of [Section 5.3](#53-delivery-forms) otherwise, with the reason recorded; that is what the drain does today. Once a worktree belongs to its item, which is the owner's direction of 2026-11-18, the release can wait until no call of the item is open or answered, at the cost of disk and not of a lane. Whether it should is [OQ-LC1](#OQ-LC1), blocked until item-owned worktrees exist. The worktree lifecycle itself is not designed here.
 
 ### 5.3 Delivery forms
 
@@ -269,7 +268,11 @@ The reasons recorded for `fresh-session` are the ones the drain already writes: 
 
 ### 6.1 The form chosen, and the two rejected
 
-**Chosen: the harness replays the unanswered call.** The pi fork already replays, when a session is opened, any tool call from the last assistant message that has no saved result, before it adds a prompt or makes a model request, and it does not repeat a call whose result is saved. That is the fork commit "feat(agent): stop print workers safely on SIGUSR1", read on 2026-11-18 in a clean build of this repository's `patch/pi` branch: `getPendingToolCalls` in the agent loop, `Agent.completePendingToolCalls`, and the fork's command-line integration guide. A tool registered by an extension therefore has its `execute()` run again in the new process, with the same call id and the saved arguments. `land` uses exactly that: on the first execution it records the offer and parks; on a replay it returns the stored answer, and pi writes the result entry itself.
+**Chosen: the harness replays the unanswered call.** When a session is opened, the pi fork already replays any tool call from the last assistant message that has no saved result, before it adds a prompt or makes a model request. It does not repeat a call whose result is saved.
+
+- **Where that was read.** The fork commit "feat(agent): stop print workers safely on SIGUSR1", on 2026-11-18, in a clean build of this repository's `patch/pi` branch: `getPendingToolCalls` in the agent loop, `Agent.completePendingToolCalls`, and the fork's command-line integration guide.
+- **What follows from it.** A tool registered by an extension has its `execute()` run again in the new process, with the same call id and the saved arguments.
+- **How `land` uses it.** On the first execution it records the offer and parks. On a replay it returns the stored answer, and pi writes the result entry itself.
 
 **Rejected: appending a tool result to the session file from outside**, the board's form. It needs single-writer discipline that pi does not offer (no lock on the session file, by `rg -n -i 'flock|lockfile|\.lock'` over the fork's session manager on 2026-11-18), a correct parent for the new entry among interleaved non-message entries, and a read-back, because the loader skips a malformed line silently. A duplicate entry id in that scheme closed a parent cycle and killed 47 lane runs on 2026-11-04. Everything it offers, the replay offers through an interface the harness owns.
 
@@ -349,7 +352,7 @@ The `land` tool itself is not a fork patch. It is a tillr extension beside `keep
 
 ### 6.6 Delivery, and how the drain knows
 
-A fork patch reaches a running jail only through the delivery path [the repository guide](../../AGENTS.md) describes for a patch-branch fork: export the lane's commits to `patch/pi`, check, lint the pack, commit, push (the pre-push hook publishes the branch), let the host's next launch build it, apply on the host, and relaunch. The replay commit itself has not made that trip: on 2026-11-18 this repository's `patch/pi` was three commits ahead of the tracked remote branch, and [the restart design](./tillr-restart.md) records that the installed pi is built from the remote branch.
+A fork patch reaches a running jail only through the delivery path [the repository guide](../../AGENTS.md) describes for a patch-branch fork: export the lane's commits to `patch/pi`, check, lint the pack, commit, push (the pre-push hook publishes the branch), let the host's next launch build it, apply on the host, and relaunch. The replay commit itself has not made that trip: on 2026-11-18 this repository's `patch/pi` was four commits ahead of the tracked remote branch, the replay commit and the park patch among them, and [the restart design](./tillr-restart.md) records that the installed pi is built from the remote branch.
 
 **What must be true on the host before the switch:**
 
@@ -386,16 +389,7 @@ The contract is the same in all three capabilities: the offer is the commit at t
 
 ### 8.2 Amendments to the graph design
 
-These are replacement texts for [the graph design](./tillr-graph-is-the-path.md). That document is not edited here.
-
-| Where | Reads today | Replacement |
-| :--- | :--- | :--- |
-| [Section 3.3](./tillr-graph-is-the-path.md#33-endings), rule 1 | "The target form is a tool call the harness suspends on, so that the answer arrives as that call's result; the first form is a file the worker writes at its end." | "An agent node's ending record is written by the tool the worker calls to end: `land` for `submitted`, `obstacle` for an objection. Where the adapter's ending capability is `footer`, the adapter writes the record from the report's footer." |
-| [Section 3.3](./tillr-graph-is-the-path.md#33-endings), rule 4 | "A dirty worktree, a change outside the write scope, a missing or malformed declared output, or no commit where one is required ends the node `refused-by-check` with the check's output." | "A dirty worktree or a missing commit is answered inside the `land` call and ends nothing. A change outside the write scope, or a missing or malformed declared output, ends the node `refused-by-check` with the check's output; so do the first two on an adapter with no tool." |
-| [Section 5.3](./tillr-graph-is-the-path.md#53-the-starting-rule-table), row 6 | "An agent node ended `missing-output` → A resume of its session saying what is missing" | The same, with: "Where the harness has a boundary hook, the worker is told inside the running node and no ending is recorded; the row applies only when the process exits anyway." |
-| Rows 7, 9 and 11 | "A resume of the producer with the findings / the gate's output / the paths" | The same, with: "delivered as the answer to the producer's open call." |
-| Row 10 | "A land attempt ended `landed` → Nothing. The graph is complete" | "A land attempt ended `landed` → Nothing. The producer's call stays open until the proof covers the landing; then it closes and the item's worktree is released." |
-| Row 22 | "A resume of the producer with that check's output; its next gate run includes that check" | "A resume of the producer, with the answer `reverted` to its open call carrying that check's output; its next gate run includes that check." |
+[The graph design](./tillr-graph-is-the-path.md) carries these. Rules 1 and 4 of [its Section 3.3](./tillr-graph-is-the-path.md#33-endings) say that the ending record is written by `land` or `obstacle`, and that a dirty worktree or a missing commit is answered inside the call. Rows 6, 7, 9, 10, 11 and 22 of [its rule table](./tillr-graph-is-the-path.md#53-the-starting-rule-table) deliver each resume as the answer to the producer's open call.
 
 ## 9. What this replaces
 
@@ -405,8 +399,8 @@ These are replacement texts for [the graph design](./tillr-graph-is-the-path.md)
 | "Continuing its session once to finish and commit", and keep-going's nudges for no commit and uncommitted paths | **Folded into the call**: the checks of [Section 3.2](#32-what-is-answered-at-once) return as the call's own result |
 | Keep-going's nudge for a missing footer | **Kept, narrowed**: it answers a worker that ended without calling `land` |
 | A refusal returned as a new user message ("This is a new run record in your existing session…") followed by the whole brief again | **Replaced by the tool result** where the capability is `call-suspends`. Kept as the `message` form elsewhere. The brief is not repeated: the session has it |
-| A fresh session after a reverted landing | **Replaced**: the worker's own session receives `reverted` |
-| A fresh conflict-fix run after a squash conflict | **Replaced**: the worker's own session receives `conflict`, on its own branch |
+| A fresh session after a reverted landing | **Replaced, in message form, by step 1**: the worker's own session receives the evidence when its lane and session remain. As the call's answer `reverted`, it is step 5 |
+| A fresh conflict-fix run after a squash conflict | **Replaced, in message form, by step 1**: the worker's own session receives the conflict, on its own branch. As the call's answer `conflict`, it is step 5 |
 | The rule that a returned turn must make a new commit | **Kept, moved into the call**: an unchanged offer is answered at once |
 | The identical-repeat rule (`repeatedEnding` in [`returned.go`](../../tools/tillr-drain/drain/returned.go)) | **Kept unchanged.** What it sends to the design seat comes back as `design-answer` |
 | The `WorkerSession` record written at a refusal ([`worker_session.go`](../../tools/tillr-drain/drain/worker_session.go)) | **Folded into the call record**, which holds the same facts from the moment of the offer, for every outcome |
@@ -415,95 +409,35 @@ These are replacement texts for [the graph design](./tillr-graph-is-the-path.md)
 
 Smallest first. The running drain keeps working at every step, because the footer form is honored until the last item and every new form is chosen per node at its start.
 
-| Step | What | Needs a fork delivery |
-| :--- | :--- | :--- |
-| 1 | Reverts and conflicts return to the worker's own session, in message form | No |
-| 2 | The call record, the offer and answer files, the answer chooser, and the ending capability, proven against a stand-in harness | No |
-| 3 | The three fork patches | It is the delivery |
-| 4 | The `land` tool, the new brief ending, and answers as tool results on pi | Yes: steps 2 and 3, and the host steps of [Section 6.6](#66-delivery-and-how-the-drain-knows) |
-| 5 | The call stays open until proven; `reverted` is its answer | Yes: step 4 |
-| 6 | `obstacle` as a tool | Yes: step 4 |
-| 7 | Claude Code's `call-then-message` form | No, but it waits on its own verification |
+| Step | What | Needs a fork delivery | State on 2026-11-18 |
+| :--- | :--- | :--- | :--- |
+| 1 | Reverts and conflicts return to the worker's own session, in message form | No | Landed |
+| 2 | The call record, the offer and answer files, the answer chooser, and the ending capability, proven against a stand-in harness | No | Landed. Every adapter declares `footer` |
+| 3 | The three fork patches | It is the delivery | Its item landed: the patch is on this repository's `patch/pi`, which the remote branch and the host do not have yet |
+| 4 | The `land` tool, the new brief ending, and answers as tool results on pi | Yes: steps 2 and 3, and the host steps of [Section 6.6](#66-delivery-and-how-the-drain-knows) | In the queue, not landed |
+| 5 | The call stays open until proven; `reverted` is its answer | Yes: step 4 | Drafted below, not filed |
+| 6 | `obstacle` as a tool | Yes: step 4 | In the queue, behind step 4 |
+| 7 | Claude Code's `call-then-message` form | No, but it waits on its own verification | Not drafted |
 
-**Step 1 is the first item, and it needs nothing from the fork.** It is also worth having if nothing after it is ever built.
+**Step 1 needs nothing from the fork**, and it is worth having if nothing after it is ever built.
 
-**Filed 2026-11-18.** Steps 1, 2, 3, 4 and 6 are item blocks with directives in [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-18-a-landing-is-a-suspended-tool-call); step 5 waits on [OQ-LC1](#OQ-LC1) and is not filed. The roadmap's blocks govern from there: the blocks below are the draft, and the filed ones differ in the criteria's wording and paths, and in step 3's added criterion for the order of messages.
+**The filed steps live in the roadmap.** Steps 1, 2, 3, 4 and 6 are queue items in [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-18-a-landing-is-a-suspended-tool-call), and their blocks there govern.
 
 ### 10.1 Drafted items
 
-These are proposals, written as item blocks with everything except the item directive, so that sync reads none of them and nothing can be dispatched. That is the route [the graph design](./tillr-graph-is-the-path.md#131-drafted-items) uses. A block gets its directive when this design is accepted.
-
-#### Return a reverted landing and a squash conflict to the worker's own session
-
-When the full suite proves that a landed change broke the trunk, or a change no longer applies to the trunk, the worker that is told about it today has never seen the change. This item records the worker's session for those two endings as it is already recorded for a gate refusal, so the same session gets the evidence.
-
-- **Paths:** `tools/tillr-drain/`, `docs/`
-- **Waits on:** nothing.
-- **c1:** A reverted landing's returned run continues the session of the run that landed, when the adapter can resume and the lane still holds that item's session. A test asserts the decision's reason is `resumed-worker` and the prompt carries the failing check's output.
-- **c2:** A squash conflict's returned run continues the session of the run whose candidate conflicted, on that run's branch. A test asserts the reason and that the conflicting paths are in the prompt.
-- **c3:** When the lane has been given to another item, the session id is gone, or the seat changed, the run starts fresh with the evidence, and the recorded reason says which. A test asserts each of the three.
-- **c4:** Nothing is counted: a test returns the same item three times with different evidence and asserts three dispatches and no hold.
-
-#### Record a landing call and choose its answer
-
-A worker's offer and what came of it are spread today across a refusal event, a landing row and a revert event. This item adds one record per call and the pure function that turns the landing steps' endings into the one answer a call may have, with nothing yet using it for delivery.
-
-- **Paths:** `tools/tillr-drain/`, `tools/tillr-run/`, `docs/`
-- **Waits on:** nothing.
-- **c1:** A run that ends with an offer file in its durable directory is recorded as a call with the offer's commit, base, summary, session and worktree, and is treated as a run that ended with its commit. A run with a footer and no offer file is treated exactly as today. A test asserts both.
-- **c2:** The answer chooser is a pure function with a table test covering: fence refusal, judge refusal, gate refusal, conflict, revert, identical repeat, landed, proven, superseded, withdrawn, and each machinery outcome that yields no answer.
-- **c3:** The store refuses a second answer for one call id, and an offer file whose call id is already recorded creates no second call. A test asserts each.
-- **c4:** Each adapter directory declares an ending capability, and the drain records the effective one at loop start. A test asserts `footer` for all four adapters as shipped.
-- **c5:** A stand-in harness that writes an offer file and exits, and on being opened again reads an answer file and prints it, is carried through offer, gate refusal, delivery and a second offer. A test asserts the call events in order and that the second opening received the stored answer text unchanged.
-
-#### Let a pi tool park its session and be answered on resume
-
-pi can already replay a tool call that has no result when a session is opened again, but a tool cannot ask to be left unanswered, a session cannot be opened without a new prompt, and a build cannot say what it supports. This item adds those three to the pi fork.
-
-- **Paths:** the pi fork's lane checkout; `yolo-packs/pi-fork/`; `docs/`
-- **Waits on:** the experiment in [Section 11.1](#111-what-the-design-leans-on-that-nobody-ran).
-- **c1:** A tool that returns a park leaves its call with no saved result; the process makes no further model request, emits a parked event naming the call id, and exits 0. A real-process test asserts the transcript and the exit.
-- **c2:** Opening that session with no prompt runs the tool again with the same call id and arguments, saves its result once, and continues to a model request. Opening it a second time repeats nothing. A test asserts both.
-- **c3:** Opening a session with no unanswered call and no trailing tool result exits non-zero, says so in the stream, and makes no model request. A test asserts it.
-- **c4:** The features flag prints JSON that includes `parked-tool-calls`. A test asserts it.
-- **c5:** A settle hook is not consulted for a parked batch. A test registers one and asserts it did not run.
-- **c6:** The fork's check passes on the exported branch and the pack lints clean.
-
-#### End a pi worker's run with the land tool
-
-With the record and the fork's support in place, this item gives a pi worker the tool and the new brief ending, and delivers refusals as the call's result.
-
-- **Paths:** `tools/tillr-run/backends/`, `tools/tillr-drain/`, `docs/`
-- **Waits on:** Record a landing call and choose its answer; Let a pi tool park its session and be answered on resume; the host steps of [Section 6.6](#66-delivery-and-how-the-drain-knows).
-- **c1:** The pi adapter's effective capability is `call-suspends` only when the installed binary prints `parked-tool-calls`, and `footer` otherwise. A test asserts both with stand-in binaries, including one that rejects the flag.
-- **c2:** Under `call-suspends` the brief ends with the text of [Section 3.6](#36-what-the-brief-says) and the tool is loaded; under `footer` the brief and the extensions are today's. A test asserts each.
-- **c3:** Each check of [Section 3.2](#32-what-is-answered-at-once) returns at once with its named content and writes no offer. A test asserts each of the five.
-- **c4:** A gate refusal, a judge refusal and a fence refusal each reach the session as the result of the open call, with the evidence of [Section 3.3](#33-what-can-come-back), and the session receives no user message. A test with a stand-in harness asserts the delivery form recorded is `tool-result`.
-- **c5:** Each failure case of [Section 6.3](#63-failure-cases) has a test that asserts its stated outcome.
-- **c6:** A worker that ends with a message and no call is told so in the same session and nothing is recorded as an ending. A session that parks is not nudged and is not ended by the settled-session watcher. A test asserts each.
-- **c7:** A session started under the footer brief is answered as a message after the capability appears. A test asserts it.
+One step is drafted and not filed. It is a proposal in prose: nothing reads it, and nothing can be dispatched from it. How a drafted item becomes a queue item is under the owner's review, so no filing step is stated here.
 
 #### Keep the call open until the landing is proven
 
 A landing that the full suite later reverts should come back as the answer to the call that offered it. This item closes a call at proven instead of at landed and makes `reverted` and `conflict` answers.
 
 - **Paths:** `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `docs/`
-- **Waits on:** End a pi worker's run with the land tool; the ruling on [OQ-LC1](#OQ-LC1).
+- **Waits on:** End a pi worker's run with the land tool.
 - **c1:** A landed call stays open until the green pointer reaches its landing, then closes as `proven`. A test asserts both moments.
 - **c2:** A revert pinned to that landing becomes the call's one answer, delivered as its result. A test asserts the answer carries the check's output and both commits.
 - **c3:** A squash or take-in conflict becomes the answer `conflict` with its paths and the trunk commit, and the worktree is left on the worker's own branch. A test asserts it.
-- **c4:** The item's worktree is not offered to another item while one of its calls is open or answered. A test asserts it.
+- **c4:** While worktrees are a fixed set of lanes, the item's worktree is released at the landing. A `reverted` answer is delivered in the worker's own session when its worktree and session remain, and otherwise starts a fresh session with the recorded reason. A test asserts each.
 - **c5:** The item's page shows the call's state, "landed, proof pending" among them, and the number of open calls is visible for the whole queue. A test asserts the rendered text.
-
-#### Name an obstacle with a tool call
-
-A worker that cannot finish writes its obstacle today as lines in a report, and a missing line is found only afterwards. This item makes the obstacle a tool call with typed arguments whose reply returns to the same session.
-
-- **Paths:** `tools/tillr-run/backends/`, `tools/tillr-drain/`, `docs/`
-- **Waits on:** End a pi worker's run with the land tool.
-- **c1:** `obstacle` accepts each of the six kinds with that kind's required fields and rejects a call missing one, without ending the run. A test asserts each kind and one rejection.
-- **c2:** An obstacle call is recorded and routed exactly as the same obstacle in a footer is today. A test runs the shared obstacle case file through both forms and asserts equal routing.
-- **c3:** The reply to an obstacle reaches the session as the call's result. A test asserts it for a design answer and for a `trunk` claim the base replay did not reproduce.
 
 ## 11. Risks
 
@@ -512,7 +446,7 @@ A worker that cannot finish writes its obstacle today as lines in a report, and 
 | The replay does not run an extension's tool as read (a different call id, a prompt added first, the tool not yet registered when the replay runs) | The experiment below | The park patch grows to cover it. The design does not change: pi is ours |
 | A model treats a call that "never returns" as a reason to hedge, and ends with a message first | Keep-going nudges for a missing call, counted from the event log after step 4 | The brief text. The mechanism does not depend on it |
 | A parked session is opened by hand, without the tool loaded | pi answers the unanswered call with its own error | The answer is still in the store and is delivered as a message. The item's page shows a parked session, so a person can tell before opening one |
-| Worktrees held until proven use up a fixed pool of lanes during a long red | Lanes out of rotation with reason "open call" | [OQ-LC1](#OQ-LC1) |
+| A late `reverted` answer finds the worktree given to another item, and a fresh session starts cold | The recorded reason `lane-unavailable`, counted from step 1's records | Hold the worktree until proven, once worktrees belong to items ([OQ-LC1](#OQ-LC1)) |
 | The fork delivery stalls, as it has for the replay commit | The recorded capability stays `footer` | Nothing breaks. Steps 1 and 2 are in use; 4 to 6 wait |
 | An expired cache makes a late `reverted` cost more than a new session would | Token cost per resumed turn, by cache state, from the usage ledger | Compact after delivery when the conversation is large; the choice of the same session does not rest on price |
 | A second transcript mechanism is rebuilt by habit (an outside append "just for success") | A review finding | [Section 6.1](#61-the-form-chosen-and-the-two-rejected) is the ruling: the store is the record of a landed call |
@@ -523,7 +457,7 @@ A worker that cannot finish writes its obstacle today as lines in a report, and 
 | :--- | :--- | :--- |
 | A registered extension tool is executed again on resume with the same call id, before any prompt | **Verified 2026-11-18 on the local `patch/pi` build, with a caveat.** `bin/pi-forks setup --lane operator-landcall --fork pi` and `bin/pi-forks build --lane operator-landcall --fork pi` built tip `fcf539aa7`. An extension tool whose first `execute()` killed its own process with SIGKILL left its call unanswered in the session file. A second `--print` run on the same `--session` (model `amazon-bedrock/global.openai.gpt-6-luna`, `--no-extensions` plus the one extension) ran `execute()` again with the same call id in a new process, and pi saved the tool result, `answer: refused, fix x`, before the new user prompt; the model then quoted it. Two caveats. A resume today still needs a prompt, so the open-without-prompt patch is real work. And with the default extension set an extension's message, added as the session opened, landed between the call and the replayed result, and Bedrock refused the request; the fork item has a criterion for that order. The replay was not run with the production extension set, which hung in the offer run for a reason not isolated. | Original method, for the record: a ten-line extension whose tool writes its call id to a file and never returns, ask for the tool, kill the process, open the session again. Two small model requests |
 | The installed pi lacks the replay | **Verified 2026-11-18.** The same sequence against the installed pi 1.5.2 ran `execute()` once; the resume saved no result for the call, and the model answered that the tool returned "No result provided." | The features flag still settles it for good, and is part of the fork patch |
-| The remote `patch/pi` has not moved since this jail last fetched | Read 2026-11-18 without a fetch: `origin/patch/pi` is `caf4f9c3f`, and the local `patch/pi` is three commits ahead (the replay commit `a763610ba`, `4ae75da87`, `fcf539aa7`) | A fetch |
+| The remote `patch/pi` has not moved since this jail last fetched | Read 2026-11-18 without a fetch: the local `patch/pi` is four commits ahead of `origin/patch/pi` (`git rev-list --count origin/patch/pi..patch/pi`): the replay commit, two after it, and the park-and-resume patch | A fetch |
 | A stand-in harness is a fair proxy for the drain side | Assumed, as the pause tests assume it | Step 4's first real run is watched |
 | Claude Code's tool server, stop hook and resume behave as [Section 7](#7-the-other-harnesses) needs | Not tried; the research is marked fast-moving | Its own experiment before step 7 is cut |
 | How long a judge takes | No data in the loop's tick lines | Read the judge runs' own records |
@@ -533,7 +467,7 @@ A worker that cannot finish writes its obstacle today as lines in a report, and 
 ## 12. What this does not cover
 
 - **What the gate runs**, and which checks sit before or after the merge. [Section 4](#4-landed-and-proven-one-call-two-events) is written to hold for any split.
-- **The worktree lifecycle.** This design states one event for it, the release in [Section 5.2](#52-states), and nothing else.
+- **The worktree lifecycle.** This design states one event for it, the release in [Section 5.2](#52-states), and nothing else. [The vocabulary](./tillr-vocabulary.md) proposes the lifecycle.
 - **Items that complete without a landing** (a definition whose run ends at a hook). They make no offer and have no call.
 - **Read-only runs, judges and design seats.** They do not land; their endings are the graph design's.
 - **Keeping a session's cache warm** past its lifetime. It is cost, recorded in [Section 4](#4-landed-and-proven-one-call-two-events), not scope.
@@ -541,32 +475,29 @@ A worker that cannot finish writes its obstacle today as lines in a report, and 
 
 ## Decision Ledger
 
+The `D-LC` rows are the designer's decisions of 2026-11-18. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. The Built column was read from the tree on 2026-11-18.
+
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-LC1` | A worker's run ends with the tool call `land`, which takes a summary and nothing else. The commit at the branch head at that moment is the offer. **Rejected:** a claimed-criteria argument (narration nobody checks) and a commit argument (the worker has one branch). | 2026-11-18 | [Section 3.1](#31-the-call) | — |
 | `D-LC2` | Checks the worker can fix at once (no commit, uncommitted paths, an unchanged offer, a second open call, a wake still owed) return inside the call and end nothing. | 2026-11-18 | [Section 3.2](#32-what-is-answered-at-once) | — |
-| `D-LC3` | The answers are a closed set: `refused` (fence, judge, gate), `conflict`, `reverted`, `design-answer`. Machinery outcomes and a clean take-in are never answers. | 2026-11-18 | [Section 3.3](#33-what-can-come-back) | — |
+| `D-LC3` | The answers are a closed set: `refused` (fence, judge, gate), `conflict`, `reverted`, `design-answer`. Machinery outcomes and a clean take-in are never answers. | 2026-11-18 | [Section 3.3](#33-what-can-come-back) | Partly: the chooser is built and table-tested (`chooseLandingCallAnswer`). No answer reaches a session as a call's result yet |
 | `D-LC4` | A named obstacle is a second tool, `obstacle`, with typed fields. **Rejected:** an argument of `land`, which would admit an offer that is also a refusal; and keeping the footer on a harness that can suspend. | 2026-11-18 | [Section 3.5](#35-a-named-obstacle-is-a-second-tool) | — |
 | `D-LC5` | Landed and proven are both recorded and neither opens the session. The call closes at proven, and a revert is the open call's answer. **Rejected:** closing at landed, which needs a paid turn or an outside edit to say so and a second delivery form for a revert. | 2026-11-18 | [Section 4](#4-landed-and-proven-one-call-two-events) | — |
-| `D-LC6` | One call record per call in the store, written only by the drain; one answer per call, immutable; the delivery form is recorded. | 2026-11-18 | [Section 5](#5-the-record) | — |
+| `D-LC6` | One call record per call in the store, written only by the drain; one answer per call, immutable; the delivery form is recorded. | 2026-11-18 | [Section 5](#5-the-record) | Yes: the record and the refusal of a second answer are in the drain (`landing_call.go`) |
 | `D-LC7` | On pi the answer is produced by the tool when the harness replays the unanswered call. **Rejected:** appending a result to the session file from outside (no supported interface, and its failure history), and a tool that waits (a process per call). | 2026-11-18 | [Section 6.1](#61-the-form-chosen-and-the-two-rejected) | — |
-| `D-LC8` | Three fork patches: park, open without a prompt, and a features flag. The pi adapter declares `call-suspends` only when the installed binary prints `parked-tool-calls`. **Rejected:** an interim form that parks by killing the process. | 2026-11-18 | [Section 6.5](#65-the-fork-patches) | — |
-| `D-LC9` | A node's ending form is fixed when it starts. The footer remains the form for an adapter that cannot suspend, and for a pi without the feature. | 2026-11-18 | [Section 6.6](#66-delivery-and-how-the-drain-knows) | — |
+| `D-LC8` | Three fork patches: park, open without a prompt, and a features flag. The pi adapter declares `call-suspends` only when the installed binary prints `parked-tool-calls`. **Rejected:** an interim form that parks by killing the process. | 2026-11-18 | [Section 6.5](#65-the-fork-patches) | Partly: the fork patch is on this repository's `patch/pi`, undelivered. The adapter's check of the installed binary is not built |
+| `D-LC9` | A node's ending form is fixed when it starts. The footer remains the form for an adapter that cannot suspend, and for a pi without the feature. | 2026-11-18 | [Section 6.6](#66-delivery-and-how-the-drain-knows) | Partly: every adapter declares `footer` |
 | `D-LC10` | tillr never compacts a session with an open or answered call. | 2026-11-18 | [Section 6.3](#63-failure-cases) | — |
+| `D-LC11` | While worktrees are a fixed set of lanes, an item's worktree is released at its landing, not held until the landing is proven. A later `reverted` answer reaches the worker's own session when its worktree and session remain, and a fresh session otherwise, with the reason recorded. **Rejected for now:** holding the worktree until proven, which takes a lane out of use through a long red. That choice returns as [OQ-LC1](#OQ-LC1) once worktrees belong to items. | 2026-11-18 | [Section 5.2](#52-states) | Yes, in message form: step 1 |
 
 ## Open Questions
 
-1. 💬 **OQ-LC1: Should an item keep its worktree after it lands, until the full suite has passed on it?**
+1. 🔒 **OQ-LC1: Should an item keep its worktree after it lands, until the full suite has passed on it?**
 
-   A worker finishes a change and it lands in under a minute. The full suite then runs on the trunk for some minutes, and on a bad day stays red for hours while a fixer works. If that suite pins a failure on this change, tillr reverts it and the worker is told. Today the worker's folder may already have been handed to another item, so a new worker starts cold with the evidence. Whether the first worker can pick its own change back up depends on whether its folder was kept.
+   <!-- vantage: question id=OQ-LC1 blocked-on="worktrees that belong to items: the vocabulary design proposes them as a designer's decision that awaits review, and none is built" -->
 
-   - **A — Keep it until the suite passes.** A reverted change always goes back to the worker that wrote it, in the folder it left. You see one folder held per landing that is not yet proven. With today's fixed set of lanes, a long red takes lanes out of use for new work.
-   - **B — Release it at the landing.** Lanes free up at once. A revert reaches the original worker only when its folder happens to be free; otherwise a new worker starts with the evidence, as today, and the item's page says which happened.
-   - **C — B now, A once folders belong to items.** Nothing is held while lanes are a fixed set. When an item owns its folder, it keeps it until proven.
-
-   <!-- vantage: question id=OQ-LC1 leaning="C: holding a lane from a fixed set through a long red would slow the queue exactly when the trunk needs repair, and once a folder belongs to its item the hold costs only disk." -->
-
-   _Leaning:_ C: holding a lane from a fixed set through a long red would slow the queue exactly when the trunk needs repair, and once a folder belongs to its item the hold costs only disk.
+   Waits on worktrees that belong to their items. Your direction of 2026-11-18 is that a worktree is a resource an item acquires and keeps. [The vocabulary](./tillr-vocabulary.md#33-the-life-of-a-worktree) proposes how, as a designer's decision that awaits your review, and asks separately whether an item is finished when it lands or when the full suite has passed. Nothing of it is built. Until then worktrees are a fixed set, a worktree is released when its item lands, and a reverted change goes back to the worker that wrote it only if its worktree is still free. Four landings of 803 have been reverted, all on 2026-11-18. Once an item owns its worktree, keeping it until the full suite passes costs disk and not a slot, and the question is asked then.
 
    **Answer:**
    > _(empty — fill in when decided)_

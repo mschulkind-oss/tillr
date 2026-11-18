@@ -2,34 +2,34 @@
 title: "The item graph's record is a log per item, written by one process"
 status: in-review
 stage: DESIGN
-updated: 2026-11-17
+updated: 2026-11-18
 tags:
   - tillr
   - storage
   - graphs
   - drain
   - design
-summary: "A proposal for the store the item graph needs, argued from trials of four structures run on 2026-11-17. One process applies every write; the record is an append-only log per item, in which a change and its event are the same line; SQL becomes a rebuildable index nothing waits on. The rest of tillr sees a narrow interface with no way to run its own code inside a write, so the structure behind it can change again."
-next: "Run the six trials of Section 10 on a prototype of the recommended structure, which was not itself measured, and classify today's tables by the rule of Section 9.3. The owner rules OQ-TS1 to OQ-TS3 from the results. The three remaining lock faults are fixed now and wait on nothing. A link from the tillr roadmap is owed so the questions are routed."
+summary: "A proposal for the store the item graph needs, compared across four structures in trials of 2026-11-17, whose timings are void and are owed again on a healthy file system. One process applies every write; the record is an append-only log per item, in which a change and its event are the same line; SQL becomes a rebuildable index nothing waits on. The rest of tillr sees a narrow interface with no way to run its own code inside a write, so the structure behind it can change again."
+next: "Fix the usage faults, then run today's store and the proposed structures through one workload on a healthy file system, from the repository, counting lock failures and stalls; the owner is then asked OQ-TS1, whether any change of structure is still worth making. The designer's decisions D-TS1 to D-TS9, and the one recorded as OQ-TS2, await his review."
 depends-on:
   - tillr-graph-is-the-path.md
 ---
 
 # The item graph's record is a log per item, written by one process
 
-**Status:** 2026-11-17. A proposal; none of it is built. It answers [OQ-GP2 of the graph design](./tillr-graph-is-the-path.md#OQ-GP2). The numbers come from trials run on 2026-11-17 and reproduced in [Section 3](#3-what-was-measured) with their caveats. The recommended structure is a combination the trials measured only in parts, and [Section 10](#10-trials-owed-before-building) says which parts.
+**Status:** 2026-11-18. None of it is built, and the case for it is not made. Two things undercut what was written on 2026-11-17. The lock held across a git ref move, which the question this design answers leaned on, is a usage fault that no structure fixes ([Section 1](#1-the-verdict)). And the trials ran on a host whose btrfs file system was afterwards found unhealthy, so every latency, wall time and stall in [Section 3](#3-what-was-measured) is void. The recommended structure was measured only in parts, and the prototypes are not in the repository; [Section 10](#10-trials-owed-before-building) says what is owed. The `D-TS` rows of the ledger are the designer's decisions and await the owner's review. The design was written to the owner's direction on [OQ-GP2 of the graph design](./tillr-graph-is-the-path.md#OQ-GP2): "do the right thing here, not the easy thing."
 
 > **In short.** The model already says a graph is a history, so the record should be that history: one append-only log per item, where a change and its event are a single line. One process applies every write, which turns the fog-of-war checks and every cross-item check into ordinary code with nothing to lock. SQL survives as an index that can be deleted at any moment.
 
-**Why it matters.** Eleven store incidents are on record for 2026-11. Five came from SQLite's one-writer file lock under many processes, four from how tillr used it, two from the file system. The file system part does not go away: under load 40 to 120, every trialed variant that waits on a flush showed 3 to 5 second maximum write latencies.
+**Why it matters.** Eleven store incidents were on record for 2026-11 when this was written: five from SQLite's one-writer file lock under many processes, four from how tillr used it, two from the file system. Two more causes were found and fixed on 2026-11-18, both in how tillr used the file. Usage faults are fixed at their cause, whatever the structure. What a structure can add is to make the next one impossible: an interface through which no caller can do slow work inside a write.
 
 **The shape.** Four parts: a narrow interface with no caller code inside a write; one writer process, which is whoever holds a kernel lock; a log per item plus one for the queue; and derived indexes that nothing on the write path reads.
 
-**Cost.** tillr owns a small storage layer instead of borrowing one. About 100 write call sites and the SQL in about 135 files are rewritten onto the interface, and about 1,700 lines of checkpoint machinery are deleted. Ad hoc SQL against the record is lost; it remains against the index.
+**Cost.** tillr owns a small storage layer instead of borrowing one. Every write call site (142 in 83 files outside tests, counted 2026-11-18) is rewritten onto the interface, and the checkpoint machinery (836 lines in `tools/tillr/store/checkpoint.go`, and its tests) is deleted. Ad hoc SQL against the record is lost; it remains against the index.
 
 **Start at [Section 5](#5-the-structure-i-recommend)**, the structure. [Section 4](#4-the-structures-against-the-needs) is why, and [Section 11](#11-what-would-change-the-recommendation) is what would change it.
 
-**Needs your ruling:** [OQ-TS1](#OQ-TS1), [OQ-TS2](#OQ-TS2), [OQ-TS3](#OQ-TS3).
+**Needs your ruling:** None open. **Blocked:** [OQ-TS1](#OQ-TS1) and [OQ-TS3](#OQ-TS3), until the trials are run again. **Decided by the designer, for the owner's review:** [OQ-TS2](#OQ-TS2).
 
 **Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the model this store serves; its Section 10 lists the needs), [the SQLite contention recovery](../recovery/sqlite-contention/README.md) (the incidents and the residual limit in landing), [the store's own reference](../../tools/tillr-store/README.md) (today's checkpoint scheme, which this deletes).
 
@@ -37,11 +37,27 @@ depends-on:
 
 ## 1. The verdict
 
+**What no structure fixes.** A landing holds the store's write lock while git moves a ref, and every other writer waits behind it. That is a usage fault. One writer process would not remove it: the writer would block in the same place, and every other write would queue behind it. The repair is to do nothing else under the lock, which is the owner's standing rule (minimal work under locks; every lock failure gets a root cause and a fix). It is being fixed now, separately from this design and ahead of it. The same holds for the other usage faults of [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled). None of them is a reason for any structure here.
+
+**A status command is a read.** It needs no write lock, and a writer does not block it. It answered "database is locked" because every open of the store took the write lock for a migration check, which was fixed on 2026-11-17 (commit `ef7ed5ff1`). One run of `tillr view status` beside the running loop on 2026-11-18 returned no lock error; that is one observation, not a proof.
+
+**What is left to choose once the usage faults are gone is not known.** Of the eleven incidents of [Section 2.3](#23-what-todays-store-does-and-where-it-failed), four were usage. Two were the file system, and three more needed a multi-second flush inside the lock; the file system was later found unhealthy, so those five may not happen on a healthy one, which was not verified. That leaves two incidents of SQLite's one-writer rule under many processes. So the case for changing the structure cannot rest on lock errors today. It rests on four claims, none of them measured on a healthy file system:
+
+- **An interface that makes the fault impossible.** If no call takes a function, a statement or a transaction, no caller can do other work under the lock. This is the structural form of the owner's rule. It needs no new structure, and it is worth building whatever the trials show.
+- **Cross-item checks without locks.** With one writer, "is this lane in use" is a read of that process's memory.
+- **One representation.** In a log, a change and its event are the same line.
+- **Cheap test stores.**
+
+**The proposal, if the trials support a change:**
+
 1. **The interface comes first and is the expensive part.** Every structure worth choosing needs callers to stop composing transactions. Once they have, the structure behind the interface is a few hundred lines and can change again.
-2. **One process writes.** Not as the least change, but because the model's cross-item checks (a lane used once, a premise on another item's node) become reads of that process's memory instead of locks across files.
+2. **One process writes.** Not as the least change, and not to cure a lock held too long, but because the model's cross-item checks (a lane used once, a premise on another item's node) become reads of that process's memory instead of locks across files.
 3. **The record is a log per item**, with one more log for the queue. PostgreSQL and SQLite both provide the needs of the graph design; the logs provide them with less machinery, cheaper tests, no flush on the write path and a fault that stays inside one item.
 4. **The path there passes through the runner-up.** One writer over today's SQLite file is the second step of the migration and a complete stopping point. If the trials of [Section 10](#10-trials-owed-before-building) go against the logs, the work stops there with nothing wasted.
 5. **Migration cost is stated, not used as a reason.** Under the graph design most of today's tables stop existing, so their SQL is rewritten once whatever is chosen. The choice is only what it is rewritten into.
+
+**If the trials show no failure left** in today's shape once the faults are fixed, the work stops after the interface, and neither a single writer nor the logs is built on the strength of lock errors.
+
 
 ## 2. What the store must do
 
@@ -65,9 +81,9 @@ The first row decides more than it seems to. A store that needs no flush before 
 
 ### 2.3 What today's store does, and where it failed
 
-Today one SQLite file of about 36 MB holds about 55 tables. Every tillr program opens it, and callers compose their own write transactions through one primitive that takes the write lock, runs the caller's function, and commits. About 135 files outside tests carry SQL; about 100 call sites use the write primitive. The committed write rate is low (85 landings in 9.6 hours on the overnight run of 2026-11-15) while the rate of opens and probes is high.
+On 2026-11-17 one SQLite file of about 36 MB held about 55 tables. On 2026-11-18 the file is 1.16 GB: of its 1,292,581 events, 1,266,578 are `run.child-session` events written that one day by 35 runs. The cause is not diagnosed, and it is a defect of its own ([Section 9.1](#91-what-is-fixed-first-whatever-is-ruled)). Every tillr program opens the file, and callers compose their own write transactions through one primitive that takes the write lock, runs the caller's function, and commits. About 135 files outside tests carry SQL; 142 call sites use the write primitive (counted 2026-11-18). The committed write rate is low (85 landings in 9.6 hours on the overnight run of 2026-11-15) while the rate of opens and probes is high.
 
-Eleven incidents are recorded for 2026-11 in [the contention recovery](../recovery/sqlite-contention/README.md) and the commits it names. By primary cause:
+Eleven incidents were recorded for 2026-11, up to 2026-11-17, in [the contention recovery](../recovery/sqlite-contention/README.md) and the commits it names. By primary cause:
 
 | Cause | Count | Examples |
 | :--- | ---: | :--- |
@@ -75,13 +91,18 @@ Eleven incidents are recorded for 2026-11 in [the contention recovery](../recove
 | tillr's usage | 4 | Git work inside the landing's write (`31ba65672`); a migration transaction on every open; the trace index rebuilt whole each tick |
 | The file system | 2 | Flushes of 1.8 to 2.6 seconds under gate load; one of 6.7 seconds |
 
-Three of the five in the first row were reachable only because a multi-second flush sat inside the lock. About 1,700 lines of checkpoint code and about 1,100 lines of its prose exist only to move that flush.
+Three of the five in the first row were reachable only because a multi-second flush sat inside the lock. The checkpoint machinery (836 lines in `checkpoint.go`, and about 1,300 lines of tests) exists only to move that flush.
 
-**Usage faults on 2026-11-17.** Three were found and fixed in place: a migration write transaction on every open; a history scan held under the write lock for 4.8 seconds; one lane's failure faulting the loop. Three remain: no shared handle per process (about 85 open call sites in the drain); a planning step that holds the write lock for up to 0.85 seconds; and a write lock held across a git ref move in landing. Separately, the trace index, a derived index in a file of its own, grew to 32 GB and stalled the loop because the loop waited for it.
+**Two more causes, fixed on 2026-11-18.** Both are tillr's usage. A planning step folded the whole event log, 228,806 events, two or three times inside its write transaction, for 2 to 3 seconds each time; commit `517c31a3e` added an event cache and an in-process write queue. An unindexed poll kept a reader slot busy, so no checkpoint could finish and the write-ahead log passed 3 GB; commit `8ab93d9ac` added two indexes.
+
+**Usage faults.** Three were found and fixed in place on 2026-11-17: a migration write transaction on every open; a history scan held under the write lock for 4.8 seconds; one lane's failure faulting the loop. Three remain on 2026-11-18, and [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled) lists them with their state. Separately, the trace index, a derived index in a file of its own, grew to 32 GB and stalled the loop because the loop waited for it.
 
 ## 3. What was measured
 
 Four structures were prototyped behind one Go interface (claim a node, append an event, read an item, list ready nodes, audit) and run on 2026-11-17 on a 32-core machine whose one-minute load average stayed between 40 and 120 throughout. The prototypes (about 2,400 lines with their harness) are kept outside the repository, so these numbers can be checked only by running them again or bringing them in.
+
+> [!WARNING]
+> **The timings below are void.** The host's btrfs file system was found unhealthy after these runs. No latency, wall time or stall in this section can be relied on, and none may rank the structures. The counts that do not rest on timing (double claims, lost acknowledged writes, torn records) come from the same runs and are owed again with them. Trial 1 of [Section 10](#10-trials-owed-before-building) replaces all of it.
 
 | Id | Structure |
 | :--- | :--- |
@@ -132,7 +153,7 @@ A claim made against a revision that had since moved was refused in every varian
 
 **What the numbers cannot carry.**
 
-- **The maximums cannot rank the variants.** One run each, in sequence, on a machine whose load moved. The 3 to 5 second maximums appear in A, B, C-sync and D, and not in D-async, which is the one variant that waits on no flush. A probe at a quiet moment measured a 0.6 ms median flush. The stalls belong to the file system under load. C, which also waits on no flush, still showed one 1.4 second write, so a plain `write` can stall too; removing the flush removes the worst of it, not all of it.
+- **The maximums cannot rank the variants.** One run each, in sequence, on a machine whose load moved. The 3 to 5 second maximums appear in A, B, C-sync and D, and not in D-async, which is the one variant that waits on no flush. A probe at a quiet moment measured a 0.6 ms median flush. The stalls belong to the file system, which was later found unhealthy, so they say nothing certain about any structure. C, which also waits on no flush, still showed one 1.4 second write, so a plain `write` can stall too; removing the flush removes the worst of it, not all of it.
 - **Throughput is not capacity.** The offered load was fixed by sleeps.
 - **B's daemon is crude:** JSON framing, one write connection, no batching. Its processor cost is the prototype's.
 - **C's kill result rests on the page cache**, which survives a process kill. Its torn records were injected (46, all repaired by the next writer), not natural.
@@ -185,7 +206,7 @@ So my answer is that the model does not need it. I hold that with less confidenc
 
 | Structure | Verdict |
 | :--- | :--- |
-| **A — many processes, one SQLite file** | Rejected. It is the cause of five recorded incidents, and the fixed faults do not remove the one-writer queue or the flush inside it |
+| **A — many processes, one SQLite file** | Not shown to be enough, and no longer shown to fail. Five recorded incidents came from it, and at least three of them needed a slow flush on a file system later found unhealthy. Whether it still fails once the usage faults are fixed is the first thing the trials must show |
 | **B — one writer over SQLite** | The runner-up, and the second step of the migration. It removes cross-process lock failures by construction. It keeps the engine's log restart on the write path, a second representation of every change (the row and its event), and a store that costs a test 15 ms or more |
 | **C as trialed — many processes, a log per item, no writer** | Rejected. It has no daemon to go wrong, which is a real merit in a jail. But every cross-item check then needs several file locks taken in order, the store-wide sequence needs a lock every write holds, and every short command rebuilds the cross-item picture for itself |
 | **D — PostgreSQL** | Rejected. It buys concurrent writers for a workload that commits a few times a minute. The price is a flush on every commit (or lost writes), a server that failed to restart after a kill in up to 14 of 50 rounds until a wrapper insisted, a preloaded library to get past its refusal of uid 0, a test cost above a tenth of a second on a server all tests share, and a data migration at each major version |
@@ -198,7 +219,7 @@ So my answer is that the model does not need it. I hold that with less confidenc
 
 ### 4.4 What each structure does to the files that write SQL
 
-About 135 files, about 515 SQL statements and about 100 write call sites, outside tests.
+About 135 files and about 515 SQL statements outside tests (counted 2026-11-17), and 142 write call sites (counted 2026-11-18).
 
 | Structure | What happens to them |
 | :--- | :--- |
@@ -323,13 +344,14 @@ Three rules, for the view's index, the trace index and any later one.
 
 ### 9.1 What is fixed first, whatever is ruled
 
-The three remaining usage faults are defects under R6 and wait on nothing in this document:
+Four defects stand on 2026-11-18. Each is a defect under R6 and under the owner's standing rule that a lock failure gets a root cause and a fix, and none waits on anything in this document.
 
-1. **One store handle per process**, shared, in place of about 85 opens in the drain.
-2. **The planning step computes outside the write** and holds the lock only to apply its result; it holds it for up to 0.85 seconds today.
-3. **The landing moves the git ref with no write open.** The exclusion between closing and landing becomes a short write that marks the landing begun, the git move, then a short write that records it, with the existing marker ref making a repeat harmless.
+1. **One store handle per process**, shared. The drain opens the store on 116 lines outside tests (counted 2026-11-18). The in-process write queue of 2026-11-18 puts one process's writers in order; the opens remain.
+2. **The planning step computes outside the write** and holds the lock only to apply its result. The event cache of 2026-11-18 removed its worst case, the fold of the whole event log; the step still computes inside the write.
+3. **The landing moves the git ref with no write open.** Today `finishLanding` in `tools/tillr-land/land/landing.go` moves the ref with the transaction open, and two tests pin that exclusion: `TestFinalMoveExcludesCloseUntilReceipt` and `TestGitPreparationAllowsHeartbeatAndClose`. The exclusion between closing and landing becomes a short write that marks the landing begun, the git move, then a short write that records it, with the existing marker ref making a repeat harmless. This one is being fixed now, separately from this design.
+4. **The child-session flood.** One event kind was written 1.27 million times on 2026-11-18 ([Section 2.3](#23-what-todays-store-does-and-where-it-failed)). Its cause is found and fixed where the event is written; no structure should absorb it.
 
-Each is the same change the interface later makes structural, so none is thrown away.
+The first three are the same change the interface later makes structural, so none is thrown away.
 
 ### 9.2 The order, against the graph design's sixteen steps
 
@@ -337,12 +359,14 @@ Each is the same change the interface later makes structural, so none is thrown 
 
 | Stage | What moves | Where it sits |
 | :--- | :--- | :--- |
-| **S1** | The three usage faults | Now; beside step 1 |
+| **S1** | The defects of [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled) | Now; beside step 1 |
 | **S2** | The interface of [Section 6](#6-the-interface-the-rest-of-tillr-sees), with the fog checks as pure functions, implemented over today's SQLite file | It is step 3's "store's checks". Steps 4 to 15 write graph state only through it |
 | **S3** | One writer: every graph write goes through one process. The record is still the SQLite file. This is structure B, complete | After step 3; independent of steps 4 to 15 |
 | **S4** | The record becomes the logs, item by item; the SQLite file becomes the view's index | After S3, after the trials, and after [OQ-TS1](#OQ-TS1) |
 
-Whether step 3 is built over today's SQLite first, as S2 says, or waits for the logs, is [OQ-TS2](#OQ-TS2). I recommend S2 as written for two reasons: no step of the graph design waits on a store that is still being trialed, and the SQLite implementation of the interface becomes the reference the logs are checked against, the way the four prototypes were checked against each other.
+**Step 3 is built over today's SQLite file, behind the interface.** This is the designer's decision, recorded in the ledger as [OQ-TS2](#OQ-TS2), and the owner may overturn it. Two reasons carry it. No step of the graph design then waits on a store that is still being trialed. And the SQLite implementation of the interface becomes the reference the logs are checked against, the way the four prototypes were checked against each other. The checks are pure functions written once, so only a thin layer is replaced later. The alternative, holding step 3 until the new store exists, is rejected: it stops the whole graph migration behind trials whose timings are void, to save replacing that one layer.
+
+[The graph design](./tillr-graph-is-the-path.md#13-migration-order) states this staging in its steps 3 and 16, and [its Section 10](./tillr-graph-is-the-path.md#10-storage) lists the needs.
 
 ### 9.3 How existing state is carried over
 
@@ -353,11 +377,11 @@ Whether step 3 is built over today's SQLite first, as S2 says, or waits for the 
 
 ### 9.4 Drafted items
 
-These are proposals, written as item blocks without the item directive so that sync reads none of them and nothing can be dispatched, as in [the graph design's drafted items](./tillr-graph-is-the-path.md#131-drafted-items). A block gets its directive when this design is accepted and its question is ruled.
+These are drafted items: proposals in prose, written on 2026-11-17, and none is filed. Nothing reads them, and nothing can be dispatched from them. How a drafted item becomes a queue item is under the owner's review, so no filing step is stated here.
 
 #### Share one store handle in each process
 
-The drain opens the store at about 85 call sites, once per operation and from many goroutines, so one process queues against itself for the write lock and each open repeats checks the last one made. This item gives each process one handle for its life.
+The drain opens the store on 116 lines outside tests (counted 2026-11-18), once per operation and from many goroutines, so one process queues against itself for the write lock and each open repeats checks the last one made. This item gives each process one handle for its life.
 
 - **Paths:** `tools/tillr-drain/`, `tools/tillr/store/`, `docs/`
 - **Waits on:** nothing.
@@ -387,7 +411,7 @@ A landing holds the store's write lock while git moves the trunk ref, so a slow 
 
 #### Run the storage trials on the recommended structure
 
-The storage design recommends a structure that was measured only in parts. This item builds a prototype of the whole of it behind the trial interface and runs the six trials the design names, so the ruling rests on measurements of the thing ruled on.
+The storage design recommends a structure that was measured only in parts, and the timings it was compared on are void: the host's file system was unhealthy when they were taken. This item builds a prototype of the whole structure behind the trial interface and runs every trial the design names, all structures together, on a file system checked healthy first, so that the ruling rests on measurements of the thing ruled on.
 
 - **Paths:** `docs/`, `tools/tillr-store/`
 - **Waits on:** nothing.
@@ -395,6 +419,7 @@ The storage design recommends a structure that was measured only in parts. This 
 - **c2:** Each of the six trials has a recorded result in a tracked document: what was run, the numbers and the date.
 - **c3:** The variants run interleaved, more than once, so that a slow period of the machine does not fall on one of them.
 - **c4:** No trial result is a pass or fail on elapsed time.
+- **c5:** Each recorded result states how the file system's health was checked before the run, and a run on a file system that reports errors is not recorded as a result.
 
 #### Put the graph's writes behind one interface
 
@@ -434,7 +459,7 @@ The record of an item is rows in several tables plus events that repeat them. Th
 
 | # | Trial | What it settles |
 | :--- | :--- | :--- |
-| 1 | **The recommended structure, whole.** One writer over a log per item with text lines, behind the same interface, through the same four trials: the workload, the race, 50 kill rounds, and the cost of a test store. All variants interleaved and repeated. Plus the writer's start time at 1, 10 and 100 times today's volume | Whether the combination behaves like its parts. Today's support is C for the files and B for the lifecycle |
+| 1 | **Today's shape with its faults fixed, and the recommended structure, whole.** First, structure A after the usage faults are fixed: does any lock failure or stall remain? Then one writer over a log per item with text lines, behind the same interface, through the same four trials: the workload, the race, 50 kill rounds, and the cost of a test store. All variants interleaved and repeated, on a file system checked healthy first, which also replaces the void timings of [Section 3](#3-what-was-measured). Plus the writer's start time at 1, 10 and 100 times today's volume | Whether any change of structure is still warranted, and whether the combination behaves like its parts. Today's support is C for the files and B for the lifecycle |
 | 2 | **A writer that is stuck and not dead.** Stop the writer with SIGSTOP; block it inside a `write`; make it spin in a check. For each: what clients see, whether a second writer can ever run beside it, and what a restart costs | The writer lock, and the facts [OQ-TS3](#OQ-TS3) is ruled on |
 | 3 | **Cross-item acts.** Walk every act in the graph design that touches two items or an item and the queue, and write each as single-log writes. Kill between every pair of writes and evaluate again | Whether the model needs a write across items ([Section 4.2](#42-does-the-model-need-a-write-across-two-items)), and so whether the logs are per item or one |
 | 4 | **A Python reader.** The trace indexer and the evidence tool read through the JSON command and the cursor, during the workload | That no second implementation of the format is needed |
@@ -447,6 +472,7 @@ The table classification of [Section 9.3](#93-how-existing-state-is-carried-over
 
 | Finding | Then |
 | :--- | :--- |
+| Trial 1 shows no lock failure and no stall in today's shape once the usage faults are fixed | Stop at S2: the interface, over today's file, with many processes |
 | Trial 1 loses an acknowledged write, or the whole structure is materially slower to start or to write than B | Stop at S3: one writer over SQLite |
 | Trial 3 finds an act that must change two items or neither | One log for the store in place of one per item; the rest unchanged |
 | The table classification finds many records that are neither graph, fact nor derived, and that must change together with the graph | Stop at S3: transactions across tables are what SQLite is for |
@@ -468,171 +494,50 @@ The table classification of [Section 9.3](#93-how-existing-state-is-carried-over
 | **tillr now owns a storage layer**, and hand-built file stores fail at torn tails, ordering and recovery | The layer is one append per write with one writer. Trials 1, 2 and 5 exercise exactly those three. B stays one step back as a complete fallback |
 | **The writer is a single point of liveness** | Reads of an item do not need it; a dead writer is replaced by the next client; a stuck one is [OQ-TS3](#OQ-TS3) |
 | **The recommendation rests on a combination that was not measured** | Trial 1 is the first thing built, and S1 to S3 are worth doing whatever it shows |
+| **The timings behind the comparison are void** | The trials are run again on a healthy file system before any ruling is asked. S1 and S2 do not depend on them |
+| **The case for a new structure collapses** once the usage faults are fixed | Trial 1 tests exactly that first, and S2 is a complete stopping point |
 | **The cross-item argument is wrong somewhere** | Trial 3, and a fallback that changes only the on-disk form |
 | **Ad hoc SQL over the record is lost** | The index answers the same questions, and it says how far behind it is |
 | **Two structures exist during S4** | An item is in exactly one; the comparison check runs throughout; moves stop on the first difference |
 | **The interim SQLite implementation of the interface is thrown away** | It is kept as the reference the logs are tested against |
 
-## 14. Amendments to the graph design
-
-These are proposed texts. The graph design is not edited by this document.
-
-### 14.1 Its Section 10, Storage
-
-The table of needs stands. The paragraphs around it are replaced. Current text, before the table:
-
-```text
-What follows is what the graph model needs from storage. Which structure provides it is [OQ-GP2](#OQ-GP2). The owner directed on 2026-11-17 that the choice be the right structure and not the easy one, so it is made in a storage design that compares the structures against this table, with trials.
-```
-
-Replacement:
-
-```text
-What follows is what the graph model needs from storage. Which structure provides it is decided in [the storage design](./tillr-storage.md), which compares the structures against this table with trials run on 2026-11-17 and recommends one writer process over an append-only log per item. The rest of this design depends only on the interface that document defines, not on the structure behind it.
-```
-
-Two rows are added to the table:
-
-```text
-| **A store-wide order with a cursor** | The view and replay resume from a position; a reader must never skip a write that committed late |
-| **No flush on the write path** | Durability need only survive a process kill (the owner, 2026-11-16), and a flush on this file system took 3 to 5 seconds under load in every trialed variant that waited on one |
-```
-
-Current text, after the table:
-
-```text
-Research on 2026-11-17, with no trials, found the following. The store is about 36 MB of SQLite. Its failures come from many processes contending for the one write lock and from how it is used, not from its size: a write lock held across a git move in landing; the loop opening the store for each operation from many goroutines; and a migration check that takes the write lock on every open. Changing the engine would not remove the single-writer limit.
-
-Those three usages are defects and are fixed whatever the question's answer is (R6). They are not options.
-```
-
-Replacement:
-
-```text
-The store is about 36 MB of SQLite. Its failures come from many processes contending for the one write lock, from a flush that sits inside that lock, and from how it is used, not from its size. Of the usage faults, the migration check that took the write lock on every open was fixed on 2026-11-17; three remain: the loop opening the store for each operation from many goroutines, a planning step that computes while holding the write lock, and a write lock held across a git move in landing.
-
-Those three are defects and are fixed whatever structure is ruled (R6). They are the first stage of [the storage design's migration](./tillr-storage.md#9-migration-while-the-drain-keeps-running).
-```
-
-### 14.2 Its migration table
-
-Current rows:
-
-```text
-| 3 | The policy function and the store's checks, with a table that reproduces today's routing | step 2 |
-```
-
-```text
-| 16 | The storage structure | [OQ-GP2](#OQ-GP2) |
-```
-
-Replacements:
-
-```text
-| 3 | The policy function and the store's checks, with a table that reproduces today's routing. The checks are pure functions behind [the storage design's interface](./tillr-storage.md#6-the-interface-the-rest-of-tillr-sees), and from here on graph state is written only through it | step 2 |
-```
-
-```text
-| 16 | The storage structure behind the interface: one writer, then a log per item, as [the storage design](./tillr-storage.md#92-the-order-against-the-graph-designs-sixteen-steps) stages them | step 3; the storage design's questions |
-```
-
-### 14.3 Its open question on storage
-
-Current text:
-
-```text
-1. 💬 **OQ-GP2: Should one process own every write to the store?**
-
-   The loop, the lander, each run and each command you type all write one SQLite file. A landing holds the write lock while git moves a ref, and your status command answers "database is locked". The file is about 36 MB, so size is not the cause; this was researched on 2026-11-17 without trials. Three usage faults get fixed either way.
-
-   - **A — One owner.** One process applies every write and the rest send it requests. You stop seeing lock errors. With no owner running, a command does its one write itself.
-   - **B — A log per item.** Each item's history is a file you can read and compare, and SQLite becomes an index rebuilt from the logs. It is the larger rewrite.
-   - **C — Fix the faults only**, and measure before changing structure.
-
-   [the question directive, with id OQ-GP2 and a leaning of "None yet"]
-
-   _Leaning:_ None yet. The owner directed on 2026-11-17 to do the right thing here, not the easy thing. The earlier leaning toward one owner rested on "the least change", which is not a reason he accepts. A storage design compares one owner against a log per item on the needs of [Section 10](#10-storage), with trials, and this question is asked again from it.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-```
-
-The directive line is shown in words above so that this document does not carry a second question with that id. Replacement, in which the directive keeps its id and loses its leaning:
-
-```text
-1. 🔒 **OQ-GP2: Should one process own every write to the store?**
-
-   [the question directive, with id OQ-GP2 and no leaning]
-
-   Waits on [the storage design's first question](./tillr-storage.md#OQ-TS1), which asks this from trials run on 2026-11-17 and recommends one writer process over a log per item. A ruling there is recorded here.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-```
-
-The graph design's header line and its `next` field name this question as waiting on a storage design; both then name [OQ-TS1](#OQ-TS1) instead.
-
 ---
 
 ## Decision Ledger
 
-The `D-TS` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete; each is open to the owner's overturn. None is built.
+The `D-TS` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. None is built. [OQ-TS2](#OQ-TS2) was asked as a question and is recorded here as a designer's decision, because evidence settles it.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-TS1` | The rest of tillr writes the store through a narrow interface in the graph design's words, with no call that takes a statement, a function or a transaction. **Rejected:** passing SQL through a daemon, which keeps caller work inside a write. | 2026-11-17 | [Section 6](#6-the-interface-the-rest-of-tillr-sees) | — |
 | `D-TS2` | The writer is whichever process holds a kernel lock; clients start one on demand; tests run it in-process; it exits when idle. **Rejected:** a command writing for itself when no writer runs, and the loop as the writer. | 2026-11-17 | [Section 5.6](#56-the-writers-life) | — |
-| `D-TS3` | The write path never calls a flush, and the durability requirement is a process kill. **Rejected:** a flush per acknowledgement, which cost 2.55 ms at the median and 3.9 s at worst in the trial for a guarantee the owner ruled out needing. | 2026-11-17 | [Section 2.1](#21-the-requirements-that-are-rulings) | — |
+| `D-TS3` | The write path never calls a flush, and the durability requirement is a process kill. **Rejected:** a flush per acknowledgement, which makes every write wait on the file system for a guarantee the owner ruled out needing. | 2026-11-17 | [Section 2.1](#21-the-requirements-that-are-rulings) | — |
 | `D-TS4` | No write spans two logs. Cross-item checks are reads of the writer's memory; cross-item effects are an ending followed by a rule application. **Rejected for now:** one log for the whole store, which is the fallback if trial 3 finds a counterexample. | 2026-11-17 | [Section 4.2](#42-does-the-model-need-a-write-across-two-items) | — |
 | `D-TS5` | Liveness is a kernel lock the runner holds, not a stored row. **Rejected:** a heartbeat record, which is the most frequent write in today's store and carries nothing anyone reads later. | 2026-11-17 | [Section 5.2](#52-the-record) | — |
 | `D-TS6` | Derived data is rebuildable, off the write path, and never waited on by the loop; each index shows its size against a ceiling and how far behind it is. **Rejected:** the loop reading an index to decide. | 2026-11-17 | [Section 7](#7-derived-data) | — |
 | `D-TS7` | After a machine crash the writer cuts the store back to the first gap in the store sequence by itself and reports what it set aside. **Rejected:** stopping for a person, which the no-hand-repair rule excludes. | 2026-11-17 | [Section 5.5](#55-kills-and-a-machine-crash) | — |
 | `D-TS8` | Storage leaves step 16 and is staged: usage faults, the interface at step 3, one writer over SQLite, then logs item by item. **Rejected:** building the new store beside the drain and switching over. | 2026-11-17 | [Section 9.2](#92-the-order-against-the-graph-designs-sixteen-steps) | — |
 | `D-TS9` | PostgreSQL, the other servers and the other embedded engines are rejected, with the reasons of the verdict table. | 2026-11-17 | [Section 4.3](#43-the-verdicts) | — |
+| `OQ-TS2` | **Designer's decision, not the owner's ruling. The owner may overturn this.** The graph design's third step builds its store checks now, on today's SQLite file, behind the new interface. **Evidence:** the interface is what stops a caller from doing other work under the lock, and it is needed whatever the structure; the checks are pure functions written once, so only a thin layer is replaced if the structure changes; and no graph step then waits on trials whose timings are void. **Rejected:** waiting for the new store, whose only effect is to delay every later step of the graph design. | 2026-11-18 | [Section 9.2](#92-the-order-against-the-graph-designs-sixteen-steps) | — |
 
 ---
 
 ## Open Questions
 
-1. 💬 **OQ-TS1: Should tillr keep each item's record as a file of its own, written by one process?**
+1. 🔒 **OQ-TS1: Is any change to how tillr stores its record still worth making once the lock faults are fixed, and if so which?**
 
-   You type a status command while a landing is in flight, and today it can answer "database is locked", because every program writes one SQLite file. Four structures were trialed on 2026-11-17 under load. All four kept every acknowledged write through 50 kills except PostgreSQL with its flush off, which lost about 15,855. The one recommended was measured only in its two halves.
+   <!-- vantage: question id=OQ-TS1 blocked-on="the usage faults fixed, then the storage trials run again on a healthy file system from the repository" -->
 
-   - **A — One writer process, a file per item.** You never see a lock error. An item's history is a text file you can read with `tail`; SQL questions go to an index that says how far behind it is. A test store costs 0.13 ms. tillr owns the storage code.
-   - **B — One writer process, the SQLite file kept.** You never see a lock error and `sqlite3` still reads everything. A test store costs 15 ms or more, and the checkpoint machinery stays in part.
-   - **C — PostgreSQL.** `psql` reads everything. Commits wait on the disk (3.85 ms typical, 3.4 s at worst in the trial), and after a kill it needed restarting until it stayed up.
-
-   <!-- vantage: question id=OQ-TS1 leaning="A, confirmed by a trial of the whole structure first — the change and its event become one line, nothing waits on a flush, and B is a complete stopping point on the way there." -->
-
-   _Leaning:_ A, confirmed by a trial of the whole structure first — the change and its event become one line, nothing waits on a flush, and B is a complete stopping point on the way there.
+   Waits on two things. First the usage faults are fixed. No structure fixes those; the first of them, the lock held while git moves a ref, is being fixed now. Then today's store and the proposed structures are run through one workload on a healthy file system, from a harness kept in the repository, counting lock failures and stalls. The timings of 2026-11-17 are void, so nothing here can be chosen from them. If today's store shows no failure left, you are asked nothing and the work stops at the interface. If it does, you are asked one thing: whether tillr keeps one writer process over today's SQLite file, or owns a small storage layer of its own, a text log per item. Nothing built before then depends on the answer.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-2. 💬 **OQ-TS2: Should the graph's store checks be built on today's SQLite first, or wait for the new store?**
+2. 🔒 **OQ-TS3: When the store's writer process stops answering, may a command kill it?**
 
-   The graph work's third step adds the checks that stop anything already started from changing. The new store is not yet trialed whole. If the checks are written into today's store as it is, they are rewritten when the store changes, along with everything the twelve later steps add.
+   <!-- vantage: question id=OQ-TS3 blocked-on="a decision to build a single writer process at all, that writer existing, and the trial of a writer that is stuck and not dead" -->
 
-   - **A — Build them now, behind the new interface, on today's SQLite.** The graph steps go ahead without waiting. You see lock errors a while longer. One SQLite-backed piece is later replaced, and is kept as the reference the new store is checked against.
-   - **B — Wait for the new store.** Nothing is built twice. The graph work's third step and all that follow wait on the trials and the build.
-
-   <!-- vantage: question id=OQ-TS2 leaning="A — the checks are written once as plain functions either way, so only a thin layer is replaced, and nothing in the graph work waits on a store still being trialed." -->
-
-   _Leaning:_ A — the checks are written once as plain functions either way, so only a thin layer is replaced, and nothing in the graph work waits on a store still being trialed.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-TS3: When the store's writer process stops answering, may a command kill it?**
-
-   With one writer, a command sends its write and waits. Suppose the writer has stopped answering. If it is dead, the next command starts another, which the trial did 50 times of 50. If it is alive and stuck, every command waits, and under your rules no wait may time out into a failure. This case was not trialed.
-
-   - **A — Wait, and say so.** You see "waiting on the store writer, pid 4711, 40 s". Nothing is killed. You kill it yourself when you judge it stuck.
-   - **B — Kill it on evidence.** The writer reports what it is doing. If it is waiting on the disk, commands wait. If it has sat in a check, which takes microseconds, or cannot report at all, the waiting command kills it, records what it was doing, and a new writer starts. No work fails, and you read the record afterwards.
-
-   <!-- vantage: question id=OQ-TS3 leaning="B — killing the writer is already safe and tested, a restart loses nothing, and the record of what it was doing is what lets the bug be fixed." -->
-
-   _Leaning:_ B — killing the writer is already safe and tested, a restart loses nothing, and the record of what it was doing is what lets the bug be fixed.
+   Waits on a single writer process being chosen and built, and on the trial of a writer that is stuck and not dead, which was not run. If the trials show that no single writer is needed, this question is withdrawn. Until then nobody knows what a stuck writer looks like from outside, and your standing rule holds: a command waits with no time limit and says what it is waiting on, and a stuck writer is a defect to diagnose.
 
    **Answer:**
    > _(empty — fill in when decided)_
