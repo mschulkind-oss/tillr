@@ -169,7 +169,6 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 		out.check.OverBudgetMS = out.check.DurationMS - int64(out.check.BudgetMS)
 	}
 	out.check.CPUTimeMS = state.previous.CPUTimeMS
-	out.check.CPUSource = state.previous.CPUSource
 	out.check.LastOutputLine = state.previous.LastLine
 	out.check.SilentSamples = state.SilentSamples
 	out.check.WatchdogUnavailable = state.Unavailable
@@ -211,9 +210,6 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 		}
 	}
 	header := []string{gateHeader(program, root, how, elapsed, triage.seen, wholePath)}
-	if out.check.CPUSource != "" {
-		header = append(header, "watchdog CPU source: "+out.check.CPUSource)
-	}
 	header = append(header, budgetNotes(VerdictPayload{Checks: []VerdictCheck{out.check}})...)
 	if writeTriage(&out, triagePath, triage, header) != nil {
 		return out
