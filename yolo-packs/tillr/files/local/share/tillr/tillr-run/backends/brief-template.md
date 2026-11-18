@@ -1,5 +1,10 @@
 # {{ITEM_ID}} — {{TITLE}}
 
+You are running unattended: nobody reads or answers your messages while you work. Your
+first message without a tool call ends the run and is read as your final report, so keep
+working with tools until the goal in **Report shape** is met or a stop condition is
+confirmed.
+
 <!--
 The brief a lane receives, from design §3 of docs/design/tillr-muse-backend.md.
 Instances are UNTRACKED: the driver copies this file into the lane directory as
@@ -145,6 +150,12 @@ not permission to run the landing gate (`just done`).
 
 ## Report shape
 
+The goal of this run is one commit in the target that meets the criteria above (in the
+main-checkout form, the finished change, left uncommitted). Do not end your turn until
+that commit exists and its verification has run, or until a stop condition below is
+confirmed. Ending without the commit and without a named stop condition is not a valid
+ending: there is nobody to hand the work back to.
+
 Your final message contains, in this order:
 
 1. paths changed;
@@ -161,6 +172,12 @@ Its last line is exactly one of:
 
 Nothing after it. The extractor refuses a report without that footer, whatever your
 exit code was, so a run that ends without one is recorded as incomplete.
+
+`RESULT: done` means the commit exists. `RESULT: blocked` names the stop condition below
+that holds and its evidence. `RESULT: failed` names the command whose failure you could
+not repair, with its output. Unfinished work is not a failure, and neither is a patch
+that does not apply cleanly or a test you have not yet made pass: those are work to
+continue.
 
 `RESULT: trunk-broken` is not a synonym for `failed`. Use it only when you believe the
 base you were staged from is itself red — the failure is in the trunk, not in the change

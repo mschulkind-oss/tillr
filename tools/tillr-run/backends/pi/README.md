@@ -12,6 +12,8 @@ sections 7 and 9.
 | `run-pi` | The adapter. A `run.request`'s `Command[0]` names it. |
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
+| [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
+| [`testdata/keep-going-driver.mjs`](./testdata/keep-going-driver.mjs) | Drives [`keep-going.ts`](./keep-going.ts) through scripted endings without a model, for `pi_keep_going_test.go`. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete event stream, ending in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer — the negative control. |
 
@@ -115,6 +117,40 @@ lost after Pi saves its checkpoint, the drain recovers its token and cost measur
 that checkpoint instead of compacting twice. An intent without an identifiable completed
 checkpoint is ambiguous and refuses another paid request. No process or request keeps a
 session warm.
+
+## Keeping a writer going until it commits
+
+A worker's goal is one commit in its lane worktree. [`keep-going.ts`](./keep-going.ts)
+is a pi extension, and `run-pi` loads it with `-e` only for a run that has that goal: the
+brief's first `**Target:**` line ends `(lane worktree)`, staging's `base_sha` file is
+beside the brief, and `TILLR_READ_ONLY_GROUP` is empty. The adapter exports the base as
+`TILLR_GOAL_BASE`. A judge, a fork checkout, a plain directory and a read-only node get
+neither the extension nor the variable.
+
+At pi's `agent_before_settle` boundary, the extension compares the worktree with the goal.
+If the worker ended its turn without meeting the goal and without naming a blocker, the
+extension appends a `tillr-goal` custom message that says what is missing: no commit,
+the uncommitted paths, or no `RESULT:` footer. It then asks pi to continue. The run
+carries on in the same session, so nothing counts it as a failure, starts a new run, or
+reports it as ended. These are the only endings it lets settle:
+
+| Ending | Why it settles |
+| :--- | :--- |
+| HEAD is off the base, the worktree is clean, and the last message has a footer | The goal is met. |
+| `RESULT: blocked` or `RESULT: trunk-broken` | The worker named a stop condition. The drain routes it as before. |
+| The tree and the report (whitespace aside) match the last nudge exactly | An identical repeat. Another nudge would change nothing, so the drain's own repeat rule takes over. A different report on an unchanged tree is nudged again. |
+| An error, an abort, a stop that is not `stop`, or a requested pause | These endings were not the model's choice, and each has its own route. |
+
+The extension keeps no count and no time limit of its own. The run's wall, if staging
+set one, still bounds the whole process. `RESULT: failed` with no commit is not an
+ending it accepts. On 2026-11-18, Sol 6.2 at medium ended 19 of 61 drain runs with that
+footer and no blocker, after one to five read-only commands, and nothing answered them.
+
+The claude, muse and agy adapters have no such hook yet. Each needs the same check at its
+harness's last actionable boundary, with the same three settling endings. Claude Code's
+`Stop` hook can block a stop with a reason. The muse and agy CLIs would need either a
+comparable hook or an adapter loop that re-opens the session with the missing-goal
+message.
 
 ## Pausing and continuing
 

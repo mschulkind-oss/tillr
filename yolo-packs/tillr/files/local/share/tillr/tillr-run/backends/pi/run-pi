@@ -159,6 +159,23 @@ if [ -n "$session" ]; then
     fi
 fi
 
+# A run whose goal is a commit keeps going until it has one (keep-going.ts). That is a
+# worker in a lane worktree, with the base sha staging wrote beside its brief, that is
+# not a read-only node: a judge, a fork checkout and a plain directory have other goals,
+# and their briefs do not name a lane worktree target.
+goal_base=
+target_kind=$(sed -n 's/^- \*\*Target:\*\* .* (\(.*\))$/\1/p' "$brief" | head -n 1)
+if [ -z "${TILLR_READ_ONLY_GROUP:-}" ] && [ "$target_kind" = "lane worktree" ] && [ -r "$(lane_path "$brief" base_sha)" ]; then
+    goal_base=$(tr -d ' \n' <"$(lane_path "$brief" base_sha)")
+fi
+if [ -n "$goal_base" ]; then
+    TILLR_GOAL_BASE=$goal_base
+    export TILLR_GOAL_BASE
+    set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/keep-going.ts"
+else
+    unset TILLR_GOAL_BASE
+fi
+
 # Only runner-managed launches have a pause file. Keep pi's PID private to the
 # watcher: signaling a timeout wrapper or process group would also signal tools.
 if [ -n "${TILLR_PAUSE_REQUEST:-}" ]; then
