@@ -109,6 +109,10 @@ type Decision struct {
 	ConflictID        string         `json:"conflict_id,omitempty"`
 	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
 	Inputs            *RunInputs     `json:"inputs,omitempty"`
+	// DispatchBuild is the loop build that planned a dispatch whose decision carries no
+	// Inputs (a design-seat or owner-question dispatch). The dispatch fact records it as
+	// its TillrBuild, so build migration knows the run's build (migrateBuildRuns).
+	DispatchBuild string `json:"dispatch_build,omitempty"`
 	// Readmitted marked a dispatch the removed input-change rule allowed. No pass writes
 	// it since the owner's ruling of 2026-11-17; recorded decisions still carry it.
 	Readmitted bool `json:"readmitted,omitempty"`
@@ -316,6 +320,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if err != nil {
 			return nil, err
 		}
+	}
+	buildHash, err := build.Hash()
+	if err != nil {
+		return nil, err
 	}
 	inputs := map[string]*RunInputs{}
 	for _, row := range items {
@@ -638,6 +646,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			request := *decision.RunRequest
 			request.WorkingDir = PlainDir
 			decision.RunRequest = &request
+		}
+		if decision.Inputs == nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
+			decision.DispatchBuild = buildHash
 		}
 		env, err := decisionEnvelope(decision, at)
 		if err != nil {

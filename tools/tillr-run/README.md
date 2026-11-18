@@ -181,7 +181,9 @@ tillr-run exec --store STORE --lane-root LANES --input REQUEST --resume
 path in `TILLR_PAUSE_REQUEST`; adapters that cannot stop at a tool-call gap also
 receive SIGTERM, with ten seconds before a process-group kill. A gap adapter is
 allowed to finish until the requested straggler bound, then its process group is
-killed. The first continuation message identifies an interrupted command and says
+killed. A request with no `timeout_ms`, which is how the loop's build migration asks,
+has no bound: a gap adapter stops at its next gap or ends on its own, and nothing is
+killed (`TestAPauseWithNoBoundWaitsForTheGapOrTheRunsOwnEnd`). The first continuation message identifies an interrupted command and says
 it may be run again. `paused` is an attempt outcome, never a verdict or a retry.
 
 The adapter declares its kind beside its program in `pause-kind`, not in a backend

@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ func TestNewBuildPausesThreeWorkersAndDispatchesBeforeTheirLastPause(t *testing.
 	if err := os.Chmod(adapter, 0755); err != nil {
 		t.Fatal(err)
 	}
+	writeForkFile(t, filepath.Join(filepath.Dir(adapter), "pause-kind"), run.PauseAtGap+"\n")
 	l.cfg.Policy.Backends["fixture"] = Backend{Adapter: adapter}
 	fixtureWrite(t, h.f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET allowed_paths='["' || item_id || '.txt"]'`)
@@ -101,6 +103,7 @@ func TestNewBuildPausesThreeWorkersAndDispatchesBeforeTheirLastPause(t *testing.
 
 func TestOlderWorkflowEvaluatorReceivesTheSameAttemptPause(t *testing.T) {
 	h := newRestartHarness(t, nil, nil)
+	declarePauseKind(t, h.l, run.PauseAtGap)
 	p := mustPlan(t, h.l)[0]
 	ok, w, err := h.l.applyPlan(context.Background(), p, runGit(t, h.f.root, "rev-parse", TrunkRef), h.l.cfg.Now())
 	if err != nil || !ok {
@@ -126,31 +129,110 @@ func TestOlderWorkflowEvaluatorReceivesTheSameAttemptPause(t *testing.T) {
 	})
 }
 
-func TestBuildMigrationTreatsMissingFactsAsOlderAndKeepsCurrentRuns(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprint(legacy), func(t *testing.T) {
+// A run with no dispatch fact has an unknown build, not an older one: the loop requests no
+// migration pause for it, and it finishes where it started. A run whose fact names another
+// build is paused; one that names this build is not.
+func TestBuildMigrationLeavesARunWithNoDispatchFactAndPausesOnlyAnOlderBuild(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		legacy, next bool
+		want         int
+	}{{"current", false, false, 0}, {"older", false, true, 1}, {"no-fact", true, true, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newRestartHarness(t, nil, nil)
+			declarePauseKind(t, h.l, run.PauseAtGap)
 			p := mustPlan(t, h.l)[0]
-			if legacy {
-				p.decision.Inputs = nil
+			if tc.legacy {
+				p.decision.Inputs, p.decision.DispatchBuild = nil, ""
 			}
 			if ok, _, err := h.l.applyPlan(context.Background(), p, runGit(t, h.f.root, "rev-parse", TrunkRef), h.l.cfg.Now()); err != nil || !ok {
 				t.Fatalf("claim=%v/%v", ok, err)
 			}
+			if tc.next {
+				h.l.build.Revision = "next-build"
+			}
 			if err := h.l.migrateBuildRuns(context.Background(), &LoopResult{}); err != nil {
 				t.Fatal(err)
 			}
+			if got := pauseRequests(t, h.f); got != tc.want {
+				t.Errorf("pauses=%d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// A design-seat dispatch (conflictDecision) carries no RunInputs. Its dispatch fact still
+// names the build that started it, so a pass on that build does not pause it as older. On
+// 2026-11-18 every conflict-design run was paused in its first second and SIGKILLed 120 s
+// later (run.pause-request events 1288425, 1288450 and 1288597).
+func TestADesignDispatchRecordsItsBuildAndIsNotPausedAsOlder(t *testing.T) {
+	f, l := designQuotaFixture(t)
+	l.cfg.Restart = &RestartConfig{}
+	declarePauseKind(t, l, run.PauseAtGap)
+	p := mustPlan(t, l)[0]
+	if p.decision.Action != ActionDispatch || p.decision.Reason != ReasonConflictDesign || p.decision.Inputs != nil {
+		t.Fatalf("fixture is not an inputs-free design dispatch: %+v", p.decision)
+	}
+	if ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("claim=%v/%v", ok, err)
+	}
+	if err := l.migrateBuildRuns(context.Background(), &LoopResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pauseRequests(t, f); got != 0 {
+		t.Fatalf("a design run on the current build was paused %d time(s)", got)
+	}
+	hash, _ := l.build.Hash()
+	fixtureRead(t, f, func(r *store.Reader) error {
+		facts, err := readInputDecisions(r)
+		if err != nil {
+			return err
+		}
+		fact := facts[p.decision.RunRequest.RunID]
+		if fact.Inputs == nil || fact.Inputs.TillrBuild != hash || fact.BlockConflict == nil {
+			t.Errorf("design dispatch fact %+v, want build %s and its conflict", fact, hash)
+		}
+		return nil
+	})
+}
+
+// A migration pause is requested only of an adapter that declares it stops at a gap, and
+// with no straggler bound, so nothing kills the worker: one that cannot stop at a gap, or
+// declares nothing, finishes on the build it started under.
+func TestAMigrationPauseIsOnlyForAGapAdapterAndHasNoKillBound(t *testing.T) {
+	for _, kind := range []string{run.PauseAtGap, run.PauseWhereItStands, run.PauseCannotResume, ""} {
+		t.Run(kind, func(t *testing.T) {
+			h := newRestartHarness(t, nil, nil)
+			declarePauseKind(t, h.l, kind)
+			p := mustPlan(t, h.l)[0]
+			if ok, _, err := h.l.applyPlan(context.Background(), p, runGit(t, h.f.root, "rev-parse", TrunkRef), h.l.cfg.Now()); err != nil || !ok {
+				t.Fatalf("claim=%v/%v", ok, err)
+			}
+			h.l.build.Revision = "next-build"
+			if err := h.l.migrateBuildRuns(context.Background(), &LoopResult{}); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if kind == run.PauseAtGap {
+				want = 1
+			}
+			if got := pauseRequests(t, h.f); got != want {
+				t.Fatalf("pauses=%d, want %d", got, want)
+			}
+			if want == 0 {
+				return
+			}
 			fixtureRead(t, h.f, func(r *store.Reader) error {
-				var n int
-				if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, run.PauseRequestKind).Scan(&n); err != nil {
+				var raw []byte
+				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, run.PauseRequestKind).Scan(&raw); err != nil {
 					return err
 				}
-				want := 0
-				if legacy {
-					want = 1
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					return err
 				}
-				if n != want {
-					t.Errorf("legacy=%v pauses=%d, want %d", legacy, n, want)
+				if _, bounded := body["timeout_ms"]; bounded || body["tillr_build"] == nil {
+					t.Errorf("migration pause %s, want a build and no timeout_ms", raw)
 				}
 				return nil
 			})
@@ -158,8 +240,31 @@ func TestBuildMigrationTreatsMissingFactsAsOlderAndKeepsCurrentRuns(t *testing.T
 	}
 }
 
+// declarePauseKind points the fixture backend at an adapter whose directory declares kind,
+// as each real adapter's pause-kind file does; "" declares nothing.
+func declarePauseKind(t *testing.T, l *Loop, kind string) {
+	t.Helper()
+	dir := scratchUnderDurable(t)
+	if kind != "" {
+		writeForkFile(t, filepath.Join(dir, "pause-kind"), kind+"\n")
+	}
+	b := l.cfg.Policy.Backends["fixture"]
+	b.Adapter = filepath.Join(dir, "fixture")
+	l.cfg.Policy.Backends["fixture"] = b
+}
+
+func pauseRequests(t *testing.T, f refusalLoopFixture) int {
+	t.Helper()
+	var n int
+	fixtureRead(t, f, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, run.PauseRequestKind).Scan(&n)
+	})
+	return n
+}
+
 func TestNewBuildRequestsOnePauseWithoutChangingDispatchInputs(t *testing.T) {
 	h := newRestartHarness(t, nil, nil)
+	declarePauseKind(t, h.l, run.PauseAtGap)
 	p := mustPlan(t, h.l)[0]
 	ok, _, err := h.l.applyPlan(context.Background(), p, runGit(t, h.f.root, "rev-parse", TrunkRef), h.l.cfg.Now())
 	if err != nil || !ok {

@@ -167,12 +167,18 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, 
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				return <-done, false, false, Internalf("handing pause request to adapter: %v", err)
 			}
+			// A request with no timeout_ms (the loop's build migration) has no straggler
+			// bound for an at-gap adapter: it stops at its next gap or ends on its own, and
+			// nothing is killed. Only a bounded request, the operator's, ends a straggler.
 			bound := time.Duration(request.TimeoutMS) * time.Millisecond
 			if kind != PauseAtGap {
 				bound = 10 * time.Second
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 			}
-			elapsed := after(bound)
+			var elapsed <-chan time.Time
+			if bound > 0 {
+				elapsed = after(bound)
+			}
 			select {
 			case err := <-done:
 				// A harness may exit while its shell is still running. Pausing must not
