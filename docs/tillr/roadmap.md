@@ -2851,6 +2851,54 @@ reopened.
   full suites. This replaces the starting point named in the ruling above; that ruling's other
   two points still hold.
 
+**Ruling, 2026-11-18 (answers the conflict the eighth and ninth runs raised):** both runs built
+c1 to c5, saw the shutdown tests pass, and stopped without a commit because a full suite was red
+for a reason outside their change. Neither failure is a design question, so the criteria, the
+paths and the shutdown design stand as written. What was missing is the rule for finishing
+when the base is red, and these five points are that rule.
+
+- **The `fork-check` suite is red on the base.** Measured on 2026-11-18 in a clean worktree at
+  `c15a5440e`, with none of this item's work applied: `python3 tests/fork-check.test.py` exited 1
+  at the assertion `a timing declaration no longer matches a hit`, naming
+  `tools/bedrock-spend/internal/cli/cli_test.go: if time.Since(started) > time.Second {`. Commit
+  `e99cdf1a9` removed that line from the test and left its entry in
+  `tools/gate-timing-declarations.json`. That file is outside this item's paths and stays
+  outside them; the entry is the trunk's to repair.
+- **How to prove the Python suite anyway.** Run `python3 tests/fork-check.test.py` once on the
+  unchanged declarations file, with no limit shorter than the run, and keep the assertion it
+  stops at. Remove the stale entry in the working tree only and run the suite again; that run
+  is the proof of c2 and its output goes in the report. Restore the file with
+  `git checkout -- tools/gate-timing-declarations.json`, check that `git status --short` does
+  not list it, and only then commit. If the first run passed, because the entry was repaired on
+  the run's base, skip the removal.
+- **The heavy test is not this item's.** The ninth run saw
+  `TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery/legacy` fail once inside the full drain
+  suite with the owner gone before its judge child started. That test waits on a child process
+  starting and has failed the same way in another item's full run while passing alone. A run
+  that sees it fail in the full suite runs it alone once, with
+  `go test ./drain -count=1 -run TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery` in
+  `tools/tillr-drain`. If it passes alone, the run reports both results with the command and
+  date and carries on to its commit. If it fails alone, the run stops and reports the trunk
+  broken, naming the test and the base. Any other drain failure is the candidate's until a run
+  on the base shows otherwise.
+- **Commit, then report.** A red suite on the base is not a reason to end without a commit: a
+  run with no commit has no candidate, and the base cannot be replayed against nothing. Make
+  the one commit, holding this item's paths and the pack copy and nothing else, once the
+  shutdown tests, the adapter suite and the drain suite are accounted for as above. Then, if the
+  first `fork-check` run stopped at the stale declaration, end the report with the trunk broken,
+  naming that assertion, the declarations file and the base sha. Otherwise report done.
+- **Start from the ninth run's work.** It is kept at
+  `refs/tillr/preserved/run-item-loop-stop-ends-rolling-checks-a9`, uncommitted work saved on
+  base `3318def2f`: eleven files, which are the runner, its test, the adapter and its embedded
+  copy, the drain shutdown with its tests and README, and the pack copies. It reported the
+  focused shutdown tests, the adapter suite, the c4 mutation, `just pack-sync` and
+  `yolo pack lint yolo-packs/tillr` passing; those are that run's report, not a check made here.
+  On 2026-11-18 `git merge-tree --write-tree --merge-base 3318def2f c15a5440e <that ref>`
+  printed a tree and no conflict. Carry it onto the current base and do not write c1 to c5
+  again; take this roadmap from the trunk. Run `python3 tools/tillr-loop/sync-adapter.py` and
+  `just pack-sync` again and do not resolve a copy by hand. A clean merge is not a verdict, so
+  the suites decide. This replaces the starting point named in the ruling above.
+
 **Outcomes:**
 
 - End all rolling checks before removing their temporary checkout.
