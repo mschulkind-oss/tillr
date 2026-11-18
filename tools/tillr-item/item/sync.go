@@ -1112,8 +1112,8 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		b.payload.BlockedBy = blockers
 
 		if seat, named := attrs["seat"]; named {
-			if !KnownSeat(seat) {
-				bad("invalid-seat", "seat %q is not one of the item model's seats: %s", seat, SeatList())
+			if !validSeatName(seat) {
+				bad("invalid-seat", invalidSeatName, seat)
 			}
 			b.payload.Seat = seat
 		}

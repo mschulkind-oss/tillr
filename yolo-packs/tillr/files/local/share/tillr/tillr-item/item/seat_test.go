@@ -97,9 +97,8 @@ func TestAnItemStoresTheSeatItAsksFor(t *testing.T) {
 	}
 }
 
-// A seat outside the item model's vocabulary is refused at the write face, naming the seat
-// and the vocabulary: a stored value that means nothing is a typo, not a role.
-func TestAnItemRefusesASeatThatDoesNotExist(t *testing.T) {
+// Apply checks the spelling of a seat, not whether the backend policy maps it.
+func TestAnItemChecksOnlyTheShapeOfASeatName(t *testing.T) {
 	ctx := context.Background()
 	s, err := store.InitFixture(ctx, filepath.Join(scratch(t), "board.sqlite3"))
 	if err != nil {
@@ -107,16 +106,19 @@ func TestAnItemRefusesASeatThatDoesNotExist(t *testing.T) {
 	}
 	defer s.Close()
 
-	_, err = applyRecord(t, s, seatRecord(t, "item_042", "qa"))
-	if err == nil {
-		t.Fatalf("an item asking for seat \"qa\" was accepted")
+	if _, err := applyRecord(t, s, seatRecord(t, "item_042", "qa")); err != nil {
+		t.Fatalf("applying seat qa: %v", err)
 	}
-	if code := item.ExitCode(err); code != 2 {
-		t.Fatalf("the refusal exits %d, want 2", code)
+	if got := showSeat(t, s, "item_042"); got != "qa" {
+		t.Fatalf("seat %q, want qa", got)
 	}
-	for _, want := range []string{`"qa"`, "design, build, review, scout"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("the refusal %q does not name %q", err, want)
+	for _, seat := range []string{"QA", "2nd"} {
+		_, err := applyRecord(t, s, seatRecord(t, "item_043", seat))
+		if err == nil || item.ExitCode(err) != 2 {
+			t.Fatalf("applying seat %q: want exit code 2, got %v", seat, err)
+		}
+		if !strings.Contains(err.Error(), `"`+seat+`"`) || !strings.Contains(err.Error(), "backend policy") {
+			t.Fatalf("refusal for %q does not name the seat and backend policy: %v", seat, err)
 		}
 	}
 }

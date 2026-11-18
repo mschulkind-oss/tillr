@@ -222,7 +222,7 @@ func TestSyncReportsEachFindingAndSkipsOnlyItsFile(t *testing.T) {
 		{"no criterion", "missing-criterion", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" -->\nprose only\n"},
 		{"unknown attribute", "unknown-attribute", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" rank=\"a\" -->\n- **c1:** x\n"},
 		{"unknown blocker", "unknown-blocker", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" blocked_by=\"item-nowhere\" -->\n- **c1:** x\n"},
-		{"unknown seat", "invalid-seat", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" seat=\"architect\" -->\n- **c1:** x\n"},
+		{"malformed seat", "invalid-seat", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" seat=\"Architect\" -->\n- **c1:** x\n"},
 		{"unclosed", "malformed-directive", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\"\n- **c1:** x\n"},
 	}
 	for _, c := range cases {
@@ -408,9 +408,9 @@ func TestSyncLeavesAJudgedDefinitionFrozen(t *testing.T) {
 // A seat names the role the item asks for; it is part of the definition.
 func TestSyncMapsTheSeat(t *testing.T) {
 	s := syncStore(t)
-	runSync(t, s, "", doc("docs/a.md", strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/thing/" seat="design"`, 1)))
-	if got := column(t, s, `SELECT seat FROM items`); got != "design" {
-		t.Fatalf("seat %q, want design", got)
+	runSync(t, s, "", doc("docs/a.md", strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/thing/" seat="architect-2"`, 1)))
+	if got := column(t, s, `SELECT seat FROM items`); got != "architect-2" {
+		t.Fatalf("seat %q, want architect-2", got)
 	}
 	report := runSync(t, s, "", doc("docs/a.md", goodBlock))
 	if report.UpdatedCount != 1 {
