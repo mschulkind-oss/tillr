@@ -7,3 +7,4 @@ func prepareHeavyTree() error {
 }
 func finishHeavyTree() error                   { return prepareHeavyTree() }
 func heavySupervisorIdentity() (string, error) { return "", prepareHeavyTree() }
+func reapWhileSupervising(<-chan int) func()   { return func() {} }

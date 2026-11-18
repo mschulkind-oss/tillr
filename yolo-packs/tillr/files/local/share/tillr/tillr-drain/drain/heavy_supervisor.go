@@ -105,11 +105,17 @@ func superviseHeavy(args []string) int {
 	if args[0] == "declaration" {
 		cmd.Env = append(cmd.Env, "TILLR_HEAVY_LOCK_FD=3")
 	}
+	// The supervisor adopts every orphan the command leaves; it reaps them as they exit
+	// rather than only after the command ends (reapWhileSupervising).
+	started := make(chan int, 1)
+	stopReaping := reapWhileSupervising(started)
+	notify := func(pid int) { started <- pid }
 	if args[0] == "declaration" {
-		err = runHeavyDeclarationGroup(cmd)
+		err = runHeavyDeclarationGroupStarted(cmd, notify)
 	} else {
-		err = runCheckGroup(cmd)
+		err = runCheckGroupStarted(cmd, notify)
 	}
+	stopReaping()
 	if cmd.Process == nil && err != nil {
 		if reportErr := os.WriteFile(args[1]+".start-error", []byte(err.Error()), 0600); reportErr != nil {
 			fmt.Fprintln(os.Stderr, "heavy startup diagnostic:", reportErr)

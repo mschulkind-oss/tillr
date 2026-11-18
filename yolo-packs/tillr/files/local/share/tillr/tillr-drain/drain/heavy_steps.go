@@ -271,10 +271,16 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 // Declaration checks have their own process groups for CPU observation. Give the
 // gate a termination signal so it cancels and reaps those groups before tree removal.
 func runHeavyDeclarationGroup(cmd *exec.Cmd) error {
+	return runHeavyDeclarationGroupStarted(cmd, nil)
+}
+
+// runHeavyDeclarationGroupStarted is runHeavyDeclarationGroup that tells started the
+// command's pid once it has started.
+func runHeavyDeclarationGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = checkGroupGrace
-	err := cmd.Run()
+	err := startAndWait(cmd, started)
 	if cmd.Process != nil {
 		endProcessGroup(cmd.Process.Pid)
 	}
