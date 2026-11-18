@@ -363,12 +363,12 @@ func TestSeparateLeaseExpiriesEachRecordTheirGenerationTiming(t *testing.T) {
 	}
 }
 
-func TestGenerationTimingSumsIndependentExaminationsAndEnforcesBudget(t *testing.T) {
+func TestGenerationTimingSumsIndependentExaminationsAndComparesEachRunToTheBudget(t *testing.T) {
 	f, l := passFixture(t)
 	at := l.cfg.Now().UnixMilli()
 	l.recordPass(&PassTiming{TickID: "gen-1", AtMS: at, StageMS: 10, GateBudgetMS: 330, Applied: 2, DecisionCounts: map[string]int{ActionJudge: 2}})
 	for i := 0; i < 2; i++ {
-		l.recordPass(&PassTiming{TickID: "gen-1", AtMS: at, GateMS: 200, GateBudgetMS: 330, Gates: 1})
+		l.recordPass(&PassTiming{TickID: "gen-1", AtMS: at, GateMS: 200, GateMaxMS: 200, GateBudgetMS: 330, Gates: 1})
 	}
 	s := openFixture(t, f.storePath)
 	defer s.Close()
@@ -377,10 +377,12 @@ func TestGenerationTimingSumsIndependentExaminationsAndEnforcesBudget(t *testing
 		if err := r.QueryRow(`SELECT stage_ms, gate_ms, gate_over_budget FROM drain_passes WHERE tick_id = 'gen-1'`).Scan(&stage, &gate, &over); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT COUNT(*) FROM items WHERE item_id = ?`, gateRegressionItemID(l.cfg.Now())).Scan(&items); err != nil {
+		if err := r.QueryRow(`SELECT COUNT(*) FROM items WHERE item_id LIKE 'gate-budget-%'`).Scan(&items); err != nil {
 			return err
 		}
-		if stage != 10 || gate != 400 || over != 1 || items != 1 {
+		// Two 200ms runs against a 330ms per-run budget: the generation's cost is their
+		// 400ms sum, and neither run overran.
+		if stage != 10 || gate != 400 || over != 0 || items != 0 {
 			t.Fatalf("timing lost or duplicated measurements: stage %d gate %d over %d items %d", stage, gate, over, items)
 		}
 		return nil

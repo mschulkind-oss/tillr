@@ -654,10 +654,15 @@ to the document-fed Git landing workflow, not to the queue’s general readiness
 A store is document-fed when at least one stored item, in any state, has a block in
 the tracked documents that sync reads. A store with no such item keeps its ordinary
 seat and workflow routing. Closed, landed, and otherwise terminal items are never
-counted as unshared or sent to triage. Neither is a trunk fixer (`fixer-main-*`):
-the loop files it, its criterion is its whole brief, and it has no document to be
-declared in. A fixer an older build parked on a triage conflict has that conflict
-closed before the next plan and returns to its worker.
+counted as unshared or sent to triage. Neither is a generated item (`IsGeneratedItem`
+in [`drain/defect.go`](./drain/defect.go), the one list): a trunk fixer (`fixer-main-*`), a tooling-defect
+item (`defect-*`), a prose rewrite (`rewrite-*`), a revert's landing id
+(`revert-main-*`) or a gate-budget alarm an older build filed (`gate-budget-*`). The
+loop or sync generates it, its criteria are its whole brief, and it has no block of its
+own to be declared in. A generated item an older build parked on a triage conflict has
+that conflict closed before the next plan and returns to its worker; a gate-budget
+alarm is closed instead, because a budget is a reported target and the loop files no
+item for it.
 
 An open item without a block goes to **triage**, the design-seat run that shapes a
 stored request into a document declaration, with reason `triage-no-block`. It runs
@@ -870,7 +875,10 @@ trunk is a new key. A `NEXT-ACTOR:` line followed by a reason (`NEXT-ACTOR: owne
 ...`) still names its actor.
 
 Budgets are reported targets, never deadlines. The summary names each overrun's measured
-and declared times without changing the verdict. A sampled stall is retried once on the
+and declared times without changing the verdict. The pass gate budget (`DefaultGateBudget`)
+bounds one gate run: a pass is compared by its longest run (`drain_passes.gate_max_ms`),
+with the sum of its runs (`gate_ms`) reported beside it as cost. An overrun is a log line
+and the board's `over_budget` flag; it files no item. A sampled stall is retried once on the
 same tip; a second stall is red and files a fixer. A loop stop ends check processes before
 removing their checkout. `tillr-view status --store <store> --root <repository>` reports
 the green commit and its recorded proof time, recorded landings since it, first-red

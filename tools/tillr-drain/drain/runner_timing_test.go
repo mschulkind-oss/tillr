@@ -26,9 +26,10 @@ func TestRunnerProofTimeIsCountedApartAndNeverFailsALanding(t *testing.T) {
 	l := &Loop{cfg: LoopConfig{Store: path, Report: &report}, gateBudget: 10 * time.Second}
 	for _, runner := range []bool{true, false} {
 		timing := PassTiming{TickID: "pass", AtMS: 1000, GateBudgetMS: 10000}
-		timing.addGateTime(120000, runner)
-		if !runner {
-			timing.GateMS = 1000
+		if runner {
+			timing.addGateTime(120000, runner)
+		} else {
+			timing.addGateTime(1000, runner)
 		}
 		timing.addLandTime(200, runner)
 		if err := l.recordPass(&timing); err != nil {

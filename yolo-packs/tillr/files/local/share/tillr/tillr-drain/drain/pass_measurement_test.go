@@ -3,8 +3,8 @@ package drain
 import (
 	"context"
 	"errors"
-	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,7 +72,9 @@ func TestAsyncMeasurementsAccumulateWithoutReplacingPassAnswers(t *testing.T) {
 		if err := r.QueryRow(`SELECT count(*), gate_ms, gate_count, gate_over_budget, ended_at, json_extract(decision_counts, '$.judge') FROM drain_passes`).Scan(&n, &gate, &gates, &over, &ended, &decisions); err != nil {
 			return err
 		}
-		if n != 1 || gate != 120 || gates != 2 || over != 1 || ended != 1100 || decisions != 2 {
+		// Two 60ms gates against a 100ms per-run budget: the cost is their sum, and neither
+		// run overran, so the pass is not over budget.
+		if n != 1 || gate != 120 || gates != 2 || over != 0 || ended != 1100 || decisions != 2 {
 			t.Errorf("completion replaced pass: %d %d %d %d %d %d", n, gate, gates, over, ended, decisions)
 		}
 		return nil
@@ -81,34 +83,59 @@ func TestAsyncMeasurementsAccumulateWithoutReplacingPassAnswers(t *testing.T) {
 	}
 }
 
-func TestAggregatePassGateTimeFilesTheBudgetRegression(t *testing.T) {
+// The budget is a per-run target, so a pass is over budget only when one of its gate runs
+// is: two runs each under it are not an overrun however their sum compares. And a budget is
+// a reported target, never a hold, so an overrun files no item.
+func TestThePassBudgetComparesEachGateRunAndFilesNothing(t *testing.T) {
 	path := filepath.Join(scratchUnderDurable(t), "store.db")
 	s, err := store.InitFixture(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
-	pass := PassTiming{TickID: "pass", AtMS: 1000, EndMS: 1100, DecisionCounts: map[string]int{"judge": 2}, Applied: 2, GateBudgetMS: 100}
-	if err := recordPassTiming(context.Background(), path, pass); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"under", "over"} {
+		pass := PassTiming{TickID: id, AtMS: 1000, EndMS: 1100, DecisionCounts: map[string]int{"judge": 2}, Applied: 2, GateBudgetMS: 100}
+		if err := recordPassTiming(context.Background(), path, pass); err != nil {
+			t.Fatal(err)
+		}
 	}
-	l := &Loop{cfg: LoopConfig{Store: path, Report: io.Discard}, gateBudget: 100 * time.Millisecond}
+	var report strings.Builder
+	l := &Loop{cfg: LoopConfig{Store: path, Report: &report}, gateBudget: 100 * time.Millisecond}
 	for i := 0; i < 2; i++ {
-		l.recordPass(&PassTiming{TickID: "pass", AtMS: 1000, GateBudgetMS: 100, GateMS: 60, Gates: 1})
+		l.recordPass(&PassTiming{TickID: "under", AtMS: 1000, GateBudgetMS: 100, GateMS: 60, GateMaxMS: 60, Gates: 1})
 	}
+	l.recordPass(&PassTiming{TickID: "over", AtMS: 1000, GateBudgetMS: 100, GateMS: 30, GateMaxMS: 30, Gates: 1})
+	l.recordPass(&PassTiming{TickID: "over", AtMS: 1000, GateBudgetMS: 100, GateMS: 150, GateMaxMS: 150, Gates: 1})
+	l.recordPass(&PassTiming{TickID: "over", AtMS: 1000, GateBudgetMS: 100, GateMS: 20, GateMaxMS: 20, Gates: 1})
 	s = openFixture(t, path)
 	defer s.Close()
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		for id, want := range map[string][3]int{"under": {120, 60, 0}, "over": {200, 150, 1}} {
+			var gate, longest, over int
+			if err := r.QueryRow(`SELECT gate_ms, gate_max_ms, gate_over_budget FROM drain_passes WHERE tick_id = ?`, id).Scan(&gate, &longest, &over); err != nil {
+				return err
+			}
+			if got := [3]int{gate, longest, over}; got != want {
+				t.Errorf("pass %s recorded gate/longest/over %v, want %v", id, got, want)
+			}
+		}
 		var n int
-		if err := r.QueryRow(`SELECT count(*) FROM items WHERE item_id = 'gate-budget-1970-01-01'`).Scan(&n); err != nil {
+		if err := r.QueryRow(`SELECT count(*) FROM items`).Scan(&n); err != nil {
 			return err
 		}
-		if n != 1 {
-			t.Errorf("aggregate overrun filed %d regression items, want 1", n)
+		if n != 0 {
+			t.Errorf("a gate overrun filed %d item(s); a budget is a reported target, never an item", n)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	out := report.String()
+	if strings.Count(out, "overran its budget") != 1 || !strings.Contains(out, "tick over ") {
+		t.Fatalf("the report must name the one overrunning pass once:\n%s", out)
+	}
+	if strings.Contains(out, "filed") {
+		t.Fatalf("the report names a filed item:\n%s", out)
 	}
 }
 
