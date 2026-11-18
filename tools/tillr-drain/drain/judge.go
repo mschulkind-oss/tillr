@@ -32,6 +32,7 @@ var errJudgeBackendHeld = errors.New("judge settlement waits for an open review 
 // JudgeReceipt retains the caller-owned identities and the exact checked bytes.
 // It travels with the gated candidate so a retained landing needs no second judge.
 type JudgeReceipt struct {
+	Build         string            `json:"tillr_build,omitempty"`
 	Options       item.JudgeOptions `json:"options"`
 	Raw           json.RawMessage   `json:"raw,omitempty"`
 	Request       run.Request       `json:"request"`
@@ -65,6 +66,12 @@ func judgeGrant(r *store.Reader, id string, at time.Time) (string, error) {
 }
 
 func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResult) (Candidate, bool, error) {
+	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if err != nil {
+			return c, false, err
+		}
+		return c, false, errRestartPending
+	}
 	var mode, grant string
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -111,6 +118,62 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			return c, false, readErr
 		}
 	}
+	buildHash, err := l.build.Hash()
+	if err != nil {
+		return c, false, err
+	}
+	var replacementRequest *run.Request
+	if receipt != nil && len(receipt.Raw) == 0 && l.cfg.Restart != nil {
+		var rec *run.Record
+		db, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return c, false, err
+		}
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			rec, err = terminalRecord(r, receipt.Request.RunID)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			return c, false, err
+		}
+		// A finished judge's output is retained. Only an interrupted session is
+		// repeated, never translated into a failure or a spent attempt.
+		missing := false
+		if rec == nil && receipt.Build == buildHash {
+			here, err := currentLoopOwner()
+			if err != nil {
+				return c, false, err
+			}
+			faces, err := liveRunFaces(l.cfg.Store, receipt.Request.RunID, here)
+			if err != nil {
+				return c, false, err
+			}
+			missing = len(faces) == 0
+		}
+		interrupted := receipt.Build != buildHash && (rec == nil || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
+		if interrupted || missing {
+			if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
+				return c, false, err
+			}
+			_, err := restartWork(ctx, l, func(child context.Context) (struct{}, error) {
+				return struct{}{}, l.awaitBuildReader(child, receipt.Request.RunID)
+			})
+			if err != nil {
+				return c, false, err
+			}
+			if err := l.restoreJudgeInputs(c, receipt); err != nil {
+				return c, false, err
+			}
+			req := receipt.Request
+			if !missing {
+				req.RunID += "-restart"
+			}
+			replacementRequest = &req
+			receipt = nil
+		}
+	}
 	if receipt == nil {
 		if grant == "" {
 			if c.Evaluator != nil {
@@ -121,6 +184,9 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, "no unexpired grant covers the item's criteria", result)
 		}
 		req := c.Evaluator
+		if replacementRequest != nil {
+			req = replacementRequest
+		}
 		if req == nil {
 			seat := l.cfg.Policy.seatList("review")
 			if len(seat) == 0 {
@@ -162,7 +228,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			req = &selected
 		}
-		receipt = &JudgeReceipt{Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
+		receipt = &JudgeReceipt{Build: buildHash, Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
 		receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
 		judged := c.Writers
 		if len(judged) == 0 {
@@ -185,7 +251,10 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if err := appendJudgment(ctx, l.cfg.Store, judgeRequestKind, "run", req.RunID, map[string]any{"item_id": c.ItemID, "writer_run_id": judgeWriterRun(c), "seat": "review", "request": req}, l.cfg.Now()); err != nil {
 			return c, false, err
 		}
-		rec, _, runErr := l.cfg.Steps.Run(ctx, *req)
+		rec, _, runErr := l.runRestartable(ctx, *req)
+		if errors.Is(runErr, errRestartPending) {
+			return c, false, runErr
+		}
 		if runErr != nil {
 			if ctx.Err() != nil {
 				return c, false, ctx.Err()
@@ -194,63 +263,16 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 		l.countSpend(result, rec)
 	} else if len(receipt.Raw) == 0 {
-		// The request was handed off before a restart. Do not start it a second time.
-		// A live face owns its lifetime; wait for its terminal record before restoring
-		// the lane inputs or inspecting its worktree.
-		for {
-			db, err := store.OpenRead(ctx, l.cfg.Store)
-			if err != nil {
-				return c, false, err
-			}
-			var rec *run.Record
-			err = db.ReadTx(ctx, func(r *store.Reader) error { var e error; rec, e = terminalRecord(r, receipt.Request.RunID); return e })
-			db.Close()
-			if err != nil {
-				return c, false, err
-			}
-			if rec != nil && rec.State != "running" {
-				l.countSpend(result, *rec)
-				break
-			}
-			var active int
-			db, err = store.OpenRead(ctx, l.cfg.Store)
-			if err != nil {
-				return c, false, err
-			}
-			err = db.ReadTx(ctx, func(r *store.Reader) error {
-				return r.QueryRow(`SELECT COUNT(*) FROM runs WHERE run_id=? AND state='running'`, receipt.Request.RunID).Scan(&active)
-			})
-			db.Close()
-			if err != nil {
-				return c, false, err
-			}
-			if active == 0 {
-				// A face may have started but not yet committed run.allocate.
-				// Never restore its inputs while that handoff is still live.
-				here, err := currentLoopOwner()
-				if err != nil {
-					return c, false, err
-				}
-				marked, err := liveRunWorkers(l.cfg.Store, receipt.Request.RunID, here)
-				if err != nil {
-					return c, false, err
-				}
-				live := false
-				for _, process := range marked {
-					face, err := processIsRunFace(process.PID)
-					if err != nil {
-						return c, false, err
-					}
-					live = live || face
-				}
-				if !live {
-					executionError = Externalf("judge handoff has no terminal record")
-					break
-				}
-			}
-			if !waitFor(ctx, 100*time.Millisecond) {
-				return c, false, ctx.Err()
-			}
+		rec, waitErr := restartWork(ctx, l, func(child context.Context) (run.Record, error) {
+			return l.awaitJudgeRecord(child, receipt.Request.RunID)
+		})
+		if errors.Is(waitErr, errRestartPending) || ctx.Err() != nil {
+			return c, false, waitErr
+		}
+		if waitErr != nil {
+			executionError = waitErr
+		} else {
+			l.countSpend(result, rec)
 		}
 	}
 	if err := l.restoreJudgeInputs(c, receipt); err != nil {

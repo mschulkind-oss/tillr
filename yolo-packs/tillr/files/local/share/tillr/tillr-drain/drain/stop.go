@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -25,10 +26,43 @@ import (
 // not refused: the interruption ended the segment that was in flight, and the
 // continuation's run.resume event reopens the run for judgment.
 func (s *ProcessSteps) startRunFace(cmd *exec.Cmd, req run.Request) error {
-	if req.Resume {
-		return withRunStartLock(context.Background(), s.Store, cmd.Start)
+	return s.startRunFaceContext(context.Background(), cmd, req)
+}
+
+func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, req run.Request) error {
+	start := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		loop, _ := ctx.Value(runStartAdmissionKey{}).(*Loop)
+		if loop == nil || loop.cfg.Restart == nil {
+			return cmd.Start()
+		}
+		db, err := store.Open(ctx, s.Store, true)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		// File and handoff are ordered by the same store writer. Hold it only
+		// through Start (not Wait); the child performs its own allocation later.
+		return db.WriteTx(ctx, func(tx *store.Tx) error {
+			state, err := restart.ReadState(tx.Reader(), restart.RoleDrain)
+			if err != nil {
+				return err
+			}
+			if len(state.Pending) > 0 {
+				return errRestartPending
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return cmd.Start()
+		})
 	}
-	return s.startRun(req.RunID, cmd.Start)
+	if req.Resume {
+		return withRunStartLock(ctx, s.Store, start)
+	}
+	return s.startRun(req.RunID, start)
 }
 
 func withRunStartLock(ctx context.Context, path string, action func() error) error {

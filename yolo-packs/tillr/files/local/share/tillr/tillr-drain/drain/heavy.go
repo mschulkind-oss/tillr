@@ -151,6 +151,9 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 		started := r.Now()
 		run, e = r.judgeTip(context.WithValue(ctx, heavyProgressKey{}, progress), run)
 		run.ReusedChecks = progress.reused
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
 		if e == nil && run.Result == "green" {
 			old := base
 			if old == "" {

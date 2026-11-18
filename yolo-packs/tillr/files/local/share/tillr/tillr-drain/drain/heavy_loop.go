@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,12 @@ import (
 // startHeavy is a trigger, not a gate on dispatch or a synchronous landing step.
 // The shared flock excludes replacement loops; this mutex coalesces local triggers.
 func (l *Loop) startHeavy(ctx context.Context, tip string) error {
+	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if err != nil {
+			return err
+		}
+		return errRestartPending
+	}
 	step, ok := l.cfg.Steps.(HeavyStep)
 	if !ok {
 		return Usagef("after-merge needs a heavy judge; the configured steps have none")
@@ -24,6 +31,8 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 		return nil
 	}
 	l.heavyRunning = true
+	// A heavy goroutine never owns its caller's mechanical-step place.
+	ctx = context.WithValue(ctx, restartMechanicalKey{}, nil)
 	l.heavyWG.Add(1)
 	go func() {
 		defer l.heavyWG.Done()
@@ -101,8 +110,8 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
-			out, err := runner.Run(ctx)
-			if err != nil && ctx.Err() == nil {
+			out, err := restartWork(ctx, l, runner.Run)
+			if err != nil && ctx.Err() == nil && !errors.Is(err, errRestartPending) {
 				l.reportf("loop: heavy runner fault: %v\n", err)
 			}
 			l.heavyMu.Lock()
@@ -111,7 +120,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				attempted = out.Runs[len(out.Runs)-1].TipSHA
 			}
 			// Losing the lock is not a judgment and must not consume this tip's trigger.
-			if !out.Busy {
+			if !out.Busy && !errors.Is(err, errRestartPending) {
 				l.heavyAttempted = attempted
 			}
 			// A trigger arriving after the runner's final tip read still owes work. Do not

@@ -21,6 +21,10 @@ type heavyOwnership struct {
 
 const heavyCleanupGuard = "heavy.cleanup-pending"
 
+type heavyCommandNotStarted struct{ detail string }
+
+func (e *heavyCommandNotStarted) Error() string { return e.detail }
+
 type heavyCleanupUnconfirmed struct{ detail string }
 
 func (e *heavyCleanupUnconfirmed) Error() string { return e.detail }
@@ -106,6 +110,12 @@ func superviseHeavy(args []string) int {
 	} else {
 		err = runCheckGroup(cmd)
 	}
+	if cmd.Process == nil && err != nil {
+		if reportErr := os.WriteFile(args[1]+".start-error", []byte(err.Error()), 0600); reportErr != nil {
+			fmt.Fprintln(os.Stderr, "heavy startup diagnostic:", reportErr)
+			return 4
+		}
+	}
 	if cleanupErr := finishHeavyTree(); cleanupErr != nil {
 		fmt.Fprintln(os.Stderr, "heavy cleanup unconfirmed:", cleanupErr)
 		return 4
@@ -137,6 +147,10 @@ func runOwnedHeavy(ctx context.Context, cmd *exec.Cmd, mode string) error {
 	if err != nil {
 		return err
 	}
+	startError := ownership.Guard + ".start-error"
+	if err := os.Remove(startError); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	argv := append([]string{"--tillr-heavy-supervisor", mode, ownership.Guard}, cmd.Args...)
 	// Keep the original command's streams, environment and checkout, replacing only
 	// its execution with the lifetime supervisor. The pipe has no writer in children.
@@ -146,6 +160,11 @@ func runOwnedHeavy(ctx context.Context, cmd *exec.Cmd, mode string) error {
 	err = runHeavySupervisorGroup(cmd)
 	if _, observeErr := os.Stat(ownership.Guard); observeErr == nil || !os.IsNotExist(observeErr) {
 		return &heavyCleanupUnconfirmed{detail: fmt.Sprintf("cleanup not acknowledged; checkout retained; independently recover descendants named by %s before clearing that guard", ownership.Guard)}
+	}
+	if raw, readErr := os.ReadFile(startError); readErr == nil {
+		return &heavyCommandNotStarted{detail: string(raw)}
+	} else if !os.IsNotExist(readErr) {
+		return readErr
 	}
 	return err
 }
