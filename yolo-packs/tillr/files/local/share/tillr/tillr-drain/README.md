@@ -1815,10 +1815,13 @@ These classes still keep their lanes:
 | Candidate-record mismatch | The unexpected HEAD must remain available for diagnosis rather than being reset to the recorded commit. |
 | Unverified pin or unsuccessful preservation/reset | Release cannot yet prove the candidate and remaining work survive lane reuse; the recorded error names the remedy. |
 
-A lane HEAD the store records is never a reason to keep the lane: the candidate head,
-a failed repair's recorded reset, an interrupted release's destination, or the loop's own
-document-retirement commit whose parent and tree the candidate's retirement binding names.
-A lane whose HEAD is none of these is kept as `unrecorded lane HEAD needs inspection`.
+A lane HEAD a release can restore is never a reason to keep the lane: the candidate head,
+a failed repair's recorded reset, or an interrupted release's destination. The loop's own
+document-retirement commit, whose parent and tree the candidate's retirement binding names,
+is recorded but not pinned, so its lane is kept as `lane holds the loop's retirement
+commit; the retry gates it in place`: the held item's own mover (its fault's remedy, then
+`tillr drain retry`) examines that lane and gates the retired head. A lane whose HEAD is
+none of these is kept as `unrecorded lane HEAD needs inspection`.
 That keep is recorded once: a later pass re-reads the HEAD before claiming anything, and
 when the same keep still stands it writes nothing.
 
