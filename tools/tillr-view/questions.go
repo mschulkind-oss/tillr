@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // This file is the board's only source of design-document question state, and it reads

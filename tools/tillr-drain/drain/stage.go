@@ -643,7 +643,7 @@ func readStagedItem(ctx context.Context, storePath, root, itemID string) (staged
 	defer r.Close()
 	var env record.Envelope
 	if err := r.ReadTx(ctx, func(reader *store.Reader) error {
-		found, err := item.Show(reader, itemID, root)
+		found, err := item.ReadStored(reader, itemID, root)
 		env = found
 		return err
 	}); err != nil {

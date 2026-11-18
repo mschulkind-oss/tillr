@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 func whyFace(args []string) int {

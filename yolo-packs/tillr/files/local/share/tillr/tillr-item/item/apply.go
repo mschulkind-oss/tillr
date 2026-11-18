@@ -71,6 +71,10 @@ type itemPayload struct {
 	// the item points at. They are never stored: the document is the only copy.
 	Questions       []Question `json:"questions,omitempty"`
 	QuestionsSource string     `json:"questions_source,omitempty"`
+	// QuestionsStatus is known only after a successful index read. Unknown carries
+	// QuestionsReason and must not be interpreted as a design with no questions.
+	QuestionsStatus string `json:"questions_status,omitempty"`
+	QuestionsReason string `json:"questions_reason,omitempty"`
 }
 
 // criterion is one acceptance criterion of an item.

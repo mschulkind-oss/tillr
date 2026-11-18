@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // main flushes the SQLite trace on every route out of the process: before os.Exit,
@@ -285,6 +287,7 @@ func showFace(args []string) (record.Envelope, int) {
 	path := fs.String("store", "", "the store to read")
 	id := fs.String("item", "", "the item to show")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
+	questionsCmd := fs.String("questions-cmd", "", "the program that answers Vantage's index, as one command line (default: "+vantage.IndexCommandName(nil)+")")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
 	}
@@ -302,7 +305,9 @@ func showFace(args []string) (record.Envelope, int) {
 	var stored record.Envelope
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		stored, err = item.Show(r, *id, *root)
+		stored, err = item.ShowWithQuestions(r, *id, *root, &vantage.VantageQuestions{
+			Root: *root, Command: strings.Fields(*questionsCmd), Context: ctx,
+		})
 		return err
 	})
 	if err != nil {

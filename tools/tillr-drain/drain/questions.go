@@ -3,7 +3,7 @@ package drain
 import (
 	"context"
 
-	"github.com/mschulkind-oss/tillr-drain/vantage"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // The planner's question reader lives in .../vantage, not here, because the board and the

@@ -172,7 +172,7 @@ invocation mistake does not hide the real reasons items are held.
 
 **Agent Details**
 
-- **Where:** the shared default in [`vantage.go`](../../tools/tillr-drain/vantage/vantage.go), its
+- **Where:** the shared default in [`vantage.go`](../../tools/tillr/vantage/vantage.go), its
   consumers in [`tillr-view`](../../tools/tillr-view/) and [`tillr-drain`](../../tools/tillr-drain/),
   and the [committed tillr delivery](../../yolo-packs/tillr/).
 - **Verify:** put a recording package-runner stub on PATH with no standalone checker; default
@@ -3608,7 +3608,7 @@ The measured gap on 2026-11-17 is large. `tillr drain why` listed six items held
 
 This item waits on one prerequisite and builds on landed work for the rest. The prerequisite is `item-qp-one-question-reader`, filed in [the queue persistence design](../design/tillr-queue-persistence.md), which makes the loop, the view and `tillr item show` read open questions through one reader in the shared library under `tools/tillr/`. That item is not landed: on 2026-11-17 a worker staged for this item found the reader still inside the loop's module and `tillr item show` still using its older hand-written parser, which skips numbered entries. A numbered question written by this item would then hold the item in the loop while `tillr item show` reported no open questions. So this item's directive names the prerequisite in `blocked_by`, this item is dispatched only after it lands, and this item relies on that reader and does not add a second or move the existing one. `item-view-no-unclassified` is landed. It gave every held item a class and a next mover, and this item scopes itself to what is left: the summary still counts holds by reason, and a `conflict-owner` row names "the owner" with no place to answer. `item-jl-owner-criterion-hold` holds an item that owes an owner-only criterion verdict, which is a separate case from a question, and it keeps its own reason. `item-comments-design-items-at-the-desk` is about where a design session runs and is unrelated beyond sharing the document. The design on queue persistence already rules that questions are document state and never item rows (`D-UT4`), and this item applies that ruling to the one path that still breaks it.
 
-<!-- tillr: item id="item-owner-conflict-is-a-document-question" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-qp-one-question-reader" prose="2" -->
+<!-- tillr: item id="item-owner-conflict-is-a-document-question" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the run that moves a conflict to the owner reports a decision for the owner, the loop's settle writes a numbered open question into the item's own document, directly under the item's block, in the `vantage: question` form the index reads. It carries the report's question and options, the run id and the date, and it lands through the same gate as a design ruling. The item is then held by the existing `question-open` rule, and no `conflict-owner` hold remains for it. A report that only says the lane's base is stale writes no question. A test covers both reports.
 - **c2:** The owner answers in the document, through the Vantage review path or an edit. When the answer lands, the next sync releases the item with no store command, and the conflict record is closed as answered. A test lands an answer and asserts the item is dispatched on the next pass.
