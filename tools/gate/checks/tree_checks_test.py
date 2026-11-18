@@ -19,6 +19,28 @@ go_build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(go_build)
 
 
+def missing_go_reads(reads, root):
+    """For each `tools/<module>/` read with a go.mod, the in-repo modules it replaces
+    with a relative path that `reads` does not cover."""
+    def covered(path):
+        return any(path == read or (read.endswith("/") and path.startswith(read)) for read in reads)
+    missing = {}
+    for read in reads:
+        if not read.endswith("/") or not (root / read / "go.mod").is_file():
+            continue
+        for line in (root / read / "go.mod").read_text().splitlines():
+            line = line.split("//", 1)[0]
+            if "=>" not in line:
+                continue
+            target = line.split("=>", 1)[1].split()
+            if not target or not target[0].startswith(("./", "../")):
+                continue
+            dependency = os.path.normpath(os.path.join(read, target[0])) + "/"
+            if not dependency.startswith("..") and not covered(dependency):
+                missing.setdefault(read, []).append(dependency)
+    return missing
+
+
 class TreeChecks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"])
@@ -105,6 +127,29 @@ class TreeChecks(unittest.TestCase):
                     and any(isinstance(target, ast.Name) and target.id == "GO_TOOL_DIRS"
                             for target in node.targets))
         self.assertEqual(go_build.GO_TOOL_DIRS, dirs)
+
+    def test_a_declaration_reading_a_go_module_reads_its_in_repo_dependencies(self):
+        # A declaration that builds or runs a Go module is red when that module's in-repo
+        # dependency breaks it, so `reads` that name the module and not its dependencies
+        # select nothing for the change that broke it. On 2026-11-18 the tillr-view suite
+        # read only its own directory and a drain-only landing turned the trunk red. The
+        # dependency set is each module's relative `replace` directives (an unpublished
+        # v0.0.0 module builds against a sibling only through one).
+        fixture = self.root / "tools"
+        (fixture / "app").mkdir(parents=True)
+        (fixture / "lib").mkdir()
+        (fixture / "app/go.mod").write_text("module x/app\n\nreplace x/lib => ../lib\n")
+        self.assertEqual(missing_go_reads(["tools/app/"], self.root), {"tools/app/": ["tools/lib/"]})
+        self.assertEqual(missing_go_reads(["tools/app/", "tools/lib/"], self.root), {})
+        repo = HERE.parents[2]
+        for path in sorted(HERE.glob("*.json")):
+            reads = json.loads(path.read_text()).get("reads", [])
+            with self.subTest(declaration=path.name):
+                self.assertEqual(missing_go_reads(reads, repo), {})
+        # This test reads every registered module's go.mod, so it must run when one changes.
+        own = json.loads((HERE / "tree-checks-test.json").read_text())["reads"]
+        for directory in go_build.GO_TOOL_DIRS:
+            self.assertIn(directory + "/go.mod", own)
 
     def module_fixture(self):
         module = self.root / "tool"

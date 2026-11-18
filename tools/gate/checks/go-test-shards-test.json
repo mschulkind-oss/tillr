@@ -5,6 +5,6 @@
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 3600000,
-  "reads": ["tools/go-test-shards.py", "tools/go-test-durations.json", "tests/go-test-shards.test.py", "tools/tillr-drain/"],
+  "reads": ["tools/go-test-shards.py", "tools/go-test-durations.json", "tests/go-test-shards.test.py", "tools/tillr-drain/", "tools/tillr/", "tools/tillr-item/", "tools/tillr-run/", "tools/tillr-land/"],
   "tools": ["python3", "go", "git"]
 }

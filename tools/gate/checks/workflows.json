@@ -5,7 +5,7 @@
   "scope": "change",
   "tier": "heavy",
   "timeout_ms": 10000,
-  "reads": ["config/tillr/workflows/", "config/tillr/commands.json", "tools/tillr-drain/", "tools/gate/checks/workflows.py", "tools/gate/checks/change_common.py"],
+  "reads": ["config/tillr/workflows/", "config/tillr/commands.json", "tools/tillr-drain/", "tools/tillr/", "tools/tillr-item/", "tools/tillr-run/", "tools/tillr-land/", "tools/gate/checks/workflows.py", "tools/gate/checks/change_common.py"],
   "tools": ["python3", "git", "go"],
   "remember": false
 }
