@@ -1956,6 +1956,45 @@ class Cancellation:
         with self._lock:
             self._procs.discard(proc)
 
+    @contextlib.contextmanager
+    def on_sigterm(self):
+        """Let SIGTERM stop owned sessions without taking locks in a signal handler.
+
+        Python delivers signals on the main thread, which may already hold _lock.
+        A separate thread therefore does the cancellation; the handler only sets a flag.
+        Embedded callers running a plan off the main thread own their signal policy.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        finished = threading.Event()
+        terminated = False
+
+        def stop(signum, frame):
+            nonlocal terminated
+            # Event.set also takes a non-reentrant lock. Even repeated signals
+            # must do nothing here but assign a flag.
+            terminated = True
+
+        def watch():
+            while not finished.wait(0.01):
+                if terminated:
+                    self.cancel()
+                    return
+
+        previous = signal.signal(signal.SIGTERM, stop)
+        watcher = threading.Thread(target=watch, name="fork-check-sigterm", daemon=True)
+        watcher.start()
+        try:
+            yield
+        finally:
+            finished.set()
+            watcher.join()
+            signal.signal(signal.SIGTERM, previous)
+        if terminated:
+            # No baseline, verdict, or watermark may advance from an interrupted pass.
+            raise SystemExit(128 + signal.SIGTERM)
+
     def cancel(self) -> None:
         with self._lock:
             self.cancelled = True
@@ -5954,7 +5993,7 @@ def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
         more = "" if len(running) <= 3 else f" and {len(running) - 3} more"
         return f"{len(running)} check(s) at once ({named}{more})"
 
-    with heartbeat(describe):
+    with cancellation.on_sigterm(), heartbeat(describe):
         check_wall, peak, halted = run_checks(
             checks, jobs,
             lambda index: execute_check(checks[index], root, diff_base, cancellation,
@@ -9954,8 +9993,10 @@ def run_replay(argv: list[str]) -> int:
               file=sys.stderr)
         return 2
     copies = [copy.copy(check) for check in checks]
-    for check in copies:
-        execute_attempt(root, check, gate.diff_base)
+    cancellation = Cancellation()
+    with cancellation.on_sigterm():
+        for check in copies:
+            execute_attempt(root, check, gate.diff_base, cancel=cancellation)
     if any(check.unanswered or check.rc == CHECK_STALLED_RC for check in copies):
         print("fork-check replay: a named check could not judge", file=sys.stderr)
         return 2

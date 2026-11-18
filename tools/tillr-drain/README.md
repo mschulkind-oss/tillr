@@ -978,10 +978,16 @@ recorded, then every process of this user carrying that run and store identity g
 
 A stop that arrives during the loop's own checks ends them before their worktrees go. The
 rolling tier's program and the trunk-already-red replay's run in a process group of their
-own; the stop's cancellation kills that whole group, a normal exit kills whatever the
-program left in it, and the step waits (up to five seconds) for the group to be gone before
-it removes its scratch worktree. A pin (`refs/tillr/runs/<run>`) that a stop interrupts is
-finished rather than cut off, bounded at thirty seconds, because the pin is what keeps a
+own. Cancellation first sends SIGTERM to the program so it can end checks it started in
+separate sessions; `fork-check` handles SIGTERM by canceling its registered checks and
+exiting 143 without recording a verdict. The loop allows five seconds for that cleanup
+before escalating to SIGKILL. On any exit, the step kills what remains in the program's
+own group and waits briefly for it to be gone before removing the scratch worktree.
+A check program that starts separate sessions must own their SIGTERM cleanup: killing
+only the program's group cannot reach those sessions.
+
+A pin (`refs/tillr/runs/<run>`) that a stop interrupts is finished rather than cut off,
+bounded at thirty seconds, because the pin is what keeps a
 candidate reachable after its lane is reset.
 
 For an unbounded claim with no terminal record, replacement loops compare the recorded

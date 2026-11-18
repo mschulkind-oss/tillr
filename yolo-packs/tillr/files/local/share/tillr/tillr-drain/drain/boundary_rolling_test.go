@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -267,24 +268,81 @@ func processAlive(pid int) bool {
 // removed: on 2026-11-17 a `go test -parallel 48 ./...` kept running for two minutes in the
 // deleted worktree after the loop stopped, because the cancellation reached only the program.
 func TestAStoppedRollingRunEndsItsWholeProcessTreeBeforeRemovingItsWorktree(t *testing.T) {
+	testStoppedScratchChecks(t, false, false)
+}
+
+func TestAStoppedReplayEndsItsWholeProcessTreeBeforeRemovingItsWorktree(t *testing.T) {
+	testStoppedScratchChecks(t, true, false)
+}
+
+func TestStoppedRollingAdapterEndsItsChecks(t *testing.T) {
+	testStoppedScratchChecks(t, false, true)
+}
+
+func TestStoppedReplayAdapterEndsItsChecks(t *testing.T) {
+	testStoppedScratchChecks(t, true, true)
+}
+
+func testStoppedScratchChecks(t *testing.T, replay, adapter bool) {
+	t.Helper()
 	root, tip := committedRoot(t)
 	gate := scratchUnderDurable(t)
 	inside, pidFile := filepath.Join(gate, "inside"), filepath.Join(gate, "pid")
-	program := executable(t, "sleep 300 >/dev/null 2>&1 &\necho $! > "+pidFile+"\ntouch "+inside+"\nwait")
+	// Like fork-check, the program owns a check in a separate session. Only
+	// SIGTERM gives it a chance to clean that session before the worktree goes.
+	cleaned := filepath.Join(gate, "cleaned")
+	fixture := `import os, pathlib, signal, subprocess
+child = subprocess.Popen(['sleep', '300'], preexec_fn=os.setsid)
+def stop(signum, frame):
+    os.killpg(child.pid, signal.SIGKILL)
+    child.wait()
+    pathlib.Path('` + cleaned + `').write_text(str(pathlib.Path.cwd().exists()))
+    raise SystemExit(143)
+signal.signal(signal.SIGTERM, stop)
+pathlib.Path('` + pidFile + `').write_text(str(child.pid) + ' ' + str(os.getpid()))
+pathlib.Path('` + inside + `').touch()
+signal.pause()
+`
+	program := executable(t, "exec python3 - <<'PY'\n"+fixture+"PY")
+	if adapter {
+		path, err := filepath.Abs("../../tillr-loop/tillr-loop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "tools"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "tools", "fork-check.py"), []byte(fixture), 0644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, root, "add", "tools/fork-check.py")
+		runGit(t, root, "commit", "-m", "Add check fixture")
+		tip = runGit(t, root, "rev-parse", "HEAD")
+		program = path + " rolling --all"
+		if replay {
+			program = path + " replay --only {only}"
+		}
+	}
 	laneRoot := filepath.Join(root, ".tillr", "lanes")
-	steps := &ProcessSteps{Root: root, LaneRoot: laneRoot, RollingProgram: program}
+	steps := &ProcessSteps{Root: root, LaneRoot: laneRoot, RollingProgram: program, ReplayProgram: program}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := steps.Rolling(ctx, "", tip)
-		done <- err
+		if replay {
+			_, err := steps.Replay(ctx, Candidate{}, tip, []string{"check"})
+			done <- err
+		} else {
+			_, err := steps.Rolling(ctx, "", tip)
+			done <- err
+		}
 	}()
 	waitForPath(t, inside)
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	pids := strings.Fields(string(raw))
+	pid, err := strconv.Atoi(pids[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +352,48 @@ func TestAStoppedRollingRunEndsItsWholeProcessTreeBeforeRemovingItsWorktree(t *t
 	}
 	cancel()
 	<-done
-	if processAlive(pid) {
-		t.Fatalf("the rolling check's child %d outlived the stopped rolling run", pid)
+	for _, rawPID := range pids {
+		checkPID, err := strconv.Atoi(rawPID)
+		if err != nil || processAlive(checkPID) {
+			t.Fatalf("the scratch check process %s outlived the stopped run (parse: %v)", rawPID, err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(laneRoot, ".rolling", "worktree")); !os.IsNotExist(err) {
+	if body, err := os.ReadFile(cleaned); err != nil || string(body) != "True" {
+		t.Fatalf("checks were not ended before worktree cleanup: %q, %v", body, err)
+	}
+	worktree := filepath.Join(laneRoot, ".rolling", "worktree")
+	if replay {
+		worktree = filepath.Join(laneRoot, ".replay", shortSHA(tip))
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
 		t.Fatalf("the stopped rolling run left its worktree: %v", err)
+	}
+}
+
+func TestAStoppedCheckThatIgnoresSIGTERMEscalatesToSIGKILL(t *testing.T) {
+	ready := filepath.Join(scratchUnderDurable(t), "ready")
+	program := executable(t, `exec python3 - <<'PY'
+import pathlib, signal
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pathlib.Path('`+ready+`').touch()
+signal.pause()
+PY`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, program)
+	done := make(chan error, 1)
+	go func() { done <- runCheckGroup(cmd) }()
+	waitForPath(t, ready)
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a canceled check answered success")
+	}
+	if processAlive(cmd.Process.Pid) {
+		t.Fatal("the SIGTERM-ignoring check survived escalation")
+	}
+	status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("check exit = %v, want SIGKILL", cmd.ProcessState)
 	}
 }
 

@@ -845,7 +845,10 @@ def revision_check(kind: str, args: argparse.Namespace) -> int:
     else:
         flags = ["--tier", "rolling", *(["--all"] if args.all else ["--since", args.since])]
     try:
-        return subprocess.run(["python3", "tools/fork-check.py", *flags]).returncode
+        # Keep the PID the drain signals: fork-check owns the separate check sessions.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execvp("python3", ["python3", "tools/fork-check.py", *flags])
     except OSError as err:
         raise Refusal(EXIT_EXTERNAL, f"cannot run revision check: {err}") from err
 
