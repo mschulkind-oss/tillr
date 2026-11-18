@@ -150,6 +150,63 @@ func clearCandidateRelease(tx *store.Tx, c Candidate, at time.Time) error {
 	return appendEffect(tx, examinationOwnerKind, c.RunID, (*LoopOwner)(nil), at)
 }
 
+// recordedHeadKeep answers why a held candidate's lane HEAD keeps the lane, or "" when
+// the HEAD is one the store records: the candidate head, the reset a failed repair staging
+// recorded, an interrupted release's destination, or the loop's own document-retirement
+// commit whose parent and tree the candidate's retirement binding names (recoverRetirement).
+// It only reads, so a pass can learn that a recorded keep still stands without claiming
+// the lane to find out.
+func (l *Loop) recordedHeadKeep(ctx context.Context, work *pendingWork, reason string) (string, error) {
+	c := *work.Candidate
+	// Failed repair staging may have reset to its captured trunk, but never
+	// authorizes discarding arbitrary later commits in the retained checkout.
+	repairReset := ""
+	if work.RepairHold != nil {
+		repairReset = work.RepairHold.TrunkSHA
+	}
+	if reason == ReasonRepairStagingFailed {
+		// The immediate examination still has its pre-repair snapshot; read the
+		// durable basis the failed repair just recorded, rather than guessing main.
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return "", err
+		}
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			var raw []byte
+			err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, repairHeldKind, c.RunID).Scan(&raw)
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			var hold repairHold
+			if err := json.Unmarshal(raw, &hold); err != nil {
+				return err
+			}
+			repairReset = hold.TrunkSHA
+			return nil
+		})
+		s.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+	head, err := l.revParse(ctx, c.Worktree, "HEAD")
+	if err != nil {
+		return "unrecorded lane HEAD needs inspection", nil
+	}
+	if head == c.HeadSHA || head == repairReset || head == work.ReleasePending {
+		return "", nil
+	}
+	if c.WorkerHeadSHA != "" && c.RetirementTreeSHA != "" {
+		if retired, err := l.recoverRetirement(ctx, c); err == nil && retired.HeadSHA == head {
+			return "", nil
+		}
+	}
+	return "unrecorded lane HEAD needs inspection", nil
+}
+
 // releaseHeldCandidate claims idle holds; it never borrows another examiner's
 // same-run lease, even when that examiner lives in this process.
 func (l *Loop) releaseHeldCandidate(ctx context.Context, work *pendingWork, reason string) (bool, error) {
@@ -159,6 +216,18 @@ func (l *Loop) releaseHeldCandidate(ctx context.Context, work *pendingWork, reas
 func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason string, examining bool) (released bool, err error) {
 	if work.LaneReleased || work.Done || candidateKeepReason(work, reason) != "" {
 		return false, nil
+	}
+	if !examining && work.LaneKeepReason != "" {
+		// A keep the store already records is re-read before any claim: when the
+		// lane's HEAD still keeps it for the same reason, nothing would change, so the
+		// pass writes nothing rather than claiming and releasing the lane to find out.
+		kept, err := l.recordedHeadKeep(ctx, work, reason)
+		if err != nil {
+			return false, err
+		}
+		if kept == work.LaneKeepReason {
+			return false, nil
+		}
 	}
 	owner, claimed, err := l.claimCandidateRelease(ctx, work, reason, examining)
 	if err != nil || !claimed {
@@ -185,43 +254,9 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 			return clearCandidateRelease(tx, c, l.cfg.Now())
 		}))
 	}()
-	kept := ""
-	// Failed repair staging may have reset to its captured trunk, but never
-	// authorizes discarding arbitrary later commits in the retained checkout.
-	repairReset := ""
-	if work.RepairHold != nil {
-		repairReset = work.RepairHold.TrunkSHA
-	}
-	if reason == ReasonRepairStagingFailed {
-		// The immediate examination still has its pre-repair snapshot; read the
-		// durable basis the failed repair just recorded, rather than guessing main.
-		s, err := store.OpenRead(ctx, l.cfg.Store)
-		if err != nil {
-			return false, err
-		}
-		err = s.ReadTx(ctx, func(r *store.Reader) error {
-			var raw []byte
-			err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, repairHeldKind, c.RunID).Scan(&raw)
-			if err == sql.ErrNoRows {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			var hold repairHold
-			if err := json.Unmarshal(raw, &hold); err != nil {
-				return err
-			}
-			repairReset = hold.TrunkSHA
-			return nil
-		})
-		s.Close()
-		if err != nil {
-			return false, err
-		}
-	}
-	if head, err := l.revParse(ctx, c.Worktree, "HEAD"); err != nil || (head != c.HeadSHA && head != repairReset && head != work.ReleasePending) {
-		kept = "unrecorded lane HEAD needs inspection"
+	kept, err := l.recordedHeadKeep(ctx, work, reason)
+	if err != nil {
+		return false, err
 	}
 	if kept == "" {
 		if err := l.pin(ctx, c.RunID, c.HeadSHA); err != nil {
