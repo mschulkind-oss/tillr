@@ -4151,6 +4151,234 @@ full drain run timed out at 1800 seconds because failing loop tests waited out t
 timeouts, so run the ten tests named in its report first and start the full suite only when they
 pass.
 
+**Third ruling, 2026-11-18 (answers the fifth run's conflict): the plan, step by step.** The fifth
+run rebased the third run's tree, reproduced the stale-pass write, and stopped: it had the rules
+above and no plan for applying them. This ruling is that plan. It changes no criterion and no
+path. It was built and measured here on 2026-11-18 on top of `2acf66dc4`, outside the repository,
+and the result is stated under "What the plan measured" below. Where a step below is more exact
+than points 6 to 9, the step is the rule.
+
+Two things about the tree changed after the second ruling was written, and both are corrected
+here:
+
+- **The view's rule table moved.** The trunk now keeps every hold reason's display rule in
+  `Rules` in `tools/tillr-drain/holdrules/holdrules.go`, and `tools/tillr-view/waiting.go` only
+  calls `holdrules.For`. The earlier runs added their rules to a `waitingRules` map in the view
+  that no longer exists. c5 is met in `holdrules.go`.
+- **Three base tests change, not one.** Besides `TestPlanFailsAListedSeatOverAlongItsOwnList`,
+  the tests `TestLoopDoesNotSkipBackendWithoutWindowFacts` in
+  `tools/tillr-drain/quota_window_test.go` and `TestPlanTransitionPayloadCountsTerminalRuns` in
+  `tools/tillr-drain/transition_test.go` pin the behaviour this item removes: both expect a
+  second item to start on a backend whose latest run just failed. Step 9 says what each becomes.
+
+**Before any step: quiet the test output.** A run's environment sets `TILLR_SQLITE_TRACE` and
+`TILLR_TRACE_DIR`, and with them every `go test` prints one line per store and git call. One
+targeted run here printed more than 30,000 bytes of trace before its first result, and one full
+run wrote a 78 MB log. Run every test command in this item with both variables unset and its
+output in a file in the run's scratch directory, and then read only the result lines:
+
+```bash
+env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR go test ./... -run 'TestName' > "$YOLO_DURABLE_DIR/test.log" 2>&1
+grep -a -A6 -e '^--- FAIL' -e '^    --- FAIL' -e '^panic:' -e '^FAIL' -e '^ok  ' "$YOLO_DURABLE_DIR/test.log" | grep -av '^loop: ' | cut -c1-600
+```
+
+**Step 1. Start from the fifth run's tree.** It is the third run's tree already rebased once, kept
+at `refs/tillr/preserved/run-item-backend-open-is-a-fact-a5` in the main checkout. Its merge base
+with the trunk is `e8ba23743`. In the lane worktree:
+
+```bash
+git diff e8ba23743 refs/tillr/preserved/run-item-backend-open-is-a-fact-a5 -- config tests tools | git apply -3
+```
+
+On `2acf66dc4` this applies 36 files and leaves four conflicts. Resolve each as follows, and then
+`go build ./...` in `tools/tillr-drain` passes:
+
+| File | Resolution |
+|---|---|
+| `tools/tillr-drain/drain/workflow_failover.go` | Take the candidate's side: the `if !ok` branch that keeps a ready continuation. Drop the trunk's branch that reads `l.cfg.Policy.failovers()`. |
+| `tools/tillr-drain/loop_test.go` | Take the candidate's side: the second and third loops and the `ProbeBackend` call. |
+| `tools/tillr-drain/main.go` | Keep the trunk's `faceList` and add `probe-backend, ` at its front. The trunk's list has `accept-identity` and `sweep-refs`, which the candidate's lacks. |
+| `tools/tillr-view/waiting.go` | Delete the candidate's whole `waitingRules` map and its comment. Keep the trunk's `waitingRuleFor`, which calls `holdrules.For`. The candidate's other hunk in this file, which appends the rule's mover after `deferredBy` for `backend-closed`, applies cleanly and stays. |
+
+**Step 2. Add the display rules (c5).** In `Rules` in `tools/tillr-drain/holdrules/holdrules.go`,
+add two rows and change one, then run `gofmt -w` on the file:
+
+```go
+"backend-closed": {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
+"command-fault":  {"needs a cause", "lane", "repair the command process and authorize a retry"},
+// History only: an infrastructure failure now closes the backend, not the item.
+"run-infra-exhausted": {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
+```
+
+`TestEveryReasonConstantHasAHoldRule` then passes. Point 5 is about the row the view returns, not
+about this table: `TestWaitingBackendClosedNamesBackendAndReopeningMover` in `tools/tillr-view`
+asserts `Where: queue` for a queued item and passes unchanged.
+
+**Step 3. Save two facts for each ending, and classify an unsaved ending as it is read (points 6
+and 7).** Rewrite `tools/tillr-drain/drain/backend_outcomes.go`:
+
+- The table gains a column: `closes INTEGER NOT NULL DEFAULT 0`. `class` stays what
+  `ClassifyAttempt` answers, because `readPriorRuns` routes on it and a quota refusal must still
+  route as a failover. `closes` is the availability fact: 1 only for an infrastructure-class
+  ending that no other rule answers. The `drain.backend-outcome` event carries both.
+- `backendOutcome` gains `closes bool` and `saved bool`.
+- `readBackendOutcomes` selects `COALESCE(o.class,'')` and `COALESCE(o.closes,0)`, sets `saved`
+  when the class is not empty, and closes its rows. Then, only when some ending is unsaved, it
+  reads the interrupted runs and `readPendingHistory`'s second result (pending work by run id)
+  and fills each unsaved ending in memory:
+
+  ```go
+  rec := out[i].rec
+  out[i].class = ClassifyAttempt(rec, logTail(rec.ArtifactRefs))
+  out[i].closes = out[i].class == AttemptInfrastructure && !answeredByAnotherRule(rec, interrupted, byRun)
+  ```
+
+  It writes nothing. This is the one rule both readers share.
+- `answeredByAnotherRule` is point 7 as code. It answers true for a run in the interrupted set,
+  for a run where `refusedWindow(rec)` reports a stated reset time, and for a run whose pending
+  decision makes `failedDesignerResume(decision, rec)` answer true, which is the resumed session
+  that is gone. For the last, look the run up in the pending work by run id, and when the run is
+  one of `parallelNodes(work.Decision)`, pass that node's decision. Treat an error from
+  `failedDesignerResume` as false.
+- Move the event loop at the top of `readPriorRuns` in `tools/tillr-drain/drain/failover.go`
+  into `readInterruptedRuns(r) (interrupted, restaged map[string]bool, err error)` in this file,
+  unchanged: `loopOrphanedKind` and `staleBaseKind` add a run and `run.ResumeKind` removes it.
+  `readPriorRuns` calls it, and takes a class from the outcomes only when `o.saved` is true.
+- `RecordBackendOutcomes` inserts each ending whose `saved` is false, with its `class` and
+  `closes`, using `INSERT OR IGNORE` as it does now.
+
+In `readInfrastructureClosed` in `tools/tillr-drain/drain/backend_availability.go`, the loop over
+outcomes becomes: for the first ending seen for each backend, record its sequence and set
+`closed[name] = o.closes`. Remove the `o.class == ""` skip. The probe query after it is unchanged.
+
+**Step 4. Save only where the loop settles a run and when it starts (point 9).** Remove the
+`RecordBackendOutcomes` call from `refreshQuotas` in `tools/tillr-drain/drain/quota_probe.go`.
+Add the call in exactly three places in `tools/tillr-drain/drain/loop.go`, each returning the
+error the way its neighbours do:
+
+1. in `Run`, directly after the `l.startDefinition(ctx)` check;
+2. in `settle`, before `lane := decision.LaneID`;
+3. in `settle`'s failover loop, directly after `closeRunBracket` returns for the failover run and
+   before `class = ClassifyAttempt(record, log)`.
+
+`ProbeBackend` keeps its own call. A run that ends outside these moments stays unsaved and is
+classified on each read by step 3 until the next settlement or loop start saves it.
+
+**Step 5. Keep quota and infrastructure apart, so an authorized retry can pass (point 8).**
+
+- `readShutBackends` in `tools/tillr-drain/drain/quota_window.go` goes back to the trunk's body:
+  windows only, no call to `readInfrastructureClosed`.
+- In `tools/tillr-drain/drain/quota_probe.go`, rename the existing `readQuotaShutBackends` to
+  `readQuotaOnlyShut`. Add a new `readQuotaShutBackends` with the old signature that calls
+  `readQuotaOnlyShut` and then marks every backend `readInfrastructureClosed` reports closed. Add
+  `readDispatchShut(r, at, policy, d Decision)`, which answers `readQuotaOnlyShut` when
+  `d.Action == ActionRetry` and `readQuotaShutBackends` otherwise.
+- In `planDefinition` in `tools/tillr-drain/drain/plan.go`, read `readQuotaOnlyShut` beside the
+  existing `shut` and give the planner a `quotaShut` field. In `decide`, where the backend is
+  chosen:
+
+  ```go
+  shut := p.shut
+  if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {
+      shut = p.quotaShut
+  }
+  next, degraded, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
+  ```
+
+- In `tools/tillr-drain/drain/pass.go`, the claim re-reads the shut set in two places: before
+  `dispatchQuotaOpen`, and before the `selectSeatDispatch` loop over `parallelNodes(d)`. Both
+  call `readDispatchShut(..., d)` in place of `readQuotaShutBackends`. Without this the plan
+  says retry, the claim refuses it, and the loop spins: `TestTheLoopDispatchesAnAuthorizedRetry`
+  ran here until the suite's timeout.
+
+**Step 6. A restart keeps its recorded request.** In `pendingDecision` in
+`tools/tillr-drain/drain/pass.go`, the candidate rebuilds every restart's request from the
+policy, which breaks `TestSeatSharesWorkflowRestartKeepsRecordedBackend`. Keep the retained
+request and reroute only when the walk chose another backend:
+
+```go
+if d.WorkflowRestart {
+    retained := *d.RunRequest
+    request = &retained
+    if name != retained.Backend {
+        request = rerouteNodeRequest(policy, d, name)
+    }
+}
+```
+
+**Step 7. Tests of the new rules.** In `tools/tillr-drain/drain/backend_recorded_test.go`:
+
+- Replace `TestBackendAvailabilityUsesOnlySavedClass` with a test of point 6: after one
+  infrastructure ending and no save, `readInfrastructureClosed` reports the backend closed and the
+  store's event count is unchanged; after `RecordBackendOutcomes` it is still closed.
+- In `TestSavedInfrastructureClassKeepsItemWaitingAfterReportEdit`, a plan no longer saves. After
+  the first plan, assert that `backend_outcomes` holds no row, call `RecordBackendOutcomes`, and
+  only then edit the report.
+
+Restore `tools/tillr-drain/drain/readmit_test.go` to the trunk's version with `git checkout HEAD
+--`. The candidate's added block expects a signal-ended run the loop orphaned to close its
+backend, which point 7 rules out.
+
+**Step 8. The ten tests.** Run them with the pattern below in `tools/tillr-drain`. After steps 1
+to 7, nine pass and `TestPlanFailsAListedSeatOverAlongItsOwnList` fails on its last assertion,
+which step 9 changes.
+
+```text
+TestPlanHoldsWhenEveryBackendIsClosed|TestAPassDefersChangedItemRunAndLeaseWithoutWriting|TestProbeBackendFaceRecordsSuccessAndFailure|TestWorkflowRestartRecoversSignalRecordWithoutStopMarker|TestQuotaContinuationWaitsAndReopensOriginalBackend|TestLoopSkipsSpentWindowAcrossRestartAndReopens|TestReturnedWorkerGoneHarnessSession|TestReturnedWorkflowResumesProducingNode|TestTheLoopDispatchesAnAuthorizedRetry|TestPlanFailsAListedSeatOverAlongItsOwnList
+```
+
+**Step 9. The three base tests.**
+
+- `TestPlanFailsAListedSeatOverAlongItsOwnList`: the last assertion becomes a hold with
+  `drain.ReasonBackendClosed` and `DeferredBy == "designer-a, designer-b"`.
+- `TestLoopDoesNotSkipBackendWithoutWindowFacts`: the failure still records no window, and it now
+  closes `pi`. `item_051` has two runs, `pi` then `fallback`. `item_052` has one run, on
+  `fallback`.
+- `TestPlanTransitionPayloadCountsTerminalRuns`: its fixture fails both backends, so every item
+  would hold. Add a last record, `runRecord("run-landed-second", "item_landed", "lane-7",
+  "second", run.StateExited, exitCode(0), "")`, so that `second` is open. Plan with four lanes and
+  a dispatch cap of four. `item_exhausted` becomes a dispatch from `queued` to `running` at
+  attempt 3, and `item_landed` stays a hold, now at attempt 2. The other rows are unchanged.
+
+**Step 10. The README.** `tools/tillr-drain/README.md` in the candidate has a section "Recorded
+backend availability". Three of its statements are now wrong, and one is missing:
+
+- Replace "The loop captures every newly observed terminal event's class before planning" with
+  where the class is saved: when the loop settles a run and when a loop starts.
+- Replace "Read-only views use only saved classes and probe results, never an unsaved
+  classification" with point 6: a reader classifies an unsaved ending from the record and the log
+  as they are, and does not save.
+- State which infrastructure endings do not close a backend: a run the loop interrupted, a
+  refusal with a stated reset time, and a resumed session that is gone.
+- Beside the probe, say that a retry the owner authorized is the only dispatch to a closed
+  backend.
+
+**Step 11. Mirror, full suites, commit.** Run `just pack-sync`. Run the full suites with the quiet
+form above: `go test ./... -count=1 -timeout 3000s` in `tools/tillr-drain` and in
+`tools/tillr-view`, or the sharded runner on each. Run `python3 tests/tillr-muse-backend.test.py`.
+Then make the one commit.
+
+**What the plan measured.** Steps 1 to 9 and 11 were applied to a copy of the tree at `2acf66dc4`
+on 2026-11-18; step 10's wording was not. Results there:
+
+- The ten tests of step 8, the tests of step 7 and the three of step 9 passed.
+- `go test ./... -count=1 -timeout 3000s -skip TestTheComposedPipelineRunsEndToEndOnAFixture` in
+  `tools/tillr-drain` printed `ok` for every package with tests: the root package in 576 seconds
+  and `drain` in 890 seconds.
+- `go test ./... -count=1` in `tools/tillr-view` printed `ok` in 62 seconds.
+- `python3 tests/tillr-muse-backend.test.py` exited 0.
+- `TestTheComposedPipelineRunsEndToEndOnAFixture` failed in that copy with `gate:python3: watchdog
+  unavailable: kernel task-clock counter: permission denied`, and passed in the lane worktree at
+  `2acf66dc4` with none of this work applied. The message comes from `tools/tillr-gate`, which
+  this item does not touch, and the copy was not a git worktree of this repository. The builder
+  runs that one test in its lane with the work applied. If it fails there with the same message,
+  run it at the base as well: red at the base is a `trunk` obstacle naming that test, and red only
+  with the work applied is this item's to fix.
+- `TestRestartReplacesTheLoopInPlaceWithoutSignalingARun` failed once here while four other test
+  processes were running, with `replacement asked the worker to pause`, and passed twice alone
+  with the work applied and twice alone at the base. Rerun it alone before treating it as a
+  failure of this change.
+
 ## Filed 2026-11-18: plan first, then spend each model where it is enough
 
 The owner asked on 2026-11-18 for a planning stage that fans an implementation out into many nodes and spends as little on models as it can: "split different types of work into different seats as we see fit", create "a few more seat names to slot into", fit Terra and Luna in wherever they can do the work, and encourage implementers who work alone to use cheaper sub-agents. This is the first slice of [the planning node and model tiering proposal](../design/tillr-planning-node-model-tiering.md), narrowed by the owner's later rulings, and it sits on [the item graphs design](../design/tillr-item-graphs.md) and the direction in [the graph-is-the-path design](../design/tillr-graph-is-the-path.md). It is entry 4's [choice of where each seat runs](#4-choose-where-each-seat-runs) applied to a finer grain of work.
