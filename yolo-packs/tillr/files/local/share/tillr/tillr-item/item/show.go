@@ -105,7 +105,25 @@ func ShowWithQuestions(r *store.Reader, id, root string, source vantage.Question
 			}
 		}
 	}
-	return envelopeOf(RecordKind, "item-"+id, env.CreatedAt, payload)
+	// Question annotation must preserve the public shape ReadStored produced:
+	// decoding it into itemPayload loses place and would reintroduce rank.
+	var fields, annotated map[string]json.RawMessage
+	if err := json.Unmarshal(env.Payload, &fields); err != nil {
+		return record.Envelope{}, Internalf("reading stored item fields %q: %v", id, err)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	if err := json.Unmarshal(raw, &annotated); err != nil {
+		return record.Envelope{}, err
+	}
+	for _, key := range []string{"questions", "questions_source", "questions_status", "questions_reason"} {
+		if value, ok := annotated[key]; ok {
+			fields[key] = value
+		}
+	}
+	return envelopeOf(RecordKind, "item-"+id, env.CreatedAt, fields)
 }
 
 // readStoredItem answers one item's record as the rows hold it, with the clock the row was
