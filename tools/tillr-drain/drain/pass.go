@@ -2125,7 +2125,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			if work.RepairHold != nil {
 				// Retry the retained repair, not another gate and land of the same
 				// original candidate. The original conflict remains the evidence.
-				stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, &timing)
+				stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, &timing, work.RepairHold.TrunkSHA)
 			} else if work.DirtyHold != nil || work.Gated {
 				stop, landed, err = l.landCandidate(ctx, c, local, &timing)
 			} else {

@@ -8589,13 +8589,7 @@ evidence when its session and lane are still there, and a fresh worker only when
   - Return a squash conflict to the session of the run whose candidate conflicted.
   - Say in the decision's recorded reason why a fresh worker was used instead.
 
-<!-- tillr: item id="item-landing-call-session-returns" paths="tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A reverted landing's returned run continues the session of the run that landed, when the adapter can resume and the lane still holds that item's session. A test in `tools/tillr-drain/drain/` asserts the decision's `WorkerSessionReason` is `resumed-worker` and the staged prompt contains the failing check's output.
-- **c2:** A squash conflict's returned run continues the session of the run whose candidate conflicted, on that run's branch. A test asserts the reason is `resumed-worker` and the conflicting paths are in the staged prompt.
-- **c3:** When the lane has been given to another item, the session id no longer matches, or the seat changed, the run starts fresh with the evidence, and the recorded reason is `lane-unavailable`, `session-missing` or `seat-changed` respectively. A test asserts each of the three for a revert.
-- **c4:** Nothing is counted: a test returns the same item three times, with different evidence each time, and asserts three dispatches and no hold.
-- **c5:** The section "A refused run goes back to its worker" of `tools/tillr-drain/README.md` names the two new endings and the reasons of c3, and `python3 tests/tillr-docs.test.py` passes.
 
 **Agent Details:**
 

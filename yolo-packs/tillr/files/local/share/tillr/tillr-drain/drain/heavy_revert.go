@@ -95,6 +95,10 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return refuse("no landing record names commit " + landing)
 	}
 	record.ItemID, record.RunID = of.itemID, of.runID
+	workerSession, err := l.landedWorkerSession(ctx, of.runID)
+	if err != nil {
+		return RevertOutcome{}, err
+	}
 	switch {
 	case IsRevertItem(of.itemID):
 		return refuse(shortSHA(landing) + " is itself an automatic revert; a remedy is not undone by a remedy")
@@ -170,6 +174,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	}
 	record.Result, record.Revert = "reverted", after
 	ending := l.revertEnding(landing, of, tip, checks, after)
+	ending.WorkerSession = workerSession
 	if err := l.appendRevert(ctx, record, &ending); err != nil {
 		return RevertOutcome{}, err
 	}

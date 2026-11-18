@@ -454,8 +454,13 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
 			continue
 		}
-		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && p.offersLane(e.WorkerSession.LaneID) {
-			p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && p.retainedLaneFree(e.WorkerSession.LaneID) {
+			// Several reverted landings can name the same recycled lane. Only
+			// the item whose handle remains there can reserve that checkout.
+			id, err := ReadSessionID(e.WorkerSession.LaneDir)
+			if err == nil && id != "" && id == e.WorkerSession.SessionID {
+				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+			}
 		}
 	}
 	var hasNodes bool
@@ -562,7 +567,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			routed := item
 			resumeNode := 0
 			retainedGraph := false
-			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && p.offersLane(e.WorkerSession.LaneID) {
+			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
 				s := e.WorkerSession
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
@@ -896,9 +901,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane(item.Express)
-		if returned != nil && returned.WorkerSession != nil && p.offersLane(returned.WorkerSession.LaneID) {
+		if returned != nil && returned.WorkerSession != nil && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
 			lane = returned.WorkerSession.LaneID
-			ok = !p.held[lane] && !p.assigned[lane]
+			ok = true
 		}
 		if doc := deskDocument(item, p.tick.Comments); doc != "" {
 			lane = commentDesk(doc)
@@ -964,7 +969,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Returned = returned
 			decision.Reason = ReasonReturned
 			decision.WorkerSessionReason = workerSessionReason(returned.WorkerSession, decision.RunRequest)
-			if returned.WorkerSession != nil && !p.offersLane(returned.WorkerSession.LaneID) {
+			if returned.WorkerSession != nil && lane != returned.WorkerSession.LaneID {
 				decision.WorkerSessionReason = "lane-unavailable"
 			}
 			if decision.WorkerSessionReason == "resumed-worker" {
@@ -1362,6 +1367,15 @@ func (p *planner) offersLane(id string) bool {
 		}
 	}
 	return false
+}
+
+func (p *planner) retainedLaneFree(id string) bool {
+	return p.offersLane(id) && !p.held[id] && !p.assigned[id]
+}
+
+func (p *planner) retainedLaneFreeFor(id, itemID string) bool {
+	owner := p.workerLanes[id]
+	return p.retainedLaneFree(id) && (owner == "" || owner == itemID)
 }
 
 func (p *planner) freeLane(express ...bool) (string, bool) {
