@@ -25,8 +25,7 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-Five questions are left for the owner on this page: one from this round's designs, and four
-that the pi roadmap's reconciliation of 2026-11-16 found were really tillr's. Each has options and a recorded leaning.
+The questions below are left for the owner on this page. Each has options and a recorded leaning.
 They are the ones no recorded principle could answer. Twenty-three others that stood here were
 settled on 2026-11-15 and 2026-11-16 by the session's designer, at the owner's request; each
 says so in its design and is the owner's to overturn.
@@ -36,17 +35,31 @@ written on 2026-11-18 to the owner's words of that evening, comes ahead of the l
 reopens how work written in a document reaches the queue, which the owner never ruled, and none
 of it is built until he has.
 
-1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): what becomes of the pack mirror that
-   doubles every tillr change. First because it is a cost on every landing but stops nothing.
+Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
+Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
+step gets no separate check of a criterion's premise, and
+[`OQ-AC1`](../design/agent-context-delivery.md#OQ-AC1), that a lane-only extension is held to
+that by a test and not by a manifest key. Two were closed as stale:
+[`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), which asked about two next actors
+that no longer exist or cannot be named, and
+[`OQ-AC5`](../design/agent-context-delivery.md#OQ-AC5), which asked how to measure caps the
+owner has since removed. One is blocked: [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), until
+AutoQA leaves the [Icebox](#icebox).
+
+1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
+   workspaces run follows every landing or is refreshed only when it is published. First because
+   it is a cost on every landing but stops nothing.
 
 2. [Criterion repair](../design/criterion-repair.md), one question,
-   [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4): whether the judge step looks for a criterion
-   whose premise has expired. With the judge, which it amends. The owner ruled the other four on
-   2026-11-17: the whale supersedes with a required reason, the judge sees both texts, an
-   unsatisfiable criterion is repaired by reopen then supersede, and a supersession refuses a
-   verdict in flight. None of it is built.
-3. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
-   context a worker receives. Last because the brief works today and these refine it.
+   [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): who may replace a criterion's text once a
+   verdict has frozen it. The owner's ruling of 2026-11-17 gave that act to a role that was
+   deleted with the board. The rest of that day's four rulings stands: a replacement carries a
+   required reason, the judge sees both texts, an unsatisfiable criterion is repaired by reopen
+   then supersede, and a supersession refuses a verdict in flight. None of it is built.
+
+[What a lane's agent is told](../design/agent-context-delivery.md#decision-ledger) left this list:
+its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
+routed from [the pi roadmap](../pi/roadmap.md).
 
 [The item graph is the whole path](../design/tillr-graph-is-the-path.md), written on 2026-11-17 to
 the owner's rulings of that day, proposes that every act on an item is a node in its graph and that
@@ -68,9 +81,7 @@ await the owner's review in its ledger. [The landing call](../design/tillr-landi
 2026-11-18, proposes that a worker ends its run with one tool call and hears back only when something needs fixing;
 five of its build steps are filed [below](#filed-2026-11-18-a-landing-is-a-suspended-tool-call), and
 its [`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), whether an item keeps its worktree until the full suite
-has passed on it, is blocked until worktrees belong to items. First among these is
-[`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
-an actor other than the worker or the owner, because it holds two queued items.
+has passed on it, is blocked until worktrees belong to items.
 
 [What tillr will change for Product QA](../design/tillr-separable-parts.md) is tillr's answer to the
 Product QA pipeline's requests. The pipeline's second-round reply is recorded as received in
@@ -114,11 +125,10 @@ deletes them, runs no model and is work to file.
 
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
 it carried is a row of its ledger, and on 2026-11-16 it was cut into
-[thirteen build items](../design/tillr-judge-and-lifecycle.md#8-build-order) that live in the
-design. The first stops a gate pass from retiring a criterion only the owner can settle and waits
-on nothing. Part of the design was already built under other items, and
-[its seventh section](../design/tillr-judge-and-lifecycle.md#7-what-the-tree-already-holds)
-measures which part. AutoQA's one design-seat item stays held while that design is in the
+[fourteen build items](../design/tillr-judge-and-lifecycle.md#8-build-order) that live in the
+design. Eleven have landed and three are queued, as
+[its seventh section](../design/tillr-judge-and-lifecycle.md#7-what-is-built-and-what-is-owed)
+lists. AutoQA's one design-seat item is not admitted to the queue while that design is in the
 [Icebox](#icebox).
 
 [Queue persistence](../design/tillr-queue-persistence.md) is decided and waits on no ruling: every
@@ -290,10 +300,11 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 
 - **AutoQA, tillr's exploratory testing of itself** ([design](../design/tillr-autoqa.md)), iceboxed
   2026-11-17. The owner: "ice box this autoqa on the roadmap for now. I don't want to design this
-  yet." No AutoQA code exists. Its one open question,
-  [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), is left unanswered and holds the design's one
-  queue item, `item-design-autoqa-slices`, so the drain never dispatches it. Picking it up means
-  ruling that question, which releases the item to cut the design into build items. This is not
+  yet." No AutoQA code exists. Its one question,
+  [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), is blocked until the design is picked up. The
+  design's one queue item, `item-design-autoqa-slices`, is `not-started`: it was never admitted,
+  so the drain never dispatches it. Picking it up means admitting that item and ruling the
+  question, after which the item cuts the design into build items. This is not
   the Product QA pipeline, which [entry 1](#1-rulings-that-are-waiting-on-the-owner) covers.
 
 - **The goal monitor** ([design](../design/tillr-goal-monitor.md)), iceboxed 2026-11-17. The owner:
