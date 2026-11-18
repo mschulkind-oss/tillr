@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,7 +95,11 @@ func (l *Loop) compactDesigner(ctx context.Context, d Decision) error {
 // A partial model answer (including tool calls) is already a response. Never
 // replay it as though no work happened. Error-only assistant messages are not answers.
 func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
-	if !strings.HasPrefix(d.DesignerReason, "resumed-") || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
+	workerTurn := d.RunRequest != nil && d.RunRequest.SessionTurn && d.WorkerSessionReason == "resumed-worker"
+	if (!strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn) || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
+		return false, nil
+	}
+	if workerTurn && rec.EndCause != run.EndNormalExit {
 		return false, nil
 	}
 	sawLog := false
@@ -268,6 +273,9 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	next.Reason = "resume-failed"
 	next.DesignerReason = "resume-failed"
 	next.DesignerSessionID = ""
+	if old.RunRequest.SessionTurn {
+		next.WorkerSessionReason = "resume-failed"
+	}
 	req := *old.RunRequest
 	req.RunID = attemptRunID(old.ItemID, next.Attempt)
 	if backend != req.Backend {
@@ -279,9 +287,27 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 		req = *replacement
 	}
 	req.Resume = false
+	req.SessionTurn = false
+	req.ResumePrompt = ""
+	if old.RunRequest.SessionTurn && next.Workflow != nil {
+		req.RunID += "-n" + strconv.Itoa(next.NodeIndex+1)
+	}
 	next.RunRequest = &req
 	identifyDecision(&next)
-	spec := StageSpec{Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS}
+	spec := StageSpec{Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS, Returned: old.Returned}
+	if old.RunRequest.SessionTurn && next.Workflow != nil {
+		spec.Node = &next.Workflow.Stages[next.NodeIndex]
+		var err error
+		spec.InputPaths, err = l.nodeInputPaths(ctx, old)
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+	}
+	if old.RunRequest.SessionTurn {
+		if err := l.preserveWork(ctx, old.LaneID, rec.RunID, "worker session could not resume"); err != nil {
+			return laneOutcome{err: err}
+		}
+	}
 	if err := l.stageComment(ctx, &next, &spec); err != nil {
 		return laneOutcome{err: err}
 	}
@@ -307,6 +333,12 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 			return err
 		}
 		if _, err = run.ClaimLease(ctx, tx, req, next.LaneID, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		if err := carryReturnedNodeInputs(tx, next); err != nil {
+			return err
+		}
+		if err := startNode(tx, next); err != nil {
 			return err
 		}
 		if err = recordPassDecision(tx, next, l.cfg.Now().UTC()); err != nil {

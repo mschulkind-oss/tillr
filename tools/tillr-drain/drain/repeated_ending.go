@@ -24,6 +24,7 @@ const IdenticalRepeatPrefix = "Identical repeat:"
 // is raised on, and the evidence text. (The name is the removed second-failure rule's; the
 // routing it records is the same conflict for the design seat.)
 type secondFailure struct {
+	WorkerSession                     *WorkerSession
 	itemID, outcomeRun, current, text string
 	// noDesignSeat is a policy that names no design seat: no seat can diagnose the repeat,
 	// so it is the owner's (the policy is the owner's to change).
@@ -124,7 +125,11 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 			}
 		}
 	}
-	return &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text}, nil
+	routing := &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text}
+	if work := works[d.ItemID]; work != nil && !work.Done && work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID == current {
+		routing.WorkerSession = latest.WorkerSession
+	}
+	return routing, nil
 }
 
 // readItemChain answers an item's recorded endings in run order, as the identical-repeat

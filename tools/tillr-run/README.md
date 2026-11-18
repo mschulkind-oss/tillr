@@ -67,9 +67,16 @@ staging pinned in the lane (`session-id`, which every adapter passes to its harn
 reused, so the provider's prefix cache is warm; and the run's log is appended to rather than
 truncated, because the killed segment's transcript is the evidence the resume continues.
 A request may supply `resume_prompt` to replace the default interrupted-session instruction;
-it is ignored on fresh executions and also included when an adapter requires a fresh session
+it is ignored on ordinary fresh executions and also included when an adapter requires a fresh session
 for the continuation. The drain uses it to ask an exited build worker to finish verification
 and commit existing fenced work, without changing the staged brief.
+
+The drain can instead set `session_turn` after a worker refusal: a new run id and
+normal allocation in the same retained harness session. Its first message includes
+`resume_prompt`, the current brief and the requirement to make a new commit. Both
+endings stay separate records for the drain's identical-repeat check. This is not
+`exec --resume`, which continues the existing run record. The lane must carry a
+session handle before a returned turn can be claimed.
 
 A resumed request can also set `fresh_session` to force a new harness session even
 when the adapter can resume. This is how quota continuations move to a different

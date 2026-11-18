@@ -64,6 +64,9 @@ type Request struct {
 	// wrong name: it would pay for the whole transcript again and record itself as a
 	// continuation.
 	Resume bool `json:"resume,omitempty"`
+	// SessionTurn starts a new run record in the session staging retained after
+	// a refusal. Unlike Resume, it claims a new run and preserves both endings.
+	SessionTurn bool `json:"session_turn,omitempty"`
 	// ResumePrompt supplies a continuation-specific instruction. Empty uses the
 	// restart notice or the default interrupted-session prompt. Only read on resume.
 	ResumePrompt string `json:"resume_prompt,omitempty"`
@@ -229,6 +232,15 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// continue is refused before anything is claimed: it would pay for the whole transcript
 	// again while recording itself as a continuation.
 	sessionID := ""
+	if req.SessionTurn && !req.Resume {
+		sessionID, err = ReadSessionID(artifactDir)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if sessionID == "" {
+			return record.Envelope{}, Usagef("run %q cannot continue a worker session: the lane has no session id", req.RunID)
+		}
+	}
 	if req.Resume {
 		sessionID, err = continuationSessionID(ctx, s, req, artifactDir)
 		if err != nil {

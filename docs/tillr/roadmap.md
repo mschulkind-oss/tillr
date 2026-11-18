@@ -3603,13 +3603,7 @@ When the gate refuses a worker's candidate, or the worker ends without committin
   - Fall back to the fresh run with the evidence when it cannot, and record which one happened.
   - Keep no count: a refusal goes back every time, and an identical repeat still goes to the design seat.
 
-<!-- tillr: item id="item-worker-refusal-resumes-session" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the gate refuses a worker's candidate, the run's lane and its recorded session are kept, and the next turn continues that session with a prompt that carries the same evidence the fresh brief does today. The commit the continued session makes is settled through the fence and the gate like any candidate. A test refuses a fixture candidate, asserts that the continuation names the same session and the refusal's failing checks, and asserts that the second commit lands.
-- **c2:** A run that ended with no commit, a fence escape and a refused landing take the same path as c1. A test covers each of the three.
-- **c3:** When the adapter cannot resume a session, or the session is gone, the item is dispatched as a fresh run with the evidence in its brief, as it is today, and the decision records which path was taken. A test covers both.
-- **c4:** The identical-repeat rule reads a continued session's ending exactly as it reads a fresh run's ending. A test continues one session twice into the same refusal and asserts that the item goes to the design seat with both records.
-- **c5:** The drain README's section on a refused run going back to its worker states the built rule, and the ending table in the judge and lifecycle design marks ending 1 as built.
 
 **Agent details:**
 

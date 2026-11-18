@@ -33,7 +33,7 @@ const harnessCount = `if [ -n "$STUB_COUNT" ]; then echo "harness segment" >> "$
 // between it and a judged commit.
 const resumingWallHarness = harnessCount + `prev=
 for arg in "$@"; do
-    if [ "$prev" = "--session-id" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
+    if [ "$prev" = "--session-id" ] || [ "$prev" = "--session" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
     prev=$arg
 done
 if [ -f "$STUB_SEGMENT" ]; then seg=2; else seg=1; : > "$STUB_SEGMENT"; fi
@@ -52,7 +52,7 @@ exit 0
 // a loop that resumed forever would fail here rather than only in production.
 const doubleWallHarness = harnessCount + `prev=
 for arg in "$@"; do
-    if [ "$prev" = "--session-id" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
+    if [ "$prev" = "--session-id" ] || [ "$prev" = "--session" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
     prev=$arg
 done
 exit 124

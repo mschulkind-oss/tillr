@@ -83,6 +83,7 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
+	WorkerSessionReason string `json:"worker_session_reason,omitempty"`
 	// Parallel lists sibling readers claimed with this node; the item retains one pending owner.
 	Parallel []Decision `json:"parallel,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
@@ -416,6 +417,18 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
+	p.workerLanes = map[string]string{}
+	for _, row := range items {
+		if row.State != p.rules().Ready {
+			continue
+		}
+		if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
+			continue
+		}
+		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && p.offersLane(e.WorkerSession.LaneID) {
+			p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+		}
+	}
 	var hasNodes bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
 		return nil, readFailure(err)
@@ -515,6 +528,20 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		} else {
 			w, selected, source, loadErr := selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
 			routed := item
+			resumeNode := 0
+			retainedGraph := false
+			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && p.offersLane(e.WorkerSession.LaneID) {
+				s := e.WorkerSession
+				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
+					stage := s.Workflow.Stages[s.NodeIndex]
+					backend := policy.firstBackend(itemRow{ItemID: item.ItemID, Seat: stage.Seat})
+					backend, _, open := policy.availableBackend(backend, stage.Seat, p.shut)
+					if open && workerSessionReason(s, policy.request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
+						w, resumeNode, loadErr = s.Workflow, s.NodeIndex, nil
+						retainedGraph = true
+					}
+				}
+			}
 			if w != nil {
 				if loadErr == nil {
 					if evaluatorSlot(w) != "" {
@@ -524,9 +551,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 							return nil, readFailure(err)
 						}
 					}
-					routed.Seat = w.Stages[0].Seat
-					if w.Stages[0].Kind == "command" {
-						routed.Command = &w.Stages[0]
+					routed.Seat = w.Stages[resumeNode].Seat
+					if w.Stages[resumeNode].Kind == "command" {
+						routed.Command = &w.Stages[resumeNode]
 					}
 				}
 			}
@@ -556,16 +583,28 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonWorkflowInvalid + ": " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
+				if decision.RunRequest != nil && decision.Returned != nil && decision.Returned.WorkerSession != nil && decision.Returned.WorkerSession.Workflow != nil && !retainedGraph {
+					decision.RunRequest.SessionTurn = false
+					decision.RunRequest.ResumePrompt = ""
+					decision.SelectSeat = true
+					if decision.WorkerSessionReason == "resumed-worker" {
+						decision.WorkerSessionReason = "workflow-restarted"
+					}
+				}
 				decision.SelectedWorkflow, decision.WorkflowSource = selected, source
 				if w != nil && decision.RunRequest != nil {
 					decision.Workflow = w
+					decision.NodeIndex = resumeNode
+					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
+						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
+					}
 					request := *decision.RunRequest
-					request.RunID += "-n1"
+					request.RunID += "-n" + strconv.Itoa(resumeNode+1)
 					decision.RunRequest = &request
 					if routed.Command != nil {
 						decision.RunRequest = routed.Command.commandRequest(item.ItemID, decision.LaneID, request.RunID)
-					} else if w.Stages[0].TimeoutMS > 0 {
-						decision.RunRequest.TimeoutMS = w.Stages[0].TimeoutMS
+					} else if w.Stages[resumeNode].TimeoutMS > 0 {
+						decision.RunRequest.TimeoutMS = w.Stages[resumeNode].TimeoutMS
 					}
 				}
 			}
@@ -596,7 +635,8 @@ func plannerDocumentKey(root, doc string) string {
 }
 
 type planner struct {
-	definition *definition.Definition
+	workerLanes map[string]string
+	definition  *definition.Definition
 	// An open review batch holds new build dispatches for its document; workers
 	// already running settle normally, without being interrupted by intake.
 	commentHolds   map[string]string
@@ -786,6 +826,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane(item.Express)
+		if returned != nil && returned.WorkerSession != nil && p.offersLane(returned.WorkerSession.LaneID) {
+			lane = returned.WorkerSession.LaneID
+			ok = !p.held[lane] && !p.assigned[lane]
+		}
 		if doc := deskDocument(item, p.tick.Comments); doc != "" {
 			lane = commentDesk(doc)
 			if p.held[lane] || p.assigned[lane] {
@@ -849,6 +893,14 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		if returned != nil {
 			decision.Returned = returned
 			decision.Reason = ReasonReturned
+			decision.WorkerSessionReason = workerSessionReason(returned.WorkerSession, decision.RunRequest)
+			if returned.WorkerSession != nil && !p.offersLane(returned.WorkerSession.LaneID) {
+				decision.WorkerSessionReason = "lane-unavailable"
+			}
+			if decision.WorkerSessionReason == "resumed-worker" {
+				decision.RunRequest.SessionTurn = true
+				decision.RunRequest.ResumePrompt = returnedBrief(*returned)
+			}
 		}
 		if decision.ConflictID != "" {
 			decision.Reason = ReasonConflictAnswered
@@ -861,7 +913,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
-		decision.SelectSeat = !interrupted && (!attempt.failover || retry != nil || decision.ConflictID != "")
+		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && (!attempt.failover || retry != nil || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""
@@ -1145,7 +1197,7 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 	if cause == RefusalConflict && detail == "" {
 		detail = strings.Join(e.ConflictPaths, "\n")
 	}
-	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks}
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: e.WorkerSession}
 }
 
 // retry is one item's operator authorization, resolved against the store: which run it
@@ -1229,10 +1281,19 @@ func indexPriorRuns(priors map[string][]priorRun) (map[string]AttemptClass, map[
 // the choice is the caller's preference rather than the store's row order. A lane is
 // free when the store does not hold it under a lease that is still live and this tick has
 // not already assigned it.
+func (p *planner) offersLane(id string) bool {
+	for _, lane := range *p.tick.AvailableLanes {
+		if lane == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *planner) freeLane(express ...bool) (string, bool) {
 	if len(express) > 0 && express[0] {
 		for _, lane := range *p.tick.AvailableLanes {
-			if strings.HasPrefix(lane, "express-") && !p.assigned[lane] && !p.held[lane] {
+			if strings.HasPrefix(lane, "express-") && !p.assigned[lane] && !p.held[lane] && p.workerLanes[lane] == "" {
 				return lane, true
 			}
 		}
@@ -1241,7 +1302,7 @@ func (p *planner) freeLane(express ...bool) (string, bool) {
 		if strings.HasPrefix(lane, "desk-") || strings.HasPrefix(lane, "express-") {
 			continue
 		}
-		if p.assigned[lane] {
+		if p.assigned[lane] || p.workerLanes[lane] != "" {
 			continue
 		}
 		if p.held[lane] {

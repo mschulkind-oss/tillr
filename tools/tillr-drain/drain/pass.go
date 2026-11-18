@@ -1232,6 +1232,9 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if err := recordWorkflowSelection(tx, d); err != nil {
 				return err
 			}
+			if err := carryReturnedNodeInputs(tx, d); err != nil {
+				return err
+			}
 			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
 			for _, node := range parallelNodes(d) {
 				if len(d.Parallel) > 0 {
@@ -1420,7 +1423,20 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	if routed != nil && (l.cfg.Policy == nil || len(l.cfg.Policy.seatList("design")) == 0) {
 		routed.noDesignSeat = true
 	}
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	if routed != nil && routed.WorkerSession != nil {
+		// Release only this still-pending worker, before releasing its
+		// examination claim. Replayed examinations never reset a new owner.
+		session, err := ReadSessionID(l.laneDirPath(d.LaneID))
+		if err != nil {
+			return err
+		}
+		if session == routed.WorkerSession.SessionID && l.headOf(ctx, d.LaneID) == routed.WorkerSession.HeadSHA {
+			if err := l.resetLane(ctx, d.LaneID); err != nil {
+				return err
+			}
+		}
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		at := l.cfg.Now().UTC()
 		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, at); err != nil {
 			return err
@@ -1441,6 +1457,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		}
 		return recordSecondFailure(tx, routed, at)
 	})
+	return err
 }
 
 func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched []string, result *LoopResult) {

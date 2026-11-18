@@ -392,6 +392,10 @@ func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) erro
 func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string) error {
 	next := d
 	next.Parallel = nil
+	// The refusal has been answered by this node. Successors keep the repaired
+	// checkout and accepted-input references, not the return dispatch mode.
+	next.Returned = nil
+	next.WorkerSessionReason = ""
 	index, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
 		return err

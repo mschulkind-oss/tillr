@@ -122,16 +122,15 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 		if err != nil {
 			return err
 		}
-		rows, err := r.Query(`SELECT node_id,run_id FROM node_runs WHERE item_id=? AND attempt=? AND outcome IN ('passed','handled-fail') ORDER BY rowid`, d.ItemID, d.Attempt)
+		rows, err := effectiveNodeRuns(r, d.ItemID, d.Attempt)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var node, id string
-			if err := rows.Scan(&node, &id); err != nil {
-				return err
+		for _, n := range rows {
+			if n.Outcome != "passed" && n.Outcome != "handled-fail" {
+				continue
 			}
+			node, id := n.NodeID, n.RunID
 			writing := false
 			for _, stage := range d.Workflow.Stages {
 				if stage.ID == node {
@@ -157,7 +156,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 				c.Writers = append(c.Writers, identity)
 			}
 		}
-		return rows.Err()
+		return nil
 	})
 	return c, err
 }
@@ -231,7 +230,11 @@ func (l *Loop) attachWorkflowJudge(ctx context.Context, d Decision, c *Candidate
 	defer db.Close()
 	var runID string
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
-		return r.QueryRow(`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, d.Attempt, id).Scan(&runID)
+		source, err := nodeSourceAttempt(r, d.ItemID, d.Attempt, id)
+		if err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, source, id).Scan(&runID)
 	})
 	if err != nil {
 		return err
