@@ -3030,14 +3030,15 @@ stashes the owner's uncommitted work, moves the trunk and re-applies the work, a
 task P10 in `docs/design/board-state-machine-plan.md`). The move to tillr dropped it with the
 old board tool (`docs/design/tillr-seed-triage.md`, row 592), and nothing replaced it.
 
-**Build this item with the five steps below. Read this section first; it is the ruling of
-2026-11-18 that answers the latest build's conflict.** Everything in this block after this
+**Build this item with the steps below. Read this section first; it is the ruling of
+2026-11-18, amended the same day to answer the latest build's conflict.** Everything in this block after this
 section is the record of how the change was designed, and a builder does not act on it: not on
 the rulings, and not on the "Plan for the builder" under "Agent details", which this section
 replaces. No criterion, path or rule changes here.
 
-The latest build restored the preserved tree of an earlier build and wrote nothing else. It then
-reported two failures as beyond it: the lander suite's `index.lock: File exists`, and the stall in
+Two builds have now stopped after carrying out step 1 alone. Each restored the preserved tree of
+an earlier build, wrote nothing else, and reported as beyond it the failures that step 2 repairs.
+The first reported the lander suite's `index.lock: File exists` and the stall in
 `TestFileAndDirectoryExchangesFollowTheOwnersContent`. Both are what the plan's steps 2 and 5
 repair, and neither step had been carried out. The plan sat under "Agent details", after all of
 the history, and it described each change in words for the builder to write. So the commands now
@@ -3046,32 +3047,80 @@ and the README text it had left unwritten, in a clone at `55db82bc5`, ran the su
 result, and printed the difference at the end of this block: 8 files under `tools/tillr-land/`,
 534 lines added and 5 removed. After step 2 no code and no prose remains to be written.
 
+The second of those builds had this section in front of it, and its tree shows that it still
+stopped after step 1. Its preserved copy differs from the result of steps 1 and 2 in exactly the 8
+files of the patch, and in nothing else under `tools/tillr-land/`. It reported two things as
+missing, and the patch holds both:
+
+- **The stall in the directory test is the absence of step 2, not a fault in the runner.** The
+  lander suite stopped in `TestFileAndDirectoryExchangesFollowTheOwnersContent`, in the subtest "a
+  directory with tracked subdirectories becomes a file", after 480 seconds without progress. That
+  is the repeating landing described further down in this block, which the whole directory
+  exchange and the limit on predicting again end. Both are in the patch.
+- **The test that kills a lander while it holds the index lock is in the patch.** Step 1's tree
+  holds only `TestADeadLandersIndexLockIsReclaimedWithoutAHuman`, which writes a dead process's
+  record into a lock file. The patch adds
+  `TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt` to
+  `tools/tillr-land/idempotent_test.go`. It kills a real lander process just after the trunk move
+  with `killAfterMove`, checks that the lock names that dead process, lands a second item and
+  asserts that the lock is gone. That is the test c3 asks for, and the builder does not write
+  another.
+
+So steps 1 to 3 are now one command that stops at the first failure and ends by printing a line
+that says the patch is in. A builder that has not seen that line has not built this item and has
+no test result to report.
+
 - **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end
-  of a step is not an ending, and the commit is made once, at step 5.
-  1. **Apply the preserved build.** From the lane worktree:
+  of a step is not an ending, and the commit is made once, at step 5. Steps 1 to 3 are one
+  command. Run it whole, from the lane worktree, as it is written:
+
+  ```bash
+  set -euo pipefail
+  d="$(mktemp -d)"
+  git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply --index
+  git diff --cached --shortstat HEAD
+  awk '/^# owner-edits-patch end$/{p=0} p; /^# owner-edits-patch begin$/{p=1}' docs/tillr/roadmap.md > "$d/owner-edits.diff"
+  git apply --index "$d/owner-edits.diff"
+  git diff --cached --shortstat HEAD
+  (cd tools/tillr-land && gofmt -l . && go vet ./...)
+  just pack-sync > "$d/pack-sync.log" 2>&1
+  yolo pack lint yolo-packs/tillr | grep 'pack ok'
+  grep -q 'func TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt' tools/tillr-land/idempotent_test.go
+  echo "patch applied: tools/tillr-land is $(git write-tree --prefix=tools/tillr-land/)"
+  ```
+
+  Its output is these four lines, with a `yolo-jail` version line before the third:
+  `29 files changed, 4498 insertions(+), 108 deletions(-)`, then
+  `29 files changed, 5027 insertions(+), 108 deletions(-)`, then a line containing `pack ok`, then
+  `patch applied: tools/tillr-land is 3406c525f4ddf935571a93394aaa458b3c622a6b`. Do not go on to
+  step 4 without the last line. A different hash on that line is a stop only when
+  `git diff --stat 05c83dee8 HEAD -- tools/tillr-land` prints nothing, because then the trunk has
+  not changed that directory and the tree should be this one. What the command does, by step:
+  1. **Apply the preserved build.** The first `git apply`:
 
      ```bash
      git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply --index
      git diff --cached --shortstat HEAD
      ```
 
-     The second command prints `29 files changed, 4498 insertions(+), 108 deletions(-)`. This is
+     The count after it is `29 files changed, 4498 insertions(+), 108 deletions(-)`. This is
      the only preserved ref to use. The others your brief lists under "Facts carried" hold the
      same build or an older one; do not apply, inspect or compare them. Do not take
      `yolo-packs/tillr/files/` from any ref: step 3 generates it.
-  2. **Apply the patch.**
+  2. **Apply the patch.** The `awk` line writes the patch out of this block and the second
+     `git apply` applies it:
 
      ```bash
-     awk '/^# owner-edits-patch end$/{p=0} p; /^# owner-edits-patch begin$/{p=1}' docs/tillr/roadmap.md > "$YOLO_DURABLE_DIR/owner-edits.diff"
-     git apply --index "$YOLO_DURABLE_DIR/owner-edits.diff"
+     awk '/^# owner-edits-patch end$/{p=0} p; /^# owner-edits-patch begin$/{p=1}' docs/tillr/roadmap.md > "$d/owner-edits.diff"
+     git apply --index "$d/owner-edits.diff"
      git diff --cached --shortstat HEAD
      (cd tools/tillr-land && gofmt -l . && go vet ./...)
      ```
 
-     The third command prints `29 files changed, 5027 insertions(+), 108 deletions(-)`, and the
-     fourth prints nothing. Do not rewrite what the two applications produce.
-  3. **Regenerate the mirror.** Run `just pack-sync`, then `yolo pack lint yolo-packs/tillr`,
-     which prints `pack ok`.
+     The count after it is `29 files changed, 5027 insertions(+), 108 deletions(-)`, and the
+     fourth command prints nothing. Do not rewrite what the two applications produce.
+  3. **Regenerate the mirror.** `just pack-sync`, then `yolo pack lint yolo-packs/tillr`,
+     which prints a line containing `pack ok`.
   4. **Run the suites,** each with the two trace variables unset and its output in a file, and
      read only the last line of each file:
 
@@ -3095,19 +3144,26 @@ result, and printed the difference at the end of this block: 8 files under `tool
   the fourth command of step 2, or a failing test in step 4. Report it with the step number, the
   command and its output. A report that lists steps not yet done is not one of these, and neither
   is the size of the change.
-- **If an application fails,** the trunk has moved under one of its files. Run that `git apply`
-  again with `--index -3`, resolve each conflict towards the patch and keep what the trunk added,
-  and continue. The counts in steps 1 and 2 may then differ; that alone is not a stop.
+- **If an application fails,** the trunk has moved under one of its files. Run the lines of the
+  command one at a time from that `git apply` on, with `d="$(mktemp -d)"` set again and that
+  `git apply` given `--index -3`, resolve each conflict towards the patch and keep what the trunk
+  added, and continue to the last line. The counts in steps 1 and 2 and the hash may then differ;
+  that alone is not a stop.
+- **If the command is run a second time in one lane,** the first `git apply` fails because the
+  build is already there. Run `git reset -q --hard HEAD` and
+  `git clean -fdq -- tools docs/tillr/land-across-owner-edits yolo-packs/tillr` in the lane
+  worktree, then the whole command again.
 - **If a test fails in step 4,** run it alone once, with the trace variables unset and
   `-timeout 300s`. A test that passes alone is recorded in the report and does not stop the
   commit. For a test that fails alone, run it alone at the base with `git stash -u`, and restore
   the work with `git stash pop`. Red at the base is a `trunk` obstacle naming that test. Red only
   with the work applied is a `seat` obstacle that names the test and quotes its failure.
-- **The two failures the latest build reported are repaired by step 2.** After it,
+- **The failures the two builds reported are repaired by step 2.** After it,
   `TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding` passes because the test's owner
   step checks the killed lander's lock record and removes the lock, and
   `TestFileAndDirectoryExchangesFollowTheOwnersContent` passes because a directory that becomes a
-  file is exchanged whole. Seeing either failure means step 2 was not applied.
+  file is exchanged whole. Seeing either failure means step 2 was not applied: go back to the
+  command above, and do not report it as an obstacle.
 - **The builder's question about editor side files is answered.** The lander logs nothing about
   them, and the lander README in step 1's tree says so. The report need not take it up.
 - **What this section measured,** in a clone at `55db82bc5` on 2026-11-18 with steps 1 to 3
@@ -3132,6 +3188,18 @@ result, and printed the difference at the end of this block: 8 files under `tool
   - The `rg` that c6 asks for, over the drain README, the lander README, `tools/tillr-view/waiting.go`
     and the `tillr-operating` skill, for `any dirty|dirty landed path|holds the landing|uncommitted
     content on a landed path`, returned nothing.
+  - Measured again on 2026-11-18 in a clone at `05c83dee8`, with the command of steps 1 to 3 taken
+    from this block and run as a script: it exited 0 and printed the four lines given above. The
+    three suites then printed `191 tests passed` for `tools/tillr-land`, `504 tests passed` for
+    `tools/tillr-view` and `2117 tests passed` for `tools/tillr-drain`, each exiting 0, and
+    `python3 tests/tillr-docs.test.py` and `python3 tests/pack-sync.test.py` exited 0. The index
+    then held 53 changed files.
+  - The build that stopped after step 1, compared the same day: for the 29 files of steps 1 and
+    2, the blob in `refs/tillr/preserved/run-item-land-across-owner-edits-a27` differs from the
+    result of the two applications in 8, which are the 8 files of the patch.
+    `git diff --stat refs/tillr/preserved/run-item-land-across-owner-edits-a23
+    refs/tillr/preserved/run-item-land-across-owner-edits-a27 -- tools/tillr-land` printed
+    nothing.
 
 Tillr does something different today. A landing leaves unrelated uncommitted paths alone, so
 those do not delay it. When the owner's uncommitted content sits on a path the landing changes,
