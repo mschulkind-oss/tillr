@@ -395,10 +395,15 @@ tillr-build:
     # Keep the existing install untouched until all eight builds succeed.
     mkdir -p "$out"
     for program in "$work/bin/"*; do
-        mv "$program" "$out/"
+        python3 -c 'import os, sys; os.replace(*sys.argv[1:])' "$program" "$out/${program##*/}"
         printf 'tillr-build: %s/%s\n' "$out" "${program##*/}"
     done
     printf 'tillr-build: prepend %s to PATH for the loop and its children: PATH=%s:$PATH\n' "$out" "$out"
+
+# Test, build and smoke the committed checkout before updating the live bin directory.
+[positional-arguments]
+tillr-roll *args:
+    @python3 tools/tillr-roll/tillr-roll.py "$@"
 
 # Keep this checkout's loop alive; --stop stops only the keeper. Pass loop options after --.
 # Positional arguments keep each one intact, including an empty `--rolling ''`.

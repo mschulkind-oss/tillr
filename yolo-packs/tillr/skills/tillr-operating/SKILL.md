@@ -126,6 +126,14 @@ three outcomes: a ready declaration, a declaration with an owner question, or a
 duplicate/finished report waiting on the owner. Stores with no declared item
 continue to route items to their own seats.
 
+## Update a running drain
+
+Start the drain and observatory from the `just tillr-build` bin directory.
+After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts.
+After a manual commit, run `just tillr-roll` to test, build, swap and request both restarts.
+A refused restart leaves the current process running; inspect the command's per-part report.
+Pack launchers use a separate install: run `yolo host apply --assert` before requesting a restart.
+
 ## Keep the repository loop running
 
 In this repository, `just tillr-keep` runs the **keeper**: the process that starts

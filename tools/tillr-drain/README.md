@@ -34,19 +34,11 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 
 ## Moving a running loop onto new code
 
-After building and replacing the installed binaries, run
-`tillr drain restart --root <repository> --wait`. The loop reads the request at the top
-of a pass, checks the replacement with its own arguments and `--check`, and replaces
-itself with the same process id. A failed check leaves the old loop running.
-Worker runs keep going without a signal or pause request from the replacement.
-Moving those runs onto the new build is [separate work](../../docs/design/tillr-restart.md#move-every-run-onto-the-new-build-after-a-restart).
-
-`tillr view restart --root <repository> --wait` requests the same change for the
-observatory server, which finishes its HTTP requests before replacing itself.
-Both commands print the request id; `--wait` also prints `restarted`, `already-current`,
-`refused` or `superseded`. A request filed while no process runs waits for the next start.
-With no request, replacing files on disk does not restart either process;
-[automatic rolling](../../docs/design/tillr-restart.md#rolling-after-a-landing) is separate work.
+Start the drain and observatory from the `just tillr-build` bin directory.
+After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts.
+After a manual commit, run `just tillr-roll` to test, build, swap and request both restarts.
+A refused restart leaves the current process running; replacing files alone does not restart it.
+Pack launchers use a separate install: run `yolo host apply --assert` before requesting a restart.
 
 ## Opted-in judgment before the gate
 
