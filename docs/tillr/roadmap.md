@@ -1939,62 +1939,24 @@ them. This ruling replaces the sentence above that left c1 to c3 unchanged.
 
 ### Hold an item whose runs keep being orphaned
 
-A run that a loop stop orphans spends no retry and no re-admission, by design: the worker did not
-fail, the loop did. The cost of that rule is that an item whose runs are killed again and again is
-sent out again every time, without limit. On 2026-11-16 `item-sync-design-without-item` had five
-orphaned attempts, each one a worker started and killed by a loop that was exiting on a fault. The
-item is not the cause, and re-dispatching it fixes nothing until the fault is fixed. A person needs
-to see the count, and after a stated number of orphaned attempts the item should wait for a person,
-with the faults that killed its runs named, instead of being sent out again.
+**Withdrawn, 2026-11-18.** This item asked for an `orphan.limit` count, defaulting to three, after
+which an item whose runs a loop stop had orphaned would wait for a person. The owner's ruling of
+2026-11-17 removes the premise, and the item is not built:
 
-<!-- tillr: item id="item-drain-hold-repeatedly-orphaned" paths="tools/tillr-drain/,tools/tillr-view/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+- No attempt counts, retry budgets or "exhausted" states exist
+  ([R1](../design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules)).
+- A killed or interrupted run resumes as the same node, nothing is counted, and the interruption is
+  logged ([R5](../design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules); the same shape
+  for a design run is [Section 4.3, D-JL9](../design/tillr-judge-and-lifecycle.md#43-how-a-design-runs-ending-moves-its-conflict-d-jl9)).
+- An item reaches the owner only through an explicit objection that names him, recorded as an open
+  question in a design document
+  ([R3](../design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules)). A count reaching a limit
+  is not such an objection.
 
-**Ruling, 2026-11-17 (answers the first run's fence conflict):** the first run stopped because c1
-needs a reader the fence left out. The settings file is read by `tools/tillr/settings/`, which
-refuses any table other than `roll` and `push`, so it refuses `[orphan]`. That directory is added
-to this item's paths. The work extends that one reader to take `orphan.limit`, a whole number of
-at least one that defaults to three, and adds no second reader of the settings file inside the
-loop or the view. The criteria below are unchanged.
-
-**Ruling, 2026-11-17 (answers the conflict two more failed attempts raised):** neither attempt found
-a fault in c1 to c4, so they stand as written. The item was built whole twice. Both landings were
-refused because the trunk had moved under the candidate, and the second conflict fix stopped
-without a commit on a test failure that this item does not cause. Four points settle it.
-
-- [unlanded] **Start from the built candidate.** Commit `907bb3a21`, the tip of `refs/tillr/preserved/run-item-drain-hold-repeatedly-orphaned-a5-cfix`, holds the implementation, its tests, the drain README section and the pack copy, already carried forward once onto the definition-driven planner, and it does not touch this file. Apply that one commit to the base and do not write the item again. Its message is a recovery record and not a commit message, so the new commit gets its own. On 2026-11-17 `git merge-tree --write-tree --name-only 0a14295b2 907bb3a21` reported one content conflict, in `tools/tillr-view/web/src/components/ItemsPasses.tsx`, and in its pack copy, which `just pack-sync` regenerates and nobody resolves by hand. Resolve it by keeping what the trunk added since and re-adding the orphan count beside it. A file that merges without a conflict can still be wrong against the newer trunk, so the full suites decide and not the merge. On the same day the candidate's own tree passed `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, 1467 tests, on a machine doing nothing else.
-- **The failing test is the trunk's, and the candidate does not cause it.** The conflict fix's full
-  drain suite failed `TestCommentPathTwice` once, at `comments_test.go:326: designer <nil>`, while
-  eight other suites, the web build and a review ran beside it. Measured on 2026-11-17 on a
-  32-processor machine at `0a14295b2` with no change applied: the compiled `drain` test binary run
-  as `-test.run '^TestCommentPathTwice$' -test.count=6` in 24 processes at once failed 8 of 144
-  runs, every one with that same line. The same command on the candidate's tree failed 9 of 144.
-  Run alone, the test passed three times of three on the candidate. The failure appears under load
-  with and without this item's change, at the same rate.
-- **This item does not repair it.** The repair is criterion c5 of
-  [Run owner-facing work on lanes outside the cap](#add-dedicated-lanes-for-owner-facing-work),
-  whose ruling names the cause as a race in designer retirement. Two items changing
-  `retireDesigners` would conflict with each other, so this one leaves
-  `tools/tillr-drain/drain/designer.go` and the comment tests as the trunk has them.
-- **How the builder treats that one failure.** Run the full drain suite by itself, with no other
-  suite, build or review running beside it. If it fails and the only failing test is
-  `TestCommentPathTwice` with `designer <nil>`, run that test alone with
-  `go test ./drain -run '^TestCommentPathTwice$' -count=3`. If that passes, the failure is the
-  trunk's known race: commit, and state the failure and both commands' output in the report. Do not
-  report `trunk-broken` for it, because a replay on the base passes far more often than it fails
-  and would leave the failure with the candidate. Any other failing test, or this test failing
-  when run alone, is the candidate's to fix. Once the repair above is on the trunk this allowance
-  ends, and a failure of this test is treated like any other.
-
-- **c1:** The waiting face and the item's record show the number of orphaned attempts per item, and the loop's settings file takes `orphan.limit`, defaulting to three. A test asserts the count is shown for an item with two orphaned runs and for an item with none.
-- **c2:** When an item's orphaned attempts reach the limit, the planner holds it with the reason `orphan-limit`, which names each stopping loop's recorded fault, for example `fault: store: database is locked` or `gate-harness-error`. A test with three orphaned runs asserts the hold, the reason text and that nothing is dispatched.
-- **c3:** `tillr drain retry` for that item clears the hold and starts a new count, and a run that ends on its own merits (a verdict, a refusal or a report) also starts a new count. A test asserts both.
-- **c4:** A held item is not hidden from the operator: the loop's start line lists items held for `orphan-limit` with their counts.
-
-**Agent details:**
-
-- **Ref:** the interrupted-run rule in `tools/tillr-drain/README.md`; the loop stop records in `.tillr/loop/` carry each stop's fault text.
-- **Where:** `AttemptInterrupted` handling in `tools/tillr-drain/drain/plan.go`, the `drain.orphaned` events, and the waiting face in `tools/tillr-view/waiting.go`; the settings reader in `tools/tillr/settings/settings.go` for `orphan.limit`; the pack's copy under `yolo-packs/tillr/`.
-- **Evidence:** 2026-11-16, `tillr view events --since 0`: five `drain.orphaned` events for `item-sync-design-without-item`, the stops recorded as `fault` and `gate-harness-error`.
+An item that is orphaned again and again is a fault in the loop to fix, not a state of the item to
+hold. The item is `resolved-elsewhere` in the store with this ruling as its evidence, its block is
+removed from this document, and its unlanded candidate (the preserved ref
+`refs/tillr/preserved/run-item-drain-hold-repeatedly-orphaned-a5-cfix`) is not to land.
 
 ## Filed 2026-11-16: work the queue triage found stranded
 
