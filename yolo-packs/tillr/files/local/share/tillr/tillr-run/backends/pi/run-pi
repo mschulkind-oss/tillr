@@ -152,6 +152,13 @@ if [ -n "$session" ]; then
     set -- "$@" --session-id "$session"
 fi
 
+# Only runner-managed launches have a pause file. Keep pi's PID private to the
+# watcher: signaling a timeout wrapper or process group would also signal tools.
+if [ -n "${TILLR_PAUSE_REQUEST:-}" ]; then
+    require_harness python3
+    set -- python3 "$SELF_DIR/stop-at-gap" "$TILLR_PAUSE_REQUEST" "$@"
+fi
+
 # The wall wraps the whole argv, so the bound is one process group and not the harness's
 # own turn: omitted (or 0) prepends nothing at all.
 if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
