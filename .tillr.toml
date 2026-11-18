@@ -1,2 +1,5 @@
 [prose]
 rewrite = true
+
+[order]
+record = "docs/tillr/queue-order.txt"
