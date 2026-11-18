@@ -2245,9 +2245,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 	case GateFailed:
 		// A red gate is a suspect, not a conviction. Replay the failing checks on the base
-		// first: a failure that is red there is the trunk's, and the item is acquitted with
-		// no failing verdict. Only a failure the base does not reproduce is the candidate's.
-		acquitted, err := l.acquitTrunkAlreadyRed(ctx, candidate, gate, result)
+		// first: a failure that is red there and on the trunk tip is the trunk's, and the
+		// item is acquitted with no failing verdict. Only a failure the base does not
+		// reproduce is the candidate's; one the tip has repaired goes back to its worker on
+		// the tip.
+		acquitted, err := l.acquitTrunkAlreadyRed(ctx, &candidate, gate, result)
 		if err != nil {
 			return "", false, err
 		}

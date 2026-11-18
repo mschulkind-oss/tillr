@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -471,57 +473,224 @@ func (l *Loop) rollingRuns(result *LoopResult) int {
 	return result.RollingGreen + result.RollingRed
 }
 
-// trunkAlreadyRed replays the gate's failing checks on the candidate's own base.
-// Only an all-red base replay acquits. A newer trunk red does not erase the
-// candidate's failure on a check that passed where it started; rolling files that
-// newer trunk's independent fixer.
+// trunkReading is what a trunk claim's replay found.
+//
+//   - Confirmed: every named check is red on the candidate's base and, when the trunk has
+//     moved past that base, on the trunk tip too. RedSHA is the commit the fixer is filed
+//     for: the tip when the base is behind it, the base otherwise.
+//   - RepairedAt: the checks are red on the candidate's old base but not all red on the
+//     tip, so the trunk is already repaired at that tip and no fixer is filed.
+//   - Neither: the failure is the candidate's, or a replay could not judge.
+//
+// Red is the replay's red subset, so a caller can say what it saw.
+type trunkReading struct {
+	RedSHA     string
+	Red        []string
+	Confirmed  bool
+	RepairedAt string
+}
+
+// trunkAlreadyRed replays the gate's failing checks on the candidate's own base, and then
+// judges them on the current trunk tip. Only an all-red base replay can acquit: a newer
+// trunk red does not erase the candidate's failure on a check that passed where it started;
+// rolling files that newer trunk's independent fixer.
+//
+// The tip is the second question because work is always built against the latest trunk
+// (the owner's ruling of 2026-11-18): a check red only on a base the trunk has moved past
+// is a repair that already happened, and a fixer filed for that old base holds every item
+// for nothing. On 2026-11-18 a run cut nine hours earlier filed fixer-main-1887afe2c948
+// for a check the trunk had long since repaired. The tip run's recorded passes answer for
+// the tip where they cover a check; only the rest is replayed there.
 //
 // A fixer item is never acquitted here: its whole purpose is to be red on the base, and
 // replaying its own failure would let it heal itself by doing nothing.
-func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome) (string, []string, bool, error) {
+func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome) (trunkReading, error) {
 	if IsTrunkFixer(candidate.ItemID) {
-		return "", nil, false, nil
+		return trunkReading{}, nil
 	}
 	replay, ok := l.cfg.Steps.(ReplayStep)
 	if !ok || len(gate.FailingChecks) == 0 {
-		return "", nil, false, nil
+		return trunkReading{}, nil
 	}
 	base := candidate.BaseSHA
 	if base == "" {
 		base = l.laneBase(candidate.LaneID)
 	}
 	if base == "" {
-		return "", nil, false, nil
+		return trunkReading{}, nil
 	}
 	out, err := replay.Replay(ctx, candidate, base, gate.FailingChecks)
 	if err != nil {
-		return "", nil, false, err
+		return trunkReading{}, err
 	}
 	if !out.Known || out.Rev != "" && out.Rev != base {
-		return "", nil, false, nil
+		return trunkReading{}, nil
 	}
-	redSet := map[string]bool{}
-	for _, check := range out.Red {
-		redSet[check] = true
+	if !allIn(gate.FailingChecks, out.Red) {
+		return trunkReading{Red: out.Red}, nil
 	}
-	for _, check := range gate.FailingChecks {
-		if !redSet[check] {
-			// The red subset is still answered, so a caller can say what the replay saw.
-			return "", out.Red, false, nil
+	// A fork-series candidate's base is the fork's own HEAD, which the trunk tip does not
+	// describe, so its base answers alone.
+	if candidate.BaseRef != "" || l.cfg.Root == "" {
+		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true}, nil
+	}
+	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	if err != nil {
+		return trunkReading{Red: out.Red}, err
+	}
+	if tip == "" || tip == base {
+		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true}, nil
+	}
+	tipRed, known, err := l.redOnTip(ctx, replay, candidate, tip, gate.FailingChecks)
+	if err != nil || !known {
+		// A tip nobody could judge confirms nothing: a fixer for the old base is the
+		// defect this reading exists to prevent.
+		return trunkReading{Red: out.Red}, err
+	}
+	if allIn(gate.FailingChecks, tipRed) {
+		return trunkReading{RedSHA: tip, Red: tipRed, Confirmed: true}, nil
+	}
+	return trunkReading{Red: out.Red, RepairedAt: tip}, nil
+}
+
+// allIn answers whether every one of want is in have.
+func allIn(want, have []string) bool {
+	set := map[string]bool{}
+	for _, check := range have {
+		set[check] = true
+	}
+	for _, check := range want {
+		if !set[check] {
+			return false
 		}
 	}
-	return base, out.Red, true, nil
+	return true
+}
+
+// redOnTip answers which of the checks are red on the trunk tip, and whether that was
+// judged. A check the tip run's own record passed on this tip is green without a replay
+// (readCheckProofs, the record that resolves stale fixers); the rest are replayed there.
+// A proof the loop cannot read is not a pass, so it only costs a replay.
+func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candidate, tip string, checks []string) ([]string, bool, error) {
+	passed := map[string]bool{}
+	if proofs, err := readCheckProofs(ctx, l.cfg.Root); err == nil {
+		for _, proof := range proofs {
+			if proof.commit != tip {
+				continue
+			}
+			for id := range proof.at {
+				passed[id] = true
+			}
+		}
+	}
+	rest := []string{}
+	for _, check := range checks {
+		if !passed[check] {
+			rest = append(rest, check)
+		}
+	}
+	if len(rest) == 0 {
+		return nil, true, nil
+	}
+	out, err := replay.Replay(ctx, candidate, tip, rest)
+	if err != nil {
+		return nil, false, err
+	}
+	if !out.Known || out.Rev != "" && out.Rev != tip {
+		return nil, false, nil
+	}
+	return out.Red, true, nil
+}
+
+// moveLaneOntoTip rebases a returned worker's commits onto the trunk tip and records the
+// tip as the lane's base, so the session it goes back to continues on the latest trunk. It
+// answers the moved head, or "" when the lane is left as it was: a fork or workflow-node
+// lane, whose base is not the trunk's, or a rebase that conflicts (aborted, with the lane
+// reset to the head it had).
+//
+// from is the worker's own head; a gate candidate's lane also carries the loop's
+// document-retirement commit, which is not the worker's to inherit.
+func (l *Loop) moveLaneOntoTip(ctx context.Context, lane, from, tip string) (string, error) {
+	if l.nonLanding || l.laneForkTarget(lane) != "" || from == "" {
+		return "", nil
+	}
+	if itemBase := l.laneFile(lane, ItemBaseSHAFile); itemBase != "" && itemBase != l.laneFile(lane, BaseSHAFile) {
+		return "", nil
+	}
+	target := l.laneTarget(lane)
+	original, err := l.revParse(ctx, target, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	restore := func() {
+		_, _ = l.git(ctx, target, "rebase", "--abort")
+		_, _ = l.git(ctx, target, "reset", "-q", "--hard", original)
+	}
+	if original != from {
+		if _, err := l.git(ctx, target, "reset", "-q", "--hard", from); err != nil {
+			restore()
+			return "", nil
+		}
+	}
+	if _, err := l.git(ctx, target, "rebase", "-q", "--autostash", tip); err != nil {
+		l.reportf("loop: lane %s could not be rebased onto %s: %v\n", lane, shortSHA(tip), err)
+		restore()
+		return "", nil
+	}
+	head, err := l.revParse(ctx, target, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{BaseSHAFile, ItemBaseSHAFile} {
+		if err := os.WriteFile(filepath.Join(l.laneDirPath(lane), name), []byte(tip+"\n"), 0o644); err != nil {
+			return "", Externalf("recording lane %s's base: %v", lane, err)
+		}
+	}
+	return head, nil
+}
+
+// repairedAtTipDetail is what a worker is told when its trunk claim was red only on the
+// base it started from.
+func repairedAtTipDetail(checks []string, base, tip, moved string) string {
+	detail := fmt.Sprintf("Checks %s are red on this run's base %s but pass on the trunk tip %s: the trunk is repaired at %s. Take in the latest trunk and continue.", strings.Join(checks, ", "), shortSHA(base), shortSHA(tip), shortSHA(tip))
+	if moved != "" {
+		return detail + fmt.Sprintf(" The loop rebased this lane's commits onto %s, so the lane's base is now %s.", shortSHA(tip), shortSHA(tip))
+	}
+	return detail + fmt.Sprintf(" The loop could not rebase this lane onto %s without a conflict, so the lane stays on %s.", shortSHA(tip), shortSHA(base))
 }
 
 // acquitTrunkAlreadyRed is the gate-failure fork: it answers true when the failure was
 // the trunk's and the item has been acquitted (a refusal recorded, a fixer filed, the
-// item held blocked), and false when the ordinary gate refusal should stand.
-func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome, result *LoopResult) (bool, error) {
-	redSHA, redChecks, ok, err := l.trunkAlreadyRed(ctx, candidate, gate)
-	if err != nil || !ok {
+// item held blocked), and false when the ordinary gate refusal should stand. A failure red
+// only on a base the trunk has repaired since files no fixer: the lane is brought onto the
+// tip and the ordinary refusal goes back to its worker saying so.
+func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate *Candidate, gate GateOutcome, result *LoopResult) (bool, error) {
+	reading, err := l.trunkAlreadyRed(ctx, *candidate, gate)
+	if err != nil {
 		return false, err
 	}
-	return true, l.acquitRed(ctx, candidate, gate, redSHA, redChecks, result)
+	if reading.RepairedAt != "" {
+		from := candidate.WorkerHeadSHA
+		if from == "" {
+			from = candidate.HeadSHA
+		}
+		moved, err := l.moveLaneOntoTip(ctx, candidate.LaneID, from, reading.RepairedAt)
+		if err != nil {
+			return false, err
+		}
+		oldBase := candidate.BaseSHA
+		detail := repairedAtTipDetail(gate.FailingChecks, oldBase, reading.RepairedAt, moved)
+		if moved != "" {
+			candidate.BaseSHA, candidate.HeadSHA, candidate.WorkerHeadSHA = reading.RepairedAt, moved, moved
+		}
+		candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
+		l.reportf("loop: %s's gate failure is red only on its base %s; the trunk is repaired at %s, so no fixer is filed\n", candidate.ItemID, shortSHA(oldBase), shortSHA(reading.RepairedAt))
+		return false, nil
+	}
+	if !reading.Confirmed {
+		return false, nil
+	}
+	return true, l.acquitRed(ctx, *candidate, gate, reading.RedSHA, reading.Red, result)
 }
 
 // acquitRed records a replay's red base against a candidate: the fixer filed or attached,

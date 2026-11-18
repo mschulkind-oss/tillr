@@ -37,10 +37,17 @@ type trunkSteps struct {
 
 	replayCalls  []string
 	rollingCalls []string
+	// beforeReplay, when set, runs once before the first replay: a case moves the trunk
+	// there, the way other landings move it while a run's candidate waits to be judged.
+	beforeReplay func()
 }
 
 func (s *trunkSteps) Replay(_ context.Context, _ drain.Candidate, rev string, checks []string) (drain.ReplayOutcome, error) {
 	s.mu.Lock()
+	if hook := s.beforeReplay; hook != nil {
+		s.beforeReplay = nil
+		hook()
+	}
 	s.replayCalls = append(s.replayCalls, rev)
 	out, ok := s.replays[rev]
 	s.mu.Unlock()
@@ -223,6 +230,55 @@ func TestAGateFailureRedOnTheBaseAcquitsTheItem(t *testing.T) {
 	}
 	if refusal["fixer_item"] != fixer {
 		t.Fatalf("the refusal names fixer_item %v, want %s", refusal["fixer_item"], fixer)
+	}
+}
+
+// A gate failure red on the candidate's base but green on the trunk tip names a repair that
+// already happened: the trunk moved past the base while the candidate waited. No fixer is
+// filed for either commit, the lane is brought onto the tip, and the ordinary refusal goes
+// back to the worker saying the trunk is repaired there (the owner's ruling of 2026-11-18:
+// work is always built against the latest trunk).
+func TestAGateFailureRedOnlyOnAnOldBaseFilesNoFixer(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
+	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
+	base := git(t, f.root, "rev-parse", "main")
+	var tip string
+	steps := &trunkSteps{
+		ProcessSteps: f.steps(t, stub(t, "gate", failingGateBody), always(t, "land", 0), always(t, "verdict", 0)),
+		replays:      map[string]drain.ReplayOutcome{base: {Red: []string{"unit"}, Known: true}},
+		beforeReplay: func() {
+			if err := os.WriteFile(filepath.Join(f.root, "repair.txt"), []byte("repaired\n"), 0o644); err != nil {
+				t.Error(err)
+			}
+			git(t, f.root, "add", "repair.txt")
+			git(t, f.root, "commit", "-qm", "repair the trunk")
+			tip = git(t, f.root, "rev-parse", "main")
+		},
+	}
+	var report strings.Builder
+	result, err := runTrunkLoop(t, f, steps, &report)
+	if err != nil {
+		t.Fatalf("the loop failed: %v", err)
+	}
+	if result.TrunkAcquitted != 0 {
+		t.Fatalf("a base the trunk has repaired acquitted the item: %d", result.TrunkAcquitted)
+	}
+	for _, sha := range []string{base, tip} {
+		if itemExists(t, f.store, drain.TrunkFixerID(sha)) {
+			t.Fatalf("a fixer was filed for %s; the trunk is repaired at %s", sha, tip)
+		}
+	}
+	refusal := refusalOf(t, f.store, drain.RefusalGate)
+	if refusal == nil {
+		t.Fatalf("no gate refusal was recorded: %v", kinds(eventsOf(t, f.store)))
+	}
+	detail, _ := refusal["detail"].(string)
+	if !strings.Contains(detail, "repaired at "+tip[:12]) || !strings.Contains(detail, "rebased this lane") {
+		t.Fatalf("the refusal does not send the worker to the tip: %q\n%s", detail, report.String())
+	}
+	session, _ := refusal["worker_session"].(map[string]any)
+	if session != nil && session["base_sha"] != tip {
+		t.Fatalf("the returned session keeps base %v, want the tip %s", session["base_sha"], tip)
 	}
 }
 
