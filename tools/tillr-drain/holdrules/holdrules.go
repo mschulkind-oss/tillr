@@ -24,6 +24,9 @@ var Unknown = Rule{"needs a cause", "queue", "add a history rule for this record
 // Rules maps an exact reason spelling to its rule. Entries that no drain pass writes
 // any more stay, because a recorded decision that carries one is history.
 var Rules = map[string]Rule{
+	"words-missing":               {"needs a cause", "fence", "inspect the missing words file and authorize a retry"},
+	"words-altered":               {"needs a cause", "fence", "restore the saved words unchanged and authorize a retry"},
+	"idea-no-outcome":             {"needs a cause", "fence", "add item blocks carrying from the idea and authorize a retry"},
 	"Vantage not answering":       {"needs a cause", "queue", "check Vantage availability"},
 	"node-output-missing":         {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
 	"workflow-invalid":            {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},

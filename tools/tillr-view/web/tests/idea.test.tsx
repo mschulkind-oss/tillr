@@ -23,12 +23,17 @@ test("idea row carries a chip and Item page renders full verbatim words and the 
   expect(screen.getByText("First words")).toBeTruthy();
   list.unmount();
   const words = "Exact words\n  whitespace and <not markup> 雪\n";
-  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("/doc") ? { error: { code: "no-design-doc", message: "No design document" } } : envelope({ ...dispatchedItemData, idea: { words, words_path: "docs/ideas/one.txt", in_tree: false } })), { status: path.endsWith("/doc") ? 404 : 200 })));
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("/doc") ? { error: { code: "no-design-doc", message: "No design document" } } : envelope({ ...dispatchedItemData, idea: { words, words_path: "docs/ideas/one.txt", in_tree: false, outcomes: [{ item_id: "item-outcome-a", title: "Build the first change", state: "in-queue" }, { item_id: "item-outcome-b", title: "Settle the question", state: "landed" }] } })), { status: path.endsWith("/doc") ? 404 : 200 })));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><ItemPage id={id} live={false} paused baseURL="" /></QueryClientProvider>);
   const region = await screen.findByRole("region", { name: "Idea words" });
   expect(region.querySelector("pre")?.textContent).toBe(words);
   expect(region.textContent).toContain("not yet in the tree");
+  const outcomes = screen.getByRole("region", { name: "Idea outcomes" });
+  expect(outcomes.textContent).toContain("Build the first change");
+  expect(outcomes.textContent).toContain("Settle the question");
+  expect(outcomes.textContent).toContain("landed");
+  expect(outcomes.querySelector('a[href="#/item/item-outcome-a"]')).toBeTruthy();
   client.clear();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); window.history.replaceState(null, "", "/"); });

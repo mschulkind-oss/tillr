@@ -12,10 +12,17 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+type ideaOutcome struct {
+	ItemID string `json:"item_id"`
+	Title  string `json:"title"`
+	State  string `json:"state"`
+}
+
 type ideaWords struct {
-	Words     string `json:"words"`
-	WordsPath string `json:"words_path"`
-	InTree    bool   `json:"in_tree"`
+	Outcomes  []ideaOutcome `json:"outcomes"`
+	Words     string        `json:"words"`
+	WordsPath string        `json:"words_path"`
+	InTree    bool          `json:"in_tree"`
 }
 
 // ideaIDs reads metadata once for the snapshot; old stores without intake are
@@ -74,5 +81,23 @@ func (s *server) readIdeaWords(r *store.Reader, id string) (*ideaWords, error) {
 		return nil, fmt.Errorf("idea words for %s differ from saved bytes", id)
 	}
 	out.Words = string(raw)
-	return out, nil
+	out.Outcomes = []ideaOutcome{}
+	// Sync records the source once at first import. The receipt outlives retired
+	// blocks and hand moves, so landed outcomes remain linked to their idea.
+	rows, err := r.Query(`SELECT item_id,title,state FROM items WHERE EXISTS
+ (SELECT 1 FROM events WHERE object_type='item' AND object_id=items.item_id
+ AND kind='item.update' AND json_valid(payload) AND json_extract(payload,'$.placed_from')=?)
+ ORDER BY rank,item_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v ideaOutcome
+		if err := rows.Scan(&v.ItemID, &v.Title, &v.State); err != nil {
+			return nil, err
+		}
+		out.Outcomes = append(out.Outcomes, v)
+	}
+	return out, rows.Err()
 }

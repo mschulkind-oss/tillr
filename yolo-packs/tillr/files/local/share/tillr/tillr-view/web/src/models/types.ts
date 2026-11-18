@@ -536,7 +536,7 @@ export interface GraphRevisionView {
 
 export interface ItemData {
   progress?: ProgressClaim[];
-  idea?: { words: string; words_path: string; in_tree: boolean };
+  idea?: { words: string; words_path: string; in_tree: boolean; outcomes?: { item_id: string; title: string; state: string }[] };
   graph_revisions?: GraphRevisionView[];
   usage?: UsageSum;
   comments?: CommentItemView;

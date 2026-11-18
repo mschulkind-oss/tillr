@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr/store"
@@ -58,6 +59,35 @@ func placeRows(t *testing.T, s *store.Store) (map[string]string, []string) {
 	}
 	return values, order
 }
+func TestPlaceUnkeyedAtRequestedPosition(t *testing.T) {
+	for _, args := range [][]string{{"--to", "first"}, {"--to", "last"}, {"--before", "0"}, {"--after", "0"}} {
+		path, s := placeFixture(t, "")
+		code, out := run(t, append([]string{"place", "--store", path, "--item", "0"}, args...)...)
+		if code != 0 {
+			t.Fatalf("%d %s", code, out)
+		}
+		before, _ := placeRows(t, s)
+		if strings.Contains(before["0"], "||") {
+			t.Fatalf("no key: %v", before)
+		}
+		code, out = run(t, append([]string{"place", "--store", path, "--item", "0"}, args...)...)
+		if code != 0 {
+			t.Fatalf("%d %s", code, out)
+		}
+		after, _ := placeRows(t, s)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatal("keyed no-op changed receipt")
+		}
+		var count int
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error { return r.QueryRow(`SELECT count(*) FROM events`).Scan(&count) }); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%d records, want one", count)
+		}
+	}
+}
+
 func TestPlaceDestinations(t *testing.T) {
 	for _, tc := range []struct {
 		args []string

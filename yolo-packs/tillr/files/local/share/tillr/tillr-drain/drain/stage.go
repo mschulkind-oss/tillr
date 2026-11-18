@@ -433,6 +433,22 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	ideaTask, ideaWords, err := s.ideaTask(ctx, spec.ItemID)
+	if err != nil {
+		return err
+	}
+	if ideaTask != "" {
+		for i := range values {
+			if values[i].placeholder == "TASK" {
+				values[i].text = ideaTask
+			}
+			// The first saved line is the intake's display title, not template
+			// syntax. Its unchanged text is in the suffix along with all words.
+			if values[i].placeholder == "TITLE" {
+				values[i].text = "Design the saved idea"
+			}
+		}
+	}
 	if item.ProseRewriteOriginal(spec.ItemID) != "" {
 		task, err := s.proseRewriteTask(ctx, spec.ItemID)
 		if err != nil {
@@ -489,6 +505,12 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	brief, err = s.workflowNodeBrief(spec, brief, true)
 	if err != nil {
 		return err
+	}
+	if ideaWords != nil {
+		// Append only after all node instructions and brief rewrites. Preflight
+		// excludes exactly these bytes through EOF from template checks, never
+		// any of the nine required sections or the node's instructions.
+		brief += fmt.Sprintf("\n## Saved idea words (verbatim; %d bytes)\n%s", len(ideaWords), ideaWords)
 	}
 	// The session id is resolved before the lane is written: it is the handle a killed run
 	// is resumed from, and a lane with no session id is a run whose transcript nothing can

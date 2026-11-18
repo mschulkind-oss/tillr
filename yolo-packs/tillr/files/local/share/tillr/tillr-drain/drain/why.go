@@ -486,6 +486,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", "judge", "amend the candidate against the judge's reason"
 	case ReasonGateFailed, ReasonRetryJudged:
 		return "needs you", "gate", "inspect the verdict; tillr drain retry --help"
+	case RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
+		return "needs a cause", "fence", "inspect the idea outcome and authorize a retry"
 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:
 		return "needs a cause", "fence", "inspect the boundary report"
 	case ReasonBackendClosed, ReasonInfraExhausted:
