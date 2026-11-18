@@ -1827,7 +1827,11 @@ An ended run's surviving processes can also keep a lane out of rotation, with re
 reaping and before offering a configured lane, the loop checks processes carrying both
 `TILLR_RUN_ID` and `TILLR_LOOP_STORE` (the canonical store path) in their inherited
 environment. Successful release events also identify ended runs when a legacy allocation
-left no terminal run row. This check applies to both landing and hook definitions. Only processes whose current working directory is inside that
+left no terminal run row. A paused run continued as the same attempt is not ended: its
+`run.resume` event is newer than its paused `runs` row and every release, so the
+continuation's own processes do not hold its lane, and `tillr view running` lists it as
+live rather than as a paused finished run. Once the continuation's terminal record lands,
+any process it left behind holds the lane as before. This check applies to both landing and hook definitions. Only processes whose current working directory is inside that
 run's lane directory hold it; a process elsewhere does not. The waiting row names the
 process ids and a `kill` command. This condition is checked on every pass, including after
 a restart, and clears with `drain.lane-restored` once none remain. Worktree changes and the
