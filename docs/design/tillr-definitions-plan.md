@@ -756,6 +756,39 @@ Neither run's work is on the trunk. A run of this item starts from the tree as i
 the preserved ref as a draft: it was built on an older base, its high-effort review was not
 finished, and its item suite was never run in full. The run finishes all three before it commits.
 
+A third run on 2026-11-17 changed no file and reported `failed`: it read the preserved ref's file
+list and stopped without building anything. The loop then took the lane's head, `e597f5bc8`, as this
+item's change, and on 2026-11-18 asked a conflict-fix run to re-apply that commit on the moved
+trunk. That run stopped, and it was right to. This answers the conflict it raised. No criterion
+changes.
+
+- **`e597f5bc8` is not this item's change, and nothing is re-applied.** It is a roadmap commit from
+  other work: it changes only [roadmap.md](../tillr/roadmap.md), and the trunk already holds it
+  (`git merge-base --is-ancestor e597f5bc8 HEAD` exits 0, run on 2026-11-18). No run of this item
+  has made a commit, so this item has no candidate to carry forward. The loop's commit that retired
+  this block on top of it, `1fcb00b0e` [unlanded], is not on the trunk either, and this block and
+  its eight criteria stand.
+- **The next run is a build run from the tree as it stands.** It is not a conflict-fix run and it
+  is given no commit to re-apply. It builds c1 to c8 and commits once.
+- **The draft is carried as a patch of its 17 source files, by a three-way apply.** The preserved
+  ref sits on `a376bfdac`, and the trunk has changed 45 files under `tools/tillr-drain/` and
+  `tools/tillr-item/` since. So the draft is this diff and nothing wider:
+  `git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- tools/tillr-drain
+  tools/tillr-item`, which is 17 files, 604 lines added and 23 removed. Measured on 2026-11-18 on
+  the trunk at `3da00ddcf`: `git apply --3way` takes 16 of the 17 files cleanly and leaves
+  conflicts in one, [pass.go](../../tools/tillr-drain/drain/pass.go), which the run resolves by
+  hand, keeping what the trunk added there. The run does not check out or cherry-pick the ref, and
+  does not compare the ref with the trunk's head: that comparison shows 225 files, most of them the
+  trunk's later work undone. It does not copy the 17 pack files. `just pack-sync` writes them.
+- **Reading the draft is not the work.** A run of this item ends in one of two ways: a commit that
+  meets c1 to c8, with the full item and drain suites run, or a report that names the one thing
+  that stopped it. A report with no change and no named blocker, like the third run's, gives the
+  next run nothing to act on.
+- **Why the loop took another work's commit as this item's change is not this item's to repair.**
+  The third run reported no paths changed, and the conflict-fix brief still named a head for its
+  change. That is a fault in how the loop picks a candidate after a run that changed nothing. It is
+  recorded here so the owner can file it; a run of this item does not look for it or fix it.
+
 <!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
