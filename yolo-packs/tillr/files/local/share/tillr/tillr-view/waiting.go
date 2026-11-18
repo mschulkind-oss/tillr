@@ -328,7 +328,14 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				row.Mover = deferredBy
 			}
 			if last.Reason == "question-open" {
-				answer := readQuestions(questions, item.DesignDoc)
+				var excluded []string
+				for other, conflict := range conflicts {
+					file, id, ok := strings.Cut(conflict.QuestionRef, "#")
+					if other != item.ItemID && conflict.Status == "question" && ok && file == item.DesignDoc {
+						excluded = append(excluded, id)
+					}
+				}
+				answer := readQuestions(questions, item.DesignDoc, excluded...)
 				if answer.State == questionsOK && len(answer.Questions) > 0 {
 					row.Mover = "owner; answer " + item.DesignDoc + "#" + answer.Questions[0].QuestionID
 					row.Why += ": " + answer.Questions[0].Text
@@ -722,11 +729,17 @@ func waitingRecordedStage(r *store.Reader, itemID string, run *storeRun) (string
 	return stage, nil
 }
 
-// decorateOwnerQuestionWaiting reads current document state even when the recorded
-// plan predates publication. The origin fields are references, not a second parser.
+// decorateOwnerQuestionWaiting uses the conflict record for state and the index for the title.
 func decorateOwnerQuestionWaiting(row *waitingRow, c waitingConflict, source vantage.QuestionSource) {
 	file, id, _ := strings.Cut(c.QuestionRef, "#")
-	row.Class, row.Mover, row.Why = "needs a cause", "operator; restore the question index or document", "questions-unknown: "+c.QuestionRef
+	row.Class = "needs you"
+	if c.QuestionRemovedHead != "" {
+		row.Mover = "operator; restore " + c.QuestionRef + " under the item's block and land it"
+		row.Why = "question-removed: " + c.QuestionRef + ": the question was removed without a ruling"
+		return
+	}
+	row.Mover = "owner; answer " + c.QuestionRef
+	row.Why = "question-open: " + c.QuestionRef
 	if source == nil || file == "" || id == "" {
 		return
 	}
@@ -734,19 +747,13 @@ func decorateOwnerQuestionWaiting(row *waitingRow, c waitingConflict, source van
 	if err != nil {
 		return
 	}
-	if !doc.Present {
-		row.Why = "no document exists for " + row.ItemID + ": " + file
-		return
-	}
 	for _, q := range doc.Questions {
 		if q.ID != id {
 			continue
 		}
-		row.Class, row.Mover, row.Why = "needs you", "owner; answer "+c.QuestionRef, "question-open: "+questionText(q)
+		row.Why = "question-open: " + questionText(q)
 		return
 	}
-	// A compacted question is settled by the next sync; a missing index entry
-	// is never silently interpreted as an answer by this read face.
 }
 
 // normalizeWaitingMover keeps question answers separate from operational acts,

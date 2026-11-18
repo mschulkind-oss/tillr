@@ -1131,6 +1131,11 @@ budget would re-dispatch a broken adapter at once and forever. That is the queue
 
 ### Owner decisions in documents
 
+The owner-question regression set is `TestOwnerReportQuestionGateHoldAnswerAndRelease`
+(publication through dispatch), `TestOwnerWaitingEqualsCommittedIndex` (waiting rows
+before and after removal), and `TestOwnerQuestionMigrationPublishesOnceAndSkipsStagingReports`
+(legacy conflicts).
+
 Answer sync indexes the trunk commit, not the checkout. A question counts as
 answered when the index marks it answered, or when it is absent from the
 question list and its ID survives in the document's decision ledger. An open

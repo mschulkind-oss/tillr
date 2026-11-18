@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -72,7 +73,8 @@ func TestOwnerReportQuestionGateHoldAnswerAndRelease(t *testing.T) {
 	if steps.gates != 1 || steps.lands != 1 || c.Status != "question" || file != "briefs/item-a.md" || id == "" || c.AnswerHead != "" {
 		t.Fatalf("question bypassed design landing: gates=%d lands=%d conflict=%+v", steps.gates, steps.lands, c)
 	}
-	l.questions = &VantageQuestions{Root: f.root, Command: ownerIndexCommand(file, id, "open")}
+	l.cfg.QuestionsCmd = ownerTreeIndexCommand(file, id, "")
+	l.questions = &VantageQuestions{Root: f.root, Command: l.cfg.QuestionsCmd}
 	// Vantage's indexed questions and the planner's owner-waiting items must
 	// describe exactly the same set of document/question destinations.
 	fixtureRead(t, f, func(r *store.Reader) error {
@@ -369,6 +371,76 @@ func TestAPublishedQuestionHoldsOnlyItsOwnItem(t *testing.T) {
 	if other := decisionFor(t, l, "item-b").decision; other.Action != ActionHold || other.Reason != ReasonQuestionOpen || other.QuestionID != "OQ-1" {
 		t.Fatalf("the document's own question no longer holds item-b: %+v", other)
 	}
+}
+
+func TestOwnerWaitingEqualsCommittedIndex(t *testing.T) {
+	f, l, d, base := designAnswerFixture(t)
+	l.cfg.Steps = &ownerQuestionSteps{t: t, f: f, l: l}
+	c := settleDesignReport(t, f, l, d, base, ownerChoiceReport)
+	file, id, _ := strings.Cut(c.QuestionRef, "#")
+	s, err := store.Open(context.Background(), f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRefusalItem(t, s, "item-b")
+	s.Close()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='in-queue', design_doc=? WHERE item_id IN ('item-a','item-b')`, file)
+		return err
+	})
+	l.cfg.QuestionsCmd = ownerTreeIndexCommand(file, id, "")
+	check := func(wantOpen bool) {
+		t.Helper()
+		tree := t.TempDir()
+		archive := filepath.Join(t.TempDir(), "trunk.tar")
+		runGit(t, f.root, "archive", "--output="+archive, TrunkRef)
+		if out, err := exec.Command("tar", "-xf", archive, "-C", tree).CombinedOutput(); err != nil {
+			t.Fatalf("extract trunk: %v: %s", err, out)
+		}
+		index := &VantageQuestions{Root: tree, Command: l.cfg.QuestionsCmd}
+		doc, err := index.Document(file)
+		if err != nil || !doc.Present {
+			t.Fatalf("index document: %+v, %v", doc, err)
+		}
+		indexed := map[string]string{}
+		for _, q := range doc.Questions {
+			if q.State != QuestionAnswered {
+				indexed["owner; answer "+file+"#"+q.ID] = d.ItemID
+			}
+		}
+		if (len(indexed) == 1 && indexed["owner; answer "+c.QuestionRef] == d.ItemID) != wantOpen || (!wantOpen && len(indexed) != 0) {
+			t.Fatalf("unexpected indexed questions: %v", indexed)
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			why, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, index)
+			if err != nil {
+				return err
+			}
+			waiting := map[string]string{}
+			removed := false
+			for _, row := range why.Rows {
+				if row.Reason == ReasonQuestionOpen {
+					if _, duplicate := waiting[row.Mover]; duplicate {
+						t.Fatalf("duplicate answer target: %+v", row)
+					}
+					waiting[row.Mover] = row.ItemID
+				}
+				removed = removed || (row.ItemID == d.ItemID && row.Reason == ReasonQuestionRemoved)
+			}
+			if !reflect.DeepEqual(waiting, indexed) || why.Summary.OwnerWaiting != len(indexed) || removed == wantOpen {
+				t.Fatalf("index %v disagrees with waiting %v: %+v", indexed, waiting, why)
+			}
+			return nil
+		})
+	}
+	check(true)
+	writeForkFile(t, filepath.Join(f.root, file), "# Request\n")
+	runGit(t, f.root, "add", file)
+	runGit(t, f.root, "commit", "-qm", "docs: remove the owner question")
+	if _, err := l.refreshDocuments(context.Background(), &LoopResult{}); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
 }
 
 func ownerTreeIndexCommand(file, id, count string) []string {
