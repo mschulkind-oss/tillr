@@ -1,0 +1,83 @@
+{
+  "definition": "recorded-verdict",
+  "version": 1,
+  "states": [
+    "in-queue",
+    "blocked",
+    "closed",
+    "confirmed",
+    "rejected",
+    "inconclusive",
+    "repeat-of",
+    "tooling-fault"
+  ],
+  "ready": "in-queue",
+  "blocked": "blocked",
+  "closed": "closed",
+  "finished": [
+    "confirmed",
+    "rejected",
+    "inconclusive",
+    "repeat-of",
+    "tooling-fault"
+  ],
+  "transitions": [
+    {
+      "from": "in-queue",
+      "to": "blocked"
+    },
+    {
+      "from": "in-queue",
+      "to": "closed"
+    },
+    {
+      "from": "in-queue",
+      "to": "confirmed"
+    },
+    {
+      "from": "in-queue",
+      "to": "rejected"
+    },
+    {
+      "from": "in-queue",
+      "to": "inconclusive"
+    },
+    {
+      "from": "in-queue",
+      "to": "repeat-of"
+    },
+    {
+      "from": "in-queue",
+      "to": "tooling-fault"
+    },
+    {
+      "from": "blocked",
+      "to": "in-queue"
+    },
+    {
+      "from": "blocked",
+      "to": "closed"
+    },
+    {
+      "from": "closed",
+      "to": "in-queue"
+    },
+    {
+      "from": "closed",
+      "to": "blocked"
+    }
+  ],
+  "prerequisites": [],
+  "completes": "hook",
+  "retention": "keep",
+  "brief_template": "brief-template.md",
+  "hooks": {
+    "argv": [
+      "python3",
+      "hook.py"
+    ],
+    "names": [
+      "complete-item"
+    ]
+  }
+}

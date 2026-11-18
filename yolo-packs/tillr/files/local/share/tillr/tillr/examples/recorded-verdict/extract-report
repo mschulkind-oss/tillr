@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""The stub prints plain report text; preserve it without claiming model spend."""
+import argparse
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+parser.add_argument("log")
+args = parser.parse_args()
+Path(args.out).write_bytes(Path(args.log).read_bytes())

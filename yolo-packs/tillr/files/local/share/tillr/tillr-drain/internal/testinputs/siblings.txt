@@ -1,3 +1,5 @@
+tillr-cli
+tillr-store
 tillr-item
 tillr-run
 tillr-land

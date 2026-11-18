@@ -1,0 +1,25 @@
+{
+  "name": "recorded-verdict",
+  "version": 1,
+  "stages": [
+    {
+      "id": "reproduce",
+      "kind": "command",
+      "command_ref": "reproduce",
+      "access": "read_only"
+    },
+    {
+      "id": "investigate",
+      "kind": "agent",
+      "seat": "build",
+      "access": "read_only",
+      "prompt": "Read the reproduction and record the finding assessment. This demonstration uses a deterministic stub, not a model."
+    }
+  ],
+  "edges": [
+    {
+      "from_node": "reproduce",
+      "to_node": "investigate"
+    }
+  ]
+}

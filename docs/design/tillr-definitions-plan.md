@@ -986,14 +986,7 @@ to the trunk and neither is a reason to stop. The builder leaves them alone, fin
 and names both in its report with the commands that show them on the base. No criterion changes:
 c1 to c6 were met by the first run's work and stand as written.
 
-<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
-- **c2:** The README gives one fenced command sequence that a Product QA agent runs from an empty directory with no Git repository: `tillr store init --definition`, `tillr item apply` of three findings, `tillr drain loop --exit-when-drained`, then `tillr item list` and `tillr item show` to read the outcomes.
-- **c3:** A test copies the example into a fresh directory outside any repository, runs the README's fenced sequence as written, and asserts that the three findings end in three different finished states, each with a reason, a verdict on every criterion and an event, and that no Git command ran.
-- **c4:** The test asserts the count of findings in each finished state from `tillr item list --state`.
-- **c5:** The README links the definition package's README for every key, says which commands it uses are stable for a consumer, and lists what the example does not show yet.
-- **c6:** `tests/pack-sync.test.py` passes with the example in the pack's mirror.
 
 - [unlanded] **Start from** the commit at `refs/tillr/preserved/run-item-def-recorded-verdict-example-a1` in the main repository, `c48173c4b`: 32 files, holding the example under `tools/tillr/examples/recorded-verdict/`, `tools/tillr-drain/recorded_verdict_example_test.go`, two added lines in `tools/tillr-drain/internal/testinputs/siblings.txt`, and the pack copies of all three. Do not rebuild it from nothing. Its first parent is `73ed72839` and the trunk has moved, so re-apply its change instead of reusing its tree. On 2026-11-18 `git merge-tree --write-tree f213b9481 c48173c4b` reported no conflict. Its second parent holds what that run had staged, which is empty; ignore it. Do not resolve a pack copy by hand: run `just pack-sync` after re-applying, so the copies come from the sources.
 - **What passed with that work on `f213b9481`, 2026-11-18:** `go test . -run '^(TestRecordedVerdictExampleREADME|TestMissingSiblingBuildInputIsRejected)$'` in `tools/tillr-drain`, and `python3 tests/pack-sync.test.py`. The first run's report also says `go test ./...` in `tools/tillr`, `yolo pack lint yolo-packs/tillr` and `uvx vantage-check` on the example's two Markdown files passed. Run them again after re-applying.

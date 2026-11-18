@@ -1,0 +1,17 @@
+{
+  "finding-confirmed": {
+    "state": "confirmed",
+    "reason": "The deterministic reproduction matched the reported failure.",
+    "verdict": "done"
+  },
+  "finding-rejected": {
+    "state": "rejected",
+    "reason": "The deterministic reproduction disproved the reported failure.",
+    "verdict": "not-done"
+  },
+  "finding-inconclusive": {
+    "state": "inconclusive",
+    "reason": "The deterministic reproduction supplied insufficient evidence.",
+    "verdict": "blocked"
+  }
+}
