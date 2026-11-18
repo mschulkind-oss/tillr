@@ -548,6 +548,11 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 				if strings.Contains(err.Error(), "workflow-write-scope") {
 					r = "proposal-scope-outside-fence"
 				}
+				if strings.Contains(err.Error(), "workflow-unknown-seat") {
+					r = "proposal-seat-unmapped"
+				} else if strings.Contains(err.Error(), "workflow-read-only-seat-writes") {
+					r = "proposal-read-only-seat-writes"
+				}
 				refuse(r, err)
 			} else {
 				var fence string

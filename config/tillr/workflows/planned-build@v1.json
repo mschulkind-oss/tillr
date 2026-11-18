@@ -1,0 +1,16 @@
+{
+  "name": "planned-build",
+  "version": 1,
+  "stages": [
+    {
+      "id": "plan", "kind": "agent", "seat": "plan", "access": "read_only",
+      "outputs": { "proposal": "graph.proposal" },
+      "may_replace": { "work": ["build-pieces@v1"] },
+      "prompt": "Read the item and tree. To divide the work, write the optional proposal output targeting work with workflow build-pieces@v1 and args.pieces, a list of at most 12 objects in execution order. Each object has id, seat, access (read_only or write), prompt, optional outputs mapping names to types, and for write access a nonempty write_scope within the item's fence. Read-only pieces must omit write_scope. Choose seats mapped by policy and do not assign writes to read-only seats. If no division is useful, propose nothing. Do not write or commit repository files."
+    },
+    { "id": "work", "kind": "agent", "seat": "build", "access": "write" },
+    { "id": "verify", "kind": "agent", "seat": "verify", "access": "read_only" }
+  ],
+  "edges": [ { "from_node": "plan", "to_node": "work" }, { "from_node": "work", "to_node": "verify" } ],
+  "exit": { "requires_nodes": ["plan", "work", "verify"], "requires_candidate": "commit_required", "evaluator_slot": "verify" }
+}

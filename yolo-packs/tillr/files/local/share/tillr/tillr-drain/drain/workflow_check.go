@@ -287,8 +287,23 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 				copies = nil
 				for i, value := range values {
 					node := stage
-					node.ID = fmt.Sprintf("%s-%d", stage.ID, i+1)
-					node.Prompt = strings.ReplaceAll(stage.Prompt, "${item}", value.(string))
+					if w.Args[stage.Repeat].Type == "pieces" {
+						piece, err := parseWorkflowPiece(root, value)
+						if err != nil {
+							return nil, fmt.Errorf("workflow-argument-type: %s: %w", stage.Repeat, err)
+						}
+						node.ID = stage.ID + "-" + piece.ID
+						node.Seat, node.Access, node.Prompt, node.Outputs = piece.Seat, piece.Access, piece.Prompt, piece.Outputs
+						node.WriteScope = WorkflowScope{Paths: piece.WriteScope, explicit: piece.Access == "write"}
+						if policy != nil && policy.Seats[node.Seat] == "" {
+							findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy; %s", node.ID, node.Seat, policy.seatDeclaration()))
+						} else if policy != nil && node.Access == "write" && slices.Contains(policy.ReadOnlySeats, node.Seat) {
+							findings = append(findings, fmt.Errorf("workflow-read-only-seat-writes: %s: seat %s is read-only under policy; %s", node.ID, node.Seat, policy.seatDeclaration()))
+						}
+					} else {
+						node.ID = fmt.Sprintf("%s-%d", stage.ID, i+1)
+						node.Prompt = strings.ReplaceAll(stage.Prompt, "${item}", value.(string))
+					}
 					node.Repeat = ""
 					node.CopiesOf = stage.ID
 					copies = append(copies, node)
