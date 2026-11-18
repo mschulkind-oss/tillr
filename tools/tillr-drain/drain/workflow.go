@@ -497,7 +497,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				return true, err
 			}
 			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node violated its worktree boundary: "+stage.ID); stop != "" {
-				return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+				return true, retainedAfter(d.LaneID, stop)
 			}
 			return true, l.markExamined(ctx, d)
 		}
@@ -517,7 +517,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 					return true, err
 				}
 				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
-					return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+					return true, retainedAfter(d.LaneID, stop)
 				}
 				return true, l.markExamined(ctx, d)
 			}
@@ -528,7 +528,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "command node machinery failed: "+stage.ID); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}
@@ -549,7 +549,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				return true, err
 			}
 			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
-				return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+				return true, retainedAfter(d.LaneID, stop)
 			}
 			return true, l.markExamined(ctx, d)
 		}
@@ -580,7 +580,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			}
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}
@@ -594,7 +594,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, outputErr.Error()); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}

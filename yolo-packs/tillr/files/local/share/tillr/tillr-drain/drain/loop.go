@@ -2071,6 +2071,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	// A prepared retirement tree is already bound; do not rebase it on rejudgment.
 	if candidate.WorkerHeadSHA == "" {
 		if rebased, err := l.preRebaseFixer(ctx, candidate); err != nil {
+			if conflict := asFixerRebaseConflict(err); conflict != nil {
+				return l.fixerRebaseConflicted(ctx, candidate, conflict, result, timing)
+			}
 			return "", false, err
 		} else {
 			candidate = rebased
@@ -2656,7 +2659,7 @@ func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons
 		reason = reasons[0]
 	}
 	if err := l.preserveWork(ctx, lane, runID, reason); err != nil {
-		return l.retainUnpreserved(ctx, lane, runID, err)
+		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
 	if headSHA != "" {
 		l.pinQuietly(ctx, runID, headSHA)
@@ -2664,14 +2667,14 @@ func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons
 	if runID != "" {
 		retained, err := l.retainedWorkerSession(ctx, runID)
 		if err != nil {
-			return l.retainUnpreserved(ctx, lane, runID, err)
+			return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 		}
 		if retained != nil {
 			// Item-block retirement is loop-owned preparation, not work the
 			// returning worker may inherit as its own change.
 			if retained.HeadSHA != "" && headSHA != "" && retained.HeadSHA != headSHA {
 				if _, err := l.git(ctx, l.laneTarget(lane), "reset", "--hard", retained.HeadSHA); err != nil {
-					return l.retainUnpreserved(ctx, lane, runID, err)
+					return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 				}
 			}
 			return ""
@@ -2968,6 +2971,9 @@ func (l *Loop) resetLaneToRegistryLocked(ctx context.Context, lane, revision str
 		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
 		return err
 	}
+	// A lane left mid-rebase, mid-merge or mid-cherry-pick keeps that state through a
+	// checkout, so the next rebase there refuses; the operation is aborted first.
+	l.abortInProgress(ctx, path)
 	// A hard reset keeps untracked files. Every caller preserves the lane's dirty work
 	// (preserveWork) before it resets, so those files already have a durable copy; left
 	// behind, they released a lane with a settled run's files in it (2026-11-17, lane-12).

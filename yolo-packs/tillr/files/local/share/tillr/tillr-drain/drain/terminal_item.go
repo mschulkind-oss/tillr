@@ -181,7 +181,7 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 			stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
 		}
 		if stop != "" {
-			return Externalf("lane %s retained after preservation failed", d.LaneID)
+			return retainedAfter(d.LaneID, stop)
 		}
 		if err := l.prunePreservedWork(ctx); err != nil {
 			return err

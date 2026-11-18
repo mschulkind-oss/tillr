@@ -32,7 +32,7 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 			head = l.headOf(ctx, d.LaneID)
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node infrastructure exhausted"); stop != "" {
-			return Externalf("lane %s retained after preservation failed", d.LaneID)
+			return retainedAfter(d.LaneID, stop)
 		}
 		return l.markExamined(ctx, d)
 	}

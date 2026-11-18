@@ -1428,6 +1428,13 @@ another kind of fault on the same item or erase the original evidence. Gate reco
 rejudges the retained candidate; it does not dispatch another model run. When the loop
 rebases a fixer onto a newer trunk, it records the prepared candidate before gating,
 so clearing a gate fault rejudges that bound head instead of convicting its own rebase.
+A fixer whose rebase conflicts is not a loop fault: the rebase is aborted in the same
+step, so the lane is back on the fixer's head and never left mid-rebase. If every check
+the fixer names already passes on the trunk tip (a recorded pass of the tip, or a replay
+there), another commit repaired the trunk: the fixer is resolved elsewhere with a
+`drain.fixer-proved` event, which releases its waiters, and its run settles as one whose
+item is terminal. Otherwise the conflict is a landing conflict like any other, recorded
+with its paths for the producer.
 Clearing a
 sync fault forces document sync again even at the same trunk commit, so a definition
 that is still broken is held again rather than run from stale store content.
@@ -1784,6 +1791,15 @@ recording the event. Before resetting on a replay, it checks that every current
 dirty path is covered by the saved working or staged version. Newer uncovered
 edits retain the lane; the loop does not overwrite the older evidence or discard
 the newer work. A recorded pruning prevents replay from recreating the ref.
+
+A retained lane is that lane's condition, not the loop's: its item is held
+(`preserve-failed`) and every other lane goes on. When the item is already terminal
+(landed, closed or resolved elsewhere), there is nothing to retain the lane for. The
+loop records the lane's `git status --porcelain` in a `drain.lane-discarded` event,
+aborts any rebase, merge or cherry-pick left in progress, pins the head, and resets
+the lane back into rotation. Only a store that cannot record the hold or the discard
+stops the loop. Every lane reset aborts an operation left in progress first, because
+a checkout keeps that state and the next rebase there would refuse.
 
 Preservation finishes before reset, including a workflow restart and a conflict
 repair; Git runs outside SQLite write transactions. An ordinary lane reset then

@@ -35,7 +35,7 @@ func (l *Loop) refuseParallelBoundary(ctx context.Context, d Decision, base, hea
 		return err
 	}
 	if stop := l.abandon(ctx, d.LaneID, d.RunRequest.RunID, head, c.RefusalDetail); stop != "" {
-		return Externalf("lane %s retained after preservation failed", d.LaneID)
+		return retainedAfter(d.LaneID, stop)
 	}
 	return l.markExamined(ctx, d)
 }
