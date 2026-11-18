@@ -107,7 +107,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 				if e != nil {
 					return e
 				}
-				moves, e := waitingPatchMoves(r, *path)
+				moves, e := waitingPublicationHolds(r, *path)
 				if e != nil {
 					return e
 				}
@@ -513,7 +513,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
-	moves, err := waitingPatchMoves(r, storePath)
+	moves, err := waitingPublicationHolds(r, storePath)
 	if err != nil {
 		return nil, err
 	}

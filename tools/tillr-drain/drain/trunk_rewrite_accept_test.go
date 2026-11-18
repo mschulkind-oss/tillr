@@ -14,17 +14,18 @@ import (
 
 var acceptAt = time.Date(2026, 11, 17, 20, 0, 0, 0, time.UTC)
 
-// reauthor recreates every commit in base..tip with the same tree and message under
-// another identity, the way an operator rewrites a trunk to fix authorship.
+// reauthor recreates every commit in base..tip with the same tree but an edited
+// message. Identity-only rewrites now recover automatically; these fixtures must
+// still exercise the broader, explicitly accepted content-preserving rewrite.
 func reauthor(t *testing.T, root, base, tip string) string {
 	t.Helper()
 	parent := base
 	for _, c := range strings.Fields(runGit(t, root, "rev-list", "--reverse", base+".."+tip)) {
 		tree := runGit(t, root, "rev-parse", c+"^{tree}")
-		msg := runGit(t, root, "log", "-1", "--format=%B", c)
+		msg := runGit(t, root, "log", "-1", "--format=%B", c) + " [edited]"
 		cmd := exec.Command("git", "-C", root, "commit-tree", tree, "-p", parent, "-m", msg)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Owner", "GIT_AUTHOR_EMAIL=owner@example.invalid",
-			"GIT_COMMITTER_NAME=Owner", "GIT_COMMITTER_EMAIL=owner@example.invalid")
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=tillr", "GIT_AUTHOR_EMAIL=tillr@example.invalid",
+			"GIT_COMMITTER_NAME=tillr", "GIT_COMMITTER_EMAIL=tillr@example.invalid")
 		out, err := cmd.Output()
 		if err != nil {
 			t.Fatalf("commit-tree: %v", err)

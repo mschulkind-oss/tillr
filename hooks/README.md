@@ -38,6 +38,48 @@ written where git never looks and every hook here is off. The installer checks f
 says so; the guard itself repeats the setting on every push it inspects, because a push is
 where it matters.
 
+## `pre-commit` — the main identity guard
+
+The [pre-commit hook](./pre-commit) refuses an ordinary commit on `main` when its
+actual author or committer differs from the configured global Git name and email.
+Repository-local and worktree-local identity overrides are refused, just as they are
+by the lander. Existing host checks run first through the preserved local hook.
+Install this copy on the host with `just hooks-install` after landing this change.
+
+This hook cannot cover detached commits, commits on other branches, merges or fetched
+history that skips this hook, direct ref updates, or commits created with Git's
+`commit-tree` command or a private index without invoking hooks. It is prevention,
+not the publication check: tillr independently checks trunk commits at each tick and
+again under the landing lock. Bypassing hooks does not bypass that check.
+
+The loop retains unanswered commit ids, including a foreign commit buried below a
+later correctly authored one. The waiting view names each id, its author and its
+committer under `trunk-foreign-identity`. Only landings wait; running work continues
+and judged candidates remain available. Monitoring starts at the current tip on
+first observation, then checks every newly reachable commit, including merged parents.
+It does not retrospectively judge history predating that first observation.
+
+Choose one remedy:
+
+- Re-author the offending history with the configured identity. The next tick clears
+  both the identity and lost-history holds automatically only when every tree,
+  message, other commit header and ordered parent relationship is unchanged. Proof
+  pointers follow the matching unchanged trees. Any other rewrite still needs the
+  existing explicit rewrite remedy.
+- Record acceptance of the exact full commit id in the loop's store. Both the loop
+  and the locked lander read the same record, which retains who accepted it and why.
+  This is not acceptance of a name, an email, a prefix, or future commits.
+
+```bash
+tillr-drain accept-identity --root /path/to/repo \
+  --store /path/to/loop-state.db --commit <full-commit-id> \
+  --by <who> --why <reason>
+```
+
+The command requires an existing store and a commit currently on `main`. Other
+unanswered commits and unrelated holds remain in force. Acceptance does not rewrite
+Git history or waive the repository's separate identity quality check.
+
 ## `pre-push` — the patch branch guard
 
 A pack manifest may name a `patch_branch` locator instead of a `patches` series. When

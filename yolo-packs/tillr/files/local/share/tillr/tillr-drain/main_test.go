@@ -65,6 +65,13 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
+	// All default fixture commits use this deployed identity. Keep the config
+	// private so identity observation never depends on the host's Git identity.
+	config := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(config, []byte("[user]\n name = Fixture Landing\n email = landing@example.invalid\n"), 0600); err != nil {
+		return 1
+	}
+	os.Setenv("GIT_CONFIG_GLOBAL", config)
 	binDir = dir
 	bin = filepath.Join(dir, "tillr-drain")
 	build := exec.Command("go", "build", "-o", bin, ".")
@@ -461,7 +468,7 @@ func TestPlanHoldsAnItemBlockedByAnUnlandedItem(t *testing.T) {
 	// in a lane and a fresh clone; lane-base tests cover proof requirements.
 	root := fixtureRepo(t)
 	git(t, root, "init", "-b", "main")
-	git(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
+	git(t, root, "commit", "--allow-empty", "-qm", "base")
 	policyPath := policy(t, "/bin/true")
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)
 

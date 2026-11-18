@@ -6,6 +6,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mschulkind-oss/tillr v0.0.0
 	github.com/mschulkind-oss/tillr-drain v0.0.0
+	github.com/mschulkind-oss/tillr-land v0.0.0
 	github.com/mschulkind-oss/tillr-item v0.0.0
 	modernc.org/sqlite v1.61.0
 )
@@ -28,3 +29,5 @@ replace github.com/mschulkind-oss/tillr => ../tillr
 replace github.com/mschulkind-oss/tillr-drain => ../tillr-drain
 
 replace github.com/mschulkind-oss/tillr-item => ../tillr-item
+
+replace github.com/mschulkind-oss/tillr-land => ../tillr-land

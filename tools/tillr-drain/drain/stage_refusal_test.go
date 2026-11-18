@@ -478,6 +478,11 @@ type refusalLoopFixture struct {
 
 func newRefusalLoopFixture(t *testing.T, ids ...string) refusalLoopFixture {
 	t.Helper()
+	// Fixture commits and the deployed identity check must agree, without
+	// writing the owner's shared Git configuration.
+	config := filepath.Join(scratchUnderDurable(t), "gitconfig")
+	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	root := filepath.Join(scratchUnderDurable(t), "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("creating the fixture repository failed: %v", err)

@@ -46,12 +46,15 @@ printf 'RESULT: done\n'
 `
 	f := blockedRouteFixture(t, worker, designer)
 	land := stub(t, "land", counting+fmt.Sprintf(`unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+root=%q
 while [ "$#" -gt 0 ]; do
  if [ "$1" = --head ]; then shift; head=$1; fi
  shift
 done
-git -C %q cherry-pick "$head" >/dev/null
-`, f.root))
+# The real lander normalizes both identities when publishing a worker's change.
+git -C %q cherry-pick --no-commit "$head"
+git -C "$root" commit -qm "$(git -C "$root" log -1 --format=%%B "$head")"
+`, f.root, f.root))
 	gate := stub(t, "gate", counting+`set -eu
 if [ "$(git log -1 --format=%s)" = 'amend contract' ]; then
  git show HEAD:docs/work.md | rg -q 'implementable contract'

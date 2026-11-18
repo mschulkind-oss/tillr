@@ -365,6 +365,9 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	if strings.HasPrefix(d.Reason, "prose-criteria-count: ") {
 		return "needs you", "queue", "the owner; reconcile the original criteria"
 	}
+	if strings.HasPrefix(d.Reason, ReasonForeignIdentity+": ") {
+		return "needs you", "trunk", "re-author the commit, or record its id with tillr-drain accept-identity"
+	}
 	if strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 		return "waits on work", "land", "the heavy runner; prove trunk or file its fixer"
 	}

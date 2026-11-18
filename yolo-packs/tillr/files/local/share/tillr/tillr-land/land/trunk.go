@@ -34,6 +34,9 @@ func OpenTrunk(repo string) (*Trunk, error) {
 	return t, nil
 }
 
+// SetContext binds subsequent Git reads to the caller's cancellation.
+func (t *Trunk) SetContext(ctx context.Context) { t.ctx = ctx }
+
 // Head answers the commit a ref points at.
 func (t *Trunk) Head(ref string) (string, error) {
 	out, err := t.git("rev-parse", "--verify", normalizeRef(ref)+"^{commit}")

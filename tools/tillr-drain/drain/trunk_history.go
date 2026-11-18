@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -73,6 +74,9 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 	}
 	l.historyMu.Lock()
 	defer l.historyMu.Unlock()
+	if err := l.observeIdentity(ctx); err != nil {
+		return trunkHistory{}, err
+	}
 	l.mu.Lock()
 	ready := l.historyPinned
 	l.mu.Unlock()
@@ -146,6 +150,32 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 			restored, err := trunkAncestor(ctx, l.cfg.Root, h.Lost, tip)
 			if err != nil {
 				return h, err
+			}
+			if !restored {
+				t, err := land.OpenTrunk(l.cfg.Root)
+				if err != nil {
+					return h, err
+				}
+				t.SetContext(ctx)
+				mapped, same, err := t.IdentityRewrite(h.Lost, tip)
+				if err != nil {
+					return h, err
+				}
+				if same {
+					// A proof names an unchanged tree. Carry it to the matching
+					// commit before clearing the lost-history hold.
+					green, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", GreenRef)
+					if err != nil {
+						return h, err
+					}
+					green = strings.TrimSpace(green)
+					if replacement := mapped[green]; replacement != "" {
+						if _, err := l.git(ctx, l.cfg.Root, "update-ref", GreenRef, replacement, green); err != nil {
+							return h, err
+						}
+					}
+					restored = true
+				}
 			}
 			if restored {
 				h.Lost = ""
