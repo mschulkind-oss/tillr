@@ -35,7 +35,7 @@ type passRow struct {
 
 type passDecision struct {
 	ItemID string `json:"item_id"`
-	Rank   string `json:"rank"`
+	Place  int    `json:"place,omitempty"`
 	Action string `json:"action"`
 	Reason string `json:"reason"`
 	LaneID string `json:"lane_id,omitempty"`
@@ -190,17 +190,14 @@ func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, e
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	ranks := map[string]string{}
-	for _, item := range items {
-		ranks[item.ItemID] = item.Rank
-	}
+	places := itemPlaces(items)
 	sessions, err := readPassSessions(r, loopDir)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
 		row := &out[i]
-		row.Decisions, err = readPassDecisions(r, row.DispatchedAtMS, ranks)
+		row.Decisions, err = readPassDecisions(r, row.DispatchedAtMS, places)
 		if err != nil {
 			return nil, err
 		}
@@ -235,7 +232,7 @@ func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, e
 	return out, nil
 }
 
-func readPassDecisions(r *store.Reader, at int64, ranks map[string]string) ([]passDecision, error) {
+func readPassDecisions(r *store.Reader, at int64, places map[string]int) ([]passDecision, error) {
 	query := `SELECT item_id,action,reason,COALESCE(lane_id,''),COALESCE(run_id,''),COALESCE(pass_id,'') FROM dispatches WHERE dispatched_at = ? ORDER BY rowid`
 	rows, err := r.Query(query, at)
 	legacy := isMissingColumn(err)
@@ -256,21 +253,21 @@ func readPassDecisions(r *store.Reader, at int64, ranks map[string]string) ([]pa
 		if err := rows.Scan(cols...); err != nil {
 			return nil, err
 		}
-		d.Rank = ranks[d.ItemID]
+		d.Place = places[d.ItemID]
 		if !passDispatchAction(d.Action) {
 			d.LaneID, d.RunID = "", ""
 		}
 		out = append(out, d)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Rank != out[j].Rank {
-			if out[i].Rank == "" {
+		if out[i].Place != out[j].Place {
+			if out[i].Place == 0 {
 				return false
 			}
-			if out[j].Rank == "" {
+			if out[j].Place == 0 {
 				return true
 			}
-			return out[i].Rank < out[j].Rank
+			return out[i].Place < out[j].Place
 		}
 		return out[i].ItemID < out[j].ItemID
 	})

@@ -48,16 +48,17 @@ that execution.
 
 ## Recording queue priority
 
-The retained queue's unranked heading separates items with no recorded priority from
-ranked items. Use `tillr item rank` to record one item's priority in the store; the
-browser remains read-only. Rank is a string over `0123456789abcdefghijklmnopqrstuvwxyz`,
-compared lexically; unranked items follow all ranked items. For example:
+The Items page shows [places](../../../docs/design/observatory-actions.md#3-principles-and-words),
+counted from 1 across the whole order. Filtering keeps those numbers, including
+any gaps. Parked and finished items have no place. Stored ordering keys are never
+sent to the page, and there is no separate unranked block.
 
-```sh
-tillr item rank --store .tillr/state.db --item item-042 --rank am
-```
+Use `tillr item place` to move an item without changing its state, criteria,
+fence or runs. The page offers the same command when the server enables writes.
 
-This changes no state, criteria, fence or runs. An empty `--rank ''` clears priority.
+`tillr item sync` fills empty keys in its own transaction after the last keyed
+item, in item id order. Until sync runs, readers count those items in the same
+order, so filling the keys does not change their places.
 
 ## Reading the spans
 

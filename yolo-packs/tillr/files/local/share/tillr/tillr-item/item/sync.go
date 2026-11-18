@@ -203,6 +203,10 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	report := plan.report
 	report.Created, report.Updated = []string{}, []string{}
 	created := map[string]bool{}
+	keyed, err := keyMissingOrder(ctx, tx, in.At)
+	if err != nil {
+		return SyncReport{}, err
+	}
 	for _, fw := range plan.writes {
 		if _, err := tx.Exec(`SAVEPOINT item_sync_file`); err != nil {
 			return SyncReport{}, Internalf("opening the savepoint for %s: %v", fw.file, err)
@@ -210,6 +214,21 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		var refused error
 		var refusedID string
 		for _, payload := range fw.payloads {
+			if payload.Rank == "" && InOrder(payload.State) {
+				// Planning precedes the missing-key writes. Preserve a key supplied above.
+				if !fw.created[payload.ItemID] {
+					if err := tx.Reader().QueryRow(`SELECT rank FROM items WHERE item_id=?`, payload.ItemID).Scan(&payload.Rank); err != nil {
+						return SyncReport{}, err
+					}
+				}
+				if payload.Rank == "" {
+					var last string
+					if err := tx.Reader().QueryRow(`SELECT COALESCE(MAX(rank),'') FROM items WHERE state NOT IN ('not-started','landed','closed','resolved-elsewhere')`).Scan(&last); err != nil {
+						return SyncReport{}, err
+					}
+					payload.Rank = last + "m"
+				}
+			}
 			env, err := envelopeOf(RecordKind, "item-"+payload.ItemID, in.At, payload)
 			if err != nil {
 				return SyncReport{}, err
@@ -254,6 +273,17 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		if created[p.id] {
 			if err := placeFrom(tx, p.id, p.from, in.At); err != nil {
 				return SyncReport{}, err
+			}
+		}
+	}
+	for _, id := range keyed {
+		if !containsID(report.Created, id) && !containsID(report.Updated, id) {
+			report.Updated = append(report.Updated, id)
+		}
+		for i, v := range report.Unchanged {
+			if v == id {
+				report.Unchanged = append(report.Unchanged[:i], report.Unchanged[i+1:]...)
+				break
 			}
 		}
 	}
@@ -568,8 +598,10 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			report.Created = append(report.Created, desired.ItemID)
 			continue
 		}
+		// Only a whole sync can observe that a roadmap no longer parks this document.
+		unpark := !in.Partial && stored.State == "not-started" && !b.parked
 		field := definitionDiff(desired, stored)
-		if field == "" {
+		if field == "" && !unpark {
 			report.Unchanged = append(report.Unchanged, desired.ItemID)
 			continue
 		}
@@ -595,6 +627,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		// The definition is the document's; everything the store learned is the store's.
 		desired.State = stored.State
+		if unpark {
+			desired.State = d.Ready
+		}
 		desired.Rank = stored.Rank
 		fw.payloads = append(fw.payloads, desired)
 		report.Updated = append(report.Updated, desired.ItemID)

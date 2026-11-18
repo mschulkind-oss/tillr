@@ -23,6 +23,11 @@ func TestProseRewriteSyncOptInAndIdempotence(t *testing.T) {
 	if report.CreatedCount != 1 {
 		t.Fatalf("rewrite not created: %+v", report)
 	}
+	originalKey := column(t, s, `SELECT rank FROM items WHERE item_id='item-read-api'`)
+	rewriteKey := column(t, s, `SELECT rank FROM items WHERE item_id='rewrite-item-read-api'`)
+	if rewriteKey <= originalKey {
+		t.Fatalf("sync-created rewrite key %q not after existing key %q", rewriteKey, originalKey)
+	}
 	for query, want := range map[string]string{
 		`SELECT seat FROM items WHERE item_id='rewrite-item-read-api'`:             "build",
 		`SELECT allowed_paths FROM items WHERE item_id='rewrite-item-read-api'`:    `["docs/api.md"]`,

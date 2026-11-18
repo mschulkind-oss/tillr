@@ -31,8 +31,8 @@ func (d Destination) Valid() bool {
 type orderedItem struct{ id, rank, state string }
 
 // Place changes only ordering and its update receipt. A crowded gap is repaired in
-// this same transaction, preserving the other items' relative order. Unranked
-// items still sort last by id until the separate place-number migration ships.
+// this same transaction, preserving the other items' relative order. Empty keys
+// sort last by id until sync supplies them.
 func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.Time, by, via string) (record.Envelope, error) {
 	if id == "" || !d.Valid() {
 		return record.Envelope{}, Usagef("place needs an item and exactly one of --to first|last, --before <item>, --after <item>")
@@ -58,7 +58,7 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 		return record.Envelope{}, err
 	}
 	inOrder := func(v orderedItem) bool {
-		return v.state != "not-started" && v.state != "landed" && v.state != "closed" && v.state != "resolved-elsewhere"
+		return InOrder(v.state)
 	}
 	check := func(id string) error {
 		i, ok := index[id]

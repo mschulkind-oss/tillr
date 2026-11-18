@@ -22,78 +22,9 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
-/** hasRank is the one test the queue and the gutter share: a rank is a non-empty string.
- * The server sends `"rank": ""` for an item the store never ranked, and sends no `rank`
- * key at all when it predates the field. Those are two different facts, which is why the
- * absence of the key is asked about separately in `rankProvenance`. */
-export function hasRank(item: ItemView): item is ItemView & { rank: string } {
-  return typeof item.rank === "string" && item.rank !== "";
-}
-
-/** queueOrder is the queue as the queue is: `rank` ascending — a sparse lexical token, so
- * the comparison is a string comparison — then unranked items last, then by id. The order
- * is total and stable, which is what makes the rank gutter readable.
- *
- * This is one rule in three places and the three must not drift: `rankBefore` in the
- * server's `assemble.go` (the order the snapshot is emitted in), `drain`'s planner (the
- * order a tick decides items in), and this. The server's suite reads a store holding both
- * kinds (`the_board_is_ordered_by_the_queue_rank`); this client's suite asserts the same
- * list, so a change to one that is not made to the other fails a case rather than the
- * operator. */
+/** Places are counted by the server before filtering. Sorting never renumbers them. */
 export function queueOrder(items: ItemView[]): ItemView[] {
-  return [...items].sort((a, b) => {
-    const ra = hasRank(a) ? a.rank : null;
-    const rb = hasRank(b) ? b.rank : null;
-    if (ra !== null && rb !== null && ra !== rb) return ra < rb ? -1 : 1;
-    if (ra !== null && rb === null) return -1;
-    if (ra === null && rb !== null) return 1;
-    return a.item_id < b.item_id ? -1 : a.item_id > b.item_id ? 1 : 0;
-  });
-}
-
-/** RankProvenance is the three-way answer to "why is this row where it is?".
- *
- *   - `recorded` — the store ranks at least one item, so the gutter is the owner's own
- *     priority and the unranked tail is a gap the operator can close.
- *   - `store-unranked` — the payload carries `rank` on every item and every one is empty:
- *     the store has never been ranked. Also a state the operator can correct.
- *   - `server-unranked` — the payload carries no `rank` key on ANY item, so the server
- *     predates the field and the order on screen is item id, not priority. The board says
- *     so instead of presenting 55 unranked rows as a store that refused to rank them:
- *     measured 2026-11-14, a `tillr-view` built before the rank field drew the whole board
- *     in id order with nothing on screen saying why.
- */
-export type RankProvenance = "recorded" | "store-unranked" | "server-unranked";
-
-/** rankProvenance reads the payload's own shape rather than counting rows: the store's
- * silence (`""` or `null`) and the server's (`no key at all`) look identical to a count
- * and are not the same fact. */
-export function rankProvenance(items: ItemView[]): RankProvenance {
-  if (items.some(hasRank)) return "recorded";
-  // No item carries a rank. The difference between "the store never ranked them" and "the
-  // server never sent the field" is whether the key is there at all.
-  return items.length > 0 && items.every((item) => item.rank === undefined)
-    ? "server-unranked"
-    : "store-unranked";
-}
-
-/** unrankedCount is how many of the board's rows carry no rank. */
-export function unrankedCount(items: ItemView[]): number {
-  return items.filter((item) => !hasRank(item)).length;
-}
-
-/** splitByRank cuts the queue's one order into the two blocks the rail draws: the ranked
- * rows, then the unranked ones. It is a cut, not a sort — the two lists concatenated are
- * exactly `queueOrder`'s answer, which is what keeps the board's order one rule rather
- * than two. */
-export function splitByRank(items: ItemView[]): {
-  ranked: ItemView[];
-  unranked: ItemView[];
-} {
-  const ranked: ItemView[] = [];
-  const unranked: ItemView[] = [];
-  for (const item of items) (hasRank(item) ? ranked : unranked).push(item);
-  return { ranked, unranked };
+  return [...items].sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity) || a.item_id.localeCompare(b.item_id));
 }
 
 /** Which half of the store the rail draws: the queue (items still to come) or the archive
@@ -120,7 +51,7 @@ export function isTerminal(item: ItemView): boolean {
 }
 
 /** queueItems is the spine: the items that are not terminal, in the order they were given
- * (the store's rank). The order is not recomputed here — the rail renders it. */
+ * (the places supplied by the server). The order is not recomputed here — the rail renders it. */
 export function queueItems(items: ItemView[]): ItemView[] {
   return items.filter((item) => !isTerminal(item));
 }

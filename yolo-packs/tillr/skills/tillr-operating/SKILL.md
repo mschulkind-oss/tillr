@@ -10,7 +10,7 @@ description: Compose the eight `tillr*` binaries across the seven-step loop — 
 > candidate on an unattended tick, but three parts are unfinished:
 > 1. **Item-state moves just landed** — queue item-state transitions are newly wired and have minimal production mileage.
 > 2. **Document intake** — `tillr item sync` reads shared items from tracked Markdown;
->    the old seed file and command are retired. `tillr item rank` records local priority.
+>    the old seed file and command are retired. `tillr item place` changes the local order.
 > 3. **Recording emitters unbuilt** — the recording/event schema exists in `tools/tillr`, but the binaries' event emitters are not yet wired (`events` faces see only what is currently emitted).
 >
 > **Do not wire `tillr` into another repository's gate while the emitters are unbuilt.**
@@ -86,13 +86,20 @@ A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
 The former stay option is removed; waiting no longer needs an option.
 
-## Change an item's rank without changing its work
+## Change an item's place without changing its work
 
-A rank-only seed changes the rank alone, apart from `updated_at` and `event_seq`
-bookkeeping. It preserves every other stored field, including `workflow` (the item's
-chosen sequence of work steps), criteria and dependency edges. Items with a workflow
-can be ranked without skipping them. The seed must still match the stored definition;
-a conflicting definition is refused rather than overwritten.
+A [place](../../../../docs/design/observatory-actions.md#3-principles-and-words)
+is an item's position in the full order, counted from 1. Read faces show places,
+not stored ordering keys. Parked and finished items have no place. Filters keep
+true places, including gaps.
+
+Use `tillr item place` to move an existing item; learn its destinations from the
+binary. It preserves state, workflow, criteria, dependency edges, fence and runs.
+Sync never changes a nonempty key. It fills empty keys after the last keyed item,
+in item id order, in its own transaction; readers count the same order before
+that sync. New items and items leaving a parked section enter at the end unless
+they already have a key. Opening or migrating a store never supplies a key.
+Existing item records still accept `rank` through apply and fixture seeding.
 
 ## Declare document-fed work before building it
 

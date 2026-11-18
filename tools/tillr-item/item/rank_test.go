@@ -33,6 +33,7 @@ func TestAStoreCreatedBeforeTheRankColumnGainsItOnFirstOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating the store failed: %v", err)
 	}
+	exec(t, created, `INSERT INTO items(item_id,title,state,updated_at) VALUES ('item-legacy','Legacy','in-queue',0)`)
 	if err := created.Close(); err != nil {
 		t.Fatalf("closing the store failed: %v", err)
 	}
@@ -46,6 +47,12 @@ func TestAStoreCreatedBeforeTheRankColumnGainsItOnFirstOpen(t *testing.T) {
 	if got := columnDeclaration(t, repaired, "items", "rank"); got != "TEXT|notnull|''" {
 		repaired.Close()
 		t.Fatalf("the repaired store's items.rank is %q, want the declaration ItemDDL states", got)
+	}
+	if got := column(t, repaired, "SELECT rank FROM items WHERE item_id='item-legacy'"); got != "" {
+		t.Fatalf("migration supplied key %q", got)
+	}
+	if n := count(t, repaired, "SELECT count(*) FROM events"); n != 0 {
+		t.Fatalf("migration wrote %d item records", n)
 	}
 	version, err := repaired.SchemaVersion()
 	if err != nil {

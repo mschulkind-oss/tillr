@@ -78,7 +78,7 @@ const snapshot: SnapshotData = {
       cost_usd: null,
       latest_decision: null,
       latest_run: null,
-      rank: "1",
+      place: 2,
     },
   ],
   recent_runs: [],

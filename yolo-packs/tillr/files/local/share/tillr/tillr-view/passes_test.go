@@ -84,7 +84,7 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 		t.Fatalf("hold-only pass: %v", hold)
 	}
 	decisions := hold["decisions"].([]any)
-	if len(decisions) != 2 || decisions[0].(map[string]any)["item_id"] != "item-seed-04" {
+	if len(decisions) != 2 || decisions[0].(map[string]any)["item_id"] != "item-seed-02" {
 		t.Fatalf("rank order: %v", decisions)
 	}
 	oldest := rows[2].(map[string]any)
@@ -95,7 +95,7 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 	if phases["stage_ms"] != float64(12) || phases["gate_ms"] != float64(14) {
 		t.Fatalf("phases: %v", phases)
 	}
-	dispatch := oldest["decisions"].([]any)[1].(map[string]any)
+	dispatch := oldest["decisions"].([]any)[0].(map[string]any)
 	if dispatch["lane_id"] != "lane-a" || dispatch["run_id"] != "run-1" || dispatch["action"] != "dispatch" || dispatch["reason"] != "ready" {
 		t.Fatalf("dispatch: %v", dispatch)
 	}

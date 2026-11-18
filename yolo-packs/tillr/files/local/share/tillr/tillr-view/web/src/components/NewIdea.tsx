@@ -22,10 +22,7 @@ export function NewIdea({ enabled, items, store, onSaved }: { enabled: boolean; 
   const [open, setOpen] = useState(false), [saving, setSaving] = useState(false), [refusal, setRefusal] = useState("");
   const busy = useRef(false), wordsBox = useRef<HTMLTextAreaElement>(null), trigger = useRef<HTMLButtonElement>(null), dialog = useRef<HTMLDivElement>(null);
   const close = () => { setOpen(false); trigger.current?.focus(); };
-  const order = items.filter(item => !["not-started", "landed", "closed", "resolved-elsewhere"].includes(item.projected_state.raw_state)).sort((a, b) => {
-    const ar = a.rank ?? "", br = b.rank ?? "";
-    return ar === br ? a.item_id.localeCompare(b.item_id) : !ar ? 1 : !br ? -1 : ar < br ? -1 : 1;
-  });
+  const order = items.filter(item => item.place != null).sort((a, b) => (a.place ?? 0) - (b.place ?? 0));
   useEffect(() => {
     if (!enabled) return;
     const keydown = (event: KeyboardEvent) => {

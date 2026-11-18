@@ -406,10 +406,10 @@ route still keeps missing clocks null; only the downloads derive enclosing bound
 
 `tillr-view passes` lists the newest [passes](../../docs/design/observatory-redesign.md#4-entities-and-urls)
 first. One pass contains every decision with the same `dispatched_at` millisecond.
-Decisions appear in current queue rank order, with unranked items last and item id
-breaking ties. Each decision names its item, action, and verbatim reason; actions
+Decisions appear in current queue place order; items outside the order follow
+by item id. Each decision names its item, action, and verbatim reason; actions
 that launch work (`dispatch` and `retry`) also name the lane and run when recorded. Items removed from the queue retain their
-decisions as unranked rows. The command's help owns its flags.
+decisions with no place. The command's help owns its flags.
 
 The JSON output is the same array served as `data` by `GET /api/v1/passes`.
 Each row carries `dispatched_at_ms`, `decisions`, and `phases`. The API returns at
@@ -481,9 +481,11 @@ may supply the reason and recovery command, but does not hide the conflict's tra
 
 `waiting --history` retains the recorded-decision view, as does
 `GET /api/v1/waiting`. It prints one row per item except those stored as
-`landed`, `closed`, or `resolved-elsewhere`. The columns are rank, item id,
-class, where, why, mover, and since, ordered by queue rank with unranked items
-last. Its JSON output and the historical API use the same row objects; the API
+`landed`, `closed`, or `resolved-elsewhere`. The columns are #, item id,
+class, where, why, mover, and since. # is the item's
+[place](../../docs/design/observatory-actions.md#3-principles-and-words), counted
+from 1 across the full order, with empty keys counted last by item id. Parked
+items have no place. Readers never print the stored key. Its JSON output and the historical API use the same row objects; the API
 places the array in its usual `data` field beside the read transaction's snapshot.
 
 
@@ -555,7 +557,7 @@ drain. It prints three blocks:
 the newest `.tillr/loop/drain-*.json`. When an event was appended after that file, the
 header says `stale stop record — newer run exists at seq <N>`: the shape that hid a loop
 whose newest stop record was an older take.
-2. **The active runs** — the lane, run, item, rank, title, elapsed (the viewer's clock from
+2. **The active runs** — the lane, run, item, place, title, elapsed (the viewer's clock from
 the run's start), lease left, and the run's `.log` path. With no live run it says
 `0 live runs; lanes idle: lane-1` rather than drawing an empty table.
 3. **The last five finished runs** — the outcome (`landed <sha>`, `gate-failed`,

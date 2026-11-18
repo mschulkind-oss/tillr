@@ -752,17 +752,15 @@ var serveCases = []serveCase{
 					got, want, raw)
 			}
 		}
-		// The rank reaches the client, not just the order it implied: a board that sorted
-		// correctly and printed no rank would leave the operator unable to say where the
-		// next item goes.
-		ranks := map[string]string{
-			"item-seed-02": "b", "item-seed-04": "a", "item-seed-06": "", "item-seed-08": "am",
-		}
+		places := map[string]any{"item-seed-02": float64(2), "item-seed-04": nil, "item-seed-06": float64(3), "item-seed-08": float64(1)}
 		for _, entry := range body["data"].(map[string]any)["items"].([]any) {
-			item, _ := entry.(map[string]any)
-			id, _ := item["item_id"].(string)
-			if item["rank"] != ranks[id] {
-				t.Fatalf("%s answered rank %v, want %q: %s", id, item["rank"], ranks[id], raw)
+			item := entry.(map[string]any)
+			id := item["item_id"].(string)
+			if _, ok := item["rank"]; ok {
+				t.Fatalf("key leaked: %s", raw)
+			}
+			if item["place"] != places[id] {
+				t.Fatalf("%s place %v want %v", id, item["place"], places[id])
 			}
 		}
 		// A single item's dossier carries the same token, because it is the same fact.
@@ -771,8 +769,8 @@ var serveCases = []serveCase{
 			t.Fatalf("item-seed-02 answered %d: %s", status, detailRaw)
 		}
 		item, _ := detail["data"].(map[string]any)["item"].(map[string]any)
-		if item["rank"] != "b" {
-			t.Fatalf("the item's payload answered rank %v, want \"b\": %s", item["rank"], detailRaw)
+		if item["place"] != float64(2) || item["rank"] != nil {
+			t.Fatalf("the item's payload answered place %v, want 2: %s", item["place"], detailRaw)
 		}
 	}},
 	{"the_board_counts_its_own_rows", func(t *testing.T, h *serveHarness) {

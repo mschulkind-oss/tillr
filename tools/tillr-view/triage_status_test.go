@@ -23,7 +23,7 @@ func TestActualSyncToStoreStatusShowsUnsharedCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`CREATE TABLE items(item_id TEXT PRIMARY KEY,title TEXT NOT NULL,body_ref TEXT,state TEXT NOT NULL,design_doc TEXT,updated_at INTEGER)`); err != nil {
+		if _, err := tx.Exec(`CREATE TABLE items(item_id TEXT PRIMARY KEY,title TEXT NOT NULL,body_ref TEXT,state TEXT NOT NULL,design_doc TEXT,updated_at INTEGER,event_seq INTEGER NOT NULL DEFAULT 0)`); err != nil {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO items(item_id,title,state,updated_at) VALUES('item-request','Request','in-queue',1)`)

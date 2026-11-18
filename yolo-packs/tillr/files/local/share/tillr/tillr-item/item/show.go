@@ -2,6 +2,7 @@ package item
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -36,7 +37,26 @@ func Show(r *store.Reader, id, root string) (record.Envelope, error) {
 		payload.Questions = questions
 		payload.QuestionsSource = payload.DesignDoc
 	}
-	return envelopeOf(RecordKind, "item-"+id, updatedAt, payload)
+	places, err := OrderPlaces(r)
+	if err != nil {
+		return record.Envelope{}, Internalf("reading item places: %v", err)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return record.Envelope{}, err
+	}
+	delete(fields, "rank")
+	if place := places[id]; place > 0 {
+		fields["place"], err = json.Marshal(place)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	return envelopeOf(RecordKind, "item-"+id, updatedAt, fields)
 }
 
 // readStoredItem answers one item's record as the rows hold it, with the clock the row was

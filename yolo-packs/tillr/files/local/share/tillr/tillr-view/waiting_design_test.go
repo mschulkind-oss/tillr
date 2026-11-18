@@ -43,7 +43,7 @@ func TestWaitingDesignWithoutItem(t *testing.T) {
 				if row["document"] != "" && row["document"] != nil {
 					seenDesign = true
 					designs = append(designs, row)
-					if row["item_id"] != "" || row["rank"] != "" || row["class"] != "needs you" || row["where"] != "queue" || !strings.HasPrefix(row["why"].(string), "design-without-item") || !strings.Contains(row["mover"].(string), "owner") {
+					if row["item_id"] != "" || row["place"] != nil || row["class"] != "needs you" || row["where"] != "queue" || !strings.HasPrefix(row["why"].(string), "design-without-item") || !strings.Contains(row["mover"].(string), "owner") {
 						t.Fatalf("bad design row: %+v", row)
 					}
 				} else if seenDesign && row["item_id"] != "" {
@@ -96,7 +96,7 @@ func TestPlannerDesignWithoutItem(t *testing.T) {
 			}
 			itemRows := `[]`
 			if hasItem {
-				itemRows = `[{"item_id":"item-a","rank":"a","why":"ready","planner_only":9007199254740993}]`
+				itemRows = `[{"item_id":"item-a","place":1,"why":"ready","planner_only":9007199254740993}]`
 			}
 			script := filepath.Join(t.TempDir(), "planner")
 			writeScript(t, script, `printf '%s' '{"event_head_seq":7,"summary":{"held":{}},"rows":`+itemRows+`}'`)

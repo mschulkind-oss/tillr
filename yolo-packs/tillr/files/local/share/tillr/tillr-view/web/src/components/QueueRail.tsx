@@ -1,22 +1,11 @@
-// The queue, as the queue: one row per item, in the order the store will dispatch them.
-// `rank` is a sparse lexical token, so the gutter's numbers are the board's own statement
-// of priority rather than an accident of the order rows came back in.
-//
-// The order is one list with two kinds of row in it, and the rail must not draw them as
-// one continuum: a ranked row shows the store's token, and the items the store never
-// ranked — every blocked, landed and closed row in this seed, 16 of 65 — are drawn under
-// their own heading, because an id-ordered tail continuing the list reads as a recorded
-// priority that was simply low. `UnrankedHeading` names the count and the one command that
-// corrects it; `rankProvenance` catches the case where the payload carries no rank at all,
-// which is a server older than the field rather than a store that never ranked anything.
 
 import { FinishedBand } from "./FinishedBand";
 import { NowBand } from "./NowBand";
 import { RefusalState } from "./RefusalState";
 import type { RefusalSentence } from "./RefusalState";
 import { StateGlyph } from "./StateGlyph";
-import { hasRank, rankProvenance, splitByRank, stateLabel, unrankedCount } from "../models/board";
-import type { BoardFilter, BoardView, RankProvenance } from "../models/board";
+import { stateLabel } from "../models/board";
+import type { BoardFilter, BoardView } from "../models/board";
 import type { RefObject } from "react";
 import type { BuildStamp, ItemView, SnapshotData } from "../models/types";
 
@@ -62,11 +51,7 @@ export interface QueueRailProps {
    * is in flight. */
   items: ItemView[] | undefined;
   total: number;
-  /** How many of the whole board's rows carry no rank, counted before the filter. The
-   * unranked heading names the rows it is drawing and, when a narrowing hides some, the
-   * number hiding behind it — a block that reported only its visible rows would shrink
-   * when the operator typed in the filter box. */
-  unrankedTotal?: number;
+
   selectedItem: string | null;
   onSelectItem: (itemId: string) => void;
   /** The board's narrowing: the text needle the box draws, and the states the header's
@@ -90,9 +75,7 @@ export interface QueueRailProps {
   /** The snapshot the now band reads its live runs from (design §4.4). Undefined while the
    * first read is in flight, and the band is absent with it. */
   snapshot?: SnapshotData;
-  /** The build that answered, from the response cursor (`snapshot.build` on the envelope,
-   * not on the board's data). The unranked heading names it when the payload carries no
-   * `rank` at all, because that server's identity is the whole diagnosis. */
+  /** The build that answered. */
   build?: BuildStamp;
   /** The viewer's clock. A test pins it, the band ticks it, and a paused board hands it the
    * moment of the pause so the band's elapsed and lease stop where the reader left them. */
@@ -129,7 +112,7 @@ function QueueRow({
   // stays the seven-state reading; the reason is what a reader needs to know the wait is a
   // ruling rather than a lane (serve.go's itemProjection.Hold).
   const hold = item.projected_state.hold ?? "";
-  const rank = hasRank(item) ? item.rank : null;
+  const place = item.place;
   const open = typeof item.open_criteria === "number" ? item.open_criteria : null;
   return (
     <li>
@@ -137,7 +120,7 @@ function QueueRow({
         type="button"
         className="queue-row"
         data-state={state}
-        data-rank={rank === null ? "absent" : "recorded"}
+        data-place={place ?? "absent"}
         aria-current={selected ? "true" : "false"}
         onClick={onSelect}
       >
@@ -146,19 +129,8 @@ function QueueRow({
         <span className="queue-row__glyph">
           <StateGlyph state={state} />
         </span>
-        {/* A rank is the store's own token and the operator quotes it verbatim. An item
-         * the store never ranked shows `—`, never a number: a count in this gutter is
-         * indistinguishable from a priority, which is the confusion the unranked heading
-         * exists to end. */}
-        <span
-          className="queue-row__rank"
-          title={
-            rank === null
-              ? "the store records no rank for this item; the queue falls back to item id after the ranked items"
-              : `queue rank ${rank}`
-          }
-        >
-          {rank ?? "—"}
+        <span className="queue-row__place" title={place == null ? "not in the order" : `place ${place}`}>
+          {place ?? "—"}
         </span>
         <span className="queue-row__title" title={item.title}>
           {item.title}
@@ -179,75 +151,11 @@ function QueueRow({
   );
 }
 
-/** The correction acts only on one item already in the store. */
-function howToRank(): string {
-  return "Record a priority with `tillr item rank --store <store> --item <id> --rank <token>`.";
-}
-/** UnrankedHeading heads the block of items the store never ranked.
- *
- * The queue is one order, and its tail is the store's silence: `unrankedCount` items sort
- * after every ranked one, by id. Drawn as a continuation of the list, that tail reads as a
- * priority nobody recorded — the failure measured on 2026-11-14, where `item-seed-01`
- * (blocked) sorted after rank `z` and nothing on screen distinguished it from a recorded
- * priority. So the heading names the block, its count, and the one command that corrects
- * it.
- *
- * The `server-unranked` variant is a different fact with no remedy in the store: the
- * payload carries no `rank` field at all, so the order is item id and the board will not
- * present it as priority. It names the build that answered, because a board that cannot
- * say which build served the page cannot be vouched for, and it says "unverified" rather
- * than guessing when the server sends no build stamp. */
-function UnrankedHeading({
-  provenance,
-  shown,
-  total,
-  build,
-}: {
-  provenance: RankProvenance;
-  shown: number;
-  total: number;
-  build?: BuildStamp;
-}) {
-  const count = shown === total ? `${shown}` : `${shown} of ${total}`;
-  const noun = total === 1 && shown === total ? "item" : "items";
-  if (provenance === "server-unranked") {
-    const buildName = build
-      ? build.revision
-        ? `build ${build.revision.slice(0, 12)}${build.modified ? "+dirty" : ""}`
-        : `build ${build.executable || "unnamed"}`
-      : "build unverified — this server names no build";
-    return (
-      <header className="queue-unranked__head" data-provenance={provenance}>
-        <h3 className="queue-unranked__title" id="queue-unranked-title">
-          No priority in this payload — {count} {noun}
-        </h3>
-        <p className="queue-unranked__note">
-          This server sends no <code>rank</code> field, so it predates the queue&rsquo;s rank
-          and the order below is item id, not priority ({buildName}). The board will not
-          present an order it was not given as a priority it can vouch for.
-        </p>
-      </header>
-    );
-  }
-  return (
-    <header className="queue-unranked__head" data-provenance={provenance}>
-      <h3 className="queue-unranked__title" id="queue-unranked-title">
-        No priority recorded — {count} {noun}
-      </h3>
-      <p className="queue-unranked__note">
-        {provenance === "store-unranked"
-          ? "This store has never ranked an item, so the whole queue is in item id order. "
-          : "The store carries no rank for these, so the queue falls back to item id after every ranked item. "}
-        {howToRank()}
-      </p>
-    </header>
-  );
-}
 
 export function QueueRail({
   items,
   total,
-  unrankedTotal,
+
   selectedItem,
   onSelectItem,
   filter,
@@ -260,7 +168,7 @@ export function QueueRail({
   onRetry,
   onCloseRail,
   snapshot,
-  build,
+
   now,
   view = "queue",
   onSelectView,
@@ -269,14 +177,9 @@ export function QueueRail({
   otherMatches = 0,
   recent = [],
 }: QueueRailProps) {
-  // The one order, cut into the two blocks the rail draws. The cut is taken from `queueOrder`'s
-  // own answer, so concatenating the two lists is the client's whole order rule — the split
-  // is a heading, never a second sort.
+
   const rows = items ?? [];
-  const { ranked, unranked } = splitByRank(rows);
-  const provenance = rankProvenance(rows);
-  const unrankedShown = unranked.length;
-  const unrankedAll = unrankedTotal ?? unrankedCount(rows);
+
   const atStoreTotal = storeTotal ?? total;
   const viewWord = view === "archive" ? "finished" : "queue";
   const otherWord = view === "archive" ? "queue" : "finished";
@@ -429,40 +332,9 @@ export function QueueRail({
           </div>
         ) : (
           <div className="queue-list">
-            {ranked.length > 0 ? (
-              <ul className="queue">
-                {ranked.map((item) => (
-                  <QueueRow
-                    key={item.item_id}
-                    item={item}
-                    selected={item.item_id === selectedItem}
-                    onSelect={() => onSelectItem(item.item_id)}
-                  />
-                ))}
-              </ul>
-            ) : null}
-            {unranked.length > 0 ? (
-              /* One heading for the block, not one per row: the fact is the same for every
-               * row under it, and a repeated line would bury the rows it explains. */
-              <section className="queue-unranked" aria-labelledby="queue-unranked-title">
-                <UnrankedHeading
-                  provenance={provenance}
-                  shown={unrankedShown}
-                  total={unrankedAll}
-                  build={build}
-                />
-                <ul className="queue">
-                  {unranked.map((item) => (
-                    <QueueRow
-                      key={item.item_id}
-                      item={item}
-                      selected={item.item_id === selectedItem}
-                      onSelect={() => onSelectItem(item.item_id)}
-                    />
-                  ))}
-                </ul>
-              </section>
-            ) : null}
+            <ul className="queue">
+              {rows.map((item) => <QueueRow key={item.item_id} item={item} selected={item.item_id === selectedItem} onSelect={() => onSelectItem(item.item_id)} />)}
+            </ul>
           </div>
         )}
       </div>

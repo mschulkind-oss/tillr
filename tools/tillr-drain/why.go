@@ -122,7 +122,7 @@ func whyFace(args []string) int {
 		}{answer, drain.ReadBuildStamp()})
 	} else {
 		for _, row := range answer.Rows {
-			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", row.Rank, row.ItemID, row.Position, row.Reason, row.Mover); err != nil {
+			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", whyPlace(row.Place), row.ItemID, row.Position, row.Reason, row.Mover); err != nil {
 				break
 			}
 		}

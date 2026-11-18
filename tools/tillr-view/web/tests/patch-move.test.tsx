@@ -10,7 +10,7 @@ test("publication observations offer acknowledgment, not item links or controls"
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
   const command = "tillr drain acknowledge-patch-move --store /repo/.tillr/state.db --observation 123 --fork pi --by <owner>";
   const observation: WaitingRow = {
-    item_id: "", rank: "", class: "needs you", where: "publication",
+    item_id: "", class: "needs you", where: "publication",
     why: "patch/pi observed by run observing-run: old -> new; publication held",
     mover: command, since: "today", class_source: "store",
     ...{ observation: "patch/pi observation 123" },

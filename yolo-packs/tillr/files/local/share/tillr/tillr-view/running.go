@@ -81,7 +81,7 @@ type runningRun struct {
 	LaneID        string `json:"lane_id"`
 	RunID         string `json:"run_id"`
 	ItemID        string `json:"item_id"`
-	Rank          string `json:"rank"`
+	Place         int    `json:"place,omitempty"`
 	Title         string `json:"title"`
 	StartedAtMS   int64  `json:"started_at_ms"`
 	ElapsedMS     *int64 `json:"elapsed_ms"`
@@ -285,6 +285,7 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 	if domain == nil {
 		return out
 	}
+	places := itemPlaces(domain.items)
 	items := map[string]storeItem{}
 	for _, it := range domain.items {
 		items[it.ItemID] = it
@@ -304,7 +305,7 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 			LaneID:      live.LaneID,
 			RunID:       live.RunID,
 			ItemID:      live.ItemID,
-			Rank:        item.Rank,
+			Place:       places[item.ItemID],
 			Title:       item.Title,
 			StartedAtMS: live.StartedAtMS,
 			LogPath:     filepath.Join(laneRoot, live.LaneID, live.RunID+".log"),
@@ -490,14 +491,14 @@ func renderRunning(w io.Writer, p runningPayload) {
 	} else {
 		fmt.Fprintf(w, "LIVE RUNS (%d)\n", len(p.Active))
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "LANE\tITEM\tRANK\tTITLE\tELAPSED\tLEASE LEFT\tLOG")
+		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tLEASE LEFT\tLOG")
 		for _, run := range p.Active {
 			lease := leaseLeftText(run.LeaseLeftMS)
 			if run.LeaseNoExpiry {
 				lease = "lease has no expiry"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				orDash(run.LaneID), orDash(run.ItemID), orDash(run.Rank), orDash(run.Title),
+				orDash(run.LaneID), orDash(run.ItemID), placeText(run.Place), orDash(run.Title),
 				elapsedText(run.ElapsedMS), lease, orDash(run.LogPath))
 		}
 		tw.Flush()

@@ -8,7 +8,7 @@ import { snapshotData } from "./fixtures";
 afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); });
 test("a cleared but retained document row never navigates to a fabricated item", () => {
  window.history.replaceState(null, "", "/#/items");
- const warning = { rank: "", item_id: "", document: "docs/design/a.md", class: "needs you", where: "queue", why: "design-without-item", mover: "owner", since: "today", class_source: "rule" };
+ const warning = { place: undefined, item_id: "", document: "docs/design/a.md", class: "needs you", where: "queue", why: "design-without-item", mover: "owner", since: "today", class_source: "rule" };
  const view = render(<ItemsView waiting={[warning]} snapshot={snapshotData} />);
  fireEvent.focus(screen.getAllByRole("row")[1]);
  view.rerender(<ItemsView waiting={[]} snapshot={snapshotData} />);
@@ -18,9 +18,9 @@ test("a cleared but retained document row never navigates to a fabricated item",
 });
 
 const rows = [
- { rank: "", item_id: "", document: "docs/design/z.md", class: "needs you", where: "queue", why: "design-without-item: docs/roadmap.md:3", mover: "owner: file the document's item block", since: "today", class_source: "rule" },
- { rank: "", item_id: "item-z", class: "needs you", where: "queue", why: "not-ready", mover: "owner", since: "today", class_source: "rule" },
- { rank: "", item_id: "", document: "docs/design/a.md", class: "needs you", where: "queue", why: "design-without-item: docs/roadmap.md:2", mover: "owner: file the document's item block", since: "today", class_source: "rule" },
+ { place: undefined, item_id: "", document: "docs/design/z.md", class: "needs you", where: "queue", why: "design-without-item: docs/roadmap.md:3", mover: "owner: file the document's item block", since: "today", class_source: "rule" },
+ { place: undefined, item_id: "item-z", class: "needs you", where: "queue", why: "not-ready", mover: "owner", since: "today", class_source: "rule" },
+ { place: undefined, item_id: "", document: "docs/design/a.md", class: "needs you", where: "queue", why: "design-without-item: docs/roadmap.md:2", mover: "owner: file the document's item block", since: "today", class_source: "rule" },
 ];
 for (const face of ["home", "items"]) {
  test(`${face} shows distinct design paths after unranked items without fake item links`, () => {

@@ -140,6 +140,18 @@ func (v view) assembleSubject(itemID string, source vantage.QuestionSource) (sub
 		}
 	}
 
+	if assembly.item != nil {
+		board, err := v.assembleBoard()
+		if err != nil {
+			return subjectAssembly{}, err
+		}
+		for _, it := range board.items {
+			if it.ItemID == itemID {
+				assembly.item.Place = it.Place
+				break
+			}
+		}
+	}
 	if assembly.item != nil && assembly.item.DesignDoc != "" {
 		answer := readQuestions(source, assembly.item.DesignDoc)
 		// The index is the only copy of the questions, so the item component carries the
@@ -255,9 +267,39 @@ func rankBefore(rankA, itemA, rankB, itemB string) bool {
 // rankOrdered answers a list of items in the board's order.
 func rankOrdered(items []itemRecord) []itemRecord {
 	out := append([]itemRecord{}, items...)
+	// A presentation stream (for example, Show output) already carries places
+	// counted over a larger order. Preserve them, including gaps and a singleton.
+	presented := false
+	for _, it := range out {
+		if it.Place > 0 {
+			presented = true
+			break
+		}
+	}
+	if presented {
+		sort.SliceStable(out, func(i, j int) bool {
+			a, b := out[i], out[j]
+			if (a.Place == 0) != (b.Place == 0) {
+				return b.Place == 0
+			}
+			if a.Place != b.Place {
+				return a.Place < b.Place
+			}
+			return a.ItemID < b.ItemID
+		})
+		return out
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return rankBefore(out[i].Rank, out[i].ItemID, out[j].Rank, out[j].ItemID)
 	})
+	place := 0
+	for i := range out {
+		out[i].Place = 0
+		if inOrder(out[i].State) {
+			place++
+			out[i].Place = place
+		}
+	}
 	return out
 }
 

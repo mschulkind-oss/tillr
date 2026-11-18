@@ -196,8 +196,9 @@ describe("the archive view", () => {
 
     await waitFor(() =>
       expect(railTitles(container)).toEqual([
-        "landed parser",
         "closed renderer",
+        "landed parser",
+
         "resolved elsewhere",
       ]),
     );
@@ -207,8 +208,8 @@ describe("the archive view", () => {
     expect(container.querySelectorAll(".queue-row")).toHaveLength(3);
     expect(container.querySelector(".pane__title")?.textContent).toBe("Archive");
     expect(
-      Array.from(container.querySelectorAll(".queue-row__rank")).map((node) => node.textContent),
-    ).toEqual(["4", "5", "6"]);
+      Array.from(container.querySelectorAll(".queue-row__place")).map((node) => node.textContent),
+    ).toEqual(["—", "—", "—"]);
   });
 
   test("the header's landed count opens the archive filtered to landed", async () => {
@@ -254,8 +255,8 @@ describe("the archive view", () => {
 
     fireEvent.click(buttonWithText(container, "Open the archive")!);
     await waitFor(() => expect(railTitles(container)).toEqual([
-      "landed parser",
       "closed renderer",
+      "landed parser",
       "resolved elsewhere",
     ]));
     expect(window.location.search).toBe("?view=archive");

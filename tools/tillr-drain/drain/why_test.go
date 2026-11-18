@@ -142,3 +142,64 @@ func TestWhyAccountsForBusyLanesAndPendingRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWhyCountsPlacesWithoutExposingKeys(t *testing.T) {
+	f, l := passFixture(t, "first", "a", "z", "parked", "done")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec("UPDATE items SET rank=''; UPDATE items SET rank='secretkey' WHERE item_id='first'; UPDATE items SET state='not-started' WHERE item_id='parked'; UPDATE items SET state='landed' WHERE item_id='done'")
+		return err
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			raw, err := json.Marshal(row)
+			if err != nil {
+				return err
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				return err
+			}
+			if _, ok := fields["rank"]; ok {
+				t.Fatalf("key leaked: %s", raw)
+			}
+			want := map[string]any{"first": float64(1), "a": float64(2), "z": float64(3)}[row.ItemID]
+			if fields["place"] != want {
+				t.Fatalf("%s place %v want %v", row.ItemID, fields["place"], want)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWhyPlacesFollowKeysNotPlannerPromotions(t *testing.T) {
+	f, l := passFixture(t, "ordinary", "fixer-main-test", "rewrite-item-test")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec("UPDATE items SET rank=CASE item_id WHEN 'ordinary' THEN 'a' WHEN 'fixer-main-test' THEN 'z' ELSE 'zz' END")
+		return err
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			want := map[string]int{"ordinary": 1, "fixer-main-test": 2, "rewrite-item-test": 3}[row.ItemID]
+			if row.Place != want {
+				t.Fatalf("%s place %d want %d", row.ItemID, row.Place, want)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

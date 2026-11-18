@@ -6,4 +6,4 @@ export function graphItem(id: string, blockers: string[] = [], state = "in_queue
 
 /** Three columns: 20 roots, 20 single dependencies, 20 triple dependencies (80 edges). */
 export const sixtyItems = Array.from({length: 60}, (_, i) => graphItem(`item-${i}`, i < 20 ? [] : i < 40 ? [`item-${i-20}`] : [`item-${i-20}`, `item-${i-40}`, `item-${(i-39)%20}`]));
-export const fixtureClasses: WaitingRow[] = sixtyItems.map((item, i) => ({item_id:item.item_id, class:i < 20 ? "ready" : "waits on work", rank:String(i), where:"queue", why:"fixture", mover:"fixture", since:"fixture", class_source:"rule"}));
+export const fixtureClasses: WaitingRow[] = sixtyItems.map((item, i) => ({item_id:item.item_id, class:i < 20 ? "ready" : "waits on work", place:i+1, where:"queue", why:"fixture", mover:"fixture", since:"fixture", class_source:"rule"}));

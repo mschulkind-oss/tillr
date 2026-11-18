@@ -121,7 +121,7 @@ export const liveSnapshotData: SnapshotData = {
       cost_usd: null,
       latest_decision: null,
       latest_run: null,
-      rank: "1",
+      place: 2,
     },
     {
       item_id: "item-live",
@@ -141,7 +141,7 @@ export const liveSnapshotData: SnapshotData = {
         cost_usd: null,
         usage_tokens: null,
       },
-      rank: "2",
+      place: 3,
     },
     {
       item_id: "item-after",
@@ -151,7 +151,7 @@ export const liveSnapshotData: SnapshotData = {
       cost_usd: null,
       latest_decision: null,
       latest_run: null,
-      rank: "3",
+      place: 4,
     },
   ],
   recent_runs: [],
@@ -362,7 +362,7 @@ export const dispatchedItemData: ItemData = {
  * include and something to hide without inventing a fifth shape. No `counts` object on
  * purpose: the header then counts the rows itself, which is the fallback a store read by an
  * older server exercises. */
-function itemIn(item_id: string, title: string, state: string, rank: string) {
+function itemIn(item_id: string, title: string, state: string, place: number) {
   return {
     item_id,
     title,
@@ -371,7 +371,7 @@ function itemIn(item_id: string, title: string, state: string, rank: string) {
     cost_usd: null,
     latest_decision: null,
     latest_run: null,
-    rank,
+    place: ["landed", "closed", "resolved_elsewhere"].includes(state) ? undefined : place,
   };
 }
 
@@ -379,19 +379,19 @@ function itemFinished(
   item_id: string,
   title: string,
   state: string,
-  rank: string,
+  place: number,
   updated_at_ms: number,
 ) {
-  return { ...itemIn(item_id, title, state, rank), updated_at_ms };
+  return { ...itemIn(item_id, title, state, place), updated_at_ms };
 }
 
 export const filterSnapshotData: SnapshotData = {
   ...snapshotData,
   items: [
-    itemIn("item-queue", "queued parser", "in_queue", "1"),
-    itemIn("item-working", "working parser", "working", "2"),
-    itemIn("item-blocked", "blocked renderer", "blocked", "3"),
-    itemIn("item-landed", "landed parser", "landed", "4"),
+    itemIn("item-queue", "queued parser", "in_queue", 1),
+    itemIn("item-working", "working parser", "working", 2),
+    itemIn("item-blocked", "blocked renderer", "blocked", 3),
+    itemIn("item-landed", "landed parser", "landed", 4),
   ],
 };
 
@@ -401,16 +401,16 @@ export const filterSnapshotData: SnapshotData = {
 export const archiveSnapshotData: SnapshotData = {
   ...snapshotData,
   items: [
-    itemIn("item-queue", "queued parser", "in_queue", "1"),
-    itemIn("item-working", "working parser", "working", "2"),
-    itemIn("item-blocked", "blocked renderer", "blocked", "3"),
-    itemFinished("item-landed", "landed parser", "landed", "4", 1762979400000),
-    itemFinished("item-closed", "closed renderer", "closed", "5", 1762979460000),
+    itemIn("item-queue", "queued parser", "in_queue", 1),
+    itemIn("item-working", "working parser", "working", 2),
+    itemIn("item-blocked", "blocked renderer", "blocked", 3),
+    itemFinished("item-landed", "landed parser", "landed", 4, 1762979400000),
+    itemFinished("item-closed", "closed renderer", "closed", 5, 1762979460000),
     itemFinished(
       "item-resolved",
       "resolved elsewhere",
       "resolved_elsewhere",
-      "6",
+      6,
       1762979430000,
     ),
   ],

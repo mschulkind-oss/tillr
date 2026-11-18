@@ -6,7 +6,7 @@ import { dependencyLayout, relatedItems, selfLoopPath } from "../src/models/depe
 import type { ItemView, WaitingRow } from "../src/models/types";
 
 import { graphItem as item, sixtyItems } from "./dependency-fixture";
-const rows = (items: ItemView[]): WaitingRow[] => items.map(i => ({item_id: i.item_id, class: i.item_id === "a" ? "moving" : "ready", rank: "", where: "", why: "", mover: "", since: "", class_source: "store"}));
+const rows = (items: ItemView[]): WaitingRow[] => items.map(i => ({item_id: i.item_id, class: i.item_id === "a" ? "moving" : "ready", place: undefined, where: "", why: "", mover: "", since: "", class_source: "store"}));
 afterEach(cleanup);
 
 test("60 items and 80 edges have nonoverlapping full labels at 1440px", () => {

@@ -13,7 +13,7 @@ test.each([false, true, "refused"])("Items move-to-top with writes=%s against a 
   const writes = mode !== false;
   const requests: { path: string; body: string; type: string | undefined }[] = [];
   let moved = false;
-  const rows = () => [{ item_id: "first", rank: "a", class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }, { item_id: "second", rank: moved ? "0" : "b", class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }];
+  const rows = () => [{ item_id: "first", place: 1, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }, { item_id: "second", place: moved ? 1 : 2, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }];
   server = createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
     res.setHeader("Content-Type", "application/json");

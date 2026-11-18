@@ -18,7 +18,7 @@ test.each(["#/", "#/items", "#/item/one", "#/lane/one", "#/questions", "#/trunk"
 test("idea row carries a chip and Item page renders full verbatim words and the gap", async () => {
   window.history.replaceState(null, "", "/#/items?state=unlanded");
   const id = items[0].item_id;
-  const list = render(<ItemsView snapshot={{ ...snapshotData, items: [{ ...items[0], kind: "idea", title: "First words" }] }} waiting={[{ item_id: id, rank: "a", class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }]} />);
+  const list = render(<ItemsView snapshot={{ ...snapshotData, items: [{ ...items[0], kind: "idea", title: "First words" }] }} waiting={[{ item_id: id, place: 1, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }]} />);
   expect(screen.getByText("idea")).toBeTruthy();
   expect(screen.getByText("First words")).toBeTruthy();
   list.unmount();
@@ -127,12 +127,14 @@ test("read-only has no control or n shortcut, and n does not interrupt typing", 
 test("After saves the named item; malformed success cannot clear the draft", async () => {
   const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
   vi.stubGlobal("fetch", fetch);
-  render(<NewIdea enabled items={items} store="fixture" onSaved={() => {}} />);
+  const ordered = [{ ...items[0], item_id: "second", place: 2 }, { ...items[0], item_id: "parked", place: undefined }, { ...items[0], item_id: "first", place: 1 }];
+  render(<NewIdea enabled items={ordered} store="fixture" onSaved={() => {}} />);
   fireEvent.keyDown(window, { key: "n" });
   fireEvent.change(screen.getByRole("textbox", { name: "The words" }), { target: { value: "An idea" } });
   fireEvent.click(screen.getByRole("radio", { name: "After…" }));
   const option = screen.getByRole<HTMLSelectElement>("combobox", { name: "After item" });
-  fireEvent.change(option, { target: { value: option.options[1].value } });
+  expect(Array.from(option.options, entry => entry.value)).toEqual(["", "first", "second"]);
+  fireEvent.change(option, { target: { value: "first" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("alert");
   expect(JSON.parse(fetch.mock.calls[0][1].body).place).toEqual({ after: option.options[1].value });

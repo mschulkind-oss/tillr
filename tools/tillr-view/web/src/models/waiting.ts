@@ -10,7 +10,5 @@ export function waitingOrder(a: WaitingRow, b: WaitingRow): number {
     if (!b.document) return 1;
     return a.document.localeCompare(b.document);
   }
-  if (!a.rank) return b.rank ? 1 : waitingIdentity(a).localeCompare(waitingIdentity(b));
-  if (!b.rank) return -1;
-  return a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : waitingIdentity(a).localeCompare(waitingIdentity(b));
+  return (a.place ?? Infinity) - (b.place ?? Infinity) || waitingIdentity(a).localeCompare(waitingIdentity(b));
 }

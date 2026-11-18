@@ -30,7 +30,7 @@ type waitingRow struct {
 	backendReset time.Time
 	Quota        *quota.QuotaStatus `json:"quota,omitempty"`
 	GraphChanges []string           `json:"graph_changes,omitempty"`
-	Rank         string             `json:"rank"`
+	Place        int                `json:"place,omitempty"`
 	ItemID       string             `json:"item_id"`
 	Document     string             `json:"document"`
 	// Observation identifies a publication hold, never an item or design document.
@@ -348,12 +348,13 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
+	places := itemPlaces(items)
 	out := []waitingRow{}
 	for _, item := range items {
 		if waitingTerminal(item.State) {
 			continue
 		}
-		row := waitingRow{Rank: item.Rank, ItemID: item.ItemID, Class: "waits on the loop", Where: "queue", Why: "not yet planned", Mover: "the next pass", Since: "no pass yet", ClassSource: "rule"}
+		row := waitingRow{Place: places[item.ItemID], ItemID: item.ItemID, Class: "waits on the loop", Where: "queue", Why: "not yet planned", Mover: "the next pass", Since: "no pass yet", ClassSource: "rule"}
 		var latestRun *storeRun
 		var active *storeRun
 		for i := range runs {
@@ -802,14 +803,11 @@ func waitingRecordedStage(r *store.Reader, itemID string, run *storeRun) (string
 
 func printWaiting(w io.Writer, rows []waitingRow) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "rank\titem_id\tclass\twhere\twhy\tmover\tsince"); err != nil {
+	if _, err := fmt.Fprintln(table, "#\titem_id\tclass\twhere\twhy\tmover\tsince"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		rank := row.Rank
-		if rank == "" {
-			rank = "—"
-		}
+		place := placeText(row.Place)
 		// Quote control characters supplied by store text so one item stays one row.
 		why := row.Why
 		for _, change := range row.GraphChanges {
@@ -825,7 +823,7 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		if row.Observation != "" {
 			identity = row.Observation
 		}
-		cells := []string{rank, identity, row.Class, row.Where, why, row.Mover, row.Since}
+		cells := []string{place, identity, row.Class, row.Where, why, row.Mover, row.Since}
 		for i, cell := range cells {
 			cells[i] = strings.NewReplacer("\t", "\\t", "\n", "\\n", "\r", "\\r").Replace(cell)
 		}

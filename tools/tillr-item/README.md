@@ -187,7 +187,8 @@ The following rules describe Git-landing, including its established refusal name
   same record→row mapping `apply` uses. The directive grammar and the field mapping are
   [the queue-persistence ruling's Section 1](../../docs/design/queue-persistence-ruling.md#1-shared-item-block-shape).
   A new item is `in-queue`, or `not-started` when a roadmap's `## Icebox` or
-  `## Exploration` section links to its document; an item the store holds keeps its state,
+  `## Exploration` section links to its document. Only a whole sync can observe an item
+  leaving a parked section and return it to `in-queue`. Otherwise, a stored item keeps its state,
   rank, runs and criterion states. A new block may name its source with
   `from="<item id>"`: a keyed source, including a landed one, places it immediately
   after that source and earlier items placed by the same mark, in block order.
@@ -199,6 +200,13 @@ The following rules describe Git-landing, including its established refusal name
   criterion carries a state, and is reported `definition-frozen` once one does. A second run
   over unchanged documents changes no item and appends no event; it refreshes the
   saved sync observation.
+- **Read faces show places, not stored keys.** A [place](../../docs/design/observatory-actions.md#3-principles-and-words)
+  counts from 1 across the full order; parked and finished items have no place.
+  Empty keys count after keyed items, in item id order. A writing sync fills those
+  empty keys in that same order, one item update each in its own transaction;
+  opening or migrating a store never does. New and newly unparked items with no
+  key are added after the last item in the order. Existing records still accept
+  the legacy `rank` field through apply and fixture seeding.
 - **A whole writing sync saves its residue counts in the same transaction.** The
   item-owned `item_sync_residue` table holds one row: the sync time, ids of open store
   items no document declares (`unshared_open`), the oldest one's last write, and ids
@@ -206,11 +214,12 @@ The following rules describe Git-landing, including its established refusal name
   that row even when no item changes. A dry run leaves it alone; a caller supplying
   only some documents must set `SyncInput.Partial` and also leaves it alone. Status
   reads this observation, not documents, so its timestamp names when counts were computed.
-- **A document with a finding writes nothing; the others are written.** A missing or
+- **A document with a finding writes no definition; the others are written.** A missing or
   malformed id, a duplicate id, no paths, no `c1`, an unknown attribute or seat, or a
   `blocked_by` naming nothing a block declares or the store holds is reported with its file
   and heading, and the face exits `1` after the other documents are applied. A path that
-  does not exist yet is a warning, since the slice may create it.
+  does not exist yet is a warning, since the slice may create it. Missing keys on
+  items already in the order are still filled independently of document findings.
 - **Rank changes priority, not an item's definition.** `tillr item rank` requires an
   existing item and an explicit `--rank` token. It changes only rank, `updated_at` and
   `event_seq` bookkeeping, appending one `item.update` event in the same transaction.

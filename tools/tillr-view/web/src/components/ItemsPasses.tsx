@@ -123,7 +123,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
   const sort = params.get("sort") === "item" ? "item" : "place";
   const rows = useMemo(() => {
     const source: WaitingRow[] = preset === "landed" ? (snapshot?.items ?? []).filter(item => item.projected_state.state === "landed").map(item => ({
-      item_id: item.item_id, rank: item.rank ?? "", class: "landed", where: "trunk", why: item.latest_decision?.reason ?? "not recorded",
+      item_id: item.item_id, place: item.place, class: "landed", where: "trunk", why: item.latest_decision?.reason ?? "not recorded",
       mover: "—", since: "not recorded", class_source: "state",
     })) : waiting ?? [];
     return source.filter(row => (preset !== "not-moving" || !["ready", "moving"].includes(row.class)) && (!klass || row.class === klass) && (!reason || row.why === reason))
@@ -189,7 +189,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
     <details><summary>Keys</summary><p>j / k: focus next / previous row · Enter: open row · u: Home</p><p>J: move down one visible row · K: move up one visible row (writes on, sorted by place)</p></details>
     <div className="ledger__newer">{list.updates ? <button type="button" disabled={moving !== null} onClick={list.accept}>{list.newer ? `${list.newer} newer ↑` : `${list.updates} updates ↑`}</button> : null}{list.orderChanged && moving === null ? <button type="button" onClick={list.accept}>order changed ↑</button> : null}</div>
     {error ? <p role="alert">Items refused: {error.message}</p> : (preset === "landed" ? snapshot === undefined : waiting === undefined) ? <p role="status">Reading items…</p> : list.visible.length === 0 ? <p>No items match these filters.</p> :
-      <table><thead><tr>{["Rank", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run", ...(writesEnabled ? ["Order"] : [])].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
+      <table><thead><tr>{["#", "Item", "Class", "Where", "Why", "Mover", "Since", "Last run", ...(writesEnabled ? ["Order"] : [])].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{list.visible.map(row => {
         const item = snapshot?.items.find(item => item.item_id === row.item_id);
         const identity = waitingIdentity(row);
         return <tr key={identity} data-row-id={identity} tabIndex={0} data-focused={list.focused === identity} onFocus={() => list.focus(identity)}
@@ -203,7 +203,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
             if (below && next) dropAt(next.item_id);
             else dropAt(row.item_id, below);
           }}>
-          <td>{row.rank || "unranked"}</td><td>{row.observation || row.document || <EntityLink kind="item" id={row.item_id} />}{item?.kind === "idea" ? <> <span className="chip">idea</span> {item.title}</> : null}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
+          <td>{row.place ?? "—"}</td><td>{row.observation || row.document || <EntityLink kind="item" id={row.item_id} />}{item?.kind === "idea" ? <> <span className="chip">idea</span> {item.title}</> : null}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
           <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
           {writesEnabled ? <td>{canMove(row) ? <>
             {orderedMoves ? <button type="button" className="ledger__drag" aria-label={`Drag ${row.item_id}`} disabled={moving !== null} draggable={moving === null}
@@ -227,7 +227,7 @@ export function PassSpend({ pass }: { pass: PassRow }) {
 }
 
 function answer(pass: PassRow): string {
-  const decisions = (pass.decisions ?? []).map(decision => [decision.item_id, decision.rank, decision.action, decision.reason, decision.lane_id ?? "", decision.run_id ?? ""]);
+  const decisions = (pass.decisions ?? []).map(decision => [decision.item_id, decision.place ?? "—", decision.action, decision.reason, decision.lane_id ?? "", decision.run_id ?? ""]);
   decisions.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   return JSON.stringify([decisions, pass.session_id ?? null, pass.stop ?? null, pass.detail ?? null, pass.phases ?? null, pass.spend_started_in_loop ?? null, pass.spend_carried_over ?? null]);
 }
