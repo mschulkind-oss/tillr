@@ -32,6 +32,10 @@ type workSnapshot struct {
 	head, tree, indexTree string
 	files, indexFiles     []PreservedFile
 	summary, indexSummary string
+	// unmerged are the paths the lane's index held unmerged, preserved from the working
+	// copy; indexNote says why no staged snapshot was kept apart, when none was.
+	unmerged  []string
+	indexNote string
 }
 
 // preserveWork finishes all Git work before the short event write. The separate
@@ -83,7 +87,11 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 	} else if old != nil {
 		return Externalf("preserved ref %s is missing without a retention record; retain lane %s", ref, lane)
 	}
-	status, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+	// A lock a killed git left would refuse the lane's reset after this (index_lock.go).
+	if err := l.clearStaleIndexLock(ctx, lane, runID); err != nil {
+		return err
+	}
+	status, err := l.git(ctx, target, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return err
 	}
@@ -110,7 +118,7 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 			if len(snapshot.files) == 0 && len(snapshot.indexFiles) == 0 {
 				return nil
 			}
-			p = PreservedWork{RunID: runID, LaneID: lane, Ref: ref, Repository: target, Reason: reason, Files: snapshot.files, Summary: snapshot.summary}
+			p = PreservedWork{RunID: runID, LaneID: lane, Ref: ref, Repository: target, Reason: reason, Files: snapshot.files, Summary: snapshot.summary, Unmerged: snapshot.unmerged}
 			p.ItemID, err = l.preservationItem(ctx, runID)
 			if err != nil {
 				return err
@@ -128,6 +136,12 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 				p.IndexRef = ref + "^2"
 				p.IndexFiles = snapshot.indexFiles
 				p.Summary += "; staged index: " + snapshot.indexSummary
+			}
+			if len(snapshot.unmerged) > 0 {
+				p.Summary += "; unmerged in the lane's index: " + strings.Join(snapshot.unmerged, ", ") + " (kept as the working copy has them)"
+			}
+			if snapshot.indexNote != "" {
+				p.Summary += "; " + snapshot.indexNote
 			}
 			body, err := json.Marshal(p)
 			if err != nil {
@@ -217,11 +231,6 @@ func (l *Loop) snapshotWork(ctx context.Context, lane, runID string) (workSnapsh
 		return snapshot, err
 	}
 	snapshot.head = strings.TrimSpace(head)
-	staged, err := l.git(ctx, target, "write-tree")
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.indexTree = strings.TrimSpace(staged)
 	dir := run.DurableDir(l.laneDirPath(lane), runID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return snapshot, err
@@ -238,9 +247,9 @@ func (l *Loop) snapshotWork(ctx context.Context, lane, runID string) (workSnapsh
 		return snapshot, err
 	}
 	defer os.Remove(name)
-	git := func(args ...string) (string, error) {
+	withIndex := func(index string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", target}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+name)
+		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index, "GIT_OPTIONAL_LOCKS=0")
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -248,6 +257,14 @@ func (l *Loop) snapshotWork(ctx context.Context, lane, runID string) (workSnapsh
 			return "", Externalf("preserving %s: git %s: %v: %s", runID, strings.Join(args, " "), err, stderr.String())
 		}
 		return string(out), nil
+	}
+	git := func(args ...string) (string, error) { return withIndex(name, args...) }
+	// The staged snapshot is written from a copy of the lane's index, never the index
+	// itself: write-tree on the lane's index takes its lock (a stale index.lock refused it
+	// on 2026-11-18) and refuses an unmerged entry (lane-14 the same day, a conflict the
+	// worker resolved in the working copy and never added).
+	if err := l.stagedSnapshot(ctx, target, dir, &snapshot, withIndex); err != nil {
+		return snapshot, err
 	}
 	if _, err := git("read-tree", snapshot.head); err != nil {
 		return snapshot, err
@@ -274,12 +291,76 @@ func (l *Loop) snapshotWork(ctx context.Context, lane, runID string) (workSnapsh
 	if err != nil {
 		return snapshot, err
 	}
+	if snapshot.indexTree == "" {
+		snapshot.indexTree = snapshot.tree
+	}
 	stats, err = git("diff", "--numstat", "-z", "--no-renames", snapshot.head, snapshot.indexTree)
 	if err != nil {
 		return snapshot, err
 	}
 	snapshot.indexFiles, snapshot.indexSummary, err = snapshotSummary(stats, prefix, fence)
 	return snapshot, err
+}
+
+// stagedSnapshot sets snapshot.indexTree from a temporary copy of the lane's index. An
+// unmerged path is taken from the working copy into that copy (its resolution, when the
+// worker resolved it there) and named in snapshot.unmerged. An index that cannot be read
+// is no reason to lose the working copy's snapshot: the staged snapshot is then the
+// working copy's, and snapshot.indexNote says why.
+func (l *Loop) stagedSnapshot(ctx context.Context, target, dir string, snapshot *workSnapshot, withIndex func(string, ...string) (string, error)) error {
+	snapshot.indexTree = snapshot.head
+	out, err := l.git(ctx, target, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(strings.TrimSpace(out))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	copied, err := os.CreateTemp(dir, "preserve-staged-")
+	if err != nil {
+		return err
+	}
+	name := copied.Name()
+	defer os.Remove(name)
+	defer os.Remove(name + ".lock")
+	if _, err := copied.Write(body); err != nil {
+		copied.Close()
+		return err
+	}
+	if err := copied.Close(); err != nil {
+		return err
+	}
+	unreadable := func(err error) error {
+		snapshot.indexTree = ""
+		snapshot.indexNote = "the lane's index could not be read (" + heavyBrief(err.Error()) + "), so no staged snapshot was kept apart from the working copy's"
+		return nil
+	}
+	listed, err := withIndex(name, "ls-files", "-u", "-z")
+	if err != nil {
+		return unreadable(err)
+	}
+	seen := map[string]bool{}
+	for _, entry := range strings.Split(listed, "\x00") {
+		if _, path, ok := strings.Cut(entry, "\t"); ok && !seen[path] {
+			seen[path] = true
+			snapshot.unmerged = append(snapshot.unmerged, path)
+		}
+	}
+	if len(snapshot.unmerged) > 0 {
+		if _, err := withIndex(name, append([]string{"--literal-pathspecs", "add", "-A", "--"}, snapshot.unmerged...)...); err != nil {
+			return unreadable(err)
+		}
+	}
+	tree, err := withIndex(name, "write-tree")
+	if err != nil {
+		return unreadable(err)
+	}
+	snapshot.indexTree = strings.TrimSpace(tree)
+	return nil
 }
 
 func snapshotSummary(stats, prefix string, fence []string) ([]PreservedFile, string, error) {

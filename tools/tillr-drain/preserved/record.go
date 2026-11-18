@@ -43,7 +43,10 @@ type PreservedWork struct {
 	Files      []PreservedFile `json:"files"`
 	IndexRef   string          `json:"index_ref,omitempty"`
 	IndexFiles []PreservedFile `json:"index_files,omitempty"`
-	Pruned     bool            `json:"pruned,omitempty"`
+	// Unmerged names the paths the lane's index held unmerged; the snapshot took them
+	// from the working copy.
+	Unmerged []string `json:"unmerged,omitempty"`
+	Pruned   bool     `json:"pruned,omitempty"`
 }
 
 // ReadPreservedWork projects settlement and retention events in append order.

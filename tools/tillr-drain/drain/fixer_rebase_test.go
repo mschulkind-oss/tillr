@@ -147,6 +147,13 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	if got := runGit(t, lane, "status", "--porcelain"); !strings.Contains(got, "UU base.txt") {
 		t.Fatalf("fixture lane not mid-rebase with an unmerged path: %s", got)
 	}
+	// An unmerged index is preservable since 2026-11-18 (preserved_index_test.go). What
+	// cannot be preserved is dirty work an earlier saved ref for this run does not cover:
+	// replaying would reset it away.
+	ref := preservedPrefix + rec.RunID
+	tree := runGit(t, f.root, "rev-parse", TrunkRef+"^{tree}")
+	saved := runGit(t, f.root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", tree, "-m", `{"run_id":"`+rec.RunID+`","ref":"`+ref+`"}`)
+	runGit(t, f.root, "update-ref", ref, saved)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := item.SetState(ctx, tx, d.ItemID, StateResolvedElsewhere, l.cfg.Now(), item.WaitingOn{})
 		return err

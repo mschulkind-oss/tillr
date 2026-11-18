@@ -1913,6 +1913,20 @@ rules the snapshot read, so a file the run's own ignore edit hid stays in place
 rather than being deleted unsaved. Ignored files always stay. A workflow restart
 saves nonignored untracked files before its cleanup.
 
+Both snapshots are written from temporary indexes, never the lane's own index. The
+working snapshot reads HEAD and adds the working copy. The staged snapshot copies the
+lane's index first, so a lock on that index cannot block it. An unmerged entry in the
+copy (a conflict the worker resolved in the working copy and never added, lane-14 on
+2026-11-18) is taken from the working copy, and the record names it under `unmerged`
+and in its summary. An index that cannot be read keeps only the working snapshot, and
+the summary says why. A stale `index.lock` is a lock no process holds open, in a lane no
+process has as its working directory, read from `/proc`. Git holds the lock open until it
+renames it, so such a lock has no writer left. That happens when a killed git leaves the
+lock behind (lane-18 on 2026-11-18). Preservation and every lane reset remove a stale
+lock first and record a `drain.stale-index-lock-removed` event (`index_lock.go`). The
+age of the lock is never read. A lock that a live process holds stays, and the
+`preserve-failed` detail names that PID, which is the hold's mover.
+
 > [!WARNING]
 > **Landing remains blocked.** A dirty tracked ignore file can hide work from the
 > snapshot, then resetting that file changes the ignore rules and the subsequent
