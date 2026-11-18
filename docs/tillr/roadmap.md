@@ -45,24 +45,25 @@ says so in its design and is the owner's to overturn.
 
 [The item graph is the whole path](../design/tillr-graph-is-the-path.md), written on 2026-11-17 to
 the owner's rulings of that day, proposes that every act on an item is a node in its graph and that
-one pure function decides what comes next. None of it is built. The owner ruled four of its
-questions the same day. Two remain, and each has a design of its own:
-[`OQ-GP2`](../design/tillr-graph-is-the-path.md#OQ-GP2), which structure stores the graph, waits on
-[the storage design](../design/tillr-storage.md), made from measured trials, which asks
-[`OQ-TS1`](../design/tillr-storage.md#OQ-TS1) to [`OQ-TS3`](../design/tillr-storage.md#OQ-TS3); and
-[`OQ-GP6`](../design/tillr-graph-is-the-path.md#OQ-GP6), how a question and its design land ahead of
-their item, is answered by [early design landing](../design/tillr-early-design-landing.md), which
-asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
-[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, gives one meaning to item, node,
+one pure function decides what comes next. The graph model is not built. The owner ruled five of
+its questions, and a sixth, which structure stores the graph, moved to
+[the storage design](../design/tillr-storage.md). One is open:
+[`OQ-GP7`](../design/tillr-graph-is-the-path.md#OQ-GP7), what may land while a check is red on the trunk.
+The storage design's [`OQ-TS1`](../design/tillr-storage.md#OQ-TS1) and
+[`OQ-TS3`](../design/tillr-storage.md#OQ-TS3) are blocked until its trials are run again on a healthy file
+system. [Early design landing](../design/tillr-early-design-landing.md) designs how a question and its design
+land ahead of their item and asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1), whether every
+design change lands that way; its [`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3) is blocked until
+giving an item up is designed. [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, gives one meaning to item, node,
 run, session and worktree, and asks three things: two names
 ([`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4), [`OQ-VO5`](../design/tillr-vocabulary.md#OQ-VO5))
 and whether an item is finished when it lands or once the full suite has passed on it
 ([`OQ-VO6`](../design/tillr-vocabulary.md#OQ-VO6)). Its other decisions are the designer's and
 await the owner's review in its ledger. [The landing call](../design/tillr-landing-call.md), written on
-2026-11-18, proposes that a worker ends its run with one tool call and hears back only when something needs fixing,
-and asks [`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), whether an item keeps its worktree until the full suite
-has passed on it; five of its six build steps are filed [below](#filed-2026-11-18-a-landing-is-a-suspended-tool-call),
-and step five waits on that answer. First among these is
+2026-11-18, proposes that a worker ends its run with one tool call and hears back only when something needs fixing;
+five of its build steps are filed [below](#filed-2026-11-18-a-landing-is-a-suspended-tool-call), and
+its [`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), whether an item keeps its worktree until the full suite
+has passed on it, is blocked until worktrees belong to items. First among these is
 [`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
 an actor other than the worker or the owner, because it holds two queued items.
 
@@ -8567,8 +8568,8 @@ conflict or a revert arrives as that call's result in the worker's own session. 
 it on 2026-11-18 and ruled that the gate's contents are a separate conversation. Its
 [experiment](../design/tillr-landing-call.md#111-what-the-design-leans-on-that-nobody-ran) ran the
 same day, and the fork's replay of an unanswered tool call holds. This section files five of the
-design's six build steps; step five waits on
-[`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1) and is not filed. The pi build that sits
+design's build steps; step five is drafted in the design and not filed, and its worktree question,
+[`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), is blocked until worktrees belong to items. The pi build that sits
 behind them is [the fork patch item](#add-park-open-without-prompt-and-a-features-flag-to-our-pi-fork),
 and the host steps of the design's Section 6.6 gate only the switch, not these items: until the
 installed pi prints the feature name, every adapter keeps the footer.
