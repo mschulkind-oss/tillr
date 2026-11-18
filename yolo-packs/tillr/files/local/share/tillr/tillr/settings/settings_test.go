@@ -33,7 +33,7 @@ func TestDefaultsAndTOML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}}
+	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Order: settings.Order{SettleMinutes: 10}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -54,8 +54,9 @@ ref = "refs/heads/main"
 		t.Fatal(err)
 	}
 	want = settings.Settings{
-		Roll: settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
-		Push: settings.Push{AfterLanding: true, Remote: "origin", Ref: "refs/heads/main"},
+		Order: settings.Order{SettleMinutes: 10},
+		Roll:  settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
+		Push:  settings.Push{AfterLanding: true, Remote: "origin", Ref: "refs/heads/main"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings = %+v, want %+v", got, want)
