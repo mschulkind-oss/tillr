@@ -271,7 +271,9 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 				// A refused run goes back to its worker uncounted (the owner's ruling of
 				// 2026-11-17), so the hook's exit 1 is refused as a no-op twice: once
 				// returned with its evidence, and once as the identical repeat.
-				if result.Dispatched != 2 || result.Rejected != 2 || result.RefusedSteps[drain.RefusalNoOp] != 2 {
+				// The loop then drains with the item blocked for the owner, not held
+				// queued with nothing to move it.
+				if result.Dispatched != 2 || result.Rejected != 2 || result.RefusedSteps[drain.RefusalNoOp] != 2 || result.Stop != "queue-drained" {
 					t.Fatalf("negative answer: %+v", result)
 				}
 			} else if code != 0 || !strings.Contains(string(out), tc.want) {
