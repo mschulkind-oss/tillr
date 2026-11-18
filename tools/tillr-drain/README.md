@@ -718,7 +718,9 @@ lands without retiring the original block, so the original can be built afterwar
 
 With `landing_strategy` set to `after-merge`, each landing and loop startup trigger
 one [heavy runner](../../docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer).
-It judges a detached checkout of the trunk tip, independently of dispatch. Landings
+It judges a detached checkout of the trunk tip, independently of dispatch. Workers
+run at a lower CPU priority than the proof, which keeps the drain's priority;
+this adjustment adds no time limit and stops no process. Landings
 while it works owe one further run on the newest tip, not one run per landing. A
 nonblocking process lock beside the gate's result store admits one writer across loops.
 A busy lock does not consume the pending trigger. Judges inherit that lock through a
