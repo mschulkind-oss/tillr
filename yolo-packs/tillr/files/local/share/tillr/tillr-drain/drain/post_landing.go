@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,11 @@ import (
 )
 
 const postLandingKind = "drain.post-landing-action"
+
+// pushTimeout bounds one push. The jail's git broker may ask the human and wait; a push that
+// has not finished by then is recorded as failed and retried at the next trigger, rather than
+// holding restarts (which wait for an idle push) for as long as it hangs.
+const pushTimeout = 5 * time.Minute
 
 func init() {
 	if err := event.Register(postLandingKind, Utility); err != nil {
@@ -71,8 +77,10 @@ func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOu
 }
 
 func (l *Loop) afterLanding(ctx context.Context, tip string) {
-	if p := l.cfg.PostLanding.Push; p.AfterLanding {
-		l.pushAction.submit(tip, func(tip string) { l.recordAction(ctx, "push", tip, pushTrunk(ctx, l.cfg.Root, p)) })
+	if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
+		l.pushAction.submit(tip, func(tip string) {
+			l.recordPush(ctx, settings.PushTip, tip, pushTrunk(ctx, l.cfg.Root, p))
+		})
 	}
 	if r := l.cfg.PostLanding.Roll; r.Command != "" {
 		changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")
@@ -97,6 +105,26 @@ func (l *Loop) afterLanding(ctx context.Context, tip string) {
 	}
 }
 
+// afterGreen runs when the green pointer advances. In green mode it pushes the pointer's
+// commit, not the trunk tip: the remote only ever receives what the proof has passed. The
+// argument names the advance for the log; what is pushed is recomputed from the pointer when
+// the push runs, so a failed push needs no counter or timer to be retried, only the next
+// advance. It is also called once at loop start, so a remote left behind while no loop ran
+// catches up.
+func (l *Loop) afterGreen(ctx context.Context, advanced string) {
+	p := l.cfg.PostLanding.Push
+	if p.What != settings.PushGreen {
+		return
+	}
+	l.pushAction.submit(advanced, func(string) {
+		green, err := pushGreen(ctx, l.cfg.Root, p)
+		if green == "" && err == nil {
+			return // no green pointer yet: nothing is proven
+		}
+		l.recordPush(ctx, settings.PushGreen, green, err)
+	})
+}
+
 func matchesRollPaths(changed string, patterns []string) bool {
 	for _, file := range strings.Split(changed, "\x00") {
 		if file == "" {
@@ -114,16 +142,18 @@ func matchesRollPaths(changed string, patterns []string) bool {
 	return false
 }
 
-func pushTrunk(ctx context.Context, root string, p settings.Push) error {
-	remote, ref := p.Remote, p.Ref
+// pushDestination resolves where a push goes: the settings' remote and ref, each defaulting
+// to the trunk branch's configured upstream.
+func pushDestination(ctx context.Context, root string, p settings.Push) (remote, ref string, err error) {
+	remote, ref = p.Remote, p.Ref
 	if remote == "" || ref == "" {
 		upstream, err := actionCommand(ctx, root, "git", "for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", "refs/heads/"+TrunkRef)
 		if err != nil {
-			return err
+			return "", "", err
 		}
 		pair := strings.SplitN(strings.TrimRight(upstream, "\n"), "\t", 2)
 		if len(pair) != 2 {
-			return fmt.Errorf("trunk has no configured upstream")
+			return "", "", fmt.Errorf("trunk has no configured upstream")
 		}
 		if remote == "" {
 			remote = pair[0]
@@ -133,11 +163,73 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 		}
 	}
 	if remote == "" || ref == "" {
-		return fmt.Errorf("trunk has no configured upstream")
+		return "", "", fmt.Errorf("trunk has no configured upstream")
 	}
+	return remote, ref, nil
+}
+
+// pushTrunk pushes the trunk tip (mode "tip"), proven or not.
+func pushTrunk(ctx context.Context, root string, p settings.Push) error {
+	remote, ref, err := pushDestination(ctx, root, p)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
 	// Supply an explicit non-forcing refspec, independent of remote push defaults.
-	_, err := actionCommand(ctx, root, "git", "push", "--", remote, "refs/heads/"+TrunkRef+":"+ref)
+	_, err = actionCommand(ctx, root, "git", "push", "--", remote, "refs/heads/"+TrunkRef+":"+ref)
 	return err
+}
+
+// pushGreen pushes the commit `refs/tillr/green` holds now to the remote branch, unless the
+// remote branch already contains it. It answers the commit it considered, empty when there
+// is no pointer yet. The refspec has no `+`, so a remote that is not an ancestor of the
+// commit refuses it; nothing here pulls, rebases or merges to make it succeed. The pre-push
+// hook runs as for any push (see the patch branches note in the restart design).
+func pushGreen(ctx context.Context, root string, p settings.Push) (string, error) {
+	green, err := heavyGreen(ctx, root)
+	if err != nil || green == "" {
+		return green, err
+	}
+	remote, ref, err := pushDestination(ctx, root, p)
+	if err != nil {
+		return green, err
+	}
+	// "Remote is behind green" from the remote-tracking ref a successful push or fetch
+	// updates; when it is missing or stale a push is attempted and git reports the truth.
+	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
+	if _, err := actionCommand(ctx, root, "git", "rev-parse", "--verify", "--quiet", tracking+"^{commit}"); err == nil {
+		if _, err := actionCommand(ctx, root, "git", "merge-base", "--is-ancestor", green, tracking); err == nil {
+			return green, errAlreadyPublished
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+	_, err = actionCommand(ctx, root, "git", "push", "--", remote, green+":"+ref)
+	return green, err
+}
+
+// errAlreadyPublished marks the push that was not needed; it is a success, not a failure.
+var errAlreadyPublished = errors.New("remote already holds the green commit")
+
+// recordPush records and logs a push outcome. A failure names the retry; the next trigger
+// recomputes the condition, so nothing is counted and nothing is held.
+func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) {
+	if errors.Is(failure, errAlreadyPublished) {
+		failure = nil // recorded as success so an earlier failure's warning clears
+		l.recordActionWhat(ctx, "push", what, tip, nil)
+		return
+	}
+	retry := "retried at the next landing"
+	if what == settings.PushGreen {
+		retry = "retried at the next green advance"
+	}
+	if failure != nil {
+		l.reportf("loop: push of %s %s failed (%s; the loop goes on): %s\n", what, shortSHA(tip), retry, strings.Join(strings.Fields(failure.Error()), " "))
+	} else {
+		l.reportf("loop: pushed %s %s\n", what, shortSHA(tip))
+	}
+	l.recordActionWhat(ctx, "push", what, tip, failure)
 }
 
 func actionCommand(ctx context.Context, root, program string, args ...string) (string, error) {
@@ -155,6 +247,10 @@ func actionCommand(ctx context.Context, root, program string, args ...string) (s
 }
 
 func (l *Loop) recordAction(ctx context.Context, action, tip string, failure error) {
+	l.recordActionWhat(ctx, action, "", tip, failure)
+}
+
+func (l *Loop) recordActionWhat(ctx context.Context, action, what, tip string, failure error) {
 	detail := ""
 	if failure != nil {
 		detail = failure.Error()
@@ -163,7 +259,7 @@ func (l *Loop) recordAction(ctx context.Context, action, tip string, failure err
 	if err == nil {
 		defer s.Close()
 		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			body, err := json.Marshal(map[string]string{"action": action, "detail": detail})
+			body, err := json.Marshal(map[string]string{"action": action, "detail": detail, "what": what})
 			if err != nil {
 				return err
 			}

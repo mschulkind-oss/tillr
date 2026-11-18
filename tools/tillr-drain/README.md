@@ -811,6 +811,16 @@ incremental persistence if they need reuse inside an interrupted batch.
 A run with no failing or unjudged check advances `refs/tillr/green` with a guarded Git
 update: the value read before judging must still be the current value, and it must be
 an ancestor of the judged tip. Unavailable checks are listed, not counted as passes.
+
+With `[push] what = "green"` in `.tillr.toml`, the advance of the pointer is also what the
+loop pushes: it sends the pointer's commit to the trunk's upstream branch (`<green sha>:<ref>`,
+never forced), so the remote never receives a commit the proof has not passed. Landings push
+nothing in this mode. A refused or timed-out push logs `loop: push of green <sha> failed (...)`,
+shows in `tillr view waiting`, holds nothing, and is retried at the next green advance (and once
+at loop start) because "remote is behind green" is recomputed each time. `what = "tip"` pushes
+the trunk tip after each landing instead; `"none"` pushes nothing. The pre-push hook runs, and
+it publishes fork patch branches at their local tips whatever the pushed commit is; see
+[Pushing what the proof has passed](../../docs/design/tillr-restart.md#pushing-what-the-proof-has-passed).
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID

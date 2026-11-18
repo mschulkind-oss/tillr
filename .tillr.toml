@@ -10,4 +10,6 @@ command = "just tillr-roll --no-request"
 pause_timeout_seconds = 120
 
 [push]
-after_landing = true
+# Publish only what the proof has passed: the green pointer, when it advances.
+# "tip" pushes the trunk tip after each landing instead; "none" pushes nothing.
+what = "green"

@@ -42,6 +42,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.heavyMu.Unlock()
 			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: step.JudgeHeavy, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+				if run.Result == "green" {
+					l.afterGreen(context.WithoutCancel(ctx), run.TipSHA)
+				}
 				if len(run.ReusedChecks) > 0 {
 					l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
 				}
@@ -111,6 +114,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				runner.Revert = l.revertLanding
 			}
 			out, err := restartWork(ctx, l, runner.Run)
+			// A loop's first heavy pass also offers the pointer to the remote, so a push that
+			// failed or never ran before a restart is not left until the next proof.
+			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(ctx), "start") })
 			if err != nil && ctx.Err() == nil && !errors.Is(err, errRestartPending) {
 				l.reportf("loop: heavy runner fault: %v\n", err)
 			}

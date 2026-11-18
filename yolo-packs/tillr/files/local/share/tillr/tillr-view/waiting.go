@@ -870,10 +870,10 @@ func waitingGateStall(r *store.Reader, itemID string) (string, error) {
 // Report the latest result of each action; a successful retry clears its warning.
 func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, error) {
 	rows, err := r.Query(`WITH actions AS (
-    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail
+    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail, COALESCE(json_extract(payload,'$.what'),'') AS what
     FROM events WHERE kind = 'drain.post-landing-action'
    ), latest AS (SELECT max(seq) AS seq FROM actions GROUP BY action)
-   SELECT action, object_id, detail FROM actions JOIN latest USING(seq)
+   SELECT action, object_id, detail, what FROM actions JOIN latest USING(seq)
    WHERE detail <> '' ORDER BY action`)
 	if isMissingTable(err) {
 		return out, nil
@@ -883,16 +883,21 @@ func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, 
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var action, tip, detail string
-		if err := rows.Scan(&action, &tip, &detail); err != nil {
+		var action, tip, detail, what string
+		if err := rows.Scan(&action, &tip, &detail, &what); err != nil {
 			return nil, err
 		}
 		why := "push failed"
 		if action == "roll" {
 			why = "running build is behind the trunk"
 		}
+		mover := "the next relevant landing"
+		if what == "green" {
+			why = "push of the green commit failed"
+			mover = "the next green advance"
+		}
 		out = append(out, waitingRow{Observation: "post-landing:" + action, Class: "waits on work", Where: action,
-			Why: why + " at " + tip + ": " + strings.Join(strings.Fields(detail), " "), Mover: "the next relevant landing", Since: "—", ClassSource: "store"})
+			Why: why + " at " + tip + ": " + strings.Join(strings.Fields(detail), " "), Mover: mover, Since: "—", ClassSource: "store"})
 	}
 	return out, rows.Err()
 }

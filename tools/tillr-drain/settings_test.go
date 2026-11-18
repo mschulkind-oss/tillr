@@ -129,7 +129,7 @@ paths = ["tools/tillr*/"]
 command = "false"
 pause_timeout_seconds = 30
 [push]
-after_landing = true
+what = "green"
 remote = "origin"
 ref = "refs/heads/main"
 `)
@@ -153,9 +153,9 @@ ref = "refs/heads/main"
 				if len(lines) != 1 {
 					t.Fatalf("want one settings line: %s", out)
 				}
-				expected := []string{`sync.roadmaps=[]`, `roll.command=none`, `roll.paths=[]`, "roll.pause_timeout_seconds=120", "push.after_landing=false", "push.remote=upstream", "push.ref=upstream"}
+				expected := []string{`sync.roadmaps=[]`, `roll.command=none`, `roll.paths=[]`, "roll.pause_timeout_seconds=120", "push.what=none", "push.remote=upstream", "push.ref=upstream"}
 				if configured {
-					expected = []string{`sync.roadmaps=[]`, `roll.command="false"`, `roll.paths=["tools/tillr*/"]`, "roll.pause_timeout_seconds=30", "push.after_landing=true", `push.remote="origin"`, `push.ref="refs/heads/main"`}
+					expected = []string{`sync.roadmaps=[]`, `roll.command="false"`, `roll.paths=["tools/tillr*/"]`, "roll.pause_timeout_seconds=30", "push.what=green", `push.remote="origin"`, `push.ref="refs/heads/main"`}
 				}
 				for _, word := range expected {
 					if !strings.Contains(lines[0], word) {

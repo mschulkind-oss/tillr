@@ -133,3 +133,46 @@ func TestHeavyFilesOneFixerAgainstTheFirstRedLanding(t *testing.T) {
 		t.Fatalf("status=%+v %v", status, err)
 	}
 }
+
+// The remote receives a commit only through a green proof: a red run pushes nothing, and a
+// green run pushes the commit it proved.
+func TestHeavyGreenAdvancePushesTheProvedCommitOnly(t *testing.T) {
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	remote := filepath.Join(scratchUnderDurable(t), "remote.git")
+	heavyGit(t, root, "init", "--bare", remote)
+	heavyGit(t, root, "remote", "add", "origin", remote)
+	heavyGit(t, root, "push", "-u", "origin", TrunkRef)
+	s, err := store.InitFixture(context.Background(), filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	result := "fail"
+	steps := heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+		return []HeavyCheck{{CheckID: "unit", Result: result}}, nil
+	}}
+	log := &strings.Builder{}
+	l := &Loop{gatePolicy: GatePolicy{LandingStrategy: "after-merge"}, cfg: LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: log}}
+	l.cfg.PostLanding.Push.What = "green"
+	remoteTip := func() string { return heavyGit(t, root, "--git-dir="+remote, "rev-parse", "refs/heads/"+TrunkRef) }
+	redTip := heavyCommit(t, root, "red")
+	if err := l.bumpLandings(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	waitAction(t, func() bool { return !l.pushAction.busy() })
+	if remoteTip() != base {
+		t.Fatalf("a red run pushed %s", remoteTip())
+	}
+	result = "pass"
+	greenTip := heavyCommit(t, root, "green")
+	if err := l.bumpLandings(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	waitAction(t, func() bool { return !l.pushAction.busy() })
+	if got := remoteTip(); got != greenTip || got == redTip {
+		t.Fatalf("remote = %s, want proved %s", got, greenTip)
+	}
+}
