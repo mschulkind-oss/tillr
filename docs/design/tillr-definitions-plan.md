@@ -973,6 +973,19 @@ to `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md` in any works
 pack. The test lives in the drain's suite because the drain module already links the item and run
 utilities.
 
+The first run built the example, its test and the pack copies, and then stopped without a commit on
+two checks that are red on the trunk. Both are answered here.
+
+The first is `python3 tests/tillr-docs.test.py`, which prints `FAIL run README environment list`
+because `tools/tillr-run/README.md` does not list `TILLR_READ_ONLY_GROUP`, which
+`tools/tillr-run/run/exec.go` gives to every run. The second is
+`TestHookCompletionHoldsAndNegativeAnswer/negative` in `tools/tillr-drain`, which expects two
+dispatches and two refusals and gets one of each. On 2026-11-18 both failed the same way at
+`f213b9481`, with none of this work applied. This work changes none of their inputs. So both belong
+to the trunk and neither is a reason to stop. The builder leaves them alone, finishes and commits,
+and names both in its report with the commands that show them on the base. No criterion changes:
+c1 to c6 were met by the first run's work and stand as written.
+
 <!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
@@ -981,6 +994,12 @@ utilities.
 - **c4:** The test asserts the count of findings in each finished state from `tillr item list --state`.
 - **c5:** The README links the definition package's README for every key, says which commands it uses are stable for a consumer, and lists what the example does not show yet.
 - **c6:** `tests/pack-sync.test.py` passes with the example in the pack's mirror.
+
+- [unlanded] **Start from** the commit at `refs/tillr/preserved/run-item-def-recorded-verdict-example-a1` in the main repository, `c48173c4b`: 32 files, holding the example under `tools/tillr/examples/recorded-verdict/`, `tools/tillr-drain/recorded_verdict_example_test.go`, two added lines in `tools/tillr-drain/internal/testinputs/siblings.txt`, and the pack copies of all three. Do not rebuild it from nothing. Its first parent is `73ed72839` and the trunk has moved, so re-apply its change instead of reusing its tree. On 2026-11-18 `git merge-tree --write-tree f213b9481 c48173c4b` reported no conflict. Its second parent holds what that run had staged, which is empty; ignore it. Do not resolve a pack copy by hand: run `just pack-sync` after re-applying, so the copies come from the sources.
+- **What passed with that work on `f213b9481`, 2026-11-18:** `go test . -run '^(TestRecordedVerdictExampleREADME|TestMissingSiblingBuildInputIsRejected)$'` in `tools/tillr-drain`, and `python3 tests/pack-sync.test.py`. The first run's report also says `go test ./...` in `tools/tillr`, `yolo pack lint yolo-packs/tillr` and `uvx vantage-check` on the example's two Markdown files passed. Run them again after re-applying.
+- **The red docs check:** its inputs are `tools/tillr-run/README.md` and `tools/tillr-run/run/exec.go`, and both are outside this item's paths. Do not edit either, do not edit the check, and do not stop for it. That script stops at its first failure, so the cases after this one do not run in it. If the trunk has repaired it by the time this is built, the check simply passes.
+- **The red hook test:** `go test . -run '^TestHookCompletionHoldsAndNegativeAnswer$'` in `tools/tillr-drain` fails only in its `negative` case, at the assertion `result.Dispatched != 2 || result.Rejected != 2`, with `Dispatched:1 Rejected:1` and the item held `candidate-no-op`. It fails the same way with every `TILLR_*` variable removed from the environment, so it is not caused by running inside a lane. The test file is inside this item's paths, but which count is right is a question about how the loop returns a refused run, and that is not this item's to decide. Do not edit `tools/tillr-drain/hook_completion_test.go` and do not change the loop to make it pass. The example does not depend on it: a finding that ends `rejected` gets there by the hook answering with that state, not by the hook exiting 1.
+- **Before committing,** confirm that `git diff --name-only HEAD -- tools/tillr-run tests/tillr-docs.test.py tools/tillr-drain/hook_completion_test.go tools/tillr-drain/drain` prints nothing. Then run `python3 tools/go-test-shards.py tools/tillr-drain -k 6 --timeout 20m`. A failure there other than the hook test's `negative` case is this work's to repair if this work causes it. A failure that lies outside the item's paths and also fails on the base with this work removed is the trunk's: report it and carry on. Stop and report only when the failure is caused by this work and its repair lies outside the item's paths.
 
 ---
 
