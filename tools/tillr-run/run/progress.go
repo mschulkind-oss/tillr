@@ -107,6 +107,41 @@ type childSession struct {
 	Transcript string `json:"transcript"`
 }
 
+// mergeChild joins two observations of one child transcript: the earliest start, the
+// largest turn count, an observed end over a derived one and the later of two ends of one
+// clock, and the role first recorded. Every rule is commutative and idempotent, so the
+// merge of a fixed set of records is the same whatever order they are read in, and merging
+// one of them again changes nothing. Partial tool results never erase a clock a live
+// status record supplied.
+func mergeChild(old, c childSession) childSession {
+	if old.Role != "" {
+		c.Role = old.Role
+	}
+	if c.StartedAt == nil || (old.StartedAt != nil && *old.StartedAt < *c.StartedAt) {
+		c.StartedAt = old.StartedAt
+	}
+	if c.Turns == nil || (old.Turns != nil && *old.Turns > *c.Turns) {
+		c.Turns = old.Turns
+	}
+	rank := func(clock string) int {
+		switch clock {
+		case "observed":
+			return 2
+		case "derived":
+			return 1
+		}
+		return 0
+	}
+	switch {
+	case old.EndedAt == nil:
+	case c.EndedAt == nil,
+		rank(old.EndClock) > rank(c.EndClock),
+		rank(old.EndClock) == rank(c.EndClock) && *old.EndedAt > *c.EndedAt:
+		c.EndedAt, c.EndClock = old.EndedAt, old.EndClock
+	}
+	return c
+}
+
 func newWorkerRecords(ctx context.Context, s *store.Store, req Request, dir, log string) (*workerRecords, error) {
 	w := &workerRecords{s: s, req: req, dir: dir, log: log, children: map[string]string{}, sessions: map[string]*sessionObservation{}}
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
@@ -350,23 +385,15 @@ func (w *workerRecords) discover(ctx context.Context, v any) error {
 				c.EndedAt = facts.lastMessage
 				c.EndClock = "derived"
 			}
-			// Partial tool results must not erase clocks supplied by live status records.
+			// One transcript can be named by several records that disagree (a status file and
+			// a foreground-history entry, each read on every sample). They merge into one
+			// record that does not depend on read order, so re-reading the same records
+			// changes nothing and writes nothing; a record compared only with the last one
+			// written made disagreeing sources take turns, appending both on every sample.
 			if prev := w.children[path]; prev != "" {
 				var old childSession
 				_ = json.Unmarshal([]byte(prev), &old)
-				if c.Role == "" {
-					c.Role = old.Role
-				}
-				if c.StartedAt == nil {
-					c.StartedAt = old.StartedAt
-				}
-				if c.EndedAt == nil || (old.EndClock == "observed" && c.EndClock == "derived") {
-					c.EndedAt = old.EndedAt
-					c.EndClock = old.EndClock
-				}
-				if c.Turns == nil {
-					c.Turns = old.Turns
-				}
+				c = mergeChild(old, c)
 			}
 			body, _ := json.Marshal(c)
 			if w.children[path] != string(body) {
