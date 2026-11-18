@@ -3,3 +3,11 @@ rewrite = true
 
 [order]
 record = "docs/tillr/queue-order.txt"
+
+[roll]
+paths = ["tools/tillr*/", "config/tillr/"]
+command = "just tillr-roll --no-request"
+pause_timeout_seconds = 120
+
+[push]
+after_landing = true
