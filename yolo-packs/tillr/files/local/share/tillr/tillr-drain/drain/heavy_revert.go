@@ -152,7 +152,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	if err != nil {
 		return RevertOutcome{}, err
 	}
-	landed, err := l.cfg.Steps.Land(ctx, candidate)
+	landed, err := l.landWithActions(ctx, candidate)
 	if err != nil {
 		if ctx.Err() != nil {
 			return RevertOutcome{}, err

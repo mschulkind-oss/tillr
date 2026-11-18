@@ -37,7 +37,7 @@ type waitingRow struct {
 	Backend      string             `json:"backend,omitempty"`
 	LaneID       string             `json:"lane_id,omitempty"`
 	Document     string             `json:"document"`
-	// Observation identifies a publication hold, never an item or design document.
+	// Observation identifies a repository condition, never an item or design document.
 	Observation string `json:"observation,omitempty"`
 	Class       string `json:"class"`
 	Where       string `json:"where"`
@@ -547,7 +547,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	for i := range all {
 		normalizeWaitingMover(&all[i])
 	}
-	return all, nil
+	return appendPostLandingWaiting(r, all)
 }
 
 // Window rows are optional on old stores, and disappear at (not after) reset.
@@ -861,4 +861,34 @@ func waitingGateStall(r *store.Reader, itemID string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%s; %d gates in flight at stall", hold.Observations, hold.GatesInFlight), nil
+}
+
+// Report the latest result of each action; a successful retry clears its warning.
+func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, error) {
+	rows, err := r.Query(`WITH actions AS (
+    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail
+    FROM events WHERE kind = 'drain.post-landing-action'
+   ), latest AS (SELECT max(seq) AS seq FROM actions GROUP BY action)
+   SELECT action, object_id, detail FROM actions JOIN latest USING(seq)
+   WHERE detail <> '' ORDER BY action`)
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var action, tip, detail string
+		if err := rows.Scan(&action, &tip, &detail); err != nil {
+			return nil, err
+		}
+		why := "push failed"
+		if action == "roll" {
+			why = "running build is behind the trunk"
+		}
+		out = append(out, waitingRow{Observation: "post-landing:" + action, Class: "waits on work", Where: action,
+			Why: why + " at " + tip + ": " + strings.Join(strings.Fields(detail), " "), Mover: "the next relevant landing", Since: "—", ClassSource: "store"})
+	}
+	return out, rows.Err()
 }
