@@ -724,8 +724,18 @@ green through the current tip, even paths later reverted. Legacy checks obtain t
 paths from the gate's declaration export, not their recorded output writes. The gate's own
 code is excluded, including directories that would admit it indirectly.
 
+A red that names no landing still gets a mover. When the check is red at the pointer, when
+there is no pointer, or when attribution itself answers no verdict, the runner files one
+fixer against the tip. Its brief says why no landing is named, in the runner's words, with
+the judge's recorded output. The run stays `red` and the pointer holds; such a red is never
+`unknown`, and the red-cap hold names that fixer. Attribution replays the check with
+`fork-check.py --replay`, which plans over every tracked path; it once planned from the
+record's baseline and found nothing to replay on a verified pointer. A stopped loop is not an
+attribution failure: it files nothing, and the next run judges again.
+
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
-second repair. The attachment records the new observation and combines its paths without
+second repair. The red-cap hold finds an attached fixer by the checks its criterion
+names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
 clearing an existing owner hold. A blocked fixer report goes directly to the owner; a
 worker whose fix needs paths outside its fence must name those paths in its report. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.

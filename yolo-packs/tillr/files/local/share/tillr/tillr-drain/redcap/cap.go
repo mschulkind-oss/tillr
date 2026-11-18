@@ -174,19 +174,45 @@ func Check(ctx context.Context, r Reader, root, ref, tip, itemID string, at time
 		return nil, err
 	}
 	if exists {
-		rows, err := r.Query(`SELECT item_id FROM items WHERE item_id LIKE 'fixer-main-%' AND state NOT IN ('landed','closed','resolved-elsewhere') ORDER BY item_id`)
+		// A later red on the same check attaches to the open repair rather than filing
+		// a second, so that repair's id names an older red sha. It is still this red's
+		// mover: match it by the checks its trunk-green criterion names.
+		red := map[string]bool{}
+		for _, id := range h.CheckIDs {
+			red[id] = true
+		}
+		var criteria bool
+		if err = r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='item_criteria')`).Scan(&criteria); err != nil {
+			return nil, err
+		}
+		text := `''`
+		if criteria {
+			text = `COALESCE((SELECT c.text FROM item_criteria c WHERE c.item_id=i.item_id AND c.criterion_id='trunk-green'),'')`
+		}
+		rows, err := r.Query(`SELECT i.item_id, ` + text + ` FROM items i WHERE i.item_id LIKE 'fixer-main-%' AND i.state NOT IN ('landed','closed','resolved-elsewhere') ORDER BY i.item_id`)
 		if err != nil {
 			return nil, err
 		}
+		byCheck := ""
 		for rows.Next() {
-			var id string
-			if err = rows.Scan(&id); err != nil {
+			var id, text string
+			if err = rows.Scan(&id, &text); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			if h.FixerItem == "" && redSHAs[id] {
 				h.FixerItem = id
 			}
+			if byCheck == "" {
+				for _, check := range criteriaChecks(text) {
+					if red[check] {
+						byCheck = id
+					}
+				}
+			}
+		}
+		if h.FixerItem == "" {
+			h.FixerItem = byCheck
 		}
 		err = rows.Err()
 		rows.Close()
@@ -204,4 +230,24 @@ func Check(ctx context.Context, r Reader, root, ref, tip, itemID string, at time
 	}
 	h.Detail = strings.Join(bounds, "; ") + "; checks: " + checks + "; waiting on " + fixer
 	return h, nil
+}
+
+// criteriaChecks reads the "(red: a, b)" list a generated fixer's trunk-green criterion
+// carries; the drain writes and reads the same spelling (fixerChecks).
+func criteriaChecks(text string) []string {
+	_, rest, ok := strings.Cut(text, "(red: ")
+	if !ok {
+		return nil
+	}
+	list, _, ok := strings.Cut(rest, ")")
+	if !ok {
+		return nil
+	}
+	var checks []string
+	for _, id := range strings.Split(list, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			checks = append(checks, id)
+		}
+	}
+	return checks
 }

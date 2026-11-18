@@ -269,10 +269,19 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		if check.Result != "fail" {
 			continue
 		}
+		// The sha a fixer is filed against: the first red landing when attribution
+		// names one, otherwise the tip. A red with no named landing still gets a mover
+		// (graph design, Section 8.2: the mechanic for an unattributed red); it is
+		// never left holding landings while nobody acts.
+		against := check.FirstRedLanding
 		if check.FirstRedLanding == "" {
 			red, fault, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID)
 			if err != nil {
-				return run, err
+				// A stop or a lost cleanup is the run's own fault, not attribution's.
+				if ctx.Err() != nil || cleanupLost(err) {
+					return run, err
+				}
+				check.Detail = joinDetail(check.Detail, "attribution failed, so no landing is named and the fixer is filed against the tip: "+err.Error())
 			}
 			check.FirstRedLanding = red
 			check.GateFault = fault
@@ -283,14 +292,17 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 					check.Detail = "gate fault: check is red at the green pointer"
 				}
 				check.Detail += "; needs=" + strings.Join(check.Needs, ",") + " tools=" + strings.Join(check.Tools, ",")
+				check.Detail += "; fixer filed against the tip"
+			}
+			against = red
+			if against == "" {
+				against = run.TipSHA
 			}
 		}
-		if !check.GateFault {
-			if len(byLanding[check.FirstRedLanding]) == 0 {
-				order = append(order, check.FirstRedLanding)
-			}
-			byLanding[check.FirstRedLanding] = append(byLanding[check.FirstRedLanding], *check)
+		if len(byLanding[against]) == 0 {
+			order = append(order, against)
 		}
+		byLanding[against] = append(byLanding[against], *check)
 	}
 	if r.Fix != nil {
 		for _, sha := range order {
@@ -316,11 +328,21 @@ func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 		case "fail":
 			red = true
 		default:
+			// The judge's own words are the reason; without them the fault is unreadable.
+			if detail := strings.TrimSpace(checks[0].Detail); detail != "" {
+				return Externalf("attribution for %s at %s is %s, not a verdict: %s", id, sha, checks[0].Result, detail)
+			}
 			return Externalf("attribution for %s at %s is %s, not a verdict", id, sha, checks[0].Result)
 		}
 		return nil
 	})
 	return red, err
+}
+func joinDetail(old, add string) string {
+	if old = strings.TrimSpace(old); old == "" {
+		return add
+	}
+	return old + "; " + add
 }
 func heavyLandings(ctx context.Context, root, storePath, base, tip string) ([]string, error) {
 	return heavy.Landings(ctx, root, storePath, base, tip)

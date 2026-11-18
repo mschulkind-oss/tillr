@@ -561,7 +561,8 @@ pointer and the tip, by bisection, and remembered results make repeated steps fr
 | What the bisection finds | What happens |
 | :--- | :--- |
 | Green at the pointer, red from landing L on | L is named on the status line with the check. With `auto_revert` off, one fixer item is filed against L, deduplicated by commit as today. |
-| Red at the pointer too | The inputs did not change, so no landing is at fault. It is reported as a gate fault with the check's `needs` and `tools`, and no fixer is filed against a landing. |
+| Red at the pointer too | The inputs did not change, so no landing is at fault. It is reported as a gate fault with the check's `needs` and `tools`, and no fixer is filed against a landing. One fixer is filed against the tip instead, so the red has a mover (built 2026-11-18). |
+| Attribution answers no verdict | No landing is named. As built on 2026-11-18, one fixer is filed against the tip, and its brief says why attribution failed. A loop stop is not this row: nothing is filed. |
 | Red, then green with no input change | `flaky`, per [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint). |
 
 **With `auto_revert` on**, the lander builds a revert of L and lands it through the same fast

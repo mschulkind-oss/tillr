@@ -41,10 +41,12 @@ func TestHeavyGroupsEveryCheckAndRepairPathForOneLanding(t *testing.T) {
 	}
 }
 func TestHeavyColdStartDoesNotClaimARedPointer(t *testing.T) {
-	root, _ := heavyRepo(t)
+	root, tip := heavyRepo(t)
 	runner := heavyFixture(t, root, func(context.Context, string, string) ([]HeavyCheck, error) {
 		return []HeavyCheck{{CheckID: "unit", Result: "fail"}}, nil
 	})
+	var fixes []string
+	runner.Fix = func(_ context.Context, sha string, _ []HeavyCheck) error { fixes = append(fixes, sha); return nil }
 	out, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -52,5 +54,9 @@ func TestHeavyColdStartDoesNotClaimARedPointer(t *testing.T) {
 	detail := out.Runs[0].Checks[0].Detail
 	if !strings.Contains(detail, "no proved baseline") || strings.Contains(detail, "red at the green pointer") {
 		t.Fatalf("false baseline claim: %s", detail)
+	}
+	// No baseline accuses no landing, and the red still gets its mover against the tip.
+	if len(fixes) != 1 || fixes[0] != tip {
+		t.Fatalf("fixers=%v, want one against tip %s", fixes, tip)
 	}
 }
