@@ -25,15 +25,17 @@ func laneStateOf(t *testing.T, path, itemID string) CandidateLaneState {
 }
 
 // A held candidate whose lane HEAD is the loop's own document-retirement commit — the one
-// commit whose parent and tree its recorded retirement binds — is a recorded HEAD, and the
-// lane is released. On 2026-11-17 item-gate-pinned-fork-inputs run a3 was held for a gate
-// harness error with lane-8 at its retirement commit 15f5c29f7 (parent the candidate
-// 31ad8017d, tree the recorded retirement tree), and the lane was kept as "unrecorded lane
-// HEAD needs inspection" for good.
-func TestAHeldCandidateAtItsRetirementCommitReleasesItsLane(t *testing.T) {
+// commit whose parent and tree its recorded retirement binds — keeps its lane, under a reason
+// that says so, and the keep is recorded once. The pin carries the worker head only, so a
+// release would discard the retirement and leave the retry a candidate-record mismatch
+// (TestRestartGatesAndLandsTheRetiredHead). On 2026-11-17 item-gate-pinned-fork-inputs run a3
+// was held for a gate harness error with lane-8 at its retirement commit 15f5c29f7, kept as
+// "unrecorded lane HEAD needs inspection", and claimed and released every pass.
+func TestAHeldCandidateAtItsRetirementCommitKeepsItsLaneForTheRetry(t *testing.T) {
 	f, l, c := heldCandidateFixture(t)
 	writeForkFile(t, filepath.Join(c.Worktree, "candidate.txt"), "candidate\nretired block\n")
 	runGit(t, c.Worktree, "commit", "-qam", "chore: retire landed document block")
+	retired := runGit(t, c.Worktree, "rev-parse", "HEAD")
 	c.WorkerHeadSHA = c.HeadSHA
 	c.RetirementTreeSHA = runGit(t, c.Worktree, "rev-parse", "HEAD^{tree}")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -45,11 +47,20 @@ func TestAHeldCandidateAtItsRetirementCommitReleasesItsLane(t *testing.T) {
 	if err := l.releaseIdleHeldCandidates(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := laneStateOf(t, f.storePath, c.ItemID); got.Status != "released" {
-		t.Fatalf("a lane at its own retirement commit was kept: %+v", got)
+	if got := laneStateOf(t, f.storePath, c.ItemID); got.Status != "kept" || got.Reason != retiredHeadKeep {
+		t.Fatalf("a lane at its own retirement commit: %+v, want kept as %q", got, retiredHeadKeep)
 	}
-	if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+c.RunID+"^{commit}"); got != c.HeadSHA {
-		t.Fatalf("pin %s, want the recorded candidate %s", got, c.HeadSHA)
+	if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != retired {
+		t.Fatalf("lane HEAD %s, want the retirement commit %s", got, retired)
+	}
+	before := eventCount(t, f.storePath)
+	for i := 0; i < 3; i++ {
+		if err := l.releaseIdleHeldCandidates(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := eventCount(t, f.storePath); got != before {
+		t.Fatalf("three passes over the unchanged retirement keep appended %d event(s)", got-before)
 	}
 }
 
