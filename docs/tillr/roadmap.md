@@ -1348,6 +1348,81 @@ Three points settle how c3 is met there:
 
 No criterion changes.
 
+**Ruling, 2026-11-18 (answers the conflict two failed attempts raised):** neither attempt found a
+fault in c1 to c4, so they stand as written. Runs `run-item-policy-move-run-on-quota-a3` and
+`run-item-policy-move-run-on-quota-a4` each read the code, wrote nothing, ran no test and named no
+blocker, so they are evidence of nothing about the item. What they lacked was a place to start:
+the block said what must hold and not which existing parts already do most of it. The facts below
+were read at `3318def2f`. Seven points settle the build, in the order to build it. Each step gets
+its failing test first, and the whole item is still one commit.
+
+1. **Most of the machinery exists; this item joins it.** Four parts are already built and are
+   reused, not rewritten:
+   - `refusedWindow` and `recordBackendWindow` in `tools/tillr-drain/drain/quota_window.go` read
+     a run's report for a rejected rate limit and record the backend's window.
+   - `quotaReplacementBackend` in `drain/quota_probe.go` walks a seat's list from a named backend
+     and returns the first open one, using the combined shut set.
+   - `resumeAfterWall` in `drain/loop.go` runs a second session under the same run id, in the
+     same lane and worktree, and `Request.ResumePrompt` carries its first message.
+   - `prepareContinuation` in `tools/tillr-run/run/pause.go` already builds the first message of
+     a fresh session: the reason, the old transcript, the worktree, the report when one exists,
+     and then the brief. Today only an adapter whose `pause-kind` is `cannot-resume` reaches it.
+2. **What is wrong today is one branch in `settle`.** A run that ends in the infrastructure class
+   is sent to `nextAvailableRequest` under the next attempt's run id, after `preserveWork` and
+   `resetLane`. That is right for c4 and wrong for c1 and c2: it discards the worktree and starts
+   a new attempt. The new branch sits before it and takes a run for which both of these hold:
+   `refusedWindow` reports a refusal, and the run did work. Every other infrastructure failure
+   keeps today's branch unchanged.
+3. **"Did work" is read from the tree.** A run did work when its lane's head has moved from the
+   base it was staged on, or when `uncommittedPaths` returns at least one path. A run that left
+   the tree as it found it follows c4, whatever it read or said: nothing is lost by starting it
+   again, and the loop needs no reading of the transcript to decide.
+4. **A continuation on another backend is a fresh session, asked for by the request.** The next
+   backend is a different harness, so the old session id means nothing to it. `run.Request` gains
+   one field that asks for a fresh session, and `prepareContinuation` takes its fresh-session
+   branch when that field is set, whatever the adapter's `pause-kind` says. The loop sends the
+   same run id with `Resume` set, that field set, the next backend's command, and a
+   `ResumePrompt` that says the earlier session ran out of quota on the named backend and lists
+   the uncommitted paths. The transcript, the worktree and the report are added by
+   `prepareContinuation` as they are today. The loop does not call `preserveWork` or `resetLane`,
+   does not raise the attempt, and passes the continuation's record to `settle` once, as
+   `resumeAfterWall` already does. This is the test c2 names: a stub adapter writes two files
+   and exits refused, and the stub for the second backend asserts both files and the message.
+5. **"The window shuts" means a recorded refusal, and a reserve stops no running run.** A window
+   shuts for running work when a run's refusal writes a row to `backend_windows`. A backend held
+   only by a reserve, a stale reading or a failed probe admits no new dispatch, as
+   [the quota item](#add-direct-quota-checks-with-a-reserve) built it, and leaves running runs
+   alone. When a refusal is recorded, the loop sends `tillr run pause` to every other live run on
+   that backend, in the same pass. A run that comes back `paused` for that reason is continued by
+   points 3 and 4, or held by point 6. A run that finishes before the pause reaches it is settled
+   as any finished run. The loop records that it asked for the pause and why, so a pause for
+   quota is not continued as a pause for a restart.
+6. **A paused run is a row the loop writes and the loop removes.** When `quotaReplacementBackend`
+   finds no open backend, the loop writes one row to a new table holding the run id, the item,
+   the lane and the backend, and keeps the lane and the item's `running` position. This is the
+   record the first ruling's point 2 says the view reads. Each pass asks
+   `quotaReplacementBackend` again for every such row, starting from the row's backend, so the
+   original is preferred when it is open. When the answer is the original backend, the run
+   continues its own session with `Resume` set and no fresh-session field, and a message saying
+   the backend's quota reopened. When the answer is another backend, point 4 applies. The row is
+   deleted in the transaction that claims the continuation. [The restart
+   design](../design/tillr-restart.md#pausing-a-session) calls a paused run that nobody resumes
+   within one pass a fault; a run with such a row is the exception, and the view shows it as
+   waiting with its reopening time, not as a fault. A loop with only such runs waits for the
+   earliest reopening time or a new item, and does not exit.
+7. **Scope: the single run of an item.** c1 to c4 are judged on a run that holds a lane by
+   itself, on both paths that settle it: `settle` in `drain/loop.go` and the pending-work path in
+   `drain/pass.go`. A workflow node and a read-only parallel node keep the failover they have, in
+   `drain/workflow_failover.go` and `drain/parallel_failover.go`. A design run answering a
+   conflict keeps its own release on refusal. Changing those is not this item.
+
+The full suite follows the rule the shares item records: run the sharded suite for each module
+this item changes as a background command with no limit shorter than the suite, and regenerate
+the pack copy with `just pack-sync`. The builder does not edit this block or any other part of
+this file; the loop retires the block after landing.
+
+No criterion changes.
+
 - **c1:** When a backend's window shuts while runs are on it, each of those runs is stopped as [the restart design](../design/tillr-restart.md) stops a session, and continued on the next backend in its seat's list: a fresh session in the same lane and worktree, as the same attempt, whose first message says the earlier session ran out of quota and names the old transcript, the report if any, and the uncommitted work in the worktree.
 - **c2:** Nothing the first session did is repeated by the loop: the worktree is not reset, no retry is spent, and the candidate is judged once. A test cuts a stub run after it has written two files and asserts the continuing session finds both.
 - **c3:** A run whose seat has no other backend is paused, not ended, and resumes on the same backend when the window reopens. The waiting face shows it as waiting on that backend with the reopening time.
