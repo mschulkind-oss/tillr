@@ -767,12 +767,7 @@ func heavyReadsChanged(reads, paths []string) bool {
 step whose named function is not in the tree. An existing test that asserts the old order is
 rewritten to the three groups, and is not a reason to stop.
 
-<!-- tillr: item id="item-heavy-affected-checks-first" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Declaration checks whose declared reads intersect the paths changed since the green pointer run before the other declaration checks.
-- **c2:** The legacy program runs after the affected declaration checks and before the others when a changed path matches a watch of one of its checks, and last otherwise.
-- **c3:** With no green pointer, or with no check affected, the checks run in today's order, and the same checks run in every case.
-- **c4:** A regression test covers the four orders, and the gate design and the drain README describe the order.
 
 ### Add recovery for a failed check while the proof continues
 
@@ -1154,7 +1149,7 @@ made exactly as written. Report it with the step number, the command and its out
 test that fails because it calls `revert` with the old parameters is updated, and is not a reason
 to stop.
 
-<!-- tillr: item id="item-heavy-early-recovery" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-heavy-affected-checks-first" prose="2" -->
+<!-- tillr: item id="item-heavy-early-recovery" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A failing declaration check starts its culprit search and automatic revert when it ends, and a failing legacy check when the legacy program ends, while the proof runs its remaining checks.
 - **c2:** The green pointer still moves only on a heavy run in which every check passed.
