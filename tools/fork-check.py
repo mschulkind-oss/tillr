@@ -1775,8 +1775,44 @@ GO_SHARD_DIRS = ("tools/tillr-store", "tools/tillr-item", "tools/tillr-run",
 GO_SHARD_INPUTS = ("tools/go-test-shards.py", "tools/go-test-durations.json")
 
 
-def go_tool_watches(directory: str) -> tuple[str, ...]:
+def go_module_dependencies(directory: str, root: Path) -> tuple[str, ...]:
+    """The in-repo modules `directory`'s go.mod replaces with a relative path, as watches.
+
+    The tillr modules are unpublished `v0.0.0` requirements, so a module builds against a
+    sibling only through a `replace ... => ../<sibling>` directive: the directives are the
+    complete in-repo dependency set, and reading them costs one file read rather than a
+    `go list`. Read from the tree being planned, so a candidate that adds a dependency is
+    judged by its own go.mod. A replacement outside the repository is no path a diff names.
+    """
+    try:
+        text = (root / directory / "go.mod").read_text()
+    except OSError:
+        return ()
+    found: list[str] = []
+    for line in text.splitlines():
+        line = line.split("//", 1)[0].strip()
+        if line.startswith("replace "):
+            line = line[len("replace "):]
+        if "=>" not in line:
+            continue
+        target = line.split("=>", 1)[1].split()
+        if not target or not target[0].startswith(("./", "../")):
+            continue
+        path = os.path.normpath(os.path.join(directory, target[0]))
+        if path.startswith("..") or os.path.isabs(path) or path == directory:
+            continue
+        watch = path + "/"
+        if watch not in found:
+            found.append(watch)
+    return tuple(found)
+
+
+def go_tool_watches(directory: str, root: Path) -> tuple[str, ...]:
+    """A Go suite's inputs: its own directory, every in-repo module it builds against, and
+    the shard runner when the suite is sharded. A dependency missing here is a suite no
+    change to that dependency selects (suite section 28g2)."""
     watches = GATE_RUNNER_WATCHES if directory == "tools/tillr-gate" else (directory + "/",)
+    watches += tuple(dep for dep in go_module_dependencies(directory, root) if dep not in watches)
     return watches + (GO_SHARD_INPUTS if directory in GO_SHARD_DIRS else ())
 
 
@@ -6733,7 +6769,7 @@ def build_plan(
         runner = directory == "tools/tillr-gate"
         suite_kind = ("gate-runner" if runner else
                       "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool")
-        watches = go_tool_watches(directory)
+        watches = go_tool_watches(directory, root)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
         if go_tool and shutil.which("go"):
             plan.checks.append(

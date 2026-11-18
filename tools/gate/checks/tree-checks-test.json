@@ -5,6 +5,6 @@
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 60000,
-  "reads": ["tools/gate/checks/", "tools/fork-check.py"],
+  "reads": ["tools/gate/checks/", "tools/fork-check.py", "tools/pi-profiler/go.mod", "tools/tillr/go.mod", "tools/tillr-store/go.mod", "tools/tillr-item/go.mod", "tools/tillr-run/go.mod", "tools/tillr-gate/go.mod", "tools/tillr-view/go.mod", "tools/tillr-land/go.mod", "tools/tillr-drain/go.mod", "tools/tillr-cli/go.mod"],
   "tools": ["python3", "git", "go"]
 }

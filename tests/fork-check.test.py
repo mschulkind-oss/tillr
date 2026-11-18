@@ -2870,7 +2870,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for directory in module.GO_SHARD_DIRS:
         command = module.go_tool_command(directory)
         assert "tools/go-test-shards.py" in command and "-k 6" in command, command
-        assert set(module.GO_SHARD_INPUTS) <= set(module.go_tool_watches(directory))
+        assert set(module.GO_SHARD_INPUTS) <= set(module.go_tool_watches(directory, repo))
     for directory in set(tool_dirs) - set(module.GO_SHARD_DIRS):
         command = module.go_tool_command(directory)
         assert "go test -parallel" in command and "-count=1" not in command, command
@@ -2931,7 +2931,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 )
                 module.apply_tier(plan, tier)
                 selected = [check.kind for check in plan.checks
-                            if check.watches == module.go_tool_watches(directory)]
+                            if check.watches == module.go_tool_watches(directory, repo)]
                 expected = []
                 if tier == suite_tier:
                     expected.append(expected_suite_kind)
@@ -2961,7 +2961,7 @@ with tempfile.TemporaryDirectory() as tmp:
             assert "-short" not in checks[0].argv[-1], checks[0].argv
             assert "go build" not in checks[0].argv[-1], checks[0].argv
             for check in checks:
-                expected_watches = module.go_tool_watches(directory)
+                expected_watches = module.go_tool_watches(directory, repo)
                 assert check.watches == expected_watches, check.watches
             assert checks[0].timeout == module.GO_TOOL_TIMEOUT, checks[0].timeout
             assert checks[0].cost == module.GO_TOOL_COST_ESTIMATE[directory], checks[0].cost
@@ -3098,6 +3098,63 @@ with tempfile.TemporaryDirectory() as tmp:
         for kind in directory_kinds("tools/tillr-land"):
             assert {skip.label: skip.planned for skip in skips}.get(
                 f"{kind} (tools/tillr-land)") is False, (outside, [skip.label for skip in skips])
+
+# 28g2. A GO SUITE READS EVERY IN-REPO MODULE IT BUILDS AGAINST. tillr-view's module
+#      replaces tillr-drain with `../tillr-drain`, and its suite enumerates the drain's
+#      exported hold reasons; its watches named only `tools/tillr-view/`, so on 2026-11-18
+#      a drain-only landing that added two reasons selected no tillr-view suite and the
+#      trunk went red behind it. A module's watches are its own directory plus every
+#      directory its go.mod `replace`s with a relative path: an unpublished `v0.0.0` module
+#      cannot build without that directive, so the directives are the complete in-repo
+#      dependency set, read from the tree being planned. Pinned on a fixture (the plan
+#      selects the dependent's suite) and on this repository's own modules.
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp)
+    repo, _, _ = build_repo(base)
+    spec = importlib.util.spec_from_file_location("fork_check_go_deps", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for directory in module.GO_TOOL_DIRS:
+        (repo / directory).mkdir(exist_ok=True)
+        (repo / directory / "main.go").write_text("package main\n")
+    (repo / "tools/tillr-view/go.mod").write_text(
+        "module example.invalid/tillr-view\n\ngo 1.26.0\n\n"
+        "require example.invalid/tillr-drain v0.0.0\n\n"
+        "replace example.invalid/tillr-drain => ../tillr-drain\n"
+        "replace example.invalid/elsewhere => /opt/elsewhere\n")
+    watches = module.go_tool_watches("tools/tillr-view", repo)
+    assert "tools/tillr-drain/" in watches, watches
+    # An absolute or out-of-tree replacement is not a repository path a diff can name.
+    assert not [watch for watch in watches if "elsewhere" in watch], watches
+    go_stub = base / "go-stub"
+    go_stub.mkdir()
+    (go_stub / "go").write_text("#!/bin/sh\nexit 0\n")
+    (go_stub / "go").chmod(0o755)
+    original_path = os.environ["PATH"]
+    os.environ["PATH"] = f"{go_stub}:{original_path}"
+    try:
+        planned = module.build_plan(
+            repo, [], module.Record(base / "deps-state.json"),
+            ["tools/tillr-drain/drain/schema.go"], None, True)
+    finally:
+        os.environ["PATH"] = original_path
+    labels = {check.label for check in planned.checks}
+    assert "tools/tillr-view's whole suite passes" in labels, labels
+    assert "tools/tillr-drain's whole suite passes" in labels, labels
+    # Negative control: a module that replaces nothing still selects only its own suite.
+    assert "tools/tillr-cli's whole suite passes" not in labels, labels
+    # This repository: every relative `replace` in each registered module's go.mod is in
+    # that module's watches, and the incident's pair is named outright.
+    for directory in module.GO_TOOL_DIRS:
+        watches = module.go_tool_watches(directory, ROOT)
+        assert directory + "/" in watches or directory == "tools/tillr-gate", (directory, watches)
+        for line in (ROOT / directory / "go.mod").read_text().splitlines():
+            if "=>" in line and line.split("=>", 1)[1].strip().startswith("../"):
+                target = line.split("=>", 1)[1].split()[0]
+                dependency = os.path.normpath(os.path.join(directory, target)) + "/"
+                assert dependency in watches, (directory, dependency, watches)
+    assert "tools/tillr-drain/" in module.go_tool_watches("tools/tillr-view", ROOT)
+    assert "tools/tillr/" in module.go_tool_watches("tools/tillr-gate", ROOT)
 
 # 28h. THE ROUTINE SUITE STEP IS THE WHOLE SUITE (board item 570), AND THE BUILD IS ITS
 #      OWN STEP. The suite's label says so, and a red in the merge queue's integration
