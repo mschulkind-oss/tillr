@@ -789,6 +789,41 @@ changes.
   change. That is a fault in how the loop picks a candidate after a run that changed nothing. It is
   recorded here so the owner can file it; a run of this item does not look for it or fix it.
 
+A build run on 2026-11-18 changed no file and reported `blocked`. It tested the draft with a
+different command from the one above, `git show --format= <ref> -- tools | git apply --check -`,
+which is a plain apply with no three-way merge. That command refused the patch at
+[pass.go](../../tools/tillr-drain/drain/pass.go), and the run stopped there and asked for the patch
+to be reconciled. This answers the conflict it raised. No criterion changes, and the rulings above
+stand: the conflict in that one file was already measured and already assigned to the run.
+
+- **A refused patch in `pass.go` is the expected result, and it is not a stop.** Reconciling the
+  draft with the trunk is this item's work, and no other run does it first. A run stops on the
+  draft only when it cannot say which side of a conflict is right, and then it reports the lines in
+  question.
+- **The command is the three-way one, run as written.** Measured again on 2026-11-18 on the trunk
+  at `9eac60321`:
+  `git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- tools/tillr-drain
+  tools/tillr-item | git apply --3way -` takes 16 of the 17 files and leaves one conflict, in one
+  place, in `pass.go`. `git apply --check` without `--3way` refuses the whole patch on that same
+  place and says nothing about the other 16 files, so it is not a test of whether the draft can be
+  used.
+- **The one conflict has a known resolution.** It is in `applyPlanGeneration`, at the check that
+  runs when the decision is a dispatch or a retry. Since the draft was written the trunk added a
+  block before that check, which reads the backends that quota has shut and returns without
+  claiming a run when the decision's backend is one of them. The draft's only change at that place
+  is to put `!l.nonLanding &&` in front of the check that follows, the one that defers a dispatch
+  when a landing has moved the trunk, so that it does not run under a definition that completes on
+  `hook`. The resolution keeps the trunk's quota block exactly as it is, with no `nonLanding`
+  condition on it, and adds `!l.nonLanding &&` to the condition of the check after it. Nothing else
+  in the file needs a decision.
+- **With that resolution the draft builds and its own tests pass.** Measured on 2026-11-18 on
+  `9eac60321`, then discarded: `go build ./...` and `go vet ./...` exit 0 in both modules;
+  `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in `tools/tillr-drain`; and
+  `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion` passes in
+  `tools/tillr-item`. That is the starting point and not the finish. What is left is what the
+  second run's answer lists: the test deadline repair, the full item and drain suites, the
+  high-effort review, `just pack-sync`, and one commit.
+
 <!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
