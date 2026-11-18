@@ -1225,7 +1225,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					spec.Continue = false
 				}
 			}
-			if decision.WorkflowRestart && len(decision.Parallel) == 0 {
+			if decision.WorkflowRestart && len(decision.Parallel) == 0 && !l.nonLanding {
 				previous, stagedErr := l.stagedNodeRun(decision)
 				if stagedErr != nil {
 					return nil, stagedErr
@@ -1266,7 +1266,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 		}
 		var err error
-		if decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {
+		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {
 			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
 			err = headErr
 			expectedHead := decision.NodeBaseSHA
@@ -1523,6 +1523,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{}
 	}
 	if l.nonLanding {
+		if decision.Workflow != nil {
+			_, err := l.settleNode(ctx, decision, record, log, mainSHA, result)
+			return laneOutcome{err: err}
+		}
 		return l.settleHook(ctx, decision, result)
 	}
 	if err := pipelineCloseGraph(l.cfg.Root, record.RunID); err != nil {
@@ -2596,6 +2600,10 @@ func insideFence(path string, fence []string) bool {
 // a refused, conflicted or unjudged head is evidence, and a lane reset is what would make it
 // unreachable.
 func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons ...string) string {
+	if l.nonLanding {
+		// Plain lane files stay available for inspection; there is no Git tree to preserve or reset.
+		return ""
+	}
 	reason := "settled without landing"
 	if len(reasons) > 0 {
 		reason = reasons[0]

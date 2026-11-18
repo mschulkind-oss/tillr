@@ -405,11 +405,13 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	}
 	next.NodeIndex = index
 	next.PreviousReport = report
-	head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
-	if err != nil {
-		return err
+	if !l.nonLanding {
+		head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+		if err != nil {
+			return err
+		}
+		next.NodeBaseSHA = head
 	}
-	next.NodeBaseSHA = head
 	next.NodeStartRunID = ""
 	next.WorkflowRestart = false
 	next.NodeInfraFailures = 0
@@ -428,6 +430,8 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	if next.RunRequest == nil {
 		return fmt.Errorf("workflow seat %s cannot build a request", stage.Seat)
 	}
+	next.RunRequest.NodeID = stage.ID
+	next.RunRequest.WorkingDir = d.RunRequest.WorkingDir
 	identifyDecision(&next)
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -457,62 +461,66 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		base = stagedBase
 	}
 	target := l.laneTarget(d.LaneID)
-	head, err := l.revParse(ctx, target, "HEAD")
-	if err != nil {
-		return true, err
-	}
-	if _, err := os.Stat(filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID), graphExitFile)); err == nil {
-		if head != base {
-			return true, Externalf("recorded no-commit graph head changed: %s", d.ItemID)
-		}
-		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, BaseSHA: base, HeadSHA: head, Worktree: target}
-		return true, l.settleGraphExit(ctx, d, c)
-	} else if !os.IsNotExist(err) {
-		return true, err
-	}
-	nodeBase := d.NodeBaseSHA
-	if nodeBase == "" {
-		nodeBase = l.laneBase(d.LaneID)
-		if nodeBase == "" {
-			nodeBase = base
-		}
-	}
-	dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		return true, err
-	}
-	if (stage.Access == "read_only" && head != nodeBase) || ((stage.Access == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
-		if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
-			return true, err
-		}
-		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + stage.Access + " worktree boundary"}
-		if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
-			return true, err
-		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node violated its worktree boundary: "+stage.ID); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
-		}
-		return true, l.markExamined(ctx, d)
-	}
-	if stage.Access == "write" {
-		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
-		escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
+	var head string
+	var err error
+	if !l.nonLanding {
+		head, err = l.revParse(ctx, target, "HEAD")
 		if err != nil {
 			return true, err
 		}
-		if escape != "" {
-			c.BaseSHA = base
-			c.RefusalDetail = "node " + stage.ID + ": " + escape
+		if _, err := os.Stat(filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID), graphExitFile)); err == nil {
+			if head != base {
+				return true, Externalf("recorded no-commit graph head changed: %s", d.ItemID)
+			}
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, BaseSHA: base, HeadSHA: head, Worktree: target}
+			return true, l.settleGraphExit(ctx, d, c)
+		} else if !os.IsNotExist(err) {
+			return true, err
+		}
+		nodeBase := d.NodeBaseSHA
+		if nodeBase == "" {
+			nodeBase = l.laneBase(d.LaneID)
+			if nodeBase == "" {
+				nodeBase = base
+			}
+		}
+		dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return true, err
+		}
+		if (stage.Access == "read_only" && head != nodeBase) || ((stage.Access == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
 			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
 				return true, err
 			}
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + stage.Access + " worktree boundary"}
 			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
 				return true, err
 			}
-			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node violated its worktree boundary: "+stage.ID); stop != "" {
 				return true, Externalf("lane %s retained after preservation failed", d.LaneID)
 			}
 			return true, l.markExamined(ctx, d)
+		}
+		if stage.Access == "write" {
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
+			escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
+			if err != nil {
+				return true, err
+			}
+			if escape != "" {
+				c.BaseSHA = base
+				c.RefusalDetail = "node " + stage.ID + ": " + escape
+				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+					return true, err
+				}
+				if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
+					return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+				}
+				return true, l.markExamined(ctx, d)
+			}
 		}
 	}
 	if stage.Kind == "command" && (rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1)) {
@@ -598,6 +606,10 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		return true, err
 	}
 	if next < 0 {
+		if l.nonLanding {
+			outcome := l.settleHook(ctx, d, result)
+			return true, outcome.err
+		}
 		return l.finishWorkflow(ctx, d, rec, base, head, result)
 	}
 	// Preserve the full extracted report before staging overwrites the lane's report.

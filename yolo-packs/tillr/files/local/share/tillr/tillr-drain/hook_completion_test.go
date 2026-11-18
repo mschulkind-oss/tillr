@@ -116,6 +116,94 @@ func TestHookCompletionParallelPlainDirectory(t *testing.T) {
 	assertHookReceipt(t, f)
 }
 
+func TestHookCompletionCommandWorkflowDirectoryAndEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		commandFirst, evaluator bool
+	}{
+		{name: "command-first", commandFirst: true},
+		{name: "command-last"},
+		{name: "evaluator-refused", commandFirst: true, evaluator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commandFirst := tc.commandFirst
+			f, steps, stager := hookFixture(t, `echo '{"state":"confirmed","reason":"evidence checked","resolves_via":"doc:evidence.md"}'`, true)
+			f.policy.Seats = map[string]string{"build": "fixture"}
+			f.policy.SeatLists = map[string][]string{"build": {"fixture"}}
+			if err := os.MkdirAll(filepath.Join(f.root, "config/tillr/workflows"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			observations := filepath.Join(scratch(t, "node-observations"), "calls")
+			program := func(name string) string {
+				return stub(t, name, fmt.Sprintf("set -eu\nprintf '%%s|%%s|%%s|%%s\\n' %s \"$PWD\" \"${TILLR_ITEM_ID-}\" \"${TILLR_NODE_ID-}\" >> %q\nprintf 'RESULT: done\\n'", name, observations))
+			}
+			backend := f.policy.Backends["fixture"]
+			backend.Adapter = program("agent")
+			f.policy.Backends["fixture"] = backend
+			writeFile(t, filepath.Join(f.root, "config/tillr/commands.json"), fmt.Sprintf(`{"probe":{"argv":[%q],"flags":{}}}`, program("command")))
+			command := `{"id":"probe","kind":"command","command_ref":"probe","access":"read_only"}`
+			agent := `{"id":"investigate","kind":"agent","seat":"build","access":"read_only","prompt":"Investigate the reproduction"}`
+			first, second, from, to := command, agent, "probe", "investigate"
+			if !commandFirst {
+				first, second, from, to = agent, command, to, from
+			}
+			exit := ""
+			if tc.evaluator {
+				exit = `,"exit":{"requires_nodes":["probe","investigate"],"evaluator_slot":"investigate"}`
+			}
+			writeFile(t, filepath.Join(f.root, "config/tillr/workflows/probe@v1.json"), fmt.Sprintf(`{"name":"probe","version":1,"stages":[%s,%s],"edges":[{"from_node":%q,"to_node":%q}]%s}`, first, second, from, to, exit))
+			s, err := store.Open(context.Background(), f.store, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET workflow='probe@v1' WHERE item_id='finding'`)
+				return err
+			})
+			s.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := f.newLoopWith(t, 1, steps, stager, os.Stderr).Run(context.Background())
+			if tc.evaluator {
+				if err != nil || result.Dispatched != 0 || !strings.Contains(result.Detail, "workflow-evaluator-requires-landing") {
+					t.Fatalf("evaluator refusal: %+v %v", result, err)
+				}
+				if _, err := os.Stat(f.count); !os.IsNotExist(err) {
+					t.Fatalf("refused evaluator invoked completion hook: %v", err)
+				}
+				return
+			}
+			if err != nil || result.Dispatched != 2 || result.Landed != 0 || result.Candidates != 0 {
+				t.Fatalf("command completion: %+v %v", result, err)
+			}
+			cwd := filepath.Join(f.laneRoot, "lane-1", drain.PlainDir)
+			wantCommand := "command|" + cwd + "|finding|probe\n"
+			wantAgent := "agent|" + cwd + "|finding|investigate\n"
+			want := wantCommand + wantAgent
+			if !commandFirst {
+				want = wantAgent + wantCommand
+			}
+			got, err := os.ReadFile(observations)
+			if err != nil || string(got) != want {
+				t.Fatalf("node programs: got %q, want %q: %v", got, want, err)
+			}
+			agentRun := "run-finding-a1-n1"
+			if commandFirst {
+				agentRun = "run-finding-a1-n2"
+			}
+			brief := readAll(t, filepath.Join(drain.RunDir(f.root, agentRun), drain.BriefFile))
+			if !strings.Contains(brief, "Node task: Investigate the reproduction") {
+				t.Fatalf("agent node prompt missing: %s", brief)
+			}
+			if commandFirst && !strings.Contains(brief, "Read the previous node report:") {
+				t.Fatalf("command report handoff missing: %s", brief)
+			}
+			assertHookReceipt(t, f)
+		})
+	}
+}
+
 func TestHookCompletionPlainDirectory(t *testing.T) {
 	f, steps, stager := hookFixture(t, `printf '%s\n' '{"state":"confirmed","reason":"evidence checked","resolves_via":"doc:evidence.md"}'`, true)
 	result, err := f.newLoopWith(t, 1, steps, stager, os.Stderr).Run(context.Background())

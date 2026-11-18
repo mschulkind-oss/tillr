@@ -80,6 +80,25 @@ func TestNonLandingStagesPlainDirectory(t *testing.T) {
 			t.Fatalf("plain prose values carry %q: %s", word, prose)
 		}
 	}
+	// Plain workflow nodes receive their own prompt, outputs, and wired inputs,
+	// without instructions about a Git fence or candidate.
+	spec.Node = &drain.WorkflowStage{ID: "investigate", Seat: "build", Access: "read_only", Prompt: "Inspect the reproduction", Inputs: map[string]string{"reproduction": "text"}, Outputs: map[string]string{"analysis": "text"}}
+	spec.InputPaths = map[string][]drain.NodeInput{"reproduction": {{Producer: "probe", Path: "/fixture/reproduction.txt"}}}
+	spec.PreviousReport = "/fixture/previous-report.md"
+	if err := stager.Stage(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	nodeBrief := readAll(t, filepath.Join(lane, drain.BriefFile))
+	for _, text := range []string{"Run only node investigate", "Node task: Inspect the reproduction", "Output analysis (text):", "Input reproduction from node probe: /fixture/reproduction.txt"} {
+		if !strings.Contains(nodeBrief, text) {
+			t.Fatalf("node brief lacks %q: %s", text, nodeBrief)
+		}
+	}
+	for _, text := range []string{"candidate", "fence", "or commit", spec.PreviousReport} {
+		if strings.Contains(nodeBrief, text) {
+			t.Fatalf("plain node brief carries %q: %s", text, nodeBrief)
+		}
+	}
 	// Git-specific placeholders are not supplied, even when a template asks for them.
 	for _, name := range []string{"BASE_SHA", "FENCE_PATHS", "OUT_OF_FENCE_PATHS"} {
 		writeFile(t, filepath.Join(root, d.BriefTemplate), "{{"+name+"}}")
