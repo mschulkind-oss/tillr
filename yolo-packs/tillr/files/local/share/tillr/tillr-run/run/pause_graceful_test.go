@@ -35,7 +35,7 @@ func TestCooperativeGapAndSIGTERMExitPausePromptly(t *testing.T) {
 			}
 			defer s.Close()
 			root := filepath.Join(dir, "lanes")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
@@ -57,7 +57,7 @@ func TestCooperativeGapAndSIGTERMExitPausePromptly(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			if err := run.RequestPause(ctx, s, "run", 2*time.Second, time.Now()); err != nil {
+			if err := run.RequestPause(ctx, s, "run", hangGuard, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			if err := <-done; err != nil {

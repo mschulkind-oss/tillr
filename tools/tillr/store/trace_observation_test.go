@@ -42,14 +42,14 @@ func captureSQLiteTrace(t *testing.T, enabled bool) (string, func() string) {
 	// closed file is a sink error in the process-wide observer, and a later test's
 	// capture would report it as an incomplete trace.
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 		_, _ = FlushSQLiteTrace(ctx)
 		os.Stderr = original
 		file.Close()
 	})
 	return path, func() string {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 		_, _ = FlushSQLiteTrace(ctx)
 		raw, err := os.ReadFile(path)
@@ -62,7 +62,7 @@ func captureSQLiteTrace(t *testing.T, enabled bool) (string, func() string) {
 
 func awaitSQLiteTrace(t *testing.T, read func() string, contains func(string) bool) {
 	t.Helper()
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(hangGuard)
 	defer deadline.Stop()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()

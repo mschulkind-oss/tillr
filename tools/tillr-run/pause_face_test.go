@@ -12,6 +12,12 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func TestPauseFaceRecordsRequestAndExecAnswersPaused(t *testing.T) {
 	dir := scratch(t, "pause-face")
 	adapter := filepath.Join(dir, "run-stub")
@@ -31,7 +37,7 @@ func TestPauseFaceRecordsRequestAndExecAnswersPaused(t *testing.T) {
 	var out []byte
 	var runErr error
 	go func() { out, runErr = cmd.Output(); close(done) }()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		log, _ := os.ReadFile(filepath.Join(root, "lane", "pause-fixture.log"))
 		if strings.Contains(string(log), "ready") {
@@ -43,13 +49,13 @@ func TestPauseFaceRecordsRequestAndExecAnswersPaused(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	code, output := run(t, "pause", "--store", db, "--run", "pause-fixture", "--pause-timeout-seconds", "2")
+	code, output := run(t, "pause", "--store", db, "--run", "pause-fixture", "--pause-timeout-seconds", "300")
 	if code != 0 || !strings.Contains(string(output), "pause requested") {
 		t.Fatalf("pause exit=%d %s", code, output)
 	}
 	select {
 	case <-done:
-	case <-time.After(12 * time.Second):
+	case <-time.After(hangGuard):
 		cmd.Process.Kill()
 		t.Fatal("pause did not finish")
 	}

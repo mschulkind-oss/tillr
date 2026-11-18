@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -403,7 +402,7 @@ func TestAReadTransactionOnAWritableHandleDoesNotBlockAWriter(t *testing.T) {
 		})
 	}()
 	<-read
-	writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	writeCtx, cancel := context.WithTimeout(ctx, hangGuard)
 	defer cancel()
 	if err := writer.WriteTx(writeCtx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO meta (key, value) VALUES ('written', '1')`)

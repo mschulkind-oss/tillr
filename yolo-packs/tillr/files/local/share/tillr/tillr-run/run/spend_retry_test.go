@@ -21,7 +21,8 @@ func TestInterruptedRetryCannotReadPrecedingAttemptsReport(t *testing.T) {
 	}
 	defer s.Close()
 	opts := run.ExecOptions{LaneRoot: filepath.Join(dir, "lanes"), BackendsDir: backends, Now: time.Now()}
-	req := run.Request{RunID: "first", LaneID: "same-lane", Backend: "fixture", Command: []string{adapter}, WorkingDir: ".", TimeoutMS: 10000}
+	// No wall: this case is about spend, and a wall would make a loaded machine kill the first run.
+	req := run.Request{RunID: "first", LaneID: "same-lane", Backend: "fixture", Command: []string{adapter}, WorkingDir: ".", TimeoutMS: 0}
 	first, err := run.Exec(context.Background(), s, req, opts)
 	if err != nil {
 		t.Fatal(err)

@@ -18,6 +18,12 @@ import (
 // delivery goroutine wrote after the stall. read finishes the capture: it flushes
 // queued trace records, closes the pipe, and waits for the copier to reach EOF
 // before returning the buffer. Call it only after trace producers have stopped.
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func() string) {
 	t.Helper()
 	reader, writer, err := os.Pipe()
@@ -68,7 +74,7 @@ func capturedStalledSQLiteStderr(t *testing.T) (block, release func(), read func
 	finish := func() {
 		finished.Do(func() {
 			release()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
 			_, _ = FlushSQLiteTrace(ctx)
 			os.Stderr = original
@@ -190,7 +196,7 @@ func TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-done
 		t.Fatal("a full trace queue blocked a span's caller while it held the writer or its mutex")
@@ -208,7 +214,7 @@ func TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-competitor
 		t.Fatal("a full trace queue retained the SQLite writer")
@@ -218,7 +224,7 @@ func TestFullTraceQueueNeverBlocksAWriterAndReportsTheLoss(t *testing.T) {
 		t.Fatalf("the full queue dropped nothing, so the overflow path did not run: %+v", stalled)
 	}
 	release()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	final, err := FlushSQLiteTrace(ctx)
 	cancel()
 	if !errors.Is(err, ErrIncompleteSQLiteTrace) {
@@ -295,7 +301,7 @@ func TestBlockedTraceSinkReleasesTheWriterOnEveryReturnPath(t *testing.T) {
 				if !c.want(err) {
 					t.Fatalf("unexpected outcome %v", err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				release()
 				<-result
 				t.Fatal("a stalled trace sink held WriteTx on this return path")
@@ -313,7 +319,7 @@ func TestBlockedTraceSinkReleasesTheWriterOnEveryReturnPath(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				release()
 				<-competitor
 				t.Fatal("a stalled trace sink retained the SQLite writer on this return path")

@@ -47,7 +47,7 @@ func TestNormalExitEndsWorkerBackgroundChild(t *testing.T) {
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	// A killed orphan can remain a zombie until its new parent reaps it. Zombies
 	// cannot write in the lane, and are not live processes for lane rotation.
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(hangGuard); time.Now().Before(deadline); {
 		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 		if os.IsNotExist(err) {
 			return

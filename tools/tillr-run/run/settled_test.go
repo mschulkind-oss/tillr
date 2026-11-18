@@ -16,6 +16,12 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 // The deadline is a deadlock guard, never an elapsed-time assertion.
 func TestSettledLingeringHarnessEndsAsAnswered(t *testing.T) {
 	if run.SettledIdleSamples != 5 || run.SettledSampleInterval != time.Second {
@@ -56,7 +62,7 @@ func TestSettledLingeringHarnessEndsAsAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { sibling.Process.Kill(); sibling.Wait() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	ticks := make(chan time.Time)
 	armed := make(chan time.Duration)

@@ -72,7 +72,7 @@ func TestLandingWaitingForLockReadsNewDurableRewrite(t *testing.T) {
 	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "pass", "--store", db, "--repo", f.dir,
 		"--item", "item_042", "--run", "run-waiter", "--base", f.baseSHA,

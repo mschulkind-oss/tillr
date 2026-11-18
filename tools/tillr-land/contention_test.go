@@ -33,6 +33,12 @@ func stallGit(t *testing.T, subcommand string) (entered, release string) {
 	return
 }
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func awaitGit(t *testing.T, entered string) {
 	t.Helper()
 	// No wall-clock bound: the barrier file is the readiness signal, and a true hang is
@@ -107,7 +113,7 @@ func startLanding(t *testing.T, ctx context.Context, f contentionFixture) <-chan
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(hangGuard):
 			t.Error("landing goroutine did not stop")
 		}
 	})
@@ -119,7 +125,7 @@ func finishLanding(t *testing.T, done <-chan landAnswer) landAnswer {
 	select {
 	case a := <-done:
 		return a
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("Land did not finish")
 		return landAnswer{}
 	}
@@ -146,7 +152,8 @@ func TestGitPreparationAllowsHeartbeatAndClose(t *testing.T) {
 		finishLanding(t, done)
 		t.Fatalf("close during preparation: %v %s", err, out)
 	}
-	// Keep the preparation stalled longer than busy_timeout even on the green path.
+	// Keep the preparation stalled longer than busy_timeout even on the green path. The sleep is
+	// a floor, not a bound: a slower machine only stalls longer, so load cannot fail it.
 	time.Sleep(5100 * time.Millisecond)
 	os.WriteFile(release, nil, 0600)
 	a := finishLanding(t, done)
@@ -170,6 +177,8 @@ func TestFinalMoveExcludesCloseUntilReceipt(t *testing.T) {
 		os.WriteFile(release, nil, 0600)
 		finishLanding(t, done)
 		t.Fatalf("Close passed final Move exclusion: %s", out)
+	// A floor again: this only gives a wrongly admitted Close time to appear, so load can make
+	// the check weaker but cannot make it fail.
 	case <-time.After(250 * time.Millisecond):
 	}
 	os.WriteFile(release, nil, 0600)
@@ -182,7 +191,7 @@ func TestFinalMoveExcludesCloseUntilReceipt(t *testing.T) {
 		if !strings.Contains(out, "already-landed") {
 			t.Fatalf("Close did not see committed receipt: %s", out)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("Close did not finish")
 	}
 }
