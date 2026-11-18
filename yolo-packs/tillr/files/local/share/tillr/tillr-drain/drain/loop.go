@@ -1227,6 +1227,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			continue
 		}
 		spec := StageSpec{
+			Policy: l.currentPolicy(),
 			LaneID: decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,

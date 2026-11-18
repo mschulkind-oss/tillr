@@ -42,7 +42,7 @@ spelling lives and dies inside `run-pi`, and no policy, brief or `run.request` l
 Refusals (exit 2, nothing started): the `backend` field names neither this adapter nor a
 seat alias of it (`pi` or `pi-<role>`, as `pi-designer` runs this adapter on the design
 seat's model); no model; no effort; the brief is missing, empty, unfilled or missing one of
-the template's nine sections; the target is not the directory the adapter runs in; `pi` is
+the template's ten sections; the target is not the directory the adapter runs in; `pi` is
 not on `PATH`.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.

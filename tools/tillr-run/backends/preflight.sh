@@ -11,11 +11,12 @@
 #
 # $PROG is the adapter's own name, set by the adapter before it sources this file.
 
-# The template's nine sections, by the text after `## `. The heading is matched as a
+# The template's ten sections, by the text after `## `. The heading is matched as a
 # prefix, so `## Settled decisions — do not redesign` satisfies `Settled decisions`.
 REQUIRED_HEADINGS='Header
 Task
 Fence
+Seats
 Settled decisions
 Facts carried
 Method
@@ -102,7 +103,7 @@ preflight_brief() {
     fi
     while IFS= read -r heading; do
         if ! printf '%s\n' "$template_text" | grep -q "^## $heading"; then
-            refuse "the brief '$1' has no '## $heading' section: all nine of the template's sections are load-bearing, and one missing is a brief the driver must not dispatch"
+            refuse "the brief '$1' has no '## $heading' section: all ten of the template's sections are load-bearing, and one missing is a brief the driver must not dispatch"
         fi
     done <<EOF
 $REQUIRED_HEADINGS

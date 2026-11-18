@@ -1704,7 +1704,7 @@ still contains Git staging metadata is refused rather than reset or silently reu
 The definition's `brief_template` is required for this staging. A relative template
 path resolves under the drain's root; an absolute path is read as supplied. It does
 not fall back to the Git `--brief-template`. Supported placeholders are `ITEM_ID`,
-`TITLE`, `TASK`, `CRITERION_1` (the numbered criteria), `RUN_ID`, `BACKEND`, `TARGET`,
+`TITLE`, `TASK`, `CRITERION_1` (the numbered criteria), `RUN_ID`, `BACKEND`, `SEAT_LINES`, `TARGET`,
 `TARGET_KIND` (`plain directory`), `DATE`, `TIMEOUT_SECONDS`, `DURABLE_DIR`, `SETTLED`,
 `FACTS`, `METHOD`, and `VERIFICATION`. Staging supplies no Git base, fence, or trunk
 values; a template asking for an unsupported placeholder is refused before creating

@@ -9,7 +9,7 @@ names holds.
 The brief a lane receives, from design §3 of docs/design/tillr-muse-backend.md.
 Instances are UNTRACKED: the driver copies this file into the lane directory as
 `brief.md` and fills every double-brace placeholder. An adapter refuses a brief that
-still carries an unfilled placeholder, is empty, or is missing one of the nine `##`
+still carries an unfilled placeholder, is empty, or is missing one of the ten `##`
 sections below — that preflight is the only machine-checkable part of a brief, and it is
 what makes the convention load-bearing rather than decorative.
 
@@ -91,6 +91,15 @@ path, run `just pack-sync` in the target and commit the mirror in the same commi
 derived, not designed: do not hand-edit the mirror, and do not treat it as a second
 concern. A change that skips it is correct work that fails the gate on `pack-sync` alone —
 measured on 2026-11-14, on the first item a real drain ever dispatched.
+
+## Seats
+
+These are seats tillr runs as nodes; a worker cannot start one.
+
+{{SEAT_LINES}}
+
+Give mechanical searching, editing and checking to the cheaper sub-agents your own harness offers.
+Your harness's configuration chooses those sub-agents' models; tillr's policy does not.
 
 ## Settled decisions — do not redesign
 

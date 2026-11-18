@@ -294,7 +294,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	}
 	next.RunRequest = &req
 	identifyDecision(&next)
-	spec := StageSpec{Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS, Returned: old.Returned}
+	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS, Returned: old.Returned}
 	if old.RunRequest.SessionTurn && next.Workflow != nil {
 		spec.Node = &next.Workflow.Stages[next.NodeIndex]
 		var err error
