@@ -18,6 +18,10 @@ type obstacleSteps struct {
 	states []string
 	red    []string
 	known  bool
+	// byRev, when set, answers each revision's red checks instead of red, and revs
+	// records which revisions were replayed.
+	byRev map[string][]string
+	revs  []string
 }
 
 func (s *obstacleSteps) ItemState(_ context.Context, id, _, state string, waiting ...item.WaitingOn) error {
@@ -30,6 +34,10 @@ func (s *obstacleSteps) ItemState(_ context.Context, id, _, state string, waitin
 }
 
 func (s *obstacleSteps) Replay(_ context.Context, _ Candidate, rev string, _ []string) (ReplayOutcome, error) {
+	s.revs = append(s.revs, rev)
+	if s.byRev != nil {
+		return ReplayOutcome{Rev: rev, Red: s.byRev[rev], Known: s.known}, nil
+	}
 	return ReplayOutcome{Rev: rev, Red: s.red, Known: s.known}, nil
 }
 
@@ -61,7 +69,7 @@ func settleReport(t *testing.T, f refusalLoopFixture, l *Loop, work *pendingWork
 	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 	outcome := l.settle(context.Background(), d, rec, report, work.BaseSHA, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
 	if outcome.err != nil {
-		t.Fatalf("settle: %+v", outcome)
+		t.Fatalf("settle: %+v: %v", outcome, outcome.err)
 	}
 	if err := l.markExamined(context.Background(), d); err != nil {
 		t.Fatal(err)

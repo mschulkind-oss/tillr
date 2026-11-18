@@ -52,12 +52,27 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		// it holds this lane only because a refuted claim continues this lane's session.
 		checks := o.List("CHECKS")
 		gate := GateOutcome{FailingChecks: checks}
-		redSHA, red, ok, err := l.trunkAlreadyRed(ctx, candidate, gate)
-		if err == nil && ok {
-			if err = l.acquitRed(ctx, candidate, gate, redSHA, red, result); err == nil {
-				l.reportf("loop: %s named a trunk obstacle the base replay confirmed: held behind the trunk repair\n", req.ItemID)
+		reading, err := l.trunkAlreadyRed(ctx, candidate, gate)
+		red := reading.Red
+		if err == nil && reading.Confirmed {
+			if err = l.acquitRed(ctx, candidate, gate, reading.RedSHA, red, result); err == nil {
+				l.reportf("loop: %s named a trunk obstacle the replay confirmed on %s: held behind the trunk repair\n", req.ItemID, shortSHA(reading.RedSHA))
 				return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "trunk obstacle confirmed on the base")}, true
 			}
+		}
+		if err == nil && reading.RepairedAt != "" {
+			// The checks are red only on the base this run started from: the trunk is
+			// repaired at its tip. The same session continues, on the tip.
+			oldBase := candidate.BaseSHA
+			moved, moveErr := l.moveLaneOntoTip(ctx, lane, head, reading.RepairedAt)
+			if moveErr != nil {
+				return laneOutcome{err: moveErr}, true
+			}
+			if moved != "" {
+				head, candidate.HeadSHA, candidate.BaseSHA = moved, moved, reading.RepairedAt
+			}
+			l.reportf("loop: %s named a trunk obstacle red only on its base %s; the trunk is repaired at %s: returned to its worker\n", req.ItemID, shortSHA(oldBase), shortSHA(reading.RepairedAt))
+			return returnToWorker(repairedAtTipDetail(checks, oldBase, reading.RepairedAt, moved)+" "+ObstacleContract, ""), true
 		}
 		saw := "red: " + strings.Join(red, ", ")
 		if len(red) == 0 {

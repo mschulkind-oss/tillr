@@ -909,6 +909,19 @@ without an authorized retry; acquitted runs do not consume the failure walk. A f
 closed without landing releases nothing. A check green on the base, or a candidate with
 an additional failure of its own, keeps the ordinary refusal.
 
+The red base is only half the question when the trunk has moved past it. Work is always
+built against the latest trunk (the owner's ruling of 2026-11-18), so the failing checks
+are also judged on the current trunk tip. A check the tip run's recorded progress already
+passed on that tip counts as green there, and only the rest are replayed on the tip. When
+every check is red on the tip too, the fixer is filed for the tip. When any check passes
+on the tip, the trunk is already repaired there: no fixer is filed, the loop rebases the
+worker's commits onto the tip and records the tip as the lane's base, and the ordinary
+refusal goes back to the worker saying the trunk is repaired at the tip. A tip the replay
+could not judge confirms nothing. A fork-series candidate, whose base is the fork's own
+HEAD, is judged on that base alone. The rule exists because a run cut nine hours before
+it was judged once filed a fixer for a check the trunk had long since repaired, and an
+open fixer holds every ordinary item.
+
 ## Nothing re-runs because an input changed
 
 The owner ruled on 2026-11-17 that nothing re-runs, is invalidated or is reset because a
@@ -1003,9 +1016,12 @@ A single-worker build run has two endings: its commit, or `RESULT: blocked` with
   split the item.
 - `owner` (`QUESTION`): a design-seat conflict carrying the question. The design seat
   answers from the documents or objects `NEXT-ACTOR: owner`.
-- `trunk` (`CHECKS`, `BASE`): a replay of the named checks on the run's base. When every
-  one is red there, the trunk fixer is filed and the item waits on it, as a red gate's
-  acquittal does. Otherwise the run is returned with what the replay found.
+- `trunk` (`CHECKS`, `BASE`): a replay of the named checks on the run's base, and on the
+  trunk tip when the trunk has moved past it. When every one is red there, the trunk
+  fixer is filed and the item waits on it, as a red gate's acquittal does. When they are
+  red only on the old base, the trunk is repaired at the tip: the lane is rebased onto it
+  and the same session continues, told so. Otherwise the run is returned with what the
+  replay found.
 - `tooling` (`COMMAND`, `EVIDENCE`, `PATHS`): a defect item, `defect-<digest of the
   command>`, ranked with fixers. The item is held `tooling-defect` behind it and released
   when the defect item lands in the selected base, or when someone closes it. A second
