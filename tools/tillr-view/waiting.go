@@ -96,6 +96,8 @@ var waitingRules = map[string]waitingRule{
 	"no-policy":                      {"needs you", "queue", "the owner"},
 	"capacity":                       {"waits on work", "queue", "the next pass"},
 	"no-lane":                        {"waits on work", "queue", "a free lane"},
+	"waits on a desk":                {"waits on work", "desk", "a design desk to free up"},
+	"waits on the document's desk":   {"waits on work", "desk", "the document's desk to finish its current item"},
 	"no-fence":                       {"needs you", "queue", "the owner"},
 	"run-live":                       {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
 	"prose-criteria-count":           {"needs you", "queue", "the owner; reconcile the original criteria"},
