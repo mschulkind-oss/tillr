@@ -29,6 +29,32 @@ Other absent paths still receive the ordinary `path-missing` warning.
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
 
+## Reporting documents that owe the queue work
+
+`reconcile` reads Vantage's planning index and reports every indexed document in
+one of six cases: unstaged, terminal, built, accepted with item blocks, accepted
+without item blocks, or held for a ruling or design work. The ordered rules and
+path-derived item ids are defined in the
+[queue-persistence design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-persistence.md#102-the-function-total-partition-three-outcomes-and-the-fourth-case).
+
+```sh
+tillr-item reconcile --root /path/to/repo
+tillr-item reconcile --root /path/to/repo --store /path/to/state.db
+```
+
+This is a read-only report, not intake. It prints all six counts, each document's
+case, and tracked Markdown paths under `docs/` absent from the index. Built
+findings distinguish a saved `stage: BUILT` claim from completion inferred from
+landed items. Missing graduation or decomposition work comes with a fenced
+Markdown item block to paste into a document; `sync` imports that authored block.
+Documents with unanswered questions list their ids, including blocked questions.
+
+Without a store, only authored blocks count as carrying work. With an explicit
+store, both its document references and authored blocks count; a missing store
+refuses and is never created. An unreadable, empty, refused, or incomplete index,
+invalid item block, or path-derived id collision refuses before any report is
+printed. Run `tillr-item reconcile --help` for the optional index-command override.
+
 ## Reading an order record
 
 `tillr-item order --store /path/to/state.db` prints a plain text
