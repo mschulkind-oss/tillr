@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/spend"
@@ -763,7 +764,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// written, and the rest of the queue is still work — but a sync that cannot run at all
 	// is a fault, because a drain over a queue it could not read is a drain over a guess.
 	if _, err := l.refreshDocuments(ctx, &result); err != nil {
-		if operatorStopped(ctx) {
+		if stoppedByOperator(ctx, err) {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
 			return result, nil
@@ -775,7 +776,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// staging is the operator's stop, not a staging failure: the signal is why the git
 	// worktree add was abandoned.
 	if err := l.stageLandingLanes(ctx); err != nil {
-		if operatorStopped(ctx) {
+		if stoppedByOperator(ctx, err) {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
 			return result, nil
@@ -795,7 +796,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			// A stop that arrived while the tick was reading the store is still the
 			// operator's stop, not a store failure: the signal is why the write was
 			// abandoned, and the record says so.
-			if operatorStopped(ctx) {
+			if stoppedByOperator(ctx, err) {
 				result.Stop = StopOperatorStop
 				result.Detail = "the loop was asked to stop"
 				return result, nil
@@ -946,6 +947,48 @@ var errHeartbeatFailed = errors.New("the session heartbeat failed")
 // caller's own cancel) rather than by a failed heartbeat.
 func operatorStopped(ctx context.Context) bool {
 	return ctx.Err() != nil && !errors.Is(context.Cause(ctx), errHeartbeatFailed)
+}
+
+// signalGrace is how long an error that reads as a child killed by SIGINT or SIGTERM waits
+// for the loop's own context to be canceled before it is reported as a fault.
+var signalGrace = 5 * time.Second
+
+// stoppedByOperator answers whether err is the operator's stop. A terminal or supervisor
+// signal goes to the loop's whole process group, so a child the loop is running (a `git
+// ls-files`, a `git worktree add`) can die of it before the loop's own signal handler has
+// canceled ctx. That error is the stop, not a fault: the loop's own copy of the signal is
+// already on its way, so an error that reads as a child killed by SIGINT or SIGTERM waits for
+// ctx to be canceled. If it never is, the signal was aimed at the child alone and the error
+// is a fault after all.
+func stoppedByOperator(ctx context.Context, err error) bool {
+	if operatorStopped(ctx) {
+		return true
+	}
+	if err == nil || !diedOfStopSignal(err) {
+		return false
+	}
+	timer := time.NewTimer(signalGrace)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return operatorStopped(ctx)
+	case <-timer.C:
+		return false
+	}
+}
+
+// diedOfStopSignal answers whether err reports a child process ended by SIGINT or SIGTERM.
+// Errors cross the loop's layers as text, so the exit status is read from the chain when it
+// survives and from the standard `signal: terminated` wording when it does not.
+func diedOfStopSignal(err error) bool {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGINT
+		}
+	}
+	text := err.Error()
+	return strings.Contains(text, "signal: terminated") || strings.Contains(text, "signal: interrupt")
 }
 
 // faultResult names a run error in the result the deferred record writes, and answers the
