@@ -245,7 +245,8 @@ func OutOfFence(durableDir string) string {
 // StageSpec is one dispatch as the stager reads it: the request's identity, the values the
 // brief's header carries, and the commit the worktree is pinned to.
 type StageSpec struct {
-	Isolated       bool // parallel readers keep their own adapter metadata
+	Policy         *Policy // policy in force at dispatch; seats are brief context, not adapter options
+	Isolated       bool    // parallel readers keep their own adapter metadata
 	Continue       bool
 	Node           *WorkflowStage
 	InputPaths     map[string][]NodeInput
@@ -1160,6 +1161,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		{placeholder: "FENCE_PATHS", text: strings.Join(fencePaths(recorded.AllowedPaths), "\n"), field: "allowed_paths"},
 		{placeholder: "RUN_ID", text: spec.RunID},
 		{placeholder: "BACKEND", text: spec.Backend},
+		{placeholder: "SEAT_LINES", text: seatLines(spec.Policy)},
 		{placeholder: "BASE_SHA", text: baseSHA},
 		{placeholder: "TARGET", text: target},
 		{placeholder: "TARGET_KIND", text: targetKind},
@@ -1174,6 +1176,33 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		{placeholder: "METHOD", text: "The item states no method. Within the fence the order of work is yours; write the failing reproduction first where this repository's rules require one."},
 		{placeholder: "VERIFICATION", text: "None recorded: this item carries no verification command of its own. Report every command you ran and its output, and never run the full gate (`just done`)."},
 	}, nil
+}
+
+// seatLines describes every mapped seat in stable order, without choosing a backend.
+func seatLines(policy *Policy) string {
+	if policy == nil {
+		return "No seats are mapped by the policy in force."
+	}
+	names := policy.seatNames()
+	if len(names) == 0 {
+		return "No seats are mapped by the policy in force."
+	}
+	readOnly := make(map[string]bool, len(policy.ReadOnlySeats))
+	for _, name := range policy.ReadOnlySeats {
+		readOnly[name] = true
+	}
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		line := "- `" + name + "`"
+		if readOnly[name] {
+			line += " (read-only)"
+		}
+		if purpose := policy.SeatPurposes[name]; purpose != "" {
+			line += " — " + strings.Join(strings.Fields(purpose), " ")
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // wallWords is the brief's Timeout line: the wall in seconds with its unit, or "none" for

@@ -192,11 +192,11 @@ func TestTheAdaptersPreflightTellsATemplateFaultFromAnItemFault(t *testing.T) {
 	}
 }
 
-// refusalBrief is a brief with all nine of the template's sections and the given line in the
+// refusalBrief is a brief with all ten of the template's sections and the given line in the
 // Task section, so the section check cannot fire before the brace-pair check does.
 func refusalBrief(task string) string {
 	return "# a brief\n\n## Header\n\n- **Item:** item-a\n\n## Task\n\n" + task + "\n\n" +
-		"## Fence\n\n- tools/item-a/\n\n## Settled decisions\n\nnone\n\n" +
+		"## Fence\n\n- tools/item-a/\n\n## Seats\n\nnone\n\n## Settled decisions\n\nnone\n\n" +
 		"## Facts carried\n\nnone\n\n## Method\n\nnone\n\n## Verification commands\n\nnone\n\n" +
 		"## Report shape\n\nnone\n\n## Stop conditions\n\nnone\n"
 }

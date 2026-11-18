@@ -179,6 +179,7 @@ def filled_brief(lane):
         "CRITERION_1": "the acceptance test passes (not command-verifiable in a fixture)",
         "FENCE_PATHS": "- tools/tillr-run/backends/**",
         "OUT_OF_FENCE_PATHS": "- everything else",
+        "SEAT_LINES": "- `build` — Build the change.",
         "SETTLED": "- the report shape is fixed by the extractor, not by the harness.",
         "FACTS": "- backends/ holds one directory per harness.",
         "METHOD": "Write the failing case first.",

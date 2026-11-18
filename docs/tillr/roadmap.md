@@ -8495,9 +8495,7 @@ A worker that builds an item alone does every step on its own model, and its bri
   - List every seat the policy maps in the implementer brief, with the read-only ones marked.
   - Tell a worker to give mechanical work to its own harness's cheaper sub-agents.
 
-<!-- tillr: item id="item-plan-brief-lists-seats" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/,tests/tillr-muse-backend.test.py" blocked_by="" prose="2" -->
 
-- **c1:** The implementer brief template lists every seat the policy in force maps, one line each on what it is for, under a heading that says these are seats tillr runs as nodes and that a worker cannot start one. Each seat the policy lists under `read_only_seats` is marked read-only on its line. A separate fixed paragraph tells the worker to give mechanical searching, editing and checking to the cheaper sub-agents its own harness offers, and says the harness's configuration chooses those sub-agents' models and tillr's policy does not. The pi adapter passes no seat to pi and is not changed for this criterion. A test asserts the filled brief lists exactly the policy's seats with the read-only ones marked, that the paragraph is present, and that the adapter's command line and exported environment are the same for a policy with the six new seats as for one without them.
 
 **Agent details:**
 

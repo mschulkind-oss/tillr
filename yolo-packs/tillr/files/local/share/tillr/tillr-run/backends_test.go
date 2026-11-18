@@ -9,7 +9,7 @@ import (
 )
 
 // The template's placeholders, filled here rather than read from the template's specimen so
-// a case can state every value the brief's nine sections require. The values are inert: this
+// a case can state every value the brief's ten sections require. The values are inert: this
 // case is about the adapter's backend check and the extractor's report, not about the brief.
 var briefValues = map[string]string{
 	"ITEM_ID":            "item_042",
@@ -27,6 +27,7 @@ var briefValues = map[string]string{
 	"CRITERION_1":        "the extractor reads a RESULT footer",
 	"FENCE_PATHS":        "- tools/tillr-run/backends/**",
 	"OUT_OF_FENCE_PATHS": "- everything else",
+	"SEAT_LINES":         "- `build` — Build the change.",
 	"SETTLED":            "- a backend is the adapter's name or a `<adapter>-<role>` alias.",
 	"FACTS":              "- backends/ holds one directory per adapter.",
 	"METHOD":             "Run the adapter, then the extractor.",
@@ -49,6 +50,24 @@ func filledBrief(t *testing.T, target string) string {
 		text = strings.ReplaceAll(text, "{{"+name+"}}", value)
 	}
 	return text
+}
+
+func TestBriefPreflightRequiresSeats(t *testing.T) {
+	base := scratch(t, "missing-seats")
+	brief := filepath.Join(base, "brief.md")
+	body := strings.Replace(filledBrief(t, base), "## Seats\n", "## Omitted seats\n", 1)
+	if err := os.WriteFile(brief, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := filepath.Abs(filepath.Join("backends", "preflight.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `. "$1"; PROG=test; preflight_brief "$2"`, "test", preflight, brief)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "no '## Seats' section") {
+		t.Fatalf("missing Seats accepted or wrong refusal: %v: %s", err, out)
+	}
 }
 
 // writeExecutable writes one executable shell script.

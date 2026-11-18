@@ -69,7 +69,7 @@ timeout <wall> claude -p --output-format stream-json --verbose \
 
 Refusals (exit 2, nothing started): the `backend` field names neither `claude` nor a seat
 alias `claude-<role>`; no model; no effort; the brief is missing, empty, unfilled or
-missing one of the template's nine sections; the target is not the directory the adapter
+missing one of the template's ten sections; the target is not the directory the adapter
 runs in; `claude` is not on `PATH`; an argument before `--` that the adapter does not know.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.

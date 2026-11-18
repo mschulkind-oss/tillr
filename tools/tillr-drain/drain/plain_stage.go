@@ -88,6 +88,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		{placeholder: "CRITERION_1", text: criteria, field: "criteria"},
 		{placeholder: "RUN_ID", text: spec.RunID},
 		{placeholder: "BACKEND", text: spec.Backend},
+		{placeholder: "SEAT_LINES", text: seatLines(spec.Policy)},
 		{placeholder: "TARGET", text: target},
 		{placeholder: "TARGET_KIND", text: "plain directory"},
 		{placeholder: "DATE", text: now().UTC().Format("2006-01-02")},

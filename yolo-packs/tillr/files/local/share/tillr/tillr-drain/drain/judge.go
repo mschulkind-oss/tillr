@@ -471,6 +471,11 @@ Pass requires every criterion done. Return RESULT: done after writing the file.
 ## Fence
 No worktree writes. Only the verdict file named above may be written.
 
+## Seats
+These are seats tillr runs as nodes; a worker cannot start one.
+
+%s
+
 ## Settled decisions
 The item criteria are the bar; do not lower it.
 
@@ -489,7 +494,7 @@ Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, diffPath, criteria.String())
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
 			brief += fmt.Sprintf("\nRead-only producer %s: run=%s; session=%s; backend=%s; route=%s\n", producer.NodeID, producer.RunID, producer.SessionID, producer.Backend, producer.Route)

@@ -38,7 +38,7 @@ resolution still runs under echo.
 
 Refusals (exit 2, nothing started, no model tokens spent): the `backend` field names
 neither this adapter nor a seat alias of it (`muse` or `muse-<role>`); no model; no effort;
-the brief is missing, empty, unfilled or missing one of the template's nine sections; the
+the brief is missing, empty, unfilled or missing one of the template's ten sections; the
 target is not the directory the adapter runs in; the harness is not on `PATH`; the model id
 does not resolve through
 `muse model-profile show <id> --effort <tier>` — a check only as good as that resolver,

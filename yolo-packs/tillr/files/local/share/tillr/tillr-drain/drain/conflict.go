@@ -125,6 +125,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		return "", false, l.holdRepair(ctx, basis, markersErr)
 	}
 	spec := StageSpec{
+		Policy: l.currentPolicy(),
 		LaneID: candidate.LaneID, ItemID: candidate.ItemID, RunID: fixRunID,
 		Backend: fix.Backend, BaseSHA: mainSHA, WorkingDir: fix.WorkingDir,
 		TimeoutMS: fix.TimeoutMS, BlockConflict: candidate.BlockConflict,
