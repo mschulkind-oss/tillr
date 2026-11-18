@@ -77,13 +77,13 @@ func TestProposalTransactionRules(t *testing.T) {
 		{name: "earlier", rule: "proposal-target-order", raw: `{"target":"one","workflow":"replacement@v1"}`},
 		{name: "started", rule: "proposal-target-started", change: func(t *testing.T, f refusalLoopFixture, d *Decision) {
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				_, err := tx.Exec(`INSERT INTO node_runs VALUES('item-a',1,'three','target-run','running')`)
+				_, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES('item-a',1,'three','target-run','running')`)
 				return err
 			})
 		}},
 		{name: "expanded started", rule: "proposal-target-started", change: func(t *testing.T, f refusalLoopFixture, d *Decision) {
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				_, err := tx.Exec(`INSERT INTO node_runs VALUES('item-a',1,'three/child','target-run','passed')`)
+				_, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES('item-a',1,'three/child','target-run','passed')`)
 				return err
 			})
 		}},
@@ -460,7 +460,7 @@ func TestProposalKeepsEnclosingSiblingBarriers(t *testing.T) {
 		}
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO node_runs VALUES('item-a',1,'G/P','gp','passed'),('item-a',1,'G/X/scout','gs','passed'),('item-a',1,'G/X/join','gj','passed'),('item-a',1,'G/Y','gy','handled-fail')`)
+		_, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES('item-a',1,'G/P','gp','passed'),('item-a',1,'G/X/scout','gs','passed'),('item-a',1,'G/X/join','gj','passed'),('item-a',1,'G/Y','gy','handled-fail')`)
 		return err
 	})
 	d.Workflow = next

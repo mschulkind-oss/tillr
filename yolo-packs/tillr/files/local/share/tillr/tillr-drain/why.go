@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -87,8 +88,12 @@ func whyFace(args []string) int {
 		questions = vantage.Preloaded(*root, vantage.ParseIndex(raw, "--questions-index "+*questionsIndex))
 	}
 	var answer drain.WhyAnswer
+	var costs bytes.Buffer
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		answer, err = drain.Why(r, tick, policy, questions)
+		if err == nil && !*asJSON && itemID == "" {
+			err = landedCosts(r, &costs)
+		}
 		return err
 	}); err != nil {
 		return fail(err)
@@ -128,6 +133,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, answer.Summary.String())
+		}
+		if err == nil {
+			_, err = io.Copy(os.Stdout, &costs)
 		}
 	}
 	if err != nil {
