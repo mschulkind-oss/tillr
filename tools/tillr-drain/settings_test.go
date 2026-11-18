@@ -16,6 +16,9 @@ import (
 func TestLoopSettingsRefusedBeforeStartingOrChecking(t *testing.T) {
 	cases := []struct{ body, key, expected string }{
 		{"[unknown]", "unknown", "table"},
+		{"[sync]\nroadmaps = 'docs/roadmap.md'", "sync.roadmaps", "array of strings"},
+		{"[sync]\nroadmaps = ['docs/roadmap.md', 1]", "sync.roadmaps", "array of strings"},
+		{"[sync]\nroadmaps = false", "sync.roadmaps", "array of strings"},
 		{"[roll]\ncommmand = 'x'", "roll.commmand", "command"},
 		{"[push]\nafter_landing = 'yes'", "push.after_landing", "boolean"},
 		{"[roll]\ncommand = 'x'", "roll.command", "roll.paths"},
@@ -150,9 +153,9 @@ ref = "refs/heads/main"
 				if len(lines) != 1 {
 					t.Fatalf("want one settings line: %s", out)
 				}
-				expected := []string{`roll.command=none`, `roll.paths=[]`, "roll.pause_timeout_seconds=120", "push.after_landing=false", "push.remote=upstream", "push.ref=upstream"}
+				expected := []string{`sync.roadmaps=[]`, `roll.command=none`, `roll.paths=[]`, "roll.pause_timeout_seconds=120", "push.after_landing=false", "push.remote=upstream", "push.ref=upstream"}
 				if configured {
-					expected = []string{`roll.command="false"`, `roll.paths=["tools/tillr*/"]`, "roll.pause_timeout_seconds=30", "push.after_landing=true", `push.remote="origin"`, `push.ref="refs/heads/main"`}
+					expected = []string{`sync.roadmaps=[]`, `roll.command="false"`, `roll.paths=["tools/tillr*/"]`, "roll.pause_timeout_seconds=30", "push.after_landing=true", `push.remote="origin"`, `push.ref="refs/heads/main"`}
 				}
 				for _, word := range expected {
 					if !strings.Contains(lines[0], word) {

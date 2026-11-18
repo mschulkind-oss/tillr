@@ -26,6 +26,7 @@ type Intake struct {
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
 	Order    Order
+	Sync     Sync
 	Intake   Intake
 	Lanes    Lanes
 	Roll     Roll
@@ -35,6 +36,10 @@ type Settings struct {
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
 }
+
+// Sync selects the roadmaps and their direct links read at each loop sync.
+// Empty Roadmaps leaves sync unrestricted; the sync command validates paths.
+type Sync struct{ Roadmaps []string }
 
 // Order opts into a repository-relative order record. SettleMinutes is the delay
 // after a hand move before the loop may record it; Read defaults it to ten.
@@ -117,8 +122,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "order" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes or order)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "order" && table != "sync" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes, order or sync)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -185,7 +190,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				case "comments.repo":
 					s.Comments.Repo = str
 				}
-			case "roll.paths", "comments.paths", "intake.paths":
+			case "roll.paths", "comments.paths", "intake.paths", "sync.roadmaps":
 				list, ok := value.([]any)
 				if !ok {
 					return Settings{}, refuse(full, "an array of strings")
@@ -198,7 +203,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					}
 					paths[i] = str
 				}
-				if table == "intake" {
+				if table == "sync" {
+					s.Sync.Roadmaps = paths
+				} else if table == "intake" {
 					s.Intake.Paths = paths
 				} else if table == "comments" {
 					s.Comments.Paths = paths
@@ -242,6 +249,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				s.Push.AfterLanding = flag
 			default:
 				expected := "a known push key (after_landing, remote or ref)"
+				if table == "sync" {
+					expected = "a known sync key (roadmaps)"
+				}
 				if table == "order" {
 					expected = "a known order key (record or settle_minutes)"
 				}
@@ -329,6 +339,12 @@ func (s Settings) StartupLine() string {
 		ref = strconv.Quote(s.Push.Ref)
 	}
 	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.after_landing=%t push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.AfterLanding, remote, ref)
+	roadmaps := s.Sync.Roadmaps
+	if roadmaps == nil {
+		roadmaps = []string{}
+	}
+	scope, _ := json.Marshal(roadmaps)
+	line += " sync.roadmaps=" + string(scope)
 	line += fmt.Sprintf(" prose.rewrite=%t lanes.express=%d", s.Prose.Rewrite, s.Lanes.Express)
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
