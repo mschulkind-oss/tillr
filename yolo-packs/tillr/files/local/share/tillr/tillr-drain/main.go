@@ -834,6 +834,7 @@ func loopFace(args []string) int {
 		GateProgram: *gate, LandProgram: *land, VerdictProgram: *verdict,
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
 		TraceBin: resolveTraceBin(*root, *traceBin, traceBinNamed), TraceRoot: *traceRoot,
+		SyncRoadmaps: repositorySettings.Sync.Roadmaps,
 	}
 	explicitSteps := map[string]bool{}
 	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })

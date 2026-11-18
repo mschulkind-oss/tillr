@@ -50,6 +50,8 @@ type ProcessSteps struct {
 	// gate, land and verdict records into (LoopDir). Empty records no spans, which is what a
 	// step set that drives no repository has; the loop's own face always names it.
 	Root string
+	// SyncRoadmaps is passed in order to every sync; empty reads all documents.
+	SyncRoadmaps []string
 	// BackendsDir is where the backend's extractor lives, handed to `run exec` so the
 	// run's spend reaches the record. Empty asks `run exec` for its own default, which is
 	// the repository's `tools/tillr-run/backends`; a case that wants a spend to see sets

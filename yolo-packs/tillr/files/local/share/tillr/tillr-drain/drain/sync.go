@@ -95,6 +95,9 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	}
 	args := []string{"sync", "--store", s.Store, "--root", s.Root,
 		"--now", now().UTC().Format(time.RFC3339), "--json"}
+	for _, roadmap := range s.SyncRoadmaps {
+		args = append(args, "--roadmap", roadmap)
+	}
 	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
