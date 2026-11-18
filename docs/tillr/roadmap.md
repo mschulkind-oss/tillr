@@ -43,6 +43,19 @@ says so in its design and is the owner's to overturn.
 3. [What a lane's agent is told](../design/agent-context-delivery.md), three questions about the
    context a worker receives. Last because the brief works today and these refine it.
 
+[The item graph is the whole path](../design/tillr-graph-is-the-path.md), written on 2026-11-17 to
+the owner's rulings of that day, proposes that every act on an item is a node in its graph and that
+one pure function decides what comes next. None of it is built. The owner ruled four of its
+questions the same day. Two remain, and each has a design of its own:
+[`OQ-GP2`](../design/tillr-graph-is-the-path.md#OQ-GP2), which structure stores the graph, waits on
+a storage design made from measured trials; and
+[`OQ-GP6`](../design/tillr-graph-is-the-path.md#OQ-GP6), how a question and its design land ahead of
+their item, is answered by [early design landing](../design/tillr-early-design-landing.md), which
+asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
+[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). First among these is
+[`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
+an actor other than the worker or the owner, because it holds two queued items.
+
 [What tillr will change for Product QA](../design/tillr-separable-parts.md) carries
 eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
 [`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers the
