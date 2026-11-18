@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Translate the runner's pause file into SIGUSR1 to pi, never its tools."""
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import sys
+
+
+def main():
+    request = Path(sys.argv[1])
+    # Inherit stdin/stderr and the runner's process group. Forward stdout byte for
+    # byte, but wait for the session header: print mode emits it AFTER installing
+    # SIGUSR1. Sending during startup could otherwise lose the request to Node's
+    # debugger handler. No header or ignored signal is bounded by the runner.
+    child = subprocess.Popen(sys.argv[2:], stdout=subprocess.PIPE)
+    ready = False
+    sent = False
+    pending = bytearray()
+    oversized = False
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while True:
+            # Observe exit BEFORE checking the pipe. Output can arrive between
+            # an empty select and a later poll; that ordering would lose it.
+            exited = child.poll() is not None
+            events = selector.select(timeout=0 if exited else 0.1)
+            if not events and exited:
+                break
+            for key, _ in events:
+                data = os.read(key.fileobj.fileno(), 65536)
+                if not data:
+                    selector.unregister(key.fileobj)
+                    continue
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                if not ready:
+                    # Startup diagnostics are not readiness. Bound memory even if
+                    # an extension writes a huge line before the session header.
+                    for part in data.splitlines(keepends=True):
+                        if len(pending) + len(part) > 65536:
+                            oversized = True
+                            pending.clear()
+                        if not oversized:
+                            pending.extend(part)
+                        if part.endswith(b"\n"):
+                            if not oversized:
+                                try:
+                                    header = json.loads(pending)
+                                    ready = isinstance(header, dict) and header.get("type") == "session"
+                                except (ValueError, UnicodeError):
+                                    pass
+                            pending.clear()
+                            oversized = False
+                            if ready:
+                                break
+            if ready and not sent and request.exists() and child.poll() is None:
+                try:
+                    child.send_signal(signal.SIGUSR1)
+                except ProcessLookupError:
+                    pass  # A natural exit raced the request; wait still reaps it.
+                sent = True
+    child.stdout.close()
+    code = child.wait()
+    return code if code >= 0 else 128 - code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -118,11 +118,42 @@ session warm.
 
 ## Pausing and continuing
 
-Pause kind: `stops-where-it-stands`, declared in [`pause-kind`](./pause-kind).
-The runner sends SIGTERM, waits ten seconds, then kills any surviving process group.
-The same session receives a restart notice as its first continuation message.
+Pause kind: `stops-at-a-gap`, declared in [`pause-kind`](./pause-kind).
+When the runner writes `TILLR_PAUSE_REQUEST`, the adapter's
+[`stop-at-gap`](./stop-at-gap) watcher sends **SIGUSR1 to the pi process itself**,
+never its process group or a tool child, even when an explicit wall uses `timeout`.
+The watcher forwards JSON output unchanged and waits for the session header before
+signaling: the fork emits that header after installing its SIGUSR1 handler, so a
+pause during startup is not lost to Node's debugger handler. Startup without a header
+is covered by the same straggler bound, not a separate timeout or build probe.
+Fork commit `a763610b` (`feat(agent): stop print workers safely on SIGUSR1`),
+delivered in this repository's `patch/pi`, defines the request: finish already-started
+calls and a streaming model response, save results, start no further tool or model
+request, flush output, and exit 0. Duplicate requests have the same effect as one.
+Session persistence stays enabled; the adapter does not pass `--no-session`.
 
-**Measured 2026-11-16:** Pi entered a bash tool call whose command was `sleep 60`;
+The runner enforces the [straggler bound](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#pausing-a-session):
+120 seconds by default, supplied by `pause_timeout_seconds`. At that bound it kills
+any surviving process group, including tools. Continuing opens the same session with
+a restart notice; a gap stop does not claim an interruption, but a bound kill tells
+the session the command was interrupted by a restart and may be run again.
+
+An older pi without this fork change ignores the stop request: Node reserves SIGUSR1
+for its debugger, announces it on stderr, and continues. The runner then applies the
+same straggler bound and interruption notice. Even patched pi may announce the debugger
+in `stream.err`; that line is not a failure. The adapter does not probe the installed
+build or send a second kind of request. Publishing the patch branch and rebuilding
+pi on the host are separate from this adapter change.
+
+`TestPiPauseAtGapAndStraggler` runs the real adapter against stand-in harnesses, with
+no model or real pi: one honors SIGUSR1 after saving a tool result, and one ignores it
+until the injected 120-second bound kills the group. Both resume with the appropriate
+notice, and a tool child checks that it did not receive SIGUSR1. The pause is requested
+before print-mode readiness to cover startup, and split header writes plus startup
+diagnostics verify that the JSON stream is forwarded unchanged.
+
+**Historical persistence measurement, 2026-11-16 (not the current pause kind):**
+Pi entered a bash tool call whose command was `sleep 60`;
 SIGTERM to the harness returned 143. Opening the same session returned 0 and answered
 `cedar-pause-6149`, the marker given before the signal, without that marker appearing
 in the continuation prompt. This measures the harness, not a model guarantee.
