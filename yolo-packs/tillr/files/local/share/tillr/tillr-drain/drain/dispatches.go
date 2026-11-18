@@ -130,9 +130,16 @@ func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 			}
 		}
 	}
-	if decision.Inputs != nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
+	// Every dispatch fact names its build: a decision with no Inputs (a design-seat or
+	// owner-question dispatch) records the planning build alone, so build migration does not
+	// read its run as an older build's (migrateBuildRuns).
+	inputs := decision.Inputs
+	if inputs == nil && decision.DispatchBuild != "" {
+		inputs = &RunInputs{TillrBuild: decision.DispatchBuild}
+	}
+	if inputs != nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
 		for _, node := range parallelNodes(decision) {
-			node.Inputs = decision.Inputs
+			node.Inputs = inputs
 			if err := appendEffect(tx, inputRecordedKind, node.RunRequest.RunID, node, at); err != nil {
 				return err
 			}
