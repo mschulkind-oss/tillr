@@ -331,7 +331,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// a nested run must never claim its parent's item or node. Scratch is isolated by
 	// default, but an explicit opt-out preserves the caller's assignment (or absence).
 	cmd.Env = os.Environ()
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER"} {
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP"} {
 		cmd.Env = withoutEnv(cmd.Env, key)
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
@@ -339,6 +339,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	if req.NodeID != "" {
 		cmd.Env = append(cmd.Env, "TILLR_NODE_ID="+req.NodeID)
+	}
+	// A read-only node is told it is one, so an adapter that keeps a writer going until it
+	// has committed (backends/pi/keep-going.ts) leaves a reader to end when it is done.
+	if req.ReadOnlyGroup != "" {
+		cmd.Env = append(cmd.Env, "TILLR_READ_ONLY_GROUP="+req.ReadOnlyGroup)
 	}
 	cmd.Env = append(cmd.Env,
 		"TILLR_SESSION_MODE="+mode,

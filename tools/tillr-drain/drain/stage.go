@@ -1018,7 +1018,7 @@ func renderBrief(templatePath, itemID string, values briefValues) (string, error
 		return "", Externalf("reading the brief template %s: %v", templatePath, err)
 	}
 	provided := values.byName()
-	body := dropPlaceholderComments(string(raw))
+	body := dropTemplateComments(string(raw))
 	missing := []string{}
 	for _, found := range placeholder.FindAllStringSubmatch(body, -1) {
 		if _, ok := provided[found[1]]; !ok {
@@ -1055,9 +1055,13 @@ func renderBrief(templatePath, itemID string, values briefValues) (string, error
 	return rendered, nil
 }
 
-// dropPlaceholderComments removes every HTML comment that carries a placeholder. Those are
-// the template's specimens of a form this brief is not; its explanatory comments stay.
-func dropPlaceholderComments(body string) string {
+// dropTemplateComments removes every HTML comment in the template. A comment is the
+// template's note to its maintainers — a specimen of a form this brief is not, or how the
+// template is filled — and a brief is read by a worker nobody answers, for whom such a note
+// reads as part of the task. Measured on 2026-11-18: at one Sol 6.2 stop point, 0 of 8
+// replays continued with the leading note in the brief and 8 of 8 without it. Values are
+// substituted after this, so a comment inside an item's own text is never touched.
+func dropTemplateComments(body string) string {
 	var out strings.Builder
 	rest := body
 	for {
@@ -1071,12 +1075,8 @@ func dropPlaceholderComments(body string) string {
 			out.WriteString(rest)
 			return out.String()
 		}
-		block := rest[start : start+end+len("-->")]
 		out.WriteString(rest[:start])
-		if !strings.Contains(block, "{{") {
-			out.WriteString(block)
-		}
-		rest = rest[start+end+len("-->"):]
+		rest = strings.TrimPrefix(rest[start+end+len("-->"):], "\n")
 	}
 }
 

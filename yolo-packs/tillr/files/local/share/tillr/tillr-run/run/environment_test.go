@@ -22,12 +22,16 @@ func TestExecRequestEnvironment(t *testing.T) {
 		scratchEnv string
 		inherited  bool
 		preserve   bool
+		group      string
 	}{
-		{"default", "node-build", "", true, false},
-		{"explicit-true", "node-build", `,"scratch_env":true`, true, false},
-		{"preserve", "node-build", `,"scratch_env":false`, true, true},
-		{"preserve-unset", "", `,"scratch_env":false`, false, true},
-		{"default-unset", "", "", false, false},
+		{"default", "node-build", "", true, false, ""},
+		{"explicit-true", "node-build", `,"scratch_env":true`, true, false, ""},
+		{"preserve", "node-build", `,"scratch_env":false`, true, true, ""},
+		{"preserve-unset", "", `,"scratch_env":false`, false, true, ""},
+		{"default-unset", "", "", false, false, ""},
+		// A read-only node is told so: the pi adapter keeps a writer going until it has
+		// committed, and a reader has no commit to make (backends/pi/keep-going.ts).
+		{"read-only", "node-review", `,"read_only_group":"group-review"`, true, false, "group-review"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -44,7 +48,7 @@ func TestExecRequestEnvironment(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID"} {
+			for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_READ_ONLY_GROUP"} {
 				t.Setenv(key, "stale-parent-value")
 			}
 			var req run.Request
@@ -59,7 +63,11 @@ func TestExecRequestEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := os.ReadFile(filepath.Join(laneRoot, req.LaneID, req.RunID+".log"))
+			logDir := filepath.Join(laneRoot, req.LaneID)
+			if tc.group != "" {
+				logDir = run.NodeDir(logDir, req.RunID)
+			}
+			body, err := os.ReadFile(filepath.Join(logDir, req.RunID+".log"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,6 +92,13 @@ func TestExecRequestEnvironment(t *testing.T) {
 				}
 			} else if env["TILLR_NODE_ID"] != tc.node {
 				t.Errorf("TILLR_NODE_ID = %q, want %q", env["TILLR_NODE_ID"], tc.node)
+			}
+			if tc.group == "" {
+				if value, exists := env["TILLR_READ_ONLY_GROUP"]; exists {
+					t.Errorf("a writing run must not inherit a parent's read-only group: %q", value)
+				}
+			} else if env["TILLR_READ_ONLY_GROUP"] != tc.group {
+				t.Errorf("TILLR_READ_ONLY_GROUP = %q, want %q", env["TILLR_READ_ONLY_GROUP"], tc.group)
 			}
 			runScratch := run.DurableDir(filepath.Join(laneRoot, req.LaneID), req.RunID)
 			wantScratch := runScratch
