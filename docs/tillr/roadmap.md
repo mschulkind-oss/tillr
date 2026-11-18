@@ -4107,9 +4107,7 @@ The work is seven items, split by the design seat on 2026-11-18 after four build
 - **Outcomes:**
   - Have sync and the item store accept any well-formed seat name and refuse a malformed one.
 
-<!-- tillr: item id="item-plan-fans-out-by-seat" paths="config/tillr/,tools/tillr-drain/,tools/tillr-run/,tools/tillr-item/,tools/tillr-view/,yolo-packs/tillr/,docs/,tests/tillr-muse-backend.test.py" blocked_by="" prose="2" -->
 
-- **c1:** Sync and the item store's apply step check only the shape of a seat's name, which is lowercase letters, digits and hyphens starting with a letter, and their refusal of a malformed name says that seats are declared in the backend policy file. Tests assert that sync accepts and stores a well-formed name that is not one of the four existing seats, that sync reports a malformed name as `invalid-seat`, that apply accepts and stores the seat `qa`, and that apply refuses `QA` and `2nd` with exit code 2 and a message that names the backend policy. The drain is not changed by this item, and `item.KnownSeat` and `item.SeatList` stay in place for the drain's callers, which the next item removes.
 
 **Agent details:**
 
@@ -4137,7 +4135,7 @@ After the item before this one, sync and the item store accept any well-formed s
   - Make a seat any name the backend policy maps, with no seat list in code.
   - Name the policy file in every refusal of an unmapped seat.
 
-<!-- tillr: item id="item-plan-seat-checked-against-policy" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-plan-fans-out-by-seat" prose="2" -->
+<!-- tillr: item id="item-plan-seat-checked-against-policy" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A seat is any name the backend policy maps, and no seat list is fixed in code. The planner and the workflow loader check a seat against the policy in force, and each refusal for a name that policy does not map names the policy file as the place a seat is declared. The policy loader checks only the shape of the name, as sync and the item store do, and its refusal says the same thing about the policy. A test adds a seat to a fixture policy and asserts an item and a workflow node naming it are accepted, and that the planner and the workflow loader refuse an unmapped name with the policy file named.
 

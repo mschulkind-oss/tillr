@@ -468,13 +468,12 @@ func carryCriteria(r *store.Reader, itemID string, criteria []criterion) ([]crit
 
 // checkSeat refuses a seat outside the item model's vocabulary (seat.go). An empty seat is
 // legal: it is the item asking for no seat, and the planner then uses the tick's default
-// backend. A name the model does not define is refused here rather than stored to be
-// refused by every later plan, because a seat that means nothing is a typo, not a dispatch.
+// backend. Apply checks only the name's shape; the planner checks the backend policy.
 func checkSeat(itemID, seat string) error {
-	if seat == "" || KnownSeat(seat) {
+	if seat == "" || validSeatName(seat) {
 		return nil
 	}
-	return Usagef("item %q asks for seat %q, which is not one of the item model's seats: %s", itemID, seat, SeatList())
+	return Usagef("item %q: "+invalidSeatName, itemID, seat)
 }
 
 // checkCriteria refuses a criterion id that appears twice: the table's primary key

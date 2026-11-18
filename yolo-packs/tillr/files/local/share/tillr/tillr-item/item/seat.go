@@ -1,6 +1,13 @@
 package item
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+var validSeatName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`).MatchString
+
+const invalidSeatName = "seat %q must start with a lowercase letter and contain only lowercase letters, digits and hyphens; seats are declared in the backend policy file"
 
 // The seat vocabulary: the roles of the work an item can ask for.
 //

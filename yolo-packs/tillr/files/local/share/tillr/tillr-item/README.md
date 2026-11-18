@@ -239,8 +239,9 @@ The following rules describe Git-landing, including its established refusal name
   second failed run is new evidence, even when the status and design run stay the same.
 - **A decision is superseded, never edited.** The superseded record stays and the new one
   names it, so the ledger reads in order.
-- **A seat is a role, not a model.** An item names at most one of `design`, `build`,
-  `review` or `scout`; the backend policy maps that seat to a backend, and the backend names
+- **A seat is a role, not a model.** An item names at most one seat. Its name starts with a
+  lowercase letter and contains only lowercase letters, digits and hyphens. The backend
+  policy declares which seats exist and maps each to a backend, and the backend names
   the model it runs. Swapping which model fills a seat, or moving the seat to another
   backend, is a policy edit that touches no item.
 - **Sync is the only intake from documents, and it never destroys a local fact.** `sync`
@@ -326,7 +327,7 @@ The following rules describe Git-landing, including its established refusal name
   only some documents must set `SyncInput.Partial` and also leaves it alone. Status
   reads this observation, not documents, so its timestamp names when counts were computed.
 - **A document with a finding writes no definition; the others are written.** A missing or
-  malformed id, a duplicate id, no paths, no `c1`, an unknown attribute or seat, or a
+  malformed id, a duplicate id, no paths, no `c1`, an unknown attribute, a malformed seat name, or a
   `blocked_by` naming nothing a block declares or the store holds is reported with its file
   and heading, and the face exits `1` after the other documents are applied. A path that
   does not exist yet is a warning, since the slice may create it. Missing keys on
