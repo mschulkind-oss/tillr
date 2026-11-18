@@ -3634,6 +3634,49 @@ The owner ruled on 2026-11-17 that a machinery failure is not counted. Each fail
 - **Where:** `attempt` in `tools/tillr-drain/drain/plan.go`, which counts every infrastructure-class run against `failovers()`; `nextBackend`, `failovers` and `NextRequest` in `tools/tillr-drain/drain/policy.go`; `availableBackend`, `recordBackendWindow` and `nextAvailableRequest` in `tools/tillr-drain/drain/quota_window.go`; the in-tick failover in `settle` in `tools/tillr-drain/drain/loop.go`; `retryWorkflowNode` in `tools/tillr-drain/drain/workflow_failover.go` and `parallelFailover` in `tools/tillr-drain/drain/parallel_failover.go`; the `fault` branch of `commandNodeHold` in `tools/tillr-drain/drain/workflow_order.go`.
 - **Evidence:** on 2026-11-17 a version of this change that removed the budget and wrapped the walk was written and taken back before it landed, from reading the code rather than from a run. `recordBackendWindow` in `tools/tillr-drain/drain/quota_window.go` records a window only for a refusal that states a reset time, and `TestConsecutiveInfrastructureFailuresDoNotStopTheLoop` in `tools/tillr-drain/loop_test.go` drives a loop with one always-failing backend that must drain. With no budget, nothing closes that backend, so every pass would dispatch it again and the loop would not drain.
 
+**Ruling, 2026-11-18 (answers the first run's fence conflict):** the first run built most of this
+item and stopped without committing. Its reviewer found that a run's report can be edited or
+deleted between the moment the run ends and the moment the drain first reads it, and the run
+concluded that only a change under `tools/tillr-run/` could make the classification trustworthy.
+That directory stays outside this item's paths, and the criteria above are unchanged. The item
+asks for a recorded fact that a backend is open or closed. It does not ask for a report that
+cannot be altered. Five points settle how the work is finished:
+
+1. **The drain records a run's class once, when it first reads the ended run.** The class is what
+   `ClassifyAttempt` in `tools/tillr-drain/drain/failover.go` answers from the run record and the
+   log as they are at that moment. The drain saves that class as its own record, and the open or
+   closed state of a backend is computed from the saved classes and the saved probe results only.
+   Nothing reads the report a second time for this purpose, so a report that changes or
+   disappears later neither closes nor reopens a backend.
+2. **A report that changes before the drain's first read is out of scope.** The drain has always
+   classified from the log it finds, and the failover budget this item removes had the same gap.
+   Both wrong answers correct themselves through recorded events, so the loop cannot spin on
+   either. A backend closed by mistake is reopened by a probe that succeeds. A backend left open
+   by mistake is closed by its next run, which fails and is recorded. The README states this
+   limit in one sentence beside the probe. Capturing the class when the run's ending is written
+   is separate work under `tools/tillr-run/` and is not part of this item.
+3. **The latest run is the latest by ending, not by row order.** The first run found that a spend
+   correction rewrites a run row and moves its sequence number. "Latest run on a backend" is
+   therefore ordered by the recorded ending of each run, and a later edit to a run's row does not
+   reorder it.
+4. **A hold names the backend that is closed.** When a group of parallel nodes waits because one
+   node has no open backend, the hold names that node's backend and its reopening event, and not
+   the backend of the group's first node. The test c4 asks for may cover this case or a single
+   node; the hold's text must be right in both.
+5. **The waiting view keeps the item's stage.** The view's `Where` value for an item held on a
+   closed backend stays the item's queue stage, as the view returns it today. c5 is met when the
+   classification names the backend and the mover that reopens it. The first run's new view test
+   asserted `Where: backend`, which is wrong; correct the assertion and leave the view as it is.
+
+Start from the first run's work and do not rewrite it. It is kept at
+`refs/tillr/preserved/run-item-backend-open-is-a-fact-a1` in the main checkout: 61 files, of
+which the source changes are under `tools/tillr-drain/`, `tools/tillr-view/`, `config/tillr/` and
+`tests/tillr-muse-backend.test.py`, and the rest are the pack copies that `just pack-sync`
+regenerates. Its `probe-backend` command, which runs a check the operator chooses and never runs
+on its own, stands as the probe c1 names. What remains is point 1 where the saved class is not
+yet the only input, point 4, the corrected view assertion, the full drain and view suites, and
+the one commit.
+
 ## Filed 2026-11-18: plan first, then spend each model where it is enough
 
 The owner asked on 2026-11-18 for a planning stage that fans an implementation out into many nodes and spends as little on models as it can: "split different types of work into different seats as we see fit", create "a few more seat names to slot into", fit Terra and Luna in wherever they can do the work, and encourage implementers who work alone to use cheaper sub-agents. This is the first slice of [the planning node and model tiering proposal](../design/tillr-planning-node-model-tiering.md), narrowed by the owner's later rulings, and it sits on [the item graphs design](../design/tillr-item-graphs.md) and the direction in [the graph-is-the-path design](../design/tillr-graph-is-the-path.md). It is entry 4's [choice of where each seat runs](#4-choose-where-each-seat-runs) applied to a finer grain of work.
