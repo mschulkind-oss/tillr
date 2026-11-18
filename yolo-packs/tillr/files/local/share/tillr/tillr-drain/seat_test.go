@@ -43,10 +43,8 @@ func seatPolicy(t *testing.T, seats map[string]string, models map[string]string)
 	})
 }
 
-// setSeat writes a seat straight into the column, bypassing the item write face. The
-// item's own writer refuses a seat outside the vocabulary, so the only way to reach the
-// planner's refusal is a row a hand edit or a store written before the vocabulary existed
-// left behind — which is exactly the row the plan-time check exists to catch.
+// setSeat updates a fixture row directly. The item writer checks only the shape;
+// the planner checks whether the seat is mapped by the active policy.
 func setSeat(t *testing.T, storePath, itemID, seat string) {
 	t.Helper()
 	ctx := context.Background()
@@ -157,19 +155,18 @@ func TestPlanRefusesASeatThePolicyDoesNotMap(t *testing.T) {
 	}
 }
 
-// Criterion 3, second half: an item naming a seat that does not exist is refused at plan
-// time too, with the seat and the mapped seats named.
-func TestPlanRefusesASeatThatDoesNotExist(t *testing.T) {
+// An unmapped seat is refused at plan time, with the policy and its mapped seats named.
+func TestPlanRefusesAnUnmappedSeat(t *testing.T) {
 	storePath := fixture(t, itemRecordSeated("item_042", "in-queue", "build"))
 	setSeat(t, storePath, "item_042", "qa")
-	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1,
-		seatPolicy(t, map[string]string{"design": "fixture", "build": "fixture", "review": "fixture", "scout": "fixture"}, nil))
+	policyPath := seatPolicy(t, map[string]string{"design": "fixture", "build": "fixture", "review": "fixture", "scout": "fixture"}, nil)
+	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)
 
 	code, output := runPlan(t, storePath, tickPath)
 	if code != 2 {
 		t.Fatalf("plan exited %d, want 2: %s", code, output)
 	}
-	for _, want := range []string{`item "item_042"`, `seat "qa"`, "does not exist", "build, design, review, scout"} {
+	for _, want := range []string{`item "item_042"`, `seat "qa"`, "which the policy does not map", "build, design, review, scout", "seats are declared in " + policyPath} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("the refusal %q does not name %q", output, want)
 		}

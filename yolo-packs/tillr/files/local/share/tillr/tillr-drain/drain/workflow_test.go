@@ -24,7 +24,7 @@ func TestWorkflowLoaderRules(t *testing.T) {
 		{"workflow-cycle", func(d map[string]any) {
 			d["edges"] = append(d["edges"].([]any), map[string]any{"from_node": "work", "to_node": "scout"})
 		}},
-		{"workflow-unknown-seat", func(d map[string]any) { d["stages"].([]any)[0].(map[string]any)["seat"] = "absent" }},
+		{"workflow-unknown-seat", func(d map[string]any) { d["stages"].([]any)[0].(map[string]any)["seat"] = "Absent" }},
 		{"workflow-kind", func(d map[string]any) { d["stages"].([]any)[0].(map[string]any)["kind"] = "command" }},
 		{"workflow-access", func(d map[string]any) { d["stages"].([]any)[0].(map[string]any)["access"] = "anything" }},
 	} {

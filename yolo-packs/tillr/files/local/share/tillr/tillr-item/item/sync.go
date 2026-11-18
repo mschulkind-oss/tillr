@@ -1112,7 +1112,7 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		b.payload.BlockedBy = blockers
 
 		if seat, named := attrs["seat"]; named {
-			if !validSeatName(seat) {
+			if !ValidSeatName(seat) {
 				bad("invalid-seat", invalidSeatName, seat)
 			}
 			b.payload.Seat = seat

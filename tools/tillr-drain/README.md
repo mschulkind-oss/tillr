@@ -2139,9 +2139,9 @@ and lane restoration are separate operator actions, not performed by this test.
 - **A resume with no session to continue, or of a judged run** — the first would pay for the
   whole transcript again while recording itself as a continuation, and the second spends a
   second attempt on work a verdict already answered.
-- **A seat it cannot route** — an unmapped seat, or a seat outside the item model's closed
-  vocabulary, refuses the whole plan with the seat and the mapped seats named; it is never
-  silently replaced by the pass's default backend.
+- **A seat it cannot route** — an unmapped seat refuses the whole plan. The refusal names
+  the requested seat, the mapped seats, and the backend policy file where seats are declared.
+  An unmapped seat is never silently replaced by the pass's default backend.
 
 ## Test
 

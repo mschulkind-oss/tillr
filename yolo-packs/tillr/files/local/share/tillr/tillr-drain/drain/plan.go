@@ -1587,18 +1587,14 @@ func checkSeats(policy *Policy, items []itemRow) error {
 	}
 	for _, it := range items {
 		if it.JudgeMode == "agent" && it.JudgeGrant != "" && len(policy.seatList("review")) == 0 {
-			return Usagef("item %q asks for an agent judge, but the policy does not map the review seat", it.ItemID)
+			return Usagef("item %q asks for an agent judge, but the policy does not map the review seat; %s", it.ItemID, policy.seatDeclaration())
 		}
 		if it.Seat == "" {
 			continue
 		}
-		if !item.KnownSeat(it.Seat) {
-			return Usagef("item %q asks for seat %q, which does not exist: the item model's seats are %s; the policy maps %s",
-				it.ItemID, it.Seat, item.SeatList(), mappedSeats(policy))
-		}
 		if len(policy.seatList(it.Seat)) == 0 {
-			return Usagef("item %q asks for seat %q, which the policy does not map: the policy maps %s; a seat is never defaulted to the tick's backend",
-				it.ItemID, it.Seat, mappedSeats(policy))
+			return Usagef("item %q asks for seat %q, which the policy does not map: the policy maps %s; %s; a seat is never defaulted to the tick's backend",
+				it.ItemID, it.Seat, mappedSeats(policy), policy.seatDeclaration())
 		}
 	}
 	return nil

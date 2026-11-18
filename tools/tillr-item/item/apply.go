@@ -470,7 +470,7 @@ func carryCriteria(r *store.Reader, itemID string, criteria []criterion) ([]crit
 // legal: it is the item asking for no seat, and the planner then uses the tick's default
 // backend. Apply checks only the name's shape; the planner checks the backend policy.
 func checkSeat(itemID, seat string) error {
-	if seat == "" || validSeatName(seat) {
+	if seat == "" || ValidSeatName(seat) {
 		return nil
 	}
 	return Usagef("item %q: "+invalidSeatName, itemID, seat)

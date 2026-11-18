@@ -73,6 +73,7 @@ func decodePolicy(ref string, raw []byte) (*Policy, error) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, Usagef("reading the policy %s: %v", ref, err)
 	}
+	p.Ref = ref
 	if err := p.Check(); err != nil {
 		return nil, err
 	}
