@@ -584,11 +584,7 @@ i=0; while [ "$(nice)" = "OWN" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); d
 4. **Finish.** Run `just pack-sync`, then the commands under **Verify**, and make one commit
    holding all of it.
 
-<!-- tillr: item id="item-heavy-worker-cpu-priority" paths="tools/tillr-run/,tools/tillr-drain/README.md,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `tillr-run` lowers the CPU priority of a run's process group by a niceness of 10 when the run starts, so every process a worker starts runs at a lower priority than the heavy proof, which keeps the drain's priority.
-- **c2:** Nothing is stopped for time: the change ends no process and adds no time limit, and a failure to lower the priority does not fail the run.
-- **c3:** A test asserts the niceness that a process started inside a run inherits, and the gate design, the drain README and the run README describe the priority.
 
 ### Move the checks recent landings reach to the front of the proof
 
@@ -771,7 +767,7 @@ func heavyReadsChanged(reads, paths []string) bool {
 step whose named function is not in the tree. An existing test that asserts the old order is
 rewritten to the three groups, and is not a reason to stop.
 
-<!-- tillr: item id="item-heavy-affected-checks-first" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-heavy-worker-cpu-priority" prose="2" -->
+<!-- tillr: item id="item-heavy-affected-checks-first" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** Declaration checks whose declared reads intersect the paths changed since the green pointer run before the other declaration checks.
 - **c2:** The legacy program runs after the affected declaration checks and before the others when a changed path matches a watch of one of its checks, and last otherwise.

@@ -101,6 +101,13 @@ see [lane holds](../tillr-drain/README.md#lanes-that-staging-refuses). The waiti
 the remaining process ids and how to end them. Standalone executions have no drain to
 perform that hold.
 
+## Worker CPU priority
+
+At startup, `exec` sets the worker process group's niceness to 10. Children started
+later inherit that niceness. The heavy proof keeps the drain's priority. This
+adjustment adds no time limit and stops no process. If the adjustment fails, the
+run continues; `tillr-run` reports the error on stderr unless the group already exited.
+
 ## Child environment
 
 `exec` sets the following variables for every backend, including registered commands.

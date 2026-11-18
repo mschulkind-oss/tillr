@@ -622,7 +622,7 @@ as a `revert` row. An unattributed red is never reverted.
 A check that reaches its timeout is "no verdict": the pointer does not move, nothing is
 attributed, and the line says which check and how long it ran.
 
-**Time to a revert (measured 2026-11-18, proposed, not built).** A revert can start only once
+**Time to a revert (measured 2026-11-18).** A revert can start only once
 the heavy run has named a red check, and today that is at the end of the whole run. Over the
 recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
 minutes and at most 52.7. The legacy check `go-tool/tools-tillr-drain` runs the `tillr-drain`
@@ -637,9 +637,10 @@ program starts. Three further changes shorten the time from a landing to its rev
 2. **Checks the change reaches go first.** Checks whose declared reads intersect the paths the
    landings since the pointer changed are started before the rest. The duplicate `tillr-drain`
    runs are already gone.
-3. **The proof has the CPU first.** While a heavy run is in progress, workers' own test processes
-   run at a lower scheduling priority (a `nice` level or a cgroup weight), never under a time
-   limit, so a loaded machine slows the workers rather than the proof every one of them waits on.
+3. **The proof has the CPU first.** At startup, `tillr-run` sets each worker process group's
+   niceness to 10, whether or not a proof is running. Later children inherit the lower
+   priority, while the proof keeps the drain's priority. This uses no control group weight
+   and adds no time limit.
 
 The four roadmap items start at [faster recovery from red landings](../tillr/roadmap.md#add-faster-recovery-from-red-landings).
 
