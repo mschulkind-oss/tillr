@@ -564,6 +564,41 @@ still red on the run's base, report the trunk broken and name that check.
 
 The criteria below are unchanged.
 
+**Ruling, 2026-11-18 (answers the ninth run's report of blocked):** the ninth run stopped before
+editing, on two points. Neither is a conflict between its brief and the tree, and neither needs a
+new decision.
+
+1. **The rulings in this block are the brief's settled decisions.** The run's brief listed no
+   settled decision, the tree held the two rulings above, and the run read that difference as a
+   brief that was wrong about the tree. A brief that carries less than this block is short, not
+   wrong: it names this block as the item, so the block is read to its end and the rulings are
+   followed, the later one where two disagree. A stop is for a question the block does not
+   answer. Build the read-only fallback the second ruling settles, on the parts of the preserved
+   change it says to keep.
+2. **How to prove the Python suite with the stale declaration outside the paths.** The second
+   ruling's last paragraph already says it; these are its steps. Read on `2d70932eb` on
+   2026-11-18: `rg -n -F 'if time.Since(started) > time.Second {'` over
+   `tools/gate-timing-declarations.json` and `tools/bedrock-spend/internal/cli/cli_test.go`
+   returns one line, in the declarations file, and none in the test, so the suite is still red
+   there before it reaches this item's tests.
+   - Run `python3 tests/fork-check.test.py` once on the unchanged declarations file, with no
+     limit shorter than the run, and keep the assertion it stops at.
+   - Remove the stale entry in the working tree only and run the suite again. This run is the
+     proof of c6 and c7, and its output goes in the report.
+   - Restore the file with `git checkout -- tools/gate-timing-declarations.json`, check that
+     `git status --short` does not list it, and only then commit. The commit holds the item's
+     paths and nothing else.
+   - If the first run stopped at `a timing declaration no longer matches a hit`, end the report
+     with the trunk broken, naming that assertion, the declarations file and the base sha. The
+     commit comes first, so the candidate exists when the base is replayed. If the first run
+     passed, because the declaration was repaired on the run's base, skip the removal and report
+     done.
+
+   Running a command over a file outside the paths is not a change to it; only the commit is
+   held to the paths.
+
+The criteria below are unchanged.
+
 <!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
 
 - **c1:** When the kernel counter is refused, the gate reads the check's CPU time from unprivileged process accounting that still counts exited children, and stall detection stays on.
