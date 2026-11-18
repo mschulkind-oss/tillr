@@ -192,3 +192,20 @@ func writeDocument(t *testing.T, root, path string) {
 		t.Fatalf("writing %s failed: %v", path, err)
 	}
 }
+
+func TestDocumentLedgerIDs(t *testing.T) {
+	v := VantageQuestions{Root: t.TempDir(), Command: []string{"printf", "%s", `{"index":{"documents":[{"path":"ruled.md","questions":[],"ledgerIds":["ruled-1"]},{"path":"plain.md","questions":[]}]}}`}}
+	for _, name := range []string{"ruled.md", "plain.md"} {
+		if err := os.WriteFile(filepath.Join(v.Root, name), []byte("# Design\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ruled, err := v.Document("ruled.md")
+	if err != nil || !ruled.Present || len(ruled.LedgerIDs) != 1 || ruled.LedgerIDs[0] != "ruled-1" {
+		t.Fatalf("ruled: %+v %v", ruled, err)
+	}
+	plain, err := v.Document("plain.md")
+	if err != nil || !plain.Present || len(plain.LedgerIDs) != 0 {
+		t.Fatalf("plain: %+v %v", plain, err)
+	}
+}

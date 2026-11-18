@@ -1125,6 +1125,11 @@ budget would re-dispatch a broken adapter at once and forever. That is the queue
 
 ### Owner decisions in documents
 
+Answer sync indexes the trunk commit, not the checkout. A question counts as
+answered when the index marks it answered, or when it is absent from the
+question list and its ID survives in the document's decision ledger. An open
+entry takes precedence over the ledger; deletion alone does not release the item.
+
 An owner decision is a report's question together with at least two alternatives,
 not merely an actor line. Design briefs ask for a sentence ending in a question mark
 and bulleted or numbered alternatives under an Options heading. Explicitly lettered
