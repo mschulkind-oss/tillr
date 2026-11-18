@@ -1,5 +1,5 @@
 {
-  "about": "The tillr backend policy for a machine whose only provider is Amazon Bedrock (the work profile). Same shape and same rules as backend-policy.json beside it, which is the personal machines' policy; a drain on a Bedrock machine names this file with --policy. The build seat runs Terra and the scout seat runs Luna (the owner's instruction of 2026-11-18, to put cheaper models on implementation and scouting); the review seat runs the profile's workhorse row and the design seat runs the frontier row. All go through the pi adapter. Two files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
+  "about": "The tillr backend policy for a machine whose only provider is Amazon Bedrock (the work profile). Same shape and same rules as backend-policy.json beside it, which is the personal machines' policy; a drain on a Bedrock machine names this file with --policy. The build seat runs Terra and the scout seat runs Luna (the owner's instruction of 2026-11-18, to put cheaper models on implementation and scouting); the review seat runs the profile's workhorse row, Sol 6.2 (back on 2026-11-18 once the early-quit cause was found in the brief and fixed) and the design seat runs the frontier row. All go through the pi adapter. Two files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
   "default_backend": "pi",
   "preference": [
     "pi"
@@ -14,7 +14,7 @@
   "backends": {
     "pi": {
       "adapter": "tools/tillr-run/backends/pi/run-pi",
-      "model": "amazon-bedrock/global.openai.gpt-6.1-sol",
+      "model": "amazon-bedrock/global.openai.gpt-6.2-sol",
       "effort": "medium"
     },
     "pi-designer": {
