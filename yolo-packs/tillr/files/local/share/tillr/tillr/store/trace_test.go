@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -47,7 +46,7 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 	if value, err := s.Meta("trace-probe"); err != nil || value != nil {
 		t.Fatalf("trace changed rollback: %v %v", value, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	flushStatus, flushErr := store.FlushSQLiteTrace(ctx)
 	cancel()
 	if flushErr != nil {

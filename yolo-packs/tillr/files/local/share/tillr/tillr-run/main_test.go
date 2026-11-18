@@ -468,7 +468,7 @@ func TestExecTimesOutACommandThatOutlivesItsBound(t *testing.T) {
 	}
 	// Wait for the state, not for a duration: the process must be gone, and the
 	// bound is on how long the test is willing to wait for that event.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
 			return

@@ -40,7 +40,7 @@ func TestCanceledFaceExtractsUsageAlreadyWritten(t *testing.T) {
 		}
 		done <- err
 	}()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if _, err := os.Stat(marker); err == nil {
 			break
@@ -56,7 +56,7 @@ func TestCanceledFaceExtractsUsageAlreadyWritten(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("face did not stop")
 	}
 	if rec.Usage == nil || rec.Usage.CostUSD == nil || *rec.Usage.CostUSD != .03 || rec.Usage.Tokens == nil || *rec.Usage.Tokens != 1500 {

@@ -17,6 +17,12 @@ import (
 // transaction and not the seed marker.
 const writeKind = "store.write_test"
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func init() {
 	if err := event.Register(writeKind, "store"); err != nil {
 		panic(err)
@@ -229,7 +235,7 @@ func TestASecondWriterWaitsForTheFirstInsteadOfFailing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the second writer failed after the first committed: %v", err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("the second writer never finished after the first committed")
 	}
 	for _, key := range []string{"first", "second"} {

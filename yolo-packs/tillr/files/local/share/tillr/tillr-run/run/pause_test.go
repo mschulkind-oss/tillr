@@ -64,7 +64,7 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 					result <- e
 				}()
 				if segment < 3 {
-					deadline := time.Now().Add(5 * time.Second)
+					deadline := time.Now().Add(hangGuard)
 					for {
 						raw, _ := os.ReadFile(filepath.Join(lane, "worktree", "segments"))
 						if strings.TrimSpace(string(raw)) == string(rune('0'+segment)) {
@@ -89,13 +89,13 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 						}
 					case err := <-result:
 						t.Fatalf("run ended before the straggler bound was set: %v", err)
-					case <-time.After(15 * time.Second):
+					case <-time.After(hangGuard):
 						t.Fatal("pause request was never acted on")
 					}
 					for round := 1; round <= 2; round++ {
 						nonce := fmt.Sprintf("segment %d round %d", segment, round)
 						os.WriteFile(filepath.Join(lane, "worktree", "probe"), []byte(nonce), 0644)
-						deadline := time.Now().Add(5 * time.Second)
+						deadline := time.Now().Add(hangGuard)
 						for {
 							raw, _ := os.ReadFile(filepath.Join(lane, "worktree", "probe-echo"))
 							if string(raw) == nonce {
@@ -114,7 +114,7 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-				case <-time.After(15 * time.Second):
+				case <-time.After(hangGuard):
 					t.Fatal("pause did not stop the harness")
 				}
 				session, err := run.ReadSessionID(lane)

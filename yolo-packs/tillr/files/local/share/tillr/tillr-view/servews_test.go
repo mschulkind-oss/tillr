@@ -189,7 +189,7 @@ func TestWebSocketPushesOneInvalidationPerChange(t *testing.T) {
 	conn := h.dial(t)
 	defer conn.Close()
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(hangGuard)); err != nil {
 		t.Fatalf("setting the read deadline: %v", err)
 	}
 	h.appendEvent("item.record", "item", "item-seed-02")
@@ -225,7 +225,7 @@ func TestWebSocketClosesWithAReasonWhenTheStoreCannotAnswer(t *testing.T) {
 	}
 	conn := h.dial(t)
 	defer conn.Close()
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(hangGuard)); err != nil {
 		t.Fatalf("setting the read deadline: %v", err)
 	}
 	_, _, err := conn.ReadMessage()
@@ -251,7 +251,7 @@ func TestWebSocketReleasesItsGoroutinesOnClose(t *testing.T) {
 	base := settledGoroutines(t)
 	for i := 0; i < 5; i++ {
 		conn := h.dial(t)
-		if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(hangGuard)); err != nil {
 			t.Fatalf("setting the read deadline: %v", err)
 		}
 		// A frame is what proves the poll loop and its reader are up: a count sampled
@@ -262,17 +262,19 @@ func TestWebSocketReleasesItsGoroutinesOnClose(t *testing.T) {
 		}
 		conn.Close()
 	}
-	if got := settledGoroutines(t); got > base {
+	if got := goroutinesBackTo(t, base); got > base {
 		t.Fatalf("5 closed sockets left %d goroutines behind (%d at the start): a reader or a poll loop outlived its connection", got-base, base)
 	}
 }
 
 // settledGoroutines answers the runtime's goroutine count once it has stopped moving, so
-// a goroutine still on its way out from an earlier case is not this case's baseline.
+// a goroutine still on its way out from an earlier case is not this case's baseline. A
+// baseline sampled a little high only makes the leak check more lenient, never stricter, so
+// load cannot fail it.
 func settledGoroutines(t *testing.T) int {
 	t.Helper()
 	prev := runtime.NumGoroutine()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 		now := runtime.NumGoroutine()
@@ -283,6 +285,21 @@ func settledGoroutines(t *testing.T) int {
 	}
 	t.Fatalf("the goroutine count never settled: %d", prev)
 	return prev
+}
+
+// goroutinesBackTo waits until the count is at most want and answers the count it last saw.
+// A goroutine that outlives its connection keeps the count above want however long this
+// waits, so only a real leak reaches the hang guard; a slow exit on a loaded machine does not.
+func goroutinesBackTo(t *testing.T, want int) int {
+	t.Helper()
+	deadline := time.Now().Add(hangGuard)
+	for {
+		got := runtime.NumGoroutine()
+		if got <= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // dial opens one socket against the fixture's server, with the Origin header a browser

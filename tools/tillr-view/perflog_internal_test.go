@@ -31,6 +31,12 @@ type fakeClock struct {
 	t  time.Time
 }
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func (c *fakeClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -119,11 +125,11 @@ func readPerfLinesIfAny(path string) []string {
 	return strings.Split(strings.TrimSpace(string(raw)), "\n")
 }
 
-// waitFor polls a condition the writer goroutine will make true; it bounds the wait but
-// asserts nothing about how long the write took.
+// waitFor polls a condition the writer goroutine will make true. The hang guard only ends a
+// writer that died; it asserts nothing about how long the write took.
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for !ok() {
 		if time.Now().After(deadline) {
 			t.Fatal("the log writer never wrote the line")
@@ -190,7 +196,7 @@ func TestPerfLogDropsRatherThanBlocksAndSaysHowMany(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("emit blocked on a full queue")
 	}
 	if l.dropped.Load() != 2 {

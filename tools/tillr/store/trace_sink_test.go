@@ -47,7 +47,7 @@ func stalledSQLiteStderr(t *testing.T) (block, release func()) {
 	// in the process-wide observer, which a later test's capture reports as incomplete.
 	t.Cleanup(func() {
 		release()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 		_, _ = FlushSQLiteTrace(ctx)
 		os.Stderr = original
@@ -106,7 +106,7 @@ func TestBlockedTraceSinkDoesNotRetainMigrationWriter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-competitor
 		<-migration
@@ -117,7 +117,7 @@ func TestBlockedTraceSinkDoesNotRetainMigrationWriter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-migration
 		t.Fatal("migration return waited for diagnostic sink")

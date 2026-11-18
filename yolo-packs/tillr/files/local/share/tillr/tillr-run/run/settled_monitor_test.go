@@ -27,6 +27,12 @@ func settledScratch(t *testing.T) string {
 	return dir
 }
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly".
+const hangGuard = 5 * time.Minute
+
 func TestSilentHarnessRequiresSettlementAndFooter(t *testing.T) {
 	for _, tc := range []struct{ name, stream string }{
 		{"unsettled", "RESULT: done\n"},
@@ -163,7 +169,7 @@ func TestGroupCPUReadsHelperTicks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); cmd.Wait() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	var child string
 	for child == "" {
