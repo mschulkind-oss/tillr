@@ -492,10 +492,7 @@ a step is not an ending, and the commit is made once, at step 4.
 step whose named function or file is not in the tree. Report it with the step number, the command
 and its output. A report that lists the later items' work as missing describes other items.
 
-<!-- tillr: item id="item-heavy-revert-time-to-verdict" paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-run/,tools/fork-check.py,tests/fork-check.test.py,tests/go-test-shards.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Each proof runs the `tillr-drain` test suite once: the parity case in `tests/go-test-shards.test.py` lists and plans the suite and starts no test of it.
-- **c2:** The parity case fails if it launches a test run, a case in `tests/fork-check.test.py` asserts that a rolling plan holds one command that runs the `tillr-drain` suite, and the gate design's "Time to a revert" paragraph says the suite runs once.
 
 ### Add a lower CPU priority for worker processes
 
@@ -587,7 +584,7 @@ i=0; while [ "$(nice)" = "OWN" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); d
 4. **Finish.** Run `just pack-sync`, then the commands under **Verify**, and make one commit
    holding all of it.
 
-<!-- tillr: item id="item-heavy-worker-cpu-priority" paths="tools/tillr-run/,tools/tillr-drain/README.md,yolo-packs/tillr/,docs/" blocked_by="item-heavy-revert-time-to-verdict" prose="2" -->
+<!-- tillr: item id="item-heavy-worker-cpu-priority" paths="tools/tillr-run/,tools/tillr-drain/README.md,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tillr-run` lowers the CPU priority of a run's process group by a niceness of 10 when the run starts, so every process a worker starts runs at a lower priority than the heavy proof, which keeps the drain's priority.
 - **c2:** Nothing is stopped for time: the change ends no process and adds no time limit, and a failure to lower the priority does not fail the run.

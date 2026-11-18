@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Permanent runner regression tests; parity also exercises the real drain suite."""
+"""Permanent runner regression tests; parity lists and plans the real drain suite without running it."""
 from contextlib import redirect_stderr
 import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -225,18 +226,41 @@ func TestMain(m *testing.M) {
         self.assertEqual(run.call_args.args[-1], '0')
 
     def test_drain_name_parity(self):
+        # Lists and plans the real drain suite and runs none of it: the rolling check
+        # go-tool for tools/tillr-drain is the proof's one run of that suite.
         module = ROOT / 'tools/tillr-drain'
-        baseline = subprocess.run(['go', 'test', '-json', './...', '-count=1', '-timeout', '60m'],
-                                  cwd=module, capture_output=True, text=True)
-        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
-        report = self.root / 'drain.jsonl'
-        result = subprocess.run(['python3', str(RUNNER), str(module), '--events', str(report)],
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        def passed(lines):
-            return {(e['Package'], e['Test']) for e in map(json.loads, lines.splitlines())
-                    if e.get('Action') == 'pass' and e.get('Test')}
-        self.assertEqual(passed(baseline.stdout), passed(report.read_text()))
+        native_command = ['go', 'test', '-json', '-list', '.', './...']
+        planned = []
+        real_popen = subprocess.Popen
+
+        def refuse_a_test_run(command, *args, **kwargs):
+            words = [str(word) for word in command]
+            self.assertTrue(
+                words == native_command
+                or words == ['go', 'list', '-json', './...']
+                or (words[:4] == ['go', 'test', '-c', '-o'] and len(words) == 6)
+                or (words[0] == 'git' and words[1] == 'config')
+                or words[1:] == ['-test.list=.', '-test.timeout=0'], words)
+            return real_popen(command, *args, **kwargs)
+
+        def record(package, cwd, binary, names, *rest):
+            planned.extend((package, name) for name in names)
+            return []
+
+        with patch.object(shards, 'run_shard', record), \
+                patch.object(subprocess, 'Popen', refuse_a_test_run):
+            listing = subprocess.run(native_command, cwd=module, capture_output=True, text=True)
+            self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+            shards.run(module, 6, shards.load_durations(shards.DEFAULT_DURATIONS),
+                       self.root / 'parity', '0')
+        native = set()
+        for event in map(json.loads, listing.stdout.splitlines()):
+            name = event.get('Output', '').strip()
+            if event.get('Action') == 'output' and re.match(r'^(Test|Example|Fuzz)\w*$', name):
+                native.add((event['Package'], name))
+        self.assertTrue(native, 'Go listed no drain tests')
+        self.assertEqual(len(planned), len(set(planned)))
+        self.assertEqual(set(planned), native)
 
 
 if __name__ == '__main__':
