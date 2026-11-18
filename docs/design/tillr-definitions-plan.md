@@ -2,7 +2,7 @@
 title: "Build plan: a tillr core with Git landing as its first definition"
 status: accepted
 stage: DECIDED
-updated: 2026-11-17
+updated: 2026-11-18
 tags:
   - tillr
   - plan
@@ -10,7 +10,7 @@ tags:
   - boundaries
   - product-qa
 summary: "The build hand-off for the owner's 2026-11-17 go-ahead: eighteen queued items that turn tillr into a core that does not assume Git landing, with Git landing supplied by one definition and a second, runnable definition that lands nothing. Each item says what the Product QA pipeline can try once it lands. The next tranche is written in prose, to be filed when this one has landed."
-next: "The drain builds the eighteen items in dependency order. When the worked example lands, Product QA's agent runs it and writes round three against the real thing; then the next tranche is filed."
+next: "The first tranche has landed. Product QA's agent runs the worked example and writes round three, and the owner confirms or changes the working choices (OQ-CG1 to OQ-CG5); only then is the next tranche filed."
 depends-on:
   - tillr-core-and-git-landing.md
   - tillr-separable-parts.md
@@ -24,7 +24,7 @@ depends-on:
 **Status:** 2026-11-17. Written against `4df6e426f`. The owner said to build on 2026-11-17: "file
 item(s) to build as much of the new tillr as possible so autoqa can play with the real thing and
 comment for real the next round". By "autoqa" he means the Product QA pipeline (see
-[the words](#the-words-this-plan-uses)). The eighteen items below are queued. They rest on
+[the words](#the-words-this-plan-uses)). The eighteen items below were queued that day, and all eighteen had landed by 2026-11-18 (read from the store's status face against the tree at `dcb76fe41`). They rest on
 **working choices**, each to be confirmed or changed by the owner after the next round, which are
 recorded in
 [the direction document, Section 8](./tillr-core-and-git-landing.md#8-building-it-the-owners-go-ahead-and-the-working-choices).
@@ -1001,6 +1001,20 @@ c1 to c6 were met by the first run's work and stand as written.
 These are filed when the first tranche has landed, because each builds on the definition file, the
 hook contract or the worked example, and because the queue already holds about eighty items. Each
 names the request it answers.
+
+**What the tranche waits on, as of 2026-11-18.** The first tranche has landed, but the tranche is
+still not filed, on purpose. Two things must happen first, and neither has:
+
+- **Product QA's third round.** Their agent runs the worked example and writes round three against
+  the real thing. [Their reply](./tillr-product-qa-requests.md) is still the second round.
+- **The owner's ruling on the working choices.** Every unit below rests on choices recorded as
+  open questions [`OQ-CG1`](./tillr-core-and-git-landing.md#OQ-CG1) to [`OQ-CG5`](./tillr-core-and-git-landing.md#OQ-CG5) in
+  [the direction document](./tillr-core-and-git-landing.md#8-building-it-the-owners-go-ahead-and-the-working-choices),
+  and those choices are to be confirmed or changed after the next round. For example, unit 1
+  depends on where the line between core and definition falls ([`OQ-CG2`](./tillr-core-and-git-landing.md#OQ-CG2)), and unit 4 needs
+  `D-IG4` amended first.
+
+Filing these units now would put work in the queue that an open question still governs.
 
 1. **Count outcomes and draw the views from the definition** (R2-8). The status face and the
    observatory count items by the definition's finished states, and the landings and trunk pages

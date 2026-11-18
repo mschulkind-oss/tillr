@@ -189,11 +189,11 @@ invocation mistake does not hide the real reasons items are held.
 
 ## 3. Roll onto new code without ending runs
 
-[Rolling tillr onto new code](../design/tillr-restart.md) is decided. It comes third because
-every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in flight, and
-because [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step. Its first
-slice (run output to a file) is built; the pause, the restart request, the roll after a landing,
-the push after a landing and this repository's settings file are queued in its build order.
+[Rolling tillr onto new code](../design/tillr-restart.md) is built: all nine blocks of its build
+order had landed by 2026-11-18, among them the pause, the restart request, the roll and push
+after a landing, and this repository's settings file. It stays third as the record of why it
+came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
+flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
 
 ## 4. Choose where each seat runs
 
@@ -209,10 +209,10 @@ which the owner asked to be high priority on 2026-11-18 and which sets the queue
 
 ## 5. The ten-second gate
 
-[The gate rework](../design/gate-rework.md) is decided and partly built: check files, the policy
-file and result memory have landed. Fifth because the owner's target is a gate measured in
-seconds and landings that outpace ten lanes, and the remaining slices are a chain behind the
-change-checks slice, which has failed its own gate twice and is being reworked.
+[The gate rework](../design/gate-rework.md) is decided and, as of 2026-11-18, built except one
+decision: every slice of its build order has landed, and so have the red cap, the lane base and
+runner-pays-first. The upstream drift probe of its `D-GR12` is not built. Fifth because the
+owner's target is a gate measured in seconds and landings that outpace ten lanes.
 
 Automatic revert landed on 2026-11-18 and is on here. First of the gate's remaining work is
 [shortening the time from a red landing to its revert](#shorten-the-time-from-a-red-landing-to-its-revert),
@@ -220,20 +220,18 @@ because every lane waits on that revert.
 
 ## 6. The observatory answers the owner's questions
 
-[The observatory redesign](../design/observatory-redesign.md) has its first screens built: the
-waiting and passes faces, Home, Items, Passes, Performance, Trunk and trace export. Sixth, and
-not higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
-Queued behind it: [a stopped loop says what stopped it](#filed-2026-11-15-the-observatory-speaks-to-its-reader-not-to-its-builders),
-and the lane strip, lane page, dependency graph and usage figures, which no longer wait on a
-ruling.
+[The observatory redesign](../design/observatory-redesign.md) is built: all ten slices had landed
+by 2026-11-18, including the lane strip, lane page, dependency graph and usage figures, and so
+had [the observatory's first two writes](../design/observatory-actions.md). Sixth, and not
+higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
+Also filed here: [a stopped loop says what stopped it](#filed-2026-11-15-the-observatory-speaks-to-its-reader-not-to-its-builders).
 
 ## 7. The drain's own model
 
-[Replace the drain tick with a converge function](../design/tillr-drain-successor.md) is decided
-and four of its five steps are built: the transition value, attempt identities, the per-item pass
-and the trigger wait. Seventh because what is left, retiring the tick's names, changes no
-behavior. The design is still titled "successor function"; the owner's name for it is converge,
-and the rename waits for that last step.
+[Replace the drain tick with a converge function](../design/tillr-drain-successor.md) is built:
+all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The design is
+still titled "successor function"; the owner's name for it is converge, and the document has not
+been renamed.
 
 ## 8. Design work that keeps its context
 
