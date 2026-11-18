@@ -150,12 +150,20 @@ func clearCandidateRelease(tx *store.Tx, c Candidate, at time.Time) error {
 	return appendEffect(tx, examinationOwnerKind, c.RunID, (*LoopOwner)(nil), at)
 }
 
+// retiredHeadKeep keeps a lane whose HEAD is the loop's own document-retirement commit.
+// That commit is recorded but not pinned: the pin and a restaging carry the worker head
+// only, so releasing the lane would discard the retirement and leave the retry a
+// candidate-record mismatch. Kept, the retry examines the lane in place and gates the
+// retired head (TestRestartGatesAndLandsTheRetiredHead).
+const retiredHeadKeep = "lane holds the loop's retirement commit; the retry gates it in place"
+
 // recordedHeadKeep answers why a held candidate's lane HEAD keeps the lane, or "" when
-// the HEAD is one the store records: the candidate head, the reset a failed repair staging
-// recorded, an interrupted release's destination, or the loop's own document-retirement
-// commit whose parent and tree the candidate's retirement binding names (recoverRetirement).
-// It only reads, so a pass can learn that a recorded keep still stands without claiming
-// the lane to find out.
+// the HEAD is one a release can restore: the candidate head, the reset a failed repair
+// staging recorded, or an interrupted release's destination. The loop's own
+// document-retirement commit whose parent and tree the candidate's retirement binding
+// names (recoverRetirement) keeps the lane as retiredHeadKeep; any other HEAD keeps it
+// for inspection. It only reads, so a pass can learn that a recorded keep still stands
+// without claiming the lane to find out.
 func (l *Loop) recordedHeadKeep(ctx context.Context, work *pendingWork, reason string) (string, error) {
 	c := *work.Candidate
 	// Failed repair staging may have reset to its captured trunk, but never
@@ -201,7 +209,7 @@ func (l *Loop) recordedHeadKeep(ctx context.Context, work *pendingWork, reason s
 	}
 	if c.WorkerHeadSHA != "" && c.RetirementTreeSHA != "" {
 		if retired, err := l.recoverRetirement(ctx, c); err == nil && retired.HeadSHA == head {
-			return "", nil
+			return retiredHeadKeep, nil
 		}
 	}
 	return "unrecorded lane HEAD needs inspection", nil
