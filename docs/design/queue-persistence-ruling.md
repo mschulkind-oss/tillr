@@ -22,6 +22,8 @@ vantage:
 # Shared Documents Carry the Work; Private Queue State Stays Private
 
 > **Carried out.** `tillr item sync` reads item blocks from documents (commit `3c215883d`), and the lander writes no trailer. This document stays as the record of the ruling.
+>
+> **Reopened.** The owner did not rule on the item block of `D-RS1`; he objected to it on 2026-11-18, and the question is reopened as [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1) in [the queue mirrors the roadmap's outstanding designs](tillr-queue-mirrors-designs.md).
 
 **Status:** 2026-11-15. Ruled and executable today; nothing below waits on [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger), [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger), or [a closed question](tillr-queue-persistence.md).
 

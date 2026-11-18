@@ -31,6 +31,11 @@ They are the ones no recorded principle could answer. Twenty-three others that s
 settled on 2026-11-15 and 2026-11-16 by the session's designer, at the owner's request; each
 says so in its design and is the owner's to overturn.
 
+[The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md),
+written on 2026-11-18 to the owner's words of that evening, comes ahead of the list below: it
+reopens how work written in a document reaches the queue, which the owner never ruled, and none
+of it is built until he has.
+
 1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): what becomes of the pack mirror that
    doubles every tillr change. First because it is a cost on every landing but stops nothing.
 
