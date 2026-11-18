@@ -742,15 +742,30 @@ names the declaration judge; `--rolling` still names the legacy program. An expl
 empty `--rolling` disables that legacy coverage, not the declaration checks. Missing
 programs or missing verdict evidence are reported as faults, never silently passed.
 
+Completed passing checks are saved with the exact trunk tip under the heavy runner's
+lock, before the next check starts. A replacement loop starts proof at its first tick,
+even without a new landing, and logs `reused checks=` for passes it retains. A different
+tip starts fresh; failed, unavailable, and interrupted checks are not reusable proof.
+Declarations are judged individually. The default Python legacy gate keeps its own
+planner and scheduler; an embedded observer saves each completed pass atomically.
+A stalled check's successful retry is also saved before the next retry starts, and
+both declaration checks and the default legacy gate read those passes after restart.
+Custom legacy programs keep their batch/spans contract and must supply their own
+incremental persistence if they need reuse inside an interrupted batch.
+
 A run with no failing or unjudged check advances `refs/tillr/green` with a guarded Git
 update: the value read before judging must still be the current value, and it must be
 an ancestor of the judged tip. Unavailable checks are listed, not counted as passes.
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID
-with a selector. Red at the pointer is a gate fault, naming the check's needs and tools;
-otherwise the first red landing receives a fixer: an item that repairs the broken trunk,
-containing every check attributed to it. Its fence (the paths it may change) combines the
+with a selector. When the range cannot identify a single culprit (the base is red,
+there are no recorded landings, or the last landing is green), a fixer names both full
+commit IDs of the observed range and says attribution is unavailable, including the
+check's needs and tools. The last recorded landing is checked before narrowing the
+search, so an earlier red landing is not blamed when the last one passed. Otherwise the first
+red landing receives a fixer: an item that repairs the broken trunk, containing every
+check attributed to it. Its fence (the paths it may change) combines the
 checks' declared sources and tests with the paths touched by every commit since the last
 green through the current tip, even paths later reverted. Legacy checks obtain their read
 paths from the gate's declaration export, not their recorded output writes. The gate's own
@@ -780,8 +795,14 @@ Budgets are reported targets, never deadlines. The summary names each overrun's 
 and declared times without changing the verdict. A sampled stall is retried once on the
 same tip; a second stall is red and files a fixer. A loop stop ends check processes before
 removing their checkout. `tillr-view status --store <store> --root <repository>` reports
-the green commit, recorded landings since it, first-red attribution, unavailable checks,
-and overruns. The shared report lives beside the result store in the Git common directory;
+the green commit and its recorded proof time, recorded landings since it, first-red
+attribution, unavailable checks, and overruns. The loop log and both waiting views show
+the green commit's proof age. Proof times are stored by commit before the guarded
+pointer update; a cancelled or refused update leaves the previous green commit's time
+unchanged. With no green commit yet, the waiting view adds no proof row or reader fault.
+Older pointers without a recorded proof time explicitly say the age is unknown; the
+commit's author date is never substituted. The shared report lives beside the result
+store in the Git common directory;
 the retired rolling watermark is neither read nor written on this path.
 
 ## Legacy rolling trunk audits

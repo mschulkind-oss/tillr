@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -56,6 +57,11 @@ func TestStatusPrintsGreenRangeAttributionUnavailableAndOverruns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "heavy.json"), raw, 0644); err != nil {
 		t.Fatal(err)
 	}
+	proved := time.Now().UTC().Add(-2 * time.Hour)
+	proofRaw, _ := json.Marshal(map[string]any{"commit": green, "proved_at": proved})
+	if err := os.WriteFile(filepath.Join(dir, "green.json"), proofRaw, 0644); err != nil {
+		t.Fatal(err)
+	}
 	path := fixture(t)
 	s, err := store.Open(context.Background(), path, true)
 	if err != nil {
@@ -82,8 +88,9 @@ func TestStatusPrintsGreenRangeAttributionUnavailableAndOverruns(t *testing.T) {
 	var env struct {
 		Payload struct {
 			Heavy struct {
-				GreenCommit   string `json:"green_commit"`
-				LandingsSince int    `json:"landings_since"`
+				GreenCommit   string    `json:"green_commit"`
+				GreenProvedAt time.Time `json:"green_proved_at"`
+				LandingsSince int       `json:"landings_since"`
 				FailingChecks []struct {
 					CheckID         string `json:"check_id"`
 					FirstRedLanding string `json:"first_red_landing"`
@@ -102,11 +109,15 @@ func TestStatusPrintsGreenRangeAttributionUnavailableAndOverruns(t *testing.T) {
 	if err := json.Unmarshal(out, &env); err != nil {
 		t.Fatal(err)
 	}
+	code, waiting := runView(t, "waiting", "--history", "--json", "--store", path, "--root", root)
+	if code != 0 || !strings.Contains(string(waiting), green[:12]) || !strings.Contains(string(waiting), "ago") {
+		t.Fatalf("waiting %d: %s", code, waiting)
+	}
 	heavy := env.Payload.Heavy
 	if len(heavy.Overruns) != 1 || heavy.Overruns[0].DurationMS != 125 || heavy.Overruns[0].BudgetMS != 100 {
 		t.Fatalf("overruns=%s", out)
 	}
-	if env.Payload.Fault != "" || heavy.GreenCommit != green || heavy.LandingsSince != 2 || len(heavy.FailingChecks) != 1 || heavy.FailingChecks[0].FirstRedLanding != red || len(heavy.Unavailable) != 1 || heavy.Unavailable[0].CheckID != "external" || len(heavy.Overruns) != 1 {
+	if env.Payload.Fault != "" || heavy.GreenCommit != green || !heavy.GreenProvedAt.Equal(proved) || heavy.LandingsSince != 2 || len(heavy.FailingChecks) != 1 || heavy.FailingChecks[0].FirstRedLanding != red || len(heavy.Unavailable) != 1 || heavy.Unavailable[0].CheckID != "external" || len(heavy.Overruns) != 1 {
 		t.Fatalf("status=%s", out)
 	}
 }
