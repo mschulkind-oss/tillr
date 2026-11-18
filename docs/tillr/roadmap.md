@@ -466,9 +466,9 @@ report that detection is unavailable rather than implying that the check is bein
 - **Verify:** Force the kernel task-clock counter unavailable in both the Go gate and Python
   checker. Cover a silent, CPU-idle check for the full stall window; continued CPU use or
   output; short-lived children; and failure to read either accounting source. Check that logs
-  and verdicts identify the source. Use accounting that includes exited children, such as
-  control-group accounting, rather than partial process snapshots. Document the available
-  sources and their precedence.
+  and verdicts identify the source. Use the fallback the second ruling below settles, which
+  counts work done in children that have already exited. Document the available sources and
+  their precedence.
 
 **Ruling, 2026-11-17 (answers the third run's fence conflict):** the third run stopped before
 editing because c2 puts the CPU-accounting source in the verdict, and the verdict record is
@@ -490,6 +490,77 @@ directory, so both files and their tests are inside the fence, and the delivered
 3. **No reader outside the gate changes.** The drain reads the verdict in
    `tools/tillr-drain/drain/gate_stall.go` and does not refuse a field it does not know, so the
    new field needs no change there, and that directory stays outside the paths.
+
+The criteria below are unchanged.
+
+**Ruling, 2026-11-17 (answers the sixth run's report of blocked):** the sixth run restored the
+fifth run's change and stopped when `python3 tests/fork-check.test.py` passed a 300-second limit.
+That change kept stall detection on by putting every check under a supervisor that
+[traces](https://man7.org/linux/man-pages/man2/ptrace.2.html) it: the supervisor stops each
+thread as it exits and saves its CPU time. The run could not tell a slow suite from a hung one.
+Both were true, and the second one settles the mechanism. These were measured the same day in the
+same jail, on base `123aeab1b`, with the preserved change from
+`refs/tillr/preserved/run-item-gate-stall-watch-without-perf-counter-a6` applied and then removed:
+
+- **The limit was shorter than the suite.** On the base alone the suite ran 4 minutes 2 seconds,
+  with a load average near 80 on 32 processors, and then failed. So a 300-second cut-off says
+  nothing about the change.
+- **The suite is red on the base, before this item's tests.** It stops at the assertion
+  `a timing declaration no longer matches a hit`, naming
+  `tools/bedrock-spend/internal/cli/cli_test.go: if time.Since(started) > time.Second {`. Commit
+  `e99cdf1a9` removed that line from the test and left its entry in
+  `tools/gate-timing-declarations.json`. The Python regression tests this item adds sit after
+  that assertion, so no run has yet reached them.
+- **The tracing supervisor hangs a check.** With the stale entry removed in the working tree
+  only, the suite reached its last step, `go test -C tools/tillr-gate ./... -run` over the new
+  tests, which runs under the supervisor. It made no progress for 35 minutes, until the 40-minute
+  limit on the whole suite ended it.
+  The Go assembler it had started was a zombie whose second thread sat in a tracing stop that the
+  supervisor never resumed, `go` waited on it in `do_wait`, and the supervisor slept. A watcher
+  that can stop the check it watches turns its own defect into a stall charged to the candidate.
+- **Control-group accounting is not available here.** `mkdir /sys/fs/cgroup/probe-a8` returns
+  `Read-only file system`, so the gate cannot give a check a group of its own to read.
+- **The rest held.** `python3 tools/go-test-shards.py tools/tillr-gate -k 6` passed 171 tests in
+  22 seconds, and `just pack-sync` finished in 10 seconds and changed no path.
+
+Four points settle the fallback:
+
+1. **The fallback only reads; it never traces.** Drop the tracing supervisor: the file
+   `tools/tillr-gate/process_accounting.py`, its copy inside `tools/fork-check.py`, the socket
+   that nested watchers shared, and the code that starts a check under them. Nothing the fallback
+   does may be able to delay, stop or signal the check.
+2. **What a sample reads.** The members are the live processes in the check's process group,
+   which is the group the runner already ends on a stall. Each is identified by its process id
+   and its start time, both from `/proc/<pid>/stat`. For each member the sample sums the run time
+   of its threads, the first number in `/proc/<pid>/task/<tid>/schedstat`, in nanoseconds. A
+   sample shows CPU progress when that sum differs for any member, or when the set of members
+   differs from the previous sample. A member that disappears while it is being read counts as
+   a change.
+3. **Why this needs no record of exited children to be complete.** Any process that ran between
+   two samples was either alive at the first one, or was started after it by a process that ran.
+   Following the starters back always reaches a member of the first sample that either ran, so
+   its run time differs, or exited, so the set differs. Measured in this jail with a one-second
+   sample: an idle leader showed progress in 0 of 8 samples; a leader that ignores its children's
+   exit and starts one short child every 0.9 seconds showed 8 of 8; so did a leader that exits
+   and leaves a busy orphan, and one that waits for short shell children.
+4. **The reported total.** `cpu_time_ms` under the fallback is the highest value seen of the
+   members' run time plus the time of their reaped children, which `/proc/<pid>/stat` carries as
+   `cutime` and `cstime`. That is how c1's "still counts exited children" is judged. A child
+   whose parent discards its exit status is missing from the total, so the documents call the
+   total a lower bound; by point 3 such a child still counts as progress. A process that leaves
+   the group is not a member, and the documents say so.
+
+The names are unchanged: `kernel task-clock counter` wins when it attaches, and otherwise the
+source is `process accounting`. When `/proc` or the run-time file cannot be read, the source is
+absent and `watchdog unavailable` is printed, which is c5. The design's sentence that incomplete
+`/proc` snapshots are never substituted is replaced by points 2 to 4 under c8. Keep the rest of
+the preserved change: the `cpu_source` field, the source line, the tests' way of forcing the
+counter unavailable, and the tests that do not depend on tracing.
+
+For verification, give the Python suite no limit shorter than its run, and read a run that was cut
+off as no result. The stale declaration is outside this item's paths. Remove it in the working
+tree only to prove the tests behind it, restore it before committing, and if the assertion is
+still red on the run's base, report the trunk broken and name that check.
 
 The criteria below are unchanged.
 
