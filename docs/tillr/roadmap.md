@@ -3402,6 +3402,25 @@ that arrives in between is not seen, and the lander publishes on top of it. So t
 same check itself, under its lock, as the last thing before it publishes. This work therefore
 changes the lander as well as the loop.
 
+The fourth run stopped because the full loop suite never finished, and the cause is now known. It
+is in the suite's fixtures, not in the new check and not in the runner. On 2026-11-18 the fourth
+run's work was unpacked into a scratch directory, and `go test . -count=1 -timeout 12m` in
+`tools/tillr-drain` stopped at the deadline inside `TestDesignAmendmentLandsThenDispatchesOriginalSeat`.
+That test's stand-in lander cherry-picks a commit written as `stub <stub@example.invalid>` onto
+the fixture's trunk. The new check correctly sees a foreign commit and holds landings, the loop
+has nothing else to do, and it waits for an owner who never comes. The stack at the deadline was
+`Loop.Run`, `pass`, `planNothing`, `waitForTrigger`. The sharded runner sets no deadline of its
+own, so the same wait showed as ninety minutes of silence. The trunk itself is sound: on the same
+day `python3 tools/go-test-shards.py tools/tillr-drain -k 6 --timeout 20m` at `3318def2f` passed
+all 1,705 tests in 5 minutes 9 seconds, on a machine whose load average was near 60 on 32 cores.
+
+So the builder repairs the fixtures and leaves the hold as it is. Every fixture commit that
+reaches a fixture's trunk is written by the identity the suite's git config names, the way the
+real lander writes it. A commit a stand-in worker makes in its lane may stay foreign, because it
+is not on the trunk. The only trunk commits left foreign are the ones a test of this item puts
+there on purpose. No test is skipped or deleted, and the hold is not given a deadline or an
+escape to make a fixture pass.
+
 <!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-land/,yolo-packs/tillr/programs/tillr-land/,tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** At each tick the loop checks every trunk commit since the last one it checked, and finds any whose author or committer is not the identity the repository's git config names. A test lands a commit by another identity and asserts it is found on the next tick.
@@ -3418,7 +3437,10 @@ changes the lander as well as the loop.
 - **Where:** `Trunk.LandingIdentity` in `tools/tillr-land/land/trunk.go`, which already reads the configured identity from scopes a lane cannot write and is the reader to reuse; the per-tick trunk reads in `tools/tillr-drain/drain/trunk.go`; the waiting rules in `tools/tillr-view/waiting.go`; `hooks/` and `bin/hooks-install`.
 - **Where, for c7:** `prepareHistory` in `tools/tillr-land/land/trunk_history.go`, called from the locked preparation in `tools/tillr-land/land/landing.go`. It already compares the loop's observed trunk with the tip under the lock, but only for ancestry, and refuses with `ReasonTrunkRewritten`. The identity check belongs beside it, over the same two commits, with a separate reason. The lost-history hold in c4 is the loop's `errTrunkRewritten`.
 - **Pack copy:** a change under `tools/tillr-land/`, `tools/tillr-drain/` or `tools/tillr-view/` needs `just pack-sync`, which writes each module's copy under `yolo-packs/tillr/files/local/share/tillr/`. Commit the copies with the change.
-- **First attempt, 2026-11-17:** the first run built c1 to c6 in the loop, the view and the hook, then stopped when its review found the gap c7 closes, because the lander was outside the paths it was given. It landed nothing. Its report says the focused tests for c1 to c6 passed and the full loop suite was not finished. Build the work again from these criteria.
+- **Earlier attempts:** the first run, on 2026-11-17, built c1 to c6 and stopped when its review found the gap c7 closes, because the lander was outside the paths it was given. The third run's work covered the loop, the lander, the view and the hook, and a loop stop cut it off. The fourth re-applied that work and stopped on the suite described above. None landed.
+- [unlanded] **Start from** the commit at `refs/tillr/preserved/run-item-trunk-refuses-foreign-identity-commit-a4` in the main repository, `d990a6711`: 52 files, holding the loop, lander, view and hook changes, their tests and the pack copies. Do not rebuild it from nothing. Its parent is `123aeab1b` and the trunk has moved, so re-apply its change instead of reusing its tree; on 2026-11-18 `git merge-tree --write-tree 3318def2f d990a6711` reported no conflict. Run `just pack-sync` afterwards so the pack copies come from the merged sources. Its report says the lander suite (107 tests), the view suite (446 tests), the hook tests and `go test ./... -run 'Identity|Foreign'` in the loop module passed.
+- **Fixtures to repair:** the root package of `tools/tillr-drain` runs its tests one after another, so the first fixture that waits hides the rest; in the fourth run five of its six shards were stuck. The kept work already points the suite's git config at `Fixture Landing <landing@example.invalid>` in `runTests` in `tools/tillr-drain/main_test.go`, and the `git` helper in `pipeline_test.go` commits as that identity. What still writes to a fixture trunk as someone else: stand-in landers that cherry-pick a worker's commit unchanged, as in `testDesignAmendment` in `blocked_answer_test.go`; scripts that commit straight to the fixture root, such as the `trunk move` commit in `conflict_test.go`; and the `Fixture` base commit in `TestPlanHoldsAnItemBlockedByAnUnlandedItem` in `main_test.go`. `rg -n 'user\.(name|email)|cherry-pick' tools/tillr-drain/*_test.go` lists the candidates; read each to see whether its commit reaches the trunk.
+- **Verify the suite with a deadline:** run `python3 tools/go-test-shards.py tools/tillr-drain -k 6 --timeout 20m`. The runner's default sets no deadline, so a waiting loop prints nothing; with `--timeout` a stuck shard ends with the name of the test and its stack. A stack ending in `waitForTrigger` under `planNothing` is one more fixture to repair, not a reason to stop. Repair it and run again until the suite passes. Stop and report only for a failure that is not this wait and lies outside the item's paths.
 - **Hook limits, read 2026-11-17:** `hooks/` holds only `pre-push`, and `bin/hooks-install` copies each executable there into the shared hooks directory, so one hook covers the main checkout and every worktree. A hook runs only for `git commit`, `merge` and `am`. It does not run for `commit-tree` or `update-ref`, and `--no-verify` and a `core.hooksPath` override skip it, so the hook is a convenience and the loop's check in c1 is the guard.
 - **Evidence:** 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints `fork-check test <test@example.invalid> initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
 
