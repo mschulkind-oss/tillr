@@ -128,7 +128,7 @@ function WhyBlocked({
   );
 }
 
-function Criterion({ criterion }: { criterion: CriterionView }) {
+function Criterion({ criterion, claimed }: { criterion: CriterionView; claimed: boolean }) {
   const done = criterion.state === "done";
   return (
     <li className={done ? "criterion criterion--done" : "criterion"}>
@@ -138,7 +138,7 @@ function Criterion({ criterion }: { criterion: CriterionView }) {
       <span>
         <span className="criterion__id">{criterion.criterion_id} —</span> {criterion.text}{" "}
         <span className="criterion__state">
-          ({done ? "done" : criterion.state === "" ? "open" : criterion.state})
+          ({done ? "done" : criterion.state === "" ? "open" : criterion.state}){claimed ? " · ~claimed · derived (worker report, not a verdict)" : ""}
         </span>
       </span>
     </li>
@@ -325,7 +325,7 @@ export function ItemDetailPane({
             ) : (
               <ul className="render-list">
                 {item.criteria.map((criterion) => (
-                  <Criterion key={criterion.criterion_id} criterion={criterion} />
+                  <Criterion key={criterion.criterion_id} criterion={criterion} claimed={!!item.progress?.some(claim => claim.criterion_id === criterion.criterion_id)} />
                 ))}
               </ul>
             )}

@@ -313,7 +313,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// a nested run must never claim its parent's item or node. Scratch is isolated by
 	// default, but an explicit opt-out preserves the caller's assignment (or absence).
 	cmd.Env = os.Environ()
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST"} {
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER"} {
 		cmd.Env = withoutEnv(cmd.Env, key)
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
@@ -326,6 +326,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_SESSION_MODE="+mode,
 		"TILLR_RESUME_PROMPT_FILE="+prompt,
 		"TILLR_PAUSE_REQUEST="+pausePath,
+		"TILLR_PROGRESS_FILE="+filepath.Join(durableDir, "progress"),
+		"TILLR_CHILD_SESSIONS_ROOT="+filepath.Join(durableDir, "pi-subagents"),
+		"TILLR_CHILD_SESSIONS_MARKER="+filepath.Join(durableDir, "child-sessions-recorded"),
 		"TILLR_RUN_ID="+req.RunID,
 		"TILLR_ITEM_ID="+req.ItemID,
 		"TILLR_LANE_ID="+laneID,
@@ -344,6 +347,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		if info, err := logFile.Stat(); err == nil {
 			streamOffset = info.Size()
 		}
+	}
+	workerRequest := req
+	workerRequest.LaneID = laneID
+	workerRecords, recordsErr := newWorkerRecords(writeCtx, s, workerRequest, durableDir, logPath)
+	if recordsErr != nil {
+		logFile.Close()
+		return record.Envelope{}, recordsErr
 	}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
@@ -367,6 +377,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if req.Backend == "command" {
 		monitor.disabled = true
 	}
+	monitor.records = func() error { return workerRecords.sample(writeCtx, false) }
 	monitor.offset = streamOffset
 	monitor.startOffset = streamOffset
 	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter, monitor)
@@ -378,12 +389,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		logFile.Close()
 		return record.Envelope{}, Externalf("ending worker process group %d: %v", cmd.Process.Pid, cleanupErr)
 	}
-	if pauseErr != nil {
-		logFile.Close()
-		return record.Envelope{}, pauseErr
-	}
 	finishedAt := time.Now().UTC()
 	logFile.Close()
+	if err := workerRecords.sample(writeCtx, true); err != nil && pauseErr == nil {
+		pauseErr = Internalf("recording worker progress and sessions: %v", err)
+	}
 
 	switch {
 	case paused:
@@ -452,7 +462,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 			return record.Envelope{}, Internalf("writing the lane report: %v", err)
 		}
 	}
-	return writeTerminal(writeCtx, s, payload, finishedAt, note)
+	stored, terminalErr := writeTerminal(writeCtx, s, payload, finishedAt, note)
+	if terminalErr != nil {
+		return stored, terminalErr
+	}
+	return stored, pauseErr
 }
 
 // withoutEnv answers env with every assignment to key removed, so the value appended after

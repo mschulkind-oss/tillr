@@ -100,6 +100,16 @@ mechanism.
 
 {{METHOD}}
 
+When you believe a criterion is met, append one line naming its criterion ID
+(for example, `c1`) to the progress file named by `TILLR_PROGRESS_FILE` in this
+run's scratch directory. Append; do not replace earlier lines. This is a worker
+claim, not a verdict: the Lane and Item pages label it "claimed", never done.
+The runner records every line as a `run.progress` event while you work.
+
+```bash
+printf '%s\n' c1 >> "$TILLR_PROGRESS_FILE"
+```
+
 For the full suite before committing, use the sharded runner on modules the gate
 runs through it, as listed in the repository's verification report
 `docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent test process

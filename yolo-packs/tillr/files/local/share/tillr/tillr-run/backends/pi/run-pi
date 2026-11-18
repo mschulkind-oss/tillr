@@ -138,6 +138,15 @@ BOARD_DRAIN_RUN=${TILLR_RUN_ID:-tillr-lane}
 BOARD_DRAIN_SESSION=${session:-${TILLR_RUN_ID:-tillr-lane}}
 export BOARD_DRAIN_BRIEF BOARD_DRAIN_RUN BOARD_DRAIN_SESSION
 
+# Isolate persisted child metadata by tillr run, not by the interactive parent's
+# runtime root. Exec consumes Pi's status/history plus sessionFile tool results.
+if [ -n "${TILLR_CHILD_SESSIONS_ROOT:-}" ] && [ -n "${TILLR_CHILD_SESSIONS_MARKER:-}" ]; then
+    mkdir -p -- "$TILLR_CHILD_SESSIONS_ROOT"
+    PI_SUBAGENTS_TEMP_ROOT=$TILLR_CHILD_SESSIONS_ROOT
+    export PI_SUBAGENTS_TEMP_ROOT
+    printf '%s\n' pi-subagents-v1 > "$TILLR_CHILD_SESSIONS_MARKER"
+fi
+
 set -- pi --print --mode json --model "$model" --thinking "$effort"
 if [ -n "$session" ]; then
     set -- "$@" --session-id "$session"

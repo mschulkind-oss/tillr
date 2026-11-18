@@ -23,6 +23,7 @@ const SettledIdleSamples = 5
 type settledEnd struct{ settledAt, endedAt string }
 
 type settledMonitor struct {
+	records                                            func() error
 	disabled                                           bool
 	log, stderr, backendDir, adapter, backend, durable string
 	offset, startOffset                                int64

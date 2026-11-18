@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -345,6 +346,14 @@ func eventResources(events []event.Event) []string {
 			out = append(out, resourceItemPrefix+*e.ObjectID)
 		case "run":
 			out = append(out, resourceRunPrefix+*e.ObjectID)
+			// A worker claim also changes the Item page's derived progress marks.
+			// Live item queries do not poll; name that cache entry explicitly.
+			if e.Kind == "run.progress" {
+				var claim progressClaim
+				if json.Unmarshal(e.Payload, &claim) == nil && claim.ItemID != "" {
+					out = append(out, resourceItemPrefix+claim.ItemID)
+				}
+			}
 		}
 	}
 	return out

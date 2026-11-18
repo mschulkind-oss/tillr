@@ -96,17 +96,18 @@ type storeLane struct {
 // are pointers because "the backend reported nothing" and "the run cost zero" are
 // different answers, and a 0 in their place would be a measurement nobody made.
 type storeRun struct {
-	RunID        string
-	ItemID       string
-	LaneID       string
-	Backend      string
-	State        string
-	ExitCode     *int
-	StartedAtMS  int64
-	FinishedAtMS int64
-	EventSeq     int64
-	UsageTokens  *int64
-	CostUSD      *float64
+	TranscriptPath string // Only a recorded child session supplies an alternate log.
+	RunID          string
+	ItemID         string
+	LaneID         string
+	Backend        string
+	State          string
+	ExitCode       *int
+	StartedAtMS    int64
+	FinishedAtMS   int64
+	EventSeq       int64
+	UsageTokens    *int64
+	CostUSD        *float64
 }
 
 // storeCandidate is one row of candidates.
@@ -487,6 +488,10 @@ func readRunOrLive(r *store.Reader, runID string) (storeRun, bool, error) {
 	run, found, err := readRun(r, runID)
 	if err != nil || found {
 		return run, found, err
+	}
+	child, childFound, childErr := readChildRun(r, runID)
+	if childErr != nil || childFound {
+		return child, childFound, childErr
 	}
 	lanes, err := readLanes(r)
 	if err != nil {

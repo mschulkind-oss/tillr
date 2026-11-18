@@ -1,6 +1,6 @@
 import { useItemQuery, useRunTranscriptQuery } from "../models/queries";
 import { useNow } from "../models/clock";
-import type { ItemData, LaneRow, PipelineStep } from "../models/types";
+import type { ChildrenRecord, ItemData, LaneRow, PipelineStep } from "../models/types";
 import { EntityLink } from "./EntityLink";
 import { TranscriptView } from "./TranscriptView";
 import { DependencyLinks } from "./DependencyLinks";
@@ -20,6 +20,9 @@ export function PipelineRow({ steps, now }: { steps: PipelineStep[]; now: number
     return <li key={name} aria-current={running ? "step" : undefined}>{name} {step ? <>{running ? "▶" : "✓"} {elapsed(step.started_at_ms, step.finished_at_ms ?? now)}</> : "·"}</li>;
   })}</ol>;
 }
+export function ChildSessions({ runID, record }: { runID: string; record?: ChildrenRecord }) {
+  return <div><EntityLink kind="run" id={runID} />{record?.note ? <p role="alert">worker records unreadable: {record.note}</p> : null}{!record?.recorded ? <p>child sessions: not recorded</p> : !record.sessions.length ? <p>child sessions: {record.note ? "unreadable" : "none"}</p> : <ul>{record.sessions.map(child => <li key={child.session_id}><a href={`#/run/${encodeURIComponent(child.session_id)}?tab=transcript`}>{child.role || "role not recorded"}</a> · started {child.started_at_ms === null ? "not recorded" : new Date(child.started_at_ms).toISOString()} · end {child.end_clock === "derived" ? "~" : ""}{child.ended_at_ms === null ? "not recorded" : new Date(child.ended_at_ms).toISOString()}{child.end_clock === "derived" ? " (derived from last transcript message)" : ""} · {child.turn_count === null ? "turn count not recorded" : `${child.turn_count} turns`} · transcript {child.transcript}</li>)}</ul>}</div>;
+}
 export function activeLaneRun(lane: LaneRow): string | null {
   return lane.nodes?.find(node => node.attempt === lane.attempt && node.state === "running")?.run_id || lane.run_id || null;
 }
@@ -36,9 +39,9 @@ export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData
     <UsageSummary usage={lane.usage} />
     <section><h2>Pipeline</h2><PipelineRow steps={lane.pipeline ?? []} now={now} />{lane.pipeline_note ? <p>{lane.pipeline_note}</p> : !lane.pipeline ? <p>Pipeline timing was not recorded.</p> : null}</section>
     <section><h2>Graph</h2><p>{nodes.length} node{nodes.length === 1 ? "" : "s"} · {item?.item.selected_workflow || lane.workflow_ref || "no workflow recorded"} · run order as recorded</p><ItemGraph nodes={nodes} edges={[]} /></section>
-    <section><h2>Criteria</h2><p>worker progress is not recorded</p>{item ? <ul>{item.criteria.map(c => <li key={c.criterion_id}>{c.criterion_id} · {c.state} · {c.text}</li>)}</ul> : <p>Criteria not read yet.</p>}</section>
+    <section><h2>Criteria</h2>{!lane.progress?.length ? <p>worker progress is not recorded</p> : <p>Worker claims are derived from the worker’s report, not judge confirmation.</p>}{item ? <ul>{item.criteria.map(c => <li key={c.criterion_id}>{c.criterion_id} · {c.state}{lane.progress?.some(claim => claim.criterion_id === c.criterion_id) ? " · ~claimed · derived (worker report, not a verdict)" : ""} · {c.text}</li>)}</ul> : <p>Criteria not read yet.</p>}</section>
     {item ? <DependencyLinks id={item.item.item_id} blockedBy={item.blocked_by} unblocks={item.unblocks} /> : <section><h2>Waits on</h2>Dependencies not read yet.<h2>Unblocks</h2>Unblocks not read yet.</section>}
-    <section><h2>Now</h2><p>{lane.latest_action.kind === "unrecorded" ? "latest action not recorded" : lane.latest_action.text} · {lane.latest_action.kind === "liveness" ? "liveness signal, not an action" : lane.latest_action.kind}</p><p>child sessions: not recorded</p></section>
+    <section><h2>Now</h2><p>{lane.latest_action.kind === "unrecorded" ? "latest action not recorded" : lane.latest_action.text} · {lane.latest_action.kind === "liveness" ? "liveness signal, not an action" : lane.latest_action.kind}</p>{nodes.length ? nodes.map(node => <ChildSessions key={node.runId} runID={node.runId!} record={lane.child_sessions?.[node.runId!]} />) : <p>child sessions: not recorded</p>}</section>
     <section><h2>Attempts on this item</h2>{item || recorded.length ? <ol>{attempts.map(number => <li key={number}>attempt {number} · {recorded.length ? recorded.filter(node => node.attempt === number).map(node => runLink(node.run_id)) : item?.runs[number-1] ? runLink(item.runs[number-1].run_id) : null}</li>)}</ol> : <p>Attempts not read yet.</p>}</section>
     <section><h2>Lane history</h2>{lane.history ? <ol>{lane.history.map(run => <li key={run.run_id}><EntityLink kind="item" id={run.item_id} /> · <EntityLink kind="run" id={run.run_id} /> · <EntityLink kind="lane" id={run.lane_id} /> · {run.state} · {run.started_at_ms ? new Date(run.started_at_ms).toISOString() : "start not recorded"}</li>)}</ol> : <p>Lane history not recorded by this server.</p>}</section>
   </>;
