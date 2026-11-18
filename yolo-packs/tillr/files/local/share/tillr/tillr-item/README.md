@@ -175,7 +175,8 @@ All three flags may be omitted, including on the loop's move to `landed`.
 criterion has an `item.verdict` event bound to the hash of its stored text. This
 check runs in the state move's own write transaction, so appending a criterion
 after earlier verdicts cannot finish unjudged work. Any recorded verdict counts;
-it need not be `done`. The flag is opt-in: ordinary state moves keep their existing
+it need not be `done`. A verdict recorded before the item's latest withdrawal (below)
+does not count. The flag is opt-in: ordinary state moves keep their existing
 behavior. Hook completion always supplies it.
 
 A state flag that cannot be stored on the requested move is refused as `flag-not-stored`,
@@ -232,6 +233,12 @@ The following rules describe Git-landing, including its established refusal name
   Both commands accept an optional `--now` clock, defaulting to the wall clock.
 - **A verdict is the only writer of a criterion's state.** No other face moves one, which
   is what makes a recorded judgment the answer to "why is this criterion where it is".
+  The one inverse is a **withdrawal**: `item.WithdrawVerdicts`, which the drain calls when
+  it automatically reverts a landing, clears every criterion state the item carries and
+  appends an `item.verdicts-withdrawn` event naming the cleared states, the reason and
+  the actor. A reverted landing's verdicts judged a change the trunk no longer holds;
+  withdrawn, they no longer freeze the definition (`definition-frozen`), so a design
+  answer that amends the block syncs. An item with no state to clear records nothing.
 - **A conflict is recorded once per transition.** A transition is a changed record of
   the same conflict: its routing, answer, report, origin run, document, or blocked
   criteria may change. A record equal in every field to that conflict's last record

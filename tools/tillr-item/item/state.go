@@ -69,9 +69,10 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		return record.Envelope{}, err
 	}
 	if receipt.RequireVerdicts {
+		// A verdict a withdrawal named (WithdrawVerdicts) no longer stands.
 		for _, criterion := range payload.Criteria {
 			var judged bool
-			if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM events WHERE kind = ? AND object_id = ? AND json_extract(payload, '$.criterion_id') = ? AND json_extract(payload, '$.criterion_hash') = ?)`, VerdictRecordKind, itemID, criterion.CriterionID, CriterionHash(criterion.Text)).Scan(&judged); err != nil {
+			if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM events WHERE kind = ? AND object_id = ? AND json_extract(payload, '$.criterion_id') = ? AND json_extract(payload, '$.criterion_hash') = ? AND seq > (SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND object_id = ?))`, VerdictRecordKind, itemID, criterion.CriterionID, CriterionHash(criterion.Text), VerdictsWithdrawnKind, itemID).Scan(&judged); err != nil {
 				return record.Envelope{}, Internalf("checking criterion verdicts: %v", err)
 			}
 			if !judged {

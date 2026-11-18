@@ -231,7 +231,7 @@ func init() {
 	}
 	for _, kind := range []string{
 		AddKind, UpdateKind, DecisionRecordKind, DecisionRevokeKind, MailSendKind, MailAckKind,
-		VerdictRecordKind, GrantRecordKind,
+		VerdictRecordKind, GrantRecordKind, VerdictsWithdrawnKind,
 	} {
 		if err := event.Register(kind, "item"); err != nil {
 			panic(err)

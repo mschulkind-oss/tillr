@@ -394,7 +394,12 @@ func (l *Loop) returnReverted(ctx context.Context, of landingOf, landing string,
 	if !ok {
 		return Usagef("the configured steps cannot move a landed item back into the queue")
 	}
-	return step.ReturnLanded(ctx, of.itemID, of.runID, "landing "+landing+" reverted: "+strings.Join(ids, ", ")+" failed on the trunk from it on")
+	if err := step.ReturnLanded(ctx, of.itemID, of.runID, "landing "+landing+" reverted: "+strings.Join(ids, ", ")+" failed on the trunk from it on"); err != nil {
+		return err
+	}
+	// The revert withdraws what the landing settled (revert_withdraw.go); the next document
+	// sync repairs a withdrawal that did not commit here.
+	return l.withdrawRevertedVerdicts(ctx)
 }
 
 // ReturnLanded moves a landed item to the queue through the item face, with a receipt.
