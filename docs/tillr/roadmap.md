@@ -3746,6 +3746,83 @@ on its own, stands as the probe c1 names. What remains is point 1 where the save
 yet the only input, point 4, the corrected view assertion, the full drain and view suites, and
 the one commit.
 
+**Second ruling, 2026-11-18 (answers the third run's conflict):** the third run finished points 1
+to 5 above and stopped without committing, for two reasons. Neither changes the criteria or the
+item's paths.
+
+The first reason was a check that is red on the trunk. `python3 tests/tillr-docs.test.py` prints
+`FAIL run README environment list` and exits 1 at `f65877b5a` with none of this work applied,
+because `tools/tillr-run/README.md` does not list `TILLR_READ_ONLY_GROUP`, which
+`tools/tillr-run/run/exec.go` gives to every run. This item touches neither file, and both are
+outside its paths. The failure belongs to the trunk and is not a reason to stop. The builder
+leaves the README and the check alone, confirms that `git diff --name-only HEAD -- tools/tillr-run
+tests/tillr-docs.test.py` prints nothing, commits, and names the failure in its report with the
+base sha. That script stops at its first failure, so the cases after it do not run. If the trunk
+has repaired the README by the time this is built, the check passes.
+
+The second reason was the candidate's own drain suite, and that is work to finish. The third
+run's tree is kept at `refs/tillr/preserved/run-item-backend-open-is-a-fact-a3` in the main
+checkout, and it was measured here on 2026-11-18. `git diff bc1f61db0 <that ref> -- .
+':!yolo-packs' | git apply -3` onto `f65877b5a` applies 36 files with one conflict, in
+`tools/tillr-drain/drain/plan.go`, where the trunk now calls the planner's own `p.firstBackend`.
+With that conflict resolved towards the candidate and the trunk's method kept, `go test ./... -run`
+over the ten tests the third run's report lists fails all ten. The eight of them that exist at
+`f65877b5a` pass there. The causes were read from those runs, and they are four gaps in the rules
+above. Each is settled here:
+
+6. **An ended run with no saved class is classified by whoever reads it, and only the loop
+   saves.** This refines point 1. The third run's `readInfrastructureClosed` skips a run whose
+   class is not saved yet, while `readPriorRuns` computes the class for the same run. So a plan
+   made before the loop has saved anything sees a failed run and no closed backend, and
+   dispatches a failover where it should hold. Both readers use one rule: the saved class when
+   there is one, and otherwise what `ClassifyAttempt` answers at that moment, without saving it.
+   A face that only reads, such as `plan` or the view, never writes a class. With this change
+   alone, `TestPlanHoldsWhenEveryBackendIsClosed` and `TestProbeBackendFaceRecordsSuccessAndFailure`
+   passed here. The third run's `TestBackendAvailabilityUsesOnlySavedClass` asserts the opposite
+   and is replaced by a test of this rule. Once a class is saved it still wins over the report,
+   as point 1 says.
+7. **A backend closes only on an ending that the trunk answers with a failover today.** The
+   class that decides availability is the class the planner routes on, which `readPriorRuns`
+   already corrects: a run the loop interrupted itself, by a stop, an orphaned run or a stale
+   base, is `interrupted` and not `infrastructure`. The third run saved the uncorrected class, so
+   an interrupted run closed its backend. The same holds for the two endings the trunk already
+   answers by another rule. A run the provider refused with a stated reset time records a quota
+   window, and the window alone closes that backend and reopens it. A run whose resumed session is gone is
+   replaced by a fresh session on the same backend. None of these three is evidence that the
+   backend is broken, so none closes it, and each is "any other class" for c1's reopening.
+   These tests pass at `f65877b5a` and must pass unchanged:
+   `TestWorkflowRestartRecoversSignalRecordWithoutStopMarker`,
+   `TestQuotaContinuationWaitsAndReopensOriginalBackend`,
+   `TestLoopSkipsSpentWindowAcrossRestartAndReopens`, `TestReturnedWorkerGoneHarnessSession` and
+   `TestReturnedWorkflowResumesProducingNode`.
+8. **A retry the owner authorized dispatches once, even to a closed backend.** The authorization
+   is a recorded event, and its run retires it, so it is neither a clock nor a count and the loop
+   cannot spin on it. The run starts on the item's own backend as it does today. If it ends in
+   any other class it reopens the backend by c1's second event, and if it fails in the
+   infrastructure class the backend stays closed and the item waits on it. This is the only
+   dispatch to a closed backend, and the README says so beside the probe.
+   `TestTheLoopDispatchesAnAuthorizedRetry` passes at `f65877b5a` and must pass unchanged.
+9. **Saving a class does not make a pass write that would not have written.** The third run saves
+   classes at the top of every quota refresh, and each save appends an event. A pass that defers
+   because the store changed under it must write nothing, and
+   `TestAPassDefersChangedItemRunAndLeaseWithoutWriting` failed with `stale application wrote 1
+   event(s)`. Save the class where the loop already writes about an ended run, and when a loop
+   starts for runs that ended while none was running. Where exactly is the builder's choice; that
+   test passes at `f65877b5a` and must pass unchanged.
+
+One base test does change. `TestPlanFailsAListedSeatOverAlongItsOwnList` in
+`tools/tillr-drain/seat_test.go` expects the `run-infra-exhausted` hold this item removes. Its
+last assertion becomes the hold on the closed backend, and the rest of it, which pins that an
+item never leaves its seat's list, stays as it is.
+
+Start from the third run's tree and not from the first run's; it contains the first run's work
+and the repairs for points 1 to 5. Rebase it onto the current trunk, resolve the one conflict as
+described, apply points 6 to 9, and run `just pack-sync`. Then run the sharded suites for
+`tools/tillr-drain` and `tools/tillr-view` in full before the one commit. The third run's first
+full drain run timed out at 1800 seconds because failing loop tests waited out their own
+timeouts, so run the ten tests named in its report first and start the full suite only when they
+pass.
+
 ## Filed 2026-11-18: plan first, then spend each model where it is enough
 
 The owner asked on 2026-11-18 for a planning stage that fans an implementation out into many nodes and spends as little on models as it can: "split different types of work into different seats as we see fit", create "a few more seat names to slot into", fit Terra and Luna in wherever they can do the work, and encourage implementers who work alone to use cheaper sub-agents. This is the first slice of [the planning node and model tiering proposal](../design/tillr-planning-node-model-tiering.md), narrowed by the owner's later rulings, and it sits on [the item graphs design](../design/tillr-item-graphs.md) and the direction in [the graph-is-the-path design](../design/tillr-graph-is-the-path.md). It is entry 4's [choice of where each seat runs](#4-choose-where-each-seat-runs) applied to a finer grain of work.
