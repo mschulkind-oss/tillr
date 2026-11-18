@@ -3035,6 +3035,10 @@ func (l *Loop) resetLaneToRegistryLocked(ctx context.Context, lane, revision str
 		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
 		return err
 	}
+	// A lock a killed git left refuses every write below (index_lock.go).
+	if err := l.clearStaleIndexLock(ctx, lane, ""); err != nil {
+		return err
+	}
 	// A lane left mid-rebase, mid-merge or mid-cherry-pick keeps that state through a
 	// checkout, so the next rebase there refuses; the operation is aborted first.
 	l.abortInProgress(ctx, path)
