@@ -20,7 +20,7 @@ func TestWaitingRewriteShowsBothTipsAndRestorationMover(t *testing.T) {
 		if row["item_id"] != "rewrite" {
 			continue
 		}
-		if row["class"] != "needs you" || row["where"] != "trunk" || row["mover"] != "restore the trunk's history" || row["why"] != "trunk-rewritten: "+old+" -> "+new {
+		if row["class"] != "needs you" || row["where"] != "trunk" || row["mover"] != "operator; restore the trunk's history" || row["why"] != "trunk-rewritten: "+old+" -> "+new {
 			t.Fatalf("rewrite wait: %v", row)
 		}
 		return

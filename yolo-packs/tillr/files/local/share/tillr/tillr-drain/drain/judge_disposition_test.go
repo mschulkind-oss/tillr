@@ -124,7 +124,7 @@ func TestJudgeFailingDispositions(t *testing.T) {
 						for _, row := range answer.Rows {
 							if row.ItemID == "item-a" {
 								found = true
-								if row.Class != "waits on work" || row.Mover != "plan" || row.Why != got.Reason {
+								if row.Class != "waits on work" || row.Mover != "design seat; resolve the recorded planning hold" || row.Why != got.Reason {
 									t.Errorf("live waiting hides judge blocker: %+v", row)
 								}
 							}

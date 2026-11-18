@@ -216,7 +216,7 @@ func TestBuiltServerAsksItsOwnSiblingWhateverPATHHolds(t *testing.T) {
 			if err := json.Unmarshal(out, &rows); err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
-			if len(rows) != 2 || rows[0].ItemID != "a" || rows[1].Mover != "a" {
+			if len(rows) != 2 || rows[0].ItemID != "a" || rows[1].Mover != "drain; a" {
 				t.Fatalf("not the real planner's answer: %s", out)
 			}
 			if _, err := os.Stat(marker); err == nil {

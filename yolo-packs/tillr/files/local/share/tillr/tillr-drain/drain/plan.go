@@ -35,6 +35,8 @@ type Pass struct {
 	// every existing lane reservation and readiness dependency. It must not
 	// allocate free lanes to sibling plans that this command will not execute.
 	examineItem string
+	// ownerMigration permits only the deterministic conversion of a legacy owner report.
+	ownerMigration bool
 	// GatesInFlight is the planning pass's observation, not a concurrency cap.
 	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
@@ -730,7 +732,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	conflict, hasConflict := p.conflicts[item.ItemID]
 	// An explicit owner disposition (apply/state) can release a blocked item.
 	// Historical conflicts do not undo that act or hold terminal items.
-	if !p.lands() || (item.State != p.rules().Blocked && conflict.Status != "answered") {
+	if !p.lands() || (item.State != p.rules().Blocked && conflict.Status != "answered" && conflict.Status != "question") || (conflict.Status == "question" && item.State != p.rules().Ready && item.State != p.rules().Blocked) {
 		hasConflict = false
 	}
 	if hasConflict && conflict.Status != "closed" && conflict.Status != "answered" {
@@ -1055,7 +1057,7 @@ func (p *planner) questionState(item itemRow) questionState {
 	if !answer.Present && checkDocument {
 		return questionState{reason: ReasonDesignDocMissing}
 	}
-	if question, ok := firstUnanswered(answer.Questions); checkQuestions && ok {
+	if question, ok := firstUnanswered(withoutQuestions(answer.Questions, p.publishedForOthers(item))); checkQuestions && ok {
 		return questionState{reason: ReasonQuestionOpen, questionID: question.ID}
 	}
 	return questionState{}
@@ -1827,4 +1829,17 @@ func readFailure(err error) error {
 		return Incompatiblef("%v", err)
 	}
 	return Internalf("%v", err)
+}
+
+// publishedForOthers answers the ids of the questions published in the item's design
+// document for other items' open conflicts. Each holds only the item it was published for.
+func (p *planner) publishedForOthers(row itemRow) []string {
+	var ids []string
+	for itemID, c := range p.conflicts {
+		file, id, _ := strings.Cut(c.QuestionRef, "#")
+		if itemID != row.ItemID && c.Status == "question" && file == row.DesignDoc && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

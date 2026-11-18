@@ -14,7 +14,7 @@ func TestWaitingProseRewriteNamesReasonAndMover(t *testing.T) {
 	for _, value := range body["data"].([]any) {
 		row := value.(map[string]any)
 		if row["item_id"] == "item-prose" {
-			if row["why"] != "awaits-rewrite" || row["mover"] != "rewrite-item-prose" || row["class"] != "waits on work" {
+			if row["why"] != "awaits-rewrite" || row["mover"] != "drain; rewrite-item-prose" || row["class"] != "waits on work" {
 				t.Fatalf("prose hold: %v", row)
 			}
 			return

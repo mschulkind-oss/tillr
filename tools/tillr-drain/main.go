@@ -780,6 +780,7 @@ func printHelp(fs *flag.FlagSet) {
 func loopFace(args []string) int {
 	fs := newFlagSet("loop")
 	check := fs.Bool("check", false, "validate flags, settings, policies, the existing store and step-program arguments, then exit without starting a pass or migrating the store")
+	migrateOwner := fs.Bool("migrate-owner-questions", false, "convert existing owner decision reports into gated document questions, print each conversion or skipped report, then exit")
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
@@ -892,7 +893,7 @@ func loopFace(args []string) int {
 		Root: *root, LaneRoot: *laneRoot, Store: *path, Template: *briefTemplate, Now: at,
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
-		Root: *root, Store: *path, LaneRoot: *laneRoot,
+		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
 		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,

@@ -1123,6 +1123,55 @@ budget would re-dispatch a broken adapter at once and forever. That is the queue
 `item-backend-open-is-a-fact` in
 [the tillr roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend).
 
+### Owner decisions in documents
+
+An owner decision is a report's question together with at least two alternatives,
+not merely an actor line. Design briefs ask for a sentence ending in a question mark
+and bulleted or numbered alternatives under an Options heading. Explicitly lettered
+alternatives and legacy reports stating a ruling between two options are also recognized.
+A diagnostic question followed by a file list is not a decision. Generated ids use the OC prefix (owner conflict) and a run-derived number, so
+independent reports on one document base and compacted rulings do not share an
+anchor. The document retains the original report without interpreting or answering it. Its numbered `vantage: question` directive is read through the same
+shared Vantage index reader as ordinary design questions; settlement adds no second
+question-state parser.
+
+The owner answers in that document, by an edit or the Vantage review path. Mark the
+question answered and save the ruling. After it lands, the next document sync and
+planning pass release the item; the worker's dispatch closes the answered conflict.
+An uncommitted document edit does not record an answer. If settlement restarts after
+its question commit but before recording the candidate, the loop-written HTML
+comment naming the item, run, and question recovers that same candidate and report
+provenance without another commit.
+There is no store command for the answer. Triage can declare a stored request and
+its question in the document it names. If no document exists, the report and waiting
+view name the item and ask the operator to supply or triage its document; settlement
+never invents a document or a ruling.
+
+To convert existing owner decision reports once, run the loop with its normal root,
+store, policy, and step programs, adding the migration switch. Learn those inputs
+from `tillr drain loop --help`:
+
+```bash
+tillr drain loop --root . --migrate-owner-questions
+```
+
+Migration runs only these conversions, not the rest of the queue. It replays each
+eligible report as a command run, claims an ordinary lane, and publishes through the
+same design settlement and gate. It prints each item and document written, or the
+reason a conflict was left unchanged. Reports without a question and alternatives,
+including stale-base reports, are not converted. Migration leaves the conflict open in status `question`, just like settling a report.
+The sync closes it as answered only after the owner’s ruling lands. A published question
+holds only the item it was published for. With unchanged reports and
+documents, a second conversion writes no new questions or conflict transitions. A
+refusal is explicit and leaves the conflict unanswered; it never clears a hold before
+publication.
+
+Both `tillr drain why` and the waiting view count owner-waiting document questions
+as one class and name their document and question id. Other holds identify the next
+actor as the drain, the design seat, or the operator, with the action beside it. A
+legacy conflict awaiting conversion is the drain's work, not an owner question that
+the planning index cannot display.
+
 ### A design run that ends without answering
 
 A raised conflict gets one design-seat dispatch, and the claim marks the conflict
@@ -1148,8 +1197,16 @@ objection that names the owner. The ruling is recorded in
 4. **An objection.** A design run that commits nothing names who acts next with a report
    line `NEXT-ACTOR: <actor>`. `NEXT-ACTOR: build` says the block stands as written: the
    conflict is `answered` and the item goes back to its worker. `NEXT-ACTOR: owner` says
-   only the owner can rule: the conflict goes to the owner (`conflict-owner`, "needs
-   you"). The owner is reached only this way.
+   only the owner can rule. When the report states a question and alternatives,
+   settlement writes a numbered Vantage question directly below the item's block,
+   with the report's wording, run id, and date. This document commit passes the same
+   fence, gate, and landing path as a design answer. After landing the live conflict
+   is `question`: its document reference and publication commit are recorded, but
+   its answer commit remains empty. The shared index supplies the `question-open`
+   hold. The next sync after the owner's answer lands records `answered` and the
+   answer commit separately; the worker dispatch then closes the conflict. A
+   gate refusal leaves the conflict unanswered. A report about a stale base alone
+   writes no question: staging remains the drain's responsibility.
 5. **A run that committed nothing and named no actor**, even one that ends `RESULT:
    blocked`, is a missing output, not an objection: the design seat is dispatched again,
    and the conflict's text states the contract. It never defaults to the owner.
@@ -1162,8 +1219,9 @@ objection that names the owner. The ruling is recorded in
    or removed the block; the failing checks and their output digests for a gate refusal;
    and the refusal's words for a fence escape or a refused landing. An interrupted or
    killed run never repeats. The loop raises an objection naming the owner. It is recorded
-   as a design run's `NEXT-ACTOR: owner` is (the `conflict-owner` hold, "needs you"), and
-   the conflict's text carries a question naming both runs and the command that moves it:
+   as an owner conflict, and the waiting view names the action needed to put the
+   decision in its document rather than presenting an owner with nowhere to answer.
+   The conflict's text names both runs and the command that moves it:
    change what the design seat is given, then `tillr drain retry --item <id> --run <the
    later run>`, or close the item. Before this rule a design run that named no actor was
    dispatched again without end. The [design repeat tests](./drain/design_repeat_test.go)

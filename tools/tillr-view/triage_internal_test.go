@@ -60,7 +60,11 @@ func TestWaitingTriageAndOwnerKeepTheirNextMoverAndReport(t *testing.T) {
 				continue
 			}
 			found = true
-			if !strings.Contains(row["why"].(string), c["text"].(string)) || !strings.Contains(row["mover"].(string), seat) {
+			actor := "design seat;"
+			if seat == "owner" {
+				actor = "operator;"
+			}
+			if !strings.Contains(row["why"].(string), c["text"].(string)) || !strings.HasPrefix(row["mover"].(string), actor) {
 				t.Fatalf("lost next mover/report: %+v", row)
 			}
 		}

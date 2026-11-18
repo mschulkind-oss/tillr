@@ -27,7 +27,7 @@ func TestWhyReadsDocumentDeskSettings(t *testing.T) {
 	if err := json.Unmarshal(out, &answer); err != nil {
 		t.Fatal(err)
 	}
-	if len(answer.Rows) != 2 || answer.Rows[0].Decision.LaneID != "desk-first" || answer.Rows[1].Reason != "waits on a desk" || answer.Rows[1].Mover != "docs/design/second.md" {
+	if len(answer.Rows) != 2 || answer.Rows[0].Decision.LaneID != "desk-first" || answer.Rows[1].Reason != "waits on a desk" || answer.Rows[1].Mover != "design seat; docs/design/second.md" {
 		t.Fatalf("why desk rows: %+v", answer.Rows)
 	}
 }

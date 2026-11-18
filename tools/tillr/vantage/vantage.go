@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -65,6 +66,8 @@ type DocumentQuestions struct {
 	Present bool
 	// Questions is every question the index reports for the document, in document order.
 	Questions []Question
+	// LedgerIDs identifies rulings retained after question compaction.
+	LedgerIDs []string
 }
 
 // QuestionSource answers, for a design document an item names, whether the tree holds it and
@@ -147,7 +150,7 @@ func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
 	if err != nil {
 		return DocumentQuestions{}, err
 	}
-	return DocumentQuestions{Present: true, Questions: questions}, nil
+	return DocumentQuestions{Present: true, Questions: questions, LedgerIDs: v.index.ledger[cleanDocumentPath(key)]}, nil
 }
 
 // Done shares the lazy index with question reads; retirement does not start a
@@ -184,6 +187,7 @@ var errIndexNotRead = errors.New("the question index was never read")
 // planner turns that refusal into `questions-unknown` — never into a dispatch.
 type VantageIndex struct {
 	documents map[string][]Question
+	ledger    map[string][]string
 	done      map[string]bool
 	read      bool
 	err       error
@@ -330,16 +334,35 @@ func parseVantageIndex(raw []byte) (VantageIndex, error) {
 		Path      string     `json:"path"`
 		Stage     string     `json:"stage"`
 		Questions []Question `json:"questions"`
+		LedgerIDs []string   `json:"ledgerIds"`
 	}
 	if err := json.Unmarshal(document.Index.Documents, &entries); err != nil {
 		return VantageIndex{}, err
 	}
 	documents := make(map[string][]Question, len(entries))
+	ledger := make(map[string][]string, len(entries))
 	done := make(map[string]bool)
 	for _, entry := range entries {
 		key := cleanDocumentPath(entry.Path)
 		documents[key] = entry.Questions
+		ledger[key] = entry.LedgerIDs
 		done[key] = document.Index.Config.Stages[entry.Stage] == "done"
 	}
-	return VantageIndex{documents: documents, done: done, read: true}, nil
+	return VantageIndex{documents: documents, ledger: ledger, done: done, read: true}, nil
+}
+
+// WithoutQuestions answers the questions whose ids are not in ids, in the same order. A
+// question the loop published for one item is that item's hold alone, so a reader drops
+// the ids published for other items before asking FirstUnanswered.
+func WithoutQuestions(questions []Question, ids []string) []Question {
+	if len(ids) == 0 {
+		return questions
+	}
+	kept := make([]Question, 0, len(questions))
+	for _, question := range questions {
+		if !slices.Contains(ids, question.ID) {
+			kept = append(kept, question)
+		}
+	}
+	return kept
 }

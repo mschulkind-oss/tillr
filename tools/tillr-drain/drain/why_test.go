@@ -86,7 +86,7 @@ func TestWhyConflictContextDoesNotReplaceCurrentMover(t *testing.T) {
 	for _, test := range []struct {
 		policy        *Policy
 		reason, mover string
-	}{{l.cfg.Policy, ReasonNoLane, "lane-1"}, {nil, ReasonNoPolicy, "supply the loop's --policy file"}} {
+	}{{l.cfg.Policy, ReasonNoLane, "drain; lane-1"}, {nil, ReasonNoPolicy, "operator; supply the loop's --policy file"}} {
 		err := s.ReadTx(context.Background(), func(r *store.Reader) error {
 			answer, err := Why(r, Pass{}, test.policy, nil)
 			if err != nil {

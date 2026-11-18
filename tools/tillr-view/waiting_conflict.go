@@ -12,19 +12,22 @@ import (
 
 // The view reads conflict records without importing their writer or migrating a store.
 type waitingConflict struct {
-	ConflictID      string               `json:"conflict_id"`
-	ItemID          string               `json:"item_id"`
-	RunID           string               `json:"run_id"`
-	BodyRef         string               `json:"body_ref"`
-	Text            string               `json:"text"`
-	BlockedCriteria []string             `json:"blocked_criteria"`
-	WaitingOn       string               `json:"waiting_on"`
-	Status          string               `json:"status"`
-	DesignRunID     string               `json:"design_run_id"`
-	AnswerHead      string               `json:"answer_head"`
-	TriageVersion   string               `json:"triage_version"`
-	Since           int64                `json:"-"`
-	History         []conflictTransition `json:"-"`
+	ConflictID      string   `json:"conflict_id"`
+	ItemID          string   `json:"item_id"`
+	RunID           string   `json:"run_id"`
+	BodyRef         string   `json:"body_ref"`
+	Text            string   `json:"text"`
+	BlockedCriteria []string `json:"blocked_criteria"`
+	WaitingOn       string   `json:"waiting_on"`
+	Status          string   `json:"status"`
+	DesignRunID     string   `json:"design_run_id"`
+	AnswerHead      string   `json:"answer_head"`
+	QuestionRef     string   `json:"question_ref"`
+	QuestionHead    string   `json:"question_head"`
+
+	TriageVersion string               `json:"triage_version"`
+	Since         int64                `json:"-"`
+	History       []conflictTransition `json:"-"`
 }
 
 type conflictTransition struct {

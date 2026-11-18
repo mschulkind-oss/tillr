@@ -102,7 +102,7 @@ func TestWaitingNamesDueTriageAndOwnerReportAndStartupCount(t *testing.T) {
 					continue
 				}
 				if owner {
-					if !strings.Contains(row.Mover, "owner") || !strings.Contains(row.Why, "no document block") {
+					if !strings.HasPrefix(row.Mover, "operator;") || !strings.Contains(row.Why, "no document block") {
 						t.Errorf("owner invisible: %+v", row)
 					}
 				} else if row.Mover != "triage on the design seat" {

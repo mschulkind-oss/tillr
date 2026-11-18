@@ -224,7 +224,7 @@ func TestRedCapRetainsCandidateAndLandsAfterFixerWithEveryOfferedLaneOccupied(t 
 			return err
 		}
 		for _, row := range why.Rows {
-			if row.ItemID == c.ItemID && (row.Mover != fixer || row.Class != "waits on work" || row.Where != "land") {
+			if row.ItemID == c.ItemID && (row.Mover != "drain; "+fixer || row.Class != "waits on work" || row.Where != "land") {
 				t.Fatalf("waiting hides fixer: %+v", row)
 			}
 		}

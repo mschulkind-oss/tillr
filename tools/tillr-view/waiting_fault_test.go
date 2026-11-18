@@ -33,7 +33,7 @@ func TestWaitingFaultHasEvidenceAndOneClearCommand(t *testing.T) {
 					t.Errorf("why %q missing %q", why, want)
 				}
 			}
-			if !strings.HasPrefix(mover, "tillr drain clear-fault --store ") || !strings.Contains(mover, "--item 'item-seed-02' --fault ") {
+			if !strings.HasPrefix(mover, "operator; tillr drain clear-fault --store ") || !strings.Contains(mover, "--item 'item-seed-02' --fault ") {
 				t.Fatalf("no executable recovery: %q", mover)
 			}
 			h.exec(fmt.Sprintf(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES(4000,'drain.item-fault-cleared','item','item-seed-02','{"reason":"%s"}')`, reason))

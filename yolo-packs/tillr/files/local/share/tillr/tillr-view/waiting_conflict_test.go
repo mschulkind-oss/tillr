@@ -46,7 +46,11 @@ func TestWaitingShowsConflictTextAndOwningSeatWithoutAPass(t *testing.T) {
 				continue
 			}
 			found = true
-			if !strings.HasPrefix(row["mover"].(string), seat) || !strings.Contains(row["why"].(string), c["text"].(string)) {
+			actor := "design seat;"
+			if seat == "owner" {
+				actor = "operator;"
+			}
+			if !strings.HasPrefix(row["mover"].(string), actor) || !strings.Contains(row["why"].(string), c["text"].(string)) {
 				t.Fatalf("seat %s: %+v", seat, row)
 			}
 			if seat == "owner" && row["class"] != "needs you" {

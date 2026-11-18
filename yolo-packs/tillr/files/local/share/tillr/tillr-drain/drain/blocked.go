@@ -29,6 +29,27 @@ const (
 func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	d := Decision{ItemID: row.ItemID, Seat: c.WaitingOn, ConflictID: c.ConflictID, Attempt: p.nextAttempt(row.ItemID), From: "held", Action: ActionHold, Reason: ReasonConflictDesign}
 	switch {
+	case c.Status == "question":
+		_, d.QuestionID, _ = strings.Cut(c.QuestionRef, "#")
+		d.Reason = ReasonQuestionOpen
+	case c.WaitingOn == "owner" && p.tick.ownerMigration:
+		// This is a real command run, not a fabricated terminal record or an
+		// ungated store repair. Its report travels through the same settlement.
+		if lane, ok := p.freeLane(row.Express); ok {
+			p.assigned[lane] = true
+			p.dispatched++
+			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
+
+			d.Seat, d.BlockConflict = "design", &c
+			origin := c.DesignRunID
+			if origin == "" {
+				origin = c.RunID
+			}
+			report := "Original report from run `" + origin + "`:\n\n" + ownerReport(c) + "\nNEXT-ACTOR: owner\nRESULT: blocked\n"
+			d.RunRequest = (WorkflowStage{Command: []string{"sh", "-c", "printf '%s' \"$1\"", "owner-question", report}}).commandRequest(row.ItemID, lane, attemptRunID(row.ItemID, d.Attempt))
+		} else {
+			d.Reason = ReasonNoLane
+		}
 	case c.WaitingOn == "owner":
 		d.Reason = ReasonConflictOwner
 		// The design run that handed the conflict over is named beside it, so a view
@@ -411,7 +432,12 @@ func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error
 		if !found {
 			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s does not declare item %s in %s", c.ConflictID, blockID, file)}
 		}
-		c.Status, c.WaitingOn, c.AnswerHead = "answered", "build", candidate.HeadSHA
+		if c.QuestionRef != "" {
+			c.QuestionHead, c.AnswerHead = candidate.HeadSHA, ""
+			c.Status, c.WaitingOn = "question", "owner"
+		} else {
+			c.Status, c.WaitingOn, c.AnswerHead = "answered", "build", candidate.HeadSHA
+		}
 		return item.RecordConflict(tx, c, l.cfg.Now().UTC())
 	})
 }

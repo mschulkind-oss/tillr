@@ -32,6 +32,14 @@ func TestParseVantageIndexRefusesADocumentThatIsNotAnIndex(t *testing.T) {
 // An index nobody read answers an error, not an empty list. The zero value is the value a
 // caller that forgot to read one holds, so this is the case that stops such a caller from
 // dispatching on "no questions".
+func TestWithoutQuestionsKeepsUnexcludedQuestionsInOrder(t *testing.T) {
+	questions := []Question{{ID: "OQ-3"}, {ID: "OQ-2"}, {ID: "OQ-1"}}
+	got := WithoutQuestions(questions, []string{"OQ-2", "absent"})
+	if len(got) != 2 || got[0].ID != "OQ-3" || got[1].ID != "OQ-1" {
+		t.Fatalf("unexpected filtered questions: %+v", got)
+	}
+}
+
 func TestAZeroVantageIndexAnswersUnknown(t *testing.T) {
 	var index VantageIndex
 	if _, err := index.Questions("docs/design/x.md"); err == nil {

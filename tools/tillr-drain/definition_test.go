@@ -100,7 +100,7 @@ func TestPlannerDefinitionLifecycle(t *testing.T) {
 	}
 }
 
-func TestWhyLegacyDefinitionRowsUnchanged(t *testing.T) {
+func TestWhyLegacyDefinitionReasonsUnchanged(t *testing.T) {
 	path := fixture(t, itemRecordRanked("ready", "in-queue", "a"), itemRecordRanked("blocked", "in-queue", "b", "ready"), itemRecordFenced("empty", "in-queue", "c", nil))
 	args := []string{"why", "--store", path, "--policy", policy(t, "true"), "--lanes", "lane-1", "--now", "2026-11-16T00:00:00Z"}
 	code, out := invoke(t, args...)
@@ -109,17 +109,27 @@ func TestWhyLegacyDefinitionRowsUnchanged(t *testing.T) {
 	}
 	rows := string(out)
 	rows = strings.TrimPrefix(rows, "definition: "+definition.GitLandingName+"\n")
-	want := "1\tready\tqueued\tready\tthe next pass\n2\tblocked\theld\tblocked\tready\n3\tempty\theld\tno-fence\ttillr item apply: give the item allowed_paths\n"
+	want := "1\tready\tqueued\tready\tthe next pass\n2\tblocked\theld\tblocked\tdrain; ready\n3\tempty\theld\tno-fence\toperator; tillr item apply: give the item allowed_paths\n"
 	if !strings.HasPrefix(rows, want) {
 		t.Fatalf("legacy rows: %q", rows)
 	}
-	// The normal suite pins the pre-change rows above. A verification run can
-	// additionally supply the pre-change binary to compare this very same store.
+	// Actor labels and the owner-waiting summary intentionally changed. The
+	// item's identity, position and hold reason must still match the old binary.
+	coreRows := func(text string) string {
+		var core []string
+		for _, line := range strings.Split(text, "\n") {
+			fields := strings.Split(line, "\t")
+			if len(fields) >= 4 {
+				core = append(core, strings.Join(fields[:4], "\t"))
+			}
+		}
+		return strings.Join(core, "\n")
+	}
 	if before := os.Getenv("TILLR_DRAIN_BEFORE_BINARY"); before != "" {
 		cmd := exec.Command(before, args...)
 		cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "before-state"))
 		old, err := cmd.CombinedOutput()
-		if err != nil || string(old) != rows {
+		if err != nil || coreRows(string(old)) != coreRows(rows) {
 			t.Fatalf("pre-change binary rows differ: err=%v before=%q after=%q", err, old, rows)
 		}
 	}
