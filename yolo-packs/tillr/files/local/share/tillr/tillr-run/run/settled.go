@@ -35,7 +35,9 @@ type settledMonitor struct {
 	cpu                                                func(int) (string, error)
 	idle                                               int
 	end                                                *settledEnd
-	after                                              func(time.Duration) <-chan time.Time
+	// harnessEnded is the adapter's statement that it ended a settled harness.
+	harnessEnded string
+	after        func(time.Duration) <-chan time.Time
 }
 
 // observe reads only this execution's new stream, never the preceding resumed segment.
@@ -64,8 +66,12 @@ func (m *settledMonitor) observe() error {
 		line := m.partial[:idx]
 		m.partial = m.partial[idx+1:]
 		var e struct {
-			Type    string `json:"type"`
-			Aborted bool   `json:"aborted"`
+			Type    string   `json:"type"`
+			Aborted bool     `json:"aborted"`
+			After   string   `json:"after"`
+			Reason  string   `json:"reason"`
+			Actions []string `json:"actions"`
+			Exit    *int     `json:"harness_exit"`
 		}
 		if json.Unmarshal(line, &e) != nil {
 			continue
@@ -75,6 +81,8 @@ func (m *settledMonitor) observe() error {
 			if !e.Aborted {
 				m.settledAt = time.Now().UTC().Format(time.RFC3339Nano)
 			}
+		case HarnessEndedEvent:
+			m.harnessEnded = describeHarnessEnded(e.After, e.Reason, e.Actions, e.Exit)
 		case "agent_start":
 			m.settledAt = ""
 			m.ready = false
@@ -82,6 +90,27 @@ func (m *settledMonitor) observe() error {
 		}
 	}
 	return nil
+}
+
+// HarnessEndedEvent is the stream event an adapter appends when it ended a harness
+// whose session had settled and that did not exit (backends/pi/stop-at-gap).
+const HarnessEndedEvent = "tillr_harness_ended"
+
+func describeHarnessEnded(after, reason string, actions []string, exit *int) string {
+	if after == "" {
+		after = "an unnamed event"
+	}
+	text := "ended at " + after
+	if reason != "" {
+		text += "; " + reason
+	}
+	if len(actions) > 0 {
+		text += "; sent " + strings.Join(actions, ", then ")
+	}
+	if exit != nil {
+		text += fmt.Sprintf("; harness exited %d", *exit)
+	}
+	return text
 }
 
 func resultFooter(b []byte) bool {

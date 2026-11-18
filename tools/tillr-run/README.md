@@ -154,13 +154,21 @@ omit these fields; an immediate exit never arms the injected sampling clock. The
 [drain judges the answer](../tillr-drain/README.md#settled-harnesses), rather than
 retrying it as infrastructure failure.
 
-The [Pi adapter](./backends/pi/run-pi) uses `exec pi --print --mode json`: print-mode
-cleanup belongs in Pi's `runPrintMode` runtime disposal, not in a shell wrapper
-that kills on the first settlement event. The cached Pi source inspected on
-2026-11-17 already awaits runtime disposal and stdout flushing, but does not force
-exit if handles remain. A source fix must be delivered in the Pi fork patch series,
-which is outside this change's allowed paths; no adapter-only forced exit is added.
-The run-face rule remains necessary for other harnesses as well.
+The five quiet seconds never come for a harness whose own timers keep running. On
+2026-11-18, three Pi workers settled with `RESULT: done` and a commit, and then sat
+for seven hours, because a leaked session hold kept every extension timer armed and
+woke Pi's main thread every two to three seconds. So the
+[Pi adapter's watcher](./backends/pi/README.md#ending-a-settled-session-pi-does-not-exit)
+also ends a settled session on Pi's own statement that nothing more is owed. It
+then appends a `tillr_harness_ended` event to the stream and exits 0. The executor
+copies that event into the record as `ending_exception`, for example
+`ended at agent_settled; pi did not exit after its session settled with no background
+work owed; sent SIGTERM to pi 1234; harness exited 143`. The run stays `exited` with
+`end_cause: normal-exit` and exit 0. That makes it an answered run, judged on its
+report. It is neither a failure nor an interruption: the drain must not replay it
+or treat it as signal-killed. `ending_exception` is accepted only on an `exited`
+record, and `run status` returns it from the finish event. The settled-idle rule
+stays as the ending for other harnesses.
 
 ## Pausing a live run
 

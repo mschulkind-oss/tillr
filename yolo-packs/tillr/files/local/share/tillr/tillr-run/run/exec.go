@@ -414,6 +414,10 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	finishedAt := time.Now().UTC()
 	logFile.Close()
+	// The adapter's last line can arrive after the final sample; read it now.
+	if monitor.observe() == nil && monitor.harnessEnded != "" && !paused && runCtx.Err() == nil {
+		payload.EndingException = monitor.harnessEnded
+	}
 	if err := workerRecords.sample(writeCtx, true); err != nil && pauseErr == nil {
 		pauseErr = Internalf("recording worker progress and sessions: %v", err)
 	}
