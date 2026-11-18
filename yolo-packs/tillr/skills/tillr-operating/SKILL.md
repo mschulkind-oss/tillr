@@ -267,8 +267,9 @@ gate runs through it. The measured module list is in the
 [verification report](../../../../docs/pi/tillr-go-shards-2026-11-17.md).
 The runner always executes tests fresh; Go's test result cache does not apply.
 It builds each package's test binary once and runs up to six independent test
-processes per package, balancing recorded durations. New tests run in a fallback
-group; no duration entry is required to run a test. Each process has its own
+processes per package, balancing recorded durations. Tests without a duration are
+spread across shards using the mean recorded cost (or a unit cost when none is
+recorded); no duration entry is required to run a test. Each process has its own
 scratch directory and git global configuration file.
 
 ```bash

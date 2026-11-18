@@ -24,15 +24,21 @@ class ShardError(RuntimeError):
 
 def assign(names, durations, count):
     groups = [[] for _ in range(count)]
+    known = [name for name in names if name in durations]
     unknown = [name for name in names if name not in durations]
-    known_slots = max(1, count - bool(unknown))
-    loads = [0.0] * known_slots
-    for name in sorted((n for n in names if n in durations),
-                       key=lambda n: (-durations[n], n)):
-        slot = min(range(known_slots), key=lambda i: (loads[i], i))
+    loads = [0.0] * count
+    for name in sorted(known, key=lambda n: (-durations[n], n)):
+        slot = min(range(count), key=lambda i: (loads[i], i))
         groups[slot].append(name)
         loads[slot] += durations[name]
-    groups[-1].extend(unknown)
+    # Each unmeasured test still occupies time. Distributing them with the mean
+    # recorded cost prevents one growing fallback shard from holding the suite.
+    estimate = sum(durations[name] for name in known) / len(known) if known else 1.0
+    estimate = estimate or 1.0
+    for name in unknown:
+        slot = min(range(count), key=lambda i: (loads[i], i))
+        groups[slot].append(name)
+        loads[slot] += estimate
     return groups
 
 
