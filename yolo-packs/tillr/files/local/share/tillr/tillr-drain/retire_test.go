@@ -89,7 +89,9 @@ printf 'RESULT: done\n'
 			report := &strings.Builder{}
 			result, err := retirementLoop(t, f, f.steps(t, gate, always(t, "land", 0), always(t, "verdict", 0)), fence, report).Run(context.Background())
 			if removed {
-				if err != nil || result.Landed != 0 || result.Rejected != 1 || countMatching(lines(t, f.count), "gate") != 0 {
+				// Refused, returned to its worker with the evidence, and refused the same way
+				// again: an identical repeat (the owner's ruling of 2026-11-17).
+				if err != nil || result.Landed != 0 || result.Rejected != 2 || countMatching(lines(t, f.count), "gate") != 0 {
 					t.Fatalf("worker removal must be refused before the gate: result %+v, err %v; %s", result, err, report)
 				}
 				if !strings.Contains(report.String(), "worker edited its own item block docs/fixture.md#fixture") {

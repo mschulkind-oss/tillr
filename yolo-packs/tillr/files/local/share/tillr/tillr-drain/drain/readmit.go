@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -16,12 +15,12 @@ import (
 )
 
 const inputRecordedKind = "drain.inputs"
-const ReasonInputsChanged = "inputs-changed"
-const ReasonReadmissionExhausted = "readmission-exhausted"
 
 // RunInputs records the definition and execution inputs at dispatch, not at failure.
-// Hashes avoid duplicating document prose in the store. Queue rank, state, timestamps
-// and the base commit are not causes for an automatic second attempt.
+// Hashes avoid duplicating document prose in the store. No rule re-runs an item because
+// one of them changed: the owner ruled on 2026-11-17 that a hash change is no fact for
+// the work (audit finding F-01). They remain the claim's check that the pass that planned
+// a dispatch read the definition the claim applies, and the evidence a reader inspects.
 type RunInputs struct {
 	ItemBlock          string `json:"item_block"`
 	WorkflowDefinition string `json:"workflow_definition,omitempty"`
@@ -132,60 +131,6 @@ func readInputDecisions(r *store.Reader) (map[string]Decision, error) {
 		out[*e.ObjectID] = d
 	}
 	return out, nil
-}
-
-// readmission compares only a recorded basis. Legacy runs without one stay held;
-// an unchanged edit timestamp or advancing trunk cannot create an allowance.
-func (p *planner) readmission(itemID string, now *RunInputs) (string, bool) {
-	priors := []priorRun{}
-	for _, prior := range p.priors[itemID] {
-		if prior.Class != AttemptInterrupted {
-			priors = append(priors, prior)
-		}
-	}
-	if len(priors) == 0 {
-		return "", false
-	}
-	spent := false
-	for _, prior := range priors {
-		if p.history.judgeHolds[prior.RunID] == ReasonJudgeUnreadable {
-			continue
-		}
-		d := p.inputDecisions[prior.RunID]
-		if d.Action == ActionRetry {
-			spent = false
-		}
-		if d.Readmitted {
-			spent = true
-		}
-	}
-	if spent {
-		return "", true
-	}
-	last := priors[len(priors)-1]
-	before := p.inputDecisions[last.RunID].Inputs
-	changes := []string{}
-	if before != nil {
-		if before.ItemBlock != now.ItemBlock {
-			changes = append(changes, "item-block")
-		}
-		if before.WorkflowDefinition != now.WorkflowDefinition {
-			changes = append(changes, "workflow-definition")
-		}
-		if before.AllowedPaths != now.AllowedPaths {
-			changes = append(changes, "allowed-paths")
-		}
-		if before.BackendPolicy != now.BackendPolicy {
-			changes = append(changes, "backend-policy")
-		}
-		if before.TillrBuild != now.TillrBuild {
-			changes = append(changes, "tillr-build")
-		}
-	}
-	if len(changes) == 0 {
-		return "", false
-	}
-	return ReasonInputsChanged + ": " + strings.Join(changes, ", "), false
 }
 
 func (l *Loop) orphanedRun(ctx context.Context, rec run.Record) (bool, error) {

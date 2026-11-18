@@ -103,7 +103,13 @@ type Decision struct {
 	ConflictID        string         `json:"conflict_id,omitempty"`
 	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
 	Inputs            *RunInputs     `json:"inputs,omitempty"`
-	Readmitted        bool           `json:"readmitted,omitempty"`
+	// Readmitted marked a dispatch the removed input-change rule allowed. No pass writes
+	// it since the owner's ruling of 2026-11-17; recorded decisions still carry it.
+	Readmitted bool `json:"readmitted,omitempty"`
+	// Returned is the earlier run's ending a dispatch carries back to the item's worker:
+	// a gate refusal, a run that committed nothing, a fence escape or a refused landing.
+	// Staging writes it into the brief (returnedBrief). It is nil on every other decision.
+	Returned *ReturnedEnding `json:"returned,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
 	// failover runs. Positions use the design's closed set: queued, running, candidate,
@@ -124,7 +130,7 @@ type Decision struct {
 	RunRequest *run.Request `json:"run_request,omitempty"`
 	// RetryID names the operator's authorization a `retry` decision spends, and the
 	// SupersedesRunID names the run that authorization supersedes. A hold that refuses the
-	// claim — `retry-judged`, `retry-unjudged`, `retry-stale` — names the same pair, so an
+	// claim — `retry-judged`, `retry-unjudged` — names the same pair, so an
 	// operator reading why their authorization did not hold can see what it named. A first
 	// dispatch and every other hold leave both empty.
 	RetryID         string `json:"retry_id,omitempty"`
@@ -474,12 +480,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
 				invalid := item.State != def.Ready || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
-				before, now := work.Decision.Inputs, inputs[item.ItemID]
-				if before != nil && now != nil && (before.ItemBlock != now.ItemBlock || before.AllowedPaths != now.AllowedPaths) {
-					invalid = true
-				}
 				// The persisted graph, including source digests, owns this attempt.
-				// Editing its source does not invalidate or replace an in-flight node.
+				// Editing its source does not invalidate or replace an in-flight node, and
+				// neither does an edit to the item's block or fence: the owner ruled on
+				// 2026-11-17 that such an edit is no fact for the work (audit finding F-07).
 				if invalid {
 					leases, leaseErr := activeLeases(r, at, []string{decision.LaneID})
 					if leaseErr != nil {
@@ -663,22 +667,24 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// switch so a claim the store refuses can name its reason and the run it names.
 	attempt := p.attempt(item)
 	retry := p.retryFor(item.ItemID)
-	changed, spent := "", false
-	// A design-seat item is never re-admitted on a changed input: the owner ruled on
-	// 2026-11-17 that a change to an item's block (a metadata write, a prose rewrite) is no
-	// reason to spend a design run. It moves on an explicit retry.
-	if inputs := p.inputs[item.ItemID]; inputs != nil && item.Seat != "design" {
-		changed, spent = p.readmission(item.ItemID, inputs)
-	}
+	// No item is re-admitted because an input changed: the owner ruled on 2026-11-17 that
+	// nothing re-runs because a hash of the block, the workflow, the fence, the backend
+	// policy or the tillr build changed without knowing what the change means (audit
+	// finding F-01). An item moves on an event that names it: the operator's retry, a
+	// design answer for it, or the recovery of a killed run.
 	if p.history.refusals[p.latest[item.ItemID]] == RefusalTrunkAlreadyRed {
 		// A released acquittal starts fresh, including one whose dispatch had
-		// consumed an owner retry or the automatic input-change allowance.
-		retry, changed, spent = nil, "", false
+		// consumed an owner retry.
+		retry = nil
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
 		if p.policy != nil {
 			attempt.backend = p.policy.firstBackend(item)
 		}
 	}
+	// A gate refusal, a run with no commit, a fence escape and a refused landing go back to
+	// the item's worker with their evidence, every time and uncounted (returned.go). An
+	// operator's retry and the recovery of an interrupted run are their own moves.
+	returned := p.returnedEnding(item.ItemID)
 	interrupted, restaged := false, false
 	if priors := p.priors[item.ItemID]; len(priors) > 0 {
 		interrupted = priors[len(priors)-1].Class == AttemptInterrupted
@@ -688,9 +694,14 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// Repeat the interrupted execution, not an authorized retry or a
 		// re-admission. Preserve its backend and do not walk the failover chain.
 		attempt = attemptForInterruption(p.priors[item.ItemID])
-		retry, changed, spent = nil, "", false
+		retry = nil
 	}
-	if changed != "" && p.policy != nil {
+	if retry != nil || interrupted {
+		returned = nil
+	}
+	if returned != nil && p.policy != nil {
+		// A returned ending is about the candidate, not the machinery: the next run starts
+		// on the item's own backend.
 		attempt.backend = p.policy.firstBackend(item)
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
 	}
@@ -758,11 +769,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, retry.refusal
 		decision.RetryID = retry.retryID
 		decision.SupersedesRunID = retry.supersedesRunID
-	case retry == nil && spent && decision.ConflictID == "":
-		decision.Action, decision.Reason = ActionHold, ReasonReadmissionExhausted
-	case retry == nil && changed == "" && attempt.exhausted:
+	case retry == nil && attempt.exhausted:
 		decision.Action, decision.Reason = ActionHold, ReasonInfraExhausted
-	case retry == nil && !interrupted && changed == "" && !attempt.failover && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+	case retry == nil && !interrupted && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
 		decision.Action, decision.Reason = ActionHold, ReasonNoFence
@@ -831,18 +840,18 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Reason = seatDegradedReason(attempt.degraded, attempt.backend)
 		}
 		decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
-		if changed != "" {
-			decision.Reason, decision.Readmitted = changed, true
-		}
 		if interrupted {
 			decision.Reason = "earlier run orphaned by a loop stop"
 		}
 		if restaged {
 			decision.Reason = ReasonRestagedStaleBase
 		}
+		if returned != nil {
+			decision.Returned = returned
+			decision.Reason = ReasonReturned
+		}
 		if decision.ConflictID != "" {
 			decision.Reason = ReasonConflictAnswered
-			decision.Readmitted = false
 		}
 	}
 	decision.Attempt = p.nextAttempt(item.ItemID)
@@ -852,7 +861,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
-		decision.SelectSeat = !interrupted && (!attempt.failover || retry != nil || changed != "" || decision.ConflictID != "")
+		decision.SelectSeat = !interrupted && (!attempt.failover || retry != nil || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""
@@ -1118,6 +1127,23 @@ func (p *planner) retryHoldReason(itemID string) string {
 	return ReasonRunLinkMissing
 }
 
+// returnedEnding answers the item's latest run's ending when it goes back to the item's
+// worker (ReasonReturned), or nil. It is the latest run's hold reason, read the way
+// retryHoldReason reads it, for the four outcomes a worker can act on; the refusal's own
+// record supplies the evidence.
+func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
+	latest := p.latest[itemID]
+	if latest == "" || !p.mayBeARetry(itemID) {
+		return nil
+	}
+	cause, ok := returnedReasons[p.retryHoldReason(itemID)]
+	if !ok {
+		return nil
+	}
+	e := p.history.endings[latest]
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: e.Detail, Checks: e.Checks}
+}
+
 // retry is one item's operator authorization, resolved against the store: which run it
 // claims, and why that claim does not hold when it does not.
 type retry struct {
@@ -1152,19 +1178,12 @@ func (p *planner) retryFor(itemID string) *retry {
 	}
 	r := &retry{retryID: row.RetryID, supersedesRunID: row.SupersedesRunID}
 	if p.latest[itemID] != row.SupersedesRunID {
-		for _, prior := range p.priors[itemID] {
-			d := p.inputDecisions[prior.RunID]
-			if d.Action == ActionRetry && d.RetryID == row.RetryID {
-				if now := p.inputs[itemID]; now != nil {
-					changed, spent := p.readmission(itemID, now)
-					if changed != "" || spent {
-						return nil
-					}
-				}
-			}
-		}
-		r.refusal = ReasonRetryStale
-		return r
+		// The authorization names a run that is no longer the item's latest: it was
+		// consumed by the retry it authorized, or a newer run ended after it was written.
+		// Either way it no longer speaks, and the item's latest ending routes it, as it
+		// would with no authorization at all. Holding the item as `retry-stale` was a
+		// one-run allowance per authorization; the owner's ruling of 2026-11-17 removes it.
+		return nil
 	}
 	// The acknowledgment a retry carries is what makes a judged or unjudged run retryable:
 	// the operator has named the outcome, and the plan honours that acknowledgment only
@@ -1628,6 +1647,9 @@ type runHistory struct {
 	// said, which is the difference between a hold for a red gate and one for a land that
 	// declined a passing candidate.
 	gateResults map[string]string
+	// endings is every refusal's own record, keyed by run id: its detail, its failing
+	// checks and its evidence key. A returned ending is built from it.
+	endings map[string]refusalPayload
 }
 
 // readRunHistory reads the item-object events and answers, per item, whether its history
@@ -1645,6 +1667,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 	history := runHistory{
 		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{},
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
+		endings: map[string]refusalPayload{},
 	}
 	for _, e := range events {
 		if e.Kind == GateVerdictKind && e.ObjectType == "run" && e.ObjectID != nil {
@@ -1659,11 +1682,12 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 		}
 		if e.Kind == RefusalKind && e.ObjectType == "run" && e.ObjectID != nil {
 			var payload struct {
-				Step        string `json:"step"`
+				refusalPayload
 				WriterRunID string `json:"writer_run_id"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Step != "" {
 				history.refusals[*e.ObjectID] = payload.Step
+				history.endings[*e.ObjectID] = payload.refusalPayload
 				if payload.WriterRunID != "" {
 					history.judgeHolds[payload.WriterRunID] = payload.Step
 				}

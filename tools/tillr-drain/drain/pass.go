@@ -1377,14 +1377,17 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	}
 	defer s.Close()
 	// The routing reads the whole history, so it reads before the write and not under the
-	// store's write lock (readSecondFailure); the write records what it read.
+	// store's write lock (readRepeatedEnding); the write records what it read.
 	var routed *secondFailure
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		routed, err = readSecondFailure(r, d)
+		routed, err = readRepeatedEnding(r, d)
 		return err
 	}); err != nil {
 		return err
+	}
+	if routed != nil && (l.cfg.Policy == nil || len(l.cfg.Policy.seatList("design")) == 0) {
+		routed.noDesignSeat = true
 	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		at := l.cfg.Now().UTC()

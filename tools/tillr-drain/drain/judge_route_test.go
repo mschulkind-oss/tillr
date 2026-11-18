@@ -179,10 +179,14 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 			}
 			want := []string{"worker", "judge"}
 			switch mode {
-			case "pass", "preflight", "land-fail":
+			case "pass", "preflight":
 				want = append(want, "gate", "landing")
+			// A refused gate or landing goes back to the worker with its evidence (the
+			// owner's ruling of 2026-11-17), so the worker runs again within the passes.
+			case "land-fail":
+				want = append(want, "gate", "landing", "worker")
 			case "gate-fail":
-				want = append(want, "gate")
+				want = append(want, "gate", "worker")
 			case "mechanical":
 				want = []string{"worker", "gate", "landing"}
 			case "no-grant":
@@ -249,7 +253,9 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 					t.Errorf("candidate changed %s != %s", head, s.workerHead)
 				}
 			}
-			holds := map[string]string{"not-done": "eval-failed", "missing": "judge-unreadable", "invalid": "judge-unreadable", "dirty": "judge-unreadable", "commit": "judge-unreadable", "gate-fail": ReasonGateFailed, "land-fail": ReasonLandRefused, "no-grant": "judge-grant-absent"}
+			holds := map[string]string{"not-done": "eval-failed", "missing": "judge-unreadable", "invalid": "judge-unreadable", "dirty": "judge-unreadable", "commit": "judge-unreadable", "no-grant": "judge-grant-absent"}
+			// gate-fail and land-fail hold nothing: the refusal went back to the worker, whose
+			// returned run the order above shows.
 			if reason := holds[mode]; reason != "" {
 				for _, p := range mustPlan(t, l) {
 					if p.decision.ItemID == "item-a" && p.decision.Reason != reason {

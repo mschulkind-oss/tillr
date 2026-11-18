@@ -78,7 +78,10 @@ func TestAConflictFixCarryingTheLoopsRetirementIsNotTheWorkersEdit(t *testing.T)
 // candidate or not: the excuse is the loop's recorded removal, not any edit to the block.
 func TestAConflictFixThatEditsItsOwnBlockIsStillRefused(t *testing.T) {
 	result, _, _ := retiredConflictFixture(t, `  sed -i 's/Make the candidate./Make anything at all./' docs/work.md`)
-	if result.Landed != 0 || result.Rejected != 1 {
+	// The refused fix goes back to the item's worker with the evidence (the owner's ruling of
+	// 2026-11-17), so the item may land afterwards; the fix itself must have been refused at
+	// the fence.
+	if result.Rejected != 1 || result.RefusedSteps[drain.RefusalFence] != 1 {
 		t.Fatalf("a fix that rewrote its own criterion was not refused: %+v", result)
 	}
 }

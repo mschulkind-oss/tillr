@@ -78,8 +78,10 @@ func TestAnsweredConflictOutranksEarlierRetry(t *testing.T) {
 			decisions, _ := transitionPlan(t, path, "2026-11-10T00:03:00Z", []string{"lane-1"}, 1, p)
 			got := decisions[0]
 			if status != "answered" {
-				if got.Action != drain.ActionHold || got.Reason != drain.ReasonRetryStale || got.SupersedesRunID != older {
-					t.Fatalf("stale authorization dispatched without an unconsumed answer: %+v", got)
+				// A consumed authorization no longer speaks: the item routes by its latest run,
+				// as with no authorization, and is not held as a stale retry.
+				if got.Action == drain.ActionRetry || got.Reason == "retry-stale" || got.RetryID != "" {
+					t.Fatalf("a consumed authorization still spoke: %+v", got)
 				}
 				return
 			}

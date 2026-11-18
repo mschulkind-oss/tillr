@@ -153,6 +153,12 @@ const (
 	// ReasonRetry is a retry's reason: the item's latest run was refused by the harness —
 	// it produced no judgable candidate — and an operator authorized the second attempt.
 	ReasonRetry = "harness-refused"
+	// ReasonReturned is a dispatch's reason: the item's latest run ended in a gate refusal,
+	// with no commit, in a fence escape or in a refused landing, and the ending goes back
+	// to the item's worker with its evidence (Decision.Returned). It is uncounted: the
+	// owner ruled on 2026-11-17 that a failure returns to its worker every time, and only
+	// an identical repeat goes to the design seat instead (returned.go).
+	ReasonReturned = "returned-with-evidence"
 	// ReasonRetryJudged is a hold's reason: an authorization names a run the gate judged,
 	// so re-dispatching it would spend a second attempt on work a verdict already covers.
 	// The gate's `gate.verdict` event is the evidence, not the run's exit status.
@@ -160,10 +166,6 @@ const (
 	// ReasonRetryUnjudged is a hold's reason: an authorization names a run a wall cut
 	// short, which is inspected before anything re-dispatches it.
 	ReasonRetryUnjudged = "retry-unjudged"
-	// ReasonRetryStale is a hold's reason: an authorization names a run that is no longer
-	// the item's latest terminal run, so it cannot be the retry's link. A newer
-	// authorization naming the newer run is what corrects it.
-	ReasonRetryStale = "retry-stale"
 	// ReasonQuestionOpen is a hold's reason: the item's design document carries a question
 	// Vantage's index reports as unanswered. The decision names it in QuestionID. It is a
 	// hold rather than a refusal because the remedy is a person's ruling, and the item is

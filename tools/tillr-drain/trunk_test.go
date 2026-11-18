@@ -209,8 +209,10 @@ func TestAGateFailureRedOnTheBaseAcquitsTheItem(t *testing.T) {
 	if !itemExists(t, f.store, fixer) {
 		t.Fatalf("no fixer %q was filed for the red trunk", fixer)
 	}
-	if got := itemStateOf(t, f.store, fixer); got != "in-queue" {
-		t.Fatalf("the fixer is %q, want in-queue", got)
+	// The fixer is real work: the loop dispatches it, and when its own candidate repeats a
+	// refusal it waits on its mover like any other item. Either way it was filed and kept.
+	if got := itemStateOf(t, f.store, fixer); got != "in-queue" && got != "blocked" {
+		t.Fatalf("the fixer is %q, want in-queue or blocked", got)
 	}
 	refusal := refusalOf(t, f.store, drain.RefusalTrunkAlreadyRed)
 	if refusal == nil {
@@ -243,11 +245,13 @@ func TestAGateFailureGreenOnTheBaseIsTheCandidatesRefusal(t *testing.T) {
 	if result.TrunkAcquitted != 0 {
 		t.Fatalf("a green base acquitted the item: %d", result.TrunkAcquitted)
 	}
-	if result.Rejected != 1 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 1 and 0", result.Rejected, result.Landed)
+	// The refusal goes back to the item's worker with the evidence, and the identical
+	// second refusal waits on its mover (the owner's ruling of 2026-11-17).
+	if result.Rejected != 2 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
 	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the refused item is %q, want in-queue", got)
+	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("the repeated refusal does not wait on its mover: %s", result.Detail)
 	}
 	if itemExists(t, f.store, drain.TrunkFixerID(base)) {
 		t.Fatal("a green base filed a fixer")

@@ -59,7 +59,16 @@ type dispatchHistory struct {
 	// latest is each item's latest run id, which is the run an authorization must name for
 	// the claim to still hold.
 	latest map[string]string
+	// refusals is each run's drain refusal step, from its `drain.refusal` event.
+	refusals map[string]string
+	// gateFailed is every run the gate answered `fail` for.
+	gateFailed map[string]bool
 }
+
+// returnedSteps are the refusal steps whose ending the planner sends back to the item's
+// worker with its evidence, uncounted (the owner's ruling of 2026-11-17): a gate refusal, a
+// run with no commit, a fence escape and a refused landing.
+var returnedSteps = map[string]bool{"gate": true, "no-op": true, "fence": true, "land": true}
 
 // retryAuthorization is one operator's claim that a run may be re-dispatched, with the
 // outcome they acknowledged when they made it.
@@ -80,6 +89,8 @@ func readDispatchHistory(r *store.Reader, runs []storeRun) (*dispatchHistory, er
 		judged:     map[string]bool{},
 		unjudged:   map[string]bool{},
 		latest:     map[string]string{},
+		refusals:   map[string]string{},
+		gateFailed: map[string]bool{},
 	}
 	// readRuns orders by started_at, so the last row for an item is its newest run -- the
 	// same answer readPriorRuns gives the planner.
@@ -100,10 +111,16 @@ func readDispatchHistory(r *store.Reader, runs []storeRun) (*dispatchHistory, er
 	if err != nil {
 		return nil, err
 	}
-	for runID := range verdicts {
+	for runID, verdict := range verdicts {
 		h.judged[runID] = true
+		if verdict.Result == "fail" {
+			h.gateFailed[runID] = true
+		}
 	}
 	if err := readRetryAuthorizations(r, h); err != nil {
+		return nil, err
+	}
+	if err := readRefusals(r, h); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -149,6 +166,28 @@ func readItemHistory(r *store.Reader, h *dispatchHistory) error {
 		h.known[itemID] = true
 		if body.State == stateInProgress {
 			h.inProgress[itemID] = true
+		}
+	}
+	return rows.Err()
+}
+
+// readRefusals answers each run's refusal step. The newest event for a run speaks.
+func readRefusals(r *store.Reader, h *dispatchHistory) error {
+	rows, err := r.Query(`SELECT COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.step'), '') FROM events WHERE kind = 'drain.refusal' AND object_type = 'run' ORDER BY seq`)
+	if err != nil {
+		if isMissingTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID, step string
+		if err := rows.Scan(&runID, &step); err != nil {
+			return err
+		}
+		if runID != "" && step != "" {
+			h.refusals[runID] = step
 		}
 	}
 	return rows.Err()
@@ -225,6 +264,8 @@ func readRetryAcks(r *store.Reader) (map[string]string, error) {
 //   - the item is queued, unblocked, and not held by a question;
 //   - an operator's retry authorization that the store does not refuse makes the item a
 //     retry the planner would dispatch; and otherwise
+//   - the item's latest run ended in a refusal the planner returns to the item's worker
+//     (returnedSteps) makes it dispatchable; and otherwise
 //   - the item may not be a retry -- it has no run, its history is in the log, and it has
 //     never been in progress.
 //
@@ -257,8 +298,13 @@ func (h *dispatchHistory) dispatchable(item storeItem, stateOf map[string]string
 	if unmetBlocker(stateOf, waiting, item.ItemID) {
 		return false
 	}
-	if authorization, ok := h.retries[item.ItemID]; ok {
+	// An authorization that names a run that is no longer the item's latest no longer
+	// speaks, and the item is routed as if it had none.
+	if authorization, ok := h.retries[item.ItemID]; ok && h.latest[item.ItemID] == authorization.supersedes {
 		return !h.retryRefused(item.ItemID, authorization)
+	}
+	if latest := h.latest[item.ItemID]; latest != "" && (returnedSteps[h.refusals[latest]] || h.refusals[latest] == "" && h.gateFailed[latest]) {
+		return true
 	}
 	return !h.mayBeARetry(item.ItemID)
 }

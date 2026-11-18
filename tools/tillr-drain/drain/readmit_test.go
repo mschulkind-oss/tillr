@@ -33,11 +33,23 @@ func finishHeldPass(t *testing.T, f refusalLoopFixture, l *Loop, p plannedApplic
 	}
 }
 
-func TestHeldPassReadmitsOnlyOnceForChangedInputs(t *testing.T) {
-	for _, change := range []string{"unchanged", "item-block", "allowed-paths", "backend-policy", "tillr-build"} {
+// sameWork answers whether two decisions do the same thing to an item's work: the same
+// action for the same reason, with nothing re-admitted.
+func sameWork(a, b Decision) bool {
+	return a.Action == b.Action && a.Reason == b.Reason && !a.Readmitted && !b.Readmitted
+}
+
+// The owner ruled on 2026-11-17 that nothing re-runs because a hash changed without
+// knowing what the change means (audit finding F-01): an edit to the item's block, its
+// fence, the backend policy or the tillr build does nothing to a held item's work. The
+// operator's explicit retry still moves it.
+func TestAChangedInputReDispatchesNothing(t *testing.T) {
+	for _, change := range []string{"item-block", "allowed-paths", "backend-policy", "tillr-build"} {
 		t.Run(change, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
-			finishHeldPass(t, f, l, mustPlan(t, l)[0], run.EndNormalExit)
+			first := mustPlan(t, l)[0]
+			finishHeldPass(t, f, l, first, run.EndNormalExit)
+			before := mustPlan(t, l)[0].decision
 			switch change {
 			case "item-block":
 				fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -54,40 +66,23 @@ func TestHeldPassReadmitsOnlyOnceForChangedInputs(t *testing.T) {
 			case "tillr-build":
 				l.build.Digest = "changed-build"
 			}
-			p := mustPlan(t, l)[0]
-			if change == "unchanged" {
-				if p.decision.Action != ActionHold {
-					t.Fatalf("unchanged dispatched: %+v", p.decision)
-				}
-				return
+			after := mustPlan(t, l)[0].decision
+			if !sameWork(before, after) || strings.Contains(after.Reason, "inputs-changed") {
+				t.Fatalf("a changed %s did something to the work:\nbefore %+v\nafter  %+v", change, before, after)
 			}
-			if p.decision.Action != ActionDispatch || !strings.Contains(p.decision.Reason, change) {
-				t.Fatalf("changed %s not named and dispatched: %+v", change, p.decision)
-			}
-			finishHeldPass(t, f, l, p, run.EndNormalExit)
-			l.cfg.Policy.Backends["fixture"] = Backend{Adapter: "another-change"}
-			// A replacement loop must read the spent allowance from the store.
+			// A replacement loop reads the same store and decides the same.
 			l2 := f.loop(t, &recordingSteps{}, &itemContentStager{})
 			l2.cfg.Policy = l.cfg.Policy
-			held := mustPlan(t, l2)[0].decision
-			if held.Action != ActionHold || held.Reason != "readmission-exhausted" {
-				t.Fatalf("second automatic attempt: %+v", held)
+			l2.build = l.build
+			if again := mustPlan(t, l2)[0].decision; !sameWork(after, again) {
+				t.Fatalf("a replacement loop decided otherwise: %+v / %+v", after, again)
 			}
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{ItemID: "item-a", RunID: p.decision.RunRequest.RunID, By: "owner", Why: "diagnosed", At: l.cfg.Now()})
+				_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{ItemID: "item-a", RunID: first.decision.RunRequest.RunID, By: "owner", Why: "diagnosed", At: l.cfg.Now()})
 				return err
 			})
-			ownerPlan := mustPlan(t, l2)[0]
-			if d := ownerPlan.decision; d.Action != ActionRetry {
+			if d := mustPlan(t, l2)[0].decision; d.Action != ActionRetry {
 				t.Fatalf("owner retry refused: %+v", d)
-			}
-			finishHeldPass(t, f, l2, ownerPlan, run.EndNormalExit)
-			if d := mustPlan(t, l2)[0].decision; d.Action != ActionHold {
-				t.Fatalf("owner retry repeated unchanged inputs: %+v", d)
-			}
-			l2.cfg.Policy.Backends["fixture"] = Backend{Adapter: "changed after owner retry"}
-			if d := mustPlan(t, l2)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "backend-policy") {
-				t.Fatalf("owner did not reset allowance: %+v", d)
 			}
 		})
 	}
@@ -108,7 +103,10 @@ func TestOrphanedNoCommitPassSpendsNoReadmission(t *testing.T) {
 			if orphan && (d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop")) {
 				t.Fatalf("orphan not admitted: %+v", d)
 			}
-			if !orphan && d.Action != ActionHold {
+			// An ordinary termination that committed nothing goes back to its worker with the
+			// evidence, uncounted (the owner's ruling of 2026-11-17): not as an orphan, and
+			// not as a re-admission.
+			if !orphan && (d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Readmitted) {
 				t.Fatalf("ordinary termination re-admitted: %+v", d)
 			}
 			if orphan {
@@ -130,7 +128,7 @@ func TestOrphanedNoCommitPassSpendsNoReadmission(t *testing.T) {
 	}
 }
 
-func TestDefinitionProseNotOtherSectionsReadmits(t *testing.T) {
+func TestADefinitionProseEditReadmitsNothing(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	path := filepath.Join(f.root, "definition.md")
 	write := func(body string) {
@@ -145,13 +143,14 @@ func TestDefinitionProseNotOtherSectionsReadmits(t *testing.T) {
 		return err
 	})
 	finishHeldPass(t, f, l, mustPlan(t, l)[0], run.EndNormalExit)
+	before := mustPlan(t, l)[0].decision
 	write("# Item\nfirst body\n# Other\nchanged unrelated\n")
-	if d := mustPlan(t, l)[0].decision; d.Action != ActionHold {
-		t.Fatalf("unrelated section dispatched: %+v", d)
+	if d := mustPlan(t, l)[0].decision; !sameWork(before, d) {
+		t.Fatalf("an unrelated section's edit did something to the work: %+v", d)
 	}
 	write("# Item\nrevised body\n# Other\nchanged unrelated\n")
-	if d := mustPlan(t, l)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "item-block") {
-		t.Fatalf("body change ignored: %+v", d)
+	if d := mustPlan(t, l)[0].decision; !sameWork(before, d) {
+		t.Fatalf("a prose-only edit to the item's own body did something to its work: %+v / %+v", before, d)
 	}
 }
 
@@ -224,13 +223,14 @@ func TestSiblingRoadmapBulletDoesNotReadmitUnchangedItem(t *testing.T) {
 				return err
 			})
 			finishHeldPass(t, f, l, mustPlan(t, l)[0], run.EndNormalExit)
+			before := mustPlan(t, l)[0].decision
 			write(strings.Replace(doc, "Second prose.", "Changed second prose.", 1))
-			if d := mustPlan(t, l)[0].decision; d.Action != ActionHold {
-				t.Fatalf("sibling edit re-admitted unchanged item: %+v", d)
+			if d := mustPlan(t, l)[0].decision; !sameWork(before, d) {
+				t.Fatalf("a sibling's edit did something to the work: %+v", d)
 			}
 			write(strings.Replace(doc, "First prose.", "Changed first prose.", 1))
-			if d := mustPlan(t, l)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "item-block") {
-				t.Fatalf("own bullet edit ignored: %+v", d)
+			if d := mustPlan(t, l)[0].decision; !sameWork(before, d) {
+				t.Fatalf("a prose-only edit to the item's own bullet did something to its work: %+v / %+v", before, d)
 			}
 		})
 	}
@@ -240,7 +240,9 @@ func TestTerminationWithoutLoopStopEvidenceDoesNotReadmit(t *testing.T) {
 	for _, cause := range []string{run.EndSignal, run.EndLeaseReclaimed} {
 		f, l := passFixture(t, "item-a")
 		finishHeldPass(t, f, l, mustPlan(t, l)[0], cause)
-		if d := mustPlan(t, l)[0].decision; d.Action != ActionHold {
+		// Without the loop's stop evidence the run is not an orphan: its no-op ending goes
+		// back to its worker as any other does (the owner's ruling of 2026-11-17).
+		if d := mustPlan(t, l)[0].decision; d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Readmitted {
 			t.Fatalf("termination alone re-admitted: %+v", d)
 		}
 	}
@@ -258,11 +260,12 @@ func TestADesignSeatItemIsNotReadmittedOnAChangedInput(t *testing.T) {
 		return err
 	})
 	finishHeldPass(t, f, l, mustPlan(t, l)[0], run.EndNormalExit)
+	before := mustPlan(t, l)[0].decision
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE item_criteria SET text = 'revised criterion' WHERE item_id = 'item-a'`)
 		return err
 	})
-	if d := mustPlan(t, l)[0].decision; d.Action != ActionHold || d.Readmitted || strings.Contains(d.Reason, ReasonInputsChanged) {
+	if d := mustPlan(t, l)[0].decision; !sameWork(before, d) || d.Readmitted || strings.Contains(d.Reason, "inputs-changed") {
 		t.Fatalf("a design-seat item was re-admitted on a changed input: %+v", d)
 	}
 }

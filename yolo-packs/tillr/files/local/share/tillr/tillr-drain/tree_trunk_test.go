@@ -64,8 +64,10 @@ func TestTreeCheckAcquittalHoldsOnTheFixerWithoutAConflict(t *testing.T) {
 	if refusal == nil || refusal["red_sha"] != base {
 		t.Fatalf("refusal=%v", refusal)
 	}
+	// The fixer is ordinary work and may repeat its own refusal; the acquitted item must not
+	// be charged a conflict.
 	for _, e := range eventsOf(t, f.store) {
-		if strings.Contains(e.Kind, "conflict") {
+		if strings.Contains(e.Kind, "conflict") && eventPayload(t, e)["item_id"] == "item_041" {
 			t.Fatalf("acquittal raised %s", e.Kind)
 		}
 	}
@@ -122,16 +124,19 @@ func TestAcquittedAuthorizedRetryIsNotChargedOrStranded(t *testing.T) {
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	base := git(t, f.root, "rev-parse", "main")
 	steps := &trunkSteps{ProcessSteps: f.steps(t, always(t, "original-red", 1), always(t, "land", 0), always(t, "verdict", 0))}
+	// The first failure goes back to its worker; the identical second one waits on the owner.
 	first, err := runTrunkLoop(t, f, steps, io.Discard)
-	if err != nil || first.Rejected != 1 {
+	if err != nil || first.Rejected != 2 || !strings.Contains(first.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
+	charged := len(eventsOf(t, f.store))
+	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	s, err := store.Open(context.Background(), f.store, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
-		_, err := drain.AuthorizeRetry(context.Background(), tx, drain.RetryRequest{ItemID: "item_041", RunID: "run-item_041-a1", By: "owner", Why: "diagnosed", Acknowledge: drain.RetryAckGateFailed, At: steps.Now()})
+		_, err := drain.AuthorizeRetry(context.Background(), tx, drain.RetryRequest{ItemID: "item_041", RunID: "run-item_041-a2", By: "owner", Why: "diagnosed", Acknowledge: drain.RetryAckGateFailed, At: steps.Now()})
 		return err
 	})
 	s.Close()
@@ -144,8 +149,8 @@ func TestAcquittedAuthorizedRetryIsNotChargedOrStranded(t *testing.T) {
 	if err != nil || second.TrunkAcquitted != 1 {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
-	for _, e := range eventsOf(t, f.store) {
-		if strings.Contains(e.Kind, "conflict") {
+	for _, e := range eventsOf(t, f.store)[charged:] {
+		if strings.Contains(e.Kind, "conflict") && eventPayload(t, e)["item_id"] == "item_041" {
 			t.Fatalf("acquitted retry charged: %s %s", e.Kind, e.Payload)
 		}
 	}
@@ -174,11 +179,15 @@ func TestAcquittedPredecessorDoesNotBecomeASecondFailure(t *testing.T) {
 	steps.ProcessSteps.GateProgram = always(t, "own-red", 1)
 	steps.replays = nil
 	second, err := runTrunkLoop(t, f, steps, io.Discard)
-	if err != nil || second.Dispatched != 1 || second.Rejected != 1 {
+	// The item's own red goes back to its worker, and the identical second red waits on its
+	// mover. The acquittal before it is not part of that repeat: the repeat's conflict names
+	// two of this pass's runs, never the acquitted one.
+	if err != nil || second.Dispatched != 2 || second.Rejected != 2 {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
+	acquitted := runsForItem(t, f.store, "item_041")[0].RunID
 	for _, e := range eventsOf(t, f.store) {
-		if strings.Contains(e.Kind, "conflict") {
+		if strings.Contains(e.Kind, "conflict") && strings.Contains(string(e.Payload), acquitted) {
 			t.Fatalf("acquittal counted as earlier failure: %s %s", e.Kind, e.Payload)
 		}
 	}
@@ -206,7 +215,7 @@ func TestMixedTreeFailureDoesNotAcquitTheCandidatesOwnRed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TrunkAcquitted != 0 || result.Rejected != 1 {
+	if result.TrunkAcquitted != 0 || result.Rejected != 2 {
 		t.Fatalf("mixed failure acquitted: %+v", result)
 	}
 }
@@ -260,8 +269,11 @@ type laterRedReplaySteps struct {
 	base string
 }
 
-func (s *laterRedReplaySteps) Replay(_ context.Context, _ drain.Candidate, rev string, checks []string) (drain.ReplayOutcome, error) {
-	if rev == s.base {
+// Replay is green at a candidate's own base and red at any other revision, so a loop that
+// judged a failure against newer trunk instead of the base would acquit it. Each returned
+// run starts from the trunk the gate moved, which is that run's own base.
+func (s *laterRedReplaySteps) Replay(_ context.Context, candidate drain.Candidate, rev string, checks []string) (drain.ReplayOutcome, error) {
+	if rev == s.base || rev == candidate.BaseSHA {
 		return drain.ReplayOutcome{Rev: rev, Known: true}, nil
 	}
 	return drain.ReplayOutcome{Rev: rev, Known: true, Red: checks}, nil
@@ -281,7 +293,8 @@ func TestTreeCheckRedOnlyOnNewerTrunkStillChargesTheCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Rejected != 1 || result.TrunkAcquitted != 0 || refusalOf(t, f.store, drain.RefusalGate) == nil {
+	// Charged, returned to its worker, and charged identically again.
+	if result.Rejected != 2 || result.TrunkAcquitted != 0 || firstRefusalStep(t, f.store, "run-item_041-a1") != drain.RefusalGate {
 		t.Fatalf("own failure acquitted against later trunk: %+v", result)
 	}
 }
@@ -294,7 +307,20 @@ func TestTreeCheckGreenOnBaseChargesTheCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Rejected != 1 || result.TrunkAcquitted != 0 || refusalOf(t, f.store, drain.RefusalGate) == nil {
+	// Charged, returned to its worker, and charged identically again.
+	if result.Rejected != 2 || result.TrunkAcquitted != 0 || refusalOf(t, f.store, drain.RefusalGate) == nil {
 		t.Fatalf("candidate not charged: %+v", result)
 	}
+}
+
+// firstRefusalStep is the step of the first refusal recorded for one run, or "".
+func firstRefusalStep(t *testing.T, storePath, runID string) string {
+	t.Helper()
+	for _, e := range eventsOf(t, storePath) {
+		if e.Kind == drain.RefusalKind && e.ObjectID != nil && *e.ObjectID == runID {
+			step, _ := eventPayload(t, e)["step"].(string)
+			return step
+		}
+	}
+	return ""
 }

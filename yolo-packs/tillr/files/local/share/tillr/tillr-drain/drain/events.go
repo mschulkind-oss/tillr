@@ -232,18 +232,28 @@ type refusalPayload struct {
 	// event is keyed by the item rather than by a run.
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// Checks and Evidence are a returned ending's own fields (returned.go): the gate checks
+	// that failed, with their logs and normalized digests, and the ending's evidence key,
+	// which the identical-repeat rule compares. A refusal recorded before 2026-11-17 carries
+	// neither, and its empty key repeats nothing.
+	Checks   []EndingCheck `json:"checks,omitempty"`
+	Evidence string        `json:"evidence,omitempty"`
 }
 
 // recordRefusal appends one `drain.refusal`, idempotently by the run it names: a step
 // retried after a half-completed tick finds the first append and writes nothing.
 func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step string) error {
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, refusalPayload{
+	payload := refusalPayload{
 		Detail: candidate.RefusalDetail,
 		Step:   step,
 		ItemID: candidate.ItemID,
 		LaneID: candidate.LaneID,
 		TickID: candidate.TickID,
-	}, l.cfg.Now().UTC())
+	}
+	if returnedCauses[step] {
+		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
+	}
+	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, l.cfg.Now().UTC())
 }
 
 // recordItemRefusal appends the `drain.refusal` for an item whose own record refused

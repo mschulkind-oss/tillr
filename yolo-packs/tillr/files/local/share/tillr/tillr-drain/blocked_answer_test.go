@@ -11,20 +11,22 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestDesignAmendmentLandsThenDispatchesOriginalSeat(t *testing.T) {
 	testDesignAmendment(t, false)
 }
 
-func TestSecondFailureDesignAmendmentDispatchesOriginalSeat(t *testing.T) {
+// An identical repeat of a worker's refused ending goes to the design seat with both
+// records, and the design amendment then sends the item back to its own seat (the owner's
+// ruling of 2026-11-17 replaced the second-failure route with this one).
+func TestAnIdenticalRepeatDesignAmendmentDispatchesOriginalSeat(t *testing.T) {
 	testDesignAmendment(t, true)
 }
 
-func testDesignAmendment(t *testing.T, secondFailure bool) {
+func testDesignAmendment(t *testing.T, repeat bool) {
 	failure := "Conflict: c1 contradicts the API\nRESULT: blocked\n"
-	if secondFailure {
+	if repeat {
 		failure = "c1 impossible contract failed\nRESULT: failed\n"
 	}
 	worker := counting + `if rg -q 'impossible contract' docs/work.md; then
@@ -61,29 +63,17 @@ fi
 `)
 	steps := f.steps(t, gate, land, always(t, "verdict", 0))
 	stage := &drain.LaneStager{Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Template: filepath.Join("..", "tillr-run", "backends", "brief-template.md"), Now: func() time.Time { return steps.Now() }}
-	if secondFailure {
-		first, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())
-		if err != nil || first.Dispatched != 1 {
-			t.Fatalf("first failure: %+v / %v", first, err)
-		}
-		s, err := store.Open(context.Background(), f.store, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
-			_, err := drain.AuthorizeRetry(context.Background(), tx, drain.RetryRequest{ItemID: "item-route", RunID: "run-item-route-a1", By: "owner", Why: "diagnosed", At: steps.Now()})
-			return err
-		})
-		s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+	// A repeat needs no operator act: the first refusal goes back to the worker with its
+	// evidence, and the second, identical one goes to the design seat.
+	dispatched := 3
+	if repeat {
+		dispatched = 4
 	}
 	result, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Dispatched != 3 || result.Landed != 2 {
+	if result.Dispatched != dispatched || result.Landed != 2 {
 		t.Fatalf("result: %+v", result)
 	}
 	if got := itemStateOf(t, f.store, "item-route"); got != "landed" {
@@ -138,8 +128,8 @@ fi
 	}
 	record, err := os.ReadFile(filepath.Join(f.root, ".tillr", "loop", routed, "conflict.json"))
 	wantEvidence := "c1 contradicts the API"
-	if secondFailure {
-		wantEvidence = "Second failed attempt: run-item-route-a1 and run-item-route-a2"
+	if repeat {
+		wantEvidence = drain.IdenticalRepeatPrefix + " run run-item-route-a2 ended (refused at no-op) with the same evidence as run run-item-route-a1"
 	}
 	if err != nil || !strings.Contains(string(record), wantEvidence) {
 		t.Fatalf("conflict record %s / %v", record, err)

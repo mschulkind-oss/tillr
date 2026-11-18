@@ -37,17 +37,24 @@ printf 'RESULT: done\n'
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !failover && !strings.Contains(first.Detail, drain.ReasonCandidateNoOp) {
+			// The no-op goes back to its worker with the evidence, and the second, identical
+			// no-op waits on the owner (the owner's ruling of 2026-11-17; the fixture's policy
+			// names no design seat). A failover run counts once more.
+			if !strings.Contains(first.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
 				t.Fatalf("first stop: %+v", first)
 			}
 			before := runsForItem(t, f.store, "item_041")
-			wantFirst := 1
+			wantFirst := 2
 			if failover {
-				wantFirst = 2
+				wantFirst = 3
 			}
 			if len(before) != wantFirst {
 				t.Fatalf("first runs: %+v", before)
 			}
+			// The owner's recovery: put the item back in the queue, then authorize the retry.
+			itemPath := filepath.Join(scratch(t, "recover"), "item_041.json")
+			writeFile(t, itemPath, itemRecord("item_041", "in-queue"))
+			driveOK(t, sibling(t, "item"), "apply", "--store", f.store, "--input", itemPath, "--now", steps.Now().Format("2006-01-02T15:04:05Z"))
 			if code, out := authorizeRetry(t, f.store, "item_041", before[len(before)-1].RunID, "the owner", "retry the no-op", steps.Now().Format("2006-01-02T15:04:05Z")); code != 0 {
 				t.Fatalf("retry exited %d: %s", code, out)
 			}
