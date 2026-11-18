@@ -34,7 +34,7 @@ var Rules = map[string]Rule{
 	"land-harness-error":          {"needs you", "land", "repair what the lander refused and clear the fault"},
 	"host-boundary-violation":     {"needs you", "fence", "inspect the recorded violation and clear the fault"},
 	"candidate-record-mismatch":   {"needs you", "lane", "restore the recorded candidate and clear the fault"},
-	"definition-sync-failed":      {"needs you", "queue", "correct the definition and clear the fault"},
+	"definition-sync-failed":      {"needs you", "queue", "correct the item's block on the trunk as the detail says; the next document sync applies it and ends the hold"},
 	"backend-window":              {"waits on work", "backend", "the reset time"},
 	"lane-holds-unlanded-change":  {"needs you", "lane", "land the change, or reset the lane deliberately"},
 	"lane-branch-held":            {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},

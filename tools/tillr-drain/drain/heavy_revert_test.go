@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/redcap"
+	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -443,3 +445,135 @@ func TestRevertedEndingIsReturnedWithItsBrief(t *testing.T) {
 		}
 	}
 }
+
+// revertedBlock is item-broke's document block, with its fence.
+func revertedBlock(paths string) item.SyncDocument {
+	return item.SyncDocument{Path: "docs/broke.md", Content: []byte("# Doc\n\n### Break it\n\n<!-- tillr: item id=\"item-broke\" paths=\"" + paths + "\" -->\n\n- **c1:** It works.\n- **c2:** A test covers it.\n")}
+}
+
+// syncBlock applies doc to the harness store the way a landed design answer does.
+func (h *revertHarness) syncBlock(doc item.SyncDocument) item.SyncReport {
+	h.t.Helper()
+	var report item.SyncReport
+	if err := writeFixture(h.path, func(tx *store.Tx) error {
+		var err error
+		report, err = item.Sync(context.Background(), tx.Reader(), tx, item.SyncInput{Partial: true, Documents: []item.SyncDocument{doc}, At: time.Now().UTC()})
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return report
+}
+
+// judgedLanded declares item-broke from its block and records it judged and landed, as a
+// landing leaves it: every criterion done.
+func (h *revertHarness) judgedLanded() {
+	h.t.Helper()
+	h.syncBlock(revertedBlock("a"))
+	if err := writeFixture(h.path, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-broke'`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE items SET state = ? WHERE item_id = 'item-broke'`, StateLanded)
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// A revert withdraws what the reverted landing settled: the item's criterion states are
+// cleared with a record naming the landing and the revert, so a design answer that then
+// amends the block (its fence, here) syncs instead of being refused definition-frozen,
+// the hold item-gate-stall-watch-without-perf-counter met on 2026-11-18.
+func TestARevertWithdrawsItsLandingsVerdictsAndADesignAnswerAfterItSyncs(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	h.judgedLanded()
+	culprit := h.land("item-broke", "a", "broken\n")
+	h.land("item-later", "c", "unrelated\n")
+	h.proof()
+	reverts := h.reverts()
+	if len(reverts) != 1 || reverts[0].Result != "reverted" {
+		t.Fatalf("reverts=%+v", reverts)
+	}
+	if states := h.query(`SELECT criterion_id || '=' || state FROM item_criteria WHERE item_id = 'item-broke' ORDER BY criterion_id`); strings.Join(states, ",") != "c1=,c2=" {
+		t.Fatalf("criterion states after the revert: %v", states)
+	}
+	withdrawn := h.query(`SELECT payload FROM events WHERE kind = ? AND object_id = 'item-broke'`, item.VerdictsWithdrawnKind)
+	if len(withdrawn) != 1 || !strings.Contains(withdrawn[0], culprit) || !strings.Contains(withdrawn[0], reverts[0].Revert) || !strings.Contains(withdrawn[0], `"by":"tillr-drain"`) || !strings.Contains(withdrawn[0], `"state":"done"`) {
+		t.Fatalf("withdrawal record: %v", withdrawn)
+	}
+	report := h.syncBlock(revertedBlock("a,tests/a"))
+	if len(report.Frozen) != 0 || strings.Join(report.Updated, ",") != "item-broke" {
+		t.Fatalf("the design answer after the revert did not sync: updated %v frozen %+v", report.Updated, report.Frozen)
+	}
+	if paths := h.query(`SELECT allowed_paths FROM items WHERE item_id = 'item-broke'`); len(paths) != 1 || paths[0] != `["a","tests/a"]` {
+		t.Fatalf("paths=%v", paths)
+	}
+	// Repeating the rule records nothing more.
+	if err := h.loop.withdrawRevertedVerdicts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.query(`SELECT count(*) FROM events WHERE kind = ?`, item.VerdictsWithdrawnKind); n[0] != "1" {
+		t.Fatalf("withdrawals=%v", n)
+	}
+}
+
+// An item a revert returned before the withdrawal existed (the two live items of
+// 2026-11-18) is repaired by the next document sync, which a loop start always runs: its
+// verdicts are withdrawn and its amended block applies. A verdict recorded after the
+// revert (the item was judged again) is left alone.
+func TestTheNextSyncWithdrawsVerdictsAnEarlierRevertLeftStanding(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	h.judgedLanded()
+	// The build of 2026-11-18 recorded the revert, returned the item and withdrew nothing.
+	if err := h.loop.appendRevert(context.Background(), revertPayload{Landing: "0123456789abcdef", ItemID: "item-broke", RunID: "run-item-broke", Tip: "fedcba9876543210", Checks: []string{"unit"}, Result: "reverted", Revert: "aaaabbbbccccdddd"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.exec(`UPDATE items SET state = ? WHERE item_id = 'item-broke'`, StateInQueue)
+	if report := h.syncBlock(revertedBlock("a,tests/a")); len(report.Frozen) != 1 {
+		t.Fatalf("the fixture is not the live state: frozen %+v", report.Frozen)
+	}
+	h.loop.cfg.Steps = syncedRevertSteps{h.steps}
+	if err := h.loop.syncDocuments(context.Background(), &LoopResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if states := h.query(`SELECT state FROM item_criteria WHERE item_id = 'item-broke' AND state != ''`); len(states) != 0 {
+		t.Fatalf("the next sync left the reverted verdicts standing: %v", states)
+	}
+	if !strings.Contains(h.report.String(), "loop: withdrew the verdicts of reverted landings: item-broke (0123456789ab)") {
+		t.Fatalf("the repair is not reported:\n%s", h.report.String())
+	}
+	if report := h.syncBlock(revertedBlock("a,tests/a")); len(report.Frozen) != 0 || len(report.Updated) != 1 {
+		t.Fatalf("after the repair: updated %v frozen %+v", report.Updated, report.Frozen)
+	}
+	// A verdict recorded after the revert stands.
+	h.exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-broke'`)
+	if err := writeFixture(h.path, func(tx *store.Tx) error {
+		id := "item-broke"
+		_, err := tx.Append(event.Event{Kind: item.VerdictRecordKind, ObjectType: "item", ObjectID: &id, Payload: []byte(`{}`), At: time.Now()})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.loop.withdrawRevertedVerdicts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if states := h.query(`SELECT state FROM item_criteria WHERE item_id = 'item-broke' AND state = 'done'`); len(states) != 2 {
+		t.Fatalf("a verdict recorded after the revert was withdrawn: %v", states)
+	}
+}
+
+func (h *revertHarness) exec(q string, args ...any) {
+	h.t.Helper()
+	if err := writeFixture(h.path, func(tx *store.Tx) error {
+		_, err := tx.Exec(q, args...)
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// syncedRevertSteps answers the document sync with nothing to report.
+type syncedRevertSteps struct{ *revertSteps }
+
+func (syncedRevertSteps) Sync(context.Context) (SyncOutcome, error) { return SyncOutcome{}, nil }

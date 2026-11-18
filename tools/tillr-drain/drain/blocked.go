@@ -399,6 +399,12 @@ func (l *Loop) answerBlock(ctx context.Context, candidate Candidate) error {
 }
 
 func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error {
+	return l.recordBlockAnswerThen(ctx, candidate, nil)
+}
+
+// recordBlockAnswerThen records the answer and, when it is recorded, runs then in the
+// same transaction (a held answer's fault is cleared with its answer).
+func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, then func(*store.Tx) error) error {
 	c := *candidate.BlockConflict
 	blockID := c.ItemID
 	if original := item.ProseRewriteOriginal(c.ItemID); original != "" {
@@ -423,7 +429,17 @@ func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error
 		if err != nil {
 			return err
 		}
-		if len(report.Findings) != 0 || len(report.Frozen) != 0 {
+		// A finding skips the whole file, so it fails this answer whichever item it names;
+		// a frozen definition is that item's alone, and another item's frozen block in the
+		// same document is no reason to refuse this one (item-heavy-revert-time-to-verdict
+		// was held on 2026-11-18 for a sibling's frozen block).
+		frozen := false
+		for _, n := range report.Frozen {
+			if n.ItemID == blockID {
+				frozen = true
+			}
+		}
+		if len(report.Findings) != 0 || frozen {
 			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s could not sync its definition: %s", c.ConflictID, mustJSON(report))}
 		}
 		found := false
@@ -443,7 +459,13 @@ func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error
 		} else {
 			c.Status, c.WaitingOn, c.AnswerHead = "answered", "build", candidate.HeadSHA
 		}
-		return item.RecordConflict(tx, c, l.cfg.Now().UTC())
+		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		if then != nil {
+			return then(tx)
+		}
+		return nil
 	})
 }
 

@@ -945,6 +945,10 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 // syncDocuments reports one summary line and each finding and frozen definition
 // before any decision is made from the refreshed queue.
 func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
+	// A reverted landing's verdicts would freeze the definition this sync applies.
+	if err := l.withdrawRevertedVerdicts(ctx); err != nil {
+		return err
+	}
 	outcome, err := l.cfg.Steps.Sync(ctx)
 	if err != nil {
 		return err
@@ -962,7 +966,7 @@ func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
 			return err
 		}
 	}
-	return nil
+	return l.settleDefinitionHolds(ctx, outcome)
 }
 
 // errHeartbeatFailed is the cause the session heartbeat cancels Run's work with. A step

@@ -843,6 +843,14 @@ and, when it is not possible,
 `loop: heavy unit red from 1a2b3c4d5e6f: automatic revert not possible: <reason>; filing a fixer`.
 Each attempt is a `drain.revert` event; the landings history of `tillr-view serve` (`/api/v1/landings`) shows it as a `revert` row, and
 the item waits as `landing-reverted` until the pass that returns it.
+The revert also withdraws what the reverted landing settled: the item's criterion states
+are cleared with an `item.verdicts-withdrawn` event naming the landing and the revert
+(`tools/tillr-drain/drain/revert_withdraw.go`), so the item is as amendable and
+dispatchable as before it landed and a design answer that amends its block syncs. The
+rule is applied to the records before each document sync too, so an item a revert
+returned with its verdicts standing (a build before the withdrawal existed) is repaired
+at the next sync, which every loop start runs. The log reads
+`loop: withdrew the verdicts of reverted landings: item-x (1a2b3c4d5e6f)`.
 
 A heavy run logs as it goes, not only when it ends. Each declaration check's verdict is a
 line as the check ends (`loop: heavy <check> <result> in <time>`), and the legacy program
@@ -1483,7 +1491,15 @@ and landing. A sync finding skips its entire document, so every stored item whos
 definition comes from that file is held, not just the item named by the finding.
 A landed design answer whose document, as the trunk holds it, does not declare its
 item is held the same way (`definition-sync-failed`), never a loop stop; a
-prose-rewrite item (`rewrite-<item>`) is read on its original item's block.
+prose-rewrite item (`rewrite-<item>`) is read on its original item's block. Only that
+item's own frozen definition refuses its answer: a sibling block frozen in the same
+document does not. A `definition-sync-failed` hold ends by itself when the trunk and the
+store let the document apply (`tools/tillr-drain/drain/definition_hold.go`): after each
+whole-document sync, a held landed design answer (its conflict still awaiting the design
+run that landed and was examined) is recorded again, and when it applies the conflict is
+answered for the build seat and the hold cleared in one transaction; a hold the
+whole-document sync wrote is cleared once a whole sync applies that item's block. Its
+mover is the correction of the block on the trunk, never a hand `clear-fault`.
 Two holds of this kind stand for the loop's own defects, held on the one item they
 touch so the loop goes on. The owner ruled that the loop never stops on one item's
 condition. `decision-collision` holds an item whose planned decision could not be

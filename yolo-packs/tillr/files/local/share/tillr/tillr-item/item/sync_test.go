@@ -2,6 +2,7 @@ package item_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -571,5 +573,94 @@ func TestSyncOverThisRepositorysDocuments(t *testing.T) {
 			t.Fatalf("item %s was created twice", id)
 		}
 		seen[id] = true
+	}
+}
+
+// A withdrawal (a reverted landing's, item.WithdrawVerdicts) clears the states that froze
+// the definition, records what it cleared, and the changed block then syncs: the item is
+// as amendable as before it was judged. A second withdrawal records nothing.
+func TestSyncUpdatesADefinitionWhoseVerdictsWereWithdrawn(t *testing.T) {
+	s := syncStore(t)
+	runSync(t, s, "", doc("docs/a.md", goodBlock))
+	exec(t, s, `UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-build-thing'`)
+	changed := strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/thing/,tests/thing/"`, 1)
+	if report := runSync(t, s, "", doc("docs/a.md", changed)); len(report.Frozen) != 1 {
+		t.Fatalf("a judged definition is not frozen: %+v", report.Frozen)
+	}
+	withdraw := func() []item.WithdrawnCriterion {
+		var out []item.WithdrawnCriterion
+		if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			var err error
+			out, err = item.WithdrawVerdicts(context.Background(), tx, "item-build-thing", "landing abc reverted", "tillr-drain", time.Unix(100, 0))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := withdraw(); len(got) == 0 || got[0].CriterionID != "c1" || got[0].State != "done" {
+		t.Fatalf("withdrawn %+v", got)
+	}
+	if got := column(t, s, `SELECT group_concat(state, '|') FROM item_criteria WHERE item_id = 'item-build-thing'`); strings.Trim(got, "|") != "" {
+		t.Fatalf("states after the withdrawal: %q", got)
+	}
+	if n := count(t, s, `SELECT count(*) FROM events WHERE kind = ? AND json_extract(payload, '$.reason') = 'landing abc reverted' AND json_extract(payload, '$.by') = 'tillr-drain'`, item.VerdictsWithdrawnKind); n != 1 {
+		t.Fatalf("%d withdrawal events, want 1", n)
+	}
+	if got := withdraw(); len(got) != 0 {
+		t.Fatalf("a second withdrawal cleared %+v", got)
+	}
+	if n := count(t, s, `SELECT count(*) FROM events WHERE kind = ?`, item.VerdictsWithdrawnKind); n != 1 {
+		t.Fatalf("a second withdrawal appended an event: %d", n)
+	}
+	report := runSync(t, s, "", doc("docs/a.md", changed))
+	if len(report.Frozen) != 0 || strings.Join(report.Updated, ",") != "item-build-thing" {
+		t.Fatalf("after the withdrawal: updated %v frozen %+v", report.Updated, report.Frozen)
+	}
+	if got := column(t, s, `SELECT allowed_paths FROM items WHERE item_id = 'item-build-thing'`); got != `["tools/thing/","tests/thing/"]` {
+		t.Fatalf("paths %s", got)
+	}
+}
+
+// A verdict a withdrawal named no longer satisfies --require-verdicts: only a verdict
+// recorded after the withdrawal does.
+func TestRequireVerdictsIgnoresAWithdrawnVerdict(t *testing.T) {
+	s := syncStore(t)
+	runSync(t, s, "", doc("docs/a.md", goodBlock))
+	ctx := context.Background()
+	verdict := func() {
+		body, _ := json.Marshal(map[string]any{
+			"item_id": "item-build-thing", "criterion_id": "c1", "criterion_hash": item.CriterionHash("The thing builds."),
+			"verdict": "done", "claim_class": "verification-only", "reason": "landed", "evidence": []string{"gate-verdict-1"}, "actor_kind": "mechanical",
+		})
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := item.RecordVerdict(ctx, tx, record.Envelope{Kind: item.VerdictRecordKind, CreatedAt: syncAt, Payload: body})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move := func() error {
+		return s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := item.SetStateWithReceipt(ctx, tx, "item-build-thing", "in-queue", syncAt, item.MoveReceipt{RequireVerdicts: true})
+			return err
+		})
+	}
+	verdict()
+	if err := move(); err != nil {
+		t.Fatalf("a judged item was refused: %v", err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := item.WithdrawVerdicts(ctx, tx, "item-build-thing", "landing abc reverted", "tillr-drain", syncAt)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := move(); err == nil || !strings.Contains(err.Error(), "has no recorded verdict") {
+		t.Fatalf("a withdrawn verdict still counts: %v", err)
+	}
+	verdict()
+	if err := move(); err != nil {
+		t.Fatalf("a verdict after the withdrawal was refused: %v", err)
 	}
 }
