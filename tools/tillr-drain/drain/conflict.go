@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -46,9 +47,26 @@ func conflictFixOriginal(runID string) string {
 // design seat. Any other conflict on a moved trunk stages a fix run at once; a conflict on
 // an unmoved trunk, a fork-series candidate, or a candidate whose request the loop does not
 // hold is recorded, and the next pass returns it to the worker on the latest trunk.
-func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult, timing *PassTiming) (string, bool, error) {
+func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult, timing *PassTiming, repairReset ...string) (string, bool, error) {
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "repair"); err != nil {
 		return "", false, err
+	}
+	// The marker names a conversation, not the current checkout. Never resume
+	// it on, or reset, a branch that moved after this candidate was recorded.
+	resetCheckout := false
+	if candidate.Worktree != "" && candidate.HeadSHA != "" {
+		head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
+		if err != nil {
+			return "", false, err
+		}
+		if head != candidate.HeadSHA {
+			// A failed earlier staging may have reset to its recorded trunk or
+			// stripped the loop's prepared retirement back to the worker head.
+			if len(repairReset) == 0 || (head != repairReset[0] && (candidate.WorkerHeadSHA == "" || head != candidate.WorkerHeadSHA)) {
+				return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("conflict checkout moved from %s to %s", candidate.HeadSHA, head))
+			}
+			resetCheckout = head == repairReset[0] && head != candidate.WorkerHeadSHA
+		}
 	}
 	mainSHA, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 	if err != nil {
@@ -69,6 +87,16 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		markers, markersErr = l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, reapplyHead)
 	}
 	key := conflictEndingKey(landed.ConflictPaths, markers, candidate.RunID)
+	worker := candidate.WorkerSession
+	if worker == nil {
+		worker, err = l.captureLandedWorkerSession(ctx, candidate)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	// With no run-keyed snapshot, the current lane could belong to another
+	// worker. Never infer the old session from its mutable marker.
+	candidate.WorkerSession = worker
 	repeated, err := l.conflictRepeats(ctx, candidate, key)
 	if err != nil {
 		return "", false, err
@@ -106,7 +134,20 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	}
 	fix.RunID = fixRunID
 	fix.Resume = false
+	fix.SessionTurn = false
+	fix.ResumePrompt = ""
 	fix.CorrelationID = candidate.TickID
+	ending := &ReturnedEnding{RunID: candidate.RunID, Cause: RefusalConflict, Detail: strings.Join(landed.ConflictPaths, "\n"), WorkerSession: worker}
+	reason := conflictWorkerReason(worker, &fix, candidate.LaneID)
+	if resetCheckout {
+		// The session may survive, but its branch was already released for
+		// the fresh repair. Do not open it on the trunk checkout.
+		reason = "lane-unavailable"
+	}
+	if reason == "resumed-worker" {
+		fix.SessionTurn = true
+		fix.ResumePrompt = returnedBrief(*ending) + fmt.Sprintf("\nThe trunk is %s. Reconcile your branch with it; the staged brief describes the conflict evidence.\n", mainSHA)
+	}
 	// Pin before resetting: the repair brief is not yet staged and its failure
 	// must leave the original candidate reachable even after garbage collection.
 	if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
@@ -118,7 +159,15 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted during landing"); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
-	if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
+	base := mainSHA
+	if fix.SessionTurn {
+		base = worker.BaseSHA
+		if preparedHead != "" && reapplyHead != preparedHead {
+			if _, err := l.git(ctx, candidate.Worktree, "reset", "--hard", reapplyHead); err != nil {
+				return "", false, l.holdRepair(ctx, basis, err)
+			}
+		}
+	} else if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
 	if markersErr != nil {
@@ -127,7 +176,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	spec := StageSpec{
 		Policy: l.currentPolicy(),
 		LaneID: candidate.LaneID, ItemID: candidate.ItemID, RunID: fixRunID,
-		Backend: fix.Backend, BaseSHA: mainSHA, WorkingDir: fix.WorkingDir,
+		Backend: fix.Backend, BaseSHA: base, WorkingDir: fix.WorkingDir,
 		TimeoutMS: fix.TimeoutMS, BlockConflict: candidate.BlockConflict,
 		Conflict: &ConflictBrief{
 			Paths:         conflictPaths(landed.ConflictPaths),
@@ -138,6 +187,10 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			OriginalRunID: candidate.RunID,
 			PreparedHead:  preparedHead,
 		},
+	}
+	if fix.SessionTurn {
+		spec.Continue = true
+		spec.SessionID = worker.SessionID
 	}
 	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
@@ -161,12 +214,13 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		ItemID: candidate.ItemID, LaneID: candidate.LaneID,
 		Action: ActionDispatch, Reason: ReasonConflictFix,
 		RunRequest: &fix, Seat: candidate.Seat, Inputs: &basis.Inputs, BlockConflict: candidate.BlockConflict,
+		Returned: ending, WorkerSessionReason: reason,
 	}
 	identifyDecision(&decision)
-	if err := l.handoffRepair(ctx, candidate, decision, mainSHA); err != nil {
+	if err := l.handoffRepair(ctx, candidate, decision, base); err != nil {
 		return "", false, err
 	}
-	outcome := l.runLane(ctx, decision, mainSHA, candidate.TickID, l.cfg.Now().UTC(), result, timing, nil)
+	outcome := l.runLane(ctx, decision, base, candidate.TickID, l.cfg.Now().UTC(), result, timing, nil)
 	if outcome.err != nil {
 		return "", false, outcome.err
 	}
@@ -174,6 +228,15 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		return outcome.stop, false, nil
 	}
 	return "", false, errRepairPending
+}
+
+// A reassigned held candidate may no longer be in the worker's checkout. Never
+// open its session in a different lane, even when the original handle survives.
+func conflictWorkerReason(worker *WorkerSession, req *run.Request, lane string) string {
+	if worker != nil && worker.LaneID != lane {
+		return "lane-unavailable"
+	}
+	return workerSessionReason(worker, req)
 }
 
 // nextItemAttempt counts stored runs rather than parsing a run id: legacy ids and
@@ -212,6 +275,7 @@ func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed L
 		ConflictPaths: landed.ConflictPaths,
 		FixRunID:      fixRunID,
 		Evidence:      key,
+		WorkerSession: candidate.WorkerSession,
 	}
 	at := l.cfg.Now().UTC()
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {

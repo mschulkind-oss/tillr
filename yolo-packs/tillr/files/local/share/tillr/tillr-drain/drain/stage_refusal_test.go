@@ -19,6 +19,27 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestConflictBriefDistinguishesRetainedAndFreshCheckouts(t *testing.T) {
+	recorded := refusalStagedItem("item-a")
+	for _, continued := range []bool{false, true} {
+		spec := refusalSpec(recorded.ItemID)
+		spec.Continue = continued
+		spec.Conflict = &ConflictBrief{HeadSHA: "worker1", TrunkSHA: "trunk1", OriginalRunID: "run-a", PreparedHead: "prepared1"}
+		values, err := briefValuesFor(recorded, spec, "/wt", "lane worktree", "base", "/lane/durable", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		task := values.byName()["TASK"]
+		if continued {
+			if !strings.Contains(task, "retained") || strings.Contains(task, "lane was reset") || strings.Contains(task, "Re-apply worker1") {
+				t.Fatalf("continued checkout described as fresh: %s", task)
+			}
+		} else if !strings.Contains(task, "lane was reset") || !strings.Contains(task, "Re-apply worker1 only") {
+			t.Fatalf("fresh checkout missing reapplication instructions: %s", task)
+		}
+	}
+}
+
 // A brace pair the renderer meets is one of two different faults, and the fault decides who
 // fixes it. The template's own residue is the template's — it refuses every item staged from
 // it, and the operator edits tools/tillr-run/backends/brief-template.md. A brace pair that

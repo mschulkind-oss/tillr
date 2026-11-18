@@ -1128,7 +1128,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	facts := "None carried: staging read no code facts for this item, so nothing here is evidence about the tree. Read the fence's paths yourself before editing."
 	settled := "None recorded: this item names no settled decision, so this brief settles nothing. Where this brief is wrong about the tree, name the `definition` obstacle with its evidence instead of inventing a mechanism."
 	if spec.Conflict != nil {
-		task = conflictTask(recorded, *spec.Conflict)
+		task = conflictTask(recorded, *spec.Conflict, spec.Continue)
 		facts = conflictFacts(*spec.Conflict, durableDir)
 		settled = "This is the one conflict-fix run the item is allowed. The squash conflict is a fact about the moved trunk, not a verdict about the candidate, so do not redesign the item and do not treat the conflict as a failed attempt. Resolve the conflict and commit the resolution."
 	}
@@ -1228,7 +1228,15 @@ func taskSection(recorded stagedItem) string {
 // conflictTask is the brief's statement of a conflict-fix run: the outcome is the item's
 // own, and the fact the run must act on is that the candidate's change no longer squashes
 // onto the trunk it has to land on.
-func conflictTask(recorded stagedItem, conflict ConflictBrief) string {
+func conflictTask(recorded stagedItem, conflict ConflictBrief, continued bool) string {
+	if continued {
+		task := fmt.Sprintf("%s\n\nThe candidate's change (head %s) does not squash onto the moved trunk (%s). This retained checkout holds your change: reconcile it with the trunk, resolve the conflicts below, and commit the resolution. The earlier run was %s, and its head is pinned at refs/tillr/runs/%s.",
+			recorded.Title, conflict.HeadSHA, conflict.TrunkSHA, conflict.OriginalRunID, conflict.OriginalRunID)
+		if conflict.PreparedHead != "" && conflict.PreparedHead != conflict.HeadSHA {
+			task += fmt.Sprintf(" The pinned ref is %s: your change plus the loop's own commit retiring this item's block. The retained checkout holds your head %s without that retirement; the loop retires the block again after your fix.", conflict.PreparedHead, conflict.HeadSHA)
+		}
+		return task
+	}
 	task := fmt.Sprintf("%s\n\nThis is the item's one conflict-fix run. The candidate's change (head %s) does not squash onto the moved trunk (%s): re-apply it, resolve the conflicts below, and commit the resolution. Its first run was %s, and its head is pinned at refs/tillr/runs/%s so nothing is lost when this lane was reset.",
 		recorded.Title, conflict.HeadSHA, conflict.TrunkSHA, conflict.OriginalRunID, conflict.OriginalRunID)
 	if conflict.PreparedHead != "" && conflict.PreparedHead != conflict.HeadSHA {

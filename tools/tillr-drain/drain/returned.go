@@ -186,7 +186,7 @@ func returnedBrief(e ReturnedEnding) string {
 	case RefusalReverted:
 		b.WriteString("It landed, and the full suite then proved that it broke the trunk, so tillr reverted it. Your next gate runs the failing check below, and the item lands again only when it passes.")
 	case RefusalConflict:
-		b.WriteString("Its candidate no longer applied to the trunk: the squash onto the trunk conflicted in the paths below. This run starts from the latest trunk; redo the change on it.")
+		b.WriteString("Its candidate no longer applied to the trunk: the squash onto the trunk conflicted in the paths below. Reconcile the change with the latest trunk.")
 	default:
 		fmt.Fprintf(&b, "It was refused at %s.", e.Cause)
 	}

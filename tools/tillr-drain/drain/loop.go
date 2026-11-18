@@ -205,8 +205,9 @@ type Candidate struct {
 	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned document maintenance to the
 	// worker commit and the exact staged tree. The intent is persisted before committing,
 	// so a restarted loop can recover HEAD without exempting any worker change from its fence.
-	WorkerHeadSHA     string `json:"worker_head_sha,omitempty"`
-	RetirementTreeSHA string `json:"retirement_tree_sha,omitempty"`
+	WorkerHeadSHA     string         `json:"worker_head_sha,omitempty"`
+	RetirementTreeSHA string         `json:"retirement_tree_sha,omitempty"`
+	WorkerSession     *WorkerSession `json:"worker_session,omitempty"`
 	// FixerBaseSHA is the rolling watermark a fixer's full gate plans from: the last
 	// trunk commit a rolling run proved green. It is set only for a fixer, so the fixer's
 	// gate is the untiered range since the last green while an ordinary candidate's gate
@@ -1254,6 +1255,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
 			return nil, err
 		}
+		revertedSession := decision.Returned != nil && decision.Returned.Cause == RefusalReverted && request.SessionTurn
 		if decision.Workflow != nil {
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
 			paths, err := l.nodeInputPaths(ctx, decision)
@@ -1261,7 +1263,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				return nil, err
 			}
 			spec.InputPaths = paths
-			spec.Continue = spec.Continue || decision.NodeIndex > 0 || decision.WorkflowRestart
+			if !revertedSession {
+				spec.Continue = spec.Continue || decision.NodeIndex > 0 || decision.WorkflowRestart
+			}
 			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
 				previous, err := l.stagedNodeRun(decision)
 				if err != nil {
@@ -1312,7 +1316,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 		}
 		var err error
-		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {
+		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart && !revertedSession {
 			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
 			err = headErr
 			expectedHead := decision.NodeBaseSHA
@@ -1342,7 +1346,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
-				if decision.NodeIndex == 0 && !request.SessionTurn {
+				if (decision.NodeIndex == 0 && !request.SessionTurn) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeStartRunID = decision.RunRequest.RunID
@@ -2384,6 +2388,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		return "", false, nil
 	default:
 		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
+	}
+	// The lane is released after landing, possibly long before a rolling check
+	// reverts it. Capture its worker now, never from the later lane occupant.
+	candidate.WorkerSession, err = l.captureLandedWorkerSession(ctx, candidate)
+	if err != nil {
+		return "", false, err
 	}
 	if err := appendJudgment(ctx, l.cfg.Store, candidateGatedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
 		return "", false, err

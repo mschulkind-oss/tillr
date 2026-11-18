@@ -53,6 +53,7 @@ func workerSessionReason(s *WorkerSession, req *run.Request) string {
 	return "cannot-resume"
 }
 
+// captureWorkerSession snapshots a worker while its lane still belongs to the run.
 func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -98,6 +99,71 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 		head = l.headOf(ctx, c.LaneID)
 	}
 	return &WorkerSession{SessionID: session, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: decision.NodeBaseSHA, Attempt: decision.Attempt}, nil
+}
+
+// captureLandedWorkerSession uses the run's immutable staging copies. A held
+// candidate can be moved to another lane before landing; that lane's current
+// session is not evidence of the worker that produced it.
+func (l *Loop) captureLandedWorkerSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	dir := RunDir(l.cfg.Root, c.RunID)
+	id, err := ReadSessionID(dir)
+	if err != nil || id == "" {
+		return nil, err
+	}
+	rawBase, err := os.ReadFile(filepath.Join(dir, ItemBaseSHAFile))
+	if os.IsNotExist(err) {
+		rawBase, err = os.ReadFile(filepath.Join(dir, BaseSHAFile))
+	}
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSpace(string(rawBase))
+	if base == "" {
+		return nil, nil
+	}
+	var work pendingWork
+	err = l.readStore(ctx, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, c.RunID).Scan(&raw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		return json.Unmarshal(raw, &work)
+	})
+	if err != nil || work.Decision.RunRequest == nil {
+		return nil, err
+	}
+	req := work.Decision.RunRequest
+	if req.RunID != c.RunID {
+		return nil, nil
+	}
+	head := c.WorkerHeadSHA
+	if head == "" {
+		head = c.HeadSHA
+	}
+	return &WorkerSession{SessionID: id, LaneDir: l.laneDirPath(req.LaneID), LaneID: req.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: work.Decision.Workflow, NodeIndex: work.Decision.NodeIndex, NodeBaseSHA: work.Decision.NodeBaseSHA, Attempt: work.Decision.Attempt}, nil
+}
+
+// landedWorkerSession reads the snapshot made before the landing released its lane.
+// Legacy gated candidates have no snapshot and must start a fresh session.
+func (l *Loop) landedWorkerSession(ctx context.Context, runID string) (*WorkerSession, error) {
+	var candidate Candidate
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, candidateGatedKind, runID).Scan(&raw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		return json.Unmarshal(raw, &candidate)
+	})
+	return candidate.WorkerSession, err
 }
 
 // retainedWorkerSession is read from the refusal rather than process memory, so
@@ -223,8 +289,12 @@ func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 	if session != s.SessionID {
 		return Externalf("retained worker session %s disappeared from lane %s before staging", s.SessionID, d.LaneID)
 	}
-	spec.Continue = true
-	spec.BaseSHA = s.BaseSHA
+	// A landed lane was released and reset; a revert continues the conversation
+	// on the current trunk, not the now-stale checkout of the landed candidate.
+	if d.Returned.Cause != RefusalReverted {
+		spec.Continue = true
+		spec.BaseSHA = s.BaseSHA
+	}
 	spec.SessionID = s.SessionID
 	return nil
 }

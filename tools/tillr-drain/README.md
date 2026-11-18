@@ -1200,9 +1200,10 @@ The owner ruled on 2026-11-17 that a worker run's failure is not counted and doe
 its item (audit findings F-02, F-03 and F-09; the ruling is `D-JL10` in
 [the judge and lifecycle design](../../docs/design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)).
 When the gate refuses a candidate, a run ends with no commit, a candidate escapes its
-fence, or a landing is refused, the next pass dispatches the item again with the reason
-`returned-with-evidence`, every time. The new run's brief carries a section on the previous
-attempt: the refusal's own words, each failing gate check with its log, and the two refs
+fence, a landing is refused, a squash conflicts, or a landed change is reverted after the
+full suite fails, the item returns to its worker with evidence, every time. Except for an
+immediate conflict-fix run, the next pass dispatches it as `returned-with-evidence`. The
+new run's brief carries a section on the previous attempt: the refusal's own words, each failing gate check with its log, and the two refs
 that keep the earlier run's work (`refs/tillr/runs/<run>` for its committed head and
 `refs/tillr/preserved/<run>` for uncommitted work). It starts on the item's own backend.
 The worker keeps the same lane and session when the adapter can resume it. The refusal
@@ -1213,10 +1214,10 @@ predecessor records are referenced, not rerun or copied into fictional runs. The
 its successors settle again before the candidate is admitted. The next turn has a
 distinct run record, not an overwrite of the refused run. Its prompt carries the same
 evidence as the fresh brief, plus the current run's identity and requirements. It must make
-a new commit: the earlier refused head alone is not a new candidate. The complete change
-from the original base is checked against the fence and sent through the gate and landing
-again. Loop-owned item-block retirement is removed from the retained checkout before the
-worker returns; the prepared head remains pinned as evidence.
+a new commit: the earlier refused head alone is not a new candidate. For a retained
+checkout, the complete change from the original base is checked against the fence and sent
+through the gate and landing again. Loop-owned item-block retirement is removed from the
+retained checkout before the worker returns; the prepared head remains pinned as evidence.
 
 A workflow evaluator's `verify-not-done` return carries each not-done criterion id
 and reason, without a retained worker session. It starts a fresh workflow at its
@@ -1225,10 +1226,10 @@ of not-done criterion ids: the same finding again raises a design-seat conflict.
 
 The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
 that continuation, `cannot-resume` for an adapter without a positive resume declaration,
-`session-missing` for a missing session handle, or `seat-changed` when the backend or model
-no longer matches. A retained lane removed from the offered set uses an offered lane and
-records `lane-unavailable`. A workflow whose producing node cannot resume restarts at
-its entry; `workflow-restarted` distinguishes a fresh graph from a continued node when
+`session-missing` when the lane's handle is missing or no longer matches, or `seat-changed`
+when the backend or model no longer matches. A retained lane occupied by another run or
+removed from the offered set uses an offered lane and records `lane-unavailable`. A workflow
+whose producing node cannot resume restarts at its entry; `workflow-restarted` distinguishes a fresh graph from a continued node when
 the entry and producing seats happen to share the same backend. These fresh paths carry
 the evidence in the brief.
 A harness that refuses to open the retained session before producing an answer is replaced
@@ -1258,11 +1259,14 @@ in [`drain/returned_test.go`](./drain/returned_test.go); the loop's side is in
 [`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go), including the items the
 removed rules held being planned again at the next pass with no repair.
 
-A squash conflict is one of these returned endings too: on a moved trunk the loop stages a
-conflict-fix run at once with the conflicting paths and three-way markers, and otherwise the
-next pass returns the item on the latest trunk with the conflict lines in its brief. Nothing
-counts them; the removed rule spent one fix run per candidate and then held the item as
-`conflict-exhausted`, a reason a pass now writes only as history, and an item it parked is
+A squash conflict returns to the candidate's session and branch when they remain available.
+On a moved trunk the loop stages a conflict-fix run at once with the conflicting paths and
+three-way markers; otherwise the next pass returns it with the conflict lines. A fresh fallback
+starts from the latest trunk. For a reverted landing, the gated candidate's snapshot records
+the landing run's session before its lane is released; a continuation uses the current trunk
+and receives the failing check's output. Older landings without a snapshot start fresh.
+Nothing counts these endings; the removed rule spent one fix run per candidate and then held
+the item as `conflict-exhausted`, a reason a pass now writes only as history, and an item it parked is
 returned at the next loop start. A conflict's evidence key (`conflictEndingKey` in
 [`drain/returned.go`](./drain/returned.go)) is its sorted conflicting paths and the digest
 of its normalized hunks, so the same conflict against another trunk sha repeats and a trunk

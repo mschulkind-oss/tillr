@@ -214,6 +214,85 @@ func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) 
 	}
 }
 
+// sessionConflictStager supplies the durable session and base that the real stager
+// writes, while retaining recordingStager's observable conflict specification.
+type sessionConflictStager struct {
+	recordingStager
+	root string
+}
+
+func (s *sessionConflictStager) Stage(ctx context.Context, spec drain.StageSpec) error {
+	if err := s.recordingStager.Stage(ctx, spec); err != nil {
+		return err
+	}
+	dir := filepath.Join(s.laneRoot, spec.LaneID)
+	if err := os.WriteFile(filepath.Join(dir, drain.BriefFile), []byte("fixture brief\n"), 0644); err != nil {
+		return err
+	}
+	if !spec.Continue {
+		if err := os.WriteFile(filepath.Join(dir, drain.SessionIDFile), []byte("11111111-1111-4111-8111-111111111111\n"), 0644); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, drain.BaseSHAFile), []byte(spec.BaseSHA+"\n"), 0644); err != nil {
+		return err
+	}
+	runDir := drain.RunDir(s.root, spec.RunID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(runDir, drain.SessionIDFile), []byte("11111111-1111-4111-8111-111111111111\n"), 0644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(runDir, drain.BaseSHAFile), []byte(spec.BaseSHA+"\n"), 0644)
+}
+
+func TestSquashConflictResumesOriginalWorkerOnItsBranch(t *testing.T) {
+	adapter := stub(t, "adapter", `if [ "$TILLR_SESSION_MODE" = resume ]; then
+  grep -q 'base.txt' "$TILLR_RESUME_PROMPT_FILE" || exit 71
+  test "$(cat base.txt)" = candidate || exit 72
+  echo fixed > base.txt
+else
+  echo candidate > base.txt
+fi
+git add base.txt
+git -c user.name=stub -c user.email=stub@example.invalid commit -qm candidate
+printf 'RESULT: done\n'`)
+	f := newLoopFixture(t, adapter)
+	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
+	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
+	land := conflictLandScript(t, f.root, conflict, landingEnvelope(t, "landed", nil), 0)
+	stage := &sessionConflictStager{root: f.root, recordingStager: recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}}}
+	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), land, always(t, "verdict", 0)), stage, os.Stderr)
+	result, err := loop.Run(context.Background())
+	if err != nil || result.Landed != 1 {
+		t.Fatalf("loop: %+v %v", result, err)
+	}
+	if len(stage.specs) != 2 || !stage.specs[1].Continue || stage.specs[1].SessionID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("fix did not retain session: %+v", stage.specs)
+	}
+	var found bool
+	for _, e := range eventsOf(t, f.store) {
+		if e.Kind != "drain.started" {
+			continue
+		}
+		var payload struct {
+			Decision struct {
+				WorkerSessionReason string `json:"worker_session_reason"`
+			} `json:"decision"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Decision.WorkerSessionReason == "resumed-worker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fix dispatch did not record resumed-worker")
+	}
+}
+
 // contains is a small membership check so the case reads as the assertion it is.
 func contains(values []string, want string) bool {
 	for _, value := range values {
