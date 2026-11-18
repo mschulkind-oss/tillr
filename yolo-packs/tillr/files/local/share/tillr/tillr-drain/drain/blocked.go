@@ -175,10 +175,15 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 				l.reportf("loop: %s conflict %s goes back to its worker: design run %s says the block stands as written\n", c.ItemID, c.ConflictID, d.RunRequest.RunID)
 			case designMissingActor:
 				// No commit and no actor is a missing output: the design seat states its
-				// actor. The owner is reached only by an objection naming the owner.
-				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-				c.Text += "\n\nDesign run " + d.RunRequest.RunID + " committed nothing and named no next actor. A design run either commits its answer, or objects with a report line `" + DesignNextActorField + ": owner` (a ruling only the owner can make) or `" + DesignNextActorField + ": build` (the block stands as written and the worker builds it). The design seat is dispatched again to state it."
-				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s named no next actor\n", c.ItemID, c.ConflictID, d.RunRequest.RunID)
+				// actor, uncounted, unless this is an identical repeat of an earlier design
+				// ending (design_repeat.go). The owner is reached only by an objection naming
+				// the owner, the loop's own on a repeat.
+				runID := d.RunRequest.RunID
+				return l.settleDesignStatement(ctx, c, runID, designCauseMissingActor, "named no next actor", func(c *item.Conflict) {
+					c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+					c.Text += "\n\nDesign run " + runID + " committed nothing and named no next actor. A design run either commits its answer, or objects with a report line `" + DesignNextActorField + ": owner` (a ruling only the owner can make) or `" + DesignNextActorField + ": build` (the block stands as written and the worker builds it). The design seat is dispatched again to state it."
+					l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s named no next actor\n", c.ItemID, c.ConflictID, runID)
+				})
 			}
 		}
 		return l.saveBlockConflict(ctx, c)

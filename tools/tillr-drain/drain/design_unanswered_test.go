@@ -42,6 +42,12 @@ func endDesignRun(t *testing.T, f refusalLoopFixture, l *Loop, step string) stri
 // the terminal record carries it as the run's report artifact.
 func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, report string) string {
 	t.Helper()
+	return endDesignRunWith(t, f, l, step, report, "")
+}
+
+// endDesignRunWith is endDesignRunReporting with the evidence key its refusal records.
+func endDesignRunWith(t *testing.T, f refusalLoopFixture, l *Loop, step, report, evidence string) string {
+	t.Helper()
 	p := decisionFor(t, l, "item-a")
 	if p.decision.Action != ActionDispatch || p.decision.BlockConflict == nil {
 		t.Fatalf("fixture: the design seat is not dispatched: %+v", p.decision)
@@ -75,7 +81,7 @@ func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, re
 			// orphan record, only the terminal record the reclaim wrote.
 			return nil
 		}
-		return appendEffect(tx, RefusalKind, rec.RunID, refusalPayload{Step: step, ItemID: d.ItemID, LaneID: d.LaneID}, l.cfg.Now())
+		return appendEffect(tx, RefusalKind, rec.RunID, refusalPayload{Step: step, ItemID: d.ItemID, LaneID: d.LaneID, Evidence: evidence}, l.cfg.Now())
 	})
 	if err := l.markExamined(context.Background(), d); err != nil {
 		t.Fatal(err)

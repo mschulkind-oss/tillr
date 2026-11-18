@@ -397,7 +397,12 @@ An item held `conflict-owner` names the design run whose objection put the quest
 the owner: its report named `NEXT-ACTOR: owner`. A report naming no actor, even one
 ending `RESULT: blocked`, goes back to the design seat to state it. No count of design runs ever sends a conflict there: a gate refusal, a killed run
 or a run that committed nothing goes back to the design seat, and a gated design commit
-is the answer whatever it changed. To give the design seat another turn instead of
+is the answer whatever it changed. The one exception is an identical repeat: a design
+ending with the same cause and evidence as an earlier one of the item (a second run that
+names no actor for the same conflict and block, or a second gate refusal with the same
+failing checks and output). The loop then holds it `conflict-owner` itself, with a
+question in the conflict's text naming both runs. Change what the design seat is given
+before answering it. To give the design seat another turn instead of
 ruling, name the item and that design run to the same face: `tillr drain retry --item
 <id> --run <design run> --by <who> --why <reason>`. The conflict is raised for one more
 design run, and the face records who asked and why. A design run the conflict no longer names is refused, naming

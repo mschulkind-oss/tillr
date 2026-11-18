@@ -81,6 +81,16 @@ type designUnanswered struct {
 	// Uncounted records an owner hold the removed count wrote, raised again for the
 	// design seat by the ruling of 2026-11-17.
 	Uncounted bool `json:"uncounted,omitempty"`
+	// Cause and Key are the ending's cause and evidence key (designEndingKey), and Repeat
+	// and RepeatOf record an identical repeat the loop sent to the owner instead of the
+	// design seat, naming the earlier design run it repeated (design_repeat.go). Records
+	// written before keys existed carry neither, and an empty key repeats nothing.
+	Cause    string `json:"cause,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Repeat   bool   `json:"repeat,omitempty"`
+	RepeatOf string `json:"repeat_of,omitempty"`
+	// seq is the record's position in the event log, for ordering across conflicts.
+	seq int64
 }
 
 type designFinding struct {
@@ -94,6 +104,9 @@ type designFinding struct {
 	// the candidate commit the run left, when it left one.
 	base, head string
 	checks     []string
+	// cause and key are the ending's (designEndingKey); repeatOf names the earlier design
+	// run whose ending this one repeats, when it does.
+	cause, key, repeatOf string
 }
 
 // settleUnansweredDesignRuns applies the rule above to every blocked item whose conflict
@@ -164,10 +177,20 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 				if c.TriageVersion != "" {
 					continue
 				}
-				if f.outcome, err = designOutcome(r, c.DesignRunID, rec.State, rec.EndCause); err != nil {
+				var refusal refusalPayload
+				if f.outcome, refusal, err = designOutcome(r, c.DesignRunID, rec.State, rec.EndCause); err != nil {
 					return err
 				}
 				f.checks = l.designFailingChecks(c.DesignRunID, f.outcome)
+				facts := designEndingFacts{Step: refusal.Step, Evidence: refusal.Evidence, ConflictID: c.ConflictID, RunID: c.DesignRunID}
+				if refusal.Step == RefusalGate && refusal.Evidence == "" {
+					facts.Checks = gateFailingChecks(RunDir(l.cfg.Root, c.DesignRunID), c.DesignRunID)
+				}
+				if refusal.Step == RefusalNoOp {
+					facts.Block = l.designBlockRevision(ctx, c)
+				}
+				f.cause, f.key = designEndingKey(facts)
+				f.repeatOf, _ = designRepeatOf(itemDesignMarks(marks, id), designUnanswered{RunID: c.DesignRunID, Cause: f.cause, Key: f.key})
 				if pin, err := l.git(ctx, l.cfg.Root, "rev-parse", "--verify", "--quiet", "refs/tillr/runs/"+c.DesignRunID+"^{commit}"); err == nil {
 					if pin = strings.TrimSpace(pin); pin != "" && pin != f.base {
 						f.head = pin
@@ -180,7 +203,7 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					continue
 				}
 				last := m[len(m)-1]
-				if last.RunID != c.DesignRunID || last.Misread || last.Uncounted {
+				if last.RunID != c.DesignRunID || last.Misread || last.Uncounted || last.Repeat {
 					continue
 				}
 				found = append(found, designFinding{conflict: c, runID: c.DesignRunID, uncounted: true, outcome: last.Outcome})
@@ -206,10 +229,17 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 			if err := refuseTerminalItem(tx.Reader(), c.ItemID, "design-unanswered"); err != nil {
 				continue
 			}
-			mark := designUnanswered{ConflictID: c.ConflictID, ItemID: c.ItemID, RunID: f.runID, Outcome: f.outcome, Changes: []string{}, Reraised: true, BaseSHA: f.base, FailingChecks: f.checks, Uncounted: f.uncounted}
-			c.Text += "\n\n" + designReraiseText(f)
-			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-			l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s %s\n", c.ItemID, c.ConflictID, f.runID, designEnding(f))
+			mark := designUnanswered{ConflictID: c.ConflictID, ItemID: c.ItemID, RunID: f.runID, Outcome: f.outcome, Changes: []string{}, Reraised: true, BaseSHA: f.base, FailingChecks: f.checks, Uncounted: f.uncounted, Cause: f.cause, Key: f.key}
+			if f.repeatOf != "" {
+				if f.head != "" {
+					c.Text += "\n\nDesign run " + f.runID + "'s commit " + shortSHA(f.head) + " is pinned at refs/tillr/runs/" + f.runID + "."
+				}
+				l.routeDesignRepeat(&c, &mark, f.repeatOf)
+			} else {
+				c.Text += "\n\n" + designReraiseText(f)
+				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s %s\n", c.ItemID, c.ConflictID, f.runID, designEnding(f))
+			}
 			if err := item.RecordConflict(tx, c, at); err != nil {
 				return err
 			}
@@ -263,7 +293,7 @@ func designReraiseText(f designFinding) string {
 // readDesignUnanswered answers every drain.design-unanswered record by conflict, oldest
 // first.
 func readDesignUnanswered(r *store.Reader) (map[string][]designUnanswered, error) {
-	rows, err := r.Query(`SELECT payload FROM events WHERE kind = ? ORDER BY seq`, designUnansweredKind)
+	rows, err := r.Query(`SELECT seq, payload FROM events WHERE kind = ? ORDER BY seq`, designUnansweredKind)
 	if err != nil {
 		return nil, err
 	}
@@ -271,38 +301,40 @@ func readDesignUnanswered(r *store.Reader) (map[string][]designUnanswered, error
 	out := map[string][]designUnanswered{}
 	for rows.Next() {
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		var seq int64
+		if err := rows.Scan(&seq, &raw); err != nil {
 			return nil, err
 		}
 		var m designUnanswered
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return nil, err
 		}
+		m.seq = seq
 		out[m.ConflictID] = append(out[m.ConflictID], m)
 	}
 	return out, rows.Err()
 }
 
 // designOutcome names how the design run ended: the step that refused its candidate,
-// when one did, otherwise its terminal state.
-func designOutcome(r *store.Reader, runID, state, cause string) (string, error) {
+// when one did, otherwise its terminal state, with the refusal it read.
+func designOutcome(r *store.Reader, runID, state, cause string) (string, refusalPayload, error) {
 	var raw []byte
+	var p refusalPayload
 	err := r.QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&raw)
 	if err == nil {
-		var p refusalPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
-			return "", err
+			return "", p, err
 		}
 		if p.Step != "" {
-			return "refused at " + p.Step, nil
+			return "refused at " + p.Step, p, nil
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return "", p, err
 	}
 	if cause != "" {
-		return "ended " + state + ", " + cause, nil
+		return "ended " + state + ", " + cause, p, nil
 	}
-	return "ended " + state, nil
+	return "ended " + state, p, nil
 }
 
 // designFailingChecks names the fast-gate checks that refused a design run's candidate,

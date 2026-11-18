@@ -1000,6 +1000,21 @@ objection that names the owner. The ruling is recorded in
    blocked`, is a missing output, not an objection: the design seat is dispatched again,
    and the conflict's text states the contract. It never defaults to the owner.
 
+6. **An identical repeat goes to the owner, with a question.** An ending that repeats an
+   earlier design ending of the same item exactly is not sent to the design seat again,
+   because it would be sent the same thing. The comparison is the worker path's: the same
+   cause and the same evidence key as any earlier ending, and no count. The key is the
+   conflict plus a digest of the item's block on the trunk for a run that named no actor
+   or removed the block; the failing checks and their output digests for a gate refusal;
+   and the refusal's words for a fence escape or a refused landing. An interrupted or
+   killed run never repeats. The loop raises an objection naming the owner. It is recorded
+   as a design run's `NEXT-ACTOR: owner` is (the `conflict-owner` hold, "needs you"), and
+   the conflict's text carries a question naming both runs and the command that moves it:
+   change what the design seat is given, then `tillr drain retry --item <id> --run <the
+   later run>`, or close the item. Before this rule a design run that named no actor was
+   dispatched again without end. The [design repeat tests](./drain/design_repeat_test.go)
+   cover it.
+
 A change to the item's block, its design document or the trunk raises nothing. The rules
 that re-raised on such a change (one automatic attempt per input change, and the
 trunk-suspect re-raise after a proven trunk commit) were removed by the same ruling. A
@@ -1007,8 +1022,10 @@ design run's gate refusal that the trunk caused is the gate's to recognize; unti
 (the trunk-already-red replay cannot replay fast-gate check ids), such a refusal goes back
 to the design seat on each re-raise, and a run staged after the trunk is fixed passes.
 
-Each re-raise except an interrupted one writes one `drain.design-unanswered` event naming
-the conflict, the run, its outcome, its base and failing checks. An owner hold the removed
+Each re-raise except an interrupted one, and each repeat, writes one
+`drain.design-unanswered` event naming the conflict, the run, its outcome, its base and
+failing checks, its `cause` and evidence `key`, and, on a repeat, `repeat` true with the
+earlier run in `repeat_of`. An owner hold the removed
 count wrote (its last such record names the design run the hold names) is raised again for
 the design seat once, recorded with `uncounted` true. A hold written before 2026-11-17 whose
 last line says the design run "did not amend" or "removed or renamed" its block is raised
