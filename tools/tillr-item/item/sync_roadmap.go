@@ -8,7 +8,10 @@ import (
 )
 
 // A roadmap is a tracked docs/**/roadmap.md in the sync input, not a fixed inventory.
-func isRoadmap(file string) bool {
+func isRoadmap(file string, selected ...[]string) bool {
+	if len(selected) > 0 && len(selected[0]) > 0 {
+		return containsID(selected[0], file)
+	}
 	return strings.HasPrefix(file, "docs/") && path.Base(file) == "roadmap.md"
 }
 
@@ -46,9 +49,24 @@ func roadmapLink(file, target string) string {
 
 // roadmapBlocks interleaves entries, not individual blocks. A linked document
 // belongs to the first roadmap reaching it; its blocks remain together.
-func roadmapBlocks(docs []SyncDocument, blocks []syncBlock) []syncBlock {
+func roadmapBlocks(docs []SyncDocument, blocks []syncBlock, selected []string) []syncBlock {
 	docs = append([]SyncDocument(nil), docs...)
-	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
+	sort.SliceStable(docs, func(i, j int) bool {
+		if len(selected) > 0 {
+			position := func(file string) int {
+				for n, p := range selected {
+					if p == file {
+						return n
+					}
+				}
+				return len(selected)
+			}
+			if a, b := position(docs[i].Path), position(docs[j].Path); a != b {
+				return a < b
+			}
+		}
+		return docs[i].Path < docs[j].Path
+	})
 	byFile := map[string][]syncBlock{}
 	for _, b := range blocks {
 		byFile[b.file] = append(byFile[b.file], b)
@@ -56,7 +74,7 @@ func roadmapBlocks(docs []SyncDocument, blocks []syncBlock) []syncBlock {
 	claimed := map[string]bool{}
 	var roadmaps [][][]syncBlock
 	for _, d := range docs {
-		if !isRoadmap(d.Path) {
+		if !isRoadmap(d.Path, selected) {
 			continue
 		}
 		var entries [][]syncBlock

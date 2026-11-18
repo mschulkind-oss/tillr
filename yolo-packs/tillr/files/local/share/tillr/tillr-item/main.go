@@ -187,6 +187,11 @@ func syncFace(args []string) int {
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: the wall clock)")
 	dryRun := fs.Bool("dry-run", false, "read and report, write nothing")
 	asJSON := fs.Bool("json", false, "print the item.sync record instead of the text report")
+	var roadmaps []string
+	fs.Func("roadmap", "read this tracked docs/ roadmap and its direct links; repeat in desired order", func(path string) error {
+		roadmaps = append(roadmaps, path)
+		return nil
+	})
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
@@ -201,11 +206,11 @@ func syncFace(args []string) int {
 		}
 		at = parsed.UTC()
 	}
-	docs, err := item.ReadSyncDocuments(*root)
+	docs, selected, err := item.ReadRoadmapDocuments(*root, roadmaps)
 	if err != nil {
 		return fail(err)
 	}
-	in := item.SyncInput{Root: *root, Documents: docs, At: at}
+	in := item.SyncInput{Root: *root, Documents: docs, At: at, Partial: len(selected) > 0, Roadmaps: selected}
 
 	ctx := context.Background()
 	var report item.SyncReport

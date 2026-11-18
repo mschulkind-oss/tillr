@@ -15,13 +15,13 @@ import (
 // designWithoutItems uses the same tracked documents and block parser as sync.
 // One warning per document keeps the waiting list stable when several roadmaps link it;
 // Sorted roadmap paths and then line order select the displayed source link.
-func designWithoutItems(docs []SyncDocument, held map[string]storedState, stages map[string]string) []SyncNote {
+func designWithoutItems(docs []SyncDocument, held map[string]storedState, stages map[string]string, selected ...[]string) []SyncNote {
 	byPath := map[string]SyncDocument{}
 	var roadmaps []string
 	covered := map[string]bool{}
 	for _, d := range docs {
 		byPath[d.Path] = d
-		if strings.HasPrefix(d.Path, "docs/") && path.Base(d.Path) == "roadmap.md" {
+		if isRoadmap(d.Path, selected...) {
 			roadmaps = append(roadmaps, d.Path)
 		}
 		blocks, _ := parseItemBlocks(d.Path, d.Content)
@@ -145,7 +145,7 @@ func designStage(content []byte) string {
 
 // replaceDesignWithoutItems runs in the caller's sync transaction. Insert or update keeps
 // first_seen while replacement removes findings that no longer hold.
-func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64) error {
+func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64, allowed map[string]bool) error {
 	keep := map[string]bool{}
 	for _, n := range warnings {
 		if n.Rule != "design-without-item" {
@@ -167,7 +167,7 @@ func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64) erro
 			rows.Close()
 			return Internalf("reading design-without-item: %v", err)
 		}
-		if !keep[document] {
+		if !keep[document] && (allowed == nil || allowed[document]) {
 			removed = append(removed, document)
 		}
 	}

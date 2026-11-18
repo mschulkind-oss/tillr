@@ -61,6 +61,7 @@ type SyncDocument = docshare.Document
 type SyncInput struct {
 	// Partial marks documents as a subset; it must not replace the last whole sync observation.
 	Partial   bool
+	Roadmaps  []string // selected roadmaps, in flag order; nil for every document
 	Root      string
 	Documents []SyncDocument
 	At        time.Time
@@ -83,6 +84,8 @@ type SyncNote struct {
 // would write); the counts beside them are the same lists' lengths, so a reader that wants
 // only the summary does not count.
 type SyncReport struct {
+	Partial   bool   `json:"-"`
+	Scope     any    `json:"scope"` // "all-documents" or selected roadmap paths
 	Root      string `json:"root"`
 	DryRun    bool   `json:"dry_run"`
 	Documents int    `json:"documents"`
@@ -154,6 +157,7 @@ func ReadSyncDocuments(root string) ([]SyncDocument, error) {
 // syncPlan is what one sync decided before writing: per file, the items to write in write
 // order, and the report as a dry run would print it.
 type syncPlan struct {
+	allowed     map[string]bool // nil for whole sync; declared ids for partial previews
 	orderRecord []string
 	report      SyncReport
 	// writes are the files with something to write, in the order they may be written, and
@@ -213,7 +217,15 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	for _, id := range plan.report.Parked {
 		parking[id] = true
 	}
-	keyed, err := keyMissingOrder(ctx, tx, in.At, parking)
+	var allowed map[string]bool
+	if in.Partial {
+		allowed = docshare.Declared(in.Documents)
+	}
+	checkProtected, err := protectUnreadRanks(tx.Reader(), allowed)
+	if err != nil {
+		return SyncReport{}, err
+	}
+	keyed, err := keyMissingOrder(ctx, tx, in.At, parking, allowed)
 	if err != nil {
 		return SyncReport{}, err
 	}
@@ -376,7 +388,10 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		return SyncReport{}, err
 	}
 	report.Placed = placementReport(finalPlaces, placedIDs)
-	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli()); err != nil {
+	if err := checkProtected(tx.Reader()); err != nil {
+		return SyncReport{}, err
+	}
+	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli(), allowedDocuments(in)); err != nil {
 		return SyncReport{}, err
 	}
 	if !in.Partial {
@@ -414,16 +429,19 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	}
 	finished := func(state string) bool { return d.IsFinished(state) || frozenStates[state] }
 	report := SyncReport{
-		Root: in.Root, Documents: len(in.Documents),
+		Root: in.Root, Documents: len(in.Documents), Partial: in.Partial, Scope: "all-documents",
 		Created: []string{}, Updated: []string{}, Unchanged: []string{}, Frozen: []SyncNote{},
 		Parked: []string{}, Unparked: []string{},
 		Warnings: []SyncNote{}, Findings: []SyncNote{}, SkippedFiles: []string{},
 		UnsharedOpenIDs: []string{}, StaleDocBlockIDs: []string{},
 	}
-	parked := parkedDocuments(in.Documents)
+	if len(in.Roadmaps) > 0 {
+		report.Scope = append([]string(nil), in.Roadmaps...)
+	}
+	parked := parkedDocuments(in.Documents, in.Roadmaps)
 	parkedLines := map[string]map[int]bool{}
 	for _, doc := range in.Documents {
-		if isRoadmap(doc.Path) {
+		if isRoadmap(doc.Path, in.Roadmaps) {
 			parkedLines[doc.Path] = map[int]bool{}
 			roadmapLines(doc, func(line int, _ string, parked bool) { parkedLines[doc.Path][line] = parked })
 		}
@@ -454,7 +472,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		report.Findings = append(report.Findings, findings...)
 	}
-	blocks = roadmapBlocks(in.Documents, blocks)
+	blocks = roadmapBlocks(in.Documents, blocks, in.Roadmaps)
 	report.Blocks = len(blocks)
 
 	// The fence's paths may name what a slice creates, so a path that is not on disk is a
@@ -520,7 +538,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if err != nil {
 		return syncPlan{}, err
 	}
-	report.Warnings = append(report.Warnings, designWithoutItems(in.Documents, held, stages)...)
+	report.Warnings = append(report.Warnings, designWithoutItems(in.Documents, held, stages, in.Roadmaps)...)
 
 	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
 	// ids keep their definitions and history; sync does not retroactively rename them.
@@ -608,51 +626,56 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 	}
 
-	states := make(map[string]string, len(held))
-	for id, st := range held {
-		states[id] = st.state
-	}
-	fed, missing := docshare.SharingWithFinished(in.Documents, states, finished)
-	report.DocumentFed = fed
-	unshared := make(map[string]bool, len(missing))
-	for _, id := range missing {
-		unshared[id] = true
-	}
+	if !in.Partial {
+		states := make(map[string]string, len(held))
+		for id, st := range held {
+			states[id] = st.state
+		}
+		fed, missing := docshare.SharingWithFinished(in.Documents, states, finished)
+		report.DocumentFed = fed
+		unshared := make(map[string]bool, len(missing))
+		for _, id := range missing {
+			unshared[id] = true
+		}
 
-	// The counters read the store as it is: sync never moves an item's state, so a block's
-	// item is `landed` after this run exactly when it was before it.
-	ids := make([]string, 0, len(held))
-	for id := range held {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var oldest int64
-	oldestSet := false
-	for _, id := range ids {
-		st := held[id]
-		if !unshared[id] || ProseRewriteOriginal(id) != "" {
-			continue
+		// The counters read the store as it is: sync never moves an item's state, so a block's
+		// item is `landed` after this run exactly when it was before it.
+		ids := make([]string, 0, len(held))
+		for id := range held {
+			ids = append(ids, id)
 		}
-		report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
-		if !oldestSet || st.updatedAt < oldest {
-			oldest, oldestSet = st.updatedAt, true
+		sort.Strings(ids)
+		var oldest int64
+		oldestSet := false
+		for _, id := range ids {
+			st := held[id]
+			if !unshared[id] || ProseRewriteOriginal(id) != "" {
+				continue
+			}
+			report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
+			if !oldestSet || st.updatedAt < oldest {
+				oldest, oldestSet = st.updatedAt, true
+			}
 		}
+		report.UnsharedOpen = len(report.UnsharedOpenIDs)
+		if oldestSet {
+			report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
+		}
+		// Only Git-landing promises to remove a landed item's block. Another use may
+		// declare that spelling as an unfinished state with ordinary document updates.
+		staleLanding := func(state string) bool {
+			return d.Name == definition.GitLandingName && state == "landed" && d.IsFinished(state)
+		}
+		for _, b := range blocks {
+			if st, ok := held[b.payload.ItemID]; ok && staleLanding(st.state) {
+				report.StaleDocBlockIDs = append(report.StaleDocBlockIDs, b.payload.ItemID)
+			}
+		}
+		report.StaleDocBlocks = len(report.StaleDocBlockIDs)
 	}
-	report.UnsharedOpen = len(report.UnsharedOpenIDs)
-	if oldestSet {
-		report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
-	}
-	// Only Git-landing promises to remove a landed item's block. Another use may
-	// declare that spelling as an unfinished state with ordinary document updates.
 	staleLanding := func(state string) bool {
 		return d.Name == definition.GitLandingName && state == "landed" && d.IsFinished(state)
 	}
-	for _, b := range blocks {
-		if st, ok := held[b.payload.ItemID]; ok && staleLanding(st.state) {
-			report.StaleDocBlockIDs = append(report.StaleDocBlockIDs, b.payload.ItemID)
-		}
-	}
-	report.StaleDocBlocks = len(report.StaleDocBlockIDs)
 
 	// Classify every block of a file with no finding.
 	perFile := map[string]*fileWrites{}
@@ -772,7 +795,11 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 		}
 	}
-	return syncPlan{report: report, writes: writes, placements: placements, orderRecord: orderRecord}, nil
+	var allowed map[string]bool
+	if in.Partial {
+		allowed = docshare.Declared(in.Documents)
+	}
+	return syncPlan{report: report, writes: writes, placements: placements, orderRecord: orderRecord, allowed: allowed}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after
@@ -926,14 +953,14 @@ func note(b syncBlock, rule, message string) SyncNote {
 // parkedDocuments answers the documents a roadmap's `## Icebox` or `## Exploration` section
 // links to, as repo-relative slash paths. Only the roadmaps among the documents are read, so
 // the answer is a function of the same tracked files the blocks came from.
-func parkedDocuments(docs []SyncDocument) map[string]bool {
+func parkedDocuments(docs []SyncDocument, selected ...[]string) map[string]bool {
 	parked := map[string]bool{}
 	byPath := map[string][]byte{}
 	for _, d := range docs {
 		byPath[d.Path] = d.Content
 	}
 	for roadmap, content := range byPath {
-		if !isRoadmap(roadmap) {
+		if !isRoadmap(roadmap, selected...) {
 			continue
 		}
 		roadmapLines(SyncDocument{Path: roadmap, Content: content}, func(_ int, line string, inParked bool) {
@@ -1281,8 +1308,13 @@ func SyncText(report SyncReport, at time.Time) string {
 			oldest = fmt.Sprintf(" (oldest %s)", at.Sub(t).Round(time.Minute))
 		}
 	}
-	fmt.Fprintf(&b, "unshared_open: %d%s\n", report.UnsharedOpen, oldest)
-	fmt.Fprintf(&b, "stale_doc_blocks: %d\n", report.StaleDocBlocks)
+	if report.Partial {
+		b.WriteString("unshared_open: not computed; needs a sync of every document\n")
+		b.WriteString("stale_doc_blocks: not computed; needs a sync of every document\n")
+	} else {
+		fmt.Fprintf(&b, "unshared_open: %d%s\n", report.UnsharedOpen, oldest)
+		fmt.Fprintf(&b, "stale_doc_blocks: %d\n", report.StaleDocBlocks)
+	}
 	for _, id := range report.Created {
 		fmt.Fprintf(&b, "created: %s\n", id)
 	}
