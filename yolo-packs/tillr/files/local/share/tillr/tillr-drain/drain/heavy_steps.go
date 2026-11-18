@@ -52,8 +52,55 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		result := []HeavyCheck{}
+		paths, err := heavyChangedPaths(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+		var first, rest []string
 		for _, id := range ids {
+			if heavyReadsChanged(declared[id].Reads, paths) {
+				first = append(first, id)
+			} else {
+				rest = append(rest, id)
+			}
+		}
+		legacyFirst := false
+		if s.RollingProgram != "" && len(paths) > 0 && len(rest) > 0 {
+			watches, err := legacyCheckWatches(ctx, dir)
+			if err != nil {
+				return nil, err
+			}
+			for _, reads := range watches {
+				if heavyReadsChanged(reads, paths) {
+					legacyFirst = true
+					break
+				}
+			}
+		}
+		result := []HeavyCheck{}
+		runLegacy := func() error {
+			legacy, err := s.runHeavyLegacy(ctx, dir, "")
+			result = append(result, legacy...)
+			if err == nil {
+				failed := []string{}
+				for _, check := range legacy {
+					if check.Result == "fail" {
+						failed = append(failed, check.CheckID)
+					}
+				}
+				if len(failed) == 0 {
+					failed = append(failed, "none")
+				}
+				heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+			}
+			return err
+		}
+		for position, id := range append(first, rest...) {
+			if legacyFirst && position == len(first) {
+				if err := runLegacy(); err != nil {
+					return result, err
+				}
+			}
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
@@ -74,20 +121,10 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			heavyProgressReport(ctx, "loop: heavy %s %s in %s\n", id, checks[0].Result, (time.Duration(checks[0].DurationMS) * time.Millisecond).Round(time.Second))
 			result = append(result, checks...)
 		}
-		legacy, err := s.runHeavyLegacy(ctx, dir, "")
-		if err == nil {
-			failed := []string{}
-			for _, check := range legacy {
-				if check.Result == "fail" {
-					failed = append(failed, check.CheckID)
-				}
-			}
-			if len(failed) == 0 {
-				failed = append(failed, "none")
-			}
-			heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+		if !legacyFirst {
+			err = runLegacy()
 		}
-		return append(result, legacy...), err
+		return result, err
 	}
 	result := []HeavyCheck{}
 	if _, exists := declared[only]; only == "" || exists {
@@ -132,6 +169,34 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		}
 	}
 	return s.runHeavyLegacy(ctx, dir, only)
+}
+
+// heavyChangedPaths compares the commit under proof with the green pointer.
+func heavyChangedPaths(ctx context.Context, dir string) ([]string, error) {
+	green, err := heavyGreen(ctx, dir)
+	if err != nil || green == "" {
+		return nil, err
+	}
+	raw, err := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--name-only", "--no-renames", "-z", green, "HEAD", "--").Output()
+	if err != nil {
+		return nil, Externalf("reading the paths changed since %s: %v", green, err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"), nil
+}
+
+// heavyReadsChanged matches exact files and directory reads ending in a slash.
+func heavyReadsChanged(reads, paths []string) bool {
+	for _, read := range reads {
+		for _, path := range paths {
+			if path == read || strings.HasSuffix(read, "/") && strings.HasPrefix(path, read) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {

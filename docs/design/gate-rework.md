@@ -627,16 +627,19 @@ the heavy run has named a red check, and today that is at the end of the whole r
 recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
 minutes and at most 52.7. The legacy check `go-tool/tools-tillr-drain` runs the `tillr-drain`
 suite sharded. The parity case used to run it twice more; now it only lists and plans the suite,
-so each proof runs it once. The declaration checks run one after another before the legacy
-program starts. Three further changes shorten the time from a landing to its revert:
+so each proof runs it once. Three changes shorten the time from a landing to its revert:
 
 1. **A verdict per check.** The runner reports a failing check the moment it ends and starts the
    bisection and the revert for it while the rest of the suite keeps running, so the fastest red
    check, not the slowest check, sets the time to a revert. The pointer still moves only on a
    whole green run.
-2. **Checks the change reaches go first.** Checks whose declared reads intersect the paths the
-   landings since the pointer changed are started before the rest. The duplicate `tillr-drain`
-   runs are already gone.
+2. **Checks the change reaches go first.** The runner starts affected declaration checks in
+   name order, then the legacy program if any of its watches match a changed path, then the
+   remaining declarations in name order. If no legacy watch matches, the legacy program runs
+   last. A declaration is affected when a path changed between the green pointer and the
+   proved commit matches a file read or is under a directory read ending in `/`. Without a
+   pointer or a matching check, declarations run in name order and the legacy program runs
+   last. The set of checks is unchanged.
 3. **The proof has the CPU first.** At startup, `tillr-run` sets each worker process group's
    niceness to 10, whether or not a proof is running. Later children inherit the lower
    priority, while the proof keeps the drain's priority. This uses no control group weight

@@ -759,6 +759,14 @@ names the declaration judge; `--rolling` still names the legacy program. An expl
 empty `--rolling` disables that legacy coverage, not the declaration checks. Missing
 programs or missing verdict evidence are reported as faults, never silently passed.
 
+The proof compares its commit to the green pointer. It starts declaration checks whose
+reads match changed files or contain them under a directory read ending in `/`, in name
+order. If a changed path matches a legacy watch, the legacy program runs next, before
+the remaining declarations in name order. Otherwise the legacy program runs last.
+Without a green pointer or any affected check, all declarations run in name order,
+then the legacy program. This changes only the order, not the checks selected or the
+order inside the legacy program.
+
 Completed passing checks are saved with the exact trunk tip under the heavy runner's
 lock, before the next check starts. A replacement loop starts proof at its first tick,
 even without a new landing, and logs `reused checks=` for passes it retains. A different
