@@ -14,10 +14,11 @@ package drain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 )
@@ -43,10 +44,8 @@ type BuildStamp struct {
 	// Modified is true when the working tree had uncommitted changes at build time, which
 	// is the difference between "the current commit" and "something near it".
 	Modified bool `json:"modified"`
-	// Digest is the build's identity. It is the source digest the pack launcher names in
-	// the executable's own path when the launcher built it, and otherwise the executable's
-	// SHA-256: two builds of one revision are still two builds, and this is the field that
-	// tells them apart.
+	// Digest is the SHA-256 of the executable image, not its source-cache filename.
+	// Reading the image makes a rename racing the last restart check observable.
 	Digest string `json:"digest"`
 	// Executable is the path of the running program, so "which of the installs am I looking
 	// at" is answered by the record rather than by `ps`.
@@ -99,8 +98,15 @@ func ReadBuildStamp() BuildStamp {
 	stamp := BuildStamp{Revision: greenRevision, GreenCommit: greenRevision}
 	exe, err := os.Executable()
 	if err == nil {
-		stamp.Executable = exe
-		stamp.Digest = buildDigest(exe)
+		// A running binary replaced on disk by a rename reads back as "<path> (deleted)".
+		// Its path is the new file's, so the suffix is dropped for the record, and the
+		// running image is hashed through /proc so the digest is the code in memory.
+		stamp.Executable = strings.TrimSuffix(exe, " (deleted)")
+		if runtime.GOOS == "linux" {
+			stamp.Digest = fileDigest("/proc/self/exe")
+		} else {
+			stamp.Digest = buildDigest(exe)
+		}
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -119,20 +125,12 @@ func ReadBuildStamp() BuildStamp {
 	return stamp
 }
 
-// buildDigest answers the identity of one executable. The pack launcher names its cache
-// file `<program>-<source digest>`, so a launched build carries the launcher's own source
-// digest in its path; a build made any other way has no such name, and its executable's
-// SHA-256 is the identity that still distinguishes two builds.
-func buildDigest(exe string) string {
-	if base := filepath.Base(exe); base != "" {
-		if i := strings.LastIndexByte(base, '-'); i >= 0 {
-			suffix := base[i+1:]
-			if len(suffix) == sha256.Size*2 && isHex(suffix) {
-				return suffix
-			}
-		}
-	}
-	file, err := os.Open(exe)
+// buildDigest reads the bytes on disk, even for a digest-named cache path.
+func buildDigest(exe string) string { return fileDigest(exe) }
+
+// fileDigest is the SHA-256 of one file, empty when it cannot be read.
+func fileDigest(path string) string {
+	file, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
@@ -144,14 +142,16 @@ func buildDigest(exe string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// isHex reports whether s is entirely lowercase hexadecimal, the spelling a sha256 digest
-// is written in. An uppercase digest is not the launcher's, so it falls through to the
-// executable hash rather than being trusted as one.
-func isHex(s string) bool {
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
+// DiskDigest is the identity of the binary now at path, which a restart compares with the
+// running build's. It is the same function the running build's digest comes from.
+func DiskDigest(path string) string { return buildDigest(path) }
+
+// Hash is the build's fact in `drain.inputs`: revision, modified flag and digest. The
+// executable path is left out, because a relocation of the same executable is not a new build.
+func (b BuildStamp) Hash() (string, error) {
+	raw, err := json.Marshal([]any{b.Revision, b.Modified, b.Digest})
+	if err != nil {
+		return "", err
 	}
-	return s != ""
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }

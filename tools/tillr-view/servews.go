@@ -81,14 +81,24 @@ var wsUpgrader = websocket.Upgrader{
 // and a client that reads newer than the baseline only ever sees one redundant refetch.
 func (s *server) wsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		// An upgrade that begins while a restart drains is refused, and one that began is
+		// counted until its socket is tracked, so the closing sweep cannot miss it.
+		if !s.beginUpgrade() {
+			http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+			return
+		}
 		detector := newChangeDetector(s)
 		primeErr := detector.prime(req.Context())
 		conn, err := wsUpgrader.Upgrade(w, req, nil)
 		if err != nil {
+			s.endUpgrade()
 			// Upgrade has already answered the request with the refusal it chose.
 			return
 		}
 		defer conn.Close()
+		s.trackSocket(conn)
+		defer s.untrackSocket(conn)
+		s.endUpgrade()
 		if primeErr != nil {
 			// A baseline this process cannot read still answers the handshake — a browser
 			// reports a refused upgrade as a close with no reason at all — and then ends the
@@ -458,4 +468,67 @@ func (w *wsWindow) close(reason string) {
 	}
 	w.closed = true
 	w.flush(reason)
+}
+
+// trackSocket registers a live channel so a restart can close it: Shutdown does not wait for
+// hijacked connections and would otherwise leave them to die with the process.
+func (s *server) trackSocket(conn *websocket.Conn) {
+	s.socketMu.Lock()
+	defer s.socketMu.Unlock()
+	if s.sockets == nil {
+		s.sockets = map[*websocket.Conn]struct{}{}
+	}
+	s.sockets[conn] = struct{}{}
+}
+
+func (s *server) untrackSocket(conn *websocket.Conn) {
+	s.socketMu.Lock()
+	defer s.socketMu.Unlock()
+	delete(s.sockets, conn)
+}
+
+// beginUpgrade admits one WebSocket upgrade unless a restart is draining. Every admitted
+// upgrade must reach endUpgrade, after Upgrade has failed or the socket is tracked.
+func (s *server) beginUpgrade() bool {
+	s.socketMu.Lock()
+	defer s.socketMu.Unlock()
+	if s.draining {
+		return false
+	}
+	s.upgrading++
+	return true
+}
+
+func (s *server) endUpgrade() {
+	s.socketMu.Lock()
+	s.upgrading--
+	s.socketMu.Unlock()
+}
+
+// openUpgrades admits upgrades again after a restart that did not replace the process.
+func (s *server) openUpgrades() {
+	s.socketMu.Lock()
+	s.draining = false
+	s.socketMu.Unlock()
+}
+
+// closeSockets stops admitting upgrades, waits for the ones already past admission to be
+// tracked, and ends every live channel with "going away"; a browser reconnects on its own.
+func (s *server) closeSockets() {
+	s.socketMu.Lock()
+	s.draining = true
+	for s.upgrading > 0 {
+		s.socketMu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		s.socketMu.Lock()
+	}
+	conns := make([]*websocket.Conn, 0, len(s.sockets))
+	for conn := range s.sockets {
+		conns = append(conns, conn)
+	}
+	s.socketMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "the server is restarting"), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}
 }

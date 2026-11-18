@@ -60,7 +60,22 @@ tillr drain stop --root <repository>
 tillr drain stop --root <repository> --end-runs
 ```
 
-Without the flag, stop ends supervision only. With it, the drain records the
+To move a running loop onto the binary now on disk, file a restart request. It is a
+store fact, so it also works while no loop runs: the next loop answers it.
+
+```sh
+tillr drain restart --root <repository> --wait
+tillr view restart --store <store> --wait
+```
+
+The loop reads the request at the top of a pass, starts no work in that pass, checks
+the new binary with `--check`, and replaces itself with the same process id and arguments.
+Worker runs keep going without a signal or pause request. Moving those runs onto the
+new build is separate work and is not implemented by these commands.
+The answer is `restarted`, `already-current`, `refused` (the old loop keeps running)
+or `superseded`. Nothing restarts without a request.
+
+Without `--end-runs`, stop ends supervision only. With it, the drain records the
 interruption before sending SIGTERM to each in-flight run face. It does not ask the
 runs to pause, so those items start over on the next pass without
 spending a retry, failover, or automatic re-admission allowance. Repeated stops

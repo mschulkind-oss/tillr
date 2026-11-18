@@ -274,7 +274,22 @@ export interface StopExplanation {
   next: string;
 }
 
+/** The answer to one restart request, as the loop or the server recorded it (Go:
+ * tillr-drain/restart). `from_build` and `to_build` are the builds' one-line stamps. */
+export interface RestartAnswer {
+  request_id: string;
+  role: string;
+  answer: "restarted" | "already-current" | "refused" | "superseded";
+  from_build: string;
+  to_build: string;
+  detail?: string;
+  at: string;
+}
+
 export interface DrainSummary {
+  /** The latest answered restart request of each role, keyed `drain` and `view`. A role
+   * never asked has no key, and a server older than the field sends none. */
+  restarts?: Record<string, RestartAnswer>;
   active: boolean;
   stop?: StopExplanation | null;
   heartbeat_interval_ms?: number;

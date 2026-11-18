@@ -18,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mschulkind-oss/tillr-drain/preserved"
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/stop"
 	"github.com/mschulkind-oss/tillr-item/workflowmeta"
 	"github.com/mschulkind-oss/tillr/record"
@@ -75,10 +77,15 @@ type server struct {
 	writeEnabled bool
 	itemFlag     string
 	writeMu      sync.Mutex
-	openMu       sync.Mutex
-	storePath    string
-	store        *store.Store
-	schema       int
+	// sockets are the open live channels, for a restart to close (servews.go).
+	socketMu  sync.Mutex
+	sockets   map[*websocket.Conn]struct{}
+	draining  bool
+	upgrading int
+	openMu    sync.Mutex
+	storePath string
+	store     *store.Store
+	schema    int
 	// vantageBase is the configured base URL of the Vantage that serves this repository,
 	// or empty when the operator configured none. It is on the response envelope rather
 	// than in a document payload because the link belongs to the board, not to one route:
@@ -181,6 +188,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	perfStartup := fs.String("perf-startup", os.Getenv("TILLR_VIEW_PERF_STARTUP"), "the recipe's startup phases for the log's startup record, as name=milliseconds pairs separated by commas; `recipe_start_ms=<unix ms>` dates the recipe's start, so the record can say how long the recipe took to listen")
 	writeEnabled := fs.Bool("write", false, "allow idea saving and item placement through tillr-item; the server's store handle stays read-only")
 	itemFlag := fs.String("tillr-item", "", "the item writer (default: beside this executable, then PATH)")
+	check := fs.Bool("check", false, "parse the flags and open the store, then exit 0 without listening; any failure exits non-zero with one line")
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
@@ -196,9 +204,22 @@ func serveFace(args []string) (record.Envelope, int) {
 	srv.plannerFlag = *plannerFlag
 	srv.writeEnabled = *writeEnabled
 	srv.itemFlag = *itemFlag
+	// The check is startup without the listening: the store, the front end and the
+	// planner are all read the way a launch reads them, because a binary that passes here
+	// and then refuses to start would have cost the working server its place.
 	web, webNote, code := openWebAssets(*webDist, *uiAt)
 	if code != record.ExitOK {
 		return record.Envelope{}, code
+	}
+	if *check {
+		if srv.problem != nil {
+			return record.Envelope{}, usagef("%s", srv.problem.note)
+		}
+		if _, err := resolvePlanner(srv.plannerFlag); err != nil {
+			return record.Envelope{}, usagef("planner: %v", err)
+		}
+		fmt.Fprintln(os.Stderr, "tillr-view serve: check ok")
+		return record.Envelope{}, record.ExitOK
 	}
 	srv.web = web
 	srv.build = buildInfo(frontEndLabel(web, webNote))
@@ -234,13 +255,8 @@ func serveFace(args []string) (record.Envelope, int) {
 	} else {
 		fmt.Fprintf(os.Stderr, "tillr-view serve: perf log: off\n")
 	}
-	httpServer := &http.Server{Handler: srv.routes(), ReadHeaderTimeout: 5 * time.Second}
-	stopOnSignal(httpServer)
-	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintf(os.Stderr, "tillr-view: %v\n", err)
-		return record.Envelope{}, record.ExitInternal
-	}
-	return record.Envelope{}, record.ExitOK
+	sv := &serving{srv: srv, addr: *addr}
+	return record.Envelope{}, sv.run(ctx, listener)
 }
 
 // defaultTraceIndex is where tillr-trace keeps its index: its own default, not a path
@@ -621,24 +637,27 @@ func (s *server) sources() sourceStates {
 
 // drainSummary is the drain's own account of itself.
 type drainSummary struct {
-	Active              bool             `json:"active"`
-	Session             *loopSession     `json:"session"`
-	SessionNote         string           `json:"session_note"`
-	SessionGraceMS      int64            `json:"session_grace_ms"`
-	RunningRuns         int              `json:"running_runs"`
-	Ticks               int              `json:"ticks"`
-	Dispatched          int              `json:"dispatched"`
-	Landed              int              `json:"landed"`
-	Rejected            int              `json:"rejected"`
-	InfraFailures       *int             `json:"infra_failures"`
-	TotalCostUSD        *float64         `json:"total_cost_usd"`
-	UnreportedRuns      int              `json:"unreported_runs"`
-	CostUnreportedRuns  int              `json:"cost_unreported_runs"`
-	LastStopReason      *string          `json:"last_stop_reason"`
-	Stop                *stopExplanation `json:"stop"`
-	HeartbeatIntervalMS int64            `json:"heartbeat_interval_ms"`
-	StopNote            string           `json:"stop_note"`
-	LastDecision        *dispatchView    `json:"last_decision"`
+	// Restarts is the answer to the latest answered restart request of each role, keyed
+	// `drain` and `view`: the header's record of the last roll. A role never asked has no key.
+	Restarts            map[string]restart.Answer `json:"restarts,omitempty"`
+	Active              bool                      `json:"active"`
+	Session             *loopSession              `json:"session"`
+	SessionNote         string                    `json:"session_note"`
+	SessionGraceMS      int64                     `json:"session_grace_ms"`
+	RunningRuns         int                       `json:"running_runs"`
+	Ticks               int                       `json:"ticks"`
+	Dispatched          int                       `json:"dispatched"`
+	Landed              int                       `json:"landed"`
+	Rejected            int                       `json:"rejected"`
+	InfraFailures       *int                      `json:"infra_failures"`
+	TotalCostUSD        *float64                  `json:"total_cost_usd"`
+	UnreportedRuns      int                       `json:"unreported_runs"`
+	CostUnreportedRuns  int                       `json:"cost_unreported_runs"`
+	LastStopReason      *string                   `json:"last_stop_reason"`
+	Stop                *stopExplanation          `json:"stop"`
+	HeartbeatIntervalMS int64                     `json:"heartbeat_interval_ms"`
+	StopNote            string                    `json:"stop_note"`
+	LastDecision        *dispatchView             `json:"last_decision"`
 	// Build is the drain build that wrote the newest loop result, and BuildNote says why
 	// there is none. A record written before the stamp existed is a build that cannot be
 	// named, which the board draws as such rather than as a current build (build.go in
@@ -1011,10 +1030,16 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	// A current session is the loop's present state; the file describes a previous
-	// stop and must not advise restarting a loop that is already running.
+	// A live loop's running build is what it published when it started or adopted a
+	// restart; the terminal result names only the last loop that stopped.
 	if active {
 		stopReason, stopNote, stop = "", "", nil
+		if fact, err := restart.ReadBuild(r, restart.RoleDrain); err != nil {
+			return nil, unreadable(err)
+		} else if fact != nil {
+			loopBuild = &drainBuild{Revision: fact.Revision, Time: fact.Time, Modified: fact.Modified, Digest: fact.Digest, Executable: fact.Executable}
+			buildNote = ""
+		}
 	}
 	out.Drain = drainSummary{
 		UnreportedRuns:      unreported,
@@ -1033,6 +1058,18 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		HeartbeatIntervalMS: HeartbeatIntervalMS,
 		Build:               loopBuild,
 		BuildNote:           buildNote,
+	}
+	for _, role := range []string{restart.RoleDrain, restart.RoleView} {
+		state, err := restart.ReadState(r, role)
+		if err != nil {
+			return nil, unreadable(err)
+		}
+		if state.Latest != nil {
+			if out.Drain.Restarts == nil {
+				out.Drain.Restarts = map[string]restart.Answer{}
+			}
+			out.Drain.Restarts[role] = *state.Latest
+		}
 	}
 	if stopReason != "" {
 		out.Drain.LastStopReason = &stopReason

@@ -1,0 +1,142 @@
+package drain
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/mschulkind-oss/tillr-drain/restart"
+)
+
+// StopRestarted is reachable only through a test replacement that returns. Real exec
+// never returns successfully, so it writes no stop record and signals no worker.
+const StopRestarted = "restarted"
+
+// RestartConfig supplies the running process's executable and original arguments.
+// Tests can replace Check and Exec; production Exec is syscall.Exec.
+type RestartConfig struct {
+	Executable string
+	Argv       []string
+	Check      func(context.Context, string) error
+	Exec       func(string, []string, []string) error
+}
+
+func (l *Loop) restarter() *restart.Restarter {
+	rc := l.cfg.Restart
+	return &restart.Restarter{Store: l.cfg.Store, Role: restart.RoleDrain,
+		Running:    restart.Build{Line: l.build.String(), Digest: l.build.Digest},
+		Executable: rc.Executable, Disk: DiskDigest, Check: rc.Check,
+		Candidate: restart.LauncherCandidate(rc.Executable), Now: l.cfg.Now}
+}
+
+// adoptRestart publishes the live build and answers only the request carried across exec.
+// It does not pause, resume or record a starting build for any run.
+func (l *Loop) adoptRestart(ctx context.Context) error {
+	if l.cfg.Restart == nil {
+		return nil
+	}
+	if err := restart.PublishBuild(ctx, l.cfg.Store, restart.BuildFact{
+		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
+		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
+		PID: os.Getpid(), At: l.cfg.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+	adopted, err := l.restarter().Adopt(ctx)
+	if err != nil {
+		return err
+	}
+	if adopted {
+		// This runs before the new image starts any subprocess. Wait only on children
+		// inherited from the old image, never children whose exec.Cmd owns their exit.
+		go reapInherited(ctx, inheritedChildren())
+		l.reportf("loop: restarted in place onto build %s\n", l.build)
+	}
+	return nil
+}
+
+// gateRestart is the first action of a pass. A pass that sees a request starts no new
+// dispatch, gate or landing; replacement leaves in-flight runs untouched. Recovery of
+// other in-flight work is the sibling restart block's responsibility.
+func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, string, error) {
+	if l.cfg.Restart == nil {
+		return false, "", nil
+	}
+	rs := l.restarter()
+	pending, err := rs.Pending(ctx)
+	if err != nil || !pending {
+		return false, "", err
+	}
+	request, replace, err := rs.Settle(ctx)
+	if err != nil {
+		return true, "", err
+	}
+	if !replace {
+		l.reportf("loop: restart %s answered without replacing the process\n", request.ID)
+		return true, "", nil
+	}
+	l.reportf("loop: restart %s: replacing build %s in place\n", request.ID, l.build)
+	if err := rs.Replace(ctx, request, l.cfg.Restart.Argv, l.cfg.Restart.Exec); err != nil {
+		if errors.Is(err, restart.ErrSuperseded) {
+			return true, "", nil
+		}
+		if ctx.Err() != nil {
+			return true, StopOperatorStop, nil
+		}
+		return true, "", rs.Refuse(ctx, request, "exec: "+err.Error())
+	}
+	return true, StopRestarted, nil
+}
+
+// inheritedChildren lists this process's existing children on Linux. Exec preserves
+// their parent PID, but the old image's exec.Cmd waiters no longer exist.
+func inheritedChildren() []int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// comm may contain spaces and parentheses; ppid follows its last closing paren.
+		text := string(raw)
+		fields := strings.Fields(text[strings.LastIndexByte(text, ')')+1:])
+		if len(fields) >= 2 {
+			if ppid, err := strconv.Atoi(fields[1]); err == nil && ppid == os.Getpid() {
+				pids = append(pids, pid)
+			}
+		}
+	}
+	return pids
+}
+
+// reapInherited collects only the named PIDs, without stealing new exec.Cmd statuses.
+func reapInherited(ctx context.Context, pids []int) {
+	for len(pids) > 0 {
+		remaining := pids[:0]
+		for _, pid := range pids {
+			var status syscall.WaitStatus
+			if done, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil); done == 0 && err == nil {
+				remaining = append(remaining, pid)
+			}
+		}
+		pids = remaining
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}

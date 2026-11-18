@@ -338,6 +338,8 @@ type LoopConfig struct {
 	VantageRepo      string
 	WorkflowDefaults map[string]string
 	Comments         *settings.Comments
+	// Restart enables explicit requests to replace this loop's process in place.
+	Restart *RestartConfig
 	// ExitWhenDrained opts out of the default wait when nothing is dispatchable.
 	ExitWhenDrained bool
 	// Steps is what the loop drives.
@@ -681,6 +683,12 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // disk before the caller is answered (recordResult), so a stop is readable after the process
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
+	// Adopt before starting any new child, so inherited-child collection cannot
+	// steal a status from this image's subprocess waiters.
+	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
+	if err := l.adoptRestart(ctx); err != nil {
+		return faultResult(result, err)
+	}
 	defer l.recordResult(&result)
 	defer func() {
 		if spendErr := l.snapshotSpend(&result); spendErr != nil {
@@ -734,10 +742,6 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// on a store it could not open is a stop an operator needs the record of, and a file
 	// written only on the clean path would answer "why did it stop" for everything except
 	// the stops that matter most.
-	// The first line names the build, before any tick can spend a night on a tree the
-	// process never loaded. It is the answer to "is this the binary that carries the fix?",
-	// and it is printed even when the very first tick fails.
-	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
 	// Cost is observation only. An unavailable measurement is explicit, but
 	// cannot withhold work that the planner would otherwise dispatch.
 	if window, err := spend.Read(ctx, l.cfg.Store, l.cfg.Now()); err != nil {
