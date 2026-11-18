@@ -1242,6 +1242,16 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		return err
 	}
 	defer s.Close()
+	// The routing reads the whole history, so it reads before the write and not under the
+	// store's write lock (readSecondFailure); the write records what it read.
+	var routed *secondFailure
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		routed, err = readSecondFailure(r, d)
+		return err
+	}); err != nil {
+		return err
+	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		at := l.cfg.Now().UTC()
 		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, at); err != nil {
@@ -1261,7 +1271,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 				return err
 			}
 		}
-		return routeSecondFailure(tx, d, at)
+		return recordSecondFailure(tx, routed, at)
 	})
 }
 
