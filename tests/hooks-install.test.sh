@@ -57,7 +57,9 @@ check() {
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# The real pre-commit guard reads the deployed identity, not only commit variables.
+printf '[user]\n name = fixture\n email = fixture@example.invalid\n' > "$tmp/gitconfig"
+export GIT_CONFIG_GLOBAL="$tmp/gitconfig" GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
 export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
 export GIT_CONFIG_COUNT=1

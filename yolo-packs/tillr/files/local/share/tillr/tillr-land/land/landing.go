@@ -79,6 +79,7 @@ func Reasons() []string {
 		ReasonPatchAtHead,
 		ReasonItemNotLandable,
 		ReasonTrunkRewritten,
+		ReasonForeignIdentity,
 		ReasonAlreadyOnTrunk,
 		ReasonRedCap,
 	}
@@ -490,6 +491,29 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		p.history, rewritten, err = t.prepareHistory(p.historyBefore, req.ObservedTrunk, p.observationTip)
 		if err != nil {
 			return p, err
+		}
+		if !rewritten && !p.recovered {
+			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				h, err := ReadIdentityHistory(r)
+				if err != nil {
+					return err
+				}
+				// History observation is not identity certification: a commit
+				// can arrive between the loop's two reads. Check from both
+				// the durable checked tip and this request's observed tip.
+				checked := h.Tip
+				h, err = t.CheckIdentities(r, h, checked, p.observationTip)
+				if err == nil && req.ObservedTrunk != checked {
+					h, err = t.CheckIdentities(r, h, req.ObservedTrunk, p.observationTip)
+				}
+				if err == nil && len(h.Pending) != 0 {
+					p.landing.Result, p.landing.Reason = ResultRefused, ReasonForeignIdentity
+				}
+				return err
+			})
+			if err != nil {
+				return p, err
+			}
 		}
 		if rewritten {
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkRewritten

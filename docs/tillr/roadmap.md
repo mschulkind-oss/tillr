@@ -3455,15 +3455,7 @@ all three suites passed. The details below name the two repairs and the measurem
 left is short: apply the kept work, make the two repairs, run the suites, and commit. No
 criterion changes.
 
-<!-- tillr: item id="item-trunk-refuses-foreign-identity-commit" paths="tools/tillr-land/,yolo-packs/tillr/programs/tillr-land/,tools/tillr-drain/,tools/tillr-view/,hooks/,bin/hooks-install,tests/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** At each tick the loop checks every trunk commit since the last one it checked, and finds any whose author or committer is not the identity the repository's git config names. A test lands a commit by another identity and asserts it is found on the next tick.
-- **c2:** The waiting view names the commit, its author and the documented remedy: re-author it, or accept it by recording the commit's id. It shows this for as long as the commit is unanswered, whether or not any candidate is waiting to land. A test asserts the text with a candidate held, and a second test asserts it with no candidate and no item in the queue.
-- **c3:** While such a commit is unanswered, the loop starts no landing. Runs already in progress continue, and their candidates wait to land. A test asserts a ready candidate is not landed and a running one is not stopped.
-- **c4:** Re-authoring the commit or recording its acceptance releases the hold at the next tick. A test asserts each path. Re-authoring rewrites the trunk, so it must not leave the loop held for lost history instead: a rewrite that changes only author and committer, with the same trees, messages and parent order, releases both holds, and any other rewrite still holds. A test asserts both.
-- **c5:** A `pre-commit` hook in `hooks/`, installed by `just hooks-install`, refuses a commit on `main` whose identity differs from the configured one. The item states in its report what the hook cannot cover.
-- **c6:** A commit made with `git commit-tree`, `update-ref` or a private index, which skips hooks, is still found by c1. A test asserts it.
-- **c7:** The lander repeats the c1 check while it holds its lock, over every commit between the trunk the loop observed and the tip it is about to publish onto. When it finds an unanswered foreign commit it refuses the landing with its own named reason, publishes nothing, and the loop holds that candidate as in c3. It reads the same acceptance record as the loop, so an accepted commit does not refuse. A test advances the trunk to a foreign commit after the loop's check and before the lander's lock, and asserts nothing is landed; a second test accepts that commit and asserts the landing proceeds.
 
 **Agent details:**
 

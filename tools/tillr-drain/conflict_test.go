@@ -63,7 +63,7 @@ if [ ! -f %[1]q/land-once ]; then
   touch %[1]q/land-once
   echo trunk > %[1]q/base.txt
   git -C %[1]q add base.txt
-  git -C %[1]q -c user.name=stub -c user.email=stub@example.invalid commit -q -m "trunk move"
+  git -C %[1]q commit -q -m "trunk move"
   printf '%%s\n' '%[2]s'
   exit 1
 fi

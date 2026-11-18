@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
@@ -560,6 +561,15 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if work.Candidate != nil && work.Gated && !work.JudgeLanded {
+		identity, err := land.ReadIdentityHistory(r)
+		if err != nil {
+			return Decision{}, err
+		}
+		if len(identity.Pending) != 0 {
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, identity.Reason()
+			identifyDecision(&d)
+			return d, nil
+		}
 		h, err := readTrunkHistory(r)
 		if err != nil {
 			return Decision{}, err

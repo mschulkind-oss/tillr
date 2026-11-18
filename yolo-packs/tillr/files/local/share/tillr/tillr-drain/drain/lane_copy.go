@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -28,11 +29,12 @@ func init() {
 // trunk under its squash commit, and an unlanded one stays with its item, which restages it
 // from the pin.
 type laneCopyCleared struct {
-	LaneID string   `json:"lane_id"`
-	SHA    string   `json:"sha"`
-	Refs   []string `json:"refs"`
-	Landed bool     `json:"landed"`
-	RunID  string   `json:"run_id,omitempty"`
+	LaneID     string   `json:"lane_id"`
+	SHA        string   `json:"sha"`
+	Refs       []string `json:"refs"`
+	Landed     bool     `json:"landed"`
+	RunID      string   `json:"run_id,omitempty"`
+	Reauthored bool     `json:"reauthored,omitempty"`
 }
 
 // retainingRunPins answers the run pins that contain sha. A held candidate's lane is
@@ -113,7 +115,20 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, sha string) (b
 		return false, err
 	}
 	if len(refs) == 0 && !payload.Landed {
-		return false, nil
+		t, err := land.OpenTrunk(s.Root)
+		if err != nil {
+			return false, err
+		}
+		t.SetContext(ctx)
+		tip, err := t.Head(TrunkRef)
+		if err != nil {
+			return false, err
+		}
+		_, same, err := t.IdentityRewrite(sha, tip)
+		if err != nil || !same {
+			return false, err
+		}
+		payload.Reauthored = true
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

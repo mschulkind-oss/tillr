@@ -17,6 +17,7 @@ func TestTheRefusalReasonsAreTheRegisteredSet(t *testing.T) {
 		"patch-at-head",
 		"patch-rewind",
 		"red-cap",
+		"trunk-foreign-identity",
 		"trunk-rewritten",
 		"trunk-worktree-uncommitted",
 		"verdict-error",

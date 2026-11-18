@@ -1073,7 +1073,7 @@ func (l *Loop) index() {
 func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
 	held := heldDetail(holds)
 	for _, d := range holds {
-		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") || strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") || strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
+		if strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") || strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") || strings.HasPrefix(d.Reason, ReasonForeignIdentity+": ") || strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 			result.Detail = held
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
@@ -2323,6 +2323,11 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if err != nil {
 		return "", false, err
 	}
+	if held, err := l.identityHeld(ctx); err != nil {
+		return "", false, err
+	} else if held {
+		return "", false, l.holdIdentity(ctx, candidate)
+	}
 	if h.Lost != "" {
 		return "", false, l.holdRewrite(ctx, candidate, h)
 	}
@@ -2355,6 +2360,12 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if landed.Result == LandRefused && landed.Reason == ReasonRedCap {
 		return "", false, l.holdRedCap(ctx, candidate, landed.RedCap)
+	}
+	if landed.Result == LandRefused && landed.Reason == ReasonForeignIdentity {
+		if _, err := l.observeTrunk(ctx, candidate.ObservedTrunk); err != nil {
+			return "", false, err
+		}
+		return "", false, l.holdIdentity(ctx, candidate)
 	}
 	if landed.Result == LandRefused && landed.Reason == ReasonTrunkRewritten {
 		h, err := l.observeTrunk(ctx, candidate.ObservedTrunk)
