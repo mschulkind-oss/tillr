@@ -224,6 +224,7 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 	}
 	needed := map[string]bool{}
 	examined := map[string]bool{}
+	superseded := map[string]bool{}
 	baseRefs := map[string]string{}
 	events, err := r.Events(0)
 	if err != nil {
@@ -244,6 +245,9 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 		}
 		if e.ObjectID != nil && e.ObjectType == "run" && e.Kind == examinationDoneKind {
 			examined[*e.ObjectID] = true
+		}
+		if e.ObjectID != nil && e.ObjectType == "run" && e.Kind == candidateSupersededKind {
+			superseded[*e.ObjectID] = true
 		}
 		if e.Kind == "land.landing" {
 			var receipt struct {
@@ -351,8 +355,15 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			if _, known := runs[id]; !known && strings.HasSuffix(id, "-set-aside-base") {
 				id = strings.TrimSuffix(id, "-set-aside-base")
 			}
+			if _, known := runs[id]; !known && strings.HasSuffix(id, supersededHeadSuffix) {
+				id = strings.TrimSuffix(id, supersededHeadSuffix)
+			}
 			run, known := runs[id]
 			switch {
+			case superseded[id]:
+				// A retry superseded this candidate (retry_supersede.go). The pin is the only
+				// copy the loop keeps of it, and the supersession promised it is never deleted.
+				ref.Reason = "candidate superseded by a retry; retained"
 			case live[id] || liveItems[run.item]:
 				ref.Reason = "live lane may need this item's attempt history"
 			case !known:

@@ -1722,6 +1722,9 @@ planned:
 		if err := l.releaseTrunkAcquittals(ctx); err != nil {
 			return "", err
 		}
+		if err := l.supersedeRetriedCandidates(ctx); err != nil {
+			return "", err
+		}
 		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
 			return "", err
 		}
