@@ -40,12 +40,28 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 	if err != nil {
 		return "", err
 	}
-	if state != StateLanded {
+	if state != StateLanded && state != StateResolvedElsewhere {
 		return "", nil
 	}
 	green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 	if err != nil {
 		return "", err
+	}
+	if state == StateResolvedElsewhere {
+		// A fixer a green heavy proof resolved (resolveProvedFixers) repaired nothing
+		// itself; the proof is the repair evidence. Release once the selected base
+		// contains the proved commit, so the fresh run starts from a green tree.
+		proved, err := fixerProvedGreen(r, fixer)
+		if err != nil || proved == "" {
+			return "", err
+		}
+		if green != "" {
+			ok, err := containsCommit(ctx, l.cfg.Root, proved, green)
+			if err != nil || !ok {
+				return "", err
+			}
+		}
+		return underlying, nil
 	}
 	// A waiter is not a dependency edge. Check its landing before clearing it,
 	// using the same proof rule as ordinary blockers, so the fresh run cannot

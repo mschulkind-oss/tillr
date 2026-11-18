@@ -139,6 +139,11 @@ func designNextActor(log string) string {
 	return actor
 }
 
+// FixerNextActorRule is what a trunk fixer is told about a blocked report: it either
+// repairs the trunk or objects to the owner by name. A report naming no actor is a
+// missing output and returns the fixer to its own worker, never to the owner.
+const FixerNextActorRule = "A trunk fixer either commits the repair, or objects with a report line `" + DesignNextActorField + ": owner` naming what only the owner can decide or grant (paths outside the fence, a ruling). A blocked report that names no next actor goes back to this fixer's worker to repair the trunk or state its actor; it never reaches the owner by default."
+
 func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -222,10 +227,19 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	if len(c.BlockedCriteria) == 0 {
 		c.BlockedCriteria = []string{"not stated in report"}
 	}
-	if c.BodyRef == "" || IsTrunkFixer(d.ItemID) {
-		// A generated repair has no design decision to dispatch. In particular a
-		// fence refusal goes straight to the owner with the needed paths in the
-		// pinned report, rather than waiting behind its own broken-trunk hold.
+	if IsTrunkFixer(d.ItemID) {
+		// A generated repair has no design decision to dispatch, and it reaches the
+		// owner only by an objection naming him: a report line `NEXT-ACTOR: owner`,
+		// with what only the owner can grant (a fence refusal's paths) in the pinned
+		// report. Any other report sends the fixer back to its own worker, told to
+		// repair the trunk or name its next actor.
+		if designNextActor(text) == DesignNextOwner {
+			c.WaitingOn, c.Status = "owner", "owner"
+		} else {
+			c.WaitingOn, c.Status = "build", "answered"
+			c.Text += "\n\n" + FixerNextActorRule
+		}
+	} else if c.BodyRef == "" {
 		c.WaitingOn, c.Status = "owner", "owner"
 	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)

@@ -120,7 +120,7 @@ var waitingRules = map[string]waitingRule{
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
 	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
 	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
-	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land"},
+	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land, or a heavy proof green past its red commit"},
 	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
