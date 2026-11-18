@@ -6,13 +6,6 @@
       "kind": "backlog",
       "reason": "a real elapsed-time assertion: the capture must fail inside a wall-clock ceiling, so a loaded box reds it for a reason that has nothing to do with the profiler",
       "repair": "assert the recorded failure mode the profiler reports for each mode instead of the duration; no board item is filed for it yet"
-    },
-    {
-      "file": "tools/bedrock-spend/internal/cli/cli_test.go",
-      "snippet": "if time.Since(started) > time.Second {",
-      "kind": "backlog",
-      "reason": "a real elapsed-time assertion: the watch's poll/cancellation schedule is judged by a one-second wall clock, so a loaded box reds it for a reason that has nothing to do with the schedule",
-      "repair": "assert the two reports' recorded timestamps and their order instead of the elapsed duration; no board item is filed for it yet"
     }
   ]
 }
