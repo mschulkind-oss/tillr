@@ -2,11 +2,58 @@ package drain
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 )
+
+func TestPolicyDeclaresSeatsForItemsAndWorkflows(t *testing.T) {
+	root := t.TempDir()
+	policyPath := filepath.Join(root, "backend-policy.json")
+	workflowPath := filepath.Join(root, "scout-then-build@v1.json")
+	write := func(path string, raw []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture := twoBackends()
+	fixture.Seats = map[string]string{"architect-2": "first", "build": "first"}
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(policyPath, raw)
+	policy, err := LoadPolicy(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := "seats are declared in " + policyPath
+	for _, seat := range []string{"architect-2", "architect-3"} {
+		t.Run(seat, func(t *testing.T) {
+			write(workflowPath, []byte(strings.Replace(workflowFixture, `"seat":"scout"`, `"seat":"`+seat+`"`, 1)))
+			planErr := checkSeats(policy, []itemRow{{ItemID: "item-a", Seat: seat}})
+			_, workflowErr := readWorkflow(root, workflowPath, policy, map[string]bool{})
+			if seat == "architect-2" {
+				if planErr != nil || workflowErr != nil {
+					t.Fatalf("mapped seat refused: planner=%v; workflow=%v", planErr, workflowErr)
+				}
+				return
+			}
+			for _, check := range []struct {
+				err  error
+				want string
+			}{{planErr, "which the policy does not map"}, {workflowErr, "workflow-unknown-seat"}} {
+				if check.err == nil || !strings.Contains(check.err.Error(), check.want) || !strings.Contains(check.err.Error(), seat) || !strings.Contains(check.err.Error(), declaration) {
+					t.Errorf("expected %q refusal for %s naming %s, got %v", check.want, seat, policyPath, check.err)
+				}
+			}
+		})
+	}
+}
 
 // twoBackends is a policy whose preference walks a backend it names: the shape a failover
 // needs, and the shape a single-backend policy degenerates from.
@@ -280,7 +327,7 @@ func TestSelectionFollowsOverrideThenSeatThenDefault(t *testing.T) {
 
 // A policy that maps a seat it cannot route is refused before the store is read: an unknown
 // backend would make a dispatch's request name a backend the policy does not hold, and a
-// seat name outside the item model's vocabulary is a typo that would silently route nothing.
+// seat name must have the same shape as a seat name on an item.
 func TestPolicyCheckRefusesSeatsItCannotRoute(t *testing.T) {
 	cases := map[string]struct {
 		seats map[string]string
@@ -290,9 +337,9 @@ func TestPolicyCheckRefusesSeatsItCannotRoute(t *testing.T) {
 			seats: map[string]string{"design": "third"},
 			names: `seat "design" to backend "third"`,
 		},
-		"seat outside the vocabulary": {
-			seats: map[string]string{"desgn": "first"},
-			names: `seat "desgn", which is not one of the item model's seats`,
+		"malformed seat": {
+			seats: map[string]string{"Desgn": "first"},
+			names: `seat "Desgn" must start with a lowercase letter and contain only lowercase letters, digits and hyphens; seats are declared in the backend policy file`,
 		},
 	}
 	for name, c := range cases {
@@ -369,7 +416,7 @@ func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 // its end, and a step along the list is not a degradation: every backend on it was named for
 // that seat. A one-element seat and an item with no seat walk the preference as they always
 // did, including naming the seat a walk leaves.
-func TestAFailoverWalksTheItemsOwnSeatList(t *testing.T) {
+func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 	policy := seatListPolicy(t)
 	cases := []struct {
 		name, failed, seat string
@@ -421,7 +468,7 @@ func TestPolicyCheckRefusesASeatListItCannotWalk(t *testing.T) {
 		"an undeclared backend": {`{"design": ["builder-a", "nobody"]}`, `seat "design" to backend "nobody", which is not one of its backends`},
 		"an empty list":         {`{"build": []}`, `seat "build" to an empty list`},
 		"a backend twice":       {`{"build": ["builder-a", "builder-b", "builder-a"]}`, `seat "build" to backend "builder-a" twice`},
-		"an unknown seat":       {`{"desgn": ["builder-a"]}`, `seat "desgn", which is not one of the item model's seats`},
+		"a malformed seat":      {`{"Desgn": ["builder-a"]}`, `seat "Desgn" must start with a lowercase letter and contain only lowercase letters, digits and hyphens; seats are declared in the backend policy file`},
 	}
 	for name, c := range refused {
 		t.Run(name, func(t *testing.T) {

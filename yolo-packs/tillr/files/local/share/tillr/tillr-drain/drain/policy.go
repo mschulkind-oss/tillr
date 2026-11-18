@@ -35,6 +35,8 @@ type Backend = run.Backend
 // "whatever policy_ref names". So the policy's shape is drain's own, and Check is the
 // refusal that keeps a dispatch from carrying a request no runner would accept.
 type Policy struct {
+	Ref string `json:"-"` // Source path, when loaded from a file.
+
 	DefaultBackend string   `json:"default_backend"`
 	Preference     []string `json:"preference"`
 	MaxFailovers   *int     `json:"max_failovers"`
@@ -66,6 +68,16 @@ type Policy struct {
 	// (seat_escalation.go). Past its end the design seat plans or splits the item.
 	Escalate map[string][]string `json:"escalate,omitempty"`
 	Backends map[string]Backend  `json:"backends"`
+}
+
+const invalidPolicySeatName = "seat %q must start with a lowercase letter and contain only lowercase letters, digits and hyphens; %s"
+const defaultSeatDeclaration = "seats are declared in the backend policy file"
+
+func (p Policy) seatDeclaration() string {
+	if p.Ref != "" {
+		return "seats are declared in " + p.Ref
+	}
+	return defaultSeatDeclaration
 }
 
 // UnmarshalJSON reads a policy document whose `seats` values may each be a backend name or
@@ -279,12 +291,8 @@ func (p Policy) Check() error {
 		}
 	}
 	for _, seat := range p.seatNames() {
-		// A seat name outside the item model's vocabulary is a typo that would silently
-		// route nothing, so it is refused here rather than left to a plan that never sees
-		// the item asking for it.
-		if !item.KnownSeat(seat) {
-			return Usagef("the policy maps seat %q, which is not one of the item model's seats: %s",
-				seat, item.SeatList())
+		if !item.ValidSeatName(seat) {
+			return Usagef(invalidPolicySeatName, seat, p.seatDeclaration())
 		}
 		list := p.seatList(seat)
 		if pick := p.SeatPicks[seat]; pick != "" && pick != "in-order" && pick != "round-robin" && pick != "random" {

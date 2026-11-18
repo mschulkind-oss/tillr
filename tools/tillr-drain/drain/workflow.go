@@ -175,8 +175,8 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		if s.TimeoutMS < 0 {
 			return nil, fmt.Errorf("workflow-timeout: %s", s.ID)
 		}
-		if s.Kind == "agent" && !item.KnownSeat(s.Seat) {
-			return nil, fmt.Errorf("workflow-unknown-seat: %s: %s", s.ID, s.Seat)
+		if s.Kind == "agent" && !item.ValidSeatName(s.Seat) {
+			return nil, fmt.Errorf("workflow-unknown-seat: %s: "+invalidPolicySeatName, s.ID, s.Seat, defaultSeatDeclaration)
 		}
 		if s.Access != "read_only" && s.Access != "write" {
 			return nil, fmt.Errorf("workflow-access: %s", s.ID)

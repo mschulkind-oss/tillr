@@ -274,7 +274,7 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 					findings = append(findings, fmt.Errorf("stage=%s: %w", stage.ID, err))
 				}
 			} else if policy != nil && policy.Seats[stage.Seat] == "" {
-				findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy", stage.ID, stage.Seat))
+				findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy; %s", stage.ID, stage.Seat, policy.seatDeclaration()))
 			}
 			copies := []WorkflowStage{stage}
 			if stage.Repeat != "" {

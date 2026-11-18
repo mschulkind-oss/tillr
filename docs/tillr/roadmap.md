@@ -4126,9 +4126,7 @@ After the item before this one, sync and the item store accept any well-formed s
   - Make a seat any name the backend policy maps, with no seat list in code.
   - Name the policy file in every refusal of an unmapped seat.
 
-<!-- tillr: item id="item-plan-seat-checked-against-policy" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A seat is any name the backend policy maps, and no seat list is fixed in code. The planner and the workflow loader check a seat against the policy in force, and each refusal for a name that policy does not map names the policy file as the place a seat is declared. The policy loader checks only the shape of the name, as sync and the item store do, and its refusal says the same thing about the policy. A test adds a seat to a fixture policy and asserts an item and a workflow node naming it are accepted, and that the planner and the workflow loader refuse an unmapped name with the policy file named.
 
 **Agent details:**
 
@@ -4160,7 +4158,7 @@ Once a seat is whatever the policy maps, the policies can name more kinds of wor
   - Declare six new seats, their purposes and the read-only ones in every tracked policy.
   - Refuse a writing workflow node on a seat the policy lists as read-only.
 
-<!-- tillr: item id="item-plan-policies-declare-seats" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-plan-seat-checked-against-policy" prose="2" -->
+<!-- tillr: item id="item-plan-policies-declare-seats" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The four existing seats keep their meaning, and every policy under `config/tillr/` maps the six new seats in the starting set below. The bedrock policy maps them to the backends that set names, and each other policy maps them to backends it already has. A policy may list seats as read-only under a `read_only_seats` key and may give each seat one sentence under a `seat_purposes` key. Every policy lists `scout` and `test-run` as read-only and gives all ten seats a purpose. The policy loader refuses an entry under either key that names a seat the policy does not map, and the workflow loader refuses a node whose `access` is `write` on a seat the policy lists as read-only. A test asserts that every policy under `config/tillr/` maps all ten seats, that the bedrock policy maps no seat outside its read-only list to the Luna backend, and that each of the two refusals is made.
 
