@@ -370,6 +370,14 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	monitor.offset = streamOffset
 	monitor.startOffset = streamOffset
 	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter, monitor)
+	// Wait reaps the worker, not its background children. End the remaining group
+	// on normal exit too, before releasing the lane in the terminal write. A child
+	// that created its own group is left to drain's marked-process lane hold.
+	cleanupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if cleanupErr != nil && !errors.Is(cleanupErr, syscall.ESRCH) {
+		logFile.Close()
+		return record.Envelope{}, Externalf("ending worker process group %d: %v", cmd.Process.Pid, cleanupErr)
+	}
 	if pauseErr != nil {
 		logFile.Close()
 		return record.Envelope{}, pauseErr

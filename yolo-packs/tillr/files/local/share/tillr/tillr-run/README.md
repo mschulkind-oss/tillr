@@ -71,6 +71,17 @@ it is ignored on fresh executions and also included when an adapter requires a f
 for the continuation. The drain uses it to ask an exited build worker to finish verification
 and commit existing fenced work, without changing the staged brief.
 
+## Worker child cleanup
+
+When the worker exits, including a normal exit, `exec` sends `SIGKILL` to the remaining
+members of the process group it created for the worker, before writing the terminal
+record and releasing the lane. Children that created a different process group escape
+this cleanup. The drain keeps the lane out of rotation while such children still carry
+the run and store environment markers and have working directories inside the lane;
+see [lane holds](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#lanes-that-staging-refuses). The waiting row names
+the remaining process ids and how to end them. Standalone executions have no drain to
+perform that hold.
+
 ## Child environment
 
 `exec` sets the following variables for every backend, including registered commands.

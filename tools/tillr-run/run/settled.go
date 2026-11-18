@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -134,6 +136,10 @@ func (m *settledMonitor) reportReady(ctx context.Context) bool {
 // helpers, by pid/start time/CPU ticks. Membership changes count as activity too.
 // Linux /proc is required for this rule; unreadable counters never authorize a kill.
 func groupCPU(pgid int) (string, error) {
+	return groupCPUWithStat(pgid, os.ReadFile)
+}
+
+func groupCPUWithStat(pgid int, readStat func(string) ([]byte, error)) (string, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return "", err
@@ -143,8 +149,10 @@ func groupCPU(pgid int) (string, error) {
 		if _, err := strconv.Atoi(entry.Name()); err != nil {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
-		if os.IsNotExist(err) {
+		raw, err := readStat(filepath.Join("/proc", entry.Name(), "stat"))
+		// A process exiting between enumeration and stat can return ESRCH,
+		// not just ENOENT. Neither is an unreadable counter for a live process.
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 			continue
 		}
 		if err != nil {

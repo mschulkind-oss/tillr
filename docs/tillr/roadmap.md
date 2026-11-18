@@ -2837,12 +2837,7 @@ problem to the next item.
 - Show the owner which processes hold the lane and how to end them.
 - Clean up background children on normal exit, or keep the lane unavailable.
 
-<!-- tillr: item id="item-lane-release-waits-for-run-children" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A lane whose ended run still has a live process carrying its markers, with its working directory under the lane's directory, is not staged with a new item. It is released in the store but stays out of rotation, with the same event and waiting row a lane refusal has, until no such process is left. A test leaves a marker-carrying process in a lane and asserts that the lane is not offered, and is offered once the process exits.
-- **c2:** The waiting row names the process ids and how to end them. A test asserts the text.
-- **c3:** A marker carrier whose working directory is outside the lane does not hold the lane. A test asserts the lane is offered.
-- **c4:** A worker's background child is ended when its run exits normally, or the item records why that is not done. A test runs a worker that starts a `sleep` child, lets the run end, and asserts the child is gone or the lane is held.
 
 **Agent details:**
 
