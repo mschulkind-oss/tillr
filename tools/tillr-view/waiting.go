@@ -114,7 +114,10 @@ var waitingRules = map[string]waitingRule{
 	"harness-refused":              {"ready", "queue", "the next pass"},
 	// A worker run's refused ending goes back to the item's worker with its evidence,
 	// uncounted (the owner's ruling of 2026-11-17).
-	"returned-with-evidence":         {"ready", "queue", "the next pass"},
+	"returned-with-evidence": {"ready", "queue", "the next pass"},
+	// A landing the full suite proved broke the trunk is reverted by tillr and its item
+	// goes back to its worker, whose next gate runs the failing check (OQ-GP1).
+	"landing-reverted":               {"ready", "queue", "the next pass returns it to its worker with the failing check"},
 	"retry-judged":                   {"needs you", "gate", "the owner"},
 	"retry-unjudged":                 {"needs you", "lane", "the owner"},
 	"question-open":                  {"needs you", "queue", "question not recorded"},

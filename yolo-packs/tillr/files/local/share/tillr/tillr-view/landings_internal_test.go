@@ -151,3 +151,42 @@ func TestLandingsMissingTableIsNotEmptyHistory(t *testing.T) {
 		t.Fatalf("status %d: %s", status, raw)
 	}
 }
+
+// An automatic revert reads as its own row: the reverted landing, the revert that took
+// it out (or why it was not possible), and the checks that proved it broke the trunk.
+func TestLandingsHistoryShowsAnAutomaticRevert(t *testing.T) {
+	h := newServeHarness(t)
+	landingFixture(t, h)
+	db, err := sql.Open("sqlite", "file:"+h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO events(seq,ts,kind,object_type,object_id,payload) VALUES
+ (107,1800,'drain.revert','landing','ddd','{"landing":"ddd","item_id":"item-c","run_id":"run-c","tip":"ddd","checks":["unit"],"result":"reverted","revert":"eee"}'),
+ (108,1900,'drain.revert','landing','fff','{"landing":"fff","item_id":"item-d","tip":"fff","checks":["unit"],"result":"not-possible","reason":"does not apply cleanly"}')`); err != nil {
+		t.Fatal(err)
+	}
+	status, _, raw := h.get("/api/v1/landings")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, raw)
+	}
+	var response struct {
+		Data struct {
+			Rows []landingRow `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	var reverts []landingRow
+	for _, row := range response.Data.Rows {
+		if row.Kind == "revert" {
+			reverts = append(reverts, row)
+		}
+	}
+	if len(reverts) != 2 || reverts[0].Result != "reverted" || reverts[0].RedSHA != "ddd" || reverts[0].TrunkAfter != "eee" || reverts[0].ItemID != "item-c" || len(reverts[0].FailingChecks) != 1 ||
+		reverts[1].Result != "not-possible" || reverts[1].Reason != "does not apply cleanly" {
+		t.Fatalf("reverts: %+v", reverts)
+	}
+}
