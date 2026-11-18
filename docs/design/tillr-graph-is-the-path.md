@@ -97,7 +97,7 @@ Each term is used throughout with exactly this meaning. Terms marked *(coined he
 | **Ending** *(coined here)* | The record a node is done with: a cause from a closed list for its kind, the evidence, and where the cause requires it, the next actor. | Not an exit code and not a line read from a log. |
 | **Objection** | The ending by which an actor says it should not continue and names who must act next: the design seat, the owner, another item, or the tooling. It replaces "blocked". | Not a failure. Nothing is counted against the objector. |
 | **Asset** | Something a node leaves that a later node may use: a session, a commit, an output file, a transcript. | Not the node. Reusing a session does not reopen the node that made it. |
-| **Item branch** | The commits the item's nodes have made, on top of the trunk commit last taken in. The store pins its head, so no lane owns it. The owner's word is "the branch". | Not a lane's worktree. A worktree is where one node runs. |
+| **Item branch** | The commits the item's nodes have made, on top of the trunk commit last taken in. The store pins its head, so the branch survives the collection of the item's worktree. The owner's word is "the branch". | Not the item's worktree. The worktree is a checkout of the branch that the item acquires and that can be deleted and restored. |
 | **Event** | Something a participant did or decided that the rule table has a row for: a node ended, the owner answered, a backend closed, a proof ended. | Not an exception. |
 | **Exception** | The machinery failing to carry a node to an ending: a killed process, a host restart, a stopped loop, a dropped connection, a stall. It is logged and the same node resumes. | Never a node, never counted, never seen by the rule table. |
 | **Premise** *(coined here)* | A part of the graph or a fact that a claim or a rule recorded having read. A premise can never change afterward. | Not everything a program happened to load. Only what was recorded as read is protected, and reading without recording is refused. |
@@ -132,7 +132,7 @@ Every kind is one of three executions: an agent (a harness invocation), a comman
 | **take-in** | command | Brings the latest trunk under the item branch | `clean` with the new head, `conflict` with paths |
 | **gate run** | command | Runs the gate on the candidate as taken in | `pass`, `refused` with the failing checks |
 | **land attempt** | command | Asks the lander to put the candidate, or a revert, on the trunk | `landed` with the trunk commit, `conflict` with paths |
-| **owner question** | person | Carries one question that names the owner, from asked to answered. It holds no lane and no process | `answered` |
+| **owner question** | person | Carries one question that names the owner, from asked to answered. It needs no worktree and no process | `answered` |
 | **resume** | agent | Continues an earlier node's session with one new message | the endings of the kind it continues |
 | **fork** | agent | Starts from a copy of an earlier node's session, leaving the original untouched | the endings of the kind it continues |
 | **backend move** | agent | Continues the work from the item branch and the earlier transcript on another backend, because the session cannot move | the endings of the kind it continues |
@@ -404,7 +404,7 @@ Scheduling is a separate concern with a separate input: the ready nodes of every
 
 **Ready** means in fog, with every `after`, `input`, `resumes` and `forks` source done.
 
-**What the scheduler chooses, and fixes at the claim:** the lane where the node needs a worktree; the backend, from the seat's list; the model and effort, from that backend's row; whether a resumed session is compacted first.
+**What the scheduler chooses, and fixes at the claim:** the backend, from the seat's list; the model and effort, from that backend's row; whether a resumed session is compacted first. It does not choose a worktree: a node that needs one runs in its item's, which the claim creates or restores.
 
 **How a node names what it needs.**
 
@@ -413,9 +413,9 @@ Scheduling is a separate concern with a separate input: the ready nodes of every
 - **Constraints the node carries.** A resume must run on the backend that holds its session. A writing node needs a worktree to itself. A rewrite states a small context: its brief holds the block and the guide and nothing else.
 - **A stronger seat is named, not climbed.** There are no rungs. When a diagnosis decides the work needs a stronger worker, its ending names the seat.
 
-**Lanes.** A lane is a worktree and belongs to one running node. When the node ends the lane is free, because the item branch is pinned in the store and any lane can restore it. Two writing nodes of one item never run at once, since each starts from the head the last one left; read-only nodes of one item may run together. An owner question takes no lane.
+**Worktrees.** A worktree belongs to an item, which acquires it at the claim of its first node that needs one. When a node ends the worktree is idle, not free: it stays the item's, and it may be collected and later restored, because the item branch is pinned in the store. Two writing nodes of one item never run at once, since each starts from the head the last one left; read-only nodes of one item may run together in it. An owner question needs no worktree. The lifecycle, the bound and the running-agent limit are in [the vocabulary, Section 3](./tillr-vocabulary.md#3-what-a-lane-was-and-the-worktree-as-a-resource).
 
-**Order, when ready nodes exceed resources.** Work the owner is waiting on first, on lanes outside the cap, as `D-IG10` rules. Then, nearest to done first: land attempts, gate runs and judges, take-ins, resumes and backend moves, design answers, rewrites and triage, and last the first nodes of items not yet started, by rank. The mechanic and proof nodes are placed by [Section 8.2](#82-proof-and-a-red-trunk). The exact tie-break within a class is the implementer's, provided it is stable.
+**Order, when ready nodes exceed resources.** Work the owner is waiting on first, outside the running-agent limit, as `D-IG10` rules. Then, nearest to done first: land attempts, gate runs and judges, take-ins, resumes and backend moves, design answers, rewrites and triage, and last the first nodes of items not yet started, by rank. The mechanic and proof nodes are placed by [Section 8.2](#82-proof-and-a-red-trunk). The exact tie-break within a class is the implementer's, provided it is stable.
 
 **Capacity limits are scheduling, not policy.** How many read-only nodes run together is a resource setting. No capacity setting ends, refuses or re-routes a node.
 
@@ -640,7 +640,7 @@ Every row of [the item-graph ledger](./tillr-item-graphs.md#71-decision-ledger),
 | `D-IG5` | Kept | Tracked templates and commands. The rule table is tracked and versioned the same way |
 | `D-IG6` | Amended | Producer-bound inputs and checked outputs are kept. Edges gain kinds and lose their role in routing; `when_outcome` is shorthand |
 | `D-IG7` | Amended | Scopes stay inside the fence. Added: the item's own block and design document are inside the scope of a rewrite, a triage and a design answer; a child's scope is inside its parent's |
-| `D-IG8` | Superseded | A lane belongs to a running node, not to an item. The gate and the landing are nodes and run as often as the rule table adds them. What survives: a graph runs correctly on one lane |
+| `D-IG8` | Amended | The item keeps one worktree across its nodes, as a resource it acquires and that is collected and restored, not as a slot in a pool. The gate and the landing are nodes and run as often as the rule table adds them, so "once at the exit" is withdrawn. What survives: a graph runs correctly with one agent running at a time |
 | `D-IG9` | Amended | See [Section 4.5](#45-relation-to-the-item-graph-rulings) |
 | [OQ-IG1](./tillr-item-graphs.md#71-decision-ledger) | Kept | One commit on the trunk for an item's deliverable, by the lander's squash |
 | [OQ-IG2](./tillr-item-graphs.md#71-decision-ledger) | Kept | Refinement by a running node's request is row 20 |

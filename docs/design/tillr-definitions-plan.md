@@ -10,7 +10,7 @@ tags:
   - boundaries
   - product-qa
 summary: "The build hand-off for the owner's 2026-11-17 go-ahead: eighteen queued items that turn tillr into a core that does not assume Git landing, with Git landing supplied by one definition and a second, runnable definition that lands nothing. Each item says what the Product QA pipeline can try once it lands. The next tranche is written in prose, to be filed when this one has landed."
-next: "The first tranche has landed. Product QA's agent runs the worked example and writes round three, and the owner confirms or changes the working choices (OQ-CG1 to OQ-CG5); only then is the next tranche filed."
+next: "The first tranche has landed. Product QA's agent runs the worked example and writes round three, and the owner reviews the designer's decisions the build rests on (D-CG1 to D-CG5 in the direction document's ledger); only then is the next tranche filed."
 depends-on:
   - tillr-core-and-git-landing.md
   - tillr-separable-parts.md
@@ -25,8 +25,8 @@ depends-on:
 item(s) to build as much of the new tillr as possible so autoqa can play with the real thing and
 comment for real the next round". By "autoqa" he means the Product QA pipeline (see
 [the words](#the-words-this-plan-uses)). The eighteen items below were queued that day, and all eighteen had landed by 2026-11-18 (read from the store's status face against the tree at `dcb76fe41`). They rest on
-**working choices**, each to be confirmed or changed by the owner after the next round, which are
-recorded in
+six choices, two of them the owner's own words and the rest the designer's decisions, which await
+the owner's review. All are recorded in
 [the direction document, Section 8](./tillr-core-and-git-landing.md#8-building-it-the-owners-go-ahead-and-the-working-choices).
 
 > **In short.** Five items have no dependency and can start at once. One of them fixes a defect in
@@ -59,7 +59,7 @@ asks something, so the questions stay in the direction document and this plan li
 - **Definition** *(a placeholder, coined in the direction document)*: the layer that turns tillr's
   core into one use. It is a data file plus one hook program. **`git-landing`** is the placeholder
   name of the definition for landing changes in Git, which is everything tillr does today. The owner
-  has not chosen either word ([OQ-CG5](./tillr-core-and-git-landing.md#OQ-CG5)). Every item keeps
+  has not chosen either word; both names are asked in [the vocabulary](./tillr-vocabulary.md#OQ-VO4). Every item keeps
   the words in as few places as possible, so a rename is mechanical.
 - **Definition file:** the JSON file that states a definition's vocabulary and rules. Coined here.
 - **Hook program:** the one program a definition names, which the core calls for each step it
@@ -1007,14 +1007,14 @@ still not filed, on purpose. Two things must happen first, and neither has:
 
 - **Product QA's third round.** Their agent runs the worked example and writes round three against
   the real thing. [Their reply](./tillr-product-qa-requests.md) is still the second round.
-- **The owner's ruling on the working choices.** Every unit below rests on choices recorded as
-  open questions [`OQ-CG1`](./tillr-core-and-git-landing.md#OQ-CG1) to [`OQ-CG5`](./tillr-core-and-git-landing.md#OQ-CG5) in
-  [the direction document](./tillr-core-and-git-landing.md#8-building-it-the-owners-go-ahead-and-the-working-choices),
-  and those choices are to be confirmed or changed after the next round. For example, unit 1
-  depends on where the line between core and definition falls ([`OQ-CG2`](./tillr-core-and-git-landing.md#OQ-CG2)), and unit 4 needs
-  `D-IG4` amended first.
+- **The owner's review of the designer's decisions.** Every unit below rests on choices recorded
+  in [the direction document's ledger](./tillr-core-and-git-landing.md#decision-ledger). Where the
+  line between core and definition falls, which unit 1 depends on, is the owner's own ruling
+  ([`OQ-CG2`](./tillr-core-and-git-landing.md#OQ-CG2)). The shape of the one file and four other
+  choices (`D-CG1` to `D-CG5` there) are the designer's, and the owner has not reviewed them. Unit 4
+  also needs `D-IG4` amended first.
 
-Filing these units now would put work in the queue that an open question still governs.
+Filing these units now would put work in the queue that rests on decisions the owner has not seen.
 
 1. **Count outcomes and draw the views from the definition** (R2-8). The status face and the
    observatory count items by the definition's finished states, and the landings and trunk pages

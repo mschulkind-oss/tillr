@@ -53,9 +53,12 @@ questions the same day. Two remain, and each has a design of its own:
 [`OQ-GP6`](../design/tillr-graph-is-the-path.md#OQ-GP6), how a question and its design land ahead of
 their item, is answered by [early design landing](../design/tillr-early-design-landing.md), which
 asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
-[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, settles what an item, a node, a
-run, a session and a worktree are, and asks [`OQ-VO1`](../design/tillr-vocabulary.md#OQ-VO1) to
-[`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4). [The landing call](../design/tillr-landing-call.md), written on
+[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, gives one meaning to item, node,
+run, session and worktree, and asks three things: two names
+([`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4), [`OQ-VO5`](../design/tillr-vocabulary.md#OQ-VO5))
+and whether an item is finished when it lands or once the full suite has passed on it
+([`OQ-VO6`](../design/tillr-vocabulary.md#OQ-VO6)). Its other decisions are the designer's and
+await the owner's review in its ledger. [The landing call](../design/tillr-landing-call.md), written on
 2026-11-18, proposes that a worker ends its run with one tool call and hears back only when something needs fixing,
 and asks [`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), whether an item keeps its worktree until the full suite
 has passed on it; five of its six build steps are filed [below](#filed-2026-11-18-a-landing-is-a-suspended-tool-call),
@@ -63,28 +66,25 @@ and step five waits on that answer. First among these is
 [`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
 an actor other than the worker or the owner, because it holds two queued items.
 
-[What tillr will change for Product QA](../design/tillr-separable-parts.md) carries
-eight more, [`OQ-SP1`](../design/tillr-separable-parts.md#OQ-SP1) to
-[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8), from 2026-11-16: whether tillr answers the
-Product QA pipeline's requests with that proposal, and which of its small changes are filed. The
-pipeline's second-round reply is recorded as received in
+[What tillr will change for Product QA](../design/tillr-separable-parts.md) is tillr's answer to the
+Product QA pipeline's requests. The pipeline's second-round reply is recorded as received in
 [Product QA's reply](../design/tillr-product-qa-requests.md), and on 2026-11-17 the owner said to build:
-the answer is [the build plan](../design/tillr-definitions-plan.md), whose items hold no question.
-None of the eight holds the build; [`OQ-SP3`](../design/tillr-separable-parts.md#OQ-SP3) still
-decides the proposal's documentation items. (The first round called the pipeline "AutoQA", which is
+the answer is [the build plan](../design/tillr-definitions-plan.md), whose eighteen items have all
+landed. The document asks nothing of the owner now. Two of its questions are blocked until a
+consumer needs them, [`OQ-FQ7`](../design/tillr-separable-parts.md#OQ-FQ7) and
+[`OQ-FQ8`](../design/tillr-separable-parts.md#OQ-FQ8); the other six are closed in its ledger, one
+on the owner's words and the rest by events or by a designer's decision that awaits his review. Its
+four small pieces of work (P2, P3, P4, P6) need no ruling and are unfiled. (The owner sometimes
+calls the pipeline "AutoQA", which is
 [tillr's own exploratory-testing design](../design/tillr-autoqa.md), a different thing.)
 
 [The core and the landing definition](../design/tillr-core-and-git-landing.md)
-writes down the owner's direction of 2026-11-16 and carries five more,
-[`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1) to
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5). Since the owner's go-ahead of
-2026-11-17, [`OQ-CG1`](../design/tillr-core-and-git-landing.md#OQ-CG1),
-[`OQ-CG2`](../design/tillr-core-and-git-landing.md#OQ-CG2),
-[`OQ-CG3`](../design/tillr-core-and-git-landing.md#OQ-CG3) and
-[`OQ-CG5`](../design/tillr-core-and-git-landing.md#OQ-CG5) each have a working
-choice the build rests on, which he confirms or changes after the next round with the Product QA
-pipeline's agent; [`OQ-CG4`](../design/tillr-core-and-git-landing.md#OQ-CG4) can wait.
-That document also lists the owner's statements as the pipeline reported them, for him to confirm.
+writes down the owner's direction of 2026-11-16 and asks nothing of him now. Its five questions
+are closed in its ledger: two on his own words, one by a designer's decision that the build already
+rests on and that awaits his review, one overtaken by events, and the naming question moved to the
+vocabulary as [`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4) and
+[`OQ-VO5`](../design/tillr-vocabulary.md#OQ-VO5). It also lists the owner's statements as the
+pipeline reported them, and says which of them he has since made directly.
 
 [Work reaches tillr through several doors](../design/tillr-intake-paths.md) writes down the owner's
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
@@ -2810,7 +2810,7 @@ prerequisite of that workflow and not of the queue itself, as
 records. That is why it applies only to a store
 that documents feed, the narrowing made on 2026-11-17: Product QA files its items with the apply face
 into a store of its own that nobody syncs, and that store is left alone. Question
-[`OQ-SP8`](../design/tillr-separable-parts.md#OQ-SP8) in the separable-parts design stays open on
+[`OQ-FQ8`](../design/tillr-separable-parts.md#OQ-FQ8) in the separable-parts design stays, blocked until AutoQA is picked up, on
 one point only: whether AutoQA writes a block for each bug it files into tillr's own store, or
 files it with the apply face and lets triage write the block.
 
