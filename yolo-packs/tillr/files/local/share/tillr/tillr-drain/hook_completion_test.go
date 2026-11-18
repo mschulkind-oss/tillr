@@ -180,7 +180,10 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 				code = 1
 			}
 			if tc.name == "negative" {
-				if result.Dispatched != 1 || result.Rejected != 1 || !strings.Contains(result.Detail, tc.want) {
+				// A refused run goes back to its worker uncounted (the owner's ruling of
+				// 2026-11-17), so the hook's exit 1 is refused as a no-op twice: once
+				// returned with its evidence, and once as the identical repeat.
+				if result.Dispatched != 2 || result.Rejected != 2 || result.RefusedSteps[drain.RefusalNoOp] != 2 {
 					t.Fatalf("negative answer: %+v", result)
 				}
 			} else if code != 0 || !strings.Contains(string(out), tc.want) {
@@ -194,8 +197,14 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
 				var state string
 				err := r.QueryRow(`SELECT state FROM items WHERE item_id='finding'`).Scan(&state)
-				if state != "in-queue" {
-					t.Errorf("moved: %s", state)
+				// The repeat of the negative answer is the one case the owner is
+				// asked about; every other answer leaves the item queued.
+				want := "in-queue"
+				if tc.name == "negative" {
+					want = "blocked"
+				}
+				if state != want {
+					t.Errorf("item state %s, want %s", state, want)
 				}
 				return err
 			}); err != nil {
