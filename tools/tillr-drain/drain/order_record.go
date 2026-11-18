@@ -229,9 +229,8 @@ func (l *Loop) recordOrder(ctx context.Context, base string, result *LoopResult,
 	}
 	if work.Phase == "ready" {
 		started := time.Now()
-		timing.Gates++
 		gate, gateErr := l.cfg.Steps.Gate(ctx, work.Candidate)
-		timing.GateMS += time.Since(started).Milliseconds()
+		timing.addGateTime(time.Since(started).Milliseconds(), false)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

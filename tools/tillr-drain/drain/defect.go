@@ -170,3 +170,14 @@ func (l *Loop) holdBehindDefect(ctx context.Context, c Candidate, defectID, comm
 	}
 	return l.cfg.Steps.ItemState(ctx, c.ItemID, c.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + defectID, Reason: RefusalToolingDefect + ": " + clip(command, 200)})
 }
+
+// IsGeneratedItem answers whether the loop or sync generated the item rather than anyone
+// requesting it: a trunk fixer, a tooling-defect item, a gate-budget alarm an older build
+// filed, a prose rewrite sync produced, or a revert's landing id. None has a block of its
+// own a request is declared in, so none is ever triaged for a document, and none reaches
+// the owner except by an explicit objection naming him. This is the one list of those
+// prefixes; a caller that needs "generated" asks here.
+func IsGeneratedItem(itemID string) bool {
+	return IsGeneratedRepair(itemID) || IsGateBudgetItem(itemID) || IsRevertItem(itemID) ||
+		item.ProseRewriteOriginal(itemID) != ""
+}

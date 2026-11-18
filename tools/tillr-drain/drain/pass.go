@@ -1699,7 +1699,7 @@ planned:
 		return "", err
 	}
 	if !l.nonLanding {
-		if err := l.releaseFixerTriage(ctx); err != nil {
+		if err := l.releaseGeneratedTriage(ctx); err != nil {
 			return "", err
 		}
 		if err := l.resolveProvedFixers(ctx); err != nil {

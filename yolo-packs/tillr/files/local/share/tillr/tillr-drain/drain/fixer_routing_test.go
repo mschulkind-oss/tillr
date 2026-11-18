@@ -77,7 +77,7 @@ func TestFixerParkedOnTriageIsReturnedToItsWorker(t *testing.T) {
 			Text:            "Request has no repository-relative Markdown document under docs/ in its body reference; sync reads only that document scope. The owner must supply one or close the item.",
 		}, l.cfg.Now().UTC())
 	})
-	if err := l.releaseFixerTriage(ctx); err != nil {
+	if err := l.releaseGeneratedTriage(ctx); err != nil {
 		t.Fatal(err)
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -99,7 +99,7 @@ func TestFixerParkedOnTriageIsReturnedToItsWorker(t *testing.T) {
 	}
 	// Idempotent: a second pass writes nothing.
 	before := eventCount(t, f.storePath)
-	if err := l.releaseFixerTriage(ctx); err != nil {
+	if err := l.releaseGeneratedTriage(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if got := eventCount(t, f.storePath); got != before {

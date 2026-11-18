@@ -28,6 +28,7 @@ func (t *PassTiming) addGateTime(ms int64, runner bool) {
 	} else {
 		t.Gates++
 		t.GateMS += ms
+		t.GateMaxMS = max(t.GateMaxMS, ms)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -134,9 +133,9 @@ func budgetLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, report *
 }
 
 // A tick records the gate's own wall time — the gate program's, not the tick's and not the
-// lane's — and a tick whose gate exceeds its budget says so in the loop's own output and
-// files one item for the regression.
-func TestTheTickRecordsTheGateTimeAndFilesAnOverrun(t *testing.T) {
+// lane's — and a tick whose gate run exceeds its budget says so in the loop's own output.
+// The budget is a reported target, never a hold, so the overrun files no item.
+func TestTheTickRecordsTheGateTimeAndReportsAnOverrun(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_061", "in-queue"))
 	steps := f.steps(t, stub(t, "slow-gate", slowerGate), always(t, "land", 0), always(t, "verdict", 0))
@@ -178,19 +177,20 @@ func TestTheTickRecordsTheGateTimeAndFilesAnOverrun(t *testing.T) {
 		t.Fatalf("the loop's own report does not name the overrun:\n%s", report.String())
 	}
 
-	// One item for the regression, visible on the board the same night. Its state is read at
-	// filing by the drain-package case; here the loop may already have dispatched and landed
-	// it, because the stub stager admits the stub adapter's candidate.
-	items := readItemsByName(t, f.store)
-	filed, ok := items["gate-budget-2026-11-12"]
-	if !ok {
-		t.Fatalf("no gate-budget item was filed; the store holds %v", items)
+	assertNoGateBudgetItem(t, f.store)
+	if strings.Contains(report.String(), "regression item") {
+		t.Fatalf("the loop's report names a filed regression item:\n%s", report.String())
 	}
-	if !strings.Contains(filed.title, "budget") {
-		t.Fatalf("the filed item's title does not name the budget: %q", filed.title)
-	}
-	if !strings.Contains(report.String(), "filed the gate's regression item gate-budget-2026-11-12") {
-		t.Fatalf("the loop's report does not name the filed item:\n%s", report.String())
+}
+
+// assertNoGateBudgetItem fails when the store holds an item the gate budget filed: a budget
+// is a target the board reports, and an item for it is a ticket nobody asked for.
+func assertNoGateBudgetItem(t *testing.T, path string) {
+	t.Helper()
+	for id := range readItemsByName(t, path) {
+		if strings.HasPrefix(id, "gate-budget-") {
+			t.Fatalf("the gate budget filed item %s; an overrun is reported, never filed", id)
+		}
 	}
 }
 
@@ -216,9 +216,9 @@ func TestALoopWithNoBudgetReadsTheOneStatement(t *testing.T) {
 	}
 }
 
-// A night of overruns files one item, not one per tick: the trend is the table, the ticket is
-// the regression. Two items on two ticks, both gates over their budget, one item filed.
-func TestTwoOverrunningTicksFileOneRegressionItem(t *testing.T) {
+// A night of overruns is a trend on the board, not a ticket: two ticks whose gates both
+// overran record their overruns and file nothing.
+func TestOverrunningTicksFileNoItem(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store,
 		itemRecord("item_063", "in-queue"),
@@ -232,9 +232,6 @@ func TestTwoOverrunningTicksFileOneRegressionItem(t *testing.T) {
 	if _, err := loop.Run(context.Background()); err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	// One row per tick that gated anything, and the two items' ticks are the first two the
-	// store holds. The regression item the first tick filed is itself dispatchable, so a
-	// later tick may add a third row; the case is about the two the items produced.
 	ticks := readTicks(t, f.store)
 	if len(ticks) < 2 {
 		t.Fatalf("the loop recorded %d tick(s), want at least the two that gated items: %+v", len(ticks), ticks)
@@ -242,51 +239,5 @@ func TestTwoOverrunningTicksFileOneRegressionItem(t *testing.T) {
 	if !tickFor(t, f.store, ticks, "item_063").overBudget || !tickFor(t, f.store, ticks, "item_064").overBudget {
 		t.Fatalf("a tick did not record its overrun: %+v", ticks)
 	}
-	filed := 0
-	for id := range readItemsByName(t, f.store) {
-		if strings.HasPrefix(id, "gate-budget-") {
-			filed++
-		}
-	}
-	if filed != 1 {
-		t.Fatalf("the store holds %d gate-budget item(s), want exactly 1 for one day of overruns", filed)
-	}
-}
-
-// The item the loop files is a legal item.record: item.Apply is the one materializer, and a
-// payload it would refuse is a ticket nobody finds. This pins the payload against the item
-// package's own validation and criterion rows rather than against a struct in this module.
-func TestTheFiledRegressionItemIsOneItemWouldAccept(t *testing.T) {
-	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
-	fixtureAt(t, f.store, itemRecord("item_065", "in-queue"))
-	steps := f.steps(t, stub(t, "slow-gate", slowerGate), always(t, "land", 0), always(t, "verdict", 0))
-	var report strings.Builder
-	loop := budgetLoop(t, f, steps, &report, time.Millisecond)
-	if _, err := loop.Run(context.Background()); err != nil {
-		t.Fatalf("the loop failed: %v", err)
-	}
-	s, err := store.OpenRead(context.Background(), f.store)
-	if err != nil {
-		t.Fatalf("opening the store failed: %v", err)
-	}
-	defer s.Close()
-	var criteria int
-	err = s.ReadTx(context.Background(), func(r *store.Reader) error {
-		return r.QueryRow(`SELECT count(*) FROM item_criteria WHERE item_id = ?`,
-			"gate-budget-2026-11-12").Scan(&criteria)
-	})
-	if err != nil {
-		t.Fatalf("reading the filed item's criteria failed: %v", err)
-	}
-	if criteria != 1 {
-		t.Fatalf("the filed item carries %d criterion(s), want the one measurement that opened it", criteria)
-	}
-}
-
-// The item package's own kind is what the loop writes; a typo in it would be caught by the
-// materializer only at write time, which is the night the ticket had to be visible.
-func TestTheRegressionItemUsesTheItemRecordKind(t *testing.T) {
-	if item.RecordKind != "item.record" {
-		t.Fatalf("item.RecordKind is %q, and the loop's regression item is built on it", item.RecordKind)
-	}
+	assertNoGateBudgetItem(t, f.store)
 }
