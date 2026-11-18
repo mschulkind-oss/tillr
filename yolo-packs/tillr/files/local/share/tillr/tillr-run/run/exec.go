@@ -67,6 +67,9 @@ type Request struct {
 	// ResumePrompt supplies a continuation-specific instruction. Empty uses the
 	// restart notice or the default interrupted-session prompt. Only read on resume.
 	ResumePrompt string `json:"resume_prompt,omitempty"`
+	// FreshSession continues the attempt with a new harness session, for example
+	// when quota forces it onto another backend. Only meaningful with Resume.
+	FreshSession bool `json:"fresh_session,omitempty"`
 }
 
 // ExecOptions is what the face supplies that the request does not: where the lane root
@@ -227,7 +230,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// again while recording itself as a continuation.
 	sessionID := ""
 	if req.Resume {
-		sessionID, err = ReadSessionID(artifactDir)
+		sessionID, err = continuationSessionID(ctx, s, req, artifactDir)
 		if err != nil {
 			return record.Envelope{}, err
 		}
@@ -235,7 +238,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 			return record.Envelope{}, Usagef("run %q cannot be resumed: %s carries no session id, so there is no session to continue and a resume would start cold", req.RunID, filepath.Join(artifactDir, SessionIDFile))
 		}
 	}
-	mode, prompt, err := prepareContinuation(req, pauseKind, artifactDir, workDir, durableDir)
+	mode, prompt, freshSession, err := prepareContinuationSession(req, pauseKind, artifactDir, workDir, durableDir)
 	if err != nil {
 		return record.Envelope{}, err
 	}
@@ -243,12 +246,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := os.Remove(pausePath); err != nil && !os.IsNotExist(err) {
 		return record.Envelope{}, Internalf("clearing prior pause request: %v", err)
 	}
-	// A fresh continuation minted a new session id; the resume event names it.
-	if req.Resume {
-		sessionID, err = ReadSessionID(artifactDir)
-		if err != nil {
-			return record.Envelope{}, err
-		}
+	// The new id exists only in memory until the handoff is durably claimed.
+	if freshSession != "" {
+		sessionID = freshSession
 	}
 	logPath := filepath.Join(artifactDir, req.RunID+".log")
 	// A resume appends to the run's log instead of truncating it. The log is the run's record
@@ -287,6 +287,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := claimLane(ctx, s, req, laneID, sessionID, now); err != nil {
 		logFile.Close()
 		return record.Envelope{}, err
+	}
+	if req.Resume {
+		if err := os.WriteFile(filepath.Join(artifactDir, SessionIDFile), []byte(sessionID+"\n"), 0600); err != nil {
+			logFile.Close()
+			return record.Envelope{}, Internalf("publishing claimed session: %v", err)
+		}
 	}
 
 	// A wall is a bound on total run duration, and it exists only when the request names
@@ -680,6 +686,9 @@ func claimLane(ctx context.Context, s *store.Store, req Request, laneID, session
 		if !req.Resume {
 			return nil
 		}
+		if _, err := tx.Exec(`DELETE FROM quota_pauses WHERE run_id = ?`, req.RunID); err != nil {
+			return err
+		}
 		return appendResume(ctx, tx, req, laneID, sessionID, startedAt)
 	})
 }
@@ -693,12 +702,15 @@ func claimLane(ctx context.Context, s *store.Store, req Request, laneID, session
 // itself killed is still a recorded resume: the row would otherwise be the only evidence, and
 // a row rewritten twice cannot say it was resumed at all.
 type resume struct {
-	RunID     string `json:"run_id"`
-	ItemID    string `json:"item_id,omitempty"`
-	LaneID    string `json:"lane_id"`
-	Backend   string `json:"backend"`
-	SessionID string `json:"session_id"`
-	ResumedAt string `json:"resumed_at"`
+	// Request records a backend handoff so a replacement loop continues the current
+	// command, not the command of the original segment.
+	Request   *Request `json:"request,omitempty"`
+	RunID     string   `json:"run_id"`
+	ItemID    string   `json:"item_id,omitempty"`
+	LaneID    string   `json:"lane_id"`
+	Backend   string   `json:"backend"`
+	SessionID string   `json:"session_id"`
+	ResumedAt string   `json:"resumed_at"`
 }
 
 // appendResume writes one run.resume event on the run it continues.
@@ -706,6 +718,7 @@ type resume struct {
 // event replay even when the store's millisecond timestamps are identical.
 func appendResume(ctx context.Context, tx *store.Tx, req Request, laneID, sessionID string, at time.Time) error {
 	body, err := json.Marshal(resume{
+		Request:   &req,
 		RunID:     req.RunID,
 		ItemID:    req.ItemID,
 		LaneID:    laneID,

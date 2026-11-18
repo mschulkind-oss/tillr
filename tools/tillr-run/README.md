@@ -71,6 +71,18 @@ it is ignored on fresh executions and also included when an adapter requires a f
 for the continuation. The drain uses it to ask an exited build worker to finish verification
 and commit existing fenced work, without changing the staged brief.
 
+A resumed request can also set `fresh_session` to force a new harness session even
+when the adapter can resume. This is how quota continuations move to a different
+backend without reusing an unrelated harness's session id. The new first message
+includes the supplied reason, earlier transcript, worktree, any report for this
+run, and the original brief. The log remains appended and the run id unchanged.
+The resume event carries the request so a replacement loop reads the current
+backend and command. Its claim atomically removes any recorded quota pause. The
+new session id is published to the lane only after that claim commits; recovery
+uses the claimed id if publication was interrupted. A peer's paused finish also
+marks its quota row as waiting in the same transaction, so a restarted loop and
+the waiting face see the pause without needing another settlement pass.
+
 ## Worker child cleanup
 
 When the worker exits, including a normal exit, `exec` sends `SIGKILL` to the remaining

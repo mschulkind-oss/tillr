@@ -87,6 +87,17 @@ CREATE TABLE IF NOT EXISTS read_only_runs (
 CREATE INDEX IF NOT EXISTS read_only_group_members ON read_only_runs(group_id,settled);
 CREATE INDEX IF NOT EXISTS read_only_active_lanes ON read_only_runs(lane_id,run_id) WHERE settled=0;
 
+-- Drain writes quota pauses; the executor removes them atomically with resume.
+-- requested distinguishes a peer still stopping from a terminal run waiting to resume.
+CREATE TABLE IF NOT EXISTS quota_pauses (
+ run_id TEXT PRIMARY KEY,
+ item_id TEXT NOT NULL,
+ lane_id TEXT NOT NULL,
+ backend TEXT NOT NULL,
+ state TEXT NOT NULL CHECK (state IN ('requested','waiting')),
+ paused_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
   run_id        TEXT PRIMARY KEY,
   item_id       TEXT,

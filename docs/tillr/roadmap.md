@@ -1417,7 +1417,6 @@ route to the next backend; it does not need a continuation handoff.
   - Pause runs that have no alternative backend and show when they can resume.
   - Keep each continuation within the original attempt and judge its result once.
 
-<!-- tillr: item id="item-policy-move-run-on-quota" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 **Agent Details**
 
@@ -1528,10 +1527,6 @@ this file; the loop retires the block after landing.
 
 No criterion changes.
 
-- **c1:** When a backend's window shuts while runs are on it, each of those runs is stopped as [the restart design](../design/tillr-restart.md) stops a session, and continued on the next backend in its seat's list: a fresh session in the same lane and worktree, as the same attempt, whose first message says the earlier session ran out of quota and names the old transcript, the report if any, and the uncommitted work in the worktree.
-- **c2:** Nothing the first session did is repeated by the loop: the worktree is not reset, no retry is spent, and the candidate is judged once. A test cuts a stub run after it has written two files and asserts the continuing session finds both.
-- **c3:** A run whose seat has no other backend is paused, not ended, and resumes on the same backend when the window reopens. The waiting face shows it as waiting on that backend with the reopening time.
-- **c4:** A run refused at its first message, before any work, is dispatched to the next backend as today, with no continuation message.
 
 The owner runs bake-offs: one model served by several providers, such as the DeepSeek routes on
 OpenRouter, with work spread across them. Each provider is already its own pi model id, so each
