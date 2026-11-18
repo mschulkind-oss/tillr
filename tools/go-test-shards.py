@@ -7,11 +7,15 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 DEFAULT_DURATIONS = Path(__file__).with_name('go-test-durations.json')
+# Bound a stalled test or TestMain without timing out a shard that keeps completing tests.
+DEFAULT_SHARD_TIMEOUT = 480.0
 
 
 class ShardError(RuntimeError):
@@ -77,7 +81,8 @@ def private_environment(label, scratch, git_values=None):
                 GIT_CONFIG_GLOBAL=str(config))
 
 
-def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None):
+def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None,
+              wall_timeout=DEFAULT_SHARD_TIMEOUT):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -87,16 +92,80 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                '-test.v=test2json', '-test.count=1', '-test.parallel=48',
                '-test.timeout=' + timeout, '-test.run=' + pattern]
     try:
-        result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
+        # Files rather than pipes let us recover even if an escaped descendant keeps
+        # its inherited output descriptors open after the shard itself is killed.
+        with tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
+                open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader:
+            process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,
+                                       start_new_session=True)
+            deadline = time.monotonic() + wall_timeout
+            pending = b''
+            seen_progress = set()
+            assigned = set(names)
+            timed_out = False
+            while True:
+                # The reader has its own file offset; seeking a descriptor shared with
+                # the writer would corrupt its output. Read a finite snapshot each time.
+                size = os.fstat(out.fileno()).st_size
+                lines = (pending + reader.read(max(0, size - reader.tell()))).split(b'\n')
+                pending = lines.pop()
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue  # The complete report is validated below.
+                    key = (event.get('Test'), event.get('Action'))
+                    if key[0] in assigned and key[1] in ('run', 'pass', 'skip', 'fail') and key not in seen_progress:
+                        seen_progress.add(key)
+                        deadline = time.monotonic() + wall_timeout
+                if process.poll() is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Kill test2json, the test binary, and its ordinary descendants together.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                    timed_out = True
+                    break
+                try:
+                    process.wait(timeout=min(1.0, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
+            reader.seek(0)
+            # Snapshot the sizes: even an escaped writer must not keep a read alive.
+            stdout = reader.read(os.fstat(out.fileno()).st_size).decode('utf-8', errors='replace')
+            stderr = error_reader.read(os.fstat(err.fileno()).st_size).decode('utf-8', errors='replace')
     except OSError as exc:
         raise ShardError(f'{label} cannot start: {exc}') from exc
-    try:
-        events = [json.loads(line) for line in result.stdout.splitlines()]
-    except ValueError as exc:
-        raise ShardError(f'{label} invalid test report: {exc}') from exc
-    if result.returncode or any(e.get('Action') == 'fail' for e in events):
+    events = []
+    for line in stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError as exc:
+            if not timed_out:
+                raise ShardError(f'{label} invalid test report: {exc}', events) from exc
+            # A killed test2json can leave its last JSON record incomplete.
+            break
+    if timed_out:
+        active = set()
+        for event in events:
+            name = event.get('Test')
+            if name and event.get('Action') == 'run':
+                active.add(name)
+            elif name and event.get('Action') in ('pass', 'skip', 'fail'):
+                active.discard(name)
+        pending = set(names) - {e.get('Test') for e in events
+                                if e.get('Action') in ('pass', 'skip', 'fail')}
+        detail = ', '.join(sorted(active)) or 'none reported'
+        remaining = ', '.join(sorted(pending)) or 'none'
+        raise ShardError(f'{label} timed out after {wall_timeout:g}s without top-level test progress; running: {detail}; '
+                         f'not completed: {remaining}\n{stderr}', events)
+    if process.returncode or any(e.get('Action') == 'fail' for e in events):
         output = ''.join(e.get('Output', '') for e in events)
-        raise ShardError(f'{label} failed (exit {result.returncode}):\n{output}{result.stderr}', events)
+        raise ShardError(f'{label} failed (exit {process.returncode}):\n{output}{stderr}', events)
     completed = {e.get('Test') for e in events if e.get('Action') in ('pass', 'skip')}
     missing = set(names) - completed
     if missing:
@@ -118,7 +187,7 @@ def load_durations(path):
     return record
 
 
-def run(module, count, durations, scratch, timeout):
+def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT):
     stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
     packages = []
     decoder = json.JSONDecoder()
@@ -145,7 +214,8 @@ def run(module, count, durations, scratch, timeout):
             # once even with no runnable names, as the native Go driver does.
             if group or (not names and index == 0):
                 jobs.append((package['ImportPath'], Path(package['Dir']), binary, group,
-                             index, scratch / f'package-{number}-shard-{index}', timeout, git_values))
+                             index, scratch / f'package-{number}-shard-{index}', timeout, git_values,
+                             shard_timeout))
     events = []
     errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
@@ -171,10 +241,14 @@ def main():
     parser.add_argument('--record', type=Path, help='write measured top-level durations after success')
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
-    parser.add_argument('--timeout', default='0', help='explicit per-shard Go timeout; default disables nested wall deadlines')
+    parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
+    parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
+                        help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')
     args = parser.parse_args()
     if args.shards < 1:
         parser.error('shards must be positive')
+    if args.shard_timeout is not None and (not math.isfinite(args.shard_timeout) or args.shard_timeout <= 0):
+        parser.error('shard timeout must be a positive finite number of seconds')
     try:
         durations = load_durations(args.durations)
         parent = args.scratch or os.environ.get('TMPDIR') or os.environ.get('YOLO_DURABLE_DIR')
@@ -183,7 +257,8 @@ def main():
         parent = Path(parent).resolve()
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='go-shards-', dir=parent) as temporary:
-            events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout)
+            options = {} if args.shard_timeout is None else {'shard_timeout': args.shard_timeout}
+            events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))
         if args.record:
