@@ -559,6 +559,9 @@ type Loop struct {
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
 	heartbeatClock func() heartbeatTicker
+	// sessionOptions are the open options the session refresh uses; a test sets a zero
+	// busy timeout to meet a held write lock without waiting out the default one.
+	sessionOptions []store.OpenOption
 	// keeperOpen lets tests shorten the checkpoint writer's SQLite lock wait.
 	keeperOpen func(context.Context, string) (*store.CheckpointOwner, error)
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
@@ -972,7 +975,7 @@ func (l *Loop) backOff(ctx context.Context) (bool, error) {
 	delay := BackoffDelay(streak, l.cfg.BackoffBase)
 	fmt.Fprintf(l.cfg.Report, "loop: %d consecutive infrastructure failure(s) and nothing dispatched; waiting %s before the next attempt\n",
 		streak, delay)
-	if err := l.refreshSession(ctx, l.cfg.Now().Add(delay)); err != nil {
+	if err := l.beat(ctx, l.cfg.Now().Add(delay)); err != nil {
 		return false, err
 	}
 	if l.cfg.Comments == nil {
