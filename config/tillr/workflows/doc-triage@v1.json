@@ -1,0 +1,26 @@
+{
+  "name": "doc-triage",
+  "version": 1,
+  "args": { "docs": { "type": "strings", "most": 48 } },
+  "stages": [
+    {
+      "id": "read",
+      "kind": "agent",
+      "seat": "scout",
+      "access": "read_only",
+      "repeat": "docs",
+      "outputs": { "finding": "markdown" },
+      "prompt": "Triage one document: ${item}. Read it and check what it says against the repository as it is today. Change no file and commit nothing. Write the finding output as Markdown that starts with a line naming ${item}, then these five headings, each answered with evidence: a file path, a test name, a landed item id, or a command and what it printed. Relevant: is what it designs or describes still wanted, already built, superseded or iceboxed, and by what. Accurate: does what it says is built, unbuilt or true match the tree; list each statement that does not, with the evidence. Status line: is its stage or status line true. Open questions: is each open question still open and still askable, or already answered, and where. Action: exactly one of keep as is, correct facts, mark built or graduate, supersede by <document>, retire, or merge into <document>, with a one-sentence reason. Cite a heading or a quoted line, never a bare line number. Where you cannot tell, say so and why rather than guessing."
+    },
+    {
+      "id": "report",
+      "kind": "agent",
+      "seat": "design",
+      "access": "write",
+      "inputs": { "finding": "markdown" },
+      "prompt": "Read every finding input named in this brief; each covers one document. Write one triage report at the single path in the item's fence, to the design-doc and vantage-docs standards: frontmatter, a short paragraph saying what was triaged and when, then a table with one row per document in input order with the document as a link, its verdict (current: still relevant and accurate; stale: still relevant but inaccurate; obsolete: no longer relevant), the recommended action, and the evidence in one sentence. Below the table give one section per document with the detail from its finding. The report recommends and changes nothing else: edit no other file, and do not act on any recommendation. Where a finding lacks evidence, say so in its row rather than supplying a verdict of your own. Verify the report with uvx vantage-check on the file and commit it."
+    }
+  ],
+  "edges": [{ "from_node": "read", "from_output": "finding", "to_node": "report", "to_input": "finding" }],
+  "exit": { "requires_nodes": ["read", "report"], "requires_candidate": "commit_required" }
+}

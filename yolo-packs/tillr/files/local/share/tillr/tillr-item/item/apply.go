@@ -67,6 +67,11 @@ type itemPayload struct {
 	Workflow         string `json:"workflow"`
 	SelectedWorkflow string `json:"selected_workflow,omitempty"`
 	WorkflowSource   string `json:"workflow_source,omitempty"`
+	// WorkflowArgs are the arguments the item's own workflow is bound with, for a workflow
+	// whose top-level args a containing stage would otherwise supply (doc-triage@v1's
+	// documents). Only the store carries them: a document block has no attribute for them,
+	// so an item that has them is declared by its record (StoreDeclared).
+	WorkflowArgs map[string]any `json:"workflow_args,omitempty"`
 	JudgeMode        string `json:"judge_mode"`
 	Express          bool   `json:"express"`
 	UpdatedAt        string `json:"updated_at,omitempty"`
@@ -183,6 +188,10 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	if err := checkSeat(payload.ItemID, payload.Seat); err != nil {
 		return record.Envelope{}, err
 	}
+	workflowArgs, err := encodeWorkflowArgs(payload)
+	if err != nil {
+		return record.Envelope{}, err
+	}
 	if d.Name == definition.GitLandingName && d.IsFinished(from) && from != d.Closed && from != payload.State {
 		// A record carries no receipt, so it never moves a finished item: the one listed
 		// move out of landed (a reverted landing's return) goes through the state face.
@@ -212,16 +221,16 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		return record.Envelope{}, err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, judge_mode, express)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, workflow_args, judge_mode, express)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(item_id) DO UPDATE SET
 		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
-		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, judge_mode = excluded.judge_mode, express = excluded.express,
+		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, workflow_args = excluded.workflow_args, judge_mode = excluded.judge_mode, express = excluded.express,
 		   waiting_on = CASE WHEN excluded.state IN (?, ?) THEN items.waiting_on ELSE '' END,
 		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
-		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, payload.JudgeMode, payload.Express,
+		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, workflowArgs, payload.JudgeMode, payload.Express,
 		d.Blocked, d.Closed, d.Blocked, d.Closed,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the item: %v", err)
@@ -362,7 +371,7 @@ func sameTerminalDefinition(a, b itemPayload) bool {
 	slices.Sort(bb)
 	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef &&
 		a.DesignDoc == b.DesignDoc && a.Rank == b.Rank && a.Seat == b.Seat &&
-		a.Prose == b.Prose && a.Workflow == b.Workflow && a.JudgeMode == b.JudgeMode && a.Express == b.Express && slices.Equal(ac, bc) &&
+		a.Prose == b.Prose && a.Workflow == b.Workflow && sameWorkflowArgs(a, b) && a.JudgeMode == b.JudgeMode && a.Express == b.Express && slices.Equal(ac, bc) &&
 		slices.Equal(ab, bb) && slices.Equal(a.AllowedPaths, b.AllowedPaths)
 }
 
@@ -650,4 +659,39 @@ func reachesItem(ctx context.Context, r *store.Reader, start, target string) (bo
 		rows.Close()
 	}
 	return false, nil
+}
+
+// encodeWorkflowArgs answers the column's value: empty when the item supplies no arguments,
+// otherwise the arguments as canonical JSON (object keys sorted). Arguments with no workflow
+// to bind them are refused: nothing would read them, and the item would read as declared.
+func encodeWorkflowArgs(p itemPayload) (string, error) {
+	if len(p.WorkflowArgs) == 0 {
+		return "", nil
+	}
+	if !WorkflowRefValid(p.Workflow) {
+		return "", Rejectionf("workflow-args-without-workflow", p.ItemID, "workflow_args needs a workflow of the form <name>@v<N> to bind them")
+	}
+	raw, err := json.Marshal(p.WorkflowArgs)
+	if err != nil {
+		return "", Rejectionf("workflow-args-without-workflow", p.ItemID, "workflow_args cannot be encoded: %v", err)
+	}
+	return string(raw), nil
+}
+
+func sameWorkflowArgs(a, b itemPayload) bool {
+	ra, _ := json.Marshal(a.WorkflowArgs)
+	rb, _ := json.Marshal(b.WorkflowArgs)
+	return len(a.WorkflowArgs) == len(b.WorkflowArgs) && string(ra) == string(rb)
+}
+
+// decodeWorkflowArgs reads the column back; empty is an item that supplies none.
+func decodeWorkflowArgs(id, stored string) (map[string]any, error) {
+	if stored == "" {
+		return nil, nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(stored), &args); err != nil {
+		return nil, Internalf("reading item %q's workflow_args %q: %v", id, stored, err)
+	}
+	return args, nil
 }

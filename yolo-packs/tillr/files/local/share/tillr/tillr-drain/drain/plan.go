@@ -173,7 +173,10 @@ type itemRow struct {
 	JudgeGrant string
 	Designer   *lastDesigner
 	Workflow   string
-	Command    *WorkflowStage
+	// WorkflowArgs binds the item's own workflow's top-level args (item's workflow_args):
+	// nil for an item that supplies none, which is every document-declared item.
+	WorkflowArgs map[string]any
+	Command      *WorkflowStage
 	ItemID     string
 	State      string
 	Rank       string
@@ -1529,6 +1532,14 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	if hasWorkflow {
 		workflowColumn = "COALESCE(workflow, '')"
 	}
+	var hasArgs bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow_args')`).Scan(&hasArgs); err != nil {
+		return nil, readFailure(err)
+	}
+	argsColumn := "''"
+	if hasArgs {
+		argsColumn = "COALESCE(workflow_args, '')"
+	}
 	var hasJudge bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='judge_mode')`).Scan(&hasJudge); err != nil {
 		return nil, readFailure(err)
@@ -1539,7 +1550,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	}
 	rows, err := r.Query(
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
-		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `
+		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `, ` + argsColumn + `
 		   FROM items
 		  ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
 		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
@@ -1552,9 +1563,15 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 		var (
 			item    itemRow
 			allowed string
+			args    string
 		)
-		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode, &item.Express); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode, &item.Express, &args); err != nil {
 			return nil, readFailure(err)
+		}
+		if args != "" {
+			if err := json.Unmarshal([]byte(args), &item.WorkflowArgs); err != nil {
+				return nil, Internalf("reading item %s's workflow_args %q: %v", item.ItemID, args, err)
+			}
 		}
 		if item.Allowed, err = decodeFence(allowed); err != nil {
 			return nil, err

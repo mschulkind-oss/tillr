@@ -164,6 +164,9 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 			return itemPayload{}, time.Time{}, Internalf("reading workflow metadata: %v", err)
 		}
 	}
+	if payload.WorkflowArgs, err = readWorkflowArgs(r, id); err != nil {
+		return itemPayload{}, time.Time{}, err
+	}
 	if payload.SelectedWorkflow, payload.WorkflowSource, _, err = ReadWorkflowSelection(r, id); err != nil {
 		return itemPayload{}, time.Time{}, Internalf("reading workflow selection: %v", err)
 	}

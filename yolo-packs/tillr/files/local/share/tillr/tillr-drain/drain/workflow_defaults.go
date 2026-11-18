@@ -83,7 +83,7 @@ func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[stri
 	if source == "default" {
 		w, err = loadDefaultWorkflow(root, row.Seat, selected, policy)
 	} else {
-		w, err = loadWorkflow(root, selected, policy)
+		w, err = loadWorkflowWith(root, selected, policy, row.WorkflowArgs)
 	}
 	return w, selected, source, err
 }
