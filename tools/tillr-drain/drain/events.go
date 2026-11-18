@@ -87,7 +87,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, "drain.graph-completed", FixerAttachedKind, RevertKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -267,7 +267,17 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			}
 		}
 	}
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, l.cfg.Now().UTC())
+	repeated, err := l.landingRefusalRepeats(ctx, candidate, payload)
+	if err != nil {
+		return err
+	}
+	at := l.cfg.Now().UTC()
+	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
+		if repeated {
+			return nil
+		}
+		return l.answerLandingRefusal(tx, candidate, payload, at)
+	})
 }
 
 // recordItemRefusal appends the `drain.refusal` for an item whose own record refused
@@ -455,6 +465,10 @@ func recordPayload(body []byte, kind string) (map[string]json.RawMessage, error)
 // the append are one transaction, so two callers cannot both find nothing and both write; and
 // the events table stays append-only, so the guard costs a read rather than an update.
 func appendJudgment(ctx context.Context, storePath, kind, objectType, objectID string, payload any, at time.Time) error {
+	return appendJudgmentThen(ctx, storePath, kind, objectType, objectID, payload, at, nil)
+}
+
+func appendJudgmentThen(ctx context.Context, storePath, kind, objectType, objectID string, payload any, at time.Time, then func(*store.Tx) error) error {
 	if storePath == "" {
 		return Usagef("the loop cannot append %s: it was given no store", kind)
 	}
@@ -483,6 +497,9 @@ func appendJudgment(ctx context.Context, storePath, kind, objectType, objectID s
 			Kind: kind, ObjectType: objectType, ObjectID: &id, Payload: body, At: at,
 		}); err != nil {
 			return Internalf("appending the %s event: %v", kind, err)
+		}
+		if then != nil {
+			return then(tx)
 		}
 		return nil
 	})

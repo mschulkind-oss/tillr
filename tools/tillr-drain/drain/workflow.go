@@ -447,7 +447,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	})
 }
 
-func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult) (bool, error) {
+func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult, offered bool) (bool, error) {
 	if evaluatorNode(d) {
 		return l.settleEvaluator(ctx, d, rec, base, result)
 	}
@@ -532,15 +532,19 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		return true, l.markExamined(ctx, d)
 	}
+	footer := reportFooter(log)
+	if offered {
+		footer = "done"
+	}
 	if stage.Kind == "agent" {
 		if ClassifyAttempt(rec, log) == AttemptUnjudged {
 			return true, Externalf("unjudged workflow node requires continuation or inspection")
 		}
-		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && reportFooter(log) == "") {
+		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && footer == "") {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
 		}
-		if reportFooter(log) != "done" && reportFooter(log) != "failed" {
-			if reportFooter(log) == "blocked" {
+		if footer != "done" && footer != "failed" {
+			if footer == "blocked" {
 				if err := l.reportedBlock(ctx, d, log); err != nil {
 					return true, err
 				}
@@ -548,14 +552,14 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			if err := l.nodeOutcome(ctx, d, "blocked"); err != nil {
 				return true, err
 			}
-			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+footer); stop != "" {
 				return true, retainedAfter(d.LaneID, stop)
 			}
 			return true, l.markExamined(ctx, d)
 		}
 	}
 	failedCommand := stage.Kind == "command" && *rec.ExitCode == 1
-	if failedCommand || (stage.Kind == "agent" && reportFooter(log) == "failed") {
+	if failedCommand || (stage.Kind == "agent" && footer == "failed") {
 		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
 			return true, err
 		}
@@ -579,7 +583,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				}
 			}
 		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+reportFooter(log)); stop != "" {
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+footer); stop != "" {
 			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)

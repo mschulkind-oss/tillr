@@ -8626,14 +8626,7 @@ as it does today.
   - Choose a call's one answer by a pure function that a table test covers.
   - Declare each adapter's ending capability, `footer` for every adapter as shipped.
 
-<!-- tillr: item id="item-landing-call-record" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A run that ends with an offer file in its durable directory is recorded as a call with the offer's commit, base, summary, session and worktree, and is treated as a run that ended with its commit. A run with a footer and no offer file is treated exactly as today. A test asserts both.
-- **c2:** The answer chooser is a pure function with a table test covering: fence refusal, judge refusal, gate refusal, conflict, revert, identical repeat, landed, proven, superseded, withdrawn, and each machinery outcome that yields no answer.
-- **c3:** The store refuses a second answer for one call id, and an offer file whose call id is already recorded creates no second call. A test asserts each.
-- **c4:** Each adapter directory under `tools/tillr-run/backends/` holds an `ending-capability` file, read the way `pause-kind` is, and the drain records the effective capability at loop start. A test asserts `footer` for `pi`, `claude`, `muse` and `agy` as shipped.
-- **c5:** A stand-in harness that writes an offer file and exits, and on being opened again reads an answer file and prints it, is carried through offer, gate refusal, delivery and a second offer. A test asserts the call events (`call.offered`, `call.answered`, `call.delivered`) in order and that the second opening received the stored answer text unchanged.
-- **c6:** `tools/tillr-drain/README.md` has a section stating the call record, the two files and the capability, and `python3 tests/tillr-docs.test.py` passes.
 
 **Agent Details:**
 
@@ -8697,7 +8690,7 @@ until the host has the fork's delivery every worker keeps the footer exactly as 
   - Deliver a refusal as the result of the open call and never as a new message.
   - Choose the form by what the installed pi says it supports.
 
-<!-- tillr: item id="item-landing-call-land-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-record,item-landing-call-pi-fork-park" prose="2" -->
+<!-- tillr: item id="item-landing-call-land-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-pi-fork-park" prose="2" -->
 
 - **c1:** The pi adapter's effective ending capability is `call-suspends` only when the installed binary prints `parked-tool-calls` from the features flag, and `footer` otherwise. A test asserts both with stand-in binaries, including one that rejects the flag.
 - **c2:** Under `call-suspends` the staged brief ends with the "Finishing" text of [the design's Section 3.6](../design/tillr-landing-call.md#36-what-the-brief-says) and the tool is loaded; under `footer` the brief and the loaded extensions are byte-identical to today's. A test asserts each.
