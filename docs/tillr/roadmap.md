@@ -3030,6 +3030,109 @@ stashes the owner's uncommitted work, moves the trunk and re-applies the work, a
 task P10 in `docs/design/board-state-machine-plan.md`). The move to tillr dropped it with the
 old board tool (`docs/design/tillr-seed-triage.md`, row 592), and nothing replaced it.
 
+**Build this item with the five steps below. Read this section first; it is the ruling of
+2026-11-18 that answers the latest build's conflict.** Everything in this block after this
+section is the record of how the change was designed, and a builder does not act on it: not on
+the rulings, and not on the "Plan for the builder" under "Agent details", which this section
+replaces. No criterion, path or rule changes here.
+
+The latest build restored the preserved tree of an earlier build and wrote nothing else. It then
+reported two failures as beyond it: the lander suite's `index.lock: File exists`, and the stall in
+`TestFileAndDirectoryExchangesFollowTheOwnersContent`. Both are what the plan's steps 2 and 5
+repair, and neither step had been carried out. The plan sat under "Agent details", after all of
+the history, and it described each change in words for the builder to write. So the commands now
+come first and the changes are given as a patch. The design seat made the changes of that plan,
+and the README text it had left unwritten, in a clone at `55db82bc5`, ran the suites on the
+result, and printed the difference at the end of this block: 8 files under `tools/tillr-land/`,
+534 lines added and 5 removed. After step 2 no code and no prose remains to be written.
+
+- **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end
+  of a step is not an ending, and the commit is made once, at step 5.
+  1. **Apply the preserved build.** From the lane worktree:
+
+     ```bash
+     git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply --index
+     git diff --cached --shortstat HEAD
+     ```
+
+     The second command prints `29 files changed, 4498 insertions(+), 108 deletions(-)`. This is
+     the only preserved ref to use. The others your brief lists under "Facts carried" hold the
+     same build or an older one; do not apply, inspect or compare them. Do not take
+     `yolo-packs/tillr/files/` from any ref: step 3 generates it.
+  2. **Apply the patch.**
+
+     ```bash
+     awk '/^# owner-edits-patch end$/{p=0} p; /^# owner-edits-patch begin$/{p=1}' docs/tillr/roadmap.md > "$YOLO_DURABLE_DIR/owner-edits.diff"
+     git apply --index "$YOLO_DURABLE_DIR/owner-edits.diff"
+     git diff --cached --shortstat HEAD
+     (cd tools/tillr-land && gofmt -l . && go vet ./...)
+     ```
+
+     The third command prints `29 files changed, 5027 insertions(+), 108 deletions(-)`, and the
+     fourth prints nothing. Do not rewrite what the two applications produce.
+  3. **Regenerate the mirror.** Run `just pack-sync`, then `yolo pack lint yolo-packs/tillr`,
+     which prints `pack ok`.
+  4. **Run the suites,** each with the two trace variables unset and its output in a file, and
+     read only the last line of each file:
+
+     ```bash
+     env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR TMPDIR="$YOLO_DURABLE_DIR" python3 tools/go-test-shards.py tools/tillr-land -k 6 > "$YOLO_DURABLE_DIR/land.log" 2>&1; echo "land rc=$?"
+     env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR TMPDIR="$YOLO_DURABLE_DIR" python3 tools/go-test-shards.py tools/tillr-view -k 6 > "$YOLO_DURABLE_DIR/view.log" 2>&1; echo "view rc=$?"
+     env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR TMPDIR="$YOLO_DURABLE_DIR" python3 tools/go-test-shards.py tools/tillr-drain -k 6 > "$YOLO_DURABLE_DIR/drain.log" 2>&1; echo "drain rc=$?"
+     python3 tests/tillr-docs.test.py > "$YOLO_DURABLE_DIR/docs.log" 2>&1; echo "docs rc=$?"
+     python3 tests/pack-sync.test.py > "$YOLO_DURABLE_DIR/pack.log" 2>&1; echo "pack rc=$?"
+     tail -n 1 "$YOLO_DURABLE_DIR/land.log" "$YOLO_DURABLE_DIR/view.log" "$YOLO_DURABLE_DIR/drain.log"
+     ```
+
+     Give each command a timeout of at least an hour, although the three suites took under
+     fifteen minutes together here. Pass no `--shard-timeout` and no `--timeout`, and do not run
+     a narrower `go test` in place of a suite.
+  5. **Commit.** `git add -A tools docs/tillr/land-across-owner-edits yolo-packs/tillr`, then
+     one commit. It holds 53 files: the 29 of steps 1 and 2 and the 24
+     mirror copies. `docs/tillr/roadmap.md` is not part of it. Append `c1` to `c8` to the
+     progress file before the commit.
+- **What does stop this build:** an application that fails after the fallback below, output from
+  the fourth command of step 2, or a failing test in step 4. Report it with the step number, the
+  command and its output. A report that lists steps not yet done is not one of these, and neither
+  is the size of the change.
+- **If an application fails,** the trunk has moved under one of its files. Run that `git apply`
+  again with `--index -3`, resolve each conflict towards the patch and keep what the trunk added,
+  and continue. The counts in steps 1 and 2 may then differ; that alone is not a stop.
+- **If a test fails in step 4,** run it alone once, with the trace variables unset and
+  `-timeout 300s`. A test that passes alone is recorded in the report and does not stop the
+  commit. For a test that fails alone, run it alone at the base with `git stash -u`, and restore
+  the work with `git stash pop`. Red at the base is a `trunk` obstacle naming that test. Red only
+  with the work applied is a `seat` obstacle that names the test and quotes its failure.
+- **The two failures the latest build reported are repaired by step 2.** After it,
+  `TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding` passes because the test's owner
+  step checks the killed lander's lock record and removes the lock, and
+  `TestFileAndDirectoryExchangesFollowTheOwnersContent` passes because a directory that becomes a
+  file is exchanged whole. Seeing either failure means step 2 was not applied.
+- **The builder's question about editor side files is answered.** The lander logs nothing about
+  them, and the lander README in step 1's tree says so. The report need not take it up.
+- **What this section measured,** in a clone at `55db82bc5` on 2026-11-18 with steps 1 to 3
+  carried out. It is a report, not a test in the tree:
+  - Step 1's `git apply --index` and step 2's both applied with no output, and the two counts
+    were the ones the steps give. `gofmt -l .` and `go vet ./...` printed nothing.
+  - `just pack-sync` changed 24 files under `yolo-packs/tillr/files/`, and `yolo pack lint
+    yolo-packs/tillr` printed `pack ok`. The lint ran the jail's binary, so the host's render
+    was not verified.
+  - `python3 tools/go-test-shards.py tools/tillr-land -k 6` printed `191 tests passed, 6 shards
+    per package` and exited 0. That run preceded the README text, which no test in the module
+    reads.
+  - `python3 tools/go-test-shards.py tools/tillr-view -k 6` printed `504 tests passed, 6 shards
+    per package` and exited 0.
+  - `python3 tools/go-test-shards.py tools/tillr-drain -k 6` printed `2114 tests passed, 6 shards
+    per package` and exited 0, with the mirror regenerated.
+  - `python3 tests/tillr-docs.test.py` and `python3 tests/pack-sync.test.py` exited 0.
+  - `TestTheComposedPipelineRunsEndToEndOnAFixture` in the drain module failed once, on
+    `pack-sync`, in a clone whose commit held step 1 without the mirror. It passed with the
+    whole change uncommitted on `55db82bc5`, which is the state a lane is in at step 4, and
+    passed again with the whole change committed.
+  - The `rg` that c6 asks for, over the drain README, the lander README, `tools/tillr-view/waiting.go`
+    and the `tillr-operating` skill, for `any dirty|dirty landed path|holds the landing|uncommitted
+    content on a landed path`, returned nothing.
+
 Tillr does something different today. A landing leaves unrelated uncommitted paths alone, so
 those do not delay it. When the owner's uncommitted content sits on a path the landing changes,
 the lander refuses and the loop holds the already-gated candidate with `trunk-path-dirty` until
@@ -3283,7 +3386,7 @@ the three were already ruled above and the third was not a failure.
 
 - **Ref:** `docs/design/board-state-machine.md` section 9 (D33, "the comparison-and-swap autostashes"); `docs/design/board-state-machine-plan.md` P10 (fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; `finishLanding` in `tools/tillr-land/land/landing.go`, which calls `Trunk.Move` inside the write transaction; the ignored ref prefixes in `tools/tillr-drain/drain/boundary.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-drain/holdrules/holdrules.go` and in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
-- **Plan for the builder (2026-11-18, second version, replaces the first):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
+- **Plan for the builder (2026-11-18, second version; superseded the same day by the build order at the head of this block, and kept as the description of what the patch at the end of this block holds; a builder does not carry it out):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
   1. **Start from the last build.** In the lane worktree run `git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply`. The ref is in the main repository and is readable from the lane. The patch applies without offsets that matter on `d4eecbea3`; if the base has moved and it does not apply, use `git apply --3way` and resolve. Do not take `yolo-packs/tillr/files/` from the ref. This build already holds the hold rules change, the view test with the `operator;` prefix, the lock record and the reclaim of a dead lander's lock, so none of those is written again.
   2. **The two trunk tests, in `tools/tillr-land/idempotent_test.go`.** Add a helper that reads `.git/index.lock` in the fixture's checkout, decodes it as JSON, and fails unless `kind` is `tillr-land-index-lock`, `pid` is positive, `host` is not empty and `syscall.Kill(pid, 0)` answers `ESRCH`; and a second helper that calls the first and then removes the file. Call the second helper immediately after `killAfterMove` in `TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding` and in `TestTheSameRunLandingADifferentHeadIsNotTakenForItsEarlierLanding`, and change nothing else in them. Add the test c3 asks for: `killAfterMove`, the first helper, then land a second item made with `f.candidateFrom` through `passBoth`, and assert exit 0, result `landed`, and that `.git/index.lock` is gone.
   3. **The retry test, in `owner_retry_test.go`.** Change `saves` from 201 to 25 and the expected last line from `save-201` to `save-25`.
@@ -3291,11 +3394,810 @@ the three were already ruled above and the third was not a failure.
   5. **The whole directory exchange.** In `land/owner_fs.go` add a function that, given the parent's descriptor, the path, its base name, the file to install and a map from checkout path to the content the prediction read for each file the landing deletes under that directory: makes the temporary with `makeTemp`, exchanges it with the directory by `Renameat2` with `RENAME_EXCHANGE`, then walks the displaced directory with `Openat` (`O_DIRECTORY|O_NOFOLLOW`) and `inspect`, collecting for each file its path, its path inside the directory, what it read and the open handle, and for each subdirectory its path, parents first. A file that is not in the map, or differs from it, or a count of files different from the map's, is the owner's change: close the handles and return `restoreDisplacement(dirfd, rel, base, tmp, true, want, ErrOwnerChanged)`, which exchanges the directory back and removes the lander's file. Add a second function that removes a displaced directory: each collected file by `Unlinkat` only when `Fstatat` on its name and `Fstat` on its handle give the same device and inode, then each collected subdirectory with `AT_REMOVEDIR`, deepest first, then the temporary name itself, answering whether that last removal succeeded. Add a third that lists the collected directories again and answers true when one holds a name that was not collected. In `land/owner_install.go`: give `installed` a flag for a displaced directory and the two collected lists. In `install`, before the loop, build the map for every action with `Install` set and `Disk.Kind == "dir"` from the `Remove` actions whose path begins with that path and a slash, using `planned(p)`; skip those `Remove` actions in the loop; and for the directory action call the exchange in place of `removeEmptyTree` and `swap`, set `swapped`, the flag, `tmp` and the lists, check `sameDir`, run the `AfterReplace` hook and continue. In `changedNodes` read each collected handle again and report a file whose bytes differ. In `MoveOwner`, where it tests `changedFiles()` after the `AfterInstall` hook, also call the listing function for each displaced directory and treat true as `ErrOwnerChanged`. In `dropTemps`, for a displaced directory call the removing function and, when it answers false, append to `in.leftover` a line naming the path and the temporary name. In `undoOne`, when the path still holds what was installed, exchange the temporary name back with `RENAME_EXCHANGE` and unlink the temporary name; when it does not, append a failure naming the path and the temporary name and leave both. Close the collected handles wherever `rec.handle` is closed, in `undo` and in `Finish`. Tests, in `owner_cases_test.go`, each on a landing that replaces `g` holding `g/z.txt` and `g/s/t/y.txt` with a file: one that in `AfterInstall` finds exactly one directory matching `.tillr-*.tmp` in the checkout root, asserts both files are inside it and that it holds no `.tillr-*` name at any depth, and after the landing asserts no `.tillr-*` name in the root and an empty `git status --porcelain`; one that writes `new.txt` into `g` in `BeforeSwap` for `g`, and in a second case into the displaced directory in `AfterInstall`, and asserts in both a hold on `g` and `g/new.txt`, all three files at their paths with their bytes, no `.tillr-*` name left and the trunk unmoved; one that writes `new.txt` into the displaced directory in `BeforeTrunkMove` and asserts the landing landed, one fault naming the temporary directory, one `land.FaultKind` event, the file's bytes still there, and `z.txt` and `s` gone from it. The fixture's landing also changes `a.txt`, so the root holds a second temporary that is a file; pick the directory with `os.Lstat`.
   6. **The READMEs.** In `tools/tillr-land/README.md` state the exchange of a whole directory and what is left under a temporary name with a fault; that a landing predicts again only when something was read differently and otherwise ends with a fault; and, in the index lock paragraph, that a lander killed during the final move leaves the lock, that its content names the lander's host and process, and that removing it is safe once that process is gone. Then run the rg of c6 over the four documents.
   7. **Finish.** `gofmt -l tools/tillr-land` prints nothing; `go vet ./...` in `tools/tillr-land`; `just pack-sync`; `yolo pack lint yolo-packs/tillr`; the three sharded suites; `python3 tests/tillr-docs.test.py`; `python3 tests/pack-sync.test.py`; one commit.
-- **Question for the builder, answered in its report and not a criterion:** whether the presence of an editor swap or lock file for a landed path, a sign the file is open and may hold unsaved changes, should appear in the landing's log line as information for the owner. It must not pause the landing, because the owner ruled that a predicted conflict is the only pause.
+- **Question for the builder, not a criterion, and answered by the preserved build (the lander logs nothing about editor side files, and its README says so):** whether the presence of an editor swap or lock file for a landed path, a sign the file is open and may hold unsaved changes, should appear in the landing's log line as information for the owner. It must not pause the landing, because the owner ruled that a predicted conflict is the only pause.
 - **Evidence for the amendment:** 2026-11-17, `finishLanding` calls `t.Move` with the store transaction open, and `TestFinalMoveExcludesCloseUntilReceipt` and `TestGitPreparationAllowsHeartbeatAndClose` in `tools/tillr-land/contention_test.go` pin the exclusion; `tools/tillr-item/` is outside this item's paths and needs no change. The drain README lists `refs/stash` as ignored, and `TestOrdinaryGitUseDuringARunNeverConvictsIt` in `tools/tillr-drain/drain/boundary_ordinary_git_test.go` stashes in the main checkout without stopping anything. `rg -n 'func landerRef|func trunkHistoryRef' -A 2 tools/tillr-drain/drain/boundary.go` at `658465404` shows the ignored refs under `refs/tillr/` are the prefixes `refs/tillr/runs/`, `refs/tillr/landed/` and `preservedPrefix` (`refs/tillr/preserved/`, from `tools/tillr-drain/preserved/record.go`) and the two refs `observedTrunkRef` and `lostTrunkRef` (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`, from `tools/tillr-drain/drain/trunk_history.go`); the README's boundary table gives "Observed" for any other ref inside tillr's namespaces. The same command at `22dee52e5` shows `landerRef` also returns true for `ref == GreenRef`; `rg -n 'GreenRef = ' tools/tillr-drain/heavy/status.go tools/tillr-drain/drain/heavy.go` shows that is `refs/tillr/green`, and `git log -S'ref == GreenRef ||' --oneline -- tools/tillr-drain/drain/boundary.go` names `89afe7e39` as the commit that added it. `rg -n 'refs/tillr/green' tools/tillr-drain/README.md` returns two lines, neither of them in the boundary table (2026-11-17). The first build's reviewer reproduced a write through a symlinked parent directory, an owner's save lost during a landing of several paths, a failed file-to-directory replacement, and a false conflict on a file with converted line endings; that build was not committed, so these are reports, not tests in the tree. The first build also stopped on `tests/tillr-docs.test.py` failing on the base over `tillr drain reset-lane`; `rg -n 'reset-lane' tools/tillr-drain/README.md` now returns nothing and `python3 tests/tillr-docs.test.py` passes. The third build reproduced the directory case in a scratch repository on 2026-11-17: with `notes/draft` tracked and `notes/.draft.swp` ignored, `git status` was empty, a fast-forward that replaced `notes/` with a file `notes` succeeded, and the swap file was gone afterwards. That build committed nothing, so this is a report, not a test in the tree. A later build's test `TestOwnerSaveThroughOpenDescriptorDuringRecoveryRemovalSurvivesLanding` failed on 2026-11-17 with `save lost from disk and recovery: Result:landed err=<nil> refs=""`: it opened a tracked file for writing before the landing, and wrote and closed it while the lander was deleting the recovery ref. The reviewer reproduced that, and also a staged revert left by undoing after the trunk had moved, an `ENOTEMPTY` failure replacing `notes/` with a file when it held the tracked `notes/sub/draft`, a text merge of a file marked `binary` in `.gitattributes` where `git pull --autostash` reports a conflict, and a landing written into a branch the owner created with `git checkout -b` during the landing. That build committed nothing either, so these are reports too.
 - **Evidence for the 2026-11-18 amendment:** the design seat extracted `tools/` from `refs/tillr/preserved/run-item-land-across-owner-edits-a20` into a scratch directory and ran its tests there; that build was not committed, so these are reports, not tests in the tree. `go test . -timeout 30s -run 'TestFileAndDirectoryExchangesFollowTheOwnersContent' -v` timed out in the subtest "a directory with tracked subdirectories becomes a file", and the Git trace of that run held 380 `merge-tree` calls, one per prediction. With a line printed at each place the build answers that the owner changed a path, every attempt reported the same one, in `removeEmptyTree`, and the directory listing printed there was `g [s .tillr-96b1f939589cef00.tmp]`, `s [t]`, `t [.tillr-773a8252437c1b1b.tmp]`: the lander's own two temporaries. A scratch call of `renameat2` with `RENAME_EXCHANGE` between a regular file and a directory holding `s/t/y.txt` and `z.txt` returned 0, and the directory's files were then readable under the file's old name. `go test . -timeout 120s -run 'TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding|TestTheSameRunLandingADifferentHeadIsNotTakenForItsEarlierLanding'` failed in that build with the `index.lock` message quoted above, and the same command passes on `4f1ac49ab`. `rg -n 'trunk-path-dirty' tools/tillr-drain/holdrules/holdrules.go` returns two lines on `4f1ac49ab`.
 - **Evidence for the second 2026-11-18 amendment:** all of it was measured by the design seat in scratch copies on 2026-11-18, and none of it is committed, so these are reports, not tests in the tree. `git diff --stat refs/tillr/preserved/run-item-land-across-owner-edits-a20 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools/tillr-land` lists the same eleven files as `git diff --stat 5ca0b0ff8 bf86efa42 -- tools/tillr-land`, and `git diff --quiet` between the two refs is clean for `land/owner.go`, `land/owner_fs.go` and `land/owner_install.go`. `git diff --stat bf86efa42 d4eecbea3 -- tools/tillr-land` is empty, and the patch of step 1 passes `git apply --check` on `d4eecbea3`. On that build, `go test . -timeout 120s -run 'TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding|TestTheSameRunLandingADifferentHeadIsNotTakenForItsEarlierLanding'` failed with the `index.lock` message and passed after step 2; `go test . -timeout 300s -run TestOwnerSavesDoNotConsumeAnArbitraryLandingRetryBudget -v` passed in 66.99 seconds, and in 9.24 seconds after step 3; `go test . -timeout 60s -run TestFileAndDirectoryExchangesFollowTheOwnersContent` timed out in the subtest "a directory with tracked subdirectories becomes a file" and passed after step 5. With steps 1 to 5 applied to a clone at `d4eecbea3`, `python3 tools/go-test-shards.py tools/tillr-land -k 6` printed `191 tests passed`, `tools/tillr-view` printed `501 tests passed`, `tools/tillr-drain` printed `2086 tests passed`, and `python3 tests/tillr-docs.test.py` exited 0 after 60 seconds. Steps 6 and 7 were not carried out, so the READMEs, the pack mirror and `yolo pack lint` are unverified.
 - **Evidence:** 2026-11-17, `Trunk.Move` runs `git -c merge.autoStash=false merge --ff-only` in the main checkout, so git itself refuses when the move would overwrite uncommitted content and otherwise advances only the changed paths; git's fast-forward keeps staged entries on untouched paths, but no test pins it. `TestALandingLeavesUncommittedContentOnAnUntouchedPathAlone` (untracked file only) and `TestALandingIsRefusedWhenTheTrunkWorktreeHoldsUncommittedContentOnALandedPath` in `tools/tillr-land/main_test.go`, and `TestUnrelatedDirtyPathDoesNotDelayLanding` in `tools/tillr-drain/drain/dirty_hold_test.go`, pin the two cases. `rg -n -i 'MERGE_HEAD|rebase-merge' tools/tillr-land tools/tillr-drain --glob '*.go'` returns nothing, so no code names an in-progress merge or rebase. `TestLockedLandingAcceptsFastForwardBeyondObservedTip` in `tools/tillr-land/trunk_history_test.go` pins the forward move, and `TestTheDrainLandsThroughTheRealAdapterAndTheRealLander` in `tools/tillr-drain/drain/step_argv_contract_test.go` pins `trunk-rewritten`. `rg -n -i dirty yolo-packs/tillr/skills/tillr-operating/` returns nothing (2026-11-17).
+
+The patch for step 2 of the build order at the head of this block. The two marker lines are not
+part of it, and the command in step 2 leaves them out. It was made in a clone at `55db82bc5` on
+2026-11-18 with `git diff --cached HEAD -- tools`, after step 1 had been applied and committed
+there, and the suites above passed on the result. It holds steps 2 to 5 of the plan under "Agent
+details" and the three README statements of that plan's step 6.
+
+````diff
+# owner-edits-patch begin
+diff --git a/tools/tillr-land/README.md b/tools/tillr-land/README.md
+index 7ac624354..87d49132e 100644
+--- a/tools/tillr-land/README.md
++++ b/tools/tillr-land/README.md
+@@ -281,12 +281,35 @@ rolled back, nothing is held, refused or recorded, and the landing tries again a
+ (25 ms doubling to 1 s; the request's context ends it). The lock is created by linking a file that
+ already carries the lander's ownership record (kind, host, process id, token), so record and lock
+ appear together. A lock whose record names this host and a process that no longer exists is the
+-lander's own leftover and the next landing removes it; any other lock is never touched. The index is
++lander's own leftover and the next landing removes it; any other lock is never touched. A lander
++killed during the final move leaves this lock, as a killed Git command leaves its own. Git then
++refuses the owner's commands with its usual `index.lock: File exists` message. The file is JSON
++whose `kind` is `tillr-land-index-lock` and whose `host` and `pid` name the lander, and removing it
++is safe once that process is gone. The index is
+ replaced once, from a copy with only the touched entries changed, so untouched entries keep their
+ stat data. Because a file is replaced by an exchange with a temporary, the displaced inode exists
+ under a temporary name beside the path from the replacement until the trunk ref has moved; that is
+ the one intermediate on-disk state, inside the lock, and the names are removed right after.
+ 
++**A directory that becomes a file is exchanged whole.** The lander does not empty the directory
++file by file. One exchange puts the prepared file at the path and leaves the directory, with
++everything in it, under a temporary name beside the path; the deletions the landing makes under it
++appear only in the index. The lander reads the whole displaced directory after the exchange and
++lists it again once every path is installed. A file the prediction did not read, or one whose
++content differs, is the owner's: before the trunk moves the directory is exchanged back and the
++landing predicts again, which is then a conflict. After the trunk has moved the lander unlinks the
++files it read, by name, and the directories that are then empty, never a tree recursively. Anything
++else found there stays, the directory keeps its temporary name (`.tillr-<random>.tmp` beside the
++path), and the landing records a `land.fault` event naming it. If the owner saves a file at the
++path while an install is being undone, that file stays at the path, the directory stays under its
++temporary name, and the fault names both.
++
++**A landing predicts again only when something was read differently.** When the comparison or the
++install answers that the owner changed a path, the next prediction's readings of the touched paths,
++their index entries and the branch are compared with the previous prediction's. If all are the
++same, the owner changed nothing: the landing ends as a failed install does, with the owner's
++content put back and a `land.fault` event, so a landing never repeats without a save in between.
++
+ - A change found **before the trunk moves** puts the owner's files back (symlinks included), saved
+   bytes included, and predicts again under the same lock. The comparison, the branch check before
+   every mutation and a parent that changed do the same.
+diff --git a/tools/tillr-land/idempotent_test.go b/tools/tillr-land/idempotent_test.go
+index 1c0cd6d17..25c0b1fb8 100644
+--- a/tools/tillr-land/idempotent_test.go
++++ b/tools/tillr-land/idempotent_test.go
+@@ -3,6 +3,7 @@ package main_test
+ import (
+ 	"bytes"
+ 	"context"
++	"encoding/json"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -110,6 +111,40 @@ func killAfterMove(t *testing.T, f fixture, args []string) string {
+ 	return tip
+ }
+ 
++// ownerRemovesLandersIndexLock is the owner's step after a lander was killed during the final
++// move: the checkout's index.lock is still there, as a killed Git command leaves it. The owner
++// reads it, sees the lander's record naming a process that is gone, and removes it, which is
++// what Git's own message says to do.
++func ownerRemovesLandersIndexLock(t *testing.T, f fixture) {
++	t.Helper()
++	landersIndexLock(t, f)
++	if err := os.Remove(filepath.Join(f.dir, ".git", "index.lock")); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// landersIndexLock asserts that the checkout's index lock carries the record of a lander that
++// is no longer running.
++func landersIndexLock(t *testing.T, f fixture) {
++	t.Helper()
++	path := filepath.Join(f.dir, ".git", "index.lock")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("the killed lander left no index lock: %v", err)
++	}
++	var record struct {
++		Kind string `json:"kind"`
++		Pid  int    `json:"pid"`
++		Host string `json:"host"`
++	}
++	if err := json.Unmarshal(data, &record); err != nil || record.Kind != "tillr-land-index-lock" || record.Pid <= 0 || record.Host == "" {
++		t.Fatalf("the index lock does not name the lander, its host and its process: %q (%v)", data, err)
++	}
++	if err := syscall.Kill(record.Pid, 0); err != syscall.ESRCH {
++		t.Fatalf("the lander the lock names (pid %d) is not gone: %v", record.Pid, err)
++	}
++}
++
+ // landingRows answers every landing row's run, result, reason and trunk_after, in
+ // insertion order.
+ func landingRows(t *testing.T, db string) [][4]string {
+@@ -212,6 +247,24 @@ func TestARecoveredLandingIsRecordedBeneathAnotherItemsLaterLanding(t *testing.T
+ 	}
+ }
+ 
++// TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt: the kill lands
++// during the final move, while the lander holds the checkout's index lock. The lock stays, as
++// a killed Git command's does, and says whose it is; the next landing removes it and lands.
++func TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt(t *testing.T) {
++	f := newFixture(t)
++	other := f.candidateFrom(t, "other-item", "second.txt", "second\n")
++	db := filepath.Join(scratch(t, "store"), "state.db")
++	killAfterMove(t, f, f.passArgs(t, db, "item_042", "run-1"))
++	landersIndexLock(t, f)
++	code, out, stderr := passBoth(t, other.passArgs(t, db, "item_043", "run-2"))
++	if code != 0 || decodeLanding(t, out).Payload.Result != "landed" {
++		t.Fatalf("the next landing exited %d: %s %s", code, out, stderr)
++	}
++	if _, err := os.Stat(filepath.Join(f.dir, ".git", "index.lock")); err == nil {
++		t.Fatal("the dead lander's index lock is still there")
++	}
++}
++
+ // TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding: the trunk holds the
+ // candidate's exact tree, but in a commit this landing did not write — the owner rewound
+ // the killed landing and committed the same change by hand. Tree equality is not the
+@@ -221,6 +274,7 @@ func TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding(t *testing.T) {
+ 	db := filepath.Join(scratch(t, "store"), "state.db")
+ 	args := f.passArgs(t, db, "item_042", "run-1")
+ 	killed := killAfterMove(t, f, args)
++	ownerRemovesLandersIndexLock(t, f)
+ 	git(t, f.dir, "reset", "-q", "--hard", f.baseSHA)
+ 	write(t, filepath.Join(f.dir, "candidate.txt"), "candidate\n")
+ 	git(t, f.dir, "add", "candidate.txt")
+@@ -282,6 +336,7 @@ func TestTheSameRunLandingADifferentHeadIsNotTakenForItsEarlierLanding(t *testin
+ 	f := newFixture(t)
+ 	db := filepath.Join(scratch(t, "store"), "state.db")
+ 	earlier := killAfterMove(t, f, f.passArgs(t, db, "item_042", "run-1"))
++	ownerRemovesLandersIndexLock(t, f)
+ 	git(t, f.dir, "checkout", "-q", "-b", "candidate-2", f.headSHA)
+ 	write(t, filepath.Join(f.dir, "more.txt"), "more\n")
+ 	git(t, f.dir, "add", "more.txt")
+diff --git a/tools/tillr-land/land/landing.go b/tools/tillr-land/land/landing.go
+index a0865cdbf..c162e1b2f 100644
+--- a/tools/tillr-land/land/landing.go
++++ b/tools/tillr-land/land/landing.go
+@@ -330,6 +330,11 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
+ 	// again, under the same lock: the transaction changed nothing.
+ 	decided := landing
+ 	busyPause := 25 * time.Millisecond
++	// changedAt is the readings of the prediction whose install answered that the owner changed
++	// a path. The next prediction must read something differently; when it reads the same, the
++	// owner changed nothing and the install itself is at fault, so the landing ends as a failed
++	// install does instead of repeating.
++	changedAt := ""
+ 	for {
+ 		prepared, err := prepareLanding(ctx, s, t, decided, req)
+ 		if err != nil {
+@@ -339,6 +344,10 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
+ 		if prepared.stored != nil {
+ 			return *prepared.stored, nil
+ 		}
++		if changedAt != "" && prepared.plan != nil && prepared.plan.readings() == changedAt {
++			failure := &InstallFailure{Err: errors.New("the install answered that the owner changed a touched path, and the next prediction read every touched path, its index entry and the branch as before")}
++			return t.settleOwner(ctx, s, prepared, req, &publication{}, decided, failure)
++		}
+ 		// Only the final check, Move and receipt need SQLite's single writer. Close
+ 		// either wins during preparation or waits here and sees the committed receipt.
+ 		pub := &publication{}
+@@ -369,6 +378,10 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
+ 		}
+ 		if errors.Is(err, ErrOwnerChanged) {
+ 			landing = decided
++			changedAt = ""
++			if prepared.plan != nil {
++				changedAt = prepared.plan.readings()
++			}
+ 			if err := ctx.Err(); err != nil {
+ 				return Landing{}, err
+ 			}
+diff --git a/tools/tillr-land/land/owner.go b/tools/tillr-land/land/owner.go
+index 225ba043f..bf3370bc5 100644
+--- a/tools/tillr-land/land/owner.go
++++ b/tools/tillr-land/land/owner.go
+@@ -3,6 +3,7 @@ package land
+ import (
+ 	"bytes"
+ 	"crypto/rand"
++	"crypto/sha256"
+ 	"encoding/hex"
+ 	"errors"
+ 	"fmt"
+@@ -69,6 +70,8 @@ var OwnerHooks struct {
+ 	FailUndoInspect func(path string) error
+ 	// AfterParentCheck runs after the last identity check of a path's parent and before the swap.
+ 	AfterParentCheck func(path string)
++	// FailComparison answers true to make the final comparison report an owner's change.
++	FailComparison func() bool
+ }
+ 
+ // ResetOwnerHooks clears every hook.
+@@ -78,7 +81,7 @@ func ResetOwnerHooks() {
+ 	OwnerHooks.BeforeTrunkMove = nil
+ 	OwnerHooks.BeforeSwap, OwnerHooks.BeforeRollbackSwap, OwnerHooks.FailDisplacedRead = nil, nil, nil
+ 	OwnerHooks.FailRollbackSwap, OwnerHooks.FailIndexRestore, OwnerHooks.FailFaultEvent = nil, nil, nil
+-	OwnerHooks.BeforeIndexLock = nil
++	OwnerHooks.BeforeIndexLock, OwnerHooks.FailComparison = nil, nil
+ 	OwnerHooks.FailRestoreExchange, OwnerHooks.FailUndoInspect, OwnerHooks.AfterParentCheck = nil, nil, nil
+ 	OwnerHooks.BeforeLastRead, OwnerHooks.BeforeUndoRead, OwnerHooks.InstallFault = nil, nil, nil
+ }
+@@ -137,6 +140,23 @@ type OwnerPlan struct {
+ 	GitDir, HeadText string
+ }
+ 
++// readings is a digest of everything the prediction read that the owner can change: the branch,
++// an operation in progress, and each touched path's content on disk and index entry. Two
++// predictions with the same readings saw the same checkout.
++func (p *OwnerPlan) readings() string {
++	h := sha256.New()
++	field := func(parts ...string) {
++		for _, part := range parts {
++			fmt.Fprintf(h, "%d:%s,", len(part), part)
++		}
++	}
++	field(p.Worktree, p.HeadText, p.Busy, p.From, p.To)
++	for _, op := range p.Paths {
++		field(op.Path, op.Disk.Kind, fmt.Sprint(op.Disk.Exec), string(op.Disk.Bytes), op.Disk.Listing, op.Disk.Parents, op.IndexNow.Mode, op.IndexNow.OID)
++	}
++	return hex.EncodeToString(h.Sum(nil))
++}
++
+ // Held answers whether the plan pauses the landing, and the paths or state to name.
+ func (p *OwnerPlan) Held() []string {
+ 	if p == nil {
+diff --git a/tools/tillr-land/land/owner_fs.go b/tools/tillr-land/land/owner_fs.go
+index d541b525e..07613d85b 100644
+--- a/tools/tillr-land/land/owner_fs.go
++++ b/tools/tillr-land/land/owner_fs.go
+@@ -6,6 +6,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"path"
++	"sort"
+ 	"strings"
+ 
+ 	"golang.org/x/sys/unix"
+@@ -292,6 +293,156 @@ func (r *rootDir) sameDir(dirfd int, rel string) bool {
+ 	return a.Dev == b.Dev && a.Ino == b.Ino
+ }
+ 
++// dirFile is one file of a directory the install displaced whole. sub is its path inside the
++// directory; handle stays open until the last read, as a displaced file's does.
++type dirFile struct {
++	path, sub string
++	planned   node
++	handle    *os.File
++}
++
++// exchangeDir replaces the directory base with want in one exchange, so the directory and
++// everything in it stand under a temporary name beside the path. It then reads the whole displaced
++// directory: every file there must be one the landing deletes, holding what the prediction read
++// (expected, keyed by checkout path). Anything else is the owner's, and the directory is exchanged
++// back before ErrOwnerChanged is answered. dirs are the subdirectories, parents first.
++func exchangeDir(dirfd int, rel, base string, want node, expected map[string]node) (tmp string, files []*dirFile, dirs []string, err error) {
++	tmp, err = makeTemp(dirfd, want)
++	if err != nil {
++		return "", nil, nil, Externalf("creating a temporary beside %s: %v", rel, err)
++	}
++	if err := unix.Renameat2(dirfd, tmp, dirfd, base, unix.RENAME_EXCHANGE); err != nil {
++		unix.Unlinkat(dirfd, tmp, 0)
++		if err == unix.ENOENT {
++			return "", nil, nil, ErrOwnerChanged
++		}
++		return "", nil, nil, Externalf("replacing %s: %v", rel, err)
++	}
++	files, dirs, cause := readDisplacedDir(dirfd, tmp, "", rel, expected)
++	if cause == nil && len(files) != len(expected) {
++		cause = ErrOwnerChanged // a file the landing deletes is no longer there
++	}
++	if cause == nil {
++		return tmp, files, dirs, nil
++	}
++	closeDirFiles(files)
++	return "", nil, nil, restoreDisplacement(dirfd, rel, base, tmp, true, want, cause)
++}
++
++func closeDirFiles(files []*dirFile) {
++	for _, f := range files {
++		if f.handle != nil {
++			f.handle.Close()
++			f.handle = nil
++		}
++	}
++}
++
++// readDisplacedDir reads the directory at root/sub in dirfd, never following a link.
++func readDisplacedDir(dirfd int, root, sub, rel string, expected map[string]node) (files []*dirFile, dirs []string, err error) {
++	fd, err := unix.Openat(dirfd, path.Join(root, sub), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
++	if err != nil {
++		return nil, nil, ErrOwnerChanged
++	}
++	dir := os.NewFile(uintptr(fd), root)
++	names, err := dir.Readdirnames(-1)
++	if err != nil {
++		dir.Close()
++		return nil, nil, Externalf("reading %s: %v", path.Join(rel, sub), err)
++	}
++	defer dir.Close()
++	sort.Strings(names)
++	for _, name := range names {
++		n, f, isDir, err := inspect(fd, name)
++		child := path.Join(sub, name)
++		if err != nil {
++			return files, dirs, err
++		}
++		if isDir {
++			dirs = append(dirs, child)
++			more, deeper, err := readDisplacedDir(dirfd, root, child, rel, expected)
++			files, dirs = append(files, more...), append(dirs, deeper...)
++			if err != nil {
++				return files, dirs, err
++			}
++			continue
++		}
++		full := path.Join(rel, child)
++		files = append(files, &dirFile{path: full, sub: child, planned: n, handle: f})
++		if want, ok := expected[full]; !ok || !n.equal(want) {
++			return files, dirs, ErrOwnerChanged
++		}
++	}
++	return files, dirs, nil
++}
++
++// displacedDirGrew answers whether the displaced directory at tmp holds a name that was not read
++// there after the exchange: a file the owner created in it since.
++func displacedDirGrew(dirfd int, tmp string, files []*dirFile, dirs []string) bool {
++	known := map[string]bool{"": true}
++	for _, f := range files {
++		known[f.sub] = true
++	}
++	for _, d := range dirs {
++		known[d] = true
++	}
++	for sub := range known {
++		if sub != "" && !contains(dirs, sub) {
++			continue
++		}
++		fd, err := unix.Openat(dirfd, path.Join(tmp, sub), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
++		if err != nil {
++			return true
++		}
++		dir := os.NewFile(uintptr(fd), tmp)
++		names, err := dir.Readdirnames(-1)
++		dir.Close()
++		if err != nil {
++			return true
++		}
++		for _, name := range names {
++			if !known[path.Join(sub, name)] {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func contains(list []string, s string) bool {
++	for _, v := range list {
++		if v == s {
++			return true
++		}
++	}
++	return false
++}
++
++// removeDisplacedDir removes a displaced directory after the landing is published: the files that
++// were read, each only while its name still is the inode the lander holds, then the directories
++// left empty, deepest first. It never removes a tree recursively, so anything that appeared there
++// meanwhile keeps the directory, and false is answered.
++func removeDisplacedDir(dirfd int, tmp string, files []*dirFile, dirs []string) bool {
++	for _, f := range files {
++		name := path.Join(tmp, f.sub)
++		if f.handle == nil {
++			if f.planned.Kind == "symlink" {
++				unix.Unlinkat(dirfd, name, 0)
++			}
++			continue
++		}
++		var byName, byHandle unix.Stat_t
++		if unix.Fstatat(dirfd, name, &byName, unix.AT_SYMLINK_NOFOLLOW) == nil && unix.Fstat(int(f.handle.Fd()), &byHandle) == nil &&
++			byName.Dev == byHandle.Dev && byName.Ino == byHandle.Ino {
++			unix.Unlinkat(dirfd, name, 0)
++		}
++	}
++	for i := len(dirs) - 1; i >= 0; i-- {
++		unix.Unlinkat(dirfd, path.Join(tmp, dirs[i]), unix.AT_REMOVEDIR)
++	}
++	return unix.Unlinkat(dirfd, tmp, unix.AT_REMOVEDIR) == nil
++}
++
+ // removeEmptyTree removes the directory name and the directories beneath it, all of which must
+ // be empty of files: a file there is the owner's and is ErrOwnerChanged.
+ func removeEmptyTree(dirfd int, name string) error {
+diff --git a/tools/tillr-land/land/owner_install.go b/tools/tillr-land/land/owner_install.go
+index bcc96ae7c..d81d58ac3 100644
+--- a/tools/tillr-land/land/owner_install.go
++++ b/tools/tillr-land/land/owner_install.go
+@@ -30,6 +30,11 @@ type installed struct {
+ 	base      string
+ 	tmp       string         // the name the displaced inode keeps until the install is settled
+ 	stuck     *MutationError // a replacement that failed after changing the directory
++	// isDir marks a directory that became a file: the whole directory was exchanged for the
++	// file and stands at tmp, with files and dirs naming what was read in it.
++	isDir bool
++	files []*dirFile
++	dirs  []string
+ }
+ 
+ func (rec *installed) closeDir() {
+@@ -155,6 +160,12 @@ func (t *Trunk) MoveOwner(plan *OwnerPlan, ref, to, from string) (*OwnerInstall,
+ 		}
+ 		return nil, err
+ 	}
++	if OwnerHooks.FailComparison != nil && OwnerHooks.FailComparison() {
++		in.unlockIndex()
++		in.root.close()
++		t.dropRecovery(plan)
++		return nil, ErrOwnerChanged
++	}
+ 	if err := t.checkPlan(plan, from); err != nil {
+ 		in.unlockIndex()
+ 		in.root.close()
+@@ -166,7 +177,7 @@ func (t *Trunk) MoveOwner(plan *OwnerPlan, ref, to, from string) (*OwnerInstall,
+ 	if OwnerHooks.AfterInstall != nil {
+ 		OwnerHooks.AfterInstall()
+ 	}
+-	if len(in.changedFiles()) > 0 {
++	if len(in.changedFiles()) > 0 || in.displacedDirsGrew() {
+ 		return retry(ErrOwnerChanged)
+ 	}
+ 	if err := plan.guard(); err != nil {
+@@ -201,6 +212,13 @@ func (in *OwnerInstall) dropTemps() {
+ 		if rec.tmp == "" || rec.dirfd < 0 {
+ 			continue
+ 		}
++		if rec.isDir {
++			if !removeDisplacedDir(rec.dirfd, rec.tmp, rec.files, rec.dirs) {
++				in.leftover = append(in.leftover, fmt.Sprintf("%s: the directory it replaced holds files the landing did not read and is left at %s beside the path", rec.path, rec.tmp))
++			}
++			rec.tmp = ""
++			continue
++		}
+ 		var byName, byHandle unix.Stat_t
+ 		if rec.handle != nil && unix.Fstatat(rec.dirfd, rec.tmp, &byName, unix.AT_SYMLINK_NOFOLLOW) == nil && unix.Fstat(int(rec.handle.Fd()), &byHandle) == nil &&
+ 			byName.Dev == byHandle.Dev && byName.Ino == byHandle.Ino {
+@@ -381,7 +399,31 @@ func (in *OwnerInstall) install() error {
+ 		}
+ 		return actions[i].Path < actions[j].Path
+ 	})
++	// A directory that becomes a file is replaced whole, so the deletions beneath it are not
++	// carried out one by one: the exchange covers them.
++	covered := map[string]map[string]node{}
+ 	for _, p := range actions {
++		if p.Install && p.Disk.Kind == "dir" {
++			covered[p.Path] = map[string]node{}
++		}
++	}
++	under := func(file string) string {
++		for dir := range covered {
++			if strings.HasPrefix(file, dir+"/") {
++				return dir
++			}
++		}
++		return ""
++	}
++	for _, p := range actions {
++		if dir := under(p.Path); dir != "" && p.Remove {
++			covered[dir][p.Path] = planned(p)
++		}
++	}
++	for _, p := range actions {
++		if p.Remove && under(p.Path) != "" {
++			continue
++		}
+ 		rec := &installed{path: p.Path, planned: planned(p), existed: p.Disk.Kind == "file" || p.Disk.Kind == "symlink", dirfd: -1}
+ 		if p.Install {
+ 			rec.want = node{Kind: "file", Exec: p.FinalExec, Bytes: p.FinalContent}
+@@ -411,6 +453,24 @@ func (in *OwnerInstall) install() error {
+ 		if !in.root.sameDir(dirfd, p.Path) {
+ 			return ErrOwnerChanged
+ 		}
++		if p.Disk.Kind == "dir" && p.Install {
++			tmp, files, dirs, err := exchangeDir(dirfd, p.Path, base, rec.want, covered[p.Path])
++			if err != nil {
++				var me *MutationError
++				if errors.As(err, &me) {
++					rec.stuck = me
++				}
++				return err
++			}
++			rec.swapped, rec.isDir, rec.tmp, rec.files, rec.dirs = true, true, tmp, files, dirs
++			if !in.root.sameDir(dirfd, p.Path) {
++				return ErrOwnerChanged
++			}
++			if OwnerHooks.AfterReplace != nil {
++				OwnerHooks.AfterReplace(p.Path)
++			}
++			continue
++		}
+ 		if p.Disk.Kind == "dir" {
+ 			if err := removeEmptyTree(dirfd, base); err != nil {
+ 				return err
+@@ -450,6 +510,20 @@ func (in *OwnerInstall) install() error {
+ func (in *OwnerInstall) changedNodes() map[string]node {
+ 	saved := map[string]node{}
+ 	for _, rec := range in.done {
++		for _, f := range rec.files {
++			if f.handle == nil {
++				continue
++			}
++			now := f.planned
++			if _, err := f.handle.Seek(0, io.SeekStart); err == nil {
++				if b, err := io.ReadAll(f.handle); err == nil {
++					now.Bytes = b
++				}
++			}
++			if !now.equal(f.planned) {
++				saved[f.path] = now
++			}
++		}
+ 		if !rec.swapped || !rec.existed {
+ 			continue
+ 		}
+@@ -462,6 +536,17 @@ func (in *OwnerInstall) changedNodes() map[string]node {
+ 
+ func (in *OwnerInstall) changedFiles() map[string]node { return in.changedNodes() }
+ 
++// displacedDirsGrew answers whether a directory the install displaced holds a file that was not
++// there when it was read: the owner's, so the install is undone before the trunk moves.
++func (in *OwnerInstall) displacedDirsGrew() bool {
++	for _, rec := range in.done {
++		if rec.isDir && rec.tmp != "" && displacedDirGrew(rec.dirfd, rec.tmp, rec.files, rec.dirs) {
++			return true
++		}
++	}
++	return false
++}
++
+ // writeIndex replaces the index once: the touched entries are applied to a copy and the copy is
+ // renamed over the index while the lander holds the index lock. Untouched entries keep their
+ // stat data.
+@@ -609,6 +694,7 @@ func (in *OwnerInstall) undo() error {
+ 			rec.handle.Close()
+ 			rec.handle = nil
+ 		}
++		closeDirFiles(rec.files)
+ 		rec.closeDir()
+ 	}
+ 	if len(rep.versions) == 0 && len(rep.failures) == 0 {
+@@ -696,6 +782,11 @@ func (in *OwnerInstall) undoOne(rec *installed, rep *undoReport) {
+ 	if isDir || !cur.equal(rec.want) {
+ 		// The owner saved at the path after the replacement: that is the newer content, and the
+ 		// original it superseded is kept when it differs from what the prediction read.
++		if rec.isDir {
++			rep.failures = append(rep.failures, fmt.Sprintf("%s was saved by the owner after its directory was replaced; the directory is kept at %s beside it", rec.path, rec.tmp))
++			rec.tmp = ""
++			return
++		}
+ 		rep.keep(rec.path, restore, rec.planned, false)
+ 		in.unlinkTmp(rec)
+ 		return
+@@ -710,6 +801,16 @@ func (in *OwnerInstall) undoOne(rec *installed, rep *undoReport) {
+ 	if OwnerHooks.BeforeRollbackSwap != nil {
+ 		OwnerHooks.BeforeRollbackSwap(rec.path, step)
+ 	}
++	if rec.isDir {
++		// The same exchange made again: the directory returns whole, saved bytes included.
++		if err := unix.Renameat2(rec.dirfd, rec.tmp, rec.dirfd, rec.base, unix.RENAME_EXCHANGE); err != nil {
++			fail("%s still holds the landing's content (%v)", rec.path, err)
++			return
++		}
++		unix.Unlinkat(rec.dirfd, rec.tmp, 0) // the lander's own content, read above
++		rec.tmp = ""
++		return
++	}
+ 	if !rec.existed {
+ 		in.removeAdded(rec, rep)
+ 		return
+@@ -817,6 +918,7 @@ func (in *OwnerInstall) Finish() []string {
+ 			rec.handle.Close()
+ 			rec.handle = nil
+ 		}
++		closeDirFiles(rec.files)
+ 		rec.closeDir()
+ 	}
+ 	in.root.close()
+diff --git a/tools/tillr-land/owner_cases_test.go b/tools/tillr-land/owner_cases_test.go
+index cc75a30d6..325e950ac 100644
+--- a/tools/tillr-land/owner_cases_test.go
++++ b/tools/tillr-land/owner_cases_test.go
+@@ -205,3 +205,137 @@ func TestASecondChangeLandsWhileAnotherIsHeldByAConflict(t *testing.T) {
+ 		t.Fatalf("the held change did not land once the owner restored: %+v", l)
+ 	}
+ }
++
++// dirToFile is a landing that replaces the directory g, holding tracked files at two depths,
++// with a file.
++func dirToFile(t *testing.T) contentionFixture {
++	t.Helper()
++	base := func(d string) {
++		os.MkdirAll(filepath.Join(d, "g", "s", "t"), 0o755)
++		write(t, filepath.Join(d, "g", "s", "t", "y.txt"), "y\n")
++		write(t, filepath.Join(d, "g", "z.txt"), "z\n")
++	}
++	cand := func(d string) { os.RemoveAll(filepath.Join(d, "g")); write(t, filepath.Join(d, "g"), "now a file\n") }
++	f := newOwnerFixtureWith(t, base, cand)
++	resetHooks(t)
++	return f
++}
++
++// displacedDir answers the temporary name the directory g stands under after the exchange.
++func displacedDir(t *testing.T, d string) string {
++	t.Helper()
++	all, _ := filepath.Glob(filepath.Join(d, ".tillr-*.tmp"))
++	var found []string
++	for _, p := range all {
++		if st, err := os.Lstat(p); err == nil && st.IsDir() {
++			found = append(found, p)
++		}
++	}
++	if len(found) != 1 {
++		t.Fatalf("displaced directories: %v, want one", found)
++	}
++	return found[0]
++}
++
++func TestADirectoryIsReplacedByOneExchangeAndLeavesNothingBehind(t *testing.T) {
++	f := dirToFile(t)
++	d := f.f.dir
++	var during []string
++	land.OwnerHooks.AfterInstall = func() {
++		tmp := displacedDir(t, d)
++		for _, p := range []string{"z.txt", "s/t/y.txt"} {
++			if _, err := os.Stat(filepath.Join(tmp, p)); err != nil {
++				t.Errorf("the displaced directory does not hold %s whole: %v", p, err)
++			}
++		}
++		inner, _ := filepath.Glob(filepath.Join(tmp, "*", "*", ".tillr-*"))
++		top, _ := filepath.Glob(filepath.Join(tmp, ".tillr-*"))
++		during = append(inner, top...)
++	}
++	if l := mustLand(t, f); !l.Landed() {
++		t.Fatalf("landing: %+v", l)
++	}
++	if len(during) != 0 {
++		t.Errorf("the directory was emptied file by file: %v", during)
++	}
++	if left, _ := filepath.Glob(filepath.Join(d, ".tillr-*")); len(left) != 0 {
++		t.Errorf("left behind: %v", left)
++	}
++	if statOf(t, filepath.Join(d, "g")).body != "now a file\n" || git(t, d, "status", "--porcelain") != "" {
++		t.Errorf("status %q", git(t, d, "status", "--porcelain"))
++	}
++}
++
++func TestAFileAppearingInADisplacedDirectoryBeforeTheTrunkMovesIsPutBack(t *testing.T) {
++	for name, when := range map[string]func(func()){
++		"before the exchange": func(save func()) {
++			land.OwnerHooks.BeforeSwap = func(p string) {
++				if p == "g" {
++					save()
++				}
++			}
++		},
++		"after the exchange": func(save func()) { land.OwnerHooks.AfterInstall = save },
++	} {
++		t.Run(name, func(t *testing.T) {
++			f := dirToFile(t)
++			d := f.f.dir
++			saved := false
++			when(func() {
++				if saved {
++					return
++				}
++				saved = true
++				dir := filepath.Join(d, "g")
++				if st, err := os.Stat(dir); err != nil || !st.IsDir() {
++					dir = displacedDir(t, d)
++				}
++				write(t, filepath.Join(dir, "new.txt"), "mine\n")
++			})
++			l := mustLand(t, f)
++			wantHeld(t, l, "g", "g/new.txt")
++			for p, want := range map[string]string{"g/new.txt": "mine\n", "g/z.txt": "z\n", "g/s/t/y.txt": "y\n"} {
++				if got := statOf(t, filepath.Join(d, p)).body; got != want {
++					t.Errorf("%s = %q, want %q", p, got, want)
++				}
++			}
++			if left, _ := filepath.Glob(filepath.Join(d, ".tillr-*")); len(left) != 0 {
++				t.Errorf("left behind: %v", left)
++			}
++			if tip := git(t, d, "rev-parse", "HEAD"); tip != f.f.baseSHA {
++				t.Errorf("the trunk moved to %s", tip)
++			}
++		})
++	}
++}
++
++func TestAFileAppearingInADisplacedDirectoryAfterItsLastListingIsKeptWithAFault(t *testing.T) {
++	f := dirToFile(t)
++	d := f.f.dir
++	var kept string
++	land.OwnerHooks.BeforeTrunkMove = func() {
++		kept = filepath.Join(displacedDir(t, d), "new.txt")
++		write(t, kept, "mine\n")
++	}
++	l, err := land.Land(context.Background(), f.s, f.trunk, f.req)
++	if err != nil || !l.Landed() {
++		t.Fatalf("landing: %+v, %v", l, err)
++	}
++	if got := statOf(t, kept).body; got != "mine\n" {
++		t.Fatalf("the owner's file is gone: %q", got)
++	}
++	if len(l.Faults) != 1 || !strings.Contains(l.Faults[0], filepath.Base(filepath.Dir(kept))) {
++		t.Fatalf("faults = %v, want one naming %s", l.Faults, filepath.Dir(kept))
++	}
++	if n := eventsOfKind(t, f.db, land.FaultKind); n != 1 {
++		t.Fatalf("fault events = %d, want 1", n)
++	}
++	if statOf(t, filepath.Join(d, "g")).body != "now a file\n" {
++		t.Error("the landed file is not at the path")
++	}
++	for _, p := range []string{"z.txt", "s"} {
++		if _, err := os.Stat(filepath.Join(filepath.Dir(kept), p)); err == nil {
++			t.Errorf("%s, which the landing deleted, is still in the displaced directory", p)
++		}
++	}
++}
+diff --git a/tools/tillr-land/owner_retry_test.go b/tools/tillr-land/owner_retry_test.go
+index b257f4aa6..9fe712ec9 100644
+--- a/tools/tillr-land/owner_retry_test.go
++++ b/tools/tillr-land/owner_retry_test.go
+@@ -14,7 +14,7 @@ func TestOwnerSavesDoNotConsumeAnArbitraryLandingRetryBudget(t *testing.T) {
+ 	resetHooks(t)
+ 	f := newOwnerFixture(t, nil)
+ 	path := filepath.Join(f.f.dir, "a.txt")
+-	const saves = 201
++	const saves = 25
+ 	predictions := 0
+ 	land.OwnerHooks.AfterPredict = func() {
+ 		predictions++
+@@ -29,7 +29,7 @@ func TestOwnerSavesDoNotConsumeAnArbitraryLandingRetryBudget(t *testing.T) {
+ 	if predictions != saves+1 {
+ 		t.Fatalf("predictions = %d, want %d", predictions, saves+1)
+ 	}
+-	want := "L1\n" + strings.TrimSuffix(strings.TrimPrefix(lines, "l1\n"), "l9\n") + "save-201\n"
++	want := "L1\n" + strings.TrimSuffix(strings.TrimPrefix(lines, "l1\n"), "l9\n") + "save-25\n"
+ 	if got := statOf(t, path).body; got != want {
+ 		t.Fatalf("owner's last save was not carried: got %q, want %q", got, want)
+ 	}
+@@ -37,3 +37,34 @@ func TestOwnerSavesDoNotConsumeAnArbitraryLandingRetryBudget(t *testing.T) {
+ 		t.Fatalf("clean landing left recovery refs: %s", refs)
+ 	}
+ }
++
++// TestAChangeReportedWithNothingSavedEndsTheLandingAfterOneFurtherPrediction: the comparison
++// answers that the owner changed a path while the checkout holds what the prediction read. The
++// next prediction reads the same, so the lander is at fault, not the owner: the landing returns
++// with a recorded fault and the owner's file untouched, instead of predicting without end.
++func TestAChangeReportedWithNothingSavedEndsTheLandingAfterOneFurtherPrediction(t *testing.T) {
++	resetHooks(t)
++	f := newOwnerFixture(t, nil)
++	path := filepath.Join(f.f.dir, "a.txt")
++	write(t, path, strings.TrimSuffix(lines, "l9\n")+"mine\n")
++	before := statOf(t, path)
++	predictions := 0
++	land.OwnerHooks.AfterPredict = func() { predictions++ }
++	land.OwnerHooks.FailComparison = func() bool { return true }
++	l, err := land.Land(context.Background(), f.s, f.trunk, f.req)
++	if err == nil || l.Landed() || !strings.Contains(err.Error(), "fault recorded") {
++		t.Fatalf("landing = %+v, %v; want a recorded fault", l, err)
++	}
++	if predictions != 2 {
++		t.Fatalf("predictions = %d, want 2", predictions)
++	}
++	if got := statOf(t, path); got != before {
++		t.Fatalf("the owner's file changed: %+v, was %+v", got, before)
++	}
++	if n := eventsOfKind(t, f.db, land.FaultKind); n != 1 {
++		t.Fatalf("fault events = %d, want 1", n)
++	}
++	if tip := git(t, f.f.dir, "rev-parse", "HEAD"); tip != f.f.baseSHA {
++		t.Fatalf("the trunk moved to %s", tip)
++	}
++}
+# owner-edits-patch end
+````
 
 ## Filed 2026-11-17: tillr becomes a core with Git landing as its first definition
 
