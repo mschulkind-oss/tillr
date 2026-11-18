@@ -742,6 +742,14 @@ the result store until confirmation. A remaining guard reports unconfirmed clean
 blocks checkout removal and recovery until an operator independently recovers those
 processes and clears it; a released lock alone is not treated as cleanup evidence.
 
+Because the supervisor adopts every orphan its command leaves, it also reaps them as
+they exit, on each `SIGCHLD`, rather than only after the command ends. It looks before
+it reaps (`waitid` with `WNOWAIT`), so it never takes the exit status of its own direct
+child, which is the command's verdict. Before this, one supervisor of a heavy gate run on
+2026-11-18 held 6,408 zombies, nearly all `git`.
+`TestASubreaperReapsTheOrphansItAdoptsAndLeavesItsOwnChild` in
+[`drain/heavy_reap_linux_test.go`](./drain/heavy_reap_linux_test.go) covers both halves.
+
 The runner judges every heavy tree declaration, reusing the gate's remembered results,
 and the legacy rolling checks that have not yet migrated to declarations. `--heavy-gate`
 names the declaration judge; `--rolling` still names the legacy program. An explicitly

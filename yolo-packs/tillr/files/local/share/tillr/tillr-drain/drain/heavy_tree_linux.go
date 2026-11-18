@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -31,6 +33,74 @@ func prepareHeavyTree() error {
 	}
 	_, err = heavyTree()
 	return err
+}
+
+// siginfoPID reads si_pid, the first field of the union that follows si_signo, si_errno
+// and si_code, aligned to a pointer.
+func siginfoPID(info *unix.Siginfo) int {
+	word := unsafe.Sizeof(uintptr(0))
+	offset := (3*unsafe.Sizeof(int32(0)) + word - 1) &^ (word - 1)
+	return int(*(*int32)(unsafe.Add(unsafe.Pointer(info), offset)))
+}
+
+// reapAdoptedOrphans reaps every exited child except direct, the supervised command,
+// whose exit status is the command's verdict and belongs to its own Wait. It looks
+// before it reaps (WNOWAIT), so an exited direct child is never taken: it stops there,
+// and finishHeavyTree reaps whatever remains once the command's Wait has returned.
+func reapAdoptedOrphans(direct int) error {
+	for {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_ALL, 0, &info, unix.WEXITED|unix.WNOHANG|unix.WNOWAIT, nil)
+		if err == unix.EINTR {
+			continue
+		}
+		if err == unix.ECHILD {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		pid := siginfoPID(&info)
+		if pid == 0 || pid == direct {
+			return nil
+		}
+		var status unix.WaitStatus
+		if _, err := unix.Wait4(pid, &status, unix.WNOHANG, nil); err != nil && err != unix.EINTR && err != unix.ECHILD {
+			return err
+		}
+	}
+}
+
+// reapWhileSupervising reaps adopted orphans on every SIGCHLD while the command runs.
+// A child subreaper is the parent of every orphan its command leaves, and an orphan it
+// does not wait for stays a zombie: on 2026-11-18 one supervisor of a heavy gate run
+// held 6,408 of them. Nothing is reaped until started names the direct child, which a
+// failed start never does. The returned stop ends the loop and waits for it.
+func reapWhileSupervising(started <-chan int) (stop func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, unix.SIGCHLD)
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer signal.Stop(signals)
+		var direct int
+		select {
+		case direct = <-started:
+		case <-done:
+			return
+		}
+		for {
+			if err := reapAdoptedOrphans(direct); err != nil {
+				fmt.Fprintln(os.Stderr, "heavy supervisor: reaping adopted processes:", err)
+			}
+			select {
+			case <-signals:
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() { close(done); <-finished }
 }
 func heavySupervisorIdentity() (string, error) {
 	p, err := readHeavyProcess(os.Getpid())

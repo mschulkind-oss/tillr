@@ -770,7 +770,11 @@ const checkGroupGrace = 5 * time.Second
 // for two minutes. The program also owns checks in separate sessions: SIGTERM lets it
 // end those before WaitDelay escalates to SIGKILL. On any exit, kill what remains in
 // the program's own group before returning to the worktree cleanup.
-func runCheckGroup(cmd *exec.Cmd) error {
+func runCheckGroup(cmd *exec.Cmd) error { return runCheckGroupStarted(cmd, nil) }
+
+// runCheckGroupStarted is runCheckGroup that tells started the command's pid once it
+// has started; a command that never starts calls nothing.
+func runCheckGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
@@ -779,11 +783,22 @@ func runCheckGroup(cmd *exec.Cmd) error {
 	// has not exited does it kill the leader. The final group cleanup below reaches
 	// remaining pipe holders too.
 	cmd.WaitDelay = checkGroupGrace
-	err := cmd.Run()
+	err := startAndWait(cmd, started)
 	if cmd.Process != nil {
 		endProcessGroup(cmd.Process.Pid)
 	}
 	return err
+}
+
+// startAndWait is cmd.Run, telling started the pid between the start and the wait.
+func startAndWait(cmd *exec.Cmd, started func(pid int)) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if started != nil {
+		started(cmd.Process.Pid)
+	}
+	return cmd.Wait()
 }
 
 // endProcessGroup kills every process left in group pgid and waits, up to checkGroupGrace,
