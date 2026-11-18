@@ -3,12 +3,13 @@ title: Agent Context Delivery — How Instructions Should Reach an Agent
 date: 2026-10-26
 status: draft
 stage: SKETCH
-next: Owner review of D-AC1–D-AC11 (item 224); no implementation until autonomous-landing restores the drain
+next: "Owner review of the decision ledger, whose D-AC rows are a designer's recommendations. OQ-AC3 is routed from the pi roadmap's Icebox."
 board: "224"
-depends-on: autonomous-landing.md
 tags: [agents, context-delivery, briefing, pi-fork, board-drain, subagents]
 summary: Rules should travel at the granularity of their invariance — fleet rules in the broadcast briefing, role rules in agent definitions, run rules in the dispatcher's brief, hard limits in code and config, never in prose. The week's three leaks were one missing concept (no per-run prose channel, now fixed via the brief), one unguarded ambient extension, and one global config ceiling. Neither mode-scoping the briefing nor rebuilding on Pi's split libraries fixes the class; the briefing is materialized per home, and all context machinery lives in pi-coding-agent, not the lower libraries.
 ---
+
+> **2026-11-18: the body below describes the fleet as it was on 2026-10-26, and keeps that tense.** Since then the board's drain and its `board-cli` were deleted and tillr replaced them, `design-lane.ts` was deleted on 2026-11-11, and the autonomous-landing design this document waited on is superseded. What still holds is the ruling the body argues for: a rule is placed by how long it stays true, the brief is the one prose channel scoped to a single run, and hard limits live in code and config. Today the brief is [`brief-template.md`](../../tools/tillr-run/backends/brief-template.md), whose required sections a preflight check enforces, and a lane's process is identified by `TILLR_RUN_ID` and `TILLR_LANE_ID`; the `BOARD_DRAIN_*` names survive only as a compatibility seam. The per-agent thinking ceiling of `D-AC7` is not built. The owner has not reviewed the ledger: its `D-AC` rows are a designer's recommendations.
 
 ## In short
 
@@ -143,10 +144,12 @@ It also does not make any prose rule *binding*. A brief is an instruction to a m
 | Composer divergence | Drain, design drain, and leads each "improve" their copy of the rules until lanes behave differently by parentage | One embedded source, golden-tested; leads source rather than paraphrase (D-AC9/D-AC10) |
 | Env-gate spoofing or drift | A session with stray `BOARD_DRAIN_*` in its environment gets lane fences; or the drain renames a key and a fence goes inert in a real lane — failing *open* | Fences should require the item-scoped keys (`BOARD_DRAIN_ARTIFACT`, `_ITEM`), not generic ones; D-AC8's check pins the key set against `drainChildEnv` |
 | Ratifying the status quo too early | (a) is ruled load-bearing on one day of operation | The overturn triggers in Section 2.6 are the exit; (c′) is pre-designed so escalation is a step, not a project |
-| Home-topology assumption | Section 2.2 rests on briefing rendering per home shared by concurrent processes (scout-evidenced for the materializer); if some lanes already run in isolated homes, (b)'s cost is lower than stated for lanes specifically | Unverified for the drain's spawn environment; [`OQ-AC4`](#8-open-questions) must be answered before any future (b) work — and it does not change today's ruling, since the brief already covers lanes |
+| Home-topology assumption | Section 2.2 rests on briefing rendering per home shared by concurrent processes (scout-evidenced for the materializer); if some lanes already run in isolated homes, (b)'s cost is lower than stated for lanes specifically | Unverified for the drain's spawn environment; [`OQ-AC4`](#OQ-AC4) must be answered before any future (b) work — and it does not change today's ruling, since the brief already covers lanes |
 | Prior-art misreading | Section 2.5 rests on a scout's reading of one session file; a different session may hold a genuine Pi-vs-libraries discussion the owner remembers | If such a session with a contrary, acted-on decision surfaces, D-AC4 must be re-argued against it; the located session is the one named in the brief |
 
-## 7. Decision Ledger
+## Decision Ledger
+
+**Who decided each row.** `D-AC1` to `D-AC11` are a designer's recommendations of 2026-10-26, which the owner has not reviewed. The four `OQ-AC` rows record how each question was closed; none of them is an owner's ruling, and he may overturn any.
 
 | ID | Decision | Basis |
 |---|---|---|
@@ -161,24 +164,12 @@ It also does not make any prose rule *binding*. A brief is an instruction to a m
 | D-AC9 | On the subagent path, loop rules live in the loop owner's (lead's) agent definition; worker briefs carry item, bounds, acceptance. `inheritGlobalContext` stays false for all roles; fork-context children are treated as their parent for rule scope | Section 3 |
 | D-AC10 | Lane rules get one canonical Markdown source, embedded by `childBrief`/`designChildBrief` and sourced by any lead composing a lane-like dispatch — replacing the Go string constant, byte-stable under a golden test | Section 4; hardens D-AC2 against divergence |
 | D-AC11 | If brief-level delivery measurably fails, escalate to env-gated `before_agent_start` system-prompt injection from the same canonical source — not to briefing mode scope | Section 2.3 (c′); Section 2.6 trigger (i) |
+| OQ-AC1 | **Designer's decision, 2026-11-18; not ruled by the owner; the owner may overturn it.** An extension that behaves differently inside a lane is held to that by a test in the pack's own suite, not by a key in the pack manifest. **Rejected:** a manifest `activation` key, which is loader work in yolo for a class that has no member today; and review convention alone | No extension registers a tool-call fence any more: `rg -c 'tool_call' yolo-packs/matt/files/extensions/*.ts` on 2026-11-18 matches nothing. The one extension that keys on lane identity, `steering-timer.ts`, ran inside a lane on 2026-11-14 because the identity keys it read were empty; it now reads the current keys and `yolo-packs/matt/tests/steering-timer.test.mjs` pins that. `extension-sync-guard.test.mjs` is the precedent for a test that walks every extension |
+| OQ-AC2 | **Closed as moot on 2026-11-16; not an owner's ruling.** It asked where in the board command the canonical lane rules would be embedded. That command is deleted; tillr hands the brief to the harness from one template file | The brief template named in the note at the top of this document |
+| OQ-AC4 | **Closed on 2026-11-16, answered from the tree; not an owner's ruling.** A lane runs its harness with no home override, so lanes and interactive sessions share one agent home | Section 2.2's cost for a mode-scoped briefing stands as written |
+| OQ-AC5 | **Closed as stale by the designer, 2026-11-18; not ruled by the owner; the owner may overturn it.** It asked how adherence to the brief's rules would be measured. The rules it named, the repair and round caps, were removed by the owner's ruling of 2026-11-17 that a run's ending is never counted ([`D-JL10`](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)). The one rule a brief still carries that the drain can check is its report shape, and the drain checks it on every run: a run that ends with neither a commit nor a named obstacle is recorded as a missing output and returned to its session | Measured on 2026-11-18: 19 of 61 drain runs on one model ended that way ([`D-JL11`](./tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)). That rate is the measure trigger (i) of Section 2.6 asked for |
 
 ## 8. Open Questions
-
-- 💬 **OQ-AC1: How is extension activation declared and checked?**
-
-   D-AC8 states the discipline; the mechanism could be a pack-manifest `activation` key the loader enforces, or a lint/test that fails a pack whose fence-registering extension does not read lane env, or review convention alone. A manifest key is the only form a reviewer can see without reading extension code, but it means loader work in the materializer's layer.
-
-   <!-- vantage: question id=OQ-AC1 leaning="Lint/test first" -->
-
-   _Leaning:_ Lint/test first; manifest `activation` only if a second fence leaks.
-
-- ✅ **OQ-AC2: Where does the canonical lane-rule source (D-AC10) live?**
-
-   Embedded in `board-cli` from a Markdown file in its tree, or shipped as a pack file both the drain and leads read at runtime? Embedding keeps the drain self-contained and golden-testable; a pack file makes the lead path cheaper but adds a runtime dependency on pack layout.
-
-   _Closed 2026-11-16:_ moot: it asked where in the deleted board command the brief is assembled; tillr hands the brief to pi on standard input.
-
-   _Leaning:_ Embed in `board-cli`; publish the same file into the pack for leads.
 
 - 💬 **OQ-AC3: Should `pi` gain a `--agent <name>` startup profile (true alternative (c))?**
 
@@ -187,22 +178,6 @@ It also does not make any prose rule *binding*. A brief is an instruction to a m
    <!-- vantage: question id=OQ-AC3 leaning="No, until a Section 2.6 trigger fires." -->
 
    _Leaning:_ No, until a Section 2.6 trigger fires.
-
-- ✅ **OQ-AC4: What agent home does a drained lane process actually run with?**
-
-   Unverified: scouts evidenced the briefing materializer (per home) and the drain's argv/env, but not whether lanes share a home with interactive sessions or get isolated ones. The answer sets the true cost of any future (b) and confirms whether interactive sessions in a lane's home are a live collision risk today.
-
-   _Closed 2026-11-16:_ answered by the tree: a lane runs pi with no home override, so lanes and interactive sessions share one home.
-
-   _Leaning:_ Verify before any briefing work; expect a shared home.
-
-- 💬 **OQ-AC5: How is brief-rule adherence measured, so trigger (i) can fire on evidence?**
-
-   Options range from sampling landed lane transcripts for cap violations to a drain-side counter of out-of-policy lane behaviors it already observes (extra repair cycles, missing status posts). Without a measure, D-AC11's escalation stays a matter of feel — the condition this whole design argues against.
-
-   <!-- vantage: question id=OQ-AC5 leaning="Count what the drain already observes" -->
-
-   _Leaning:_ Count what the drain already observes; do not add transcript review.
 
 ## 9. Defined Terms
 

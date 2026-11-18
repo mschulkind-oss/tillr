@@ -454,12 +454,12 @@ one-line fix.
    fail (A1), so the row and the bootstrap in
    [§2.2](./tillr-autoqa.md#22-two-stores-and-sandboxed-sut-snapshots) (`tillr-drain once` plus a
    `/bin/true` run) describe a workaround nobody needs.
-2. **[tillr-autoqa.md D-AQ2](./tillr-autoqa.md#61-decision-ledger)** crosses into the system under
+2. **[tillr-autoqa.md D-AQ2](./tillr-autoqa.md#decision-ledger)** crosses into the system under
    test's store, here tillr's own, "solely via `item apply`". Sync is the only intake
    ([tillr-convergence.md §3](./tillr-convergence.md#3-the-target)), and such an item now goes to
    triage for its block. Which is right is [OQ-FQ8](#OQ-FQ8), blocked until that design is picked
    up.
-3. **[tillr-autoqa.md D-AQ3](./tillr-autoqa.md#61-decision-ledger)** says its two graphs work
+3. **[tillr-autoqa.md D-AQ3](./tillr-autoqa.md#decision-ledger)** says its two graphs work
    "immediately on W1 Slice-1 static flattening". They needed command nodes, outputs, the
    `no_commit` exit and the evaluator, all of which have since landed
    ([B1 to B4](#12-on-the-existing-design-path)).
@@ -583,7 +583,7 @@ Several requests are split cases, and the table says which part is which.
 | 3 | **Cuts against** the closed seven-state model (D-IP1). The four verdicts the request names belong to criteria, not items ([verdict.go](../../tools/tillr-item/item/verdict.go)) **[read]**. | Design round | A countable "why it ended" |
 | 4 | **Cuts against** an accepted ruling: `landed` and `resolved-elsewhere` are terminal. The defect the request found is real, and worse than it says **[ran]**; see A2. `reopen` refuses a landed item and reopens a closed one **[ran]**. | Defect: already queued | Finished items stop quietly re-entering the queue |
 | 5 | **Cuts against in its general form; the bounded parts are designed.** Replacing a later node that has not started is a queued proposal block, under `D-IG3`. The drain writes child items from a manifest after landing (D-IP6). Folding is `resolved-elsewhere` with an item pointer **[read]**. None of the three is built **[ran]**. | Bounded: queued | Already wanted |
-| 6 | **Unbuilt but consistent.** Command nodes and outputs bound to their producer by sha256 are queued; see B1 and B2. Re-admitting an item only when a stored basis changed exists ([lifecycle §4.2](./tillr-judge-and-lifecycle.md#42-inspected-rework-tillr-drain-rework-and-the--v2-cutover-d-jl6)). Skipping a node whose input digests did not change is not designed **[read]**. | Queued | Cheaper deterministic steps |
+| 6 | **Unbuilt but consistent.** Command nodes and outputs bound to their producer by sha256 are queued; see B1 and B2. Re-admitting an item only when a stored basis changed exists ([lifecycle §4.2](./tillr-judge-and-lifecycle.md#42-sending-a-failed-item-again-under-its-own-id-d-jl6-d-jl8)). Skipping a node whose input digests did not change is not designed **[read]**. | Queued | Cheaper deterministic steps |
 | 7 | **Unbuilt but consistent, in the narrow form.** A `no_commit` exit runs neither gate nor lander and still settles the item; see B3. The two exit codes exist: 1 is negative, 4 is "an outside dependency prevented a decision" **[read]**. | Narrow form: queued | Investigation-only items stop being held as "did nothing" |
 | 8 | **Cuts against, inside a graph** ([§5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) **[read]**. Outside a graph it works today as a `blocked` hold **[ran]**. That is how tillr settles its own uncertain landing: by reading the trunk ([already_on_trunk.go](../../tools/tillr-drain/drain/already_on_trunk.go)) **[read]**. | Hours, as a convention | Little |
 | 9 | **Unbuilt but consistent; mostly there.** See B5. `tillr run exec` needs a lane directory and an adapter directory **[ran]**. | Days | A run face that can say "dead" without a loop |
@@ -940,7 +940,7 @@ Two questions, both blocked. Neither asks anything of the owner until what it wa
      landing is.
    - **B — No.** The consumer's own dispatcher files them, as Product QA does now.
 
-   <!-- vantage: question id=OQ-FQ7 blocked-on="tillr-autoqa.md#OQ-AQ2" -->
+   <!-- vantage: question id=OQ-FQ7 blocked-on="the owner taking the AutoQA design out of the Icebox" -->
 
    Waits on a consumer that needs tillr, and not its own dispatcher, to file the children. There is
    none: Product QA files them itself, and tillr's own AutoQA, which has the same need, is parked by
@@ -964,7 +964,7 @@ Two questions, both blocked. Neither asks anything of the owner until what it wa
    - **C — Through `tillr item apply` as today,** so the bug arrives without a block and triage
      writes one.
 
-   <!-- vantage: question id=OQ-FQ8 blocked-on="tillr-autoqa.md#OQ-AQ2" -->
+   <!-- vantage: question id=OQ-FQ8 blocked-on="the owner taking the AutoQA design out of the Icebox" -->
 
    Waits on two things. The owner parked the AutoQA design on 2026-11-17 ("I don't want to design
    this yet"), and no AutoQA code exists. And option A depends on how work written in a document

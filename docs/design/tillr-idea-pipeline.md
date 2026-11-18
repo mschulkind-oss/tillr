@@ -170,7 +170,7 @@ None. Every question this design carried is a row of the ledger above.
 
 - **Browser intake:** Governed by [observatory-actions](./observatory-actions.md#6-how-a-page-writes), not excluded. With `--write`, the observatory runs the terminal writer for saving ideas and moving items; its own store handle remains read-only. Vantage remains a separate reading and review surface.
 - **Spend display, token budgets, or cost-based stopping:** Spend UI remains iceboxed per [OQ-OBD4](./observatory-design.md#11-decision-ledger), and `.tillr/state.db` continues recording `usage_cost_usd` without gating dispatch.
-- **Self-hosted binary compilation and reload mechanics:** Governed by [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) ([OQ-SH1](./tillr-selfhosted-build.md#61-settled-decisions) through [OQ-SH3](./tillr-selfhosted-build.md#61-settled-decisions)), which Slice 1 assumes as its launcher substrate.
+- **Self-hosted binary compilation and reload mechanics:** Governed by [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) ([OQ-SH1](./tillr-selfhosted-build.md#decision-ledger) through [OQ-SH3](./tillr-selfhosted-build.md#decision-ledger)), which Slice 1 assumes as its launcher substrate.
 - **Ruling the external owner-blocked queue items:** The Claude-whale counterpart, the pi-roadmap host-render row, and existing open design rulings in sibling specs remain owner decisions rather than automated dispositions.
 ## 8. Remaining work
 
