@@ -420,15 +420,18 @@ The loop may try a failed item once more by itself when something it recorded ha
 When an item could not be repaired in place, the workaround was to file a copy with `-v2` on its id and mark the original as resolved elsewhere. Six items went that way on 2026-11-14. Each copy lost the original's run history and its place in other items' dependencies, and each "resolved elsewhere" was untrue. With a failed attempt no longer freezing criteria, and with retry, re-admission and the design seat all working on the original id, the workaround has no remaining use. This block makes the sync refuse it, so the rule does not depend on anyone remembering.
 
 <a id="return-a-design-runs-gate-refusal-to-its-own-session"></a>
+<a id="route-a-design-runs-gate-refusal-to-its-own-session"></a>
 
-### Route a design run's gate refusal to its own session
+### Route design gate refusals back to the same session
 
-The owner ruled on 2026-11-17 that a design run whose commit the gate refuses has not failed. The refusal is feedback for the designer who wrote the commit, and it should go back to that same designer session, which still holds the document and its reasoning in its context, as many times as it takes. Today the drain does the next best thing: it raises the conflict again and starts a fresh design run, which has to read everything again and finds the refused commit only through the text the conflict carries. That costs a cold session per refusal and loses the reasoning the document does not record. The landing-call design already settles how a session waits on a submission and gets the refusal back as the answer to its call, and the build-commit continuation already resumes a finished worker's session on its lane. This block joins the two for the design seat, and it covers a killed design run too, which should resume rather than start over.
+When the repo gate refuses a design commit, the designer needs the failing checks and their output to repair it. Starting a fresh design session for that repair forces another designer to reread the documents and reconstruct reasoning that may never have been written down. The owner ruled on 2026-11-17 that this refusal is feedback, not a failed design run. Return it to the session that wrote the commit so the designer can continue with the context already in hand.
+
+Today the drain raises the conflict again and starts a fresh design run. This work connects the existing submission-and-response flow with the ability to resume a finished worker's session, applying both to the design seat. Each revised commit must go through the same allowed-path checks and repo gate as any other design answer. Return every refusal without a retry limit; only an objection that names the owner should reach the owner. If a design run is killed, resume its recorded session when it is still available. If that session is gone, start a fresh one and explain that choice in the conflict text.
 
 - **Outcomes:**
-  - Deliver a gate refusal of a design commit to the session that made it, and settle the commit it then makes like any other design answer.
-  - Resume a killed design run's session instead of starting a fresh one, when its session is still there.
-  - Keep no count: the refusal goes back every time, and only an objection naming the owner reaches the owner.
+  - Return each gate refusal to the original designer session and check its revised commit before landing it and answering the conflict.
+  - Resume interrupted design work when its session remains available, or explain why a fresh session was needed.
+  - Continue repairs without a retry limit and send only objections naming the owner to the owner.
 
 **Agent Details:**
 
