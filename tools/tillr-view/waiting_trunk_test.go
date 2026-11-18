@@ -11,7 +11,7 @@ func TestWaitingUnprovedTrunkNamesTheHeavyRunner(t *testing.T) {
 
 func TestWaitingBrokenTrunkNamesTheFixer(t *testing.T) {
 	rule := waitingRuleFor("trunk-broken")
-	if rule.mover != "the trunk fixer to land" || rule.where != "trunk" {
+	if rule.mover != "the trunk fixer to land, or a heavy proof green past its red commit" || rule.where != "trunk" {
 		t.Fatalf("rule=%+v", rule)
 	}
 	h := newServeHarness(t)

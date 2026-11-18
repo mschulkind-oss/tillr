@@ -35,6 +35,10 @@ type HeavyCheck struct {
 type GreenProof struct {
 	Commit   string    `json:"commit"`
 	ProvedAt time.Time `json:"proved_at"`
+	// Passed names every check the green run judged passing. A trunk fixer is resolved
+	// by a proof only when each check it was filed for is in this list; an older proof
+	// without it resolves nothing.
+	Passed []string `json:"passed,omitempty"`
 }
 
 type HeavyRun struct {

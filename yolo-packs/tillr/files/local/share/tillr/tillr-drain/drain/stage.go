@@ -1141,6 +1141,9 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		facts = conflictFacts(*spec.Conflict, durableDir)
 		settled = "This is the one conflict-fix run the item is allowed. The squash conflict is a fact about the moved trunk, not a verdict about the candidate, so do not redesign the item and do not treat the conflict as a failed attempt. Resolve the conflict and commit the resolution."
 	}
+	if IsTrunkFixer(recorded.ItemID) && spec.Conflict == nil {
+		settled = "This is a trunk fixer the loop filed for a red check: its criterion is the whole brief, and it has no design document. " + FixerNextActorRule
+	}
 	if spec.BlockConflict != nil {
 		c := spec.BlockConflict
 		task = fmt.Sprintf("Answer conflict %s raised by run %s against %s. Your brief is the complete conflict record at %s. Read it before editing. Amend only that item's block; do not implement the original work.", c.ConflictID, c.RunID, c.BodyRef, filepath.Join(filepath.Dir(target), "conflict.json"))

@@ -648,7 +648,10 @@ to the document-fed Git landing workflow, not to the queue’s general readiness
 A store is document-fed when at least one stored item, in any state, has a block in
 the tracked documents that sync reads. A store with no such item keeps its ordinary
 seat and workflow routing. Closed, landed, and otherwise terminal items are never
-counted as unshared or sent to triage.
+counted as unshared or sent to triage. Neither is a trunk fixer (`fixer-main-*`):
+the loop files it, its criterion is its whole brief, and it has no document to be
+declared in. A fixer an older build parked on a triage conflict has that conflict
+closed before the next plan and returns to its worker.
 
 An open item without a block goes to **triage**, the design-seat run that shapes a
 stored request into a document declaration, with reason `triage-no-block`. It runs
@@ -783,8 +786,21 @@ attribution failure: it files nothing, and the next run judges again.
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
 second repair. The red-cap hold finds an attached fixer by the checks its criterion
 names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
-clearing an existing owner hold. A blocked fixer report goes directly to the owner; a
-worker whose fix needs paths outside its fence must name those paths in its report. The
+clearing an existing owner hold. A blocked fixer reaches the owner only by an objection
+naming him: a report line `NEXT-ACTOR: owner`, with what only the owner can decide or
+grant in the report — a worker whose fix needs paths outside its fence names those paths
+there. A blocked report naming no actor (or `NEXT-ACTOR: build`) is answered back to the
+fixer's own worker, whose brief states this rule; it never reaches the owner by default.
+
+A green proof releases the trunk whatever the fixer's own state. A green run records
+the checks it passed beside its proof time. Before each plan, an open fixer is resolved
+(`resolved-elsewhere`, with a `drain.fixer-proved` event naming the proof) when the
+proved commit contains the fixer's red commit, the proof was recorded after the fixer's
+last red observation (its filing or a later attached tip), and every check the fixer
+names is among the proof's passed checks. The `trunk-broken` holds behind it are then
+gone on that plan, and an acquittal waiting on it is released once the selected lane
+base contains the proved commit. A proof from before this rule, which lists no checks,
+resolves nothing. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.
 With no pointer yet the report says there is no proved baseline to accuse a landing; it
 does not claim that a nonexistent pointer was judged red. Automatic revert

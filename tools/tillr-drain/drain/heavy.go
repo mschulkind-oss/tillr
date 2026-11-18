@@ -127,7 +127,13 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 			}
 			// Publish evidence by commit before moving the pointer. Cancellation or
 			// a refused compare-and-swap cannot replace the old pointer's time.
-			e = publishHeavyJSON(dir, "green-"+tip+".json", heavy.GreenProof{Commit: tip, ProvedAt: r.Now().UTC()})
+			passed := []string{}
+			for _, check := range run.Checks {
+				if check.Result == "pass" {
+					passed = append(passed, check.CheckID)
+				}
+			}
+			e = publishHeavyJSON(dir, "green-"+tip+".json", heavy.GreenProof{Commit: tip, ProvedAt: r.Now().UTC(), Passed: passed})
 			if e == nil {
 				_, e = heavyGitOutput(ctx, r.Root, "update-ref", GreenRef, tip, old)
 			}

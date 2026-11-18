@@ -1600,6 +1600,12 @@ planned:
 		return "", err
 	}
 	if !l.nonLanding {
+		if err := l.releaseFixerTriage(ctx); err != nil {
+			return "", err
+		}
+		if err := l.resolveProvedFixers(ctx); err != nil {
+			return "", err
+		}
 		if err := l.releaseTrunkAcquittals(ctx); err != nil {
 			return "", err
 		}
