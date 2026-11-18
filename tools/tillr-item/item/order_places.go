@@ -35,7 +35,7 @@ func OrderPlaces(r *store.Reader) (map[string]int, error) {
 
 // keyMissingOrder appends one item update per missing key, in the sync transaction.
 // Existing keys are never rewritten, including those outside the order.
-func keyMissingOrder(ctx context.Context, tx *store.Tx, at time.Time) ([]string, error) {
+func keyMissingOrder(ctx context.Context, tx *store.Tx, at time.Time, parking map[string]bool) ([]string, error) {
 	rows, err := tx.Reader().Query(`SELECT item_id,rank,state FROM items ORDER BY CASE WHEN rank='' THEN 1 ELSE 0 END,rank,item_id`)
 	if err != nil {
 		return nil, err
@@ -51,7 +51,9 @@ func keyMissingOrder(ctx context.Context, tx *store.Tx, at time.Time) ([]string,
 		if key != "" {
 			last = key
 		}
-		if InOrder(state) && key == "" {
+		// The planned parking update clears the key; allocating one first would
+		// record two updates for a single parking transition.
+		if InOrder(state) && key == "" && !parking[id] {
 			missing = append(missing, id)
 		}
 	}

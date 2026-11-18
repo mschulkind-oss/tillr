@@ -207,16 +207,16 @@ func TestSyncDefinitionUpdateKeepsItsFreshlySuppliedKey(t *testing.T) {
 	}
 }
 
-func TestSyncUnparkKeepsAnExistingKey(t *testing.T) {
+func TestSyncUnparkReplacesAnExistingKeyAtTheEnd(t *testing.T) {
 	s := syncStore(t)
 	idea := doc("docs/idea.md", "### Idea\n<!-- tillr: item id=\"item-idea\" paths=\"tools/\" -->\n- **c1:** Works\n")
 	runSync(t, s, "", doc("docs/roadmap.md", "## Icebox\n- [Idea](idea.md)\n"), idea)
 	exec(t, s, "UPDATE items SET rank='a' WHERE item_id='item-idea'; INSERT INTO items(item_id,title,state,updated_at,rank) VALUES('item-first','First','in-queue',0,'z')")
 	runSync(t, s, "", doc("docs/roadmap.md", "## Next\n- [Idea](idea.md)\n"), idea)
-	if got := column(t, s, "SELECT rank FROM items WHERE item_id='item-idea'"); got != "a" {
+	if got := column(t, s, "SELECT rank FROM items WHERE item_id='item-idea'"); got <= "z" {
 		t.Fatal(got)
 	}
-	if got := shownPlace(t, s, "item-idea"); got != float64(1) {
+	if got := shownPlace(t, s, "item-idea"); got != float64(2) {
 		t.Fatal(got)
 	}
 }

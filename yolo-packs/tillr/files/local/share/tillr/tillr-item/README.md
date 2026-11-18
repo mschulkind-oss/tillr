@@ -249,9 +249,15 @@ The following rules describe Git-landing, including its established refusal name
   same record→row mapping `apply` uses. The directive grammar and the field mapping are
   [the queue-persistence ruling's Section 1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md#1-shared-item-block-shape).
   A new item is `in-queue`, or `not-started` when a roadmap's `## Icebox` or
-  `## Exploration` section contains its block or links to its document. Only a whole sync can observe an item
-  leaving a parked section and return it to `in-queue`. Otherwise, a stored item keeps its state,
-  rank, runs and criterion states. A new block may name its source with
+  `## Exploration` section contains its block or links to its document. Parking also
+  moves a stored `in-queue` item to `not-started` and clears its rank, through one
+  `item.update` event. Only a whole sync can observe an item leaving every parked
+  section and return a stored `not-started` item to `in-queue`, after every rank
+  the store holds, even if the parked item retained an old rank. This also queues
+  an item manually set to `not-started` whose document is not parked. Other states,
+  runs and criterion states are preserved. The `item.sync` record lists these moves
+  under `parked` and `unparked`; text output names them too. A dry run reports the
+  same planned moves without writing. A new block may name its source with
   `from="<item id>"`: a keyed source, including a landed one, places it immediately
   after that source and earlier items placed by the same mark, in block order.
   A malformed source id is a finding; an absent or unkeyed source falls back to
@@ -259,7 +265,9 @@ The following rules describe Git-landing, including its established refusal name
   `placed_from`, so retiring a sibling's block does not lose its placement history.
   Sync and `place` share key choice and respacing; crowded gaps can change other
   keys while preserving their relative order. A changed block updates the item's definition while no
-  criterion carries a state, and is reported `definition-frozen` once one does. A second run
+  criterion carries a state, and is reported `definition-frozen` once one does.
+  Parking and unparking still apply when the definition is frozen, using the stored
+  definition rather than the changed block. A second run
   over unchanged documents changes no item and appends no event; it refreshes the
   saved sync observation.
 - **Read faces show places, not stored keys.** A [place](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#3-principles-and-words)
