@@ -68,6 +68,7 @@ type VerdictCheck struct {
 	EndUnixNano         int64  `json:"end_unix_nano,omitempty"`
 	LastOutputLine      string `json:"last_output_line,omitempty"`
 	CPUTimeMS           int64  `json:"cpu_time_ms"`
+	CPUSource           string `json:"cpu_source,omitempty"`
 	SilentSamples       int    `json:"silent_samples,omitempty"`
 	WatchdogUnavailable string `json:"watchdog_unavailable,omitempty"`
 	LogRef              string `json:"log_ref"`
@@ -335,6 +336,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.EndUnixNano = ended.UnixNano()
 	outcome.DurationMS = ended.Sub(started).Milliseconds()
 	outcome.CPUTimeMS = state.previous.CPUTimeMS
+	outcome.CPUSource = state.previous.CPUSource
 	outcome.LastOutputLine = state.previous.LastLine
 	outcome.SilentSamples = state.SilentSamples
 	outcome.WatchdogUnavailable = state.Unavailable
