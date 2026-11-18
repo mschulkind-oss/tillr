@@ -92,6 +92,9 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 					failed = append(failed, "none")
 				}
 				heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+				for _, check := range legacy {
+					heavyCheckEnded(ctx, check)
+				}
 			}
 			return err
 		}
@@ -119,6 +122,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 				return nil, err
 			}
 			heavyProgressReport(ctx, "loop: heavy %s %s in %s\n", id, checks[0].Result, (time.Duration(checks[0].DurationMS) * time.Millisecond).Round(time.Second))
+			heavyCheckEnded(ctx, checks[0])
 			result = append(result, checks...)
 		}
 		if !legacyFirst {
@@ -233,6 +237,11 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		}
 	}
 	spans := filepath.Join(s.LaneRoot, ".rolling", "heavy.spans.json")
+	if only != "" {
+		// A replay can run beside the proof's own program, whose evidence this must not remove.
+		spans = filepath.Join(s.LaneRoot, ".rolling", "heavy.replay.spans.json")
+	}
+
 	if err := os.MkdirAll(filepath.Dir(spans), 0755); err != nil {
 		return nil, err
 	}

@@ -123,8 +123,7 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 			return out, e
 		}
 		run := HeavyRun{BaseSHA: base, TipSHA: tip, Result: "unknown", Checks: []HeavyCheck{}}
-		guard := filepath.Join(dir, heavyCleanupGuard)
-		if _, guardErr := os.Stat(guard); guardErr == nil || !os.IsNotExist(guardErr) {
+		if guard := heavyPendingGuard(dir); guard != "" {
 			run.Detail = "prior cleanup is unconfirmed; checkout retained; independent process recovery must inspect and clear " + guard
 			if pe := publishHeavy(dir, run); pe != nil {
 				return out, pe
@@ -242,8 +241,9 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 	return cleanupErr
 }
 func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, error) {
+	early := r.startEarly(ctx, run)
 	err := r.inTree(ctx, run.TipSHA, func(dir string) error {
-		checks, err := r.Judge(ctx, dir, "")
+		checks, err := r.Judge(context.WithValue(ctx, heavyCheckEndedKey{}, early.offer), dir, "")
 		if err != nil {
 			return err
 		}
@@ -297,6 +297,10 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		}
 		return nil
 	})
+	// Recovery owns a second checkout: it ends before the run does, whatever the proof answered.
+	if earlyErr := early.wait(); err == nil {
+		err = earlyErr
+	}
 	if err != nil {
 		return run, err
 	}
@@ -311,56 +315,37 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		if check.Result != "fail" {
 			continue
 		}
-		// The sha a fixer is filed against: the first red landing when attribution
-		// names one, otherwise the tip. A red with no named landing still gets a mover
-		// (graph design, Section 8.2: the mechanic for an unattributed red); it is
-		// never left holding landings while nobody acts.
-		against := check.FirstRedLanding
-		if check.FirstRedLanding == "" {
-			r.progressf("loop: heavy %s failed at tip %s; searching for the first red landing since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
-			red, fault, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID)
+		against := ""
+		if a, ok := early.handled[check.CheckID]; ok && check.FirstRedLanding == "" {
+			// Recovery already ran for this check while the proof continued.
+			check.FirstRedLanding, check.GateFault, check.Detail = a.check.FirstRedLanding, a.check.GateFault, a.check.Detail
+			check.RevertedBy, check.RevertRefused = a.check.RevertedBy, a.check.RevertRefused
+			against = a.against
 			switch {
-			case err != nil && ctx.Err() == nil && !cleanupLost(err):
-				r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
-			case err == nil && fault:
-				r.progressf("loop: heavy %s culprit search names no landing (red at the green base, or the recorded landings do not explain the tip); the fixer is filed against the tip\n", check.CheckID)
-			case err == nil:
-				r.progressf("loop: heavy %s first red landing %s\n", check.CheckID, shortSHA(red))
-			}
-			if err != nil {
-				// A stop or a lost cleanup is the run's own fault, not attribution's.
-				if ctx.Err() != nil || cleanupLost(err) {
-					return run, err
-				}
-				check.Detail = joinDetail(check.Detail, "attribution failed, so no landing is named and the fixer is filed against the tip: "+err.Error())
-			}
-			check.FirstRedLanding = red
-			check.GateFault = fault
-			if fault {
-				if run.BaseSHA == "" {
-					check.Detail = "no proved baseline; attribution unavailable"
-				} else {
-					check.Detail = "cannot establish a single red landing: baseline or recorded landing range does not explain the red tip"
-				}
-				check.Detail += "; needs=" + strings.Join(check.Needs, ",") + " tools=" + strings.Join(check.Tools, ",")
-				check.Detail += "; fixer filed against the tip"
-			}
-			against = red
-			if against == "" {
+			case check.RevertedBy != "":
+				continue
+			case a.offered && a.stillRed && against != run.TipSHA:
 				against = run.TipSHA
-			} else if !fault {
-				bisected[red] = true
+			case !a.offered && a.bisected:
+				bisected[against] = true
 			}
-		}
-		if check.FirstRedLanding == "" {
-			check.Detail += "; attribution unavailable; red batch range " + run.BaseSHA + ".." + run.TipSHA
+		} else {
+			var found bool
+			var err error
+			against, found, err = r.attribute(ctx, run, check)
+			if err != nil {
+				return run, err
+			}
+			if found {
+				bisected[against] = true
+			}
 		}
 		if len(byLanding[against]) == 0 {
 			order = append(order, against)
 		}
 		byLanding[against] = append(byLanding[against], *check)
 	}
-	order, err = r.revert(ctx, &run, order, byLanding, bisected)
+	order, err = r.revert(ctx, &run, order, byLanding, bisected, early.reverted)
 	if err != nil {
 		return run, err
 	}
@@ -374,13 +359,61 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	return run, nil
 }
 
+func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCheck) (against string, found bool, err error) {
+	// The sha a fixer is filed against: the first red landing when attribution
+	// names one, otherwise the tip. A red with no named landing still gets a mover
+	// (graph design, Section 8.2: the mechanic for an unattributed red); it is
+	// never left holding landings while nobody acts.
+	against = check.FirstRedLanding
+	if check.FirstRedLanding == "" {
+		r.progressf("loop: heavy %s failed at tip %s; searching for the first red landing since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+		red, fault, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID)
+		switch {
+		case err != nil && ctx.Err() == nil && !cleanupLost(err):
+			r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
+		case err == nil && fault:
+			r.progressf("loop: heavy %s culprit search names no landing (red at the green base, or the recorded landings do not explain the tip); the fixer is filed against the tip\n", check.CheckID)
+		case err == nil:
+			r.progressf("loop: heavy %s first red landing %s\n", check.CheckID, shortSHA(red))
+		}
+		if err != nil {
+			// A stop or a lost cleanup is the run's own fault, not attribution's.
+			if ctx.Err() != nil || cleanupLost(err) {
+				return "", false, err
+			}
+			check.Detail = joinDetail(check.Detail, "attribution failed, so no landing is named and the fixer is filed against the tip: "+err.Error())
+		}
+		check.FirstRedLanding = red
+		check.GateFault = fault
+		if fault {
+			if run.BaseSHA == "" {
+				check.Detail = "no proved baseline; attribution unavailable"
+			} else {
+				check.Detail = "cannot establish a single red landing: baseline or recorded landing range does not explain the red tip"
+			}
+			check.Detail += "; needs=" + strings.Join(check.Needs, ",") + " tools=" + strings.Join(check.Tools, ",")
+			check.Detail += "; fixer filed against the tip"
+		}
+		against = red
+		if against == "" {
+			against = run.TipSHA
+		} else if !fault {
+			found = true
+		}
+	}
+	if check.FirstRedLanding == "" {
+		check.Detail += "; attribution unavailable; red batch range " + run.BaseSHA + ".." + run.TipSHA
+	}
+	return against, found, nil
+}
+
 // revert offers each bisected landing to Revert before any fixer is filed, and answers
 // the landings that still need one. A reverted landing leaves the list and its checks
 // name the revert. A refused revert keeps its fixer, and the reason rides on its checks
 // into the fixer's brief; when the check stayed red with the landing reverted, its
 // fixer moves to the tip, because the landing did not explain the red. A revert that
 // failed for its own reasons is a refusal too: the red keeps a mover either way.
-func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, byLanding map[string][]HeavyCheck, bisected map[string]bool) ([]string, error) {
+func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, byLanding map[string][]HeavyCheck, bisected map[string]bool, reverted map[string]string) ([]string, error) {
 	if r.Revert == nil {
 		return order, nil
 	}
@@ -391,15 +424,12 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 			remaining = append(remaining, sha)
 			continue
 		}
-		out, err := r.Revert(ctx, run.TipSHA, sha, byLanding[sha], r.one)
-		if err != nil {
-			if ctx.Err() != nil || cleanupLost(err) {
+		out := RevertOutcome{Reverted: reverted[sha]}
+		if out.Reverted == "" {
+			var err error
+			if out, err = r.offerRevert(ctx, run.TipSHA, sha, byLanding[sha]); err != nil {
 				return nil, err
 			}
-			out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
-		}
-		if out.Reverted == "" && out.Refused == "" {
-			out.Refused = "the revert answered neither a landing nor a reason"
 		}
 		for i := range byLanding[sha] {
 			byLanding[sha][i].RevertedBy, byLanding[sha][i].RevertRefused = out.Reverted, out.Refused
@@ -424,6 +454,22 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 		byLanding[run.TipSHA] = append(byLanding[run.TipSHA], moved...)
 	}
 	return remaining, nil
+}
+
+// offerRevert asks Revert about one landing. A revert that failed for its own reasons is
+// a refusal; only a stop or a lost cleanup is an error.
+func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []HeavyCheck) (RevertOutcome, error) {
+	out, err := r.Revert(ctx, tip, sha, checks, r.one)
+	if err != nil {
+		if ctx.Err() != nil || cleanupLost(err) {
+			return out, err
+		}
+		out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
+	}
+	if out.Reverted == "" && out.Refused == "" {
+		out.Refused = "the revert answered neither a landing nor a reason"
+	}
+	return out, nil
 }
 func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 	ctx = context.WithValue(ctx, heavyProgressKey{}, (*heavyProgress)(nil))
