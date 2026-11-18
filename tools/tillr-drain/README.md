@@ -740,8 +740,15 @@ Supervision requires Linux child adoption and stable kernel process handles. Ado
 makes the supervisor the parent of abandoned grandchildren, including legacy commands
 in separate sessions; the handles prevent signaling a reused process ID. It waits for
 the kernel to confirm every descendant has exited before acknowledging cleanup, with
-no cancellation timeout on that acknowledgement. `heavy.cleanup-pending` remains beside
-the result store until confirmation. A remaining guard reports unconfirmed cleanup and
+no cancellation timeout on that acknowledgement. When a declaration check fails or the
+legacy program reports a failure on exit, recovery searches for the culprit and offers a
+revert in `worktree-replay` while the proof continues. Recovery handles one failure at a
+time and files any fixers at the end of the run. The green pointer still moves only on a
+whole green run.
+
+`heavy.cleanup-pending` and `heavy.replay-cleanup-pending` guard the proof and recovery
+respectively and remain beside the result store until confirmation. Either remaining
+guard holds the next run, reports unconfirmed cleanup and
 blocks checkout removal and recovery until an operator independently recovers those
 processes and clears it; a released lock alone is not treated as cleanup evidence.
 

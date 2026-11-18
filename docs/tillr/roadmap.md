@@ -1161,13 +1161,7 @@ test that fails because it calls `revert` with the old parameters is updated, an
 to stop. Neither is the absence of the three tests or of `heavy_early.go` from the tree or from
 any commit: steps 1 and 5 create them.
 
-<!-- tillr: item id="item-heavy-early-recovery" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A failing declaration check starts its culprit search and automatic revert when it ends, and a failing legacy check when the legacy program ends, while the proof runs its remaining checks.
-- **c2:** The green pointer still moves only on a heavy run in which every check passed.
-- **c3:** Recovery handles one failed check at a time, in a checkout and under a cleanup guard of its own, and a guard of either name left behind holds the next run.
-- **c4:** A landing reverted earlier in the same run is not offered again, and fixers are filed when the run ends.
-- **c5:** The three regression tests named in the block cover c1 to c4, and the gate design and the drain README describe the recovery.
 
 ## Filed 2026-11-15: the observatory redesign's remaining slices
 

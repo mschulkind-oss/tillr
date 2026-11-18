@@ -622,17 +622,17 @@ as a `revert` row. An unattributed red is never reverted.
 A check that reaches its timeout is "no verdict": the pointer does not move, nothing is
 attributed, and the line says which check and how long it ran.
 
-**Time to a revert (measured 2026-11-18).** A revert can start only once
-the heavy run has named a red check, and today that is at the end of the whole run. Over the
+**Time to a revert (measured 2026-11-18).** The heavy runner starts searching for the
+culprit and can offer a revert when a failed check ends, while the proof continues. Over the
 recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
 minutes and at most 52.7. The legacy check `go-tool/tools-tillr-drain` runs the `tillr-drain`
 suite sharded. The parity case used to run it twice more; now it only lists and plans the suite,
 so each proof runs it once. Three changes shorten the time from a landing to its revert:
 
-1. **A verdict per check.** The runner reports a failing check the moment it ends and starts the
-   bisection and the revert for it while the rest of the suite keeps running, so the fastest red
-   check, not the slowest check, sets the time to a revert. The pointer still moves only on a
-   whole green run.
+1. **A verdict per check.** When a declaration check fails or the legacy program reports a
+   failure on exit, the runner queues it for culprit search and a revert offer. Recovery handles
+   one failure at a time in a separate checkout while the proof continues. Fixers are filed at
+   the end of the run, and the pointer still moves only on a whole green run.
 2. **Checks the change reaches go first.** The runner starts affected declaration checks in
    name order, then the legacy program if any of its watches match a changed path, then the
    remaining declarations in name order. If no legacy watch matches, the legacy program runs
