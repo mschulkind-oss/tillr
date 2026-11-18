@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -713,7 +714,22 @@ func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutc
 		green = state.WatermarkSHA
 	}
 	gate.SuspectPaths = append(gate.SuspectPaths, l.rangePaths(ctx, green, redSHA)...)
-	fixerID, err := l.fileTrunkFixer(ctx, redSHA, redChecks, gate)
+	note := ""
+	if l.gatePolicy.LandingStrategy == "after-merge" {
+		// Aim the fixer the way the proof does (HeavyRunner.firstRed): the first recorded
+		// landing since the green pointer on which the check is red. A red some open fixer
+		// already names attaches to it, so the search is not repeated per candidate.
+		open, err := l.openFixerFor(ctx, redChecks)
+		if err != nil {
+			return err
+		}
+		if open == "" {
+			if replay, ok := l.cfg.Steps.(ReplayStep); ok {
+				redSHA, note = l.culpritLanding(ctx, replay, candidate, green, redSHA, redChecks)
+			}
+		}
+	}
+	fixerID, err := l.fileTrunkFixerNoted(ctx, redSHA, redChecks, gate, note)
 	if err != nil {
 		return err
 	}
@@ -729,6 +745,92 @@ func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutc
 	l.reportf("loop: %s acquitted as trunk-already-red: %s is red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
 	return nil
+}
+
+// culpritLanding answers the commit a confirmed trunk red is attributed to, and a note
+// for the fixer's brief when no single landing explains it. It is the proof's culprit
+// search (HeavyRunner.firstRed) driven by the replay step: the checks are replayed at the
+// green pointer, then at the last recorded landing since it, then bisected over those
+// landings; a commit is red when any of the checks is red on it. A red at the green
+// pointer, no recorded landing in the range (a commit that reached the trunk without the
+// lander is not one), a green last landing, or a replay with no verdict names no landing,
+// and the red stays on the commit it was observed on.
+func (l *Loop) culpritLanding(ctx context.Context, replay ReplayStep, candidate Candidate, green, red string, checks []string) (string, string) {
+	if green == "" || green == red {
+		return red, ""
+	}
+	isRed := func(sha string) (bool, bool) {
+		out, err := replay.Replay(ctx, candidate, sha, checks)
+		if err != nil || !out.Known || out.Rev != "" && out.Rev != sha {
+			return false, false
+		}
+		return len(out.Red) > 0, true
+	}
+	unattributed := func(why string) (string, string) {
+		l.reportf("loop: %s red at %s names no landing: %s\n", strings.Join(checks, ", "), shortSHA(red), why)
+		return red, "No single landing is named because " + why
+	}
+	if redAtGreen, known := isRed(green); !known {
+		return unattributed("the replay at the green pointer " + shortSHA(green) + " gave no verdict")
+	} else if redAtGreen {
+		return unattributed("the checks are red at the green pointer " + shortSHA(green))
+	}
+	commits, err := heavyLandings(ctx, l.cfg.Root, l.cfg.Store, green, red)
+	if err != nil {
+		return unattributed("the recorded landings since " + shortSHA(green) + " could not be read: " + err.Error())
+	}
+	if len(commits) == 0 {
+		return unattributed("no recorded landing lies between the green pointer " + shortSHA(green) + " and " + shortSHA(red) + " (a commit that reached the trunk without the lander is not one)")
+	}
+	if lastRed, known := isRed(commits[len(commits)-1]); !known || !lastRed {
+		return unattributed("the last recorded landing " + shortSHA(commits[len(commits)-1]) + " is not red, so the landings do not explain " + shortSHA(red))
+	}
+	low, high := 0, len(commits)-1
+	for low < high {
+		mid := (low + high) / 2
+		midRed, known := isRed(commits[mid])
+		if !known {
+			return unattributed("the replay at landing " + shortSHA(commits[mid]) + " gave no verdict")
+		}
+		if midRed {
+			high = mid
+		} else {
+			low = mid + 1
+		}
+	}
+	l.reportf("loop: %s red at %s; first red landing %s\n", strings.Join(checks, ", "), shortSHA(red), shortSHA(commits[low]))
+	return commits[low], ""
+}
+
+// openFixerFor answers an unresolved trunk fixer that already names every one of checks.
+func (l *Loop) openFixerFor(ctx context.Context, checks []string) (string, error) {
+	if len(checks) == 0 {
+		return "", nil
+	}
+	found := ""
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
+		rows, err := r.Query(`SELECT i.item_id,i.state,c.text FROM items i JOIN item_criteria c USING(item_id) WHERE i.item_id LIKE 'fixer-main-%' AND c.criterion_id='trunk-green' ORDER BY i.rank,i.item_id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, state, text string
+			if err := rows.Scan(&id, &state, &text); err != nil {
+				return err
+			}
+			if !finishedState(declared.Parsed, state) && allIn(checks, fixerChecks(text)) {
+				found = id
+				return nil
+			}
+		}
+		return rows.Err()
+	})
+	return found, err
 }
 
 // recordTrunkRefusal appends the `drain.refusal` that names the red sha and the failing
@@ -931,6 +1033,81 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 			fixerID, shortSHA(redSHA), strings.Join(fence, ", "))
 	}
 	return fixerID, nil
+}
+
+// FixerFenceWidenedKind records the paths a trunk fixer's fence grew by because its worker
+// named them in a fence obstacle.
+const FixerFenceWidenedKind = "drain.fixer-fence-widened"
+
+func init() {
+	if err := event.Register(FixerFenceWidenedKind, Utility); err != nil {
+		panic(err)
+	}
+}
+
+// widenFixerFence adds the requested paths to a trunk fixer's fence. It answers the paths
+// added and the paths refused: the gate's own code and anything that is not a
+// repository-relative path are refused (trunkFixerPaths), and a request with any refused
+// path adds nothing, so the owner rules on the whole request.
+func (l *Loop) widenFixerFence(ctx context.Context, fixerID string, requested []string) ([]string, []string, error) {
+	granted, refused := trunkFixerPaths(requested, nil)
+	for _, path := range requested {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path != "" && !containsString(granted, path) && !containsString(refused, path) {
+			refused = append(refused, path)
+		}
+	}
+	if len(refused) > 0 || len(granted) == 0 {
+		return nil, refused, nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return nil, nil, Incompatiblef("%v", err)
+	}
+	defer s.Close()
+	var added []string
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var raw string
+		if err := tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, fixerID).Scan(&raw); err != nil {
+			return err
+		}
+		var fence []string
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &fence); err != nil {
+				return err
+			}
+		}
+		for _, path := range granted {
+			if !containsString(fence, path) {
+				added = append(added, path)
+			}
+		}
+		if len(added) == 0 {
+			return nil
+		}
+		widened := TrunkFixerFence(fence, added)
+		encoded, err := json.Marshal(widened)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(encoded), fixerID); err != nil {
+			return err
+		}
+		return appendEffect(tx, FixerFenceWidenedKind, fixerID, map[string]any{"fixer_item": fixerID, "added": added, "allowed_paths": widened}, l.cfg.Now())
+	})
+	if err != nil {
+		return nil, nil, classifyWrite(err)
+	}
+	return added, nil, nil
+}
+
+func containsString(list []string, want string) bool {
+	for _, have := range list {
+		if have == want {
+			return true
+		}
+	}
+	return false
 }
 
 // trunkFixerOpen answers the open fixer id, or "" when the trunk is green.

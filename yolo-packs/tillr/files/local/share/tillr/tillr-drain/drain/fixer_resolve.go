@@ -179,9 +179,67 @@ func resolveCommit(ctx context.Context, root, sha string) (string, error) {
 
 // provedFixer is one open fixer a proof covers, and the proof that covers it.
 type provedFixer struct {
-	id     string
-	checks []string
-	proof  checkProof
+	id       string
+	checks   []string
+	proof    checkProof
+	finished bool
+}
+
+// provableChecks is the checks a proof must have passed to cover a fixer. A fixer can
+// name a check twice: by its kind (`tillr-docs`, the selector a replay accepts) and by
+// its labelled id (`tillr-docs/every-face-...`), which is the only spelling a proof
+// records. A bare kind is answered by the labelled checks of that kind the fixer also
+// names; a bare kind with none stays a check of its own.
+func provableChecks(checks []string) []string {
+	out := []string{}
+	for _, check := range checks {
+		labelled := false
+		if !strings.Contains(check, "/") {
+			for _, other := range checks {
+				labelled = labelled || strings.HasPrefix(other, check+"/")
+			}
+		}
+		if !labelled {
+			out = append(out, check)
+		}
+	}
+	return out
+}
+
+// awaitedFixers answers the trunk fixers some blocked item waits on as a
+// trunk-already-red acquittal.
+func awaitedFixers(r *store.Reader) (map[string]bool, error) {
+	rows, err := r.Query(`SELECT item_id FROM items WHERE state=?`, StateBlocked)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	awaited := map[string]bool{}
+	for _, id := range ids {
+		waiting, _, err := item.ReadWaitingOn(r, id)
+		if err != nil {
+			return nil, err
+		}
+		if waiting == nil || !strings.HasPrefix(waiting.Reason, RefusalTrunkAlreadyRed+":") {
+			continue
+		}
+		if fixer := strings.TrimPrefix(waiting.Waiter, "item:"); fixer != waiting.Waiter && IsTrunkFixer(fixer) {
+			awaited[fixer] = true
+		}
+	}
+	return awaited, nil
 }
 
 // checkProof is one commit's recorded passes, by check, each with the time it passed.
@@ -323,6 +381,10 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 	type open struct {
 		id, text string
 		seen     int64
+		// finished is a fixer someone closed (or another route ended) without a landing
+		// while items are still acquitted behind it. A proof of its checks is recorded for
+		// it, so those items are released (repairedTrunkWaiter); its state is not touched.
+		finished bool
 	}
 	read := func(r *store.Reader) ([]open, error) {
 		lifecycle, err := definition.ForReader(r)
@@ -330,6 +392,10 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			return nil, err
 		}
 		declared := lifecycle.Parsed
+		awaited, err := awaitedFixers(r)
+		if err != nil {
+			return nil, err
+		}
 		rows, err := r.Query(`SELECT i.item_id, i.state, COALESCE(c.text, '') FROM items i LEFT JOIN item_criteria c ON c.item_id=i.item_id AND c.criterion_id='trunk-green' WHERE i.item_id LIKE 'fixer-main-%' ORDER BY i.item_id`)
 		if err != nil {
 			return nil, err
@@ -344,12 +410,28 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			}
 			if !finishedState(declared, state) {
 				found = append(found, o)
+			} else if state != StateLanded && state != StateResolvedElsewhere && awaited[o.id] {
+				o.finished = true
+				found = append(found, o)
 			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+		kept := found[:0]
+		for _, o := range found {
+			if o.finished {
+				// Already proved: its waiters are released by that record.
+				if proved, err := fixerProvedGreen(r, o.id); err != nil {
+					return nil, err
+				} else if proved != "" {
+					continue
+				}
+			}
+			kept = append(kept, o)
+		}
+		found = kept
 		for i := range found {
 			// The last red observation: the fixer's filing or a later red tip attached
 			// to it. A proof recorded before it cannot speak for that observation.
@@ -377,7 +459,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 		if red == "" {
 			continue
 		}
-		checks := fixerChecks(o.text)
+		checks := provableChecks(fixerChecks(o.text))
 		for _, proof := range proofs {
 			if !proof.passed(checks, o.seen) {
 				continue
@@ -387,7 +469,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 				return err
 			}
 			if contains {
-				covered = append(covered, provedFixer{id: o.id, checks: checks, proof: proof})
+				covered = append(covered, provedFixer{id: o.id, checks: checks, proof: proof, finished: o.finished})
 				break
 			}
 		}
@@ -407,10 +489,23 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			if err := tx.QueryRow(`SELECT state FROM items WHERE item_id=?`, f.id).Scan(&state); err != nil {
 				return err
 			}
+			reason := f.proof.describe(f.checks)
+			if f.finished {
+				if state == StateLanded || state == StateResolvedElsewhere || !finishedState(declared, state) {
+					continue
+				}
+				if f.checks == nil {
+					f.checks = []string{}
+				}
+				if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: f.proof.commit, ProvedAt: f.proof.provedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
+					return err
+				}
+				l.reportf("loop: %s is %s, and its checks now pass: %s; the items acquitted behind it are released\n", f.id, state, reason)
+				continue
+			}
 			if finishedState(declared, state) {
 				continue
 			}
-			reason := f.proof.describe(f.checks)
 			if _, err := item.SetStateWithReceipt(ctx, tx, f.id, StateResolvedElsewhere, at, item.MoveReceipt{Reason: reason, By: Utility, ResolvesVia: "commit:" + f.proof.commit}); err != nil {
 				return err
 			}
