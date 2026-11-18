@@ -22,7 +22,7 @@ type Intake struct {
 }
 
 // Settings holds optional post-landing actions and review intake. Empty command
-// and false after_landing disable actions; empty remote/ref mean the trunk's
+// and push.what "none" disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
 	Order    Order
@@ -74,11 +74,21 @@ type Roll struct {
 	PauseTimeoutSeconds int64
 }
 
-// Push names whether and where to push after landing.
+// Push modes: what the loop pushes, and so when. "none" pushes nothing; "tip" pushes the
+// trunk tip after each landing, proven or not; "green" pushes the green pointer's commit
+// when the pointer advances, so the remote never receives a commit the proof has not passed.
+const (
+	PushNone  = "none"
+	PushTip   = "tip"
+	PushGreen = "green"
+)
+
+// Push names what to push and where. What is one of PushNone, PushTip and PushGreen.
+// The legacy key after_landing = true reads as PushTip.
 type Push struct {
-	AfterLanding bool
-	Remote       string
-	Ref          string
+	What   string
+	Remote string
+	Ref    string
 }
 
 // Read loads only <root>/.tillr.toml. Missing files use the documented defaults;
@@ -94,7 +104,7 @@ func ReadWithoutLanding(root, definitionName string) (Settings, error) {
 }
 
 func read(root, nonLandingDefinition string) (Settings, error) {
-	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Order: Order{SettleMinutes: 10}}
+	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Push: Push{What: PushNone}, Order: Order{SettleMinutes: 10}}
 	path := filepath.Join(root, ".tillr.toml")
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -121,6 +131,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 			return Settings{}, fmt.Errorf("%s: definition %q does not complete on landing: remove settings %s", path, nonLandingDefinition, strings.Join(incompatible, ", "))
 		}
 	}
+	var legacyPush *bool
+	whatSet := false
 	for _, table := range keys(tables) {
 		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "order" && table != "sync" {
 			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes, order or sync)")
@@ -246,9 +258,16 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				if !ok {
 					return Settings{}, refuse(full, "a boolean")
 				}
-				s.Push.AfterLanding = flag
+				legacyPush = &flag
+			case "push.what":
+				str, ok := value.(string)
+				if !ok || (str != PushNone && str != PushTip && str != PushGreen) {
+					return Settings{}, refuse(full, `"none", "tip" or "green"`)
+				}
+				s.Push.What = str
+				whatSet = true
 			default:
-				expected := "a known push key (after_landing, remote or ref)"
+				expected := "a known push key (what, remote or ref; after_landing is the legacy spelling of what = \"tip\")"
 				if table == "sync" {
 					expected = "a known sync key (roadmaps)"
 				}
@@ -275,6 +294,14 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				return Settings{}, refuse(full, expected)
 			}
+		}
+	}
+	if legacyPush != nil {
+		if whatSet {
+			return Settings{}, refuse("push.after_landing", "absent when push.what is set; after_landing = true is the old spelling of what = \"tip\"")
+		}
+		if *legacyPush {
+			s.Push.What = PushTip
 		}
 	}
 	pathsToCheck := append([]string{}, s.Intake.Paths...)
@@ -338,7 +365,7 @@ func (s Settings) StartupLine() string {
 	if s.Push.Ref != "" {
 		ref = strconv.Quote(s.Push.Ref)
 	}
-	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.after_landing=%t push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.AfterLanding, remote, ref)
+	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.what=%s push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.What, remote, ref)
 	roadmaps := s.Sync.Roadmaps
 	if roadmaps == nil {
 		roadmaps = []string{}

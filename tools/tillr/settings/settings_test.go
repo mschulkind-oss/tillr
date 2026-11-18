@@ -33,7 +33,7 @@ func TestDefaultsAndTOML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Order: settings.Order{SettleMinutes: 10}}
+	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"}, Order: settings.Order{SettleMinutes: 10}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -42,7 +42,7 @@ paths = ["tools/tillr*/", "config/tillr/"]
 command = "just tillr-roll --no-request"
 pause_timeout_seconds = 45
 [push]
-after_landing = true
+what = "green"
 remote = "origin"
 ref = "refs/heads/main"
 `
@@ -56,7 +56,7 @@ ref = "refs/heads/main"
 	want = settings.Settings{
 		Order: settings.Order{SettleMinutes: 10},
 		Roll:  settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
-		Push:  settings.Push{AfterLanding: true, Remote: "origin", Ref: "refs/heads/main"},
+		Push:  settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings = %+v, want %+v", got, want)
@@ -77,6 +77,9 @@ func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 		{"[roll]\npause_timeout_seconds = 0", "roll.pause_timeout_seconds", "positive integer"},
 		{"[roll]\npause_timeout_seconds = -1", "roll.pause_timeout_seconds", "positive integer"},
 		{"[push]\nafter_landing = 'true'", "push.after_landing", "boolean"},
+		{"[push]\nwhat = 'main'", "push.what", "green"},
+		{"[push]\nwhat = true", "push.what", "green"},
+		{"[push]\nwhat = 'green'\nafter_landing = true", "push.after_landing", "push.what"},
 		{"[push]\nremote = false", "push.remote", "string"},
 		{"[push]\nref = 1", "push.ref", "string"},
 		{"[roll]\ncommand = 'run'", "roll.command", "roll.paths"},
@@ -122,5 +125,26 @@ func TestMalformedOrUnreadableFileIsNotDefaults(t *testing.T) {
 	}
 	if _, err := settings.Read(dir); err == nil || !strings.Contains(err.Error(), path) {
 		t.Fatalf("unreadable file: %v", err)
+	}
+}
+
+func TestPushWhatSpellings(t *testing.T) {
+	for body, want := range map[string]string{
+		"":                              "none",
+		"[push]\nremote = 'o'":          "none",
+		"[push]\nafter_landing = false": "none",
+		"[push]\nafter_landing = true":  "tip",
+		"[push]\nwhat = 'tip'":          "tip",
+		"[push]\nwhat = 'green'":        "green",
+		"[push]\nwhat = 'none'":         "none",
+	} {
+		dir := root(t)
+		if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := settings.Read(dir)
+		if err != nil || got.Push.What != want || !strings.Contains(got.StartupLine(), "push.what="+want+" ") {
+			t.Fatalf("%q: what = %q, %v; line %s", body, got.Push.What, err, got.StartupLine())
+		}
 	}
 }

@@ -463,6 +463,7 @@ type LoopResult struct {
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
 	rollAction, pushAction landingAction
+	greenPushAtStart       sync.Once
 	ownerMigrationItem     string
 	laneBootstrapReported  bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this

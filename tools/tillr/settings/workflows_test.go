@@ -48,7 +48,7 @@ design = 'design@v2'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.WorkflowDefaults["build"] != "build@v1" || got.WorkflowDefaults["design"] != "design@v2" || got.Comments == nil || !got.Push.AfterLanding || got.Roll.Command != "build" {
+	if got.WorkflowDefaults["build"] != "build@v1" || got.WorkflowDefaults["design"] != "design@v2" || got.Comments == nil || got.Push.What != "tip" || got.Roll.Command != "build" {
 		t.Fatalf("settings: %+v", got)
 	}
 	if !strings.Contains(got.StartupLine(), "workflows.default") {

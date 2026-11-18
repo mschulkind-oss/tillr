@@ -580,6 +580,11 @@ built by `just tillr-build`.
 - **A red trunk does not stop a deploy of the last green commit**, and never produces a deploy of
   a newer one.
 
+**Pushing reads the pointer too.** Under `push.what = "green"` the drain loop pushes the pointer's
+commit to the remote branch when the pointer advances, so the remote never receives a commit the
+proof has not passed. [Pushing what the proof has passed](tillr-restart.md#pushing-what-the-proof-has-passed)
+is the reference.
+
 One path is outside this rule and is named so nobody assumes otherwise: the pack's rendered copy
 is written on the host from the main checkout as it stands, by a command the owner runs. The
 status line shows whether the main checkout is at the green pointer, so a render from a red tree

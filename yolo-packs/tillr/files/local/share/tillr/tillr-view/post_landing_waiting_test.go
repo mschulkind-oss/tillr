@@ -36,3 +36,22 @@ func TestWaitingPostLandingFailures(t *testing.T) {
 		t.Fatalf("successful push should clear only its warning: %v", rows)
 	}
 }
+
+func TestWaitingGreenPushFailureNamesItsMover(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES
+ (1000,'drain.post-landing-action','landing','green-sha','{"action":"push","what":"green","detail":"refused by broker"}')`)
+	rows, err := readWaiting(context.Background(), h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Observation == "post-landing:push" {
+			if row.Why != "push of the green commit failed at green-sha: refused by broker" || row.Mover != "the next green advance" {
+				t.Fatalf("row = %+v", row)
+			}
+			return
+		}
+	}
+	t.Fatal("no push warning")
+}
