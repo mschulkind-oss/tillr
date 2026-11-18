@@ -500,7 +500,8 @@ another restart.
   an ordinary failover.
 - **A seat may name its own fallback order.** A seat's value is one backend name or an
   ordered list of them, such as `"design": ["claude-designer", "pi-designer"]`. The item
-  dispatches to the list's first backend, and a failover walks that seat's list forward and
+  dispatches to the first open backend unless shares or a selection mode request a split.
+  A failover walks that seat's list forward and
   stops at its end, so design work falls back to a design backend and never onto the build
   seat's. A step along the list is an ordinary `failover`, not `seat-degraded`: every
   backend on it was named for that seat. A seat with one backend, and an item with no seat,
@@ -549,6 +550,64 @@ zero-model-token cost are recorded in the
 [Claude backend design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md#direct-readings-and-the-owners-reserve).
 `tillr view waiting` shows each probed backend, both fractions, reserve, and when
 it reopens, including open backends and explicit failed/stale readings.
+
+## Seat backend shares and selection
+
+A seat is a workflow role; a backend is the execution service that fills it. Existing
+backend-name strings and ordered lists keep choosing the first open backend. To
+spread fresh dispatches by count, give every entry a positive numeric `share`:
+
+```json
+{
+  "seats": {
+    "build": [
+      {"backend": "claude", "share": 3},
+      {"backend": "pi", "share": 1}
+    ],
+    "review": {
+      "backends": ["claude", "pi", "muse"],
+      "pick": "round-robin"
+    }
+  }
+}
+```
+
+This is the seat portion of a policy; each named service still needs a row in the
+policy's `backends` map. Equal shares alternate; shares of three and one assign three
+of every four dispatches to the first service when both remain open. The policy check
+names the seat when refusing zero, negative, nonnumeric, or missing shares in a list
+that otherwise gives shares.
+
+A seat object has `backends` (the same list syntax) and an optional `pick`:
+
+- **`in-order`**, the default: without shares, choose the first open backend. With
+  shares, choose the backend whose next dispatch is earliest in the proportional
+  count order; ties follow list order.
+- **`round-robin`**: move forward through the list from the seat's last recorded
+  dispatch, skipping closed services. This gives equal turns even if entries name
+  unequal shares.
+- **`random`**: draw once per fresh dispatch among open services, with equal odds
+  without shares and odds proportional to shares otherwise.
+
+The choice is made inside the store transaction that claims the dispatch, not by
+redrawing during execution. The dispatch row records `backend`; the complete request
+records the adapter and model arguments. The `seat_dispatches` table records each
+seat/run/backend choice once, including parallel workflow nodes and independent
+agent reviews. Two loops using the same store and a restarted loop read the same
+history. Failed transactions and canceled, never-started staging claims contribute no dispatch
+count; completed parallel readers keep their history. A read-only `plan` retains
+its ordered capacity preview; its proposed backend is not a committed draw.
+
+Quota and reserve closures remove services from the choice. Their share goes to the
+open services in proportion. Counts are cumulative: when a service reopens, count-based
+selection lets it catch up against the seat's history. Ordered refusal fail-over still
+walks forward from the refused backend through the original seat list; it never makes
+another share or random draw. An item override still wins for a worker's fresh dispatch.
+Interrupted runs retain their backend; workflow restarts retain their request rather
+than selecting again. If every independent review backend is closed, the candidate waits
+for an open service without being refused, discarded, or rebuilt.
+Selection is implemented by `selectSeatDispatch`; `selectReviewDispatch` applies the
+same stored history to an agent review outside an explicit workflow.
 
 ## Document-fed workflow prerequisite
 

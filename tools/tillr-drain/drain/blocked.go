@@ -63,6 +63,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			p.dispatched++
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 			d.Seat = "design"
+			d.SelectSeat = true
 			d.BlockConflict = &c
 			d.RunRequest = p.request(row.ItemID, lane, backend)
 		} else {

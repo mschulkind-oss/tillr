@@ -128,6 +128,13 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
+		for _, node := range parallelNodes(d) {
+			// Finished readers may be retained in a resumed parallel group. Only
+			// never-started claims lose their share count when staging is canceled.
+			if _, err := tx.Exec(`DELETE FROM seat_dispatches WHERE run_id=? AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(`DELETE FROM dispatches WHERE decision_id=? AND item_id=? AND run_id=?`, d.DecisionID, d.ItemID, d.RunRequest.RunID); err != nil {
 			return err
 		}
