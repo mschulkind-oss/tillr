@@ -32,6 +32,10 @@ func placeFrom(tx *store.Tx, id, from string, at time.Time) error {
 			target = v
 			continue
 		}
+		// Parked and finished rows without keys do not belong to a gap.
+		if v.rank == "" && !InOrder(v.state) {
+			continue
+		}
 		if v.id == from && v.rank != "" {
 			sourcePos = len(rest)
 		}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -50,10 +49,6 @@ var (
 	linkTarget     = regexp.MustCompile(`\]\(([^)\s]+)`)
 )
 
-// roadmapDocuments are the roadmaps whose `## Icebox` and `## Exploration` sections park a
-// document: an item block in a parked document is synced as `not-started`, not `in-queue`.
-var roadmapDocuments = []string{"docs/roadmap.md", "docs/pi/roadmap.md", "docs/tillr/roadmap.md"}
-
 // parkedSections are the roadmap section headings that park the documents they link to. A
 // heading counts when its text starts with one of these words, so `## Icebox 🧊` parks too.
 var parkedSections = []string{"Icebox", "Exploration"}
@@ -93,10 +88,11 @@ type SyncReport struct {
 	Documents int    `json:"documents"`
 	Blocks    int    `json:"blocks"`
 
-	Created   []string   `json:"created"`
-	Updated   []string   `json:"updated"`
-	Unchanged []string   `json:"unchanged"`
-	Frozen    []SyncNote `json:"frozen"`
+	Placed    []SyncPlacement `json:"placed"`
+	Created   []string        `json:"created"`
+	Updated   []string        `json:"updated"`
+	Unchanged []string        `json:"unchanged"`
+	Frozen    []SyncNote      `json:"frozen"`
 
 	CreatedCount   int `json:"created_count"`
 	UpdatedCount   int `json:"updated_count"`
@@ -199,6 +195,10 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	}
 	if tx == nil {
 		plan.report.DryRun = true
+		plan.report.Placed, err = previewPlacements(r, plan)
+		if err != nil {
+			return SyncReport{}, err
+		}
 		return finishReport(plan.report), nil
 	}
 	report := plan.report
@@ -207,6 +207,27 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	keyed, err := keyMissingOrder(ctx, tx, in.At)
 	if err != nil {
 		return SyncReport{}, err
+	}
+	var last string
+	if err := tx.Reader().QueryRow(`SELECT COALESCE(MAX(rank),'') FROM items`).Scan(&last); err != nil {
+		return SyncReport{}, err
+	}
+	appendIDs := []string{}
+	needsKey := map[string]bool{}
+	for _, fw := range plan.writes {
+		for _, payload := range fw.payloads {
+			needsKey[payload.ItemID] = payload.Rank == "" && InOrder(payload.State)
+		}
+	}
+	for _, p := range plan.placements {
+		if needsKey[p.id] {
+			appendIDs = append(appendIDs, p.id)
+		}
+	}
+	keys := appendKeys(last, len(appendIDs))
+	appendRank := map[string]string{}
+	for i, id := range appendIDs {
+		appendRank[id] = keys[i]
 	}
 	for _, fw := range plan.writes {
 		if _, err := tx.Exec(`SAVEPOINT item_sync_file`); err != nil {
@@ -223,11 +244,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 					}
 				}
 				if payload.Rank == "" {
-					var last string
-					if err := tx.Reader().QueryRow(`SELECT COALESCE(MAX(rank),'') FROM items WHERE state NOT IN ('not-started','landed','closed','resolved-elsewhere')`).Scan(&last); err != nil {
-						return SyncReport{}, err
-					}
-					payload.Rank = last + "m"
+					payload.Rank = appendRank[payload.ItemID]
 				}
 			}
 			env, err := envelopeOf(RecordKind, "item-"+payload.ItemID, in.At, payload)
@@ -301,7 +318,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	// Finish append placement before following source marks: a source imported
 	// later in block order must not subsequently move away from its children.
 	for _, p := range plan.placements {
-		if created[p.id] && !recorded[p.id] && p.from != "" {
+		if created[p.id] && places[p.id] != 0 && !recorded[p.id] && p.from != "" {
 			if err := placeFrom(tx, p.id, p.from, in.At); err != nil {
 				return SyncReport{}, err
 			}
@@ -318,6 +335,32 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			}
 		}
 	}
+	placedIDs := map[string]string{}
+	for _, id := range keyed {
+		placedIDs[id] = ""
+	}
+	for _, id := range appendIDs {
+		if containsID(report.Created, id) || containsID(report.Updated, id) {
+			placedIDs[id] = ""
+		}
+	}
+	for _, p := range plan.placements {
+		if !created[p.id] || places[p.id] == 0 || recorded[p.id] || p.from == "" || p.from == p.id {
+			continue
+		}
+		var sourceKey string
+		if err := tx.Reader().QueryRow(`SELECT COALESCE((SELECT rank FROM items WHERE item_id=?),'')`, p.from).Scan(&sourceKey); err != nil {
+			return SyncReport{}, err
+		}
+		if sourceKey != "" {
+			placedIDs[p.id] = p.from
+		}
+	}
+	finalPlaces, err := OrderPlaces(tx.Reader())
+	if err != nil {
+		return SyncReport{}, err
+	}
+	report.Placed = placementReport(finalPlaces, placedIDs)
 	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli()); err != nil {
 		return SyncReport{}, err
 	}
@@ -362,13 +405,20 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		UnsharedOpenIDs: []string{}, StaleDocBlockIDs: []string{},
 	}
 	parked := parkedDocuments(in.Documents)
+	parkedLines := map[string]map[int]bool{}
+	for _, doc := range in.Documents {
+		if isRoadmap(doc.Path) {
+			parkedLines[doc.Path] = map[int]bool{}
+			roadmapLines(doc, func(line int, _ string, parked bool) { parkedLines[doc.Path][line] = parked })
+		}
+	}
 
 	var blocks []syncBlock
 	bad := map[string]bool{}
 	for _, doc := range in.Documents {
 		found, findings := parseItemBlocks(doc.Path, doc.Content)
 		for i := range found {
-			found[i].parked = parked[doc.Path]
+			found[i].parked = parked[doc.Path] || parkedLines[doc.Path][found[i].line]
 			if ref := found[i].payload.Workflow; ref != "" {
 				rule, message := "", ""
 				if !WorkflowRefValid(ref) {
@@ -388,6 +438,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		report.Findings = append(report.Findings, findings...)
 	}
+	blocks = roadmapBlocks(in.Documents, blocks)
 	report.Blocks = len(blocks)
 
 	// The fence's paths may name what a slice creates, so a path that is not on disk is a
@@ -661,6 +712,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		desired.Rank = stored.Rank
 		fw.payloads = append(fw.payloads, desired)
+		if desired.Rank == "" && InOrder(desired.State) {
+			placements = append(placements, sourcePlacement{desired.ItemID, ""})
+		}
 		report.Updated = append(report.Updated, desired.ItemID)
 	}
 	for file := range bad {
@@ -682,7 +736,13 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			return syncPlan{}, err
 		}
 		if config.Prose.Rewrite {
-			writes = append(writes, proseRewriteWrites(&report, blocks, held, d.Ready)...)
+			rewrites := proseRewriteWrites(&report, blocks, held, d.Ready)
+			writes = append(writes, rewrites...)
+			for _, fw := range rewrites {
+				for _, p := range fw.payloads {
+					placements = append(placements, sourcePlacement{p.ItemID, ""})
+				}
+			}
 		}
 	}
 	return syncPlan{report: report, writes: writes, placements: placements, orderRecord: orderRecord}, nil
@@ -845,46 +905,20 @@ func parkedDocuments(docs []SyncDocument) map[string]bool {
 	for _, d := range docs {
 		byPath[d.Path] = d.Content
 	}
-	for _, roadmap := range roadmapDocuments {
-		content, ok := byPath[roadmap]
-		if !ok {
+	for roadmap, content := range byPath {
+		if !isRoadmap(roadmap) {
 			continue
 		}
-		inParked := false
-		fence := fenceState{}
-		for _, line := range splitLines(content) {
-			if fence.step(line) {
-				continue
-			}
-			if strings.HasPrefix(line, "## ") {
-				title := strings.TrimSpace(strings.TrimPrefix(line, "## "))
-				inParked = false
-				for _, s := range parkedSections {
-					if strings.HasPrefix(title, s) {
-						inParked = true
-					}
-				}
-				continue
-			}
-			if strings.HasPrefix(line, "# ") {
-				inParked = false
-				continue
-			}
+		roadmapLines(SyncDocument{Path: roadmap, Content: content}, func(_ int, line string, inParked bool) {
 			if !inParked {
-				continue
+				return
 			}
 			for _, m := range linkTarget.FindAllStringSubmatch(line, -1) {
-				target := m[1]
-				if strings.Contains(target, "://") || strings.HasPrefix(target, "#") || strings.HasPrefix(target, "mailto:") {
-					continue
+				if target := roadmapLink(roadmap, m[1]); target != "" {
+					parked[target] = true
 				}
-				target, _, _ = strings.Cut(target, "#")
-				if target == "" {
-					continue
-				}
-				parked[path.Clean(path.Join(path.Dir(roadmap), target))] = true
 			}
-		}
+		})
 	}
 	return parked
 }
@@ -1227,6 +1261,13 @@ func SyncText(report SyncReport, at time.Time) string {
 	}
 	for _, id := range report.Updated {
 		fmt.Fprintf(&b, "updated: %s\n", id)
+	}
+	for _, p := range report.Placed {
+		fmt.Fprintf(&b, "placed: %s at %d", p.ItemID, p.Place)
+		if p.From != "" {
+			fmt.Fprintf(&b, " from %s", p.From)
+		}
+		b.WriteByte('\n')
 	}
 	for _, id := range report.StaleDocBlockIDs {
 		fmt.Fprintf(&b, "stale: %s is landed in this store; delete its block\n", id)

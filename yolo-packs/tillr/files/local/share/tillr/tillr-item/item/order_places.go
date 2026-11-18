@@ -48,13 +48,11 @@ func keyMissingOrder(ctx context.Context, tx *store.Tx, at time.Time) ([]string,
 			rows.Close()
 			return nil, err
 		}
-		if !InOrder(state) {
-			continue
-		}
-		if key == "" {
-			missing = append(missing, id)
-		} else {
+		if key != "" {
 			last = key
+		}
+		if InOrder(state) && key == "" {
+			missing = append(missing, id)
 		}
 	}
 	err = rows.Err()
@@ -62,11 +60,9 @@ func keyMissingOrder(ctx context.Context, tx *store.Tx, at time.Time) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range missing {
-		// Appending a digit always sorts strictly after the previous key. Unlike moves,
-		// sync must not repair a crowded gap by rewriting existing keys.
-		last += "m"
-		if _, err := SetRank(ctx, tx, id, last, at); err != nil {
+	keys := appendKeys(last, len(missing))
+	for i, id := range missing {
+		if _, err := SetRank(ctx, tx, id, keys[i], at); err != nil {
 			return nil, err
 		}
 	}
