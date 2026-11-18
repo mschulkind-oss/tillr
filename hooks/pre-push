@@ -329,9 +329,6 @@ def refusal(remote: str, manifest: str, sha: str, locator: str, branch: str,
 
 
 def main() -> int:
-    if os.environ.get(ACTIVE_ENV):
-        return 0
-
     stdin_lines = [line.split() for line in sys.stdin if line.strip()]
     if not stdin_lines:
         return 0
@@ -345,7 +342,29 @@ def main() -> int:
     # branch was there anyway. The push is the writer for a ref it carries.
     pushed_refs = {fields[2] for fields in stdin_lines if len(fields) >= 3}
 
-    repo = Path(git("rev-parse", "--show-toplevel").stdout.strip() or ".").resolve()
+    top = git("rev-parse", "--show-toplevel")
+    if top.returncode or not top.stdout.endswith("\n"):
+        print(f"pre-push: cannot locate checkout: {top.stderr.strip()}", file=sys.stderr)
+        return 1
+    repo = Path(top.stdout[:-1]).resolve()
+    publisher = repo / "bin" / "patch-branches-publish"
+
+    def holds_allow(refs):
+        checked = subprocess.run(
+            [sys.executable, str(publisher), "--check-only",
+             *[arg for ref in sorted(refs) for arg in ("--skip-ref", ref)]],
+            cwd=repo, capture_output=True, text=True,
+        )
+        if checked.returncode:
+            print(checked.stdout + checked.stderr, file=sys.stderr, end="")
+        return checked.returncode == 0
+
+    patch_destinations = {ref for ref in pushed_refs if ref.startswith("refs/heads/patch/")}
+    if patch_destinations and not holds_allow(patch_destinations):
+        return 1
+    # Internal pushes skip recursive publishing, never the destination hold check.
+    if os.environ.get(ACTIVE_ENV):
+        return 0
     # WHICH HOOK RAN, said on every push this guard inspects. The 2026-10-24 failure was
     # not a wrong answer but a missing one: a push reached origin with the guard never
     # invoked, and nothing on the push said so. An absent report is now the signal, and
@@ -377,7 +396,6 @@ def main() -> int:
     # lived in one clone only, and the first thing to notice was a launch on another
     # machine. A push is the one moment credentials and the network are certainly present,
     # so this is where the operation belongs.
-    publisher = repo / "bin" / "patch-branches-publish"
     publish_failed = False
     if publisher.is_file():
         published = subprocess.run(
@@ -392,6 +410,8 @@ def main() -> int:
         # nothing it reported, and the first symptom was a launch on another machine.
         for line in published.stdout.splitlines():
             print(f"pre-push: {line}", file=sys.stderr)
+        if published.returncode == 3:  # An observation hold must not reach the fallback push.
+            return 1
         if published.returncode != 0:
             # NOT a refusal yet: fall through to the per-commit check below, which is
             # what prints the exact remedy -- the manifest, the locator, both OIDs and
@@ -460,6 +480,8 @@ def main() -> int:
                         # proposing the destructive remedy is the wrong direction to be
                         # wrong in (2026-10-30).
                         continue
+                    if branch.startswith("patch/") and not holds_allow({f"refs/heads/{branch}"}):
+                        return 1
                     env = dict(os.environ, **{ACTIVE_ENV: "1"})
                     pushed = git("push", "--quiet", remote, f"{oid}:refs/heads/{branch}", env=env)
                     if pushed.returncode == 0 and remote_branch_oid(remote, branch) == oid:

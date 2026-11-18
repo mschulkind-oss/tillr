@@ -114,6 +114,11 @@ type Boundary struct {
 // run's target that was not that way before the run. Every one of them is a stop for an
 // unattended loop, and each names exactly what changed.
 type Violation struct {
+	// Ref, Old and New retain the complete identity of a ref observation. Empty
+	// endpoints mean creation or deletion; Detail remains the human-readable delta.
+	Ref string `json:"ref,omitempty"`
+	Old string `json:"old,omitempty"`
+	New string `json:"new,omitempty"`
 	// Kind is ref, worktree, path or store — the four things a snapshot records.
 	Kind string `json:"kind"`
 	// Where is the worktree path a path belongs to, and empty for a ref.
@@ -660,9 +665,9 @@ func refViolations(before, after *Boundary, excused func(string) bool) []Violati
 		now, hasAfter := after.Refs[name]
 		switch {
 		case !hadBefore:
-			violations = append(violations, Violation{Kind: "ref", Detail: fmt.Sprintf("%s appeared at %s", name, now)})
+			violations = append(violations, Violation{Kind: "ref", Ref: name, New: now, Detail: fmt.Sprintf("%s appeared at %s", name, now)})
 		case !hasAfter:
-			violations = append(violations, Violation{Kind: "ref", Detail: fmt.Sprintf("%s went away from %s", name, was)})
+			violations = append(violations, Violation{Kind: "ref", Ref: name, Old: was, Detail: fmt.Sprintf("%s went away from %s", name, was)})
 		case was != now:
 			violations = append(violations, refMoveViolation(name, was, now))
 		}
@@ -964,7 +969,7 @@ func shortSHA(sha string) string {
 // names it moved between. The landing excuse builds the same value, so the comparison and
 // the excuse cannot disagree about what a trunk move looks like.
 func refMoveViolation(ref, was, now string) Violation {
-	return Violation{Kind: "ref", Detail: fmt.Sprintf("%s moved %s -> %s", ref, was, now)}
+	return Violation{Kind: "ref", Ref: ref, Old: was, New: now, Detail: fmt.Sprintf("%s moved %s -> %s", ref, was, now)}
 }
 
 // headMoveViolation is the violation one worktree HEAD move produces. The shas are spelled

@@ -693,6 +693,68 @@ check "and the publish step left the ref to the push" \
 check "and it reports nothing it pushed for that ref" \
   "$(says '0 pushed to origin' && echo 1 || echo 0)"
 
+# Exercise all three entry points before and after acknowledging the moves.
+mkdir -p "$work/.tillr"
+git -C "$work" branch patch/unrequired main
+printf '// held publication
+' >> "$work/yolo-packs/p/pack.json"
+git -C "$work" commit -qam "manifest names the held patch branch"
+git -C "$work" checkout -q patch/ext
+git -C "$work" commit --allow-empty -qm "advance held patch branch"
+git -C "$work" checkout -q main
+python3 - "$work/.tillr/state.db" <<'PYTHON'
+import json, sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute('CREATE TABLE events (seq INTEGER PRIMARY KEY, kind TEXT, payload TEXT)')
+    db.execute('INSERT INTO events VALUES (1, ?, ?)', ('boundary.check', json.dumps({
+        'patch_moves': [{'ref': 'refs/heads/patch/' + name} for name in ('ext', 'unrequired')],
+    })))
+PYTHON
+if out="$(python3 "$work/bin/patch-branches-publish" --force-rewritten 2>&1)"; then rc=0; else rc=$?; fi
+check "publisher signals held publication with status 3 even when forced" \
+  "$([ "$rc" = 3 ] && says acknowledge-patch-move && echo 1 || echo 0)"
+for dest in main patch/ext patch/unrequired; do
+  push "$dest"
+  check "hold refuses $dest without publishing either branch" \
+    "$([ "$rc" != 0 ] && says acknowledge-patch-move &&
+        [ "$(origin_ref patch/ext)" = "$inflight_oid" ] &&
+        [ -z "$(origin_ref patch/unrequired)" ] && echo 1 || echo 0)"
+done
+PI_FORKS_PUSH_GUARD_ACTIVE=1 push patch/unrequired
+check "recursion flag does not bypass a direct patch hold" \
+  "$([ "$rc" != 0 ] && says acknowledge-patch-move &&
+      [ -z "$(origin_ref patch/unrequired)" ] && echo 1 || echo 0)"
+mv "$work/.tillr/state.db" "$work/.tillr/saved.db"
+mkdir "$work/.tillr/state.db"
+push patch/unrequired
+check "hook refuses unreadable store" \
+  "$([ "$rc" != 0 ] && says 'cannot read patch move acknowledgments at' &&
+      [ -z "$(origin_ref patch/unrequired)" ] && echo 1 || echo 0)"
+rmdir "$work/.tillr/state.db"
+mv "$work/.tillr/saved.db" "$work/.tillr/state.db"
+python3 - "$work/.tillr/state.db" <<'PYTHON'
+import json, sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    for name in ('ext', 'unrequired'):
+        db.execute('INSERT INTO events(kind,payload) VALUES (?,?)', ('drain.patch-move-acknowledged', json.dumps({
+            'observation': 1, 'ref': 'refs/heads/patch/' + name,
+            'by': 'owner', 'acknowledged_at': '2026-11-18T00:00:00Z',
+        })))
+PYTHON
+for dest in patch/ext patch/unrequired main; do
+  push "$dest"
+  check "acknowledgment allows $dest" \
+    "$([ "$rc" = 0 ] && [ "$(origin_ref "$dest")" = "$(git -C "$work" rev-parse "$dest")" ] && echo 1 || echo 0)"
+done
+
+# Publication holds use SQLite observations and owner acknowledgments. Keep their
+# isolated Python cases in this permanent suite, which the landing gate already runs.
+if python3 "$repo_root/tests/patch-move-publish.test.py"; then
+  check "observed patch moves hold publication until acknowledged" 1
+else
+  check "observed patch moves hold publication until acknowledged" 0
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures pre-push guard case(s) failed" >&2
   exit 1

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -73,6 +74,8 @@ func dispatch(args []string) int {
 		return clearFaultFace(rest)
 	case "accept-rewrite":
 		return acceptRewriteFace(rest)
+	case "acknowledge-patch-move":
+		return acknowledgePatchMoveFace(rest)
 	case "acquit", "examine", "set-aside":
 		return recoveryFace(face, rest)
 	case "retry":
@@ -88,6 +91,39 @@ func dispatch(args []string) int {
 	default:
 		return fail(drain.Usagef("unknown face %q: want %s", face, faceList))
 	}
+}
+
+func acknowledgePatchMoveFace(args []string) int {
+	fs := newFlagSet("acknowledge-patch-move")
+	path := fs.String("store", "", "the store holding the observation (required)")
+	seq := fs.Int64("observation", 0, "the boundary event sequence shown by waiting")
+	fork := fs.String("fork", "", "the fork whose observed move was reviewed")
+	by := fs.String("by", "", "who acknowledges the move (required)")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" || *seq <= 0 || strings.TrimSpace(*fork) == "" || strings.TrimSpace(*by) == "" {
+		return fail(drain.Usagef("acknowledge-patch-move needs --store <path>, --observation <sequence>, --fork <fork> and --by <owner>"))
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	ctx := context.Background()
+	s, err := store.Open(ctx, *path, true)
+	if err != nil {
+		return fail(openFailure(err))
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := patchmoves.Acknowledge(tx, *seq, *fork, *by, time.Now().UTC()); err != nil {
+			return drain.Usagef("%v", err)
+		}
+		return nil
+	}); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("acknowledged patch/%s observation %d by %s\n", *fork, *seq, *by)
+	return record.ExitOK
 }
 
 // clearFaultFace acknowledges one diagnosed fault without erasing its evidence.
@@ -612,7 +648,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acquit, examine, set-aside, boundary, resume, stop or loop"
+const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, acquit, examine, set-aside, boundary, resume, stop or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")

@@ -89,6 +89,8 @@ export interface WaitingRow {
   rank: string;
   item_id: string;
   document?: string;
+  /** Publication observation identity; not an item and has no item controls. */
+  observation?: string;
   class: string;
   where: string;
   why: string;

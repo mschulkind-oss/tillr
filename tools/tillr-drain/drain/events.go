@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
@@ -124,6 +127,9 @@ type boundaryCheckPayload struct {
 	// reads only Violations.
 	Observed     int                 `json:"observed,omitempty"`
 	Observations []boundaryViolation `json:"observations,omitempty"`
+	// PatchMoves is uncapped: every unexpected patch ref delta holds publication,
+	// but never faults the run. It is committed atomically with this bracket.
+	PatchMoves []patchmoves.Move `json:"patch_moves,omitempty"`
 }
 
 // maxBoundaryObservations bounds how many observations one boundary.check names: a gc or
@@ -184,6 +190,11 @@ func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []strin
 		}
 	}
 	payload.Observed = len(observed)
+	for _, o := range observed {
+		if o.Kind == "ref" && strings.HasPrefix(o.Ref, "refs/heads/patch/") {
+			payload.PatchMoves = append(payload.PatchMoves, patchmoves.Move{Ref: o.Ref, Old: o.Old, New: o.New})
+		}
+	}
 	for i, o := range observed {
 		if i == maxBoundaryObservations {
 			break
