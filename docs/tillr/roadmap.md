@@ -339,14 +339,59 @@ full run to pass before advancing the green pointer, without imposing a time lim
 - **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph; the owner's ruling in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1).
 - **Where:** the heavy runner and its revert in `tools/tillr-drain/drain/` (`heavy.go`,
   `heavy_revert.go`, `heavy_supervisor.go`), the run order in `tools/tillr-gate/`, the legacy
-  check list in `tools/fork-check.py`, and worker process launch in `tools/tillr-run/`.
+  check list in `tools/fork-check.py`, worker process launch in `tools/tillr-run/`, and the
+  parity case in `tests/go-test-shards.test.py`.
 - **Verify:** a fake judge whose first check fails quickly and second runs long: the revert
   event is recorded before the second check ends, and the pointer does not move until the whole
   run is green. A plan whose range touches one check's reads runs that check first. Only one
   whole run of the `tillr-drain` suite appears per proof. A worker test process started during
   a proof runs at a lower priority than the proof's processes and is never killed for time.
 
-<!-- tillr: item id="item-heavy-revert-time-to-verdict" paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-run/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+**Ruling, 2026-11-18 (answers the first run's fence conflict):** the first run stopped on c4
+because the heavy check `go-test-shards-test` runs `python3 tests/go-test-shards.test.py`, and that
+file was outside the item's paths. The run was right to stop. The paths now name
+`tests/go-test-shards.test.py`, and nothing else about the item is reopened. These were read on
+`2acf66dc4` on 2026-11-18:
+
+- **A proof runs the drain suite three times today, not two.** `GO_SHARD_DIRS` in
+  `tools/fork-check.py` already names `tools/tillr-drain`, so the legacy check
+  `go-tool/tools-tillr-drain` runs the suite sharded. That run is the one c4 keeps. The other two
+  are both in `test_drain_name_parity`, which runs `go test -json ./... -count=1` and then the
+  sharded runner over the same module. `tools/fork-check.py` therefore needs no change for c4.
+- **The parity case can compare names without running a test.** With `shards.run_shard` replaced
+  by a function that records each shard's package and names and returns no events,
+  `shards.run` over `tools/tillr-drain` planned 1,171 names with no name twice. They equalled the
+  `Test`, `Example` and `Fuzz` names that `go test -json -list . ./...` printed for the module.
+  The listing took 5.7 seconds and the planning 6.1.
+
+Three points settle the change:
+
+1. **The parity case lists and plans, and runs nothing.** `test_drain_name_parity` compares the
+   pairs of package and name from the native listing with the pairs the runner hands to
+   `run_shard`, as measured above, and asserts that no pair is planned twice. It starts no test:
+   the only processes are the listing, `go list`, `go test -c` and each binary's own
+   `-test.list`. The file's first line, which says parity exercises the real drain suite, changes
+   to match.
+2. **Nothing is lost by not running.** The case exists to prove the runner drops no name. That a
+   planned name then completes is already enforced in every real run, where `run_shard` fails a
+   shard with `missing completion`, and `test_missing_completion_names_shard` covers it.
+3. **Only that case changes outside the original paths.** The declaration
+   `tools/gate/checks/go-test-shards-test.json` stays as it is, reads included, because a change
+   under `tools/tillr-drain/` can still change the names. `tools/go-test-shards.py` is not edited:
+   the case replaces `run_shard` from the test. The rest of the file stays as it is, and it has no
+   copy under `yolo-packs/`.
+
+For c6, the regression test for c4 is in two parts. The parity case fails if it launches a command
+that runs a test, which is any argument beginning `-test.run`, or a `go test` with neither `-list`
+nor `-c`. A case in `tests/fork-check.test.py` asserts that a heavy plan holds exactly one command
+naming `tools/tillr-drain` as a suite to run. The gate design's "Time to a revert" paragraph still
+says the legacy check runs the suite whole; correct it under c6.
+
+The other criteria are not in conflict. The first run's kept work starts affected declared checks
+first and does not order the legacy checks, so it is a partial start on c3 to inspect, not a
+finished part. The criteria below are unchanged.
+
+<!-- tillr: item id="item-heavy-revert-time-to-verdict" paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-run/,tools/fork-check.py,tests/fork-check.test.py,tests/go-test-shards.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A failing heavy check starts its culprit search and automatic revert when it ends, not when the whole heavy run ends.
 - **c2:** The green pointer still moves only on a heavy run in which every check passed.
