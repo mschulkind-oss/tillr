@@ -434,6 +434,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", where, "the owner"
 	case ReasonConflictDesign:
 		return "waits on work", where, "design"
+	case ReasonDecisionCollision, ReasonSettleFailed:
+		return "needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"
 	default:
 		return "needs a cause", "lane", "diagnose the run; tillr drain retry --help"
 	}

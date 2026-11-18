@@ -22,6 +22,13 @@ const (
 	// gate that cannot judge, it is a fault about this candidate's delivery, not a verdict
 	// on its code, and it must not end the loop for every other lane.
 	ReasonLandHarnessError = "land-harness-error"
+	// ReasonDecisionCollision holds an item whose planned decision could not be recorded,
+	// because its id is already recorded with other columns: a drain defect, held on the
+	// one item it names rather than ending the loop.
+	ReasonDecisionCollision = "decision-collision"
+	// ReasonSettleFailed holds an item whose run could not be settled: an error while
+	// settling one run is that item's condition, not the loop's.
+	ReasonSettleFailed = "settle-failed"
 )
 
 func init() {

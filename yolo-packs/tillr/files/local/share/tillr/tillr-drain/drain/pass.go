@@ -916,7 +916,24 @@ func (l *Loop) applyPlan(ctx context.Context, p plannedApplication, mainSHA stri
 	return l.applyPlanGeneration(ctx, p, mainSHA, at, &generation)
 }
 
+// applyPlanGeneration applies one planned decision. A decision whose id the store already
+// holds with other columns is that one item's condition, not the loop's: the write is
+// rolled back, the item is held with ReasonDecisionCollision naming both decisions, and the
+// pass goes on (the owner's ruling: the loop never stops on one item's condition).
 func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
+	applied, work, err := l.applyPlanRecorded(ctx, p, mainSHA, at, generation)
+	var collision *decisionCollisionError
+	if err == nil || !errors.As(err, &collision) {
+		return applied, work, err
+	}
+	detail := collision.Error() + "; the planned " + p.decision.Action + " was not applied. A drain defect named two decisions alike: fix it, then clear this fault (tillr drain clear-fault)"
+	if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, detail); holdErr != nil {
+		return false, nil, err
+	}
+	return false, nil, nil
+}
+
+func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	if p.decision.Action == ActionHold {
 		if c := p.decision.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "owner" {
 			s, err := store.Open(ctx, l.cfg.Store, true)
@@ -1560,6 +1577,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		// One lane's retained work is that lane's condition; its item is held.
 		return "", nil
 	}
+	if c.outcome.err != nil && l.holdSettleFailure(c) {
+		return c.outcome.stop, nil
+	}
 	if c.outcome.stop != "" || c.outcome.err != nil {
 		result.StopItemID, result.StopStep = c.itemID, c.step
 		if c.result != nil && c.result.StopStep != "" {
@@ -1567,6 +1587,29 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		}
 	}
 	return c.outcome.stop, c.outcome.err
+}
+
+// holdSettleFailure holds one run's item when settling that run failed on a condition of
+// that item alone, and answers whether it did (the owner's ruling: the loop never stops on
+// one item's condition). The class is a decision collision: a decision id the store already
+// holds with other columns names one item's history, and the same plan would refuse it at
+// every start. The item is held with ReasonSettleFailed naming the step and the error.
+//
+// Other settle errors keep their recorded rules and still end the loop: a step's usage
+// refusal is a configuration fault every item shares, and a judgment the loop cannot record
+// fails the step. A store that refuses the hold itself is not one item's condition either.
+func (l *Loop) holdSettleFailure(c runCompletion) bool {
+	var collision *decisionCollisionError
+	if c.itemID == "" || !errors.As(c.outcome.err, &collision) {
+		return false
+	}
+	detail := c.step + ": " + c.outcome.err.Error()
+	ctx := context.Background()
+	if l.holdItemFault(ctx, Candidate{ItemID: c.itemID, RunID: c.id}, ReasonSettleFailed, detail) == nil {
+		return true
+	}
+	// A terminal item's run is not judged, so its fault is recorded without the run.
+	return l.holdItemFault(ctx, Candidate{ItemID: c.itemID}, ReasonSettleFailed, detail) == nil
 }
 
 // pass advances each item's one planned transition without waiting for a sibling.
