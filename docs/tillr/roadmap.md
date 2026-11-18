@@ -599,6 +599,53 @@ new decision.
 
 The criteria below are unchanged.
 
+**Ruling, 2026-11-18 (answers the eleventh run's report of blocked):** the eleventh run restored
+the preserved change, ran `just pack-sync`, saw it cut off part-way through the mirror of another
+module, put that mirror back and stopped without running a test. Nothing in this block changes.
+The run did its steps in the wrong order, on a change that was not yet the one to commit. These
+were read on `2ca3cedff` on 2026-11-18, in the same jail:
+
+- **The restored change is still the one the second ruling rejects.** `git ls-tree -r --name-only
+  refs/tillr/preserved/run-item-gate-stall-watch-without-perf-counter-a11` lists
+  `tools/tillr-gate/process_accounting.py`, the tracing supervisor, and its 336 lines are in that
+  change. The eleventh run's 19 files are the sixth run's 19 files. Syncing and committing them
+  would have delivered the supervisor that hangs a check.
+- **The sync is short, and it was cut off by the caller's limit.** On the unchanged tree, with a
+  load average of 42, `just pack-sync` finished in 20 seconds and `git status --short` then
+  listed nothing. The recipe deletes each module's mirror and copies it again, eleven modules in
+  turn, so a sync stopped part-way leaves one module's mirror partly deleted. That is what the
+  run saw in `tillr-view`; the recipe was not rewriting that module with anything new.
+- **The preserved change still applies.** `git diff` between that ref's first parent, which is
+  `3318def2f`, and the ref passes `git apply --check` on `2ca3cedff`.
+- **The stale declaration is still there.** The `rg` command in the ruling above returns the same
+  one line, in `tools/gate-timing-declarations.json`.
+
+The order of work, which the next run follows:
+
+1. **Restore the sources only.** Apply the preserved change's `tools/`, `tests/` and `docs/`
+   paths and leave out its copy under `yolo-packs/`. The mirror is made by the sync in step 4,
+   never restored and never edited by hand.
+2. **Build the fallback before anything else.** The restored change is the starting material, not
+   the candidate. Do what the second ruling's four points say: delete
+   `tools/tillr-gate/process_accounting.py`, its copy inside `tools/fork-check.py`, the shared
+   socket and the code that starts a check under them, and write the fallback that only reads.
+   The work is not ready to sync while `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py`
+   returns a line.
+3. **Test.** Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6`, then the Python suite by
+   the steps in the ruling above.
+4. **Sync once, last, and let it finish.** Run `just pack-sync` with a limit of at least ten
+   minutes on the command; it is a file copy and needs no more than that on a busy machine. If it
+   is cut off anyway, run it again to its end. A complete run rebuilds every module's mirror from
+   its source, so it repairs a partial one, and no mirror is restored with `git checkout`.
+5. **Check the paths, then commit.** `git status --short` lists only this item's paths and
+   `yolo-packs/tillr/files/local/share/tillr/tillr-gate/`. A line for any other module's mirror
+   means the sync did not finish: go back to step 4. Then commit once.
+
+A cut-off command is no result, for the sync as for the suite. It is repeated with a longer
+limit and is not a reason to stop.
+
+The criteria below are unchanged.
+
 <!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
 
 - **c1:** When the kernel counter is refused, the gate reads the check's CPU time from unprivileged process accounting that still counts exited children, and stall detection stays on.
