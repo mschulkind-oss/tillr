@@ -786,6 +786,17 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return nil, nil, err
 	}
+	// Reaping above may have just ended a run and freed its lane. Discover
+	// surviving children after those writes and before offering any lane, for
+	// hook definitions too; only the Git fingerprint checks are landing-specific.
+	if l.nonLanding {
+		err = l.recheckLaneChildren(ctx)
+	} else {
+		err = l.recheckLanes(ctx)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
 	var plans []plannedApplication
 	var leases []LaneLease
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
@@ -1257,8 +1268,9 @@ const (
 //
 // Only the face keeps the lease. A process that merely carries the run's markers — an MCP
 // server or other child the adapter left behind — is not the run, and on 2026-11-17 one
-// kept a finished run's lane leased with no expiry indefinitely. Such strays are reported,
-// not signaled: EndRuns is the drain's only run-signaling function.
+// kept a finished run's lane leased with no expiry indefinitely. Such strays are not
+// signaled: EndRuns is the drain's only run-signaling function. A stray inside the lane
+// instead holds it out of rotation, without keeping the store lease.
 //
 // The process table is read once, before the write transaction opens.
 func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
@@ -1313,7 +1325,7 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		return appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseEnded}, l.cfg.Now().UTC())
 	})
 	if err == nil && len(strays) > 0 {
-		l.reportf("loop: run %s ended, but process(es) %s still carry its markers; its lane %s was released anyway, and the processes were left running (end them with `tillr drain stop --end-runs`, or by hand)\n", d.RunRequest.RunID, strings.Join(strays, ", "), d.LaneID)
+		l.reportf("loop: run %s ended, but process(es) %s still carry its markers; lane %s's lease was released. Before offering it again, the next pass holds it out of rotation if any of these processes are still inside it\n", d.RunRequest.RunID, strings.Join(strays, ", "), d.LaneID)
 	}
 	return err
 }
@@ -1546,11 +1558,6 @@ planned:
 			l.index()
 		}
 	}()
-	if !l.nonLanding {
-		if err := l.recheckLanes(ctx); err != nil {
-			return "", err
-		}
-	}
 	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
 	if err != nil {
 		return "", err

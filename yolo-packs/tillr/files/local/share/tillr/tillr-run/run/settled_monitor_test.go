@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -124,6 +125,32 @@ func TestSettledReportUsesFreshExtractor(t *testing.T) {
 	}
 	if m.reportReady(context.Background()) {
 		t.Fatal("accepted old report")
+	}
+}
+
+// Child cleanup and unrelated process exits can race the /proc enumeration.
+// Linux returns both ENOENT and ESRCH for a stat entry that disappeared; neither
+// may turn a still-live worker group into a failed observation.
+func TestGroupCPUSkipsExitedProcessesButRejectsUnreadableCounters(t *testing.T) {
+	self := filepath.Join("/proc", fmt.Sprint(os.Getpid()), "stat")
+	for _, gone := range []error{os.ErrNotExist, syscall.ESRCH, syscall.EACCES} {
+		t.Run(gone.Error(), func(t *testing.T) {
+			cpu, err := groupCPUWithStat(syscall.Getpgrp(), func(path string) ([]byte, error) {
+				if path == self {
+					return os.ReadFile(path)
+				}
+				return nil, &os.PathError{Op: "read", Path: path, Err: gone}
+			})
+			if gone == syscall.EACCES {
+				if !errors.Is(err, gone) {
+					t.Fatalf("unreadable counter ignored: cpu=%q err=%v", cpu, err)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(cpu, fmt.Sprint(os.Getpid())+":") {
+				t.Fatalf("exited process broke the live group observation: cpu=%q err=%v", cpu, err)
+			}
+		})
 	}
 }
 

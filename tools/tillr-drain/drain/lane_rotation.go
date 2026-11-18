@@ -30,6 +30,9 @@ const (
 	// files when a pinned candidate is staged onto it (stagePinnedCandidate), which
 	// staging will not overwrite.
 	ReasonLaneUncommittedWork = "lane-holds-uncommitted-work"
+	// ReasonLaneChildren holds an idle lane while an ended run's marked processes
+	// have working directories inside it.
+	ReasonLaneChildren = "lane-run-children-live"
 )
 
 const (
@@ -135,7 +138,10 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 		c = &laneCondition{reason: refusal.Reason, detail: refusal.Msg, remedy: refusal.Remedy}
 		l.laneConditions[lane] = c
 	}
-	c.out, c.at, c.fingerprint = true, l.cfg.Now().UTC(), l.laneFingerprint(ctx, lane)
+	c.out, c.at = true, l.cfg.Now().UTC()
+	if c.reason != ReasonLaneChildren {
+		c.fingerprint = l.laneFingerprint(ctx, lane)
+	}
 	if !c.recorded {
 		if err := appendLaneEvent(ctx, l.cfg.Store, laneRefusedKind, lane, laneRefusal{LaneID: lane, Reason: c.reason, Detail: c.detail, Remedy: c.remedy}, c.at); err != nil {
 			return err
@@ -143,8 +149,12 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 		c.recorded = true
 	}
 	if !c.printed {
-		l.reportf("loop: lane %s is out of rotation (%s): %s. Remedy: %s. It is re-checked when its HEAD or status changes, or every %s\n",
-			lane, c.reason, c.detail, c.remedy, laneRecheckInterval)
+		recheck := fmt.Sprintf("when its HEAD or status changes, or every %s", laneRecheckInterval)
+		if c.reason == ReasonLaneChildren {
+			recheck = "on every pass, until no marked process remains inside it"
+		}
+		l.reportf("loop: lane %s is out of rotation (%s): %s. Remedy: %s. It is re-checked %s\n",
+			lane, c.reason, c.detail, c.remedy, recheck)
 		c.printed = true
 	}
 	return nil
@@ -162,7 +172,7 @@ func (l *Loop) restoreLane(ctx context.Context, lane string) error {
 	}{lane}, l.cfg.Now().UTC()); err != nil {
 		return err
 	}
-	l.reportf("loop: lane %s is back in rotation: it stages again\n", lane)
+	l.reportf("loop: lane %s is back in rotation: it is available to stage again\n", lane)
 	return nil
 }
 
@@ -179,9 +189,12 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 		}
 		l.laneConditionsLoaded = true
 	}
+	if err := l.recheckLaneChildren(ctx); err != nil {
+		return err
+	}
 	now := l.cfg.Now().UTC()
 	for lane, c := range l.laneConditions {
-		if !c.out {
+		if !c.out || c.reason == ReasonLaneChildren {
 			continue
 		}
 		if now.Sub(c.at) >= laneRecheckInterval || l.laneFingerprint(ctx, lane) != c.fingerprint {

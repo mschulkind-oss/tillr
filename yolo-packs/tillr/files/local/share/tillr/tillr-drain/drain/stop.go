@@ -116,6 +116,7 @@ func (s *ProcessSteps) startRun(id string, start func() error) error {
 type runFaceOwner struct {
 	LoopOwner
 	resume bool
+	runID  string
 }
 
 func liveRunFaces(path, id string, here *LoopOwner) ([]*runFaceOwner, error) {
@@ -176,8 +177,12 @@ func markedRunProcesses(path, id string, here *LoopOwner, facesOnly bool) ([]*ru
 			return nil, err
 		}
 		hasRun, hasStore, resume := false, false, false
+		var runID string
 		for _, v := range bytes.Split(env, []byte{0}) {
-			hasRun = hasRun || string(v) == "TILLR_RUN_ID="+id
+			if strings.HasPrefix(string(v), "TILLR_RUN_ID=") {
+				runID = strings.TrimPrefix(string(v), "TILLR_RUN_ID=")
+				hasRun = runID != "" && (id == "" || runID == id)
+			}
 			hasStore = hasStore || string(v) == "TILLR_LOOP_STORE="+path
 			resume = resume || string(v) == "TILLR_RUN_RESUME=true"
 		}
@@ -196,7 +201,7 @@ func markedRunProcesses(path, id string, here *LoopOwner, facesOnly bool) ([]*ru
 		}
 		owner := *here
 		owner.PID, owner.Start = pid, start
-		owners = append(owners, &runFaceOwner{owner, resume})
+		owners = append(owners, &runFaceOwner{LoopOwner: owner, resume: resume, runID: runID})
 	}
 	return owners, nil
 }

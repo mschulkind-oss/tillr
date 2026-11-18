@@ -1184,6 +1184,19 @@ unchanged one again. It prints the line once more for its own operator.
 `tillr view waiting` shows each lane out of rotation as a row named `lane:<id>`, with the
 remedy as its mover. `tillr view lanes` prints the condition under the lane's row.
 
+An ended run's surviving processes can also keep a lane out of rotation, with reason
+`lane-run-children-live`. The store lease is released, but after any release or expiry
+reaping and before offering a configured lane, the loop checks processes carrying both
+`TILLR_RUN_ID` and `TILLR_LOOP_STORE` (the canonical store path) in their inherited
+environment. Successful release events also identify ended runs when a legacy allocation
+left no terminal run row. This check applies to both landing and hook definitions. Only processes whose current working directory is inside that
+run's lane directory hold it; a process elsewhere does not. The waiting row names the
+process ids and a `kill` command. This condition is checked on every pass, including after
+a restart, and clears with `drain.lane-restored` once none remain. Worktree changes and the
+slow staging retry interval never bypass a live-process hold. The executor ends the
+worker's remaining process group on normal exit; children that leave that group are not
+ended by that cleanup and instead hold the lane if they remain inside it.
+
 Item-owned staging failures keep their behavior: they count toward the streak. Each item
 and lane prints its line once per distinct error, not once per pass.
 

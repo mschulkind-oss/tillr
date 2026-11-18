@@ -146,6 +146,14 @@ recorded landing names, is not refused. Staging resets that lane and records
 item the next lane. `tillr view waiting` shows it as `lane:<id>` with its remedy. Reset such
 a lane only as the tillr-drain README's "Resetting a lane" describes.
 
+An idle lane also stays out of rotation with `lane-run-children-live` while an ended
+run's processes carry its run/store markers and have working directories inside the
+lane. Its waiting row names the process ids and a `kill` command; wait for them to exit
+or end them deliberately. The loop checks this on every pass and restores rotation
+once none remain. A marked process outside the lane does not hold it. `run exec` ends
+the worker's remaining process group on normal exit too, but children that created
+another group can survive and are covered by this lane hold.
+
 ## Exit codes, once
 
 Every binary answers with the same contract, so a caller reads a decision rather than a
