@@ -53,7 +53,9 @@ questions the same day. Two remain, and each has a design of its own:
 [`OQ-GP6`](../design/tillr-graph-is-the-path.md#OQ-GP6), how a question and its design land ahead of
 their item, is answered by [early design landing](../design/tillr-early-design-landing.md), which
 asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
-[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). First among these is
+[`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, settles what an item, a node, a
+run, a session and a worktree are, and asks [`OQ-VO1`](../design/tillr-vocabulary.md#OQ-VO1) to
+[`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4). First among these is
 [`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
 an actor other than the worker or the owner, because it holds two queued items.
 
