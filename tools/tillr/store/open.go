@@ -34,6 +34,9 @@ type Store struct {
 	// lock is the checkpoint owner's lock file, opened once per handle so that its close
 	// can see whether an owner runs; nil when it could not be opened, which reads as none.
 	lock *os.File
+	// events is the process's committed-event cache for this store, nil when the
+	// process has not turned it on (eventcache.go).
+	events *eventCache
 }
 
 // Open opens the store at path and selects SQLite's write-ahead log (WAL), so
@@ -65,7 +68,7 @@ func open(ctx context.Context, path string, create, migrate bool, options ...Ope
 	}
 	trace := startSQLiteTrace(path, "open")
 	defer func() { trace.finish(resultErr) }()
-	s := &Store{path: path, writable: true, busyTimeout: cfg.busyTimeout}
+	s := &Store{path: path, writable: true, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}
 	// The sidecar first, so that even this open's own failure paths close no connection
 	// that is the store's last. A store that does not exist yet gets it once WAL is
 	// selected, before anything is migrated.
@@ -283,7 +286,7 @@ func OpenRead(ctx context.Context, path string, options ...OpenOption) (*Store, 
 		db.Close()
 		return nil, readOpenError(path, err)
 	}
-	return &Store{db: db, path: path, busyTimeout: cfg.busyTimeout}, nil
+	return &Store{db: db, path: path, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}, nil
 }
 
 // Close closes the store. A writable handle first checkpoints the log if it is due

@@ -214,7 +214,9 @@ func TestSlowWriterTraceCapturesHolderAndWaitingBegin(t *testing.T) {
 		return false
 	})
 	before := read()
-	if !strings.Contains(before, "newTx") || !strings.Contains(before, ".(*Store).WriteTx") {
+	// A writer in this process waits for its turn in the process's write queue
+	// (writequeue.go) before it begins; one in another process waits in BEGIN (newTx).
+	if !(strings.Contains(before, "newTx") || strings.Contains(before, ".(*writeQueue).enter")) || !strings.Contains(before, ".(*Store).WriteTx") {
 		t.Fatalf("missing blocked BEGIN/holder stacks: %s", before)
 	}
 	finish()
