@@ -531,7 +531,12 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 	}
 	result.RefusedSteps[reason]++
 	l.mu.Unlock()
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": judgeWriterRun(c), "step": reason, "detail": detail}, l.cfg.Now())
+	writer := judgeWriterRun(c)
+	at := l.cfg.Now()
+	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": writer, "step": reason, "detail": detail}, at, func(tx *store.Tx) error {
+		c.RunID = writer
+		return l.answerLandingRefusal(tx, c, refusalPayload{Step: reason, Detail: detail}, at)
+	})
 }
 func judgeFailureDetail(r *store.Reader, id, reason string) (string, error) {
 	rows, err := r.Query(`SELECT COALESCE(json_extract(payload,'$.detail'),'') FROM events

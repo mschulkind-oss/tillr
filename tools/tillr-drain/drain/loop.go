@@ -462,6 +462,7 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	endingCapabilities     map[string]string
 	rollAction, pushAction landingAction
 	greenPushAtStart       sync.Once
 	ownerMigrationItem     string
@@ -722,6 +723,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	l.keepWALWhileRunning()
 	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
 		return faultResult(result, Usagef("the loop has no usable policy"))
+	}
+	if err := l.recordEndingCapabilities(ctx); err != nil {
+		if ctx.Err() != nil {
+			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+			return result, nil
+		}
+		return faultResult(result, err)
 	}
 	if err := l.refreshSession(ctx, l.cfg.Now().Add(PassInterval)); err != nil {
 		if ctx.Err() != nil {
@@ -1508,13 +1516,29 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			outcome.err = l.markExamined(ctx, decision)
 		}
 	}()
-	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
-		return laneOutcome{err: err}
-	}
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
-	if quotaSingleRun(decision) {
+	intake, err := l.intakeLandingOffer(ctx, decision, record, mainSHA)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	if intake == landingOfferSettled {
+		return laneOutcome{}
+	}
+	if intake == landingOfferDuplicate {
+		l.reportf("loop: %s repeated a landing call already recorded; not judging it again\n", record.RunID)
+		return laneOutcome{stop: l.abandon(ctx, lane, record.RunID, l.headOf(ctx, lane), "duplicate landing offer")}
+	}
+	offered := intake == landingOfferSubmitted
+	if offered {
+		code := 0
+		record.State, record.ExitCode = run.StateExited, &code
+	}
+	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+		return laneOutcome{err: err}
+	}
+	if !offered && quotaSingleRun(decision) {
 		interrupted, err := l.quotaInterrupted(ctx, record.RunID)
 		if err != nil {
 			return laneOutcome{err: err}
@@ -1564,7 +1588,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	}
 	if l.nonLanding {
 		if decision.Workflow != nil {
-			_, err := l.settleNode(ctx, decision, record, log, mainSHA, result)
+			_, err := l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
 			return laneOutcome{err: err}
 		}
 		return l.settleHook(ctx, decision, result)
@@ -1574,7 +1598,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	}
 	if failed, err := failedDesignerResume(decision, record); err != nil {
 		return laneOutcome{err: err}
-	} else if failed {
+	} else if failed && !offered {
 		prepared = true
 		return l.replaceFailedDesigner(ctx, decision, record, mainSHA, tick, at, result, timing, watched, deferJudge)
 	}
@@ -1616,7 +1640,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "workflow node was cut short and remains unjudged")}
 		}
-		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result)
+		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
 		if handled {
 			prepared = nodeErr == nil
 			return laneOutcome{err: nodeErr}
@@ -1628,7 +1652,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	if orphaned {
+	if orphaned && !offered {
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "orphaned by a loop stop")}
 	}
 	// A usage refusal says nothing about the conflict. Release it for the next
@@ -1741,18 +1765,23 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// take the blocked route below. Any other ending is a missing output: with no commit it
 	// is returned to the same session saying what is missing, like a run that committed
 	// nothing, and a commit is a candidate like any other.
-	recoveredOwnerQuestion, err := l.recoverOwnerQuestion(ctx, &decision, log)
-	if err != nil {
-		return laneOutcome{err: err}
+	footer := "done"
+	recoveredOwnerQuestion := false
+	if !offered {
+		footer = reportFooter(log)
+		recoveredOwnerQuestion, err = l.recoverOwnerQuestion(ctx, &decision, log)
+		if err != nil {
+			return laneOutcome{err: err}
+		}
 	}
-	contract := workerContract(decision, request) && !recoveredOwnerQuestion
+	contract := !offered && workerContract(decision, request) && !recoveredOwnerQuestion
 	endingNote := ""
 	if contract {
 		if problem := workerEndingProblem(log); problem != "" {
 			endingNote = missingOutputDetail(problem)
 		} else if parseObstacle(log).Kind == ObstacleSeat && !l.laneAttempted(ctx, lane, mainSHA) {
 			endingNote = missingOutputDetail(SeatNeedsAttempt)
-		} else if footer := reportFooter(log); footer == "blocked" || footer == "trunk-broken" {
+		} else if footer == "blocked" || footer == "trunk-broken" {
 			if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
 				return laneOutcome{err: err}
 			} else if stale {
@@ -1763,7 +1792,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 		}
 	}
-	if footer := reportFooter(log); (request.Backend != "command" && (footer == "blocked" || (contract && footer == "trunk-broken")) && (!contract || endingNote == "")) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
+	if (request.Backend != "command" && (footer == "blocked" || (contract && footer == "trunk-broken")) && (!contract || endingNote == "")) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
 		// A report from a run staged on a base that lacked what made the item ready is
 		// about the staging, which neither the design seat nor the owner can change.
 		if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
@@ -1789,7 +1818,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// a design candidate, not the no-commit objection the report described.
 		class = AttemptAnswered
 	}
-	if request.Backend != "command" && item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
+	if request.Backend != "command" && item.IsCommentItem(request.ItemID) && footer != "done" {
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: l.laneTarget(lane), HeadSHA: l.headOf(ctx, lane)}
 		candidate.RefusalDetail = "comment run did not report RESULT: done"
 		if err := l.refuse(ctx, candidate, result, RefusalGate); err != nil {
@@ -1848,7 +1877,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				}
 			}
 		}
-		if item.IsCommentItem(request.ItemID) && reportFooter(log) == "done" && record.ExitCode != nil && *record.ExitCode == 0 {
+		if item.IsCommentItem(request.ItemID) && footer == "done" && record.ExitCode != nil && *record.ExitCode == 0 {
 			candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: target, BaseSHA: baseSHA, HeadSHA: headSHA}
 			if err := l.answerCommentWithoutCommit(ctx, candidate, result); err != nil {
 				return laneOutcome{err: err}
@@ -2490,6 +2519,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 			return "", false, err
 		}
 		return "", false, nil
+	}
+	if err := l.recordLandingCallLanded(ctx, candidate.RunID, landed.TrunkAfter); err != nil {
+		return "", false, err
 	}
 	if err := l.deliverCommentReplies(ctx, candidate); err != nil {
 		return "", false, err

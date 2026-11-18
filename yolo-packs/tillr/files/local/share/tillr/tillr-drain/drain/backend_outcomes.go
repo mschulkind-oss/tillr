@@ -66,6 +66,29 @@ func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
 	}
 	err = rows.Err()
 	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	offerRows, err := r.Query(`SELECT json_extract(payload,'$.terminal_seq') FROM events WHERE kind=?`, callOffered)
+	if err != nil {
+		return nil, err
+	}
+	offered := map[int64]bool{}
+	for offerRows.Next() {
+		var seq int64
+		if err := offerRows.Scan(&seq); err != nil {
+			offerRows.Close()
+			return nil, err
+		}
+		offered[seq] = true
+	}
+	err = offerRows.Err()
+	offerRows.Close()
+	for i := range out {
+		if offered[out[i].seq] {
+			out[i].class, out[i].closes = AttemptAnswered, false
+		}
+	}
 	if err != nil || !unsaved {
 		return out, err
 	}
@@ -78,7 +101,7 @@ func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
 		return nil, err
 	}
 	for i := range out {
-		if out[i].saved {
+		if out[i].saved || offered[out[i].seq] {
 			continue
 		}
 		rec := out[i].rec

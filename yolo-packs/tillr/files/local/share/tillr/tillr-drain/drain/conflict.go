@@ -74,7 +74,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		return "", false, err
 	}
 	if repeated {
-		if err := l.recordConflict(ctx, candidate, landed, "", key); err != nil {
+		if err := l.recordConflict(ctx, candidate, landed, "", key, true); err != nil {
 			return "", false, err
 		}
 		l.reportf("loop: %s conflicted again with the same paths and hunks as an earlier conflict; it is not sent back again\n", candidate.ItemID)
@@ -83,7 +83,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// The fix run only makes sense when the trunk actually moved: a conflict against the
 	// candidate's own base is not something a re-application onto the same tree can resolve.
 	if mainSHA == "" || mainSHA == candidate.BaseSHA || candidate.Request == nil || candidate.BaseRef != "" {
-		if err := l.recordConflict(ctx, candidate, landed, "", key); err != nil {
+		if err := l.recordConflict(ctx, candidate, landed, "", key, false); err != nil {
 			return "", false, err
 		}
 		l.reportf("loop: %s conflicted and no conflict-fix run is possible (trunk %s, base %s); the next pass returns it to its worker on the latest trunk\n",
@@ -142,7 +142,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
-	if err := l.recordConflict(ctx, candidate, landed, fixRunID, key); err != nil {
+	if err := l.recordConflict(ctx, candidate, landed, fixRunID, key, false); err != nil {
 		return "", false, err
 	}
 	l.mu.Lock()
@@ -199,11 +199,11 @@ func (l *Loop) nextItemAttempt(ctx context.Context, itemID string) (int, error) 
 // the fix run that answers it when one was staged. It is the record the identical-repeat
 // rule compares, the evidence a returned run's brief carries, and the record a person
 // reads to see which run was the fix.
-func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed LandOutcome, fixRunID, key string) error {
+func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed LandOutcome, fixRunID, key string, repeated bool) error {
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "conflict"); err != nil {
 		return err
 	}
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, refusalPayload{
+	payload := refusalPayload{
 		Detail:        strings.Join(landed.ConflictPaths, "\n"),
 		Step:          RefusalConflict,
 		ItemID:        candidate.ItemID,
@@ -212,7 +212,14 @@ func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed L
 		ConflictPaths: landed.ConflictPaths,
 		FixRunID:      fixRunID,
 		Evidence:      key,
-	}, l.cfg.Now().UTC())
+	}
+	at := l.cfg.Now().UTC()
+	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
+		if repeated {
+			return nil
+		}
+		return l.answerLandingRefusal(tx, candidate, payload, at)
+	})
 }
 
 // conflictRepeats answers whether a conflict with this key repeats an earlier conflict

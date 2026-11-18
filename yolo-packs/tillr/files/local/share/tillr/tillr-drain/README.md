@@ -456,6 +456,26 @@ ordinary exit 0 (`end_cause: normal-exit`) that carries an `ending_exception`
 The drain judges it on its answer like any exit 0. It must not treat the run as
 killed, re-dispatch it or resume its session.
 
+## Landing calls
+
+The drain owns one store record per landing call ID. `call.offered` binds the offer to its
+run, session, worktree, staged base and committed head. `call.answered` stores the one
+immutable answer. Delivery and closure are separate from choosing an answer; a repeated
+call ID does not create a second offer or authorize a second judgment.
+
+The harness publishes `landing-offer.json` in the offering run's durable directory. The
+drain reads it only after the run and its children are gone and treats a valid offer as a
+completed submission of that commit. For an opening that delivers an answer, the drain
+publishes `landing-answer.json` in the **new** run's durable directory before the harness
+starts. Both files are written whole and renamed into place. Neither belongs in the loop
+record directory.
+
+The drain records the adapters' effective `ending-capability` declarations at loop start.
+Pi, Claude, Muse and Agy all ship `footer`: a run with only a footer follows the existing
+path. The offer/answer handoff is exercised with a stand-in harness; no shipped adapter
+opens a session to deliver a landing call answer yet. See the
+[landing-call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md) for the full protocol.
+
 ## Backend policy changes
 
 The optional `read_only_seats` list and `seat_purposes` map reference seats

@@ -377,7 +377,10 @@ func (l *Loop) appendRevert(ctx context.Context, p revertPayload, ending *refusa
 		if _, err := tx.Append(event.Event{Kind: RefusalKind, ObjectType: "run", ObjectID: &run, Payload: raw, At: at}); err != nil {
 			return Internalf("appending the %s event: %v", RefusalKind, err)
 		}
-		return nil
+		if err := recordLandingCallLanding(tx, p.RunID, p.Landing, at); err != nil {
+			return err
+		}
+		return l.answerLandingRefusal(tx, Candidate{RunID: p.RunID, HeadSHA: p.Revert, BaseSHA: p.Tip}, *ending, at)
 	})
 }
 

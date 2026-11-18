@@ -462,6 +462,14 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
+		if c.Status == "answered" && strings.HasPrefix(c.Text, IdenticalRepeatPrefix) {
+			design := candidate
+			design.RunID = c.RunID
+			detail := fmt.Sprintf("Design answer commit: %s\n%s", candidate.HeadSHA, item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw)))
+			if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+		}
 		if then != nil {
 			return then(tx)
 		}

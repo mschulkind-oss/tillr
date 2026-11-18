@@ -1703,6 +1703,11 @@ planned:
 	if err != nil {
 		return "", err
 	}
+	if !l.nonLanding {
+		if err := l.reconcileLandingCalls(ctx); err != nil {
+			return "", err
+		}
+	}
 	if err := l.retireDesigners(ctx); err != nil {
 		return "", err
 	}
