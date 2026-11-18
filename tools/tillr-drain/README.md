@@ -827,7 +827,16 @@ passed at that commit. A landing gate's verdict covers only the checks its own d
 selected, and a commit an operator made directly carries none; on 2026-11-18 the proof
 reported the red `tillr-docs` check as "the landing tier's business" for five green
 advances. The one step it still leaves to the landing gate is a fork step whose verdict
-reads the upstream a launch would build rather than the tree.
+reads the upstream a launch would build rather than the tree. Those steps (`series` and
+`patch-branch-inv2`) are reported as unavailable, and green makes no claim about them:
+an unavailable check does not hold the pointer.
+
+A fork-quality step that refuses because its candidate checkout is not the series' tree
+(`STALE`) judged nothing, so it holds the run at unknown rather than passing it. The
+candidate under `.forks/candidate/` is shared with every landing gate, so `bin/pi-forks`
+leaves a candidate that is already current untouched: a patch-branch fork's candidate used
+to be detached and checked out again on every materialize, and on 2026-11-18 a proof's
+preflight landed in that window and found it "not checked out on main".
 
 The proof compares its commit to the green pointer. It starts declaration checks whose
 reads match changed files or contain them under a directory read ending in `/`, in name
