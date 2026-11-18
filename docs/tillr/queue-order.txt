@@ -1,0 +1,15 @@
+# last_hand_move_event_seq: 1291291
+# hand_move_event_sha256: 3a163140d9268e91e82fafdc21149063a71b78a396b3fcd40b02c3b19887f22e
+fixer-main-dfabbdca4520
+item-landing-call-session-returns
+item-landing-call-record
+item-landing-call-pi-fork-park
+item-gate-pinned-fork-inputs
+item-jl-owner-criterion-hold
+item-jl-terminal-state-receipts
+item-agent-default-bmad-superpowers-skills
+item-bedrock-claude-latest-only
+item-design-refusal-resumes-session
+item-plan-verify-and-guidance
+item-landing-call-land-tool
+item-landing-call-obstacle-tool
