@@ -142,6 +142,12 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, 
 			}
 			sample = monitor.after(SettledSampleInterval)
 		case <-ticker.C:
+			if monitor.records != nil {
+				if err := monitor.records(); err != nil {
+					syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					return <-done, false, false, Internalf("recording worker progress and sessions: %v", err)
+				}
+			}
 			if sample == nil && monitor.observe() == nil && monitor.reportReady(ctx) {
 				monitor.sample(ctx, cmd.Process.Pid) // Baseline, not an idle sample.
 				sample = monitor.after(SettledSampleInterval)

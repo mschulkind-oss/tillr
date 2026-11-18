@@ -532,7 +532,7 @@ func (s *transcriptSource) parseLog(raw json.RawMessage, start, end int64) *tran
 		}
 		line.entries = []transcriptEntry{notice(transcriptSourceLog, text, state, clock, have)}
 		return line
-	case "message_end":
+	case "message_end", "message": // Pi session JSONL and its live stream share message payloads.
 	default:
 		// a streaming delta, a turn boundary, an agent start: the transcript has the
 		// message these describe, or the fact they carry is about the run's frame
@@ -1034,6 +1034,10 @@ func (obs *observations) openTranscript(run storeRun, start transcriptCursor) (*
 		{transcriptSourceSteps, filepath.Join(runDir, "steps.jsonl"), start.Steps, start.StepsIndex},
 		{transcriptSourceLog, runLogPath(obs.laneRoot, run.LaneID, run.RunID), start.Log, start.LogIndex},
 		{transcriptSourceProc, filepath.Join(runDir, "proc-exec.jsonl"), start.Proc, start.ProcIndex},
+	}
+	if run.TranscriptPath != "" {
+		paths[0].path, paths[2].path = "", "" // No supervisor steps or shell trace belongs to this child.
+		paths[1].path = run.TranscriptPath
 	}
 	sources := make([]*transcriptSource, 0, len(paths))
 	for _, p := range paths {

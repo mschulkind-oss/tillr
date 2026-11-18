@@ -96,6 +96,9 @@ TILLR_LANE_ID             Always: the resolved lane id (allocated if omitted).
 TILLR_SESSION_MODE        Always: new for fresh/non-resumable sessions, resume for resumable continuations.
 TILLR_RESUME_PROMPT_FILE  Always: the continuation prompt path, empty for a fresh execution.
 TILLR_PAUSE_REQUEST       Always: the request-file path in this run's scratch directory.
+TILLR_PROGRESS_FILE       Always: the progress file in this run's scratch directory; workers append one criterion claim per line.
+TILLR_CHILD_SESSIONS_ROOT Always: the pi-subagents directory in this run's scratch directory, where the pi adapter's child sessions are discovered.
+TILLR_CHILD_SESSIONS_MARKER Always: the child-sessions-recorded marker path in this run's scratch directory; its presence reports child-session recording, and its absence means not recorded.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
 

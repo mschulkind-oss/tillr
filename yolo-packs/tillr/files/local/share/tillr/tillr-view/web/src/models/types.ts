@@ -211,7 +211,12 @@ export interface LaneHistoryRun {
   started_at_ms: number; finished_at_ms: number;
 }
 export interface LaneNode { node_id: string; run_id: string; attempt: number; state: "running" | "passed" | "failed" | "skipped" }
+export interface ProgressClaim { run_id: string; criterion_id: string }
+export interface ChildSession { run_id: string; session_id: string; role: string; started_at_ms: number | null; ended_at_ms: number | null; turn_count: number | null; end_clock?: string; transcript: string }
+export interface ChildrenRecord { recorded: boolean; sessions: ChildSession[]; note?: string }
 export interface LaneRow {
+  progress?: ProgressClaim[];
+  child_sessions?: Record<string, ChildrenRecord>;
   running_nodes?: number;
   nodes?: LaneNode[] | null;
   workflow_ref?: string;
@@ -509,6 +514,7 @@ export interface GraphRevisionView {
 }
 
 export interface ItemData {
+  progress?: ProgressClaim[];
   idea?: { words: string; words_path: string; in_tree: boolean };
   graph_revisions?: GraphRevisionView[];
   usage?: UsageSum;

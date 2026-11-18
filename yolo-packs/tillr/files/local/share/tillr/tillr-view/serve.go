@@ -1221,6 +1221,7 @@ func (s *server) documentPayload(r *store.Reader, req *http.Request) (any, *apiF
 // question state, and the one question fact it shows — the count — belongs to the document
 // route, which owns the parse (design §8.1, ledger `D-OBS6`).
 type itemData struct {
+	Progress       []progressClaim     `json:"progress"`
 	Idea           *ideaWords          `json:"idea,omitempty"`
 	GraphRevisions []graphRevisionView `json:"graph_revisions"`
 	Usage          usageSum            `json:"usage"`
@@ -1305,6 +1306,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		Decisions:      []dispatchView{},
 		Attempts:       []attemptView{},
 		ClosedBlockers: []string{},
+	}
+	out.Progress, _, err = readWorkerRecords(r, "", id)
+	if err != nil {
+		return nil, unreadable(err)
 	}
 	out.Idea, err = s.readIdeaWords(r, id)
 	if err != nil {
@@ -1512,7 +1517,7 @@ type completenessView struct {
 // runPayload is `GET /api/v1/runs/:id`.
 func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	id := req.PathValue("id")
-	run, found, err := readRun(r, id)
+	run, found, err := readRunOrLive(r, id)
 	if err != nil {
 		return nil, unreadable(err)
 	}

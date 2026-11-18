@@ -1,0 +1,31 @@
+import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
+import { LaneDetail } from "../src/components/LanePage";
+import { ItemDetailPane } from "../src/components/ItemDetailPane";
+import type { ItemData, LaneRow } from "../src/models/types";
+afterEach(cleanup);
+const lane: LaneRow = {lane_id:"lane",run_id:"run",item_id:"item",state:"running",backend:"pi",seat:"builder",attempt:1,outcome:"",state_since_ms:100,last_step:"",last_step_at_ms:null,log_grew_at_ms:null,latest_action:{kind:"unrecorded",text:"",at_ms:null,clock:"no_clock"}};
+const item: ItemData = {item:{item_id:"item",title:"Title",body_ref:"",design_doc:"",allowed_paths:[],projected_state:{state:"working",raw_state:"in-progress"}},criteria:[{criterion_id:"c1",text:"works",state:"open"}],blocked_by:[],unblocks:[],closed_blockers:[],verdicts:[],decisions:[],attempts:[],runs:[],owner_decisions:[],state_moves:[],progress:[{run_id:"run",criterion_id:"c1"}]};
+test("worker claims are derived, not done, on Lane and Item pages",()=>{
+ const {container}=render(<LaneDetail lane={{...lane,progress:item.progress}} item={item} now={1000}/>);
+ expect(container.textContent).toContain("claimed · derived");
+ expect(container.textContent).not.toContain("c1 · done");
+ cleanup();
+ const detail=render(<ItemDetailPane itemId="item" item={item} itemError={null} loading={false} onRetry={()=>{}} latestRun={null} updatedAtMs={null} selectedRunId={null} onSelectRun={()=>{}} doc={{doc:undefined,error:null,pending:false,onRetry:()=>{},baseUrl:""}}/>);
+ expect(detail.container.textContent).toContain("claimed · derived");
+ expect(detail.container.textContent).not.toContain("(done)");
+});
+test("unrecorded children differ from recorded none and recorded child links",()=>{
+ const {container,rerender}=render(<LaneDetail lane={lane} item={item} now={1000}/>);
+ expect(container.textContent).toContain("child sessions: not recorded");
+ rerender(<LaneDetail lane={{...lane,child_sessions:{run:{recorded:true,sessions:[]}}}} item={item} now={1000}/>);
+ expect(container.textContent).toContain("child sessions: none");
+ expect(container.textContent).not.toContain("child sessions: not recorded");
+ rerender(<LaneDetail lane={{...lane,child_sessions:{run:{recorded:true,sessions:[{session_id:"child",role:"reviewer",started_at_ms:100,ended_at_ms:900,turn_count:6,transcript:"/child.jsonl",run_id:"run"}]}}}} item={item} now={1000}/>);
+ expect(within(container).getByRole("link",{name:"reviewer"}).getAttribute("href")).toBe("#/run/child?tab=transcript");
+ expect(container.textContent).toContain("6 turns");
+ rerender(<LaneDetail lane={{...lane,child_sessions:{run:{recorded:true,sessions:[],note:"cannot read Pi status"}}}} item={item} now={1000}/>);
+ expect(container.textContent).toContain("worker records unreadable: cannot read Pi status");
+ expect(container.textContent).toContain("child sessions: unreadable");
+ expect(container.textContent).not.toContain("child sessions: none");
+});

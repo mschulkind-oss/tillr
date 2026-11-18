@@ -22,18 +22,20 @@ import (
 // laneRow describes only recorded states. A completed command is not evidence that
 // the next command is in progress; LastStep is deliberately the last finished step.
 type laneRow struct {
-	RunningNodes int              `json:"running_nodes,omitempty"`
-	Nodes        []laneNode       `json:"nodes"`
-	Pipeline     []pipelineStep   `json:"pipeline"`
-	PipelineNote string           `json:"pipeline_note,omitempty"`
-	History      []laneHistoryRun `json:"history"`
-	Usage        usageSum         `json:"usage"`
-	LaneID       string           `json:"lane_id"`
-	State        string           `json:"state"`
-	StateSinceMS *int64           `json:"state_since_ms"`
-	RunID        string           `json:"run_id"`
-	ItemID       string           `json:"item_id"`
-	Seat         string           `json:"seat"`
+	Progress      []progressClaim         `json:"progress"`
+	ChildSessions map[string]childrenView `json:"child_sessions"`
+	RunningNodes  int                     `json:"running_nodes,omitempty"`
+	Nodes         []laneNode              `json:"nodes"`
+	Pipeline      []pipelineStep          `json:"pipeline"`
+	PipelineNote  string                  `json:"pipeline_note,omitempty"`
+	History       []laneHistoryRun        `json:"history"`
+	Usage         usageSum                `json:"usage"`
+	LaneID        string                  `json:"lane_id"`
+	State         string                  `json:"state"`
+	StateSinceMS  *int64                  `json:"state_since_ms"`
+	RunID         string                  `json:"run_id"`
+	ItemID        string                  `json:"item_id"`
+	Seat          string                  `json:"seat"`
 	// SeatSource says where Seat was read: "dispatch" (the seat the planner recorded on the
 	// decision that started this run), "item" (the item's current seat, for a run whose
 	// decision predates the dispatch column), or "none" — the item asked for no seat, and
@@ -258,6 +260,9 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 	}
 	rows := buildLaneRowsCounted(d, verdicts, seats, loop, lanes, now, stats)
 	if err := enrichLaneNodes(r, rows, loop, stats); err != nil {
+		return nil, err
+	}
+	if err := enrichWorkerRecords(r, rows); err != nil {
 		return nil, err
 	}
 	// The seat a run was dispatched for is on its decision row (tillr-drain's
