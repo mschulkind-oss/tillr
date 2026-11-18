@@ -152,7 +152,9 @@ func fakeRunFace(t *testing.T, l *Loop, runID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 6000; i++ {
+	// No wall-clock bound: the face is a child process with no channel back, so this polls
+	// until it is recognized; a face that never is is stopped by the suite's own timeout.
+	for {
 		faces, err := liveRunFaces(l.cfg.Store, runID, here)
 		if err != nil {
 			t.Fatal(err)
@@ -162,7 +164,6 @@ func fakeRunFace(t *testing.T, l *Loop, runID string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("fixture: the fake run face was never recognized as one")
 }
 
 // A canceled examination may hand its lane to a live continuation — a run face resuming

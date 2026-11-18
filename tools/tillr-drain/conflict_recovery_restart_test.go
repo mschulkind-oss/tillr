@@ -52,7 +52,7 @@ esac
 	finished := make(chan struct{})
 	var stopped drain.LoopResult
 	go func() { stopped, err = f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(ctx); close(finished) }()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if _, e := os.Stat(marker); e == nil {
 			break
@@ -73,7 +73,7 @@ esac
 	cancel()
 	select {
 	case <-finished:
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("interrupted repair did not stop")
 	}
 	if err != nil || stopped.Stop != drain.StopOperatorStop {

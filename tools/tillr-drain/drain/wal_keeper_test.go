@@ -164,7 +164,7 @@ func (s *heartbeatFailingSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	s.tick()
 	select {
 	case <-ctx.Done():
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		s.t.Error("the heartbeat never failed against a missing store")
 	}
 	if err := os.Rename(aside, s.store); err != nil {

@@ -235,7 +235,7 @@ func TestDesignerCompactRunsOnlyAtColdDispatch(t *testing.T) {
 			server := stubReview(t, &number)
 			defer server.Close()
 			id := takeFixtureComment(t, f, server.URL)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
 			if _, err := l.Run(ctx); err != nil {
 				t.Fatal(err)

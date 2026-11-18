@@ -39,6 +39,9 @@ func TestHistoryObservationUsesLandersCrossProcessLock(t *testing.T) {
 	runGit(t, f.root, "add", ".")
 	runGit(t, f.root, "commit", "-qm", "other")
 	replacement := f.loop(t, &dirtyPathSteps{t: t, root: f.root, store: f.storePath}, &itemContentStager{})
+	// The short deadline only ends the observer's wait for a lock that stays held; the
+	// assertions (an error, no ref moved) are the same wherever in the attempt it falls, so
+	// load cannot change the verdict.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := replacement.observeTrunk(ctx, ""); err == nil {

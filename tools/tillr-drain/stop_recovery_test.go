@@ -76,18 +76,18 @@ exec "`+adapter+`" "$@"`)
 		if err == nil {
 			t.Fatal("fixture fault was not reported")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("fault stop waited for or canceled its runs")
 	}
 	writeFile(t, filepath.Join(markers, "item_a.finish"), "finish")
-	waitForFile(t, filepath.Join(markers, "item_a.finished"), 10*time.Second)
+	waitForFile(t, filepath.Join(markers, "item_a.finished"), hangGuard)
 	// One run finishes offline, the other while the replacement supervises it.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	replacement := f.newLoop(t, 3, steps)
 	go func() { _, err := replacement.Run(ctx); done <- err }()
 	writeFile(t, filepath.Join(markers, "item_b.finish"), "finish")
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for len(callsNamed(lines(t, f.count), "land")) < 2 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -97,7 +97,7 @@ exec "`+adapter+`" "$@"`)
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("replacement did not stop")
 	}
 	if n := len(callsNamed(lines(t, f.count), "land")); n != 2 {

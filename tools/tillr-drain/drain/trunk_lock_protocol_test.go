@@ -100,7 +100,16 @@ func TestHistoryLockRecoversDeadHolderButNotUnknownOrForeign(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := leftover.Stat()
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			// A dead holder must be recovered, however long that takes on a busy machine, so
+			// that case waits on the hang guard. A holder not proven dead must be refused: the
+			// short deadline only ends the attempt, and the assertions below (an error, the
+			// descriptor left in place) hold wherever in the attempt it falls, so load cannot
+			// change the verdict.
+			wait := 100 * time.Millisecond
+			if name == "dead-json" || name == "dead-plain" {
+				wait = hangGuard
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), wait)
 			defer cancel()
 			release, err := l.lockTrunkHistory(ctx)
 			if name == "dead-json" || name == "dead-plain" {

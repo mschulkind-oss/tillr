@@ -14,6 +14,13 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly". It is kept below the suite's own timeout so that a hang
+// fails the one test with a message instead of killing the whole package.
+const hangGuard = 5 * time.Minute
+
 func passFixture(t *testing.T, ids ...string) (refusalLoopFixture, *Loop) {
 	t.Helper()
 	f := newRefusalLoopFixture(t, ids...)
@@ -190,7 +197,7 @@ func drainOwned(t *testing.T, l *Loop, result *LoopResult) {
 			if stop, err := l.takeCompletion(c, result); stop != "" || err != nil {
 				t.Fatalf("completion %s / %v", stop, err)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatalf("owned transition did not finish%s", ownedTransitionTimeoutDiagnostic())
 		}
 	}
@@ -229,7 +236,7 @@ func TestTheGateReclaimsItsLaneUntilItAnswers(t *testing.T) {
 	go func() { stop, err := l.pass(context.Background(), &result); finished <- laneOutcome{stop, err} }()
 	select {
 	case <-steps.gated:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		close(steps.gateRelease)
 		t.Fatal("gate did not start")
 	}

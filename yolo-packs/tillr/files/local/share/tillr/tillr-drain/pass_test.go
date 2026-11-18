@@ -36,7 +36,7 @@ fi
 	var result drain.LoopResult
 	var err error
 	go func() { result, err = loop.Run(ctx); close(finished) }()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for time.Now().Before(deadline) {
 		if _, e := os.Stat(third); e == nil {
 			break
@@ -52,7 +52,7 @@ fi
 	writeFile(t, release, "release\n")
 	select {
 	case <-finished:
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		cancel()
 		t.Fatal("loop did not finish after sibling was released")
 	}

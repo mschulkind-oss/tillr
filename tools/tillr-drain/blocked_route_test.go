@@ -50,9 +50,14 @@ func TestBlockedReportRoutesOnceToDesignThenOwner(t *testing.T) {
 	f := blockedRouteFixture(t, counting+"printf 'Conflict: c1 contradicts the API\nRESULT: blocked\n'", counting+"printf 'Conflict: c1 requires an owner ruling\nNEXT-ACTOR: owner\nRESULT: blocked\n'")
 	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt", "docs/work.md"}}}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
-	result, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())
+	// The route is two runs. A third staging means the loop is spinning on the design seat,
+	// so it is ended by that count and reported with what it staged.
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	stage.limit, stage.stop = 2, stop
+	result, err := routeLoop(t, f, steps, stage, os.Stderr).Run(ctx)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v after %d stagings: %+v", err, len(stage.specs), stage.specs)
 	}
 	if result.Dispatched != 2 {
 		t.Fatalf("dispatched %d, want worker and one design run", result.Dispatched)

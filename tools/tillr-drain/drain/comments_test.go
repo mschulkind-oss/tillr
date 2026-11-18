@@ -275,7 +275,7 @@ func TestCommentPathTwice(t *testing.T) {
 		if dispatch.LaneID != "desk-example" || dispatch.DesignerReason != reason {
 			t.Fatalf("dispatch %+v", dispatch)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 		result, err := l.Run(ctx)
 		if err != nil {
@@ -387,7 +387,7 @@ func TestCommentDeliveryWaitsAndReplaysStoredBytes(t *testing.T) {
 	server := stubReview(t, &number)
 	defer server.Close()
 	takeFixtureComment(t, f, server.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	result, err := l.Run(ctx)
 	if err != nil {
@@ -455,7 +455,7 @@ func TestCommentRefusedAndAnswerOnly(t *testing.T) {
 			server := stubReview(t, &number)
 			defer server.Close()
 			id := takeFixtureComment(t, f, server.URL)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
 			result, err := l.Run(ctx)
 			if err != nil {

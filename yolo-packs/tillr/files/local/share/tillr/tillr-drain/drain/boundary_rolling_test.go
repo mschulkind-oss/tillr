@@ -11,17 +11,17 @@ import (
 	"time"
 )
 
-// waitForPath polls until path exists. The deadline only bounds a broken fixture; no
-// assertion is made about how long the wait took.
+// waitForPath polls until path exists. The path is written by a fixture process with no
+// channel back to the test, so the poll is the only way to see it. No wall-clock bound: a
+// fixture that never writes it is stopped by the suite's own timeout.
 func waitForPath(t *testing.T, path string) {
 	t.Helper()
-	for i := 0; i < 6000; i++ {
+	for {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("fixture: %s never appeared", path)
 }
 
 // TestARealRollingRunDuringASiblingRunConvictsNothing brackets one lane's run the way the

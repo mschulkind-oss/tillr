@@ -92,7 +92,7 @@ func TestFullTraceQueueDoesNotRetainRealSessionMutexAndReportsTheLoss(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		held := !l.sessionMu.TryLock()
 		if !held {
 			l.sessionMu.Unlock()
@@ -110,7 +110,7 @@ func TestFullTraceQueueDoesNotRetainRealSessionMutexAndReportsTheLoss(t *testing
 	go func() { l.sessionMu.Lock(); l.sessionMu.Unlock(); close(free) }()
 	select {
 	case <-free:
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-free
 		t.Fatal("a full trace queue retained the actual sessionMu")

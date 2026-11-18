@@ -249,7 +249,7 @@ func TestPinnedCandidateRefusedByItsLaneLeavesTheLoopRunning(t *testing.T) {
 		if err != nil || stop != "" {
 			t.Fatalf("one lane's condition stopped the loop: %q/%v", stop, err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("examination did not finish")
 	}
 	if got := runGit(t, l.lanePath("lane-2"), "rev-parse", "HEAD"); got != sha {

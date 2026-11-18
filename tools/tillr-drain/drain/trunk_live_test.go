@@ -52,7 +52,7 @@ func TestRewriteHoldsLandingButLiveRunFinishes(t *testing.T) {
 	}
 	select {
 	case <-steps.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("rewrite prevented sibling dispatch")
 	}
 	// Complete the examination, but leave the run waiting on its own release.
@@ -62,7 +62,7 @@ func TestRewriteHoldsLandingButLiveRunFinishes(t *testing.T) {
 			if stop, err := l.takeCompletion(c, &result); err != nil || stop != "" {
 				t.Fatalf("examination: %s / %v", stop, err)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("held examination did not finish")
 		}
 	}

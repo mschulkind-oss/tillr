@@ -16,7 +16,7 @@ import (
 
 func TestDeskReleaseTakesLandLockBeforeSQLiteWriter(t *testing.T) {
 	f, l, c := heldCandidateFixtureInLane(t, "desk-review")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	scratch := scratchUnderDurable(t)
 	// Shard scratch paths can exceed Unix socket limits; loopback rendezvous

@@ -40,7 +40,7 @@ func TestQuotaCachedRefreshNeedsNoWriter(t *testing.T) {
 			}
 			defer s.Close()
 			if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 				defer cancel()
 				return l.refreshQuotas(ctx)
 			}); err != nil {

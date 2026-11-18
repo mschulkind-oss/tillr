@@ -46,7 +46,7 @@ func (s *cyclesWaitingSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	case <-s.done:
 	case <-ctx.Done():
 		return SyncOutcome{}, ctx.Err()
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		s.t.Error("the running loop never reached the checkpoint cycle the test waits for")
 	}
 	return SyncOutcome{Skipped: "a cycle-waiting step set reads no documents"}, nil
