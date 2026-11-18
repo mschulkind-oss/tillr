@@ -48,7 +48,8 @@ the owner's rulings of that day, proposes that every act on an item is a node in
 one pure function decides what comes next. None of it is built. The owner ruled four of its
 questions the same day. Two remain, and each has a design of its own:
 [`OQ-GP2`](../design/tillr-graph-is-the-path.md#OQ-GP2), which structure stores the graph, waits on
-a storage design made from measured trials; and
+[the storage design](../design/tillr-storage.md), made from measured trials, which asks
+[`OQ-TS1`](../design/tillr-storage.md#OQ-TS1) to [`OQ-TS3`](../design/tillr-storage.md#OQ-TS3); and
 [`OQ-GP6`](../design/tillr-graph-is-the-path.md#OQ-GP6), how a question and its design land ahead of
 their item, is answered by [early design landing](../design/tillr-early-design-landing.md), which
 asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
