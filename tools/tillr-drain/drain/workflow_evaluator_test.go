@@ -76,6 +76,9 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 					t.Fatal(err)
 				}
 				drainOwned(t, l, result)
+				if mode == "not-done" && len(s.order) == 3 {
+					break
+				}
 			}
 			want := []string{"worker", "worker", "judge"}
 			if mode == "pass" || mode == "mechanical" {
@@ -136,7 +139,7 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 				}
 				return nil
 			})
-			reason := map[string]string{"not-done": ReasonEvalFailed, "no-grant": ReasonJudgeGrantAbsent}[mode]
+			reason := map[string]string{"not-done": ReasonReturned, "no-grant": ReasonJudgeGrantAbsent}[mode]
 			if reason != "" {
 				for _, p := range mustPlan(t, l) {
 					if p.decision.ItemID == "item-a" && p.decision.Reason != reason {
@@ -293,6 +296,9 @@ func TestWorkflowEvaluatorHoldCleanupReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		drainOwned(t, l, result)
+		if len(s.order) == 3 {
+			break
+		}
 	}
 	var d Decision
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -328,6 +334,65 @@ func TestWorkflowEvaluatorHoldCleanupReplay(t *testing.T) {
 	}
 }
 
+func TestWorkflowEvaluatorRefusalReplayAfterGrantExpires(t *testing.T) {
+	f, l, s := judgeRouteFixture(t, "not-done", true)
+	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
+	runGit(t, f.root, "add", "config/tillr/workflows")
+	runGit(t, f.root, "commit", "-qm", "evaluator workflow")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET workflow='scout-then-build@v1' WHERE item_id='item-a'`)
+		return err
+	})
+	result := &LoopResult{}
+	for i := 0; i < 10 && len(s.order) < 3; i++ {
+		graphPass(t, l, result)
+	}
+	if len(s.order) != 3 {
+		t.Fatalf("runs: %v", s.order)
+	}
+	var d Decision
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, history, err := readPendingHistory(tx.Reader())
+		if err != nil {
+			return err
+		}
+		work := *history[s.runs[2].RunID]
+		work.Done = false
+		d = work.Decision
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='running' WHERE run_id=?`, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().UnixMilli()); err != nil {
+			return err
+		}
+		return appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, l.cfg.Now())
+	})
+	handled, err := l.settleEvaluator(context.Background(), d, run.Record{RunID: d.RunRequest.RunID}, "", result)
+	if err != nil || !handled {
+		t.Fatalf("replay: %v %v", handled, err)
+	}
+	if result.RefusedSteps[ReasonJudgeUnreadable] != 0 {
+		t.Fatalf("replayed verdict turned unreadable: %+v", result.RefusedSteps)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var outcome string
+		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome); err != nil {
+			return err
+		}
+		if outcome != "evaluated-fail" {
+			t.Errorf("refusal not settled after grant expiry: %s", outcome)
+		}
+		var n int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=? AND json_extract(payload,'$.step')=?`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&n); err != nil {
+			return err
+		}
+		if n != 1 {
+			t.Errorf("refusals: %d", n)
+		}
+		return nil
+	})
+}
+
 func TestWorkflowEvaluatorGrantRenewalDoesNotMaskFailure(t *testing.T) {
 	f, l, s, c := prepareJudgeCandidate(t, "not-done")
 	writer := c.RunID
@@ -359,8 +424,8 @@ func TestWorkflowEvaluatorGrantRenewalDoesNotMaskFailure(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if reason := history.refusals[c.RunID]; reason != ReasonEvalFailed {
-			t.Errorf("hold %s, want %s", reason, ReasonEvalFailed)
+		if reason := history.refusals[c.RunID]; reason != RefusalVerifyNotDone {
+			t.Errorf("hold %s, want %s", reason, RefusalVerifyNotDone)
 		}
 		return nil
 	})

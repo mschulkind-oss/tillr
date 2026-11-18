@@ -175,10 +175,20 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	// Endings define run order, not mutable row metadata: a usage correction
 	// can advance runs.event_seq without ending a run again. Legacy rows with
 	// no ending event retain their recorded sequence, timestamp, and row order.
+	// Old stores have no workflow tables. Ordinary judges stay excluded there;
+	// with node runs, an evaluator is itself a workflow run and may be returned.
+	var hasNodes bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
+		return nil, readFailure(err)
+	}
+	evaluatorException := ""
+	if hasNodes {
+		evaluatorException = ` AND NOT EXISTS (SELECT 1 FROM node_runs n WHERE n.run_id=runs.run_id)`
+	}
 	rows, err := r.Query(
 		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs
 		   FROM runs WHERE item_id IS NOT NULL AND NOT EXISTS
-              (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id)
+              (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id` + evaluatorException + `)
            ORDER BY item_id, COALESCE((SELECT MAX(e.seq) FROM events e
              WHERE e.kind='run.finish' AND e.object_id=runs.run_id), event_seq), started_at, rowid`)
 	if err != nil {

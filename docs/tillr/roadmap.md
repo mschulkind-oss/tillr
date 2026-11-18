@@ -8497,10 +8497,7 @@ Once a plan can cut a build into pieces, nothing yet checks that the pieces toge
   - Send a criterion no piece covers back to the plan node by name.
   - Put the model-use rule in a tracked file the owner edits without a code change.
 
-<!-- tillr: item id="item-plan-verify-and-guidance" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The `verify` node of `planned-build@v1`, on the verify seat, runs after the pieces and before the gate, reads the item's criteria, the joined diff and the pieces' outputs, and names for each criterion the piece that satisfies it. A criterion no piece covers sends the item back to the plan node with that criterion named, and a test asserts it. The gate and the judge still decide landing.
-- **c2:** The plan node's brief carries the model-use rule in the Agent details, and a test asserts the brief text names it. When the planner cannot cut a piece without a design decision, it reports blocked with the specific question and no piece is invented. The test asserts the item is routed to the design seat.
 
 **Agent details:**
 

@@ -47,12 +47,13 @@ type EndingCheck struct {
 // next pass returns it like the others, on the latest trunk. The other refusal steps keep
 // their own routes: a missing node output its node rule, and a trunk already red its fixer.
 var returnedCauses = map[string]bool{
-	RefusalGate:     true,
-	RefusalNoOp:     true,
-	RefusalFence:    true,
-	RefusalLand:     true,
-	RefusalConflict: true,
-	RefusalReverted: true,
+	RefusalGate:          true,
+	RefusalVerifyNotDone: true,
+	RefusalNoOp:          true,
+	RefusalFence:         true,
+	RefusalLand:          true,
+	RefusalConflict:      true,
+	RefusalReverted:      true,
 }
 
 // returnedReasons are the hold reasons retryHoldReason answers for those causes, the
@@ -60,6 +61,7 @@ var returnedCauses = map[string]bool{
 // rule's name for a conflict; an item it parked is returned at the next pass.
 var returnedReasons = map[string]string{
 	ReasonGateFailed:          RefusalGate,
+	RefusalVerifyNotDone:      RefusalVerifyNotDone,
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
 	ReasonLandRefused:         RefusalLand,
@@ -173,6 +175,8 @@ func returnedBrief(e ReturnedEnding) string {
 	switch e.Cause {
 	case RefusalGate:
 		b.WriteString("The gate refused its candidate.")
+	case RefusalVerifyNotDone:
+		b.WriteString("The workflow verifier found criteria not done; revise the plan to cover them.")
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:

@@ -15,6 +15,15 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	if spec.Node.Prompt != "" {
 		brief += "\nNode task: " + spec.Node.Prompt + "\n"
 	}
+	if spec.Node.Seat == "plan" {
+		guidance, err := os.ReadFile(filepath.Join(s.Root, "config/tillr/plan-guidance.md"))
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		if len(guidance) > 0 {
+			brief += "\n## Model-use guidance\n\n" + string(guidance) + "\n"
+		}
+	}
 	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
 		brief += "\nThis node may write only these paths, within the item's fence:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
 	}
@@ -23,7 +32,7 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 		if landing {
 			brief += " or commit"
 		}
-		brief += ". Write your findings in the report and finish with RESULT: done. The item criteria describe the whole workflow, not this node.\n"
+		brief += ". Write your findings in the report and finish with RESULT: done, or report a named obstacle when blocked. The item criteria describe the whole workflow, not this node.\n"
 	}
 	dir := nodeOutputsDir(s.Root, spec.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
