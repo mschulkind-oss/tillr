@@ -72,6 +72,11 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 	if l.restartReplaced {
 		return true, StopRestarted, nil
 	}
+	// Exec would discard the pending follow-up actions, even if the current
+	// command survived as an inherited child. Keep processing passes meanwhile.
+	if l.rollAction.busy() || l.pushAction.busy() {
+		return false, "", nil
+	}
 	rs := l.restarter()
 	pending, err := rs.Pending(ctx)
 	if err != nil || !pending {
@@ -85,9 +90,14 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 		l.reportf("loop: restart %s answered without replacing the process\n", request.ID)
 		return true, "", nil
 	}
-	l.reportf("loop: restart %s: replacing build %s in place\n", request.ID, l.build)
 	l.restartMechanical.Lock()
 	defer l.restartMechanical.Unlock()
+	// A landing can finish while the replacement binary is being checked.
+	// Its action has already been queued when it releases the mechanical lock.
+	if l.rollAction.busy() || l.pushAction.busy() {
+		return false, "", nil
+	}
+	l.reportf("loop: restart %s: replacing build %s in place\n", request.ID, l.build)
 	execute := l.cfg.Restart.Exec
 	if execute == nil {
 		execute = syscall.Exec

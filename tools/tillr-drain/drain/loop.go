@@ -305,6 +305,7 @@ type Steps interface {
 // LoopConfig is one loop's parameters: where it works, what it may dispatch, and how it
 // spends.
 type LoopConfig struct {
+	PostLanding settings.Settings
 	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
 	// command runs and the design gate, then exits without dispatching other work.
 	MigrateOwnerQuestions bool
@@ -461,8 +462,9 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
-	ownerMigrationItem    string
-	laneBootstrapReported bool
+	rollAction, pushAction landingAction
+	ownerMigrationItem     string
+	laneBootstrapReported  bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
 	staleBaseChecked            map[string]bool
@@ -2384,7 +2386,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, err
 	}
 	landStart := time.Now()
-	landed, err := l.cfg.Steps.Land(ctx, candidate)
+	landed, err := l.landWithActions(ctx, candidate)
 	if err == nil {
 		l.mu.Lock()
 		if hold, ok := landed.LockObservation.holdNS(); ok {

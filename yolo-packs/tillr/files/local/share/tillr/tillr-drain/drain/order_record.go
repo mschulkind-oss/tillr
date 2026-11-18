@@ -262,7 +262,7 @@ func (l *Loop) recordOrder(ctx context.Context, base string, result *LoopResult,
 	work.Candidate.BaseRef = "refs/heads/" + TrunkRef
 	work.Candidate.ObservedTrunk = history.Observed
 	started := time.Now()
-	out, landErr := l.cfg.Steps.Land(ctx, work.Candidate)
+	out, landErr := l.landWithActions(ctx, work.Candidate)
 	timing.LandMS += time.Since(started).Milliseconds()
 	if ctx.Err() != nil {
 		return ctx.Err()
