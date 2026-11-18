@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -66,8 +67,8 @@ func waitingLaneConditions(r *store.Reader) ([]waitingRow, error) {
 	for _, lane := range lanes {
 		c := conditions[lane]
 		class, where := "needs you", "lane"
-		if rule, ok := waitingRules[c.Reason]; ok {
-			class, where = rule.class, rule.where
+		if rule, ok := holdrules.Rules[c.Reason]; ok {
+			class, where = rule.Class, rule.Where
 		}
 		out = append(out, waitingRow{ItemID: "lane:" + lane, Class: class, Where: where,
 			Why: c.Reason + ": " + c.Detail, Mover: c.Remedy,

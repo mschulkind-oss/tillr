@@ -1974,6 +1974,27 @@ not assigned a guessed backend. With no lane list, the planner offers every lane
 in the store. The default clock is the current time; `--now` supplies a fixed
 observation time. Document questions use the same root and index command as `plan`.
 
+### Adding a hold reason
+
+A hold reason is an exported `Reason...` string constant in the `drain` package. How
+a recorded reason is shown (class, where it sits, what moves it) is one table,
+`Rules` in [holdrules](holdrules/holdrules.go), a leaf package with no store
+dependency so the read-only `tillr view` face can import it. To add a reason:
+
+1. Declare the `Reason...` constant, with a string literal value.
+2. Add its row to `holdrules.Rules`: class, where, mover. A reason that carries
+   detail after a colon (`node-failed: <node>`) also needs its prefix handled in
+   `holdrules.For`.
+3. Run `go test -run TestEveryReasonConstantHasAHoldRule ./drain` here. It parses the
+   package for every exported `Reason` constant and fails for one with no row, or a
+   row with an unknown class, so the omission is caught in this module and in the
+   fast gate's change checks, not by the view's suite after landing.
+
+The view's `waiting` face and its lane conditions read the table; they keep only
+presentation. `tillr drain why` builds its mover from the live planner decision
+(deferrals, conflicts, workflow nodes), so its `whyPresentation` is a per-decision
+computation, not a second copy of this table, and is unchanged by adding a row.
+
 ## Standalone invocation
 
 ```sh

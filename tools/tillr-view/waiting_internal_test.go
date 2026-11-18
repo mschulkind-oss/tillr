@@ -5,16 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 )
 
 // The CLI and API must answer the same moment without modifying any table or
@@ -166,64 +164,21 @@ func waitingTableCounts(t *testing.T, db *sql.DB) map[string]int {
 	return counts
 }
 
-// Parse the drain package's exported Reason constants directly. Go has no
-// reflection API for constants, and importing drain would register writer DDL.
-// A new nonliteral constant fails closed instead of silently skipping coverage.
+// Every row of the shared holdrules table must read back as an explained history row.
+// The table is the single place a reason's rule is declared, and the drain module's own
+// TestEveryReasonConstantHasAHoldRule requires a row for every exported Reason constant,
+// so this test cannot fail for a missing rule; it checks that each row is displayable.
 func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
-	files, err := filepath.Glob("../tillr-drain/drain/*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	checked := 0
 	h := newServeHarness(t)
 	h.exec(`DELETE FROM dispatches; DELETE FROM items`)
-	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				values := spec.(*ast.ValueSpec)
-				for i, name := range values.Names {
-					if !strings.HasPrefix(name.Name, "Reason") || !name.IsExported() {
-						continue
-					}
-					checked++
-					if len(values.Values) <= i {
-						t.Fatalf("cannot enumerate %s: constant value is implicit", name.Name)
-					}
-					literal, ok := values.Values[i].(*ast.BasicLit)
-					if !ok || literal.Kind != token.STRING {
-						t.Fatalf("cannot enumerate %s: update the enumerator for its expression", name.Name)
-					}
-					reason, err := strconv.Unquote(literal.Value)
-					if err != nil {
-						t.Fatal(err)
-					}
-					h.exec(`INSERT INTO items(item_id,title,state,updated_at) VALUES (?,'hold','in-queue',1); INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at) VALUES (?,?,'hold',?,1000)`, name.Name, name.Name, name.Name, reason)
-					rule, ok := waitingRules[reason]
-					if !ok {
-						t.Errorf("drain exports %s = %q without a waiting rule", name.Name, reason)
-					}
-					switch rule.class {
-					case "needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop":
-					default:
-						t.Errorf("invalid class for %s: %q", name.Name, rule.class)
-					}
-				}
-			}
-		}
+	checked := 0
+	for reason := range holdrules.Rules {
+		checked++
+		id := "reason-" + reason
+		h.exec(`INSERT INTO items(item_id,title,state,updated_at) VALUES (?,'hold','in-queue',1); INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at) VALUES (?,?,'hold',?,1000)`, id, id, id, reason)
 	}
 	if checked == 0 {
-		t.Fatal("no exported drain reasons were enumerated")
+		t.Fatal("no hold rules were enumerated")
 	}
 	rows, err := readWaiting(context.Background(), h.store, nil)
 	if err != nil {
@@ -239,7 +194,7 @@ func TestWaitingEveryDrainReasonHasARule(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("all %d exported drain reasons have waiting rules and explained history rows", checked)
+	t.Logf("all %d hold rules read back as explained history rows", checked)
 }
 
 func TestWaitingMoversAndLeaseOnlyRun(t *testing.T) {
