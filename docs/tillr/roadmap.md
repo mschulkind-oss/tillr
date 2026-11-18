@@ -55,7 +55,11 @@ their item, is answered by [early design landing](../design/tillr-early-design-l
 asks [`OQ-EL1`](../design/tillr-early-design-landing.md#OQ-EL1) to
 [`OQ-EL3`](../design/tillr-early-design-landing.md#OQ-EL3). [The vocabulary](../design/tillr-vocabulary.md), written on 2026-11-18, settles what an item, a node, a
 run, a session and a worktree are, and asks [`OQ-VO1`](../design/tillr-vocabulary.md#OQ-VO1) to
-[`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4). First among these is
+[`OQ-VO4`](../design/tillr-vocabulary.md#OQ-VO4). [The landing call](../design/tillr-landing-call.md), written on
+2026-11-18, proposes that a worker ends its run with one tool call and hears back only when something needs fixing,
+and asks [`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1), whether an item keeps its worktree until the full suite
+has passed on it; five of its six build steps are filed [below](#filed-2026-11-18-a-landing-is-a-suspended-tool-call),
+and step five waits on that answer. First among these is
 [`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), whether a design run's objection may name
 an actor other than the worker or the owner, because it holds two queued items.
 
@@ -8555,3 +8559,175 @@ The point of spreading work across seats is to spend less, and today nothing pri
 - **What does stop this build:** a failing test that needs a file outside the item's paths, a step whose named function or file is not in the tree, or a contradiction in the criterion. Report it with the step number, the command and its output. A report that lists the steps not yet done is not one of these.
 - **If a decision is missing, report blocked** with one specific question.
 - **Verify:** `go test ./...` in each of `tools/tillr-drain/`, `tools/tillr-run/` and `tools/tillr-view/`, `yolo pack lint yolo-packs/tillr`, `just pack-sync`, and `uvx vantage-check docs/tillr/roadmap.md`.
+
+## Filed 2026-11-18: a landing is a suspended tool call
+
+[The landing-call design](../design/tillr-landing-call.md) proposes that a worker ends its run with
+one tool call, `land`, and hears back only when something needs fixing: a refusal, a squash
+conflict or a revert arrives as that call's result in the worker's own session. The owner asked for
+it on 2026-11-18 and ruled that the gate's contents are a separate conversation. Its
+[experiment](../design/tillr-landing-call.md#111-what-the-design-leans-on-that-nobody-ran) ran the
+same day, and the fork's replay of an unanswered tool call holds. This section files five of the
+design's six build steps; step five waits on
+[`OQ-LC1`](../design/tillr-landing-call.md#OQ-LC1) and is not filed. The pi build that sits
+behind them is [the fork patch item](#add-park-open-without-prompt-and-a-features-flag-to-our-pi-fork),
+and the host steps of the design's Section 6.6 gate only the switch, not these items: until the
+installed pi prints the feature name, every adapter keeps the footer.
+
+### Route a revert and a squash conflict to the worker's session
+
+When the full suite proves that a landed change broke the trunk, or a change no longer applies to
+the trunk, the worker that is told about it today has never seen the change: tillr starts a fresh
+worker with the evidence in a new brief. A refused run already goes back to its own worker,
+because the drain records the worker's session when it records the refusal. This item records the
+session for these two endings in the same way, so the worker that wrote the change gets the
+evidence when its session and lane are still there, and a fresh worker only when they are not.
+
+- **Outcomes:**
+  - Return a reverted landing to the session of the run that landed it.
+  - Return a squash conflict to the session of the run whose candidate conflicted.
+  - Say in the decision's recorded reason why a fresh worker was used instead.
+
+<!-- tillr: item id="item-landing-call-session-returns" paths="tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A reverted landing's returned run continues the session of the run that landed, when the adapter can resume and the lane still holds that item's session. A test in `tools/tillr-drain/drain/` asserts the decision's `WorkerSessionReason` is `resumed-worker` and the staged prompt contains the failing check's output.
+- **c2:** A squash conflict's returned run continues the session of the run whose candidate conflicted, on that run's branch. A test asserts the reason is `resumed-worker` and the conflicting paths are in the staged prompt.
+- **c3:** When the lane has been given to another item, the session id no longer matches, or the seat changed, the run starts fresh with the evidence, and the recorded reason is `lane-unavailable`, `session-missing` or `seat-changed` respectively. A test asserts each of the three for a revert.
+- **c4:** Nothing is counted: a test returns the same item three times, with different evidence each time, and asserts three dispatches and no hold.
+- **c5:** The section "A refused run goes back to its worker" of `tools/tillr-drain/README.md` names the two new endings and the reasons of c3, and `python3 tests/tillr-docs.test.py` passes.
+
+**Agent Details:**
+
+- **Ref:** [the landing-call design, Section 10](../design/tillr-landing-call.md#10-build-order), step 1 and its first drafted block; [the drain's guide](../../tools/tillr-drain/README.md#a-refused-run-goes-back-to-its-worker).
+- **Where:** `recordRefusal` in `tools/tillr-drain/drain/events.go` skips `captureWorkerSession` for a conflict (`step != RefusalConflict`); the revert's payload in `tools/tillr-drain/drain/heavy_revert.go` carries no `WorkerSession`. `workerSessionReason` and `captureWorkerSession` are in `tools/tillr-drain/drain/worker_session.go`; the reasons `lane-unavailable` and `resume-failed` are set in `plan.go` and `designer.go`. A reverted landing's run is the one that landed, so its lane and session may already belong to another item; that is what c3 covers.
+- **Build order, each step a stop only if it fails.** Make one commit, at step 3.
+  1. Capture the worker session in the revert's payload and in the conflict's refusal, with the failing check's output or the conflicting paths as the evidence the returned prompt carries.
+  2. Route both through the existing returned-run path so `workerSessionReason` decides resume against fresh. Add the tests of c1 to c4 beside the existing returned-run tests.
+  3. Finish: update the README (c5), run `just pack-sync`, `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, `yolo pack lint yolo-packs/tillr` and `python3 tests/tillr-docs.test.py`, then commit once.
+- **What does stop this build:** a failing test that needs a file outside the item's paths, or a step whose named function is not in the tree. Report it with the step number, the command and its output.
+- **If a decision is missing, report blocked** with one specific question.
+- **Verify:** `go test ./...` in `tools/tillr-drain/`, `python3 tests/tillr-docs.test.py`, `just pack-sync`, and `uvx vantage-check docs/tillr/roadmap.md`.
+
+### Add a landing call record and the answer a call may have
+
+A worker's offer and what came of it are spread today across a refusal event, a landing row and a
+revert event, and nothing says which of them the worker should hear about. This item adds one
+record per call, the two small files a harness and the drain pass each other, and the pure
+function that turns the landing steps' endings into the one answer a call may have. Nothing uses
+it for delivery yet: it is proven against a stand-in harness, so the drain keeps working exactly
+as it does today.
+
+- **Outcomes:**
+  - Record each offer as a call, with its answer, delivery and closing.
+  - Choose a call's one answer by a pure function that a table test covers.
+  - Declare each adapter's ending capability, `footer` for every adapter as shipped.
+
+<!-- tillr: item id="item-landing-call-record" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A run that ends with an offer file in its durable directory is recorded as a call with the offer's commit, base, summary, session and worktree, and is treated as a run that ended with its commit. A run with a footer and no offer file is treated exactly as today. A test asserts both.
+- **c2:** The answer chooser is a pure function with a table test covering: fence refusal, judge refusal, gate refusal, conflict, revert, identical repeat, landed, proven, superseded, withdrawn, and each machinery outcome that yields no answer.
+- **c3:** The store refuses a second answer for one call id, and an offer file whose call id is already recorded creates no second call. A test asserts each.
+- **c4:** Each adapter directory under `tools/tillr-run/backends/` holds an `ending-capability` file, read the way `pause-kind` is, and the drain records the effective capability at loop start. A test asserts `footer` for `pi`, `claude`, `muse` and `agy` as shipped.
+- **c5:** A stand-in harness that writes an offer file and exits, and on being opened again reads an answer file and prints it, is carried through offer, gate refusal, delivery and a second offer. A test asserts the call events (`call.offered`, `call.answered`, `call.delivered`) in order and that the second opening received the stored answer text unchanged.
+- **c6:** `tools/tillr-drain/README.md` has a section stating the call record, the two files and the capability, and `python3 tests/tillr-docs.test.py` passes.
+
+**Agent Details:**
+
+- **Ref:** [the landing-call design](../design/tillr-landing-call.md): [Section 3.3](../design/tillr-landing-call.md#33-what-can-come-back) (the closed set of answers), [Section 5](../design/tillr-landing-call.md#5-the-record) (the record and its states), [Section 6.2](../design/tillr-landing-call.md#62-the-sequence) (the offer and answer files), [Section 7](../design/tillr-landing-call.md#7-the-other-harnesses) (capabilities).
+- **Where:** `tools/tillr-drain/drain/` for the record, the chooser and the loop-start event; `tools/tillr-run/run/pause.go` for how `pause-kind` is read from an adapter directory, which `ending-capability` follows; `tools/tillr-run/backends/*/`. The `WorkerSession` record in `worker_session.go` stays: the design folds it into the call record only in a later step.
+- **Where the offer file lives:** in the run's own durable directory, `<root>/.tillr/loop/<run-id>/`, written whole and renamed into place; the drain reads it only after the run's process and its children are gone.
+- **Build order, each step a stop only if it fails.** Make one commit, at step 3.
+  1. The chooser and its table test (c2), with no store.
+  2. The record, the store's refusal of a second answer, the offer-file intake and the capability files (c1, c3, c4).
+  3. The stand-in harness test (c5), the README (c6), `just pack-sync`, the sharded suites for `tools/tillr-drain` and `tools/tillr-run`, `yolo pack lint yolo-packs/tillr`, `python3 tests/tillr-docs.test.py`; commit once.
+- **What does stop this build:** a failing test that needs a file outside the item's paths, a step whose named function is not in the tree, or a contradiction between a criterion and the design section it cites. Report it with the step number, the command and its output.
+- **If a decision is missing, report blocked** with one specific question. The wording of an answer's text is the implementer's, as the design says.
+- **Verify:** `go test ./...` in `tools/tillr-drain/` and `tools/tillr-run/`, `python3 tests/tillr-muse-backend.test.py`, `yolo pack lint yolo-packs/tillr`, `just pack-sync`, and `uvx vantage-check docs/tillr/roadmap.md`.
+
+### Add park, open-without-prompt and a features flag to our pi fork
+
+pi can already run a tool call again when a session is opened and the call has no saved result.
+That was checked on 2026-11-18 against the fork's `patch/pi` build: the same call id ran in a new
+process and the saved result came before the new prompt. What pi cannot do yet is let a tool ask to
+be left unanswered, open a session with no new prompt, or say what a build supports. Without those
+three, a worker cannot end its run on a call and be answered later. This item adds them to the
+fork, in the worker's own checkout. The delivery to the host and the adapter's use of them are
+other items.
+
+- **Outcomes:**
+  - Let a tool leave its call unanswered, so the process saves the session and exits.
+  - Open a saved session with no new prompt, answering the unanswered call first.
+  - Print the build's feature names so the adapter can ask what it has.
+
+<!-- tillr: item id="item-landing-call-pi-fork-park" paths=".forks/lanes/lane-1/pi/" blocked_by="" prose="2" -->
+
+- **c1:** A tool whose `execute()` returns a park leaves its call with no saved result; the process makes no further model request, does not consult a settle hook, emits a top-level parked event naming the call id, flushes the session and exits 0. A real-process test asserts the transcript, the event and the exit code.
+- **c2:** Opening that session with no prompt runs the tool again with the same call id and arguments, saves its result once, and continues to a model request. Opening it a second time repeats nothing. A test asserts both.
+- **c3:** Opening a session that has no unanswered call and no trailing tool result, with no prompt, exits non-zero, says so in the stream and makes no model request. A test asserts it.
+- **c4:** The features flag prints JSON that includes `parked-tool-calls`. A test asserts it.
+- **c5:** When an extension adds a message as the session opens, the replayed result still directly follows its call in the request the model receives. A test with such an extension asserts the order of the messages sent.
+- **c6:** The change is linear commits on `main` in the fork checkout this run is staged in. The worker runs neither `bin/pi-forks export` nor `bin/pi-forks check` and moves no ref of this repository. The touched packages' suites pass in the checkout, and the fork's `packages/coding-agent/docs/cli-integration.md` states the park result, the no-prompt open and the flag in the words a caller needs.
+
+**Agent Details:**
+
+- **Ref:** [the landing-call design](../design/tillr-landing-call.md): [Section 6.1](../design/tillr-landing-call.md#61-the-form-chosen-and-the-two-rejected) to [Section 6.5](../design/tillr-landing-call.md#65-the-fork-patches), and [Filing fork work](../../tools/tillr-drain/README.md#filing-fork-work). The same shape as [the safe-stop item](../design/tillr-restart.md).
+- **Where:** `.forks/lanes/lane-1/pi/` is the fence spelling that staging reads. Staging rewrites it to the dispatched lane's checkout and starts that checkout at the delivered patch tip. Commit linearly on the fork's `main`. The replay already exists in the fork: `getPendingToolCalls` and `runAgentPendingToolCalls` in `packages/agent/src/agent-loop.ts`, `Agent.completePendingToolCalls` in `packages/agent/src/agent.ts`, from the fork commit titled "stop print workers safely on SIGUSR1". The park belongs where a tool result can already end a batch without a follow-up request; the no-prompt open is in `packages/coding-agent/src/modes/print-mode.ts` and its argument parsing; the flag is in the command line.
+- **What the 2026-11-18 experiment saw, and c5 is for.** With the default extension set loaded, an extension appended a message to the session as it opened, between the unanswered call and the replayed result, and the Bedrock request failed with "The number of toolResult blocks ... exceeds the number of toolUse blocks of previous turn". A worker loads no discovery extensions, so it is not expected there; the order is still a precondition.
+- **A resume still needs a prompt today:** print mode took a prompt and added it after the replayed result; that is what c2 and c3 replace.
+- **Verify:** in the fork checkout, the touched packages' test suites (`packages/agent`, `packages/coding-agent`), and `uvx vantage-check docs/tillr/roadmap.md` for this document.
+
+### Add the land tool and its brief ending to pi workers
+
+With the call record and the fork's support in place, a pi worker can end its run with the `land`
+tool instead of a report footer, and a refusal can reach it as that call's result instead of a new
+message. This item gives the worker the tool and the new brief ending, answers the checks the worker
+can fix at once inside the call, and delivers the drain's answers as the call's result. It lands
+dark: the adapter declares the new form only when the installed pi prints the feature name, so
+until the host has the fork's delivery every worker keeps the footer exactly as today.
+
+- **Outcomes:**
+  - Give a pi worker a `land` tool that records its offer and ends the run.
+  - Deliver a refusal as the result of the open call and never as a new message.
+  - Choose the form by what the installed pi says it supports.
+
+<!-- tillr: item id="item-landing-call-land-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-record,item-landing-call-pi-fork-park" prose="2" -->
+
+- **c1:** The pi adapter's effective ending capability is `call-suspends` only when the installed binary prints `parked-tool-calls` from the features flag, and `footer` otherwise. A test asserts both with stand-in binaries, including one that rejects the flag.
+- **c2:** Under `call-suspends` the staged brief ends with the "Finishing" text of [the design's Section 3.6](../design/tillr-landing-call.md#36-what-the-brief-says) and the tool is loaded; under `footer` the brief and the loaded extensions are byte-identical to today's. A test asserts each.
+- **c3:** Each check of [the design's Section 3.2](../design/tillr-landing-call.md#32-what-is-answered-at-once) returns at once as an error result naming its content and writes no offer file. A test asserts each of the five.
+- **c4:** A gate refusal, a judge refusal and a fence refusal each reach the session as the result of the open call, with the evidence of [Section 3.3](../design/tillr-landing-call.md#33-what-can-come-back), and the session receives no user message. A test with a stand-in harness asserts the delivery form recorded is `tool-result`.
+- **c5:** Each failure case of [Section 6.3](../design/tillr-landing-call.md#63-failure-cases) has a test that asserts its stated outcome.
+- **c6:** A worker that ends with a message and no call is told so in the same session and nothing is recorded as an ending. A session that parks is not nudged by `keep-going.ts` and is not ended by the settled-session watcher. A test asserts each.
+- **c7:** A session started under the footer brief is answered as a message after the capability appears. A test asserts it.
+
+**Agent Details:**
+
+- **Ref:** [the landing-call design](../design/tillr-landing-call.md): [Section 3](../design/tillr-landing-call.md#3-the-contract-from-the-workers-seat), [Section 6.2](../design/tillr-landing-call.md#62-the-sequence) to [Section 6.4](../design/tillr-landing-call.md#64-the-keep-going-extension-and-the-settled-session-rule), and [Section 6.6](../design/tillr-landing-call.md#66-delivery-and-how-the-drain-knows).
+- **Where:** the `land` tool is a tillr extension beside `tools/tillr-run/backends/pi/keep-going.ts`, loaded by `run-pi` the same way and only for a worker run; the brief text is in `tools/tillr-run/backends/brief-template.md`; delivery is in `tools/tillr-drain/drain/`.
+- **Waits on** the two items it names. The design's host steps (the fork delivered, built and applied on the host, the jail relaunched) are not a condition for landing this item, because c1 keeps the footer until the installed pi prints the feature. They are a condition for switching it on, which the owner watches by the recorded capability.
+- **Verify:** `go test ./...` in `tools/tillr-drain/` and `tools/tillr-run/`, `python3 tests/tillr-muse-backend.test.py`, `just pack-sync`, `yolo pack lint yolo-packs/tillr`, `python3 tests/tillr-docs.test.py`, and `uvx vantage-check docs/tillr/roadmap.md`.
+
+### Add an obstacle tool to the pi worker
+
+A worker that cannot finish writes its obstacle today as lines in a report, and a missing line is
+found only after the run is over. This item makes the obstacle a tool call with typed arguments, so
+the harness refuses a call that lacks a required field, and the reply (a design answer, the
+owner's answer, or "the base replay did not reproduce your claim") returns to the same session as
+that call's result.
+
+- **Outcomes:**
+  - Refuse an obstacle call that lacks a field its kind requires, without ending the run.
+  - Route a tool-call obstacle exactly as the same obstacle in a footer.
+  - Return the reply to the worker as the call's result.
+
+<!-- tillr: item id="item-landing-call-obstacle-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-land-tool" prose="2" -->
+
+- **c1:** `obstacle` accepts each of the six kinds (`definition`, `fence`, `trunk`, `tooling`, `seat`, `owner`) with that kind's required fields and rejects a call missing one, without ending the run. A test asserts each kind and one rejection.
+- **c2:** An obstacle call is recorded and routed exactly as the same obstacle in a footer is today. A test runs one shared case file of obstacles through both forms and asserts equal routing.
+- **c3:** The reply to an obstacle reaches the session as the call's result. A test asserts it for a design answer and for a `trunk` claim the base replay did not reproduce.
+
+**Agent Details:**
+
+- **Ref:** [the landing-call design, Section 3.5](../design/tillr-landing-call.md#35-a-named-obstacle-is-a-second-tool). The footer's obstacle table, which stays the form under `footer`, is in `tools/tillr-run/backends/brief-template.md`.
+- **Where:** beside the `land` tool this item waits on; routing in `tools/tillr-drain/drain/`.
+- **Verify:** `go test ./...` in `tools/tillr-drain/` and `tools/tillr-run/`, `python3 tests/tillr-muse-backend.test.py`, `just pack-sync`, `yolo pack lint yolo-packs/tillr`, `python3 tests/tillr-docs.test.py`, and `uvx vantage-check docs/tillr/roadmap.md`.

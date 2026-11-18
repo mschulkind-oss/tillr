@@ -10,7 +10,7 @@ tags:
   - pi
   - design
 summary: "A worker ends its run by calling one tool, land. The commit on its branch at that moment is the offer. The harness ends the process with the call unanswered; the gate, the judge and the lander work without it; and a refusal, a conflict or a later revert comes back as that call's result in the same session. A landing that holds never wakes the session. Decides the contract, the record, the pi mechanism (replay of the unanswered call, three fork patches, one capability), the form for harnesses that cannot suspend, and the build order."
-next: "The owner rules OQ-LC1. A link from the tillr roadmap is owed so that question is routed. The first drafted item (reverts and conflicts return to the worker's own session) needs no fork delivery and can be cut now; the experiment in Section 11.1 runs before the fork items are cut."
+next: "The owner rules OQ-LC1, which step 5 of the build order waits on. Steps 1, 2, 3, 4 and 6 are filed in the tillr roadmap, which routes OQ-LC1. The replay experiment ran on 2026-11-18 and held; Section 11.1 records it."
 depends-on:
   - tillr-graph-is-the-path.md
   - landing-principles.md
@@ -427,6 +427,8 @@ Smallest first. The running drain keeps working at every step, because the foote
 
 **Step 1 is the first item, and it needs nothing from the fork.** It is also worth having if nothing after it is ever built.
 
+**Filed 2026-11-18.** Steps 1, 2, 3, 4 and 6 are item blocks with directives in [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-18-a-landing-is-a-suspended-tool-call); step 5 waits on [OQ-LC1](#OQ-LC1) and is not filed. The roadmap's blocks govern from there: the blocks below are the draft, and the filed ones differ in the criteria's wording and paths, and in step 3's added criterion for the order of messages.
+
 ### 10.1 Drafted items
 
 These are proposals, written as item blocks with everything except the item directive, so that sync reads none of them and nothing can be dispatched. That is the route [the graph design](./tillr-graph-is-the-path.md#131-drafted-items) uses. A block gets its directive when this design is accepted.
@@ -519,9 +521,9 @@ A worker that cannot finish writes its obstacle today as lines in a report, and 
 
 | Leaned on | Status | How to find out |
 | :--- | :--- | :--- |
-| A registered extension tool is executed again on resume with the same call id, before any prompt | Read from the fork's code and guide on 2026-11-18, not executed | **Run this first.** In the clean local build of `patch/pi`: a ten-line extension whose tool writes its call id to a file and never returns; ask for the tool; signal the process to terminate; open the session again; read the file. Two small model requests |
-| The installed pi lacks the replay | Inferred from the remote branch's position; the version string cannot say | The features flag settles it for good. Until then, the same experiment against the installed binary |
-| The remote `patch/pi` has not moved since this jail last fetched | Not checked | A fetch |
+| A registered extension tool is executed again on resume with the same call id, before any prompt | **Verified 2026-11-18 on the local `patch/pi` build, with a caveat.** `bin/pi-forks setup --lane operator-landcall --fork pi` and `bin/pi-forks build --lane operator-landcall --fork pi` built tip `fcf539aa7`. An extension tool whose first `execute()` killed its own process with SIGKILL left its call unanswered in the session file. A second `--print` run on the same `--session` (model `amazon-bedrock/global.openai.gpt-6-luna`, `--no-extensions` plus the one extension) ran `execute()` again with the same call id in a new process, and pi saved the tool result, `answer: refused, fix x`, before the new user prompt; the model then quoted it. Two caveats. A resume today still needs a prompt, so the open-without-prompt patch is real work. And with the default extension set an extension's message, added as the session opened, landed between the call and the replayed result, and Bedrock refused the request; the fork item has a criterion for that order. The replay was not run with the production extension set, which hung in the offer run for a reason not isolated. | Original method, for the record: a ten-line extension whose tool writes its call id to a file and never returns, ask for the tool, kill the process, open the session again. Two small model requests |
+| The installed pi lacks the replay | **Verified 2026-11-18.** The same sequence against the installed pi 1.5.2 ran `execute()` once; the resume saved no result for the call, and the model answered that the tool returned "No result provided." | The features flag still settles it for good, and is part of the fork patch |
+| The remote `patch/pi` has not moved since this jail last fetched | Read 2026-11-18 without a fetch: `origin/patch/pi` is `caf4f9c3f`, and the local `patch/pi` is three commits ahead (the replay commit `a763610ba`, `4ae75da87`, `fcf539aa7`) | A fetch |
 | A stand-in harness is a fair proxy for the drain side | Assumed, as the pause tests assume it | Step 4's first real run is watched |
 | Claude Code's tool server, stop hook and resume behave as [Section 7](#7-the-other-harnesses) needs | Not tried; the research is marked fast-moving | Its own experiment before step 7 is cut |
 | How long a judge takes | No data in the loop's tick lines | Read the judge runs' own records |
