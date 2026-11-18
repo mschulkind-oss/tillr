@@ -157,6 +157,79 @@ def load_tool(name):
     spec.loader.exec_module(module)
     return module
 
+def test_sigterm_ends_checks(mode):
+    """Drive the real plan runner with a check in its own session and a grandchild."""
+    with tempfile.TemporaryDirectory() as directory:
+        base = Path(directory)
+        ready = base / "ready"
+        fixture = base / "runner.py"
+        fixture.write_text('''import importlib.util, pathlib, sys, types
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+check = gate.Check("rank-order", "detached check", [sys.executable, "-c",
+    "import os,pathlib,subprocess,sys,time\\n"
+    "child=subprocess.Popen(['sleep','300'])\\n"
+    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())+' '+str(child.pid))\\n"
+    "time.sleep(300)", sys.argv[2]], "", 0)
+gate.execute_check = lambda check, root, diff_base, cancel, **kw: gate.run_command(root, check.argv, 0, cancel=cancel)
+if sys.argv[3] == 'repeated':
+    # A second signal arrives while Event.set holds its non-reentrant lock.
+    # This is a deterministic reentrancy probe, not a timing/rate assertion.
+    import os, signal, threading
+    main_thread_id = threading.get_ident()
+    class ReentrantEvent(threading.Event):
+        fired = False
+        def set(self):
+            if threading.get_ident() == main_thread_id and not self.fired:
+                self.fired = True
+                with self._cond:
+                    os.kill(os.getpid(), signal.SIGTERM)
+            super().set()
+    gate.threading.Event = ReentrantEvent
+if sys.argv[3] == 'replay':
+    gate.plan_gate = lambda *args: types.SimpleNamespace(
+        plan=types.SimpleNamespace(checks=[check]), missing=[], diff_base=None, head='fixture')
+    gate.execute_attempt = lambda root, check, diff_base, cancel=None: gate.run_command(root, check.argv, 0, cancel=cancel)
+    gate.main(['--replay', '--only', 'rank-order'])
+else:
+    gate.run_plan_checks(types.SimpleNamespace(checks=[check]), pathlib.Path.cwd(), None, 1)
+''')
+        proc = subprocess.Popen([sys.executable, str(fixture), str(SCRIPT), str(ready), mode],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pids = []
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not ready.exists():
+                proc.kill()
+                output = proc.communicate(timeout=15)
+                raise AssertionError(f"SIGTERM fixture check never started: {output}")
+            pids = [int(pid) for pid in ready.read_text().split()]
+            proc.terminate()
+            proc.communicate(timeout=15)
+            for pid in pids:
+                stat = Path(f"/proc/{pid}/stat")
+                assert not stat.exists() or stat.read_text().split(") ", 1)[1].startswith("Z "), (
+                    f"SIGTERM left {mode} check process {pid} alive")
+            assert proc.returncode == 143, (mode, proc.returncode)
+        finally:
+            proc.kill() if proc.poll() is None else None
+            proc.communicate(timeout=15)
+            for pid in pids:
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+    print(f"fork-check SIGTERM ({mode}): detached checks and descendants ended, exit 143")
+
+
+for sigterm_mode in (sys.argv[2:] or ["plan", "replay", "repeated"]):
+    test_sigterm_ends_checks(sigterm_mode)
+if sys.argv[1:2] == ["--sigterm-only"]:
+    sys.exit(0)
+
 # Hermetic by construction. `just done` in a lane worktree exports PI_FORKS_ROOT, and the
 # gate's own audit step runs THIS file inside that run, so an inherited value would point
 # every fixture at the real checkouts and the missing-checkout cases would stop refusing.

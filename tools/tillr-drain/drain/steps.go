@@ -749,9 +749,8 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	return out, nil
 }
 
-// checkGroupGrace bounds how long runCheckGroup waits for a killed check's process group to
-// be gone. A killed process is gone once it is reaped, which the kernel's reaper does
-// promptly; the bound only stops a wedged reaper from hanging the loop's stop.
+// checkGroupGrace gives a check program time to end checks it owns in other sessions
+// after SIGTERM, and bounds the final wait for its own killed process group.
 const checkGroupGrace = 5 * time.Second
 
 // runCheckGroup runs a check program that works in one of the loop's scratch worktrees, in
@@ -761,15 +760,17 @@ const checkGroupGrace = 5 * time.Second
 // The program is a gate: it starts test binaries, and they start their own children. A
 // cancellation that reached only the program left those running — on 2026-11-17 a loop
 // stop deleted the rolling worktree under a `go test -parallel 48 ./...` that kept going
-// for two minutes. So the cancellation kills the group, a normal exit kills whatever the
-// program left behind in it, and the return waits for the group to be gone.
+// for two minutes. The program also owns checks in separate sessions: SIGTERM lets it
+// end those before WaitDelay escalates to SIGKILL. On any exit, kill what remains in
+// the program's own group before returning to the worktree cleanup.
 func runCheckGroup(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return cmd.Process.Signal(syscall.SIGTERM)
 	}
-	// A child that kept the stderr pipe open would hold Wait past the kill; the group's
-	// kill closes it, and this bounds the copy that follows.
+	// CommandContext starts this grace period on cancellation; only if the program
+	// has not exited does it kill the leader. The final group cleanup below reaches
+	// remaining pipe holders too.
 	cmd.WaitDelay = checkGroupGrace
 	err := cmd.Run()
 	if cmd.Process != nil {

@@ -2961,13 +2961,7 @@ when the base is red, and these five points are that rule.
 - Apply the same shutdown behavior to replay checks.
 - Do the same when the loop reaches the check runner through its step adapter.
 
-<!-- tillr: item id="item-loop-stop-ends-rolling-checks" paths="tools/tillr-drain/,tools/tillr-loop/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A loop stop during a rolling run ends every check the run started, including checks that `tools/fork-check.py` placed in their own session, before the loop removes the rolling worktree. A test starts a check whose child calls `setsid`, stops the run, and asserts that no process from that tree is alive afterward.
-- **c2:** `tools/fork-check.py` ends its running checks when it receives SIGTERM, and the loop sends SIGTERM to the program and waits briefly for it before it sends SIGKILL. A test sends SIGTERM to the program and asserts that its children are gone.
-- **c3:** The replay step that also runs checks in a scratch worktree ends its checks the same way. A test covers it with the same `setsid` child.
-- **c4:** The regression test for c1 fails when the SIGTERM step is removed.
-- **c5:** c1 and c3 hold when the loop starts its checks through `tools/tillr-loop/tillr-loop rolling` and `replay`, the configured step adapter, and not only when it starts `tools/fork-check.py` directly. A test for each step starts the adapter in the way the loop does, with a check whose child calls `setsid`, stops the run, and asserts that no process from that tree is alive afterward. Each test fails against the adapter as it stands at `a1fdff636`.
 
 **Agent Details:**
 

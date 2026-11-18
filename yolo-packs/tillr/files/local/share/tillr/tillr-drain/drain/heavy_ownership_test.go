@@ -139,7 +139,7 @@ func testHeavyKilledOwner(t *testing.T, legacy bool) {
 			t.Fatal(err)
 		}
 		driver := filepath.Join(work, "legacy.py")
-		writeForkFile(t, driver, `import ast,ctypes,json,os,pathlib,platform,signal,struct,subprocess,sys,threading,time
+		writeForkFile(t, driver, `import ast,contextlib,ctypes,json,os,pathlib,platform,signal,struct,subprocess,sys,threading,time
 from pathlib import Path
 source=sys.argv[1]
 module=ast.parse(Path(source).read_text())
