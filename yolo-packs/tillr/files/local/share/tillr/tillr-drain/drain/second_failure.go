@@ -10,60 +10,69 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Completing examination and raising the conflict share a transaction. A restart
-// cannot observe a spent second attempt without its design-seat disposition.
-func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
+// secondFailureReading is a test seam: it runs where the routing starts reading the
+// store's history, so a test can see which lock that reading holds.
+var secondFailureReading func()
+
+// secondFailure is a spent second attempt's routing to the design seat, as read from the
+// store before the write that records it: the item, the attempt the conflict is named
+// for, the run it is raised on, and the evidence text.
+type secondFailure struct {
+	itemID, outcomeRun, current, text string
+}
+
+// readSecondFailure answers the routing an examination of d raises, or nil when it raises
+// none. It only reads, and the caller runs it in a read transaction before its write
+// (markExamined): the routing reads the whole history — every event, several times over,
+// every run of every item, and the runs' reports on disk — and on 2026-11-17 that reading,
+// done inside the examination's write transaction, held the store's one write lock for
+// 4.8 seconds, so every other writer queued behind it and one waited past its busy
+// timeout. Completing the examination and raising the conflict still share one write
+// transaction (recordSecondFailure), so a restart cannot observe a spent second attempt
+// without its design-seat disposition.
+//
+// The item's state and its open conflict are not read here: they are the inputs another
+// writer can change between this read and the write, so the write reads them, and they
+// are small reads. Nothing else read here is changed by the examination being
+// recorded: its own examination record is consulted only for the attempts before it.
+func readSecondFailure(r *store.Reader, d Decision) (*secondFailure, error) {
 	if d.RunRequest == nil {
-		return nil
+		return nil, nil
 	}
 	outcomeRun := d.RunRequest.RunID
 	// A squash repair finishes the originating attempt, not a new allowance.
 	// The existing durable handoff retains the parent across loop replacement.
 	if d.Reason == ReasonConflictFix {
-		works, err := readPending(tx.Reader())
+		works, err := readPending(r)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if work := works[d.ItemID]; work != nil && work.ParentRunID != "" {
-			decisions, err := readInputDecisions(tx.Reader())
+			decisions, err := readInputDecisions(r)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			d = decisions[work.ParentRunID]
 		}
 	}
 	if d.RunRequest == nil || d.BlockConflict != nil || (!d.Readmitted && d.Action != ActionRetry) {
-		return nil
+		return nil, nil
 	}
-	attemptHistory, err := readRunHistory(tx.Reader())
+	if secondFailureReading != nil {
+		secondFailureReading()
+	}
+	attemptHistory, err := readRunHistory(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if attemptHistory.refusals[outcomeRun] == RefusalTrunkAlreadyRed || attemptHistory.judgeHolds[outcomeRun] == ReasonJudgeUnreadable || attemptHistory.judgeHolds[outcomeRun] == ReasonJudgeBlocked {
 		// A checked blocker already names the next mover; it is not a failed
 		// attempt to reroute to design.
-		return nil
+		return nil, nil
 	}
-	var state string
-	if err := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, d.ItemID).Scan(&state); err != nil {
-		return err
-	}
-	if state == StateLanded || state == "closed" || state == "resolved-elsewhere" {
-		return nil
-	}
-	conflicts, err := item.ReadConflicts(tx.Reader())
+	events, err := r.Events(0)
 	if err != nil {
-		return err
-	}
-	existing, hasConflict := conflicts[d.ItemID]
-	if hasConflict && existing.Status != "closed" && existing.Status != "answered" {
-		if (existing.RunID != d.RunRequest.RunID && existing.RunID != outcomeRun) || strings.HasPrefix(existing.Text, "Second failed attempt:") {
-			return nil
-		}
-	}
-	events, err := tx.Reader().Events(0)
-	if err != nil {
-		return err
+		return nil, err
 	}
 	orphaned, examined := map[string]bool{}, map[string]bool{}
 	for _, e := range events {
@@ -80,24 +89,24 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 	// Historical markers still describe standalone runs. For loop attempts,
 	// use the reader's effective state: a matching continuation supersedes the
 	// old orphan/examination, while judged segments and replay cannot reopen it.
-	_, history, err := readPendingHistory(tx.Reader())
+	_, history, err := readPendingHistory(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for id, work := range history {
 		orphaned[id], examined[id] = work.Orphaned, work.Done
 	}
 	current := d.RunRequest.RunID
 	if orphaned[current] || orphaned[outcomeRun] {
-		return nil
+		return nil, nil
 	}
-	priors, err := readPriorRuns(tx.Reader())
+	priors, err := readPriorRuns(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	decisions, err := readInputDecisions(tx.Reader())
+	decisions, err := readInputDecisions(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	previous := ""
 	for _, prior := range priors[d.ItemID] {
@@ -121,7 +130,7 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 		previous = prior.RunID
 	}
 	if previous == "" {
-		return nil
+		return nil, nil
 	}
 	text := fmt.Sprintf("Second failed attempt: %s and %s require the design seat.", previous, current)
 	reportRuns := []string{previous, current}
@@ -129,12 +138,12 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 		reportRuns = append(reportRuns, outcomeRun)
 	}
 	for _, id := range reportRuns {
-		rec, err := terminalRecord(tx.Reader(), id)
+		rec, err := terminalRecord(r, id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if rec == nil {
-			return nil
+			return nil, nil
 		}
 		report := "Report not recorded."
 		for _, ref := range rec.ArtifactRefs {
@@ -164,16 +173,46 @@ func routeSecondFailure(tx *store.Tx, d Decision, at time.Time) error {
 			text += "\nGate: no verdict or refusal recorded."
 		}
 	}
-	var ref string
-	if err := tx.QueryRow(`SELECT COALESCE(body_ref,'') FROM items WHERE item_id = ?`, d.ItemID).Scan(&ref); err != nil {
+	return &secondFailure{itemID: d.ItemID, outcomeRun: outcomeRun, current: current, text: text}, nil
+}
+
+// recordSecondFailure records the routing readSecondFailure read, inside the examination's
+// write transaction, after rereading the two inputs another writer may have changed since:
+// a terminal item raises nothing, and an open conflict raised for another attempt (or
+// already this second failure's) is left alone. Neither read decodes the history: one is
+// the item's row, the other the conflict records alone.
+func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
+	if sf == nil {
+		return nil
+	}
+	var state string
+	if err := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, sf.itemID).Scan(&state); err != nil {
 		return err
 	}
-	c := item.Conflict{ConflictID: "conflict-" + outcomeRun, ItemID: d.ItemID, RunID: current, BodyRef: ref, Text: strings.TrimSpace(text), Status: "raised", WaitingOn: "design", BlockedCriteria: []string{"not stated in reports"}}
+	if state == StateLanded || state == "closed" || state == "resolved-elsewhere" {
+		return nil
+	}
+	conflicts, err := item.ReadConflicts(tx.Reader())
+	if err != nil {
+		return err
+	}
+	existing, hasConflict := conflicts[sf.itemID]
+	if hasConflict && existing.Status != "closed" && existing.Status != "answered" {
+		if (existing.RunID != sf.current && existing.RunID != sf.outcomeRun) || strings.HasPrefix(existing.Text, "Second failed attempt:") {
+			return nil
+		}
+	}
+	text := sf.text
+	var ref string
+	if err := tx.QueryRow(`SELECT COALESCE(body_ref,'') FROM items WHERE item_id = ?`, sf.itemID).Scan(&ref); err != nil {
+		return err
+	}
+	c := item.Conflict{ConflictID: "conflict-" + sf.outcomeRun, ItemID: sf.itemID, RunID: sf.current, BodyRef: ref, Text: strings.TrimSpace(text), Status: "raised", WaitingOn: "design", BlockedCriteria: []string{"not stated in reports"}}
 	if hasConflict && existing.Status != "closed" && existing.Status != "answered" {
 		// A blocked second report has already routed a conflict. Enrich that
 		// same conflict without changing its seat or losing its criteria.
 		c = existing
-		c.RunID = current
+		c.RunID = sf.current
 		c.Text = strings.TrimSpace(text) + "\n\nBlocked finding:\n" + existing.Text
 	}
 	// Match the blocked-report route: without a source block the design seat
