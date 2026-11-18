@@ -1606,6 +1606,11 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 			result.StopStep = c.result.StopStep
 		}
 	}
+	if c.outcome.stop == "" && c.outcome.err == nil && !l.nonLanding {
+		if err := l.pruneRunRefs(context.Background()); err != nil {
+			return "", err
+		}
+	}
 	return c.outcome.stop, c.outcome.err
 }
 
@@ -1648,6 +1653,9 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	}
 	if !l.nonLanding {
 		if err := l.prunePreservedWork(ctx); err != nil {
+			return "", err
+		}
+		if err := l.pruneRunRefs(ctx); err != nil {
 			return "", err
 		}
 	}

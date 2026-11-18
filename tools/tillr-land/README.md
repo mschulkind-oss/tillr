@@ -148,10 +148,22 @@ belongs to only one store. Two cases follow from that.
   own landing. *Operator:* do not reuse run ids across stores over one repository. If it
   happened, correct the second store's row by hand.
 
-Markers accumulate as run pins do: nothing deletes `refs/tillr/landed/*` or
-`refs/tillr/runs/*`, and pruning either is an operator's decision. Deleting a marker loses
-recovery for that run's unrecorded landing. A retry then squashes again, and it is refused as
-`already-on-trunk` when the trunk still carries the change.
+The lander still writes markers before publication; it does not delete them itself.
+The drain removes an ordinary marker in settlement only after that run has a durable
+`landed` row naming the marker's commit. A fork delivery marker stays until all pending
+examinations and leased lanes have finished: a sibling's boundary comparison needs the
+marker to recognize the patch branch's legitimate move. New landing events carry
+`base_ref` to distinguish the delivery; older receipts without that field are treated
+conservatively as fork deliveries when the published commit equals the candidate head.
+
+The drain removes all of a finished item's run pins, including earlier attempts and
+conflict repairs. Operator-owned held and recovery refs are never removed, even when
+they name the same commit as a deleted pin. The
+[drain's namespace lifetimes and sweep](../tillr-drain/README.md#ref-lifetimes-and-backlog-cleanup)
+cover retryable attempts and backlog cleanup. Standalone landings leave their markers
+until the drain or its sweep observes the receipt. An unrecorded landing keeps its
+marker: deleting it by hand loses crash recovery, so a retry squashes again and is
+refused as `already-on-trunk` when the trunk still carries the change.
 
 ## Standalone invocation
 

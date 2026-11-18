@@ -130,7 +130,7 @@ func TestAFixerWhoseRebaseConflictsIsALandingConflictWhenStillNeeded(t *testing.
 
 // A lane whose run's item is already terminal and whose state cannot be preserved — here
 // left mid-rebase with unmerged paths, as on 2026-11-18 — is not a loop fault: what it held
-// is recorded and discarded, the head pinned, and the lane reset and returned to rotation.
+// is recorded and discarded, the run pin retired, and the lane reset and returned to rotation.
 func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	ctx := context.Background()
 	f, l, d, rec := savedFixture(t)
@@ -138,7 +138,6 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	runGit(t, lane, "checkout", "-q", "--", ".")
 	writeForkFile(t, filepath.Join(lane, "base.txt"), "lane edit\n")
 	runGit(t, lane, "commit", "-qam", "lane edit")
-	head := runGit(t, lane, "rev-parse", "HEAD")
 	writeForkFile(t, filepath.Join(f.root, "base.txt"), "trunk edit\n")
 	runGit(t, f.root, "commit", "-qam", "trunk edit")
 	cmd := exec.Command("git", "-C", lane, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "rebase", TrunkRef)
@@ -174,8 +173,8 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	if got := runGit(t, lane, "rev-parse", "HEAD"); got != runGit(t, f.root, "rev-parse", TrunkRef) {
 		t.Fatalf("lane not reset to the trunk: %s", got)
 	}
-	if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+rec.RunID); got != head {
-		t.Fatalf("head not pinned: %s, want %s", got, head)
+	if got := runGit(t, f.root, "for-each-ref", "--format=%(refname)", "refs/tillr/runs/"+rec.RunID); got != "" {
+		t.Fatalf("terminal item's run pin remains: %s", got)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var payload string

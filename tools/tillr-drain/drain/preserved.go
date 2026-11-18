@@ -365,7 +365,7 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 		return err
 	}
 	for _, p := range drop {
-		if _, err := l.git(ctx, p.Repository, "update-ref", "-d", p.Ref); err != nil {
+		if _, err := l.git(ctx, p.Repository, "update-ref", "--no-deref", "-d", p.Ref); err != nil {
 			return err
 		}
 		if err := appendJudgment(ctx, l.cfg.Store, workPrunedKind, "run", p.RunID, p, l.cfg.Now().UTC()); err != nil {

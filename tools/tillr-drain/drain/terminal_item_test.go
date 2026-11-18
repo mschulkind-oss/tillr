@@ -238,8 +238,8 @@ func assertSettledUnjudged(t *testing.T, p pendingTerminalFixture, l *Loop, resu
 	if dirty := runGit(t, lane, "status", "--porcelain"); dirty != "" {
 		t.Errorf("lane-1 not clean: %s", dirty)
 	}
-	if pinned := runGit(t, p.f.root, "rev-parse", "refs/tillr/runs/"+p.runID); pinned != p.head {
-		t.Errorf("unjudged head not pinned: %s, want %s", pinned, p.head)
+	if pinned := runGit(t, p.f.root, "for-each-ref", "--format=%(refname)", "refs/tillr/runs/"+p.runID); pinned != "" {
+		t.Errorf("terminal item's run pin remains: %s", pinned)
 	}
 	// Settled once: the next plans neither examine the run again nor spend a retry or a
 	// re-admission on the item, and a further pass writes nothing about it.

@@ -131,12 +131,15 @@ func TestWorkflowReleaseSurvivesExaminationCrash(t *testing.T) {
 		return appendEffect(tx, dispatchStartedKind, p.decision.RunRequest.RunID, w, l.cfg.Now())
 	})
 	next := replaceGraphLoop(t, f, l, steps)
+	var trace strings.Builder
+	next.cfg.Report = &trace
 	graphPass(t, next, result)
 	if !pendingForTest(t, f, "item-a").Done || len(steps.runs) != 2 {
 		t.Fatal("release claim not recoverable")
 	}
-	if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+p.decision.RunRequest.RunID); got != head {
-		t.Fatalf("head %s not pinned: %s", head, got)
+	ref := "refs/tillr/runs/" + p.decision.RunRequest.RunID
+	if refExists(t, f, ref) || !strings.Contains(trace.String(), "removed "+ref+" ("+head+")") {
+		t.Fatalf("original head was not retained through release then retired: %s", trace.String())
 	}
 }
 
@@ -168,12 +171,15 @@ func TestWorkflowReleaseRestartAfterResetKeepsOriginalHead(t *testing.T) {
 		return appendEffect(tx, examinationClaimedKind, p.decision.RunRequest.RunID, &owner, l.cfg.Now())
 	})
 	next := replaceGraphLoop(t, f, l, steps)
+	var trace strings.Builder
+	next.cfg.Report = &trace
 	graphPass(t, next, result)
 	if !pendingForTest(t, f, "item-a").Done || len(steps.runs) != 2 {
 		t.Fatal("release not completed")
 	}
-	if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+p.decision.RunRequest.RunID); got != head {
-		t.Fatalf("release replay overwrote original head %s with %s", head, got)
+	ref := "refs/tillr/runs/" + p.decision.RunRequest.RunID
+	if refExists(t, f, ref) || !strings.Contains(trace.String(), "removed "+ref+" ("+head+")") {
+		t.Fatalf("release replay failed to retain then retire original head %s: %s", head, trace.String())
 	}
 }
 

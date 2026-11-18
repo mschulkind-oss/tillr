@@ -190,6 +190,11 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 	mergeExamination(&result, completion.result)
 	result.Stop = completion.outcome.stop
 	result.Detail = completion.detail
+	if completion.outcome.err == nil && result.Stop == "" && !l.nonLanding {
+		if err := l.pruneRunRefs(ctx); err != nil {
+			return result, err
+		}
+	}
 	if completion.outcome.err != nil || result.Stop != "" || d.Action != ActionSettle {
 		return result, completion.outcome.err
 	}

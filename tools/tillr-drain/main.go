@@ -80,6 +80,8 @@ func dispatch(args []string) int {
 		return acknowledgePatchMoveFace(rest)
 	case "accept-identity":
 		return acceptIdentityFace(rest)
+	case "sweep-refs":
+		return sweepRefsFace(rest)
 	case "acquit", "examine", "set-aside":
 		return recoveryFace(face, rest)
 	case "retry":
@@ -129,6 +131,40 @@ func acknowledgePatchMoveFace(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("acknowledged patch/%s observation %d by %s\n", *fork, *seq, *by)
+	return record.ExitOK
+}
+
+func sweepRefsFace(args []string) int {
+	fs := newFlagSet("sweep-refs")
+	root := fs.String("root", "", "the repository whose refs should be cleaned up")
+	path := fs.String("store", "", "the store (default <root>/.tillr/state.db)")
+	dry := fs.Bool("dry-run", false, "report the plan without deleting refs")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *root == "" {
+		return fail(drain.Usagef("sweep-refs needs --root <repository>"))
+	}
+	if *path == "" {
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	refs, err := drain.SweepRefs(context.Background(), drain.RefSweepRequest{Root: *root, Store: *path, DryRun: *dry})
+	if err != nil {
+		return fail(err)
+	}
+	for _, ref := range refs {
+		action := "kept"
+		if ref.Remove {
+			action = "removed"
+			if *dry {
+				action = "would remove"
+			}
+		}
+		fmt.Printf("%s %s (%s): %s\n", action, ref.Ref, ref.SHA, ref.Reason)
+	}
 	return record.ExitOK
 }
 
@@ -700,7 +736,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")
