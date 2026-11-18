@@ -577,6 +577,13 @@ func (l *Loop) recordTrunkRefusal(ctx context.Context, candidate Candidate, redS
 // The item is written through item.Apply, the item package's one record→row mapping, so a
 // fixer cannot be a state the item writer would refuse.
 func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []string, gate GateOutcome) (string, error) {
+	return l.fileTrunkFixerNoted(ctx, redSHA, failing, gate, "")
+}
+
+// fileTrunkFixerNoted is fileTrunkFixer with a sentence for the brief: how the red was
+// (or could not be) attributed, and the failing check's recorded output. A new fixer
+// carries it in its criteria; an attachment keeps the existing brief.
+func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing []string, gate GateOutcome, note string) (string, error) {
 	fixerID := TrunkFixerID(redSHA)
 	paths, err := l.expandFixerPaths(ctx, redSHA, append(append([]string{}, gate.SuspectPaths...), CheckWatches(gate.CheckWatches, failing)...))
 	if err != nil {
@@ -599,6 +606,9 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 		// The brief names what was red. A fixer told only the sha has to re-run the gate to
 		// find out, and a rolling red already recorded its failing checks.
 		criteria = "the full gate is green at " + shortSHA(redSHA) + " (red: " + strings.Join(failing, ", ") + "), and " + nextProof
+	}
+	if note = strings.TrimSpace(note); note != "" {
+		criteria += ". " + note
 	}
 	// A generated fixer has no body reference: its criteria are the whole brief body.
 	if len(dropped) > 0 {

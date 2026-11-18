@@ -116,7 +116,7 @@ func TestHeavyAttributesFirstRedAndGateFault(t *testing.T) {
 		t.Run(map[bool]string{false: "landing", true: "gate-fault"}[fault], func(t *testing.T) {
 			root, base := heavyRepo(t)
 			red := heavyCommit(t, root, "bad")
-			heavyCommit(t, root, "still bad")
+			tip := heavyCommit(t, root, "still bad")
 			heavyGit(t, root, "update-ref", GreenRef, base)
 			var fixes []string
 			runner := heavyFixture(t, root, func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
@@ -137,7 +137,9 @@ func TestHeavyAttributesFirstRedAndGateFault(t *testing.T) {
 			}
 			check := out.Runs[0].Checks[0]
 			if fault {
-				if len(fixes) != 0 || !check.GateFault {
+				// Red at the pointer accuses no landing, but the red still gets a
+				// mover: one fixer against the tip (graph design, Section 8.2).
+				if len(fixes) != 1 || fixes[0] != tip || !check.GateFault || check.FirstRedLanding != "" {
 					t.Fatalf("fault=%+v fixes=%v", check, fixes)
 				}
 			} else if check.FirstRedLanding != red || len(fixes) != 1 || fixes[0] != red {

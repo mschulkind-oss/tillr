@@ -55,9 +55,15 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}, Fix: func(ctx context.Context, sha string, checks []HeavyCheck) error {
 				ids := []string{}
 				watches := map[string][]string{}
+				notes := []string{}
 				for _, check := range checks {
 					ids = append(ids, check.CheckID)
 					watches[check.CheckID] = check.Reads
+					// An unattributed red's brief says why no landing is named, in the
+					// runner's own words, with whatever output the judge recorded.
+					if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
+						notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
+					}
 				}
 				if l.gatePolicy.AutoRevert {
 					return Externalf("heavy %s is red at %s; automatic revert is not implemented; pointer held", strings.Join(ids, ","), sha)
@@ -73,7 +79,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					return err
 				}
 				paths := l.rangePaths(ctx, green, tip)
-				_, err = l.fileTrunkFixer(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches})
+				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches}, strings.Join(notes, ". "))
 				return err
 			}}
 			out, err := runner.Run(ctx)
@@ -116,4 +122,15 @@ func heavyIDs(checks []HeavyCheck) []string {
 		ids = append(ids, check.CheckID)
 	}
 	return ids
+}
+
+// heavyBrief keeps a recorded detail readable in one criteria line: whitespace folded,
+// and a long output tail cut to its end, where a failure's reason usually is.
+func heavyBrief(detail string) string {
+	detail = strings.Join(strings.Fields(detail), " ")
+	const keep = 1500
+	if len(detail) > keep {
+		detail = "..." + detail[len(detail)-keep:]
+	}
+	return detail
 }
