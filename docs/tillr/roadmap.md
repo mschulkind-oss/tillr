@@ -311,30 +311,32 @@ not priority.
 
 ## Filed 2026-11-18: the time from a red landing to its revert
 
-### Shorten the time from a red landing to its revert
+<a id="shorten-the-time-from-a-red-landing-to-its-revert"></a>
+
+### Add faster recovery from red landings
 
 **Theme:** Heavy runner
 
-**Description:** Since 2026-11-18 tillr reverts a landing by itself when the full suite proves
-that it broke the trunk, as the owner ruled in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1). Every lane that lands after a broken
-change waits on that revert, so the time it takes is the time the whole drain is held. Today a
-revert can only start once the entire heavy run has finished, because the runner reports its
-verdicts at the end. On the loaded machine of 2026-11-18 one check, the sharded Go test run,
-took a median of fourteen minutes and up to fifty-three, and the drain's own test suite ran
-twice in every proof, once sharded and once whole. Meanwhile the workers' test runs compete with
-the proof for the same CPUs. The owner's ruling is to remedy a red fast; these three changes
-let the first failing check start the remedy, run the checks a landing touches before the
-others, and give the proof the CPU first, all without adding any time limit.
+**Description:** Tillr automatically reverts a landing when the full suite proves that it
+broke trunk. Later landings wait for that revert, so a slow verdict holds up the whole drain.
+Today the runner waits for every heavy check to finish before reporting a failure, even when an
+earlier check has already found a problem.
+
+On a loaded machine on 2026-11-18, the sharded Go tests took a median of fourteen minutes and
+as long as fifty-three. Each proof also ran the drain's suite twice, while worker tests competed
+with the proof for CPU time. Start recovery as soon as a check fails, give checks affected by
+recent landings the first turn, and give the proof priority over worker tests. Still require the
+full run to pass before advancing the green pointer, without imposing a time limit.
 
 **Outcomes**
 
-- Start the culprit search and the revert as soon as one check fails, while the rest of the run continues.
-- Run first the checks whose inputs the recent landings changed, and run the drain suite once per proof.
-- Give the proof priority over workers' test processes while it runs, and never stop either on time.
+- Start the culprit search and revert as soon as a check fails, while the other checks continue.
+- Run affected checks first and run the drain suite once per proof.
+- Give the proof CPU priority over worker tests without stopping either for time.
 
 **Agent Details**
 
-- **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph.
+- **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph; the owner's ruling in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1).
 - **Where:** the heavy runner and its revert in `tools/tillr-drain/drain/` (`heavy.go`,
   `heavy_revert.go`, `heavy_supervisor.go`), the run order in `tools/tillr-gate/`, the legacy
   check list in `tools/fork-check.py`, and worker process launch in `tools/tillr-run/`.
