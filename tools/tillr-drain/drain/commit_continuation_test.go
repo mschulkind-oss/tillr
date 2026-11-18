@@ -215,12 +215,20 @@ func TestDirtyExitWithoutSessionNamesWork(t *testing.T) {
 // finding F-09): a session that changes its work on every continuation is continued again
 // until it commits, and only a continuation that leaves the work as it was ends it.
 func TestDirtyExitContinuesForAsLongAsEachContinuationChangesTheWork(t *testing.T) {
-	command := `echo step >> candidate.txt
+	// The runner permits an absent global Git configuration. The worker commits
+	// inside this fixture repository, so it must not depend on the host's identity.
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "absent.gitconfig"))
+	command := `set -e
+# If a commit failed, do not keep changing the file forever on retries.
+if [ -f candidate.txt ] && [ "$(wc -l < candidate.txt)" -ge 4 ]; then exit 1; fi
+echo step >> candidate.txt
 if [ "$TILLR_SESSION_MODE" = new ]; then exit 0; fi
 if [ "$(wc -l < candidate.txt)" -ge 4 ]; then git add candidate.txt; git commit -qm finished; fi
 exit 0
 `
-	_, l, original, _ := continuationDispatchFixture(t, command, false)
+	f, l, original, _ := continuationDispatchFixture(t, command, false)
+	runGit(t, f.root, "config", "user.name", "tillr")
+	runGit(t, f.root, "config", "user.email", "tillr@example.invalid")
 	steps := &commitContinuationSteps{continuationSteps: original}
 	l.cfg.Steps = steps
 	var result LoopResult
