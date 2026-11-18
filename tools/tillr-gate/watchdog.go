@@ -31,6 +31,8 @@ type watchSample struct {
 	Bytes, CPUTimeMS int64
 	CPUTimeNS        uint64 // compare unrounded CPU: sub-millisecond work is progress too
 	LastLine         string
+	CPUSource        string
+	CPUChanged       bool // read-only process samples saw runtime or membership change
 }
 
 func (s watchSample) cpuProgress() uint64 {
@@ -61,7 +63,7 @@ func (s *watchdogState) observe(sample watchSample, err error) bool {
 		s.initialized = true
 		return false
 	}
-	if sample.Bytes > s.previous.Bytes || sample.cpuProgress() > s.previous.cpuProgress() {
+	if sample.Bytes > s.previous.Bytes || sample.CPUChanged || sample.cpuProgress() > s.previous.cpuProgress() {
 		s.SilentSamples = 0
 	} else {
 		s.SilentSamples++
@@ -108,6 +110,13 @@ func watchCommand(cmd *exec.Cmd, log *os.File, sources *watchSources) (error, wa
 		return stalled
 	}
 	sample, err := sources.Sample(cmd.Process.Pid, log)
+	if err == nil && sample.CPUSource != "" {
+		fmt.Fprintln(log, "watchdog CPU source: "+sample.CPUSource)
+		// The source line is our metadata, not progress by the command.
+		if info, statErr := log.Stat(); statErr == nil {
+			sample.Bytes = info.Size()
+		}
+	}
 	observe(sample, err)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -146,16 +155,15 @@ func accountingContinuity(sample func(int, *os.File) (watchSample, error)) func(
 	return func(pid int, log *os.File) (watchSample, error) {
 		reading, err := sample(pid, log)
 		if err == nil && initialized && reading.cpuProgress() < previous {
-			err = fmt.Errorf("kernel CPU counter decreased")
+			err = fmt.Errorf("CPU accounting decreased")
 		}
 		previous, initialized = reading.cpuProgress(), true
 		return reading, err
 	}
 }
 
-// clockSampler reads an inherited kernel counter, not process snapshots. Exited
-// children (including SIG_DFL+SA_NOCLDWAIT children) remain in this counter. A
-// missing counter never falls back to /proc, whose completeness cannot be proven.
+// clockSampler reads the preferred inherited kernel counter. The Linux launcher
+// selects read-only process accounting when this counter is refused.
 func clockSampler(counter io.Reader, unavailable error) func(int, *os.File) (watchSample, error) {
 	return accountingContinuity(func(_ int, log *os.File) (watchSample, error) {
 		var ns uint64
@@ -167,7 +175,9 @@ func clockSampler(counter io.Reader, unavailable error) func(int, *os.File) (wat
 				ns = binary.NativeEndian.Uint64(raw[:])
 			}
 		}
-		return sampleOutput(log, ns, err)
+		reading, err := sampleOutput(log, ns, err)
+		reading.CPUSource = "kernel task-clock counter"
+		return reading, err
 	})
 }
 func sampleOutput(log *os.File, cpuNS uint64, cpuError error) (watchSample, error) {
@@ -183,7 +193,12 @@ func sampleOutput(log *os.File, cpuNS uint64, cpuError error) (watchSample, erro
 	}
 	n, _ := log.ReadAt(tail, offset)
 	lines := strings.Split(strings.TrimRight(string(tail[:n]), "\n"), "\n")
-	sample.LastLine = lines[len(lines)-1]
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(lines[i], "watchdog CPU source: ") {
+			sample.LastLine = lines[i]
+			break
+		}
+	}
 	return sample, cpuError
 }
 func readFastVerdict(path string) (VerdictPayload, error) {

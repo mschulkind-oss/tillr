@@ -313,12 +313,13 @@ sys.exit(rc)
         self.assertEqual((self.repo / "render.log").read_text(), "vantage-check README.md\n")
         checks = {check["check_id"]: check for check in payload["checks"]}
         for kind in IDS:
-            # The command stays silent; an unavailable watchdog is separately
-            # reported in both the verdict and the log, never silently ignored.
+            # A silent command logs only the watchdog source or its diagnostic.
             diagnostic = checks[kind].get("watchdog_unavailable", "")
+            source = checks[kind].get("cpu_source", "")
+            self.assertNotEqual(bool(diagnostic), bool(source), checks[kind])
             if diagnostic:
                 self.assertTrue(diagnostic.startswith("watchdog unavailable: "), diagnostic)
-            expected_log = diagnostic + "\n" if diagnostic else ""
+            expected_log = (diagnostic or f"watchdog CPU source: {source}") + "\n"
             self.assertEqual(next((self.repo / "logs").glob("*-" + kind + ".log")).read_text(), expected_log)
 
     def test_added_size_refusal_and_tree_debt(self):

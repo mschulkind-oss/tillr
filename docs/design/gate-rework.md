@@ -407,20 +407,53 @@ deadline.
 
 **Only a stall ends a check early.** The watchdog (coined here: the observer of a
 running check’s progress, not an elapsed-time limit) samples every 1,000 milliseconds.
-Progress is at least one new log byte, including a heartbeat, or an increase in the
-process group’s user plus system CPU time over all live members and their reaped
-children. Sixty consecutive samples with neither is a stall. The runner kills the
-process group and records `stalled`, exit 6, distinct from pass, fail, error and
-over-budget. Its verdict entry, log and summary name the check, last output line,
-group CPU time, silent samples and run time. If CPU accounting cannot be read, no
-stall is declared; `watchdog unavailable` is recorded and printed. Linux groups
-use an [inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html)
-that retains child CPU independently of reaping or discarded child status.
-It is attached while the check is paused before its first instruction, before
-any children can be created; CPU
-progress compares unrounded nanoseconds. A denied attachment, unreadable counter,
-or decreasing counter reports unavailability immediately in the log. Incomplete
-`/proc` snapshots are never substituted. A check that
+Progress is at least one new log byte, including a heartbeat, or CPU progress
+from the selected source. Sixty consecutive samples with neither is a stall.
+The runner kills the process group and records `stalled`, exit 6, distinct
+from pass, fail, error and over-budget. Its verdict entry, log and summary name
+the check, last output line, group CPU time, silent samples and run time.
+
+Linux prefers an
+[inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html)
+that retains descendant CPU independently of reaping or discarded child status.
+Attachment precedes exec and any children: Go's disabled launching-thread counter
+is inherited and enabled only at the child's exec, and its launching thread is
+reserved until the counter closes so no other check inherits it. Python's child
+waits for an exec-release byte while the counter attaches. Observer CPU is
+excluded.
+
+A refused counter selects **process accounting**: read-only samples of the
+check's existing process group, never a supervisor that can delay, stop or signal
+the check. Members are identified by PID and start time from
+[process stat](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
+Each member's runtime is the sum of its threads' scheduled CPU in nanoseconds from
+[Linux scheduler accounting](https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html).
+CPU progress is a change in any member's runtime, a change in the member set, or
+a member disappearing while read. This rule remains effective when a total does
+not increase: a child that runs and exits between samples requires a starter that
+runs or exits; following starters back reaches a member of the previous sample
+whose runtime or presence changes. Nested watchers read their own groups without
+a shared service; the watcher's CPU is not progress by its idle child.
+
+The fallback's reported `cpu_time_ms` is the highest observed sum of members'
+runtime plus their reaped children's CPU, which process stat carries in `cutime`
+and `cstime`. The sampler captures all members' reaped-child CPU before reading
+any thread runtime, preventing a child reaped during a sample from being counted
+both directly and through its parent. It is a lower bound, not a claim to retain
+every child's total: children whose exit status is discarded may be absent from the total, but still
+count as progress by the rule above. A process leaving the group is not observed.
+The kernel source compares unrounded nanoseconds; the fallback compares runtime
+and membership independently of its reported total.
+
+The log names `watchdog CPU source: kernel task-clock counter` or
+`watchdog CPU source: process accounting`, and `cpu_source` in the verdict
+names which supplied the last successful measurement. The Python checker uses
+the same source names and rule and exports the source in stall observations.
+If neither source is readable, including unreadable process or thread runtime
+files, no stall is declared: `watchdog unavailable` is printed immediately
+and recorded, the source field is absent, and the check runs without detection.
+Unreadable observations from a selected source likewise disable detection rather
+than inferring a stall; a kernel counter decrease also disables it. A check that
 could not start or crashed remains `error`, exit 4.
 
 **Overruns are observations, not verdicts.** Checks run as long as they make
