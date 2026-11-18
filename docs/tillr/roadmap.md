@@ -1265,13 +1265,27 @@ missing rather than report that the change failed verification.
   A publisher that refused a branch differing from the record would refuse every push made
   between a lane's export and that lane's landing, because the branch moves at export and the
   record reaches the trunk only when the lane lands.
+- **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
+  tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
+  files, [their shared library](../../tests/pi-forks/lib.sh),
+  [the fork list](../../bin/pi-forks.list) and
+  [the static series test](../../tests/pi-patch-series.test.sh) are now inside this item's paths.
+  A case that asserts the old contract is rewritten to assert c2, not kept and not deleted. The
+  one known today is the last block of
+  [the candidate-check case](../../tests/pi-forks/cases/25-candidate-check.sh), which expects
+  `candidate --check` to turn stale when the cache's local `patch/chkconv` branch moves. Under
+  c2 the candidate's identity for a fork delivered from a patch branch is the recorded commit, so
+  that block becomes three assertions: moving the record makes the candidate stale and the
+  message names both commits; moving the local branch while the record stays changes nothing;
+  deleting the local branch changes nothing. Change any other case the same way when it fails
+  for the same reason, and leave every case about publishing as it is.
 - **Verify:** Use [fork-check tests](../../tests/fork-check.test.py) and
   [fork export tests](../../tests/pi-forks.test.sh) to check that exporting updates the recorded
   commit, deleting all local `patch/*` branches changes no result, and empty, current, and
   stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
   that a fetch refusal names the missing commit and remote and returns `could not judge`.
 
-<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,bin/pi-forks.list,tests/pi-forks.test.sh,tests/pi-forks/,tests/pi-patch-series.test.sh,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change. The record is the input a check reads; publishing a branch is not changed.
 - **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
