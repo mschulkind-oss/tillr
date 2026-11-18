@@ -109,7 +109,7 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 		return nil, err
 	}
 	// A relocation of the same executable is not a new build.
-	if result.TillrBuild, err = inputHash([]any{build.Revision, build.Modified, build.Digest}); err != nil {
+	if result.TillrBuild, err = build.Hash(); err != nil {
 		return nil, err
 	}
 	return result, nil

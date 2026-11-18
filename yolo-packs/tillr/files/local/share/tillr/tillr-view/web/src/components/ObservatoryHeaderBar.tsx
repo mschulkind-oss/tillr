@@ -555,6 +555,26 @@ function DrainBuildLine({ drain }: { drain: SnapshotData["drain_summary"] | unde
   );
 }
 
+/** RestartLine is the answer to the latest restart request of each role. A role nobody has
+ * asked to restart is named as such, because an absent line would read as "no restart is
+ * possible" rather than "none has been asked". */
+export function RestartLine({ drain }: { drain: SnapshotData["drain_summary"] | undefined }) {
+  const restarts = drain?.restarts ?? {};
+  return (
+    <span className="head-build head-restart">
+      {(["drain", "view"] as const).map((role) => {
+        const answer = restarts[role];
+        return (
+          <span key={role} className="head-restart__role" title={answer ? `${answer.request_id}\n${answer.from_build}\n-> ${answer.to_build}${answer.detail ? `\n${answer.detail}` : ""}` : "no restart has been requested"}>
+            {role} restart: <strong>{answer ? answer.answer : "none requested"}</strong>
+            {answer?.detail ? ` — ${answer.detail}` : ""}{" "}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 export function ObservatoryHeaderBar({
   snapshot,
   error,
@@ -710,6 +730,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row head-build-row">
           <BuildLine build={cursor.build} />
           <DrainBuildLine drain={drain} />
+          <RestartLine drain={drain} />
         </div>
       </div>
       {/* Last child, so the grid puts it on its own full-width row under the band's three

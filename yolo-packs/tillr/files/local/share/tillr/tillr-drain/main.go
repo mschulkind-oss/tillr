@@ -27,6 +27,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -88,6 +89,8 @@ func dispatch(args []string) int {
 		return stopFace(rest)
 	case "loop":
 		return loopFace(rest)
+	case "restart":
+		return restartFace(rest)
 	default:
 		return fail(drain.Usagef("unknown face %q: want %s", face, faceList))
 	}
@@ -648,7 +651,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, acquit, examine, set-aside, boundary, resume, stop or loop"
+const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")
@@ -840,6 +843,7 @@ func loopFace(args []string) int {
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
+		Restart: restartConfig(),
 	})
 	if err != nil {
 		return failStartup(err)
@@ -1004,4 +1008,75 @@ func laneIDs(n int) []string {
 		lanes = append(lanes, fmt.Sprintf("lane-%d", i))
 	}
 	return lanes
+}
+
+// restartFace files one request to replace the loop's process and prints its id. With
+// --wait it then blocks until a loop answers and prints the answer. A request filed while
+// no loop runs is answered by the next loop that starts.
+func restartFace(args []string) int {
+	fs := newFlagSet("restart")
+	root := fs.String("root", "", "the repository whose loop should restart")
+	path := fs.String("store", "", "the loop's store (default: <root>/.tillr/state.db)")
+	wait := fs.Bool("wait", false, "block until the loop answers the request, then print the answer")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" {
+		if *root == "" {
+			return fail(drain.Usagef("restart needs --root <repository> or --store <path>"))
+		}
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	if _, err := os.Stat(*path); err != nil {
+		return fail(openFailure(err))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	request, err := restart.File(ctx, *path, restart.RoleDrain, time.Now())
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Println(request.ID)
+	if !*wait {
+		return record.ExitOK
+	}
+	answer, err := restart.AwaitAnswer(ctx, *path, request.ID, 100*time.Millisecond)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Println(answer)
+	if answer.Answer == restart.AnswerRefused {
+		return 1
+	}
+	return record.ExitOK
+}
+
+// restartConfig is what lets this loop replace itself: the binary it was started from, as
+// it is on disk now, and the arguments it was started with.
+func restartConfig() *drain.RestartConfig {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	return &drain.RestartConfig{
+		Executable: exe,
+		Argv:       append([]string(nil), os.Args...),
+		Check:      checkBinary(os.Args[1:]),
+	}
+}
+
+// checkBinary runs a binary with the loop's own arguments and --check. Its failure is the
+// last line the check printed, which is the one line a refusal records.
+func checkBinary(args []string) func(context.Context, string) error {
+	return func(ctx context.Context, executable string) error {
+		out, err := exec.CommandContext(ctx, executable, append(append([]string(nil), args...), "--check")...).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		if strings.TrimSpace(string(out)) == "" {
+			return err
+		}
+		return errors.New(strings.TrimSpace(string(out)))
+	}
 }

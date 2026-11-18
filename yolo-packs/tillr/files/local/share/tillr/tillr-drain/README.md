@@ -32,6 +32,22 @@ died without a verdict from its own harness session; `loop` is the unattended su
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
 
+## Moving a running loop onto new code
+
+After building and replacing the installed binaries, run
+`tillr drain restart --root <repository> --wait`. The loop reads the request at the top
+of a pass, checks the replacement with its own arguments and `--check`, and replaces
+itself with the same process id. A failed check leaves the old loop running.
+Worker runs keep going without a signal or pause request from the replacement.
+Moving those runs onto the new build is [separate work](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#move-every-run-onto-the-new-build-after-a-restart).
+
+`tillr view restart --root <repository> --wait` requests the same change for the
+observatory server, which finishes its HTTP requests before replacing itself.
+Both commands print the request id; `--wait` also prints `restarted`, `already-current`,
+`refused` or `superseded`. A request filed while no process runs waits for the next start.
+With no request, replacing files on disk does not restart either process;
+[automatic rolling](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#rolling-after-a-landing) is separate work.
+
 ## Opted-in judgment before the gate
 
 An item directive with `judge="agent"` asks for an independent, read-only review

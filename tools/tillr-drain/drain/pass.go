@@ -1518,6 +1518,9 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+	if handled, stop, err := l.gateRestart(ctx, result); handled || err != nil {
+		return stop, err
+	}
 	if !l.nonLanding {
 		if err := l.prunePreservedWork(ctx); err != nil {
 			return "", err

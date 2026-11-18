@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -78,8 +79,14 @@ func (b buildStamp) String() string {
 func buildInfo(frontEnd string) buildStamp {
 	stamp := buildStamp{FrontEnd: frontEnd}
 	if exe, err := os.Executable(); err == nil {
-		stamp.Executable = exe
-		stamp.Digest = fileDigest(exe)
+		// A binary replaced by a rename reads back as "<path> (deleted)": the path is the
+		// new file's, and the running image is the one /proc still holds.
+		stamp.Executable = strings.TrimSuffix(exe, " (deleted)")
+		if runtime.GOOS == "linux" {
+			stamp.Digest = fileDigest("/proc/self/exe")
+		} else {
+			stamp.Digest = fileDigest(exe)
+		}
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
