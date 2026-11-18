@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -517,37 +518,6 @@ func (t *Trunk) WorktreeFor(ref string) (string, error) {
 	return "", nil
 }
 
-// ClashingPaths answers the paths a move from to would change on which the worktree that has
-// ref checked out holds uncommitted content — the paths a fast-forward would stop on, and the
-// paths a landing that went through anyway would leave holding something HEAD does not. A
-// repository whose trunk is not checked out answers none: there is no index or working tree
-// to leave behind.
-func (t *Trunk) ClashingPaths(ref, from, to string) ([]string, error) {
-	worktree, err := t.WorktreeFor(ref)
-	if err != nil || worktree == "" {
-		return nil, err
-	}
-	uncommitted, err := t.UncommittedPaths(worktree)
-	if err != nil {
-		return nil, err
-	}
-	held := make(map[string]bool, len(uncommitted))
-	for _, path := range uncommitted {
-		held[path] = true
-	}
-	changed, err := t.git("diff", "--no-renames", "--name-only", from, to)
-	if err != nil {
-		return nil, Externalf("reading the paths %s..%s change in %s: %v", from, to, t.repo, err)
-	}
-	var clashing []string
-	for _, path := range pathLines(changed) {
-		if held[path] {
-			clashing = append(clashing, path)
-		}
-	}
-	return clashing, nil
-}
-
 // UncommittedPaths answers the paths a worktree holds content for that its own HEAD does not:
 // everything `git diff HEAD` reports, staged or not, plus the untracked files a checkout
 // refuses to overwrite. Ignored files are not content a fast-forward overwrites, so they are
@@ -684,12 +654,23 @@ func (t *Trunk) runGit(extraEnv []string, args ...string) (string, string, error
 // fast-forward happens in the worktree that has the trunk checked out, which is not
 // necessarily the directory the face was pointed at.
 func (t *Trunk) runGitIn(dir string, extraEnv []string, args ...string) (string, string, error) {
+	return t.runGitStdin(dir, nil, extraEnv, args...)
+}
+
+// runGitStdin is runGitIn with the command's standard input.
+func (t *Trunk) runGitStdin(dir string, stdin []byte, extraEnv []string, args ...string) (string, string, error) {
+	if OwnerHooks.GitCall != nil {
+		OwnerHooks.GitCall(dir, args)
+	}
 	ctx := t.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = gitEnvWith(extraEnv)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	started := time.Now()
@@ -750,3 +731,6 @@ func (t *Trunk) TreeOf(commit string) (string, error) {
 	}
 	return strings.TrimSpace(out), nil
 }
+
+// syscallENOTDIR is what lstat answers when a parent of the path is a file.
+var syscallENOTDIR = syscall.ENOTDIR

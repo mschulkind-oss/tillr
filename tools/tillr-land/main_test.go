@@ -47,6 +47,9 @@ func TestMain(m *testing.M) {
 
 // runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
 func runTests(m *testing.M) int {
+	if os.Getenv("TILLR_HELPER_KILL") != "" {
+		return m.Run() // a helper process of owner_kill_test.go needs no binary
+	}
 	root := scratchRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return 1

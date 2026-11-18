@@ -61,7 +61,11 @@ type contentionFixture struct {
 
 func newContentionFixture(t *testing.T) contentionFixture {
 	t.Helper()
-	f := newFixture(t)
+	return newContentionFixtureFor(t, newFixture(t))
+}
+
+func newContentionFixtureFor(t *testing.T, f fixture) contentionFixture {
+	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", deployedConfig(t, fixtureName, fixtureEmail))
 	db := filepath.Join(scratch(t, "contention-store"), "state.db")
 	itemBin := filepath.Join(scratch(t, "item-bin"), "tillr-item")
@@ -167,7 +171,7 @@ func TestGitPreparationAllowsHeartbeatAndClose(t *testing.T) {
 
 func TestFinalMoveExcludesCloseUntilReceipt(t *testing.T) {
 	f := newContentionFixture(t)
-	entered, release := stallGit(t, "merge")
+	entered, release := stallGit(t, "tillr.move=final")
 	done := startLanding(t, context.Background(), f)
 	awaitGit(t, entered)
 	closed := make(chan string, 1)
@@ -276,17 +280,26 @@ func TestPreparationRevalidatesTrunkAndHistory(t *testing.T) {
 
 func TestFinalMoveFailureRollsBackReceiptAndReleasesWriter(t *testing.T) {
 	f := newContentionFixture(t)
-	entered, release := stallGit(t, "merge")
+	entered, release := stallGit(t, "tillr.move=final")
 	done := startLanding(t, context.Background(), f)
 	awaitGit(t, entered)
-	// A new worktree clash after preparation must be refused by the final Git move.
-	write(t, filepath.Join(f.f.dir, "candidate.txt"), "owner content\n")
+	// A trunk that moves between the comparison and the ref write is refused by the
+	// guarded ref update; the install is undone and nothing is recorded.
+	moved := git(t, f.f.dir, "-c", "user.name=owner", "-c", "user.email=owner@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "owner")
+	git(t, f.f.dir, "update-ref", "refs/heads/master", moved)
+	ownerTip := f.f.trunk(t)
 	os.WriteFile(release, nil, 0600)
 	a := finishLanding(t, done)
 	if a.err == nil {
-		t.Fatalf("Move overwrote owner content: %+v", a.landing)
+		t.Fatalf("the move went through a moved trunk: %+v", a.landing)
 	}
-	assertNoLandingMove(t, f)
+	if tip := f.f.trunk(t); tip != ownerTip {
+		t.Fatalf("a failed move changed the trunk: %s", tip)
+	}
+	if _, err := os.Stat(filepath.Join(f.f.dir, "candidate.txt")); err == nil {
+		t.Fatal("a failed move left the installed file behind")
+	}
+	assertLandingCount(t, f, 0)
 	if out, err := f.close(); err != nil {
 		t.Fatalf("close after failed Move: %v %s", err, out)
 	}

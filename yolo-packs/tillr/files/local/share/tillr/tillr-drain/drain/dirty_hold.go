@@ -11,12 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// ReasonTrunkPathDirty means owner content overlaps a retained landing. Committing
-// or restoring those paths reopens the landing without dispatching another run.
+// ReasonTrunkPathDirty means the owner's content on the main checkout would conflict with a
+// retained landing, or the checkout is in the middle of a merge, rebase or cherry-pick.
+// Resolving that reopens the landing without dispatching another run; dirt that restores
+// cleanly never holds one.
 const ReasonTrunkPathDirty = "trunk-path-dirty"
 const dirtyHeldKind = "drain.trunk-path-dirty"
 
@@ -68,29 +71,15 @@ func (h *dirtyHold) paths(ctx context.Context) ([]string, error) {
 	if tree == "" {
 		return nil, Externalf("reapplying retained candidate %s answered no tree", h.Candidate.RunID)
 	}
-	tracked, err := boundaryGit(ctx, h.Root, "diff", "--no-renames", "--name-only", "-z", "HEAD")
+	// The same prediction the lander makes: only a conflict between the owner's content
+	// and the landed result holds the landing. Dirt that restores cleanly does not.
+	landTrunk, err := land.OpenTrunk(h.Root)
+	if err != nil {
+		return nil, Externalf("opening the trunk of %s: %v", h.Root, err)
+	}
+	paths, err := landTrunk.PredictOwner(ref, trunk, tree)
 	if err != nil {
 		return nil, err
-	}
-	untracked, err := boundaryGit(ctx, h.Root, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return nil, err
-	}
-	changed, err := boundaryGit(ctx, h.Root, "diff", "--no-renames", "--name-only", "-z", trunk, tree)
-	if err != nil {
-		return nil, err
-	}
-	held := map[string]bool{}
-	for _, p := range strings.Split(tracked+untracked, "\x00") {
-		if p != "" {
-			held[p] = true
-		}
-	}
-	var paths []string
-	for _, p := range strings.Split(changed, "\x00") {
-		if held[p] {
-			paths = append(paths, p)
-		}
 	}
 	sort.Strings(paths)
 	return paths, nil
@@ -118,7 +107,7 @@ func (l *Loop) holdDirty(ctx context.Context, c Candidate, paths []string) error
 	if err != nil {
 		return err
 	}
-	l.reportf("loop: holding %s (%s); commit or restore the path\n", c.ItemID, dirtyReason(paths))
+	l.reportf("loop: holding %s (%s); commit, restore, or change your edit on %s; the landing proceeds as soon as it no longer conflicts\n", c.ItemID, dirtyReason(paths), strings.Join(paths, ", "))
 	return errDirtyHeld
 }
 

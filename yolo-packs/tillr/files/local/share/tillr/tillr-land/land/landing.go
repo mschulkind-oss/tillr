@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/redcap"
@@ -118,6 +119,10 @@ type Landing struct {
 	ConflictPaths     []string     `json:"conflict_paths"`
 	GateSkippedReason string       `json:"gate_skipped_reason"`
 	RedCap            *redcap.Hold `json:"red_cap,omitempty"`
+	// Faults name what the landing could not finish cleanly: a recovery ref an earlier
+	// landing left, or bytes the owner saved after the trunk moved, with the ref that
+	// holds them. A landing with no fault leaves no recovery ref.
+	Faults []string `json:"faults,omitempty"`
 }
 
 // Landed reports whether this landing moved the trunk ref.
@@ -321,24 +326,142 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		req.observation = &LockObservation{RunID: req.RunID, Events: []LockEvent{{Kind: "acquired", AtNS: lock.acquiredNS}}}
 	}
 
-	prepared, err := prepareLanding(ctx, s, t, landing, req)
-	if err != nil {
-		return Landing{}, err
+	// A touched path the owner saved after the prediction sends the landing back to predict
+	// again, under the same lock: the transaction changed nothing.
+	decided := landing
+	busyPause := 25 * time.Millisecond
+	// changedAt is the readings of the prediction whose install answered that the owner changed
+	// a path. The next prediction must read something differently; when it reads the same, the
+	// owner changed nothing and the install itself is at fault, so the landing ends as a failed
+	// install does instead of repeating.
+	changedAt := ""
+	for {
+		prepared, err := prepareLanding(ctx, s, t, decided, req)
+		if err != nil {
+			t.dropRecovery(prepared.plan)
+			return Landing{}, err
+		}
+		if prepared.stored != nil {
+			return *prepared.stored, nil
+		}
+		if changedAt != "" && prepared.plan != nil && prepared.plan.readings() == changedAt {
+			failure := &InstallFailure{Err: errors.New("the install answered that the owner changed a touched path, and the next prediction read every touched path, its index entry and the branch as before")}
+			return t.settleOwner(ctx, s, prepared, req, &publication{}, decided, failure)
+		}
+		// Only the final check, Move and receipt need SQLite's single writer. Close
+		// either wins during preparation or waits here and sees the committed receipt.
+		pub := &publication{}
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			if OwnerHooks.TxOpened != nil {
+				OwnerHooks.TxOpened()
+			}
+			var err error
+			landing, err = finishLanding(ctx, tx, t, prepared, req, pub)
+			return err
+		})
+		if errors.Is(err, ErrIndexBusy) {
+			// Ordinary Git work holds the checkout's index lock. That is contention, not a
+			// finding about the owner's content: nothing is held or refused, and the landing
+			// tries again after a short pause that the request's context can end.
+			landing = decided
+			timer := time.NewTimer(busyPause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return Landing{}, ctx.Err()
+			case <-timer.C:
+			}
+			if busyPause < time.Second {
+				busyPause *= 2
+			}
+			continue
+		}
+		if errors.Is(err, ErrOwnerChanged) {
+			landing = decided
+			changedAt = ""
+			if prepared.plan != nil {
+				changedAt = prepared.plan.readings()
+			}
+			if err := ctx.Err(); err != nil {
+				return Landing{}, err
+			}
+			continue
+		}
+		return t.settleOwner(ctx, s, prepared, req, pub, landing, err)
 	}
-	if prepared.stored != nil {
-		return *prepared.stored, nil
+}
+
+// publication is the install a transaction made, if its trunk move happened.
+type publication struct{ install *OwnerInstall }
+
+// settleOwner closes what the owner overlay left open once the transaction has ended, in
+// whatever way: the last read of the replaced files comes after the receipt is durable or has
+// failed, a published checkout is never undone, a fault is written in a transaction of its own,
+// and a preparation that installed nothing removes its own recovery copy.
+func (t *Trunk) settleOwner(ctx context.Context, s *store.Store, p preparedLanding, req LandingRequest, pub *publication, landing Landing, err error) (Landing, error) {
+	// What the owner overlay owes is settled with a context the request cannot cancel: bytes
+	// must not disappear because the request was canceled and Git then refused to run.
+	cleanup := *t
+	cleanup.ctx = context.WithoutCancel(ctx)
+	t = &cleanup
+	if pub.install != nil {
+		pub.install.t = t
 	}
-	// Only the final check, Move and receipt need SQLite's single writer. Close
-	// either wins during preparation or waits here and sees the committed receipt.
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		var err error
-		landing, err = finishLanding(ctx, tx, t, prepared, req)
-		return err
-	})
+	var failure *InstallFailure
+	switch {
+	case pub.install != nil:
+		faults := pub.install.Finish()
+		if len(faults) == 0 {
+			break
+		}
+		landing.Faults = append(landing.Faults, faults...)
+		if ferr := recordFault(ctx, s, req, landing.LandingID, faults); ferr != nil {
+			err = errors.Join(err, ferr)
+		}
+		if err != nil {
+			err = errors.Join(err, errors.New(strings.Join(faults, "; ")))
+		}
+	case errors.As(err, &failure):
+		// The owner's content was put back; the recovery copy stays and the fault names it.
+		ref := ""
+		if p.plan != nil {
+			ref = p.plan.RecoveryRef
+		}
+		restored := "the owner's content was put back exactly"
+		if failure.Fault != "" {
+			restored = failure.Fault
+		}
+		fault := fmt.Sprintf("installing the landing failed: %v; %s; recovery copy %s", failure.Err, restored, ref)
+		if ferr := recordFault(ctx, s, req, "", []string{fault}); ferr != nil {
+			err = errors.Join(err, ferr)
+		}
+		return Landing{}, errors.Join(err, errors.New("fault recorded: "+fault))
+	default:
+		t.dropRecovery(p.plan)
+	}
 	if err == nil {
 		req.observation.note("receipt")
 	}
 	return landing, err
+}
+
+// recordFault appends the land.fault event in a write transaction of its own, after the
+// landing's transaction ended. Nothing is computed inside it.
+func recordFault(ctx context.Context, s *store.Store, req LandingRequest, landingID string, faults []string) error {
+	if OwnerHooks.FailFaultEvent != nil {
+		if err := OwnerHooks.FailFaultEvent(); err != nil {
+			return err
+		}
+	}
+	body, err := json.Marshal(map[string]any{"run_id": req.RunID, "landing_id": landingID, "faults": faults})
+	if err != nil {
+		return Internalf("encoding the %s event: %v", FaultKind, err)
+	}
+	item := req.ItemID
+	return s.WriteTx(context.WithoutCancel(ctx), func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{Kind: FaultKind, ObjectType: "item", ObjectID: &item, Payload: body, At: req.At})
+		return err
+	})
 }
 
 type preparedLanding struct {
@@ -354,6 +477,8 @@ type preparedLanding struct {
 	// recovered is a landing this run already published and the store never recorded:
 	// the row is written for that commit and the trunk is not moved again.
 	recovered bool
+	// plan is the prediction for the trunk's checkout, read before the write transaction.
+	plan *OwnerPlan
 	// stored is the receipt this run already recorded for this head at its marker: the
 	// request is a retry of a recorded landing, answered with that row and nothing written.
 	stored *Landing
@@ -446,6 +571,14 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	if err != nil || p.stored != nil {
 		// A retry of a recorded landing: its receipt is the answer. Nothing is squashed,
 		// pinned, moved or written, so a retry cannot add a second row or a second commit.
+		// What an earlier attempt of this run left for the owner is reported all the same.
+		if err == nil {
+			faults, rerr := t.reconcileOwner(ctx, s, req)
+			if rerr != nil {
+				return p, rerr
+			}
+			p.stored.Faults = append(p.stored.Faults, faults...)
+		}
 		return p, err
 	}
 	trunkBefore, err := t.Head(req.BaseRef)
@@ -472,6 +605,11 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 				return p, err
 			}
 			p.recovered = true
+			faults, rerr := t.reconcileOwner(ctx, s, req)
+			if rerr != nil {
+				return p, rerr
+			}
+			p.landing.Faults = append(p.landing.Faults, faults...)
 			p.landing.Result, p.landing.Reason = ResultLanded, ""
 			p.landing.TrunkBefore, p.landing.TrunkAfter, p.landing.LandedTree = parent, marker, landedTree
 		}
@@ -594,13 +732,13 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, p.squash.Conflicts
 		} else if p.landing.Landed() {
 			p.landing.LandedTree = p.squash.Tree
-			clashing, err := t.ClashingPaths(req.BaseRef, trunkBefore, p.squash.Commit)
-			if err != nil {
+			if p.plan, err = t.PlanOwner(req.BaseRef, req.RunID, trunkBefore, p.squash.Commit); err != nil {
 				return p, err
 			}
-			if len(clashing) > 0 {
+			p.landing.Faults = append(p.landing.Faults, p.plan.faults()...)
+			if held := p.plan.Held(); len(held) > 0 {
 				p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkUncommitted
-				p.landing.ConflictPaths = clashing
+				p.landing.ConflictPaths = held
 			} else if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
 				return p, err
 			} else if err := t.MarkLanded(req.RunID, p.squash.Commit); err != nil {
@@ -616,7 +754,7 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	return p, ctx.Err()
 }
 
-func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLanding, req LandingRequest) (Landing, error) {
+func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLanding, req LandingRequest, pub *publication) (Landing, error) {
 	landing := p.landing
 	notLandable, err := itemNotLandable(tx, req.ItemID)
 	if err != nil {
@@ -671,9 +809,11 @@ func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLandin
 	// so the history keeps the tip read under the lock.
 	if landing.Landed() && !p.recovered {
 		req.observation.note("trunk-move")
-		if err := t.Move(req.BaseRef, p.squash.Commit, p.tip); err != nil {
+		install, err := t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
+		if err != nil {
 			return Landing{}, err
 		}
+		pub.install = install
 		landing.TrunkAfter = p.squash.Commit
 		if p.history != nil && PatchRef(req.BaseRef) == "" {
 			p.history.observed = p.squash.Commit
@@ -811,4 +951,57 @@ func checkLandingRequest(req LandingRequest) error {
 		return Usagef("a landing needs a base ref: a landing onto no branch is a landing in the wrong place")
 	}
 	return nil
+}
+
+// reconcileOwner reports what an earlier attempt of this run left for the owner and records, once,
+// the fault events that never reached the store: a surviving recovery copy that no longer matches the
+// disk, and a saved-bytes ref. It runs on every path that answers without a fresh install, and
+// every failure it meets is returned: an answer that could not make its faults durable is not a
+// clean one.
+func (t *Trunk) reconcileOwner(ctx context.Context, s *store.Store, req LandingRequest) ([]string, error) {
+	type artifact struct{ ref, text string }
+	var found []artifact
+	worktree, err := t.WorktreeFor(req.BaseRef)
+	if err != nil {
+		return nil, err
+	}
+	if worktree != "" {
+		stale, err := t.settleRecovery(worktree)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range stale {
+			found = append(found, artifact{f.Ref, f.Text})
+		}
+	}
+	refs, described, err := t.pendingSaved(req.RunID)
+	if err != nil {
+		return nil, err
+	}
+	for i, ref := range refs {
+		found = append(found, artifact{ref, described[i]})
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	events, err := s.Events(ctx, 0)
+	if err != nil {
+		return nil, Externalf("reading the fault events: %v", err)
+	}
+	var faults []string
+	for _, a := range found {
+		faults = append(faults, a.text)
+		recorded := false
+		for _, e := range events {
+			if e.Kind == FaultKind && strings.Contains(string(e.Payload), a.ref) {
+				recorded = true
+			}
+		}
+		if !recorded {
+			if err := recordFault(ctx, s, req, "", []string{a.text}); err != nil {
+				return faults, Externalf("the fault for %s could not be recorded: %v", a.ref, err)
+			}
+		}
+	}
+	return faults, nil
 }

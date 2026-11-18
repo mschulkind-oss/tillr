@@ -110,4 +110,7 @@ func init() {
 	if err := event.Register(LandingKind, "land"); err != nil {
 		panic(err)
 	}
+	if err := event.Register(FaultKind, "land"); err != nil {
+		panic(err)
+	}
 }

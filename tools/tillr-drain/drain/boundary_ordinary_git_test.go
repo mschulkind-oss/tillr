@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -163,4 +164,66 @@ func checkText(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// A real landing, with the owner's stash present, writes its recovery copy inside the run's
+// bracket. The boundary check ignores the copy and the stash alike.
+func TestARealLandingWithTheOwnersStashPresentDoesNotConvictTheRun(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	ctx := context.Background()
+	own := l.lanePath("lane-1")
+	watched := []string{"lane-2"}
+	writeForkFile(t, filepath.Join(f.root, "m.txt"), "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n")
+	runGit(t, f.root, "add", "m.txt")
+	runGit(t, f.root, "commit", "-qm", "m")
+	tip := strings.TrimSpace(runGit(t, f.root, "rev-parse", "HEAD"))
+	runGit(t, f.root, "switch", "-q", "-c", "cand")
+	writeForkFile(t, filepath.Join(f.root, "m.txt"), "L1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n")
+	runGit(t, f.root, "commit", "-qam", "candidate")
+	landed := strings.TrimSpace(runGit(t, f.root, "rev-parse", "HEAD"))
+	runGit(t, f.root, "switch", "-q", TrunkRef)
+	runGit(t, f.root, "branch", "-D", "cand")
+	writeForkFile(t, filepath.Join(f.root, "base.txt"), "stashed edit\n")
+	runGit(t, f.root, "stash", "-q")
+	writeForkFile(t, filepath.Join(f.root, "m.txt"), "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nW9\n")
+
+	before, err := l.snapshot(ctx, []string{own}, watched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var during *Boundary
+	land.OwnerHooks.BeforeLastRead = func() {
+		if refs := runGit(t, f.root, "for-each-ref", land.RecoveryPrefix); strings.TrimSpace(refs) == "" {
+			t.Error("the recovery copy is absent while the landing is in flight")
+		}
+		if during, err = l.snapshot(ctx, []string{own}, watched); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(land.ResetOwnerHooks)
+	trunk, err := land.OpenTrunk(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := trunk.PlanOwner(TrunkRef, "run-item-a-a1", tip, landed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	install, err := trunk.MoveOwner(plan, TrunkRef, landed, tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if faults := install.Finish(); len(faults) != 0 {
+		t.Fatalf("faults: %v", faults)
+	}
+	if during == nil || strings.TrimSpace(runGit(t, f.root, "stash", "list")) == "" {
+		t.Fatal("the landing's snapshot or the owner's stash is missing")
+	}
+	request := run.Request{RunID: "run-item-a-a1", ItemID: "item-a", LaneID: "lane-1"}
+	if _, err := l.finishRunBracket(ctx, own, request, "tick", l.cfg.Now(), before, during, &LoopResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if check := lastBoundaryCheck(t, f, request.RunID); check["clean"] != true {
+		t.Fatalf("a real landing with a stash convicted the run: %v", check)
+	}
 }

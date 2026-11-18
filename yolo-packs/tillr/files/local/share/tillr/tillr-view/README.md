@@ -530,8 +530,9 @@ same reading or refusal window as the backend row; stale or failed readings show
 `reopening unknown`. A requested pause that has not yet stopped the run is not a
 waiting row, and a closed backend alone never establishes that a run is paused.
 
-A landing held by owner content reads `waits on work` at `land`, with
-`trunk-path-dirty: ` and the dirty paths in **Why**, and `commit or restore the path`
+A landing held by a predicted conflict with the owner's edits reads `waits on work`
+at `land`, with `trunk-path-dirty: ` and the conflicting paths in **Why**, and
+`commit, restore, or change your edit; the landing proceeds as soon as it no longer conflicts`
 as **Mover**. Its JSON row adds **waited**, a duration rounded to the nearest
 second from **Since** to the read time. Other rows carry an empty **waited** value.
 The terminal prints the duration after the paths in **Why**; Home shows it beside
