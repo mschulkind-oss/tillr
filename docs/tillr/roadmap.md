@@ -443,6 +443,22 @@ A change to the gate's own runner can break the gate for every lane, so the runn
 
 ### Add stall detection without the kernel counter
 
+**Start here (2026-11-18, answers the thirteenth run's report of blocked):** read this block to
+its end before running a command; the rulings below are the instructions. The kept work the brief
+names is starting material, not the change to commit: it holds the tracing supervisor
+`tools/tillr-gate/process_accounting.py`, which hangs a check and which the second ruling
+removes. Four runs restored it and tested it unchanged. Do these in order:
+
+1. Apply the kept work's `tools/`, `tests/` and `docs/` paths only, not `yolo-packs/`.
+2. Delete the supervisor and write the fallback that only reads `/proc`, as the second ruling's
+   four points say. Do not test or sync while
+   `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` returns a line.
+3. Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6`, then
+   `python3 tests/fork-check.test.py` by the third ruling's steps. Give each command a limit of
+   3600 seconds, on its own, not chained with another. A command that was cut off is no result:
+   run it again, and do not report blocked for it.
+4. Run `just pack-sync` last, to its end, then check `git status --short` and commit once.
+
 **Theme:** Repo gate
 
 **Description:** The repo gate must distinguish a check that has stopped making progress from
@@ -657,6 +673,34 @@ The order of work, which the next run follows:
 
 A cut-off command is no result, for the sync as for the suite. It is repeated with a longer
 limit and is not a reason to stop.
+
+The criteria below are unchanged.
+
+**Ruling, 2026-11-18 (answers the thirteenth run's report of blocked):** the thirteenth run
+repeated the eleventh run's order and stopped on two commands that its own limits cut off. Nothing
+in the rulings above changes; what changes is where a run finds them. These were read on
+`b39510945` on 2026-11-18, from that run's log and the tree:
+
+- **The run never read the rulings.** Its one read of this block was
+  `rg -A18 '^### Add stall detection' docs/tillr/roadmap.md`, which ends inside the description.
+  The order of work is now the first paragraph under the heading, so a read of that length
+  reaches it.
+- **It tested the rejected change.** It applied the kept work with
+  `tools/tillr-gate/process_accounting.py` in it, ran `just pack-sync` before any test, and
+  edited no file. `git ls-tree -r --name-only
+  refs/tillr/preserved/run-item-gate-stall-watch-without-perf-counter-a13` still lists the
+  supervisor, and that ref's 19 files are the sixth run's.
+- **Both stops were the caller's limit.** `just pack-sync; python3 tests/tillr-docs.test.py` ran
+  under one 20-second limit, and the Go tests, `python3 tests/fork-check.test.py`, the sharded
+  suite and the sync test ran chained under one 180-second limit. The second ruling measured the
+  Python suite alone at 4 minutes 2 seconds on a busy machine, so 180 seconds could not finish it.
+  `python3 tests/tillr-docs.test.py` is no part of this item's proof and is left to the gate.
+- **The starting facts hold.** The kept work's `tools/`, `tests/` and `docs/` paths pass
+  `git apply --check` on `b39510945`, and the `rg` command in the third ruling still returns one
+  line, in `tools/gate-timing-declarations.json`.
+
+The next run builds: it follows the paragraph under the heading, and reports blocked only for a
+question this block does not answer.
 
 The criteria below are unchanged.
 
