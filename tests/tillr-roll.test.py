@@ -27,7 +27,7 @@ class RollTest(unittest.TestCase):
             'command': 'just tillr-roll --no-request',
             'pause_timeout_seconds': 120,
         })
-        self.assertIs(settings['push']['after_landing'], True)
+        self.assertEqual(settings['push'], {'what': 'green'})
         sections = {
             'tools/tillr-drain/README.md': 'Moving a running loop onto new code',
             'yolo-packs/tillr/skills/tillr-operating/SKILL.md': 'Update a running drain',
