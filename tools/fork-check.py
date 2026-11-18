@@ -8343,10 +8343,14 @@ def plan_gate(root: Path, options) -> GatePlan:
     # baseline, the upstream and input audits and the run's scope are unchanged, because
     # this is still the landing's verdict rather than a range diagnostic.
     landed_base = "" if options.all or since is not None else os.environ.get(PLAN_BASE_ENV, "").strip()
-    if options.all and getattr(options, "tier", None) == TIER_ROLLING:
+    if options.all and (getattr(options, "tier", None) == TIER_ROLLING
+                        or getattr(options, "whole_tree", False)):
         # The drain has no watermark yet: audit the tracked tree, not the gate's
         # remembered diff. force_all alone only forces fork series; path-selected
         # rolling suites otherwise disappear when the baseline already equals HEAD.
+        # A replay plans the same way: it names a check to judge on one revision, and
+        # that revision is usually one a run already verified (the green pointer), so a
+        # baseline diff there is empty and would plan none of the checks it names.
         changed = [path for path in git(root, "ls-files", "-z").split("\0") if path]
     elif since is not None:
         resolved = subprocess.run(
@@ -9930,6 +9934,10 @@ def run_replay(argv: list[str]) -> int:
     # select, and a narrowing plan would silently replay nothing.
     options.all = True
     options.since = None
+    # Plan over every tracked path, not the record's baseline diff: a path-selected check
+    # replayed on a verified commit is otherwise planned by nothing (section 60a of the
+    # suite), and the replay answers "no planned check matches" instead of a verdict.
+    options.whole_tree = True
     root = Path(__file__).resolve().parents[1]
     try:
         gate = plan_gate(root, options)

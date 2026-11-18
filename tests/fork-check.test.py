@@ -7857,6 +7857,33 @@ with tempfile.TemporaryDirectory() as tmp:
     assert replay.returncode == 2, replay.stdout + replay.stderr
     assert "no planned check matches" in replay.stderr, replay.stderr
 
+# 60a. A REPLAY PLANS THE CHECK IT NAMES, WHATEVER THE RECORD REMEMBERS. The heavy runner
+#      attributes a red by replaying that one check on the green pointer, and the pointer
+#      is a commit some earlier run already verified. The replay used to plan from the
+#      record's baseline like a landing does, so on a verified commit it planned only the
+#      checks no path selects: on 2026-11-18 attribution of the tillr-view suite at a
+#      verified green pointer answered "no planned check matches --only" (exit 2), the
+#      runner read that as "error, not a verdict", and the red got no fixer. A
+#      path-selected check (Waybar's) replayed on a verified commit must run and answer.
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp)
+    repo, _, _ = build_repo(base)
+    env = build_stubs(base)
+    waybar_fixture(repo)
+    commit(repo, "waybar inputs")
+    verified = run(repo, env)
+    assert verified.returncode == 0, verified.stdout + verified.stderr
+    replay = run(repo, env, "--replay", "--only", "waybar")
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert "PASS waybar" in replay.stdout, replay.stdout
+    # The same check red on a verified commit is a red, not "could not answer": a
+    # replay that cannot see the check would acquit or misattribute by omission.
+    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
+    commit(repo, "break the waybar test")
+    red_replay = run(repo, env, "--replay", "--only", "waybar")
+    assert red_replay.returncode == 1, red_replay.stdout + red_replay.stderr
+    assert "FAIL waybar" in red_replay.stdout, red_replay.stdout
+
 # 66. Wrapper targets never kill progress; only complete silent samples stall.
 # The fake child supplies observations, not elapsed-time assertions.
 from unittest.mock import patch
