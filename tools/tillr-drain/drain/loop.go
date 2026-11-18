@@ -574,11 +574,12 @@ type Loop struct {
 	// keeperOpen lets tests shorten the checkpoint writer's SQLite lock wait.
 	keeperOpen func(context.Context, string) (*store.CheckpointOwner, error)
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
-	historyMu    sync.Mutex
-	nonLanding   bool
-	syncedSHA    string
-	syncClearSeq int64
-	questions    *VantageQuestions
+	historyMu        sync.Mutex
+	nonLanding       bool
+	syncedSHA        string
+	syncClearSeq     int64
+	questions        *VantageQuestions
+	ownerAnswerBlobs map[string]string
 
 	// indexer runs the trace indexer off the pass goroutine (index_background.go).
 	indexer *backgroundIndex

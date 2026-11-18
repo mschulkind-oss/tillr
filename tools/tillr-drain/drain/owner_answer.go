@@ -2,6 +2,10 @@ package drain
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -23,9 +27,10 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 	if err != nil {
 		return err
 	}
-	if l.questions == nil {
-		return nil
+	if l.ownerAnswerBlobs == nil {
+		l.ownerAnswerBlobs = make(map[string]string)
 	}
+	var committed *VantageQuestions
 	ids := make([]string, 0, len(conflicts))
 	for id := range conflicts {
 		ids = append(ids, id)
@@ -37,14 +42,30 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 			continue
 		}
 		file, id, _ := strings.Cut(c.QuestionRef, "#")
-		dirty, e := l.git(ctx, l.cfg.Root, "diff", TrunkRef, "--", file)
-		if e != nil {
-			return e
-		}
-		if strings.TrimSpace(dirty) != "" {
+		blob, e := l.revParse(ctx, l.cfg.Root, sha+":"+file)
+		if e != nil || blob == "" || l.ownerAnswerBlobs[c.ConflictID] == blob {
 			continue
 		}
-		doc, e := l.questions.Document(file)
+		if committed == nil {
+			tmp, e := os.MkdirTemp("", "tillr-owner-index-*")
+			if e != nil {
+				return e
+			}
+			defer os.RemoveAll(tmp)
+			root := filepath.Join(tmp, "tree")
+			if e := os.Mkdir(root, 0700); e != nil {
+				return e
+			}
+			archive := filepath.Join(tmp, "tree.tar")
+			if _, e := l.git(ctx, l.cfg.Root, "archive", "--format=tar", "--output="+archive, sha); e != nil {
+				return e
+			}
+			if out, e := exec.CommandContext(ctx, "tar", "-xf", archive, "-C", root).CombinedOutput(); e != nil {
+				return fmt.Errorf("extract trunk archive: %w: %s", e, out)
+			}
+			committed = &VantageQuestions{Root: root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		}
+		doc, e := committed.Document(file)
 		if e != nil || !doc.Present {
 			continue
 		} // Planner reports unknown or missing; never answer on either.
@@ -60,6 +81,7 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 			answered = slices.Contains(doc.LedgerIDs, id)
 		}
 		if !answered {
+			l.ownerAnswerBlobs[c.ConflictID] = blob
 			continue
 		}
 		// A moved trunk is refreshed on the next pass rather than joining its answer
@@ -98,6 +120,7 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 		if e != nil {
 			return e
 		}
+		l.ownerAnswerBlobs[c.ConflictID] = blob
 		l.reportf("loop: %s owner answered %s at %s; conflict %s is answered\n", c.ItemID, c.QuestionRef, sha, c.ConflictID)
 	}
 	return nil

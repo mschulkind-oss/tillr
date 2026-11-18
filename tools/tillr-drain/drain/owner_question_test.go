@@ -120,7 +120,7 @@ func TestOwnerReportQuestionGateHoldAnswerAndRelease(t *testing.T) {
 	writeForkFile(t, filepath.Join(f.root, "briefs/item-a.md"), body)
 	runGit(t, f.root, "add", "briefs/item-a.md")
 	runGit(t, f.root, "commit", "-qm", "docs: answer the delivery question")
-	l.cfg.QuestionsCmd = ownerIndexCommand(file, id, "answered")
+	l.cfg.QuestionsCmd = ownerTreeIndexCommand(file, id, "")
 	if _, e := l.refreshDocuments(context.Background(), &LoopResult{}); e != nil {
 		t.Fatal(e)
 	}
@@ -260,14 +260,31 @@ func TestUncommittedOwnerAnswerDoesNotChangeTheConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeForkFile(t, path, strings.Replace(string(raw), "💬 **"+id, "✅ **"+id, 1))
-	l.questions = &VantageQuestions{Root: f.root, Command: ownerIndexCommand(file, id, "answered")}
-	before := eventCount(t, f.storePath)
-	if err := l.settleOwnerAnswers(context.Background(), runGit(t, f.root, "rev-parse", TrunkRef)); err != nil {
-		t.Fatal(err)
+	count := filepath.Join(t.TempDir(), "calls")
+	l.cfg.QuestionsCmd = ownerTreeIndexCommand(file, id, count)
+	l.questions = &VantageQuestions{Root: f.root, Command: ownerTreeIndexCommand(file, id, "")}
+	doc, err := l.questions.Document(file)
+	if err != nil || len(doc.Questions) != 1 || doc.Questions[0].State != QuestionAnswered {
+		t.Fatalf("checkout index: %+v %v", doc, err)
 	}
-	after, _ := conflictOf(t, f, d.ItemID)
-	if after.Status != "question" || after.AnswerHead != "" || eventCount(t, f.storePath) != before {
-		t.Fatalf("dirty answer was recorded: %+v", after)
+	before := eventCount(t, f.storePath)
+	for pass := 0; pass < 2; pass++ {
+		if pass == 1 {
+			writeForkFile(t, path, string(raw))
+		}
+		if err := l.settleOwnerAnswers(context.Background(), runGit(t, f.root, "rev-parse", TrunkRef)); err != nil {
+			t.Fatal(err)
+		}
+		after, _ := conflictOf(t, f, d.ItemID)
+		if after.Status != "question" || after.AnswerHead != "" || eventCount(t, f.storePath) != before {
+			t.Fatalf("pass %d recorded checkout answer: %+v", pass, after)
+		}
+		if d := decisionFor(t, l, d.ItemID).decision; d.Action != ActionHold || d.Reason != ReasonQuestionOpen {
+			t.Fatalf("not held: %+v", d)
+		}
+	}
+	if calls, err := os.ReadFile(count); err != nil || string(calls) != "call\n" {
+		t.Fatalf("index calls: %q %v", calls, err)
 	}
 }
 
@@ -351,5 +368,61 @@ func TestAPublishedQuestionHoldsOnlyItsOwnItem(t *testing.T) {
 	l.questions = &VantageQuestions{Root: f.root, Command: ownerIndexCommand(file, "OQ-1", "open")}
 	if other := decisionFor(t, l, "item-b").decision; other.Action != ActionHold || other.Reason != ReasonQuestionOpen || other.QuestionID != "OQ-1" {
 		t.Fatalf("the document's own question no longer holds item-b: %+v", other)
+	}
+}
+
+func ownerTreeIndexCommand(file, id, count string) []string {
+	return []string{"sh", "-c", `[ -z "$3" ] || echo call >> "$3"
+ [ -f "$1" ] || { printf '{"index":{"documents":[]}}'; exit; }
+ q= l=
+ if grep -Fq "✅ **$2:" "$1"; then state=answered
+ elif grep -Fq "💬 **$2:" "$1"; then state=open
+ else state=; fi
+ if [ -n "$state" ]; then q=$(printf '{"id":"%s","state":"%s","title":"Which delivery should we use?"}' "$2" "$state"); fi
+ if grep -Fq "| $2 |" "$1"; then l=$(printf '"%s"' "$2"); fi
+ printf '{"index":{"documents":[{"path":"%s","questions":[%s],"ledgerIds":[%s]}]}}' "$1" "$q" "$l"`, "questions", file, id, count}
+}
+
+func TestOwnerAnswerLedgerEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		open, ledger bool
+	}{
+		{"compacted", false, true}, {"still open", true, true}, {"removed", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, d, base := designAnswerFixture(t)
+			l.cfg.Steps = &ownerQuestionSteps{t: t, f: f, l: l}
+			c := settleDesignReport(t, f, l, d, base, ownerChoiceReport)
+			file, id, _ := strings.Cut(c.QuestionRef, "#")
+			path := filepath.Join(f.root, file)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := "# Request\n"
+			if tc.open {
+				body = string(raw)
+			}
+			if tc.ledger {
+				body += "\n## Decision Ledger\n\n| ID | Ruling |\n| -- | -- |\n| " + id + " | Ship the built-in copy. |\n"
+			}
+			writeForkFile(t, path, body)
+			runGit(t, f.root, "add", file)
+			runGit(t, f.root, "commit", "-qm", "docs: update owner question")
+			l.cfg.QuestionsCmd = ownerTreeIndexCommand(file, id, "")
+			if _, err := l.refreshDocuments(context.Background(), &LoopResult{}); err != nil {
+				t.Fatal(err)
+			}
+			after, _ := conflictOf(t, f, d.ItemID)
+			next := decisionFor(t, l, d.ItemID).decision
+			if tc.ledger && !tc.open {
+				if after.Status != "answered" || next.Action != ActionDispatch {
+					t.Fatalf("compacted ruling did not release: %+v %+v", after, next)
+				}
+			} else if after.Status != "question" || after.AnswerHead != "" || next.Action != ActionHold || next.Reason != ReasonQuestionOpen {
+				t.Fatalf("question did not stay held: %+v %+v", after, next)
+			}
+		})
 	}
 }
