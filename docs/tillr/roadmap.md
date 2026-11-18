@@ -798,9 +798,15 @@ every check passed.
   `yolo pack lint yolo-packs/tillr`, and `uvx vantage-check` on each document changed.
 
 **Rulings, settled by the design seat on 2026-11-18.** The last build named three things it could
-not settle. Each is ruled here, from a build of this change at `332a18704` on which the three
-tests below passed, the command under **Verify** with `-race` passed in 515 seconds, and the
-whole drain suite passed 2,086 tests.
+not settle. Each is ruled here from a trial build of this change, made by the design seat in a
+lane whose trunk was at `332a18704`. That sha is the trunk commit the trial was built on. It does
+not hold the trial: the trial's changes were never committed, and were discarded once this block
+was written. No commit, branch or ref holds `heavy_early.go` or the three tests of step 5, and
+`rg 'heavyCheckEnded|heavyPendingGuard' tools/tillr-drain` returns nothing at `743d8cfc7`. This
+build writes them from the steps below. In the trial, the three tests passed, the command under
+**Verify** with `-race` passed in 515 seconds, and the whole drain suite passed 2,086 tests.
+Those figures record how the rulings were reached. They are not an input to this build and not
+something to find before starting: the criteria are met by this build's own run of **Verify**.
 
 - **Recovery runs beside the proof, one failed check at a time.** The proof's judge reports each
   check as it ends. A failed one joins a queue, and one goroutine takes the queue in order: the
@@ -839,7 +845,10 @@ whole drain suite passed 2,086 tests.
   empty before it answers, on every path, so the runner's lock is never released while a replay
   is running. A stop or a lost cleanup in recovery ends the run with that error.
 
-**Build order.** Do the steps in order in one run, and make the commit once, at step 6.
+**Build order.** Do the steps in order in one run, and make the commit once, at step 6. Every
+function, comment and line that a step names was read in the tree at `743d8cfc7`, after
+[the order item](#move-the-checks-recent-landings-reach-to-the-front-of-the-proof) landed there,
+and each is present.
 
 1. **The new file.** Create `tools/tillr-drain/drain/heavy_early.go` with the content below.
 
@@ -1090,7 +1099,8 @@ func (e *heavyEarly) recover(check HeavyCheck) error {
    uses that path.
 4. **`heavy_steps.go`, three lines.** In the loop over declaration checks, directly after the
    `heavyProgressReport` line that prints `loop: heavy %s %s in %s`, add
-   `heavyCheckEnded(ctx, checks[0])`. In `runLegacy`, directly after the `heavyProgressReport`
+   `heavyCheckEnded(ctx, checks[0])`. In `runLegacy`, the closure inside `JudgeHeavy`, directly
+   after the `heavyProgressReport`
    line that prints the failing checks, add a loop that calls `heavyCheckEnded(ctx, check)` for
    each check in `legacy`. In `runHeavyLegacy`, directly after the line that sets `spans`, give a
    replay a span file of its own, so that it can never remove the proof's:
@@ -1138,16 +1148,18 @@ func (e *heavyEarly) recover(check HeavyCheck) error {
    is searched and offered for revert when it ends, in the checkout `worktree-replay` and under
    the guard `heavy.replay-cleanup-pending`, that the pointer rule is unchanged, and that either
    guard holds the next run; the sentence there that names `heavy.cleanup-pending` gains the
-   second name. In the gate design, rewrite point 1 of the "Time to a revert" paragraph to say
-   what was built, and change "proposed, not built" in that paragraph's opening words to say it
-   is built. Run `just pack-sync`, then the commands under **Verify**, and make one commit holding
-   all of it.
+   second name. In the gate design's "Time to a revert" paragraph, rewrite the opening sentence,
+   which says a revert starts "at the end of the whole run", and point 1, so that both say what
+   this build made: a failed check is searched and offered for revert when it ends. Points 2 and
+   3 stay as they are. Run `just pack-sync`, then the commands under **Verify**, and make one
+   commit holding all of it.
 
 **What does stop this build:** a failing test that needs a file outside the item's paths, a step
 whose named function is not in the tree, or a test under **Verify** that fails with the change
 made exactly as written. Report it with the step number, the command and its output. An existing
 test that fails because it calls `revert` with the old parameters is updated, and is not a reason
-to stop.
+to stop. Neither is the absence of the three tests or of `heavy_early.go` from the tree or from
+any commit: steps 1 and 5 create them.
 
 <!-- tillr: item id="item-heavy-early-recovery" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
