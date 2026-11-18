@@ -128,6 +128,26 @@ func (s *ProcessSteps) checkHooks(ctx context.Context) error {
 			}
 		}
 	}
+	if slices.Contains(s.hooks.Names, "complete-item") {
+		if s.ItemBin == "" {
+			return Usagef("configuration fault: complete-item requires an item binary with --require-verdicts")
+		}
+		cmd := exec.CommandContext(ctx, s.ItemBin, "state", "--help")
+		cmd.Dir = s.Root
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			return Usagef("configuration fault: item state --help: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		for _, flag := range []string{"--store", "--item", "--state", "--now", "--reason", "--by", "--resolves-via", "--require-verdicts"} {
+			// Go's flag help uses a single dash; both spellings parse identically.
+			if !strings.Contains(string(out), strings.TrimPrefix(flag, "-")) {
+				return Usagef("configuration fault: item state does not accept %s", flag)
+			}
+		}
+	}
 	return nil
 }
 

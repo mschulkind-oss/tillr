@@ -938,16 +938,7 @@ them. This answers the conflict it raised. No criterion and no ruling changes.
   --check`, the fault is in how the run is staged or which seat it is given, and the owner rules
   on that.
 
-<!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
-- **c2:** When the hook exits 0 and prints a finished state, a reason and an optional pointer, the drain moves the item there with `--reason`, `--resolves-via` and `--by definition:<name>`.
-- **c3:** When the hook exits 1 the item is not finished and stays where it is, under the rules a run that made no candidate gets today. Any other exit holds the item with a named fault that the waiting face shows.
-- **c4:** The drain refuses the move, and holds the item with a named reason, unless every criterion of the item has a recorded verdict. A test with a stub hook that answers without recording verdicts asserts the hold.
-- **c5:** A test applies an item, runs one stub run in a plain directory, has the hook record a verdict and answer `confirmed`, and asserts the end state, the reason, the event, and that no Git command ran: the test puts a `git` on `PATH` that fails it.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
-- **c7:** Under the Git-landing definition the end of a run is unchanged; the existing loop suites pass unchanged.
-- **c8:** The two gaps the first run's review found are closed, each with its test. `tillr item state --require-verdicts` refuses the move with `criteria-unjudged`, inside the move's own write transaction, unless every criterion the item holds has a recorded verdict for its stored text; the drain passes the flag on every move a `complete-item` answer causes; and a test in the item utility's suite appends a criterion after the others were judged and asserts the refusal and that the item did not move. A second test stops the drain after the hook's move is stored and before the run's end-of-run records are written, restarts it, and asserts that the item keeps its finished state, reason and single event, that the hook was not called again, that the missing records are written, and that no Git command ran.
 
 ### Route a command node into the lane directory and name its node
 
@@ -964,7 +955,7 @@ to that block, because that block is ready and may be dispatched at any time.
 **Agent details:** the run request's `node_id` field comes from the run-environment item; the drain
 sets it here for every workflow node.
 
-<!-- tillr: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-finish-on-hook" prose="2" -->
+<!-- tillr: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A command node of an item whose definition does not land runs through `tillr run exec` in the item's plain lane directory. Under Git landing it still runs in the item's worktree, as the command-node block's c2 says.
 - **c2:** Every workflow node's run request carries `node_id`, so its program sees `TILLR_NODE_ID` beside `TILLR_ITEM_ID`.

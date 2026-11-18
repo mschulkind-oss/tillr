@@ -978,6 +978,32 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		}
 		return nil
 	}
+	// Hook definitions also work in plain directories. Read file-backed inputs
+	// before acquiring the write lock; inputVersion below still guards row changes.
+	var plainInputs *RunInputs
+	if l.nonLanding && p.decision.Inputs != nil && (p.decision.Action == ActionDispatch || p.decision.Action == ActionRetry) {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return false, nil, err
+		}
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			rows, err := readItems(r)
+			if err != nil {
+				return err
+			}
+			for _, row := range rows {
+				if row.ItemID == p.decision.ItemID {
+					plainInputs, err = currentRunInputs(r, row, l.cfg.Policy, l.cfg.Root, l.build)
+					return err
+				}
+			}
+			return nil
+		})
+		s.Close()
+		if err != nil {
+			return false, nil, err
+		}
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return false, nil, err
@@ -1011,7 +1037,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				return nil
 			}
 		}
-		if d.Action == ActionDispatch || d.Action == ActionRetry {
+		if !l.nonLanding && (d.Action == ActionDispatch || d.Action == ActionRetry) {
 			// A concurrent landing can publish an answered conflict after the pass
 			// refreshed documents. Item versions alone do not bind that new decision
 			// to the refreshed trunk; defer before claiming a run at the old base.
@@ -1023,7 +1049,12 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				return nil
 			}
 		}
-		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) {
+		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && l.nonLanding {
+			if plainInputs == nil || *plainInputs != *d.Inputs {
+				return nil
+			}
+		}
+		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && !l.nonLanding {
 			rows, err := readItems(tx.Reader())
 			if err != nil {
 				return err
@@ -1104,7 +1135,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 				return nil
 			}
 			base := mainSHA
-			if !IsTrunkFixer(d.ItemID) {
+			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
 				green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 				if err != nil {
 					return err
@@ -2112,6 +2143,9 @@ func liveForks(r *store.Reader, at time.Time) ([]plannedFork, error) {
 // A sibling started after the bracket opened has its own writer and bracket.
 // Ignore its status in both snapshots rather than convicting that authorized work.
 func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, before *Boundary, result *LoopResult, watched []string, epochs map[string]int) (string, error) {
+	if l.nonLanding {
+		return "", nil
+	}
 	worktree := l.lanePath(d.LaneID)
 	after, err := l.snapshot(ctx, []string{worktree}, watched)
 	if err != nil {

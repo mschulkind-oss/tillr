@@ -845,6 +845,9 @@ func (l *Loop) startDefinition(ctx context.Context) error {
 	}
 	l.nonLanding = d.Completes != "landing"
 	if l.nonLanding {
+		if steps, ok := l.cfg.Steps.(interface{ ConfigureNonLanding() }); ok {
+			steps.ConfigureNonLanding()
+		}
 		if _, err := settings.ReadWithoutLanding(l.cfg.Root, d.Name); err != nil {
 			return Usagef("%v", err)
 		}
@@ -1340,6 +1343,9 @@ func (l *Loop) closeRunBracket(ctx context.Context, worktree string, request run
 }
 
 func (l *Loop) finishRunBracket(ctx context.Context, worktree string, request run.Request, tick string, at time.Time, before, after *Boundary, result *LoopResult) (string, error) {
+	if l.nonLanding {
+		return "", nil
+	}
 	violations, observed, err := CompareRunObserved(before, after)
 	if err != nil {
 		return "", err
@@ -1457,6 +1463,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// the continuing session until it answers. Keep pending work running.
 		prepared = true
 		return laneOutcome{}
+	}
+	if l.nonLanding {
+		return l.settleHook(ctx, decision, result)
 	}
 	if err := pipelineCloseGraph(l.cfg.Root, record.RunID); err != nil {
 		return laneOutcome{err: err}
@@ -2558,6 +2567,9 @@ func (l *Loop) reportf(format string, args ...any) {
 // sibling lanes are named: the loop holds them, and one run's write into another's worktree
 // is an escape, not a neighbour's work.
 func (l *Loop) snapshot(ctx context.Context, targets, watched []string) (*Boundary, error) {
+	if l.nonLanding {
+		return nil, nil
+	}
 	spec := BoundarySpec{Repo: l.cfg.Root, Targets: targets, LaneRoot: l.cfg.LaneRoot}
 	// Only the lanes this tick is not dispatching are watched. A lane whose own run is in
 	// flight writes in its own worktree, and a sibling bracket that watched it would convict

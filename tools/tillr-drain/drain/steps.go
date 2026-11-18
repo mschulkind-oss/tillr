@@ -410,15 +410,21 @@ func (s *ProcessSteps) Verdict(ctx context.Context, candidate Candidate, verdict
 // queue after its candidate landed is the board disagreeing with the trunk, and an
 // unattended night may not report a landing the board never recorded.
 func (s *ProcessSteps) ItemState(ctx context.Context, itemID, runID, state string, waiting ...item.WaitingOn) error {
+	var extra []string
+	if len(waiting) > 0 {
+		extra = append(extra, "--waiter", waiting[0].Waiter, "--reason", waiting[0].Reason)
+	}
+	return s.itemState(ctx, itemID, runID, state, extra)
+}
+
+func (s *ProcessSteps) itemState(ctx context.Context, itemID, runID, state string, extra []string) error {
 	if s.ItemBin == "" {
 		return Usagef("the loop was given no item binary: it cannot record where an item's work stands")
 	}
 	args := []string{"state",
 		"--store", s.Store, "--item", itemID, "--state", state,
 		"--now", s.Now().UTC().Format(time.RFC3339)}
-	if len(waiting) > 0 {
-		args = append(args, "--waiter", waiting[0].Waiter, "--reason", waiting[0].Reason)
-	}
+	args = append(args, extra...)
 	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
@@ -428,6 +434,16 @@ func (s *ProcessSteps) ItemState(ctx context.Context, itemID, runID, state strin
 		return spanErr
 	}
 	if err != nil {
+		var rejection struct {
+			Kind    string `json:"kind"`
+			Payload struct {
+				Rule   string `json:"rule"`
+				Reason string `json:"reason"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(out, &rejection) == nil && rejection.Kind == "item.rejection" && rejection.Payload.Rule == ReasonCriteriaUnjudged {
+			return &completionFault{ReasonCriteriaUnjudged, rejection.Payload.Reason}
+		}
 		return Externalf("%s state %s %s: %v: %s %s",
 			s.ItemBin, itemID, state, err, stderr.String(), strings.TrimSpace(string(out)))
 	}

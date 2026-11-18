@@ -68,6 +68,17 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkStateReceipt(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
+	if receipt.RequireVerdicts {
+		for _, criterion := range payload.Criteria {
+			var judged bool
+			if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM events WHERE kind = ? AND object_id = ? AND json_extract(payload, '$.criterion_id') = ? AND json_extract(payload, '$.criterion_hash') = ?)`, VerdictRecordKind, itemID, criterion.CriterionID, CriterionHash(criterion.Text)).Scan(&judged); err != nil {
+				return record.Envelope{}, Internalf("checking criterion verdicts: %v", err)
+			}
+			if !judged {
+				return record.Envelope{}, Rejectionf("criteria-unjudged", itemID, "criterion %q has no recorded verdict for its stored text", criterion.CriterionID)
+			}
+		}
+	}
 	previousWaiting, previousUnderlying := payload.WaitingOn, payload.UnderlyingState
 	if state == d.Blocked {
 		var next WaitingOn
