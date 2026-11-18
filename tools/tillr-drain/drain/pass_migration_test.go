@@ -25,6 +25,11 @@ func TestLegacyPassMigrationPreservesEveryColumnAndDoesNotOverwriteNewMeasuremen
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The rows stand for a store written before the rename, which no program of this
+	// schema has migrated: an open of a store already migrated reads, and copies nothing.
+	if err := s.ForgetMigrations(); err != nil {
+		t.Fatal(err)
+	}
 	s.Close()
 	for i := 0; i < 2; i++ {
 		s, err = store.Open(ctx, path, true)

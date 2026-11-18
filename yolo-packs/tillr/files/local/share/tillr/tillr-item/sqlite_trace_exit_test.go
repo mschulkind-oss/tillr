@@ -74,12 +74,14 @@ func TestTracedSyncChildReportsItsBusyFailureBeforeExit(t *testing.T) {
 		}
 		found := false
 		for _, line := range strings.Split(r.stderr, "\n") {
-			if strings.HasPrefix(line, "tillr-sqlite ") && strings.Contains(line, `operation="migrate" phase=end `) && strings.Contains(line, `error="sqlite_code=5"`) {
+			// The failing span is the sync's write transaction: an open of a current
+			// store reads and takes no write lock, so it is no longer the migration.
+			if strings.HasPrefix(line, "tillr-sqlite ") && strings.Contains(line, ` phase=end `) && strings.Contains(line, `error="sqlite_code=5"`) {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("child %d exited SQLITE_BUSY without delivering its failing migrate span's end record:\n%s", i, r.stderr)
+			t.Errorf("child %d exited SQLITE_BUSY without delivering its failing span's end record:\n%s", i, r.stderr)
 		}
 	}
 }

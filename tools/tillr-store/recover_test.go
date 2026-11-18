@@ -68,7 +68,7 @@ func TestRecoverRealHotJournalAndSecondRunWritesNothing(t *testing.T) {
 	if err := json.Unmarshal(raw, &record); err != nil {
 		t.Fatal(err)
 	}
-	if record.Payload.Action != "recover" || record.Payload.Journal != path+"-journal" || record.Payload.Head != 1 || record.Payload.Counts["meta"] != 1 {
+	if record.Payload.Action != "recover" || record.Payload.Journal != path+"-journal" || record.Payload.Head != 1 || record.Payload.Counts["meta"] != 2 {
 		t.Fatalf("recovery record: %s", raw)
 	}
 	if code, raw := run(t, "check", "--store", path); code != 0 {

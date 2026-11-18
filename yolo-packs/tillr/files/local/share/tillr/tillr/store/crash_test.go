@@ -63,7 +63,7 @@ func TestKilledWriterLeavesCommittedStoreReadable(t *testing.T) {
 	if version, err := r.SchemaVersion(); err != nil || version != store.SchemaVersion {
 		t.Fatalf("schema: %d %v", version, err)
 	}
-	if counts, err := r.TableCounts(); err != nil || counts["meta"] != 1 {
+	if counts, err := r.TableCounts(); err != nil || counts["meta"] != 2 {
 		t.Fatalf("committed counts: %v %v", counts, err)
 	}
 	if integrity, err := r.Integrity(); err != nil || integrity != "ok" {

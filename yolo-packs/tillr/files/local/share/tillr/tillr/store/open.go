@@ -4,7 +4,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -120,12 +122,105 @@ func open(ctx context.Context, path string, create, migrate bool, options ...Ope
 		trace.record("owner-lock.unavailable", lockErr)
 	}
 	if migrate {
-		if err := s.migrate(ctx); err != nil {
+		// Reading whether the schema is current takes no write lock; only a store that
+		// still needs this program's migration asks for one (schemaCurrent).
+		digest := schemaDigest()
+		current, err := s.schemaCurrent(ctx, digest, trace)
+		if err == nil && !current {
+			err = s.migrate(ctx, digest)
+		}
+		if err != nil {
 			s.release(nil)
 			return nil, err
 		}
 	}
 	return s, nil
+}
+
+// schemaCurrent answers whether this store has already applied exactly the schema this
+// program would migrate it to, in a read transaction, so an open of a current store is
+// a read and never a writer's competitor.
+//
+// Before 2026-11-17 every writable open began the migration IMMEDIATE, whatever the
+// store held, so every open asked for the store's one write lock. The drain loop opens
+// the store per operation, from many goroutines at once, beside the lane runs and CLI
+// readers doing the same; each open queued behind whichever writer held the lock, and
+// the open that waited past its busy timeout failed with "beginning the migration:
+// database is locked" and faulted the loop. Idempotent DDL made that migration correct
+// to repeat; it did not make it free, because the lock is taken before any statement
+// runs.
+//
+// The version number alone cannot answer "current": it is one global number, while the
+// DDL list and the columns are whatever the opening program registered (registry.go),
+// so two programs at one version migrate different schemas. The answer is the applied
+// record migrate leaves: the meta row named by this program's schema digest. A store
+// newer than this program is refused here exactly as migrate refuses it.
+func (s *Store) schemaCurrent(ctx context.Context, digest string, trace *sqliteTraceSpan) (current bool, err error) {
+	trace.record("schema-current.begin", nil)
+	defer func() { trace.record("schema-current.end", err) }()
+	err = s.ReadTx(ctx, func(r *Reader) error {
+		var tables int
+		if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations','meta')`).Scan(&tables); err != nil {
+			return fmt.Errorf("store: reading whether the schema is current: %w", err)
+		}
+		if tables != 2 {
+			return nil
+		}
+		version, err := schemaVersion(ctx, r.q)
+		if err != nil {
+			return err
+		}
+		if version > SchemaVersion {
+			return fmt.Errorf("store: schema version %d is newer than supported version %d", version, SchemaVersion)
+		}
+		applied, err := schemaApplied(ctx, r.q, digest)
+		current = applied
+		return err
+	})
+	return current, err
+}
+
+// schemaApplied answers whether this program's schema (digest) was applied to the schema
+// the store has now. migrate records, under the digest's key, SQLite's schema cookie
+// (PRAGMA schema_version, which every DDL statement changes) as its own DDL left it. A
+// cookie that no longer matches means some DDL ran since — another program's migration,
+// an older program's, or a hand repair — and this program's schema is applied again,
+// once, to be sure of it; a match means nothing has changed the schema since this
+// program's migration last committed. The caller has read that meta exists.
+func schemaApplied(ctx context.Context, q queryer, digest string) (bool, error) {
+	var recorded, cookie string
+	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, appliedSchemaKey(digest)).Scan(&recorded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err == nil {
+		err = q.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&cookie)
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: reading whether the schema is current: %w", err)
+	}
+	return recorded == cookie, nil
+}
+
+// appliedSchemaKey is the meta key migrate records once a program's schema is applied; its
+// value is the schema cookie that migration left (schemaApplied), and no clock, so two
+// stores migrated alike read alike (Fingerprint). One key per digest, because programs with different registrations share one store:
+// a single key would flip between them, and every open would migrate again.
+func appliedSchemaKey(digest string) string { return "schema.applied." + digest }
+
+// schemaDigest names the schema this program migrates a store to: the version, every
+// DDL in application order and every registered column. Any registration change, in any
+// owner, names a different schema, so the next open migrates.
+func schemaDigest() string {
+	h := sha256.New()
+	fmt.Fprintf(h, "version %d\n", SchemaVersion)
+	for _, ddl := range migrations() {
+		fmt.Fprintf(h, "ddl %d\n%s\n", len(ddl), ddl)
+	}
+	for _, c := range columns() {
+		fmt.Fprintf(h, "column %q %q %q %q\n", c.owner, c.table, c.column, c.decl)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // failSidecar is a test seam: an error it answers is the sidecar's read's, as if attaching
@@ -287,7 +382,11 @@ func (s *Store) WriteMeta(key, value string) error {
 // fail rather than wait. An immediate begin takes the store's write lock before anything
 // is read, so the second migrator waits (busy_timeout, dsn) and then finds the work
 // already done.
-func (s *Store) migrate(ctx context.Context) (result error) {
+//
+// It runs only when schemaCurrent found this program's schema unapplied, and it records the
+// applied schema (appliedSchemaKey) in the same transaction, so the next open is a read.
+// A second migrator that waited here finds the record and applies nothing.
+func (s *Store) migrate(ctx context.Context, digest string) (result error) {
 	trace := startSQLiteTrace(s.path, "migrate")
 	defer func() { trace.finish(result) }()
 	conn, err := s.db.Conn(ctx)
@@ -299,8 +398,31 @@ func (s *Store) migrate(ctx context.Context) (result error) {
 		return fmt.Errorf("store: beginning the migration: %w", err)
 	}
 	trace.record("acquired", nil)
+	var tables int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meta'`).Scan(&tables); err == nil && tables == 1 {
+		if applied, err := schemaApplied(ctx, conn, digest); err == nil && applied {
+			// Another opener migrated while this one waited for the lock.
+			trace.record("schema.already-applied", nil)
+			conn.ExecContext(ctx, `ROLLBACK`)
+			return nil
+		}
+	}
 	trace.record("schema.begin", nil)
 	schemaErr := migrate(ctx, conn)
+	if schemaErr == nil {
+		// The cookie this transaction's own DDL left; recording a meta row is not DDL and
+		// leaves it as read.
+		var cookie string
+		schemaErr = conn.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&cookie)
+		if schemaErr == nil {
+			_, schemaErr = conn.ExecContext(ctx,
+				`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+				appliedSchemaKey(digest), cookie)
+		}
+		if schemaErr != nil {
+			schemaErr = fmt.Errorf("store: recording the applied schema: %w", schemaErr)
+		}
+	}
 	trace.record("schema.end", schemaErr)
 	if err := schemaErr; err != nil {
 		conn.ExecContext(ctx, `ROLLBACK`)
@@ -356,9 +478,15 @@ func dsn(path string, readOnly bool, wait time.Duration) string {
 // exists so a test can make a migrating open observable: an open of an
 // already-current store would leave the version unchanged either way, so a test
 // built on that comparison cannot fail for the reason it states.
+//
+// It forgets the applied-schema records too (appliedSchemaKey): without them the next
+// open migrates, as it would a store no program of this schema had opened.
 func (s *Store) ForgetMigrations() error {
 	if _, err := s.db.Exec(`DELETE FROM schema_migrations`); err != nil {
 		return fmt.Errorf("store: forgetting the migration rows: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM meta WHERE key LIKE 'schema.applied.%'`); err != nil {
+		return fmt.Errorf("store: forgetting the applied schema: %w", err)
 	}
 	return nil
 }

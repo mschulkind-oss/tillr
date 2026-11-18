@@ -18,7 +18,8 @@ import (
 )
 
 // A fresh fixture has exactly the tables the migration creates, and the counts are
-// the rows those tables hold: one meta row (the fixture mark) and one migration row.
+// the rows those tables hold: two meta rows (the fixture mark and the applied-schema
+// record the next open reads instead of migrating) and one migration row.
 // A reader that answers an empty map, or that counts sqlite's own bookkeeping tables,
 // fails here.
 func TestTableCountsNamesEveryTableAndItsRows(t *testing.T) {
@@ -32,7 +33,7 @@ func TestTableCountsNamesEveryTableAndItsRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the table counts failed: %v", err)
 	}
-	for table, want := range map[string]int{"meta": 1, "schema_migrations": 1, "events": 0} {
+	for table, want := range map[string]int{"meta": 2, "schema_migrations": 1, "events": 0} {
 		got, ok := counts[table]
 		if !ok {
 			t.Fatalf("table %q is missing from the counts: %v", table, counts)

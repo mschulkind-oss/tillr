@@ -22,7 +22,7 @@ func TestReadOnceIsScopedToAnImmutableTransaction(t *testing.T) {
 			value, err := r.ReadOnce("fixture-value", func() (any, error) {
 				calls++
 				var count int
-				err := r.QueryRow(`SELECT count(*) FROM meta`).Scan(&count)
+				err := r.QueryRow(`SELECT count(*) FROM events`).Scan(&count)
 				return count, err
 			})
 			if err != nil || value.(int) != 0 {
