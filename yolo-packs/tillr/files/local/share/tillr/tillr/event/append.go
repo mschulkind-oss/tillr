@@ -34,10 +34,10 @@ CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 
 -- Every reader of one object's history, or of one kind's, finds its rows through these
--- instead of scanning the log. Without them, each lane's tillr-run polled its pause
--- request (pendingPause, ten times a second) with a backward scan of the whole log; on
--- 2026-11-18, ten lanes doing so kept a WAL reader slot share-locked for minutes at a
--- time, no checkpoint could copy past that slot's mark, and the log never restarted.
+-- instead of scanning the log. Without them, every worker's pause poll (pendingPause,
+-- ten times a second) was a backward scan of the whole log; on 2026-11-18, ten workers
+-- polling at once kept a WAL reader slot share-locked for minutes at a time, no
+-- checkpoint could copy past that slot's mark, and the log never restarted.
 CREATE INDEX IF NOT EXISTS events_by_object ON events(object_id, seq);
 CREATE INDEX IF NOT EXISTS events_by_kind ON events(kind, seq);
 `
