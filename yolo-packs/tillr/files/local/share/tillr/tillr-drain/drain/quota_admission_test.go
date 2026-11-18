@@ -103,7 +103,7 @@ func TestFailedDesignerReplacementWaitsForQuotaAcrossRestart(t *testing.T) {
 	server := stubReview(t, &number)
 	defer server.Close()
 	takeFixtureComment(t, f, server.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	if _, err := l.Run(ctx); err != nil {
 		t.Fatal(err)

@@ -190,7 +190,7 @@ func TestNewStoreFactDispatchesBeforeOwnedRunEnds(t *testing.T) {
 		if id != "item-a" {
 			t.Fatal(id)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("first run not started")
 	}
 	st, err := store.Open(context.Background(), f.storePath, true)
@@ -208,7 +208,7 @@ func TestNewStoreFactDispatchesBeforeOwnedRunEnds(t *testing.T) {
 		}
 	// The first run stays blocked, so a lane that is never woken waits here; the bound is
 	// a hang guard, not a latency assertion.
-	case <-time.After(5 * time.Minute):
+	case <-time.After(hangGuard):
 		t.Fatal("hung: new fact did not wake free lane before first run ended")
 	}
 }
@@ -226,7 +226,7 @@ func replayToStop(t *testing.T, advance time.Duration, pollOnly bool) []string {
 	var mu sync.Mutex
 	at := l.cfg.Now()
 	l.cfg.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return at }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	var result LoopResult
 	for {
@@ -296,7 +296,7 @@ func TestOneAppliedPassSharesItsGenerationAcrossRequests(t *testing.T) {
 			if req.CorrelationID != "gen-1" {
 				t.Fatalf("request correlation: %q", req.CorrelationID)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("request not dispatched")
 		}
 	}
@@ -484,12 +484,12 @@ func TestFinalExaminationIsIndexedAfterItsLaunchPass(t *testing.T) {
 	defer func() { cancel(); release(); <-ended }()
 	select {
 	case <-steps.launchIndexed:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("judge launch pass was not indexed")
 	}
 	select {
 	case <-steps.gated:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("gate never started")
 	}
 	release()

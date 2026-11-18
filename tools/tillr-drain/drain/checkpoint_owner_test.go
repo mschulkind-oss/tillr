@@ -135,7 +135,7 @@ func (s *checkpointWaitingSteps) Sync(ctx context.Context) (SyncOutcome, error) 
 	case <-s.checkpoints:
 	case <-ctx.Done():
 		return SyncOutcome{}, ctx.Err()
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		s.t.Error("the running loop never checkpointed after its clock passed the checkpoint interval")
 	}
 	return SyncOutcome{Skipped: "a checkpoint-waiting step set reads no documents"}, nil

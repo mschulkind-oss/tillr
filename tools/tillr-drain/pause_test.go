@@ -39,7 +39,7 @@ fi
 	f := newWalledFixture(t, harness)
 	var report strings.Builder
 	loop := f.newLoop(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0), &report)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() {
@@ -50,7 +50,7 @@ fi
 		finished <- err
 	}()
 	for segment := 1; segment <= 2; segment++ {
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for {
 			raw, _ := os.ReadFile(os.Getenv("STUB_SEGMENT"))
 			if strings.TrimSpace(string(raw)) == string(rune('0'+segment)) {

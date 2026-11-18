@@ -1788,7 +1788,7 @@ printf 'RESULT: done\n'
 	// A failure before cmd.Wait leaves the loop running; kill it so the case never leaves an
 	// orphan behind. A process that already exited answers an error this ignores.
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	waitForFile(t, marker, 30*time.Second)
+	waitForFile(t, marker, hangGuard)
 	// Like a terminal signal, this targets the supervisor's whole process group.
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
 		cmd.Process.Kill()
@@ -1801,7 +1801,7 @@ printf 'RESULT: done\n'
 		if err != nil {
 			t.Fatalf("the loop exited %v after SIGTERM, want 0: %s", err, out.String())
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(hangGuard):
 		cmd.Process.Kill()
 		t.Fatalf("the loop did not stop after SIGTERM: %s", out.String())
 	}
@@ -1809,7 +1809,7 @@ printf 'RESULT: done\n'
 		t.Fatal("the ordinary loop signal ended its run")
 	}
 	writeFile(t, marker+".release", "finish")
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for len(terminalRunRows(t, f.store)) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1830,6 +1830,13 @@ printf 'RESULT: done\n'
 		}
 	}
 }
+
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// concludes the code deadlocked. It is a deadlock detector and never an expectation: no
+// passing run reaches it however loaded the machine is, and no test may assert that
+// something happened "quickly". Every readiness wait in this package uses it, so a deadlock
+// fails the one test with a message and no load can.
+const hangGuard = 5 * time.Minute
 
 // waitForFile waits until path exists, bounded by timeout. It is a readiness wait, not a
 // timing assertion: the case fails if the file never appears, never because it appeared

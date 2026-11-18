@@ -73,7 +73,7 @@ func TestPolicyReloadAtPassBoundaryKeepsLiveRequest(t *testing.T) {
 		select {
 		case req := <-steps.requests:
 			return req
-		case <-time.After(5 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("dispatch did not start")
 			return run.Request{}
 		}

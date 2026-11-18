@@ -80,7 +80,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	syscall.SetNonblock(fd, false)
 	// Wait for an actual snapshot handoff, not an estimate of how long sampling takes.
 	// The full pipe prevents delivery while the real session write remains blocked.
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(hangGuard)
 	defer deadline.Stop()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
@@ -105,7 +105,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-competitor
 		<-result
@@ -115,7 +115,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	go func() { l.sessionMu.Lock(); l.sessionMu.Unlock(); close(free) }()
 	select {
 	case <-free:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		release()
 		<-free
 		<-result

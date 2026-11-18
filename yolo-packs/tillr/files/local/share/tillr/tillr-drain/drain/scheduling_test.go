@@ -110,7 +110,7 @@ func TestABlockedContinuationOrGateDoesNotHoldASiblingsNextItem(t *testing.T) {
 			go func() { result, err := l.Run(ctx); ended <- laneOutcome{result.Stop, err} }()
 			select {
 			case <-steps.blocked:
-			case <-time.After(5 * time.Second):
+			case <-time.After(hangGuard):
 				cancel()
 				close(steps.release)
 				<-ended
@@ -120,7 +120,7 @@ func TestABlockedContinuationOrGateDoesNotHoldASiblingsNextItem(t *testing.T) {
 			select {
 			case <-steps.third:
 				thirdDispatched = true
-			case <-time.After(5 * time.Second):
+			case <-time.After(hangGuard):
 			}
 			close(steps.release)
 			select {
@@ -128,7 +128,7 @@ func TestABlockedContinuationOrGateDoesNotHoldASiblingsNextItem(t *testing.T) {
 				if outcome.err != nil || outcome.stop != StopQueueDrained {
 					t.Fatalf("loop %s / %v", outcome.stop, outcome.err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				cancel()
 				<-ended
 				t.Fatal("loop did not finish")

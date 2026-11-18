@@ -191,7 +191,7 @@ func TestWritingSessionAnswersFirstComment(t *testing.T) {
 		return err
 	})
 	setDesignFence(t, f, "item-other", "docs/design/example.md")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	if result, err := l.Run(ctx); err != nil {
 		t.Fatalf("writing %+v: %v", result, err)

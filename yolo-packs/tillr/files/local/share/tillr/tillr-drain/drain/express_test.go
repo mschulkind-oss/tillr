@@ -52,7 +52,7 @@ func TestExpressDispatchNextPassWhileTwoOrdinaryRunsRemainActive(t *testing.T) {
 			if !strings.HasPrefix(req.LaneID, "lane-") {
 				t.Fatalf("ordinary on %s", req.LaneID)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("ordinary run not started")
 		}
 	}
@@ -68,7 +68,7 @@ func TestExpressDispatchNextPassWhileTwoOrdinaryRunsRemainActive(t *testing.T) {
 		if req.ItemID != "item-idea-saved" || req.LaneID != "express-1" {
 			t.Fatalf("wrong dispatch: %+v", req)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("express run not started on next pass")
 	}
 	if len(l.active) != 3 || result.Dispatched != 3 {

@@ -168,7 +168,7 @@ const heartbeatTicksDuringStartup = 4
 // heartbeatStallBound only bounds how long a FAILING test waits to learn that something is
 // stuck (the heartbeat, or a writer a diagnostic must not retain). A passing run never
 // waits on it: each event is observed as soon as it happens, however slow the machine is.
-const heartbeatStallBound = 60 * time.Second
+const heartbeatStallBound = hangGuard
 
 type slowHeartbeatSyncSteps struct {
 	recordingSteps

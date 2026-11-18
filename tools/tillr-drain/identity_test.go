@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 )
@@ -52,7 +51,7 @@ printf 'RESULT: done\n'
 			if code, out := authorizeRetry(t, f.store, "item_041", before[len(before)-1].RunID, "the owner", "retry the no-op", steps.Now().Format("2006-01-02T15:04:05Z")); code != 0 {
 				t.Fatalf("retry exited %d: %s", code, out)
 			}
-			retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			retryCtx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
 			_, retryErr := f.newLoop(t, 1, steps).Run(retryCtx)
 			runs := runsForItem(t, f.store, "item_041")

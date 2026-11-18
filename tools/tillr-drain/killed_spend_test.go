@@ -33,7 +33,7 @@ while [ ! -f "$SPEND_STOP/release" ]; do sleep 0.01; done
 
 func waitForSpendRuns(t *testing.T, f loopFixture, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for len(runsForItem(t, f.store, "item_a")) < n && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -62,7 +62,7 @@ func storedSpendRun(t *testing.T, f loopFixture, id string) run.Record {
 func TestStoppedLoopLeavesSpendToFinishingWorkerAndReplacementCarry(t *testing.T) {
 	f, markers := spendStopFixture(t)
 	cmd, out := startStopFixture(t, f, 1)
-	waitForFile(t, filepath.Join(markers, "run-item_a-a1.ready"), 10*time.Second)
+	waitForFile(t, filepath.Join(markers, "run-item_a-a1.ready"), hangGuard)
 	stopFixture(t, f, cmd, out, false)
 	if len(terminalRunRows(t, f.store)) != 0 || len(matchingPIDs(t, f.store)) != 1 {
 		t.Fatal("ordinary stop signaled the worker")
@@ -112,7 +112,7 @@ func TestTwoExplicitEndsRemainInNextLoopSpend(t *testing.T) {
 	for attempt := 1; attempt <= 2; attempt++ {
 		cmd, out := startStopFixture(t, f, 1)
 		id := "run-item_a-a" + fmtInt(attempt)
-		waitForFile(t, filepath.Join(markers, id+".ready"), 10*time.Second)
+		waitForFile(t, filepath.Join(markers, id+".ready"), hangGuard)
 		stopFixture(t, f, cmd, out, true)
 		waitForSpendRuns(t, f, attempt)
 		rec := storedSpendRun(t, f, id)
@@ -121,7 +121,7 @@ func TestTwoExplicitEndsRemainInNextLoopSpend(t *testing.T) {
 		}
 	}
 	cmd, out := startStopFixture(t, f, 1)
-	waitForFile(t, filepath.Join(markers, "run-item_a-a3.ready"), 10*time.Second)
+	waitForFile(t, filepath.Join(markers, "run-item_a-a3.ready"), hangGuard)
 	stopFixture(t, f, cmd, out, false)
 	if !strings.Contains(out.String(), "spend all recorded runs: $0.060000, 3000 tokens") ||
 		!strings.Contains(out.String(), "loop: spend, last 24h: $0.06 over 2 runs") {

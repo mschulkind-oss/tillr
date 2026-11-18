@@ -70,7 +70,7 @@ func examineHeldCandidate(t *testing.T, l *Loop) {
 		if done.outcome.err != nil || done.outcome.stop != "" {
 			t.Fatalf("examination: %+v", done.outcome)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("examination did not finish")
 	}
 }

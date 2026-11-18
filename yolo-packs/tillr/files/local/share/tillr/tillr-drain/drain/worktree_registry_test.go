@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr-land/land"
 )
@@ -54,7 +53,7 @@ func TestHeavyRegistryCommandsHoldLandLockButJudgeDoesNot(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		bounded, cancel := context.WithTimeout(ctx, hangGuard)
 		defer cancel()
 		if _, err := lock.Acquire(bounded, 0); err != nil {
 			return nil, err

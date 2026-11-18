@@ -63,7 +63,7 @@ exit "$status"`)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = helper.Process.Kill(); writeFile(t, release, "release"); _ = helper.Wait() })
-	waitForFile(t, ready, 30*time.Second)
+	waitForFile(t, ready, hangGuard)
 	if got := strings.TrimSpace(readText(t, ready)); got != "files" {
 		t.Fatalf("run inherited %s, want regular files and no pipes", got)
 	}
@@ -72,7 +72,7 @@ exit "$status"`)
 	}
 	_ = helper.Wait()
 	writeFile(t, release, "release")
-	waitForFile(t, finished, 30*time.Second)
+	waitForFile(t, finished, hangGuard)
 	if got := strings.TrimSpace(readText(t, finished)); got != "1" {
 		t.Fatalf("run face exit %q, want fixture exit 1 (not a broken pipe)", got)
 	}

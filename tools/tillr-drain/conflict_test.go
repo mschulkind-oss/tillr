@@ -82,10 +82,19 @@ exit %[4]d
 type recordingStager struct {
 	passStager
 	specs []drain.StageSpec
+	// stop, when set with limit, is called once more than limit runs have been staged. It is a
+	// count, not a duration: a loop that keeps dispatching the same run (the 2026-11-17
+	// design-run loop that ran 59 minutes to the suite timeout) is ended by what it did, so a
+	// test fails with the specs it staged instead of hanging until the suite's own timeout.
+	limit int
+	stop  context.CancelFunc
 }
 
 func (s *recordingStager) Stage(ctx context.Context, spec drain.StageSpec) error {
 	s.specs = append(s.specs, spec)
+	if s.stop != nil && len(s.specs) > s.limit {
+		s.stop()
+	}
 	return s.passStager.Stage(ctx, spec)
 }
 

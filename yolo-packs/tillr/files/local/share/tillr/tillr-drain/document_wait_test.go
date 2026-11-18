@@ -87,7 +87,7 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 			case err := <-done:
 				finished = true
 				t.Fatalf("default loop exited instead of waiting: %v: %s", err, output.String())
-			case <-time.After(15 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("default loop did not start waiting")
 			}
 			select {
@@ -105,7 +105,7 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 				if err != nil || !strings.HasSuffix(output.String(), "loop: stopped by the operator\n") {
 					t.Fatalf("operator stop must exit 0 with a final explanation: %v: %s", err, output.String())
 				}
-			case <-time.After(15 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("waiting loop ignored the operator signal")
 			}
 		})
@@ -164,7 +164,7 @@ func TestDefaultLoopDispatchesADocumentCommittedDuringTriggerWait(t *testing.T) 
 			if out.result.Dispatched != 1 || out.result.SyncedSHA != git(t, f.root, "rev-parse", "main") {
 				t.Errorf("dispatch or synced commit missing: %+v", out.result)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(hangGuard):
 			t.Error("loop did not stop after cancellation")
 		}
 	}()
@@ -173,7 +173,7 @@ func TestDefaultLoopDispatchesADocumentCommittedDuringTriggerWait(t *testing.T) 
 	case out := <-finished:
 		exited = true
 		t.Fatalf("default loop exited before waiting: %+v / %v", out.result, out.err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("loop never reached trigger wait")
 	}
 	// Leave the queue unchanged for multiple polling intervals before adding work.
@@ -189,7 +189,7 @@ func TestDefaultLoopDispatchesADocumentCommittedDuringTriggerWait(t *testing.T) 
 	case out := <-finished:
 		exited = true
 		t.Fatalf("default loop exited before dispatch: %+v / %v", out.result, out.err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("committed block was not dispatched")
 	}
 }

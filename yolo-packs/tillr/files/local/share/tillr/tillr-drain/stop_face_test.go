@@ -67,7 +67,7 @@ func stopFixture(t *testing.T, f loopFixture, cmd *exec.Cmd, out *strings.Builde
 		if err != nil {
 			t.Fatalf("loop stop: %v: %s", err, out.String())
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("stop did not stop loop")
 	}
 }
@@ -84,8 +84,8 @@ printf 'RESULT: done\n'`)
 			fixtureAt(t, f.store, itemRecordWithFence("item_a", "in-queue", "candidate.txt"), itemRecordWithFence("item_b", "in-queue", "candidate.txt"))
 			t.Cleanup(func() { writeFile(t, filepath.Join(markers, "release"), "finish") })
 			cmd, out := startStopFixture(t, f, 2)
-			waitForFile(t, filepath.Join(markers, "run-item_a-a1.started"), 10*time.Second)
-			waitForFile(t, filepath.Join(markers, "run-item_b-a1.started"), 10*time.Second)
+			waitForFile(t, filepath.Join(markers, "run-item_a-a1.started"), hangGuard)
+			waitForFile(t, filepath.Join(markers, "run-item_b-a1.started"), hangGuard)
 			stopFixture(t, f, cmd, out, end)
 			if !end {
 				if len(matchingPIDs(t, f.store)) != 2 {
@@ -96,7 +96,7 @@ printf 'RESULT: done\n'`)
 				}
 				writeFile(t, filepath.Join(markers, "release"), "finish")
 			}
-			deadline := time.Now().Add(10 * time.Second)
+			deadline := time.Now().Add(hangGuard)
 			for len(terminalRunRows(t, f.store)) < 2 && time.Now().Before(deadline) {
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -119,8 +119,8 @@ printf 'RESULT: done\n'`)
 				// Neither ended run spent a retry: the next loop dispatches both
 				// items again with no authorization.
 				cmd, out := startStopFixture(t, f, 2)
-				waitForFile(t, filepath.Join(markers, "run-item_a-a2.started"), 10*time.Second)
-				waitForFile(t, filepath.Join(markers, "run-item_b-a2.started"), 10*time.Second)
+				waitForFile(t, filepath.Join(markers, "run-item_a-a2.started"), hangGuard)
+				waitForFile(t, filepath.Join(markers, "run-item_b-a2.started"), hangGuard)
 				writeFile(t, filepath.Join(markers, "release"), "finish")
 				stopFixture(t, f, cmd, out, false)
 				for _, kind := range []string{"drain.retry", "drain.retry.ack"} {
@@ -144,17 +144,17 @@ while [ ! -f "$STOP_MARKERS/release" ]; do sleep 0.02; done
 	t.Cleanup(func() { writeFile(t, filepath.Join(markers, "release"), "finish") })
 	for attempt := 1; attempt <= 3; attempt++ {
 		cmd, out := startStopFixture(t, f, 1)
-		waitForFile(t, filepath.Join(markers, "run-item_a-a"+fmtInt(attempt)+".started"), 10*time.Second)
+		waitForFile(t, filepath.Join(markers, "run-item_a-a"+fmtInt(attempt)+".started"), hangGuard)
 		stopFixture(t, f, cmd, out, true)
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for len(runsForItem(t, f.store, "item_a")) < attempt && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	cmd, out := startStopFixture(t, f, 1)
-	waitForFile(t, filepath.Join(markers, "run-item_a-a4.started"), 10*time.Second)
+	waitForFile(t, filepath.Join(markers, "run-item_a-a4.started"), hangGuard)
 	writeFile(t, filepath.Join(markers, "release"), "finish")
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for len(callsNamed(lines(t, f.count), "land")) < 1 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -112,7 +112,7 @@ func TestStopLeavesAStaleForeignSessionAndStopsTheLocalLoop(t *testing.T) {
 			}
 			select {
 			case <-exited:
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("the live local loop was not signaled")
 			}
 			if stopFlag(t, f, "live-loop") == 0 {

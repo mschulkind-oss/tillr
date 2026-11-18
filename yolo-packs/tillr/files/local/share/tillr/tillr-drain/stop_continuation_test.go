@@ -18,7 +18,7 @@ func TestStopDuringGateReleasesExaminationLease(t *testing.T) {
 echo started > "`+marker+`"
 exec sleep 300`)
 	cmd, out := startStopFixture(t, f, 1, gate)
-	waitForFile(t, marker, 10*time.Second)
+	waitForFile(t, marker, hangGuard)
 	stopFixture(t, f, cmd, out, false)
 	for _, lane := range lanesIn(t, f.store) {
 		if lane.RunID != nil || lane.State != "idle" {
@@ -103,7 +103,7 @@ fi`)
 fi
 exec "`+sibling(t, "run")+`" "$@"`)
 			cmd, out := startStopFixtureWithRun(t, f, 1, shortRun)
-			waitForFile(t, filepath.Join(markers, "resumed"), 10*time.Second)
+			waitForFile(t, filepath.Join(markers, "resumed"), hangGuard)
 			if len(terminalRunRows(t, f.store)) != 1 {
 				t.Fatal("continuation test needs the previous terminal row")
 			}
@@ -136,7 +136,7 @@ while [ ! -f "$CRASH_STOP/release" ]; do sleep 0.02; done`)
 	fixtureAt(t, f.store, itemRecordWithFence("item_a", "in-queue", "candidate.txt"))
 	t.Cleanup(func() { writeFile(t, filepath.Join(markers, "release"), "finish") })
 	cmd, _ := startStopFixture(t, f, 1)
-	waitForFile(t, filepath.Join(markers, "started"), 10*time.Second)
+	waitForFile(t, filepath.Join(markers, "started"), hangGuard)
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ while [ ! -f "$CRASH_STOP/release" ]; do sleep 0.02; done`)
 	if err != nil {
 		t.Fatalf("offline end: %v: %s", err, raw)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for len(terminalRunRows(t, f.store)) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
