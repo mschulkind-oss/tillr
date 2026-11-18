@@ -34,6 +34,50 @@ func scratch(t *testing.T, prefix string) string {
 	return dir
 }
 
+func TestProcessMembershipProgressBelowTotal(t *testing.T) {
+	state := watchdogState{}
+	state.observe(watchSample{CPUTimeNS: 1000000000}, nil)
+	for n := 0; n < WatchdogSilentSamples*2; n++ {
+		if state.observe(watchSample{CPUTimeNS: 1000000000, CPUChanged: true}, nil) {
+			t.Fatal("membership/runtime progress mistaken for silence below total high water")
+		}
+	}
+	if state.SilentSamples != 0 {
+		t.Fatal("progress did not reset silence")
+	}
+}
+
+func TestCPUSourceReachesLogsAndVerdicts(t *testing.T) {
+	for _, source := range []string{"kernel task-clock counter", "process accounting"} {
+		t.Run(source, func(t *testing.T) {
+			dir := scratch(t, "cpu-source")
+			sources := &watchSources{Sample: func(int, *os.File) (watchSample, error) {
+				return watchSample{CPUSource: source, CPUTimeMS: 42}, nil
+			}, Ticks: func() (<-chan time.Time, func()) { return nil, func() {} }}
+			outcome := runCheck(PlanCheck{CheckID: "source", Scope: "change", Command: []string{"true"}, watchdog: sources}, dir, dir, 0)
+			if outcome.Result != ResultPass || outcome.CPUSource != source {
+				t.Fatalf("source absent from verdict: %+v", outcome)
+			}
+			body, _ := os.ReadFile(outcome.LogRef)
+			if !strings.Contains(string(body), "watchdog CPU source: "+source) {
+				t.Fatalf("source absent from log: %s", body)
+			}
+			program := runGateProgram(GateProgram{Command: []string{"true"}, watchdog: sources}, dir, dir)
+			if program.check.CPUSource != source {
+				t.Fatalf("source absent from wrapper verdict: %+v", program.check)
+			}
+			triage, _ := os.ReadFile(program.check.LogRef)
+			if !strings.Contains(string(triage), "watchdog CPU source: "+source) {
+				t.Fatalf("source absent from wrapper check log: %s", triage)
+			}
+			encoded, _ := json.Marshal(outcome)
+			if !strings.Contains(string(encoded), `"cpu_source":"`+source+`"`) {
+				t.Fatalf("source absent from JSON: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestGateWrapperPreservesCheckStall(t *testing.T) {
 	root := scratch(t, "watchdog-root")
 	logs := scratch(t, "watchdog-logs")

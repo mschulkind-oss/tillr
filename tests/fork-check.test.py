@@ -7999,7 +7999,8 @@ for mode in ("output", "cpu", "silent", "unavailable"):
          patch.object(watch, "progress", side_effect=warnings.append), \
          patch.object(watch.os, "write"), \
          patch.object(watch, "_kill_process_group", side_effect=kill), \
-         patch.object(watch, "_start_cpu_sampler", return_value=(sample, lambda: None)):
+         patch.object(watch, "_start_cpu_sampler", return_value=(sample, lambda: None)), \
+         patch.object(watch, "_start_process_sampler", return_value=(sample, lambda: None)):
         rc, out, err, _ = watch._run_cancellable(ROOT, ["stub"], 0, None, (), watch.Cancellation(), False)
     if mode == "silent":
         assert rc == watch.CHECK_STALLED_RC and "last line" in err and "60000 ms" in err, (rc, err)
@@ -8049,7 +8050,183 @@ with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as director
     observation = json.loads(path.read_text())["payload"]["checks"][0]
     assert observation["check_id"] and observation["last_output_line"] == "child holds pipe", observation
     assert observation["silent_samples"] == watch.WATCHDOG_SILENT_SAMPLES
-print("wrapper watchdog: cadence parity, output/CPU progress, unavailable accounting, group kill and named stall handoff pass")
+# Controlled snapshots prove totals, identities and progress below the total's
+# high water without relying on a child being scheduled between real samples.
+with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
+    proc_root = Path(directory)
+    def proc_member(pid, start, ns, children=0):
+        task = proc_root / str(pid) / "task" / str(pid)
+        task.mkdir(parents=True, exist_ok=True)
+        fields = "S 1 123 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0".split()
+        fields[13], fields[19] = str(children), str(start)
+        (proc_root / str(pid) / "stat").write_text(f"{pid} (name with ) spaces) " + " ".join(fields))
+        (task / "schedstat").write_text(f"{ns} 0 0")
+    sampler, close = watch._start_process_sampler(OSError("counter denied"), proc_root)
+    proc_member(123, 1, 1000, 20)
+    proc_member(999, 1, 0)
+    unrelated = proc_root / "999/stat"
+    unrelated.write_bytes(unrelated.read_bytes().replace(b"name with ) spaces", b"x\xff").replace(b"S 1 123", b"S 1 456"))
+    tick = 1_000_000_000 // os.sysconf("SC_CLK_TCK")
+    assert sampler(123) == 1000 + 20*tick and not sampler.cpu_changed
+    assert sampler(123) == 1000 + 20*tick and not sampler.cpu_changed
+    proc_member(123, 1, 1001, 30)
+    assert sampler(123) == 1001 + 30*tick and sampler.cpu_changed
+    proc_member(124, 2, 900000000)
+    high = sampler(123)
+    assert sampler.cpu_changed
+    shutil.rmtree(proc_root / "124")
+    assert sampler(123) == high and sampler.cpu_changed
+    proc_member(123, 1, 1002, 30)
+    assert sampler(123) == high and sampler.cpu_changed
+    proc_member(123, 99, 1002, 30)
+    assert sampler(123) == high and sampler.cpu_changed
+    (proc_root / "123/task/125").mkdir()
+    (proc_root / "123/task/125/schedstat").write_text("77 0 0")
+    assert sampler(123) == high and sampler.cpu_changed
+    (proc_root / "123/task/125/schedstat").write_text("invalid")
+    try:
+        sampler(123)
+        assert False, "unreadable runtime silently substituted"
+    except OSError as error:
+        assert "process accounting" in str(error)
+    (proc_root / "123/task/125/schedstat").unlink()
+    try:
+        sampler(123)
+        assert False, "missing runtime on a live task was treated as progress"
+    except OSError as error:
+        assert "process accounting" in str(error)
+
+# Reaping between child and parent reads must not inflate the lower-bound total.
+with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
+    proc_root = Path(directory)
+    def reap_member(pid, children):
+        task = proc_root / str(pid) / "task" / str(pid)
+        task.mkdir(parents=True, exist_ok=True)
+        fields = "S 1 123 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1".split()
+        fields[13] = str(children)
+        (proc_root / str(pid) / "stat").write_text(f"{pid} (check) " + " ".join(fields))
+        (task / "schedstat").write_text("1000000000 0 0")
+    reap_member(123, 0)
+    reap_member(124, 0)
+    original_read, original_iter = Path.read_bytes, Path.iterdir
+    reaped = False
+    def read_with_reap(path):
+        global reaped
+        if path == proc_root / "124/stat" and not reaped:
+            reaped = True
+            reap_member(124, 100)
+            shutil.rmtree(proc_root / "123")
+        return original_read(path)
+    def ordered_iter(path):
+        entries = list(original_iter(path))
+        return iter(sorted(entries) if path == proc_root else entries)
+    sampler, _ = watch._start_process_sampler(OSError("counter denied"), proc_root)
+    with patch.object(Path, "read_bytes", read_with_reap), patch.object(Path, "iterdir", ordered_iter):
+        total = sampler(123)
+    assert total == 2_000_000_000, f"reaped child counted twice: {total}"
+    assert sampler.cpu_changed, "disappearance did not count as progress"
+
+# Force the counter refused: read-only accounting must see progress even when
+# the command auto-reaps children between watchdog samples.
+for mode in ("silent", "cpu", "output", "children", "discarded", "neither"):
+    code = '''import os,signal,sys,time
+mode = sys.argv[1]
+def burn():
+    end = time.monotonic() + .04
+    while time.monotonic() < end: pass
+if mode == 'silent': signal.pause()
+if mode == 'neither':
+    time.sleep(.8)
+    sys.exit(0)
+if mode == 'discarded': signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+for n in range(35):
+    if mode in ('children', 'discarded'):
+        pid = os.fork()
+        if pid == 0:
+            burn()
+            os._exit(0)
+        if mode == 'children': os.waitpid(pid, 0)
+        else: time.sleep(.05)
+    elif mode in ('output', 'neither'):
+        print(n, flush=True)
+        time.sleep(.04)
+    else: burn()
+'''
+    warnings = []
+    process_sampler = watch._start_process_sampler
+    # Keep the real function outside the patched attribute to avoid recursion.
+    real_process_sampler = watch._start_process_sampler
+    if mode == "neither":
+        process_sampler = lambda error: real_process_sampler(error, ROOT / "nonexistent-proc-test")
+    with patch.object(watch, "WATCHDOG_SAMPLE_INTERVAL", .01), \
+         patch.object(watch, "_start_cpu_sampler", side_effect=OSError("counter denied")), \
+         patch.object(watch, "_start_process_sampler", side_effect=process_sampler), \
+         patch.object(watch, "progress", side_effect=warnings.append):
+        rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c", code, mode],
+                                                0, None, (), watch.Cancellation(), False)
+    if mode == "silent":
+        assert rc == watch.CHECK_STALLED_RC, (mode, rc, out, err, warnings)
+        observation = json.loads(err.split("stall observations: ")[1])
+        assert observation["silent_samples"] == 60 and observation["cpu_source"] == "process accounting", observation
+    else:
+        assert rc == 0, (mode, rc, out, err, warnings)
+    if mode == "neither":
+        assert any("watchdog unavailable" in line and "process accounting" in line for line in warnings), warnings
+    else:
+        assert any("watchdog CPU source: process accounting" in line for line in warnings), warnings
+        assert not any("watchdog unavailable" in line for line in warnings), warnings
+# A completed leader does not finish communicate while descendants hold output.
+# Force the real fallback rather than injecting perf-shaped sample readings.
+for idle in (False, True):
+    code = '''import os,signal,time,sys
+pid = os.fork()
+if pid: os._exit(0)
+print('child started', flush=True)
+if sys.argv[1] == 'idle': signal.pause()
+for n in range(35):
+    print(n, flush=True)
+    time.sleep(.04)
+print('child completed', flush=True)
+'''
+    with patch.object(watch, "WATCHDOG_SAMPLE_INTERVAL", .01), \
+         patch.object(watch, "_start_cpu_sampler", side_effect=OSError("counter denied")), \
+         patch.object(watch, "progress"):
+        rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c", code, "idle" if idle else "active"],
+                                                0, None, (), watch.Cancellation(), False)
+    if idle:
+        assert rc == watch.CHECK_STALLED_RC and "child started" in err, (rc, out, err)
+    else:
+        assert rc == 0 and "child completed" in out, (rc, out, err)
+# Nested watchdogs independently read their own process groups, without counting
+# the inner watcher's CPU as progress by its idle child.
+nested_code = '''import importlib.util,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('nested_watch', Path.cwd()/'tools/fork-check.py')
+w=importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
+def denied(pid): raise OSError('counter denied')
+w._start_cpu_sampler=denied
+w.WATCHDOG_SAMPLE_INTERVAL=.01
+warnings=[]
+w.progress=warnings.append
+mode=sys.argv[1]
+code='import signal; signal.pause()' if mode=='silent' else ''' + repr('import os,time\nfor n in range(35):\n    pid=os.fork()\n    if pid == 0:\n        end=time.monotonic()+.02\n        while time.monotonic()<end: pass\n        os._exit(0)\n    os.waitpid(pid,0)\n    time.sleep(.02)\n') + '''
+rc,out,err,_=w._run_cancellable(Path.cwd(),[sys.executable,'-c',code],0,None,(),w.Cancellation(),False)
+assert rc==(w.CHECK_STALLED_RC if mode=='silent' else 0),(rc,out,err)
+assert not any('watchdog unavailable' in note for note in warnings),warnings
+print('nested '+mode+' passed',flush=True)
+'''
+with patch.object(watch, "_start_cpu_sampler", side_effect=OSError("counter denied")), \
+     patch.object(watch, "progress"):
+    for mode in ("silent", "children"):
+        rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c", nested_code, mode],
+                                                0, None, (), watch.Cancellation(), False)
+        assert rc == 0 and f"nested {mode} passed" in out, (rc, out, err)
+    # Exercise the Go reader under the Python watchdog as the real gate does.
+    rc, out, err, _ = watch._run_cancellable(ROOT, ["go", "test", "-C", "tools/tillr-gate", "./...", "-run",
+        "^(TestProcessAccounting|TestDeniedCounter|TestNeitherCPUSource|TestCPUSource)"],
+        0, None, (), watch.Cancellation(), False)
+    assert rc == 0, (rc, out, err)
+print("wrapper watchdog: cadence parity, output/CPU progress, refused-counter fallback, retained children, nested Go/Python accounting, unavailable accounting, group kill and named stall handoff pass")
 # The runner exception is part of the legacy judge's permanent audit too.
 subprocess.run([sys.executable, str(ROOT / "tools/gate/runner-first.test.py")], check=True)
 subprocess.run([sys.executable, str(ROOT / "tests/fast-tree-in-done.test.py")], check=True)
