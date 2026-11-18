@@ -448,6 +448,12 @@ func TestTheClaudePolicyLoadsWithItsSeatLists(t *testing.T) {
 	if err := bedrock.Check(); err != nil {
 		t.Fatalf("the Bedrock policy fails its own check: %v", err)
 	}
+	// An ordinary item names no seat, so its first dispatch is default_backend, not the build
+	// seat's backend. The owner's 2026-11-18 instruction puts build work on Terra, so the two
+	// must agree or the build seat is set and never reached.
+	if bedrock.DefaultBackend != bedrock.Seats[item.SeatBuild] {
+		t.Fatalf("the Bedrock policy's default_backend %q is not its build seat's backend %q: a seatless item would run off the build seat", bedrock.DefaultBackend, bedrock.Seats[item.SeatBuild])
+	}
 
 	raw, err := os.ReadFile("../../config/tillr/backend-policy.claude.json")
 	if err != nil {
