@@ -113,7 +113,7 @@ type questionAnswer struct {
 // an error: the tool's silence and the tree's absence are answers, not failures of the
 // report, and a caller that turned either into a refusal would lose the distinction the
 // three states exist to keep.
-func readQuestions(source vantage.QuestionSource, doc string) questionAnswer {
+func readQuestions(source vantage.QuestionSource, doc string, excluded ...string) questionAnswer {
 	if doc == "" {
 		return questionAnswer{}
 	}
@@ -133,7 +133,7 @@ func readQuestions(source vantage.QuestionSource, doc string) questionAnswer {
 	// open ones: a settled question is an answer, not a question, and counting it would
 	// hold a finished design open.
 	questions := make([]question, 0, len(answer.Questions))
-	for _, q := range answer.Questions {
+	for _, q := range vantage.WithoutQuestions(answer.Questions, excluded) {
 		if q.State == vantage.QuestionAnswered {
 			continue
 		}

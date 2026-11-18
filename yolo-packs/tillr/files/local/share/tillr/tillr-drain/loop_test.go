@@ -607,7 +607,7 @@ func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
 	if countMatching(strings.Split(report.String(), "\n"), "failed in the infrastructure class") != 3 {
 		t.Fatalf("the loop did not report one line per infrastructure failure: %s", report.String())
 	}
-	if strings.Contains(report.String(), "waiting") {
+	if strings.Contains(report.String(), "nothing dispatched; waiting ") {
 		t.Fatalf("the loop backed off while it had items it could dispatch: %s", report.String())
 	}
 }
@@ -759,7 +759,7 @@ func TestAnOperatorStopInterruptsTheBackoff(t *testing.T) {
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	report := &stoppingReport{cancelOn: "waiting", cancel: cancel}
+	report := &stoppingReport{cancelOn: "nothing dispatched; waiting 30s before the next attempt", cancel: cancel}
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
 		Policy: f.policy, Steps: f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)),
