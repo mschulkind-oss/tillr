@@ -2,6 +2,13 @@ package main
 
 import "testing"
 
+func TestWaitingToolingDefectNamesRepair(t *testing.T) {
+	rule := waitingRuleFor("tooling-defect")
+	if rule.class != "waits on work" || rule.where != "queue" || rule.mover != "the tooling defect item to land or close" {
+		t.Fatalf("unexplained tooling defect hold: %+v", rule)
+	}
+}
+
 func TestWaitingDeskHoldsExplainWhatFreesTheDesk(t *testing.T) {
 	for _, tc := range []struct {
 		reason string
