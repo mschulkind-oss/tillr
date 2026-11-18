@@ -119,3 +119,92 @@ func TestUnreadableProgressStillReleasesRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// On 2026-11-18 a lane's Pi records named one child transcript twice, with different end
+// clocks and turn counts (a status file and a foreground-history entry). Each sample
+// compared a record only with the last one written, so the two took turns and every
+// sample appended both again: 24,163 of 24,240 events in one stretch, about 36 a second,
+// for six sessions. Observations of one transcript now merge into one record that does
+// not depend on the order they are read in, so a re-read of the same sources writes
+// nothing.
+func TestDisagreeingRecordsOfOneChildAreWrittenOnlyWhenTheMergeChanges(t *testing.T) {
+	dir, err := os.MkdirTemp(os.Getenv("YOLO_DURABLE_DIR"), "worker-children-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	st, err := store.Open(context.Background(), filepath.Join(dir, "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	path := filepath.Join(dir, "child.jsonl")
+	if err = os.WriteFile(path, []byte(`{"type":"session","timestamp":"2026-11-18T00:00:00Z"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]any{"agent": "reviewer", "sessionFile": path, "status": "completed", "endedAt": float64(1794979177691), "turnCount": float64(10)}
+	history := map[string]any{"agent": "reviewer", "sessionFile": path, "status": "completed", "endedAt": float64(1794979988384), "turnCount": float64(7)}
+	count := func() int {
+		var n int
+		if err := st.ReadTx(ctx, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT count(*) FROM events WHERE kind='run.child-session'`).Scan(&n)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	w, err := newWorkerRecords(ctx, st, Request{RunID: "forward", ItemID: "item", LaneID: "lane"}, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sample := 0; sample < 5; sample++ {
+		for _, record := range []map[string]any{status, history} {
+			if err = w.discover(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n := count(); n > 2 {
+		t.Fatalf("five samples of the same two records appended %d child-session events, not at most 2", n)
+	}
+	var forward childSession
+	if err = json.Unmarshal([]byte(w.children[path]), &forward); err != nil {
+		t.Fatal(err)
+	}
+
+	backward, err := newWorkerRecords(ctx, st, Request{RunID: "backward", ItemID: "item", LaneID: "lane"}, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []map[string]any{history, status} {
+		if err = backward.discover(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var reverse childSession
+	if err = json.Unmarshal([]byte(backward.children[path]), &reverse); err != nil {
+		t.Fatal(err)
+	}
+	forward.RunID, forward.SessionID, reverse.RunID, reverse.SessionID = "", "", "", ""
+	a, _ := json.Marshal(forward)
+	b, _ := json.Marshal(reverse)
+	if string(a) != string(b) {
+		t.Fatalf("the merged record depends on read order:\n  %s\n  %s", a, b)
+	}
+
+	// A restarted recorder reloads the merged record and writes nothing for the same sources.
+	before := count()
+	again, err := newWorkerRecords(ctx, st, Request{RunID: "forward", ItemID: "item", LaneID: "lane"}, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []map[string]any{history, status} {
+		if err = again.discover(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := count(); n != before {
+		t.Fatalf("a restarted recorder appended %d events for sources already merged", n-before)
+	}
+}
