@@ -38,6 +38,16 @@ test("Home groups by mover, ranks within groups and keeps every entity id in Ent
   }
 });
 
+test("Home counts owner document questions separately from other next actors", () => {
+  render(<Home waiting={[
+    { ...waiting[0], mover: "owner; answer docs/feature.md#OQ-1" },
+    { ...waiting[1], mover: "operator; repair the gate" },
+    { ...waiting[2], mover: "drain; finish the dependency" },
+    { ...waiting[3], class: "waits on work", mover: "design seat; answer the conflict" },
+  ]} />);
+  expect(screen.getByLabelText("Waiting summary").textContent).toBe("Owner-waiting 1 · next: drain 1 · design seat 1 · operator 1");
+});
+
 test("Home shows dirty landing paths and elapsed waiting time beside since", () => {
   const { container } = render(<Home waiting={[{ ...waiting[2], where: "land", why: "trunk-path-dirty: a.txt, b.txt", mover: "commit or restore the path", since: "2026-11-16T12:00:00Z", waited: "2m0s" }]} />);
   expect(container.textContent).toContain("trunk-path-dirty: a.txt, b.txt");

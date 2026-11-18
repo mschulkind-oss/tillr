@@ -106,9 +106,9 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 		byID[row["item_id"].(string)] = row
 	}
 	for id, fields := range map[string]map[string]any{
-		"item-seed-02": {"class": "needs a cause", "where": "gate", "why": "gate-failed", "mover": "cause not recorded; end cause not recorded", "since": "1970-01-01T00:00:05Z"},
-		"item-seed-06": {"since": "no pass yet", "why": "waiter not recorded", "mover": "waiter not recorded"},
-		"item-unknown": {"class": "needs a cause", "where": "gate", "why": "future-reason", "mover": "add a history rule for this recorded reason; end cause not recorded"},
+		"item-seed-02": {"class": "needs a cause", "where": "gate", "why": "gate-failed", "mover": "operator; cause not recorded; end cause not recorded", "since": "1970-01-01T00:00:05Z"},
+		"item-seed-06": {"since": "no pass yet", "why": "waiter not recorded", "mover": "drain; waiter not recorded"},
+		"item-unknown": {"class": "needs a cause", "where": "gate", "why": "future-reason", "mover": "operator; add a history rule for this recorded reason; end cause not recorded"},
 		"item-land":    {"where": "land", "why": "retry-stale"},
 		"item-fence":   {"where": "fence", "why": "not-ready"},
 		"item-moving":  {"class": "moving", "where": "lane", "why": "ready", "mover": "run-moving"},
@@ -124,7 +124,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 		t.Fatalf("table: %v: %s", err, table)
 	}
 	lines := strings.Split(strings.TrimSpace(string(table)), "\n")
-	if len(lines) != 10 || !strings.HasPrefix(lines[0], "definition: ") || lines[1] != "spend, last 24h: $0.00 over 0 runs" || lines[2] != "1 of 1 running, 0 of 0 express" || strings.Join(strings.Fields(lines[3]), " ") != "# item_id class where why mover since" {
+	if len(lines) != 11 || !strings.HasPrefix(lines[0], "definition: ") || lines[1] != "spend, last 24h: $0.00 over 0 runs" || lines[2] != "1 of 1 running, 0 of 0 express" || !strings.HasPrefix(lines[3], "summary: owner-waiting ") || strings.Join(strings.Fields(lines[4]), " ") != "# item_id class where why mover since" {
 		t.Fatalf("table columns/rows: %s", table)
 	}
 	if storeFingerprint(t, h.store) != before {
@@ -217,7 +217,7 @@ func TestWaitingMoversAndLeaseOnlyRun(t *testing.T) {
 		t.Fatalf("status %d: %s", status, raw)
 	}
 	data := body["data"].([]any)
-	if data[0].(map[string]any)["mover"] != "OQ-1; end cause not recorded" || data[1].(map[string]any)["mover"] != "item-seed-02" {
+	if data[0].(map[string]any)["mover"] != "owner; answer docs/design.md#OQ-1; end cause not recorded" || data[1].(map[string]any)["mover"] != "drain; item-seed-02" {
 		t.Fatalf("question and blocker movers: %s", raw)
 	}
 	// A deferred mover is the recorded item, not an invented cause.
@@ -233,7 +233,7 @@ func TestWaitingMoversAndLeaseOnlyRun(t *testing.T) {
 	if rows[0].Class != "moving" || rows[0].Mover != "run-live" || rows[0].Why != "question-open" || rows[0].Since != "1970-01-01T00:00:01Z" {
 		t.Fatalf("lease-only live run: %+v", rows[0])
 	}
-	if rows[1].Mover != "item-fork" {
+	if rows[1].Mover != "drain; item-fork" {
 		t.Fatalf("deferred mover: %+v", rows[1])
 	}
 }

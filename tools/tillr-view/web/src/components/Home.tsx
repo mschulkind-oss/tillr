@@ -2,7 +2,7 @@ import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
 import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
-import { waitingIdentity, waitingOrder } from "../models/waiting";
+import { waitingActors, waitingIdentity, waitingOrder } from "../models/waiting";
 
 export function passStamp(ms: number): string {
   return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -92,6 +92,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
   passes?: PassRow[]; passesError?: Error | null;
 }) {
   const rows = waiting ?? [];
+  const actors = waitingActors(rows);
   const classes = [...CLASSES, ...new Set(rows.map(row => row.class).filter(value => !CLASSES.includes(value)))];
   const notMoving = rows.filter(row => !["ready", "moving"].includes(row.class)).length;
   return <main className="home">
@@ -102,6 +103,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
             unknown — never the drain "not moving". The loop's own state is the heartbeat in
             the header and the loop summary, and it does not depend on the planner. */}
         <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="#/items">all → Items</a></h2>
+        {waiting ? <p aria-label="Waiting summary">Owner-waiting {actors.owner} · next: drain {actors.drain} · design seat {actors.design} · operator {actors.operator}</p> : null}
         {waitingError ? <p role="alert">The planner could not be asked, so which items are waiting is unknown (the loop's own state is in the header, and does not depend on it): {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
           const group = rows.filter(row => row.class === value).sort(waitingOrder);
           if (!group.length) return null;

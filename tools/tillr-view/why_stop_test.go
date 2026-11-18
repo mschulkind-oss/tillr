@@ -41,7 +41,7 @@ INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (2000,'drain.or
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != 1 || want[0].Class != "needs you" || want[0].Why != "no-policy" || want[0].Mover != "supply the loop's --policy file" {
+	if len(want) != 1 || want[0].Class != "needs you" || want[0].Why != "no-policy" || want[0].Mover != "operator; supply the loop's --policy file" {
 		t.Fatalf("planner answer: %+v", want)
 	}
 	viewBin := filepath.Join(dir, "tillr-view")

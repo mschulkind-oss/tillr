@@ -42,6 +42,10 @@ type WhySummary struct {
 	Running        int            `json:"running"`
 	CouldRun       int            `json:"could_run"`
 	Held           map[string]int `json:"held"`
+	OwnerWaiting   int            `json:"owner_waiting"`
+	DrainNext      int            `json:"drain_next"`
+	DesignNext     int            `json:"design_next"`
+	OperatorNext   int            `json:"operator_next"`
 }
 
 type WhyAnswer struct {
@@ -95,6 +99,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		return answer, err
 	}
 	items, err := readItems(r)
+	if err != nil {
+		return answer, err
+	}
+	conflicts, err := item.ReadConflicts(r)
 	if err != nil {
 		return answer, err
 	}
@@ -280,18 +288,6 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Why = d.Reason + ": " + work.RepairHold.Cause
 			row.Mover = work.RepairHold.NextAction
 		}
-		if d.Reason == ReasonQuestionOpen && strings.HasPrefix(d.ConflictID, "triage-") {
-			row.Mover = "the owner; answer " + d.QuestionID
-			if questions != nil {
-				if doc, err := questions.Document(it.DesignDoc); err == nil {
-					for _, q := range doc.Questions {
-						if q.ID == d.QuestionID {
-							row.Why += ": " + q.Title
-						}
-					}
-				}
-			}
-		}
 		if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
 			row.Why += ": " + c.Text
 			if c.WaitingOn == "owner" {
@@ -348,6 +344,57 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if it.State == "closed" || it.State == "resolved-elsewhere" {
 			row.Class, row.Mover = "done", "no further work: "+it.State
+		}
+		if d.Action == ActionHold && row.Class != "done" {
+			if d.Reason == ReasonQuestionOpen && d.QuestionID != "" {
+				row.Mover = "owner; answer " + it.DesignDoc + "#" + d.QuestionID
+				if questions != nil {
+					if doc, err := questions.Document(it.DesignDoc); err == nil {
+						for _, q := range doc.Questions {
+							if q.ID == d.QuestionID && q.Title != "" {
+								row.Why += ": " + q.Title
+							}
+						}
+					}
+				}
+				answer.Summary.OwnerWaiting++
+			} else {
+				actor := "drain"
+				if d.Reason == ReasonConflictDesign || d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy {
+					actor = "design seat"
+				}
+				if row.Mover == "plan" || row.Mover == "design" || strings.Contains(row.Mover, "design seat") {
+					actor = "design seat"
+				}
+				if row.Class == "needs you" || row.Class == "needs a cause" || strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
+					actor = "operator"
+				}
+				if d.Reason == ReasonConflictOwner {
+					c := conflicts[it.ItemID]
+					switch {
+					case c.BodyRef == "":
+						actor, row.Why = "operator", row.Why+": no document exists; name or triage one for "+it.ItemID
+						row.Mover = "name or triage the item's document"
+					case strings.Contains(strings.ToLower(ownerReport(c)), "stale") || strings.Contains(strings.ToLower(ownerReport(c)), "restage"):
+						actor, row.Mover = "drain", "repair the staging fault; no owner choice was reported"
+					default:
+						if _, ok := item.OwnerDecision(ownerReport(c)); ok {
+							actor, row.Mover = "drain", "convert the decision into a gated document question (--migrate-owner-questions)"
+						} else {
+							actor, row.Mover = "operator", "request the design seat's question and alternatives, or resolve the recorded hold"
+						}
+					}
+				}
+				row.Mover = actor + "; " + nextActorAction(row.Mover)
+				switch actor {
+				case "drain":
+					answer.Summary.DrainNext++
+				case "design seat":
+					answer.Summary.DesignNext++
+				case "operator":
+					answer.Summary.OperatorNext++
+				}
+			}
 		}
 		if d.From == "running" {
 			answer.Summary.Running++
@@ -444,6 +491,20 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	}
 }
 
+func nextActorAction(mover string) string {
+	for _, prefix := range []string{"the owner; ", "owner; ", "the operator; ", "operator; ", "design seat; ", "drain; "} {
+		mover = strings.TrimPrefix(mover, prefix)
+	}
+	switch mover {
+	case "owner", "the owner", "operator", "the operator":
+		return "resolve the recorded hold"
+	case "plan", "design":
+		return "resolve the recorded planning hold"
+	default:
+		return mover
+	}
+}
+
 // String prints a deterministic single-line summary, including every held reason.
 func (s WhySummary) String() string {
 	keys := make([]string, 0, len(s.Held))
@@ -455,5 +516,5 @@ func (s WhySummary) String() string {
 	for _, reason := range keys {
 		counts = append(counts, fmt.Sprintf("%s=%d", reason, s.Held[reason]))
 	}
-	return fmt.Sprintf("summary: lanes %d/%d busy; reserved %d; workers %d; examining %d; running %d; could run now %d; held [%s]", s.LanesBusy, s.LanesOffered, s.LanesReserved, s.LanesWorkers, s.LanesExamining, s.Running, s.CouldRun, strings.Join(counts, ", "))
+	return fmt.Sprintf("summary: lanes %d/%d busy; reserved %d; workers %d; examining %d; running %d; could run now %d; owner-waiting %d; next [drain=%d, design seat=%d, operator=%d]; held [%s]", s.LanesBusy, s.LanesOffered, s.LanesReserved, s.LanesWorkers, s.LanesExamining, s.Running, s.CouldRun, s.OwnerWaiting, s.DrainNext, s.DesignNext, s.OperatorNext, strings.Join(counts, ", "))
 }

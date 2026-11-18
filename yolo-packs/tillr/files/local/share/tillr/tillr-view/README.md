@@ -150,6 +150,14 @@ explicit classification. The
 [drain's judge contract](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#opted-in-judgment-before-the-gate)
 defines those outcomes and when the judge's verdicts become records.
 
+The waiting summary counts document questions as one owner-waiting class. Each such
+row names the document and question id to answer. Other held rows name the drain,
+the design seat, or the operator as the next actor, with the required action. A
+stored conflict without a document says that no document exists; it is an operator
+or triage task, not an owner question hidden from Vantage's planning index. Answering
+the saved document and landing that edit releases the question hold on the next sync,
+without a store command.
+
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
 round decided, `lanes` lists every configured lane and its current or last run, and
 `running` answers what is in flight. `status --text` prints a readable summary;

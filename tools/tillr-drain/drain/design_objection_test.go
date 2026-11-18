@@ -42,10 +42,10 @@ func TestADesignObjectionNamingBuildSendsTheItemBackToItsWorker(t *testing.T) {
 	}
 }
 
-// An objection naming the owner goes to the owner, whatever its footer: that is the only
-// way a design conflict reaches the owner.
-func TestADesignObjectionNamingTheOwnerGoesToTheOwner(t *testing.T) {
-	for _, report := range []string{"Needs a ruling between A and B.\n" + DesignNextActorField + ": owner\nRESULT: blocked\n", "Needs a ruling.\n" + DesignNextActorField + ": owner\nRESULT: done\n"} {
+// Naming the owner without a question and alternatives leaves an explicit conflict;
+// it is not permission to invent a document question. Decisions are tested separately.
+func TestADesignObjectionNamingTheOwnerWithoutADecisionRemainsAConflict(t *testing.T) {
+	for _, report := range []string{"Needs owner authority.\n" + DesignNextActorField + ": owner\nRESULT: blocked\n", "Needs a ruling.\n" + DesignNextActorField + ": owner\nRESULT: done\n"} {
 		f, l, d, base := designAnswerFixture(t)
 		if c := settleDesignReport(t, f, l, d, base, report); c.Status != "owner" || c.WaitingOn != "owner" {
 			t.Fatalf("an owner objection did not reach the owner (%q): %+v", report, c)

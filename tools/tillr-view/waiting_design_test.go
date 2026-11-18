@@ -43,7 +43,7 @@ func TestWaitingDesignWithoutItem(t *testing.T) {
 				if row["document"] != "" && row["document"] != nil {
 					seenDesign = true
 					designs = append(designs, row)
-					if row["item_id"] != "" || row["place"] != nil || row["class"] != "needs you" || row["where"] != "queue" || !strings.HasPrefix(row["why"].(string), "design-without-item") || !strings.Contains(row["mover"].(string), "owner") {
+					if row["item_id"] != "" || row["place"] != nil || row["class"] != "needs you" || row["where"] != "queue" || !strings.HasPrefix(row["why"].(string), "design-without-item") || !strings.HasPrefix(row["mover"].(string), "operator;") {
 						t.Fatalf("bad design row: %+v", row)
 					}
 				} else if seenDesign && row["item_id"] != "" {

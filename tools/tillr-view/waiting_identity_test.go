@@ -41,7 +41,7 @@ func TestWaitingForeignIdentityNamesCommitAuthorAndRemedy(t *testing.T) {
 		if row["item_id"] != "identity" {
 			continue
 		}
-		if row["class"] != "needs you" || row["where"] != "trunk" || row["why"] != reason || row["mover"] != "re-author the commit, or record its id with tillr-drain accept-identity" {
+		if row["class"] != "needs you" || row["where"] != "trunk" || row["why"] != reason || row["mover"] != "operator; re-author the commit, or record its id with tillr-drain accept-identity" {
 			t.Fatalf("identity waiting: %v", row)
 		}
 		return

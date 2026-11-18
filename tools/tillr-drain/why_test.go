@@ -38,7 +38,7 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 	if err := json.Unmarshal(out, &answer); err != nil {
 		t.Fatal(err)
 	}
-	if len(answer.Rows) != 4 || answer.Rows[0].ItemID != "ready" || answer.Rows[1].Reason != drain.ReasonBlocked || answer.Rows[1].Mover != "ready" {
+	if len(answer.Rows) != 4 || answer.Rows[0].ItemID != "ready" || answer.Rows[1].Reason != drain.ReasonBlocked || answer.Rows[1].Mover != "drain; ready" {
 		t.Fatalf("rows: %+v", answer.Rows)
 	}
 	total := answer.Summary.Running + answer.Summary.CouldRun
@@ -130,7 +130,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 	if err := json.Unmarshal(out, &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer.Rows[1].Reason != drain.ReasonNoLane || answer.Rows[1].Mover != "lane-1" || answer.Rows[2].Reason != drain.ReasonQuestionOpen || answer.Rows[2].Mover != "OQ-1" {
+	if answer.Rows[1].Reason != drain.ReasonNoLane || answer.Rows[1].Mover != "drain; lane-1" || answer.Rows[2].Reason != drain.ReasonQuestionOpen || answer.Rows[2].Mover != "owner; answer docs/design/open.md#OQ-1" {
 		t.Fatalf("references: %+v", answer.Rows)
 	}
 	code, out = invoke(t, "why", "missing", "--store", path)
@@ -142,7 +142,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 func TestWhyEmptyStoreAndMissingStore(t *testing.T) {
 	path := fixture(t)
 	code, out := invoke(t, "why", "--store", path)
-	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; held []" {
+	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; owner-waiting 0; next [drain=0, design seat=0, operator=0]; held []" {
 		t.Fatalf("empty: %d %s", code, out)
 	}
 	path = filepath.Join(scratch(t, "absent-why"), "absent.db")
@@ -218,7 +218,7 @@ func TestWhyReadsAPreloadedQuestionsIndex(t *testing.T) {
 		}
 		return answer.Rows
 	}
-	if got, want := rows(viaFile), rows(viaCommand); len(got) != len(want) || got[2].Reason != drain.ReasonQuestionOpen || got[2].Mover != "OQ-1" {
+	if got, want := rows(viaFile), rows(viaCommand); len(got) != len(want) || got[2].Reason != drain.ReasonQuestionOpen || got[2].Mover != "owner; answer docs/design/open.md#OQ-1" {
 		t.Fatalf("preloaded index rows %+v, command rows %+v", got, want)
 	}
 	raw, err := os.ReadFile(file)
@@ -232,7 +232,7 @@ func TestWhyReadsAPreloadedQuestionsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("why --questions-index -: %v %s", err, viaStdin)
 	}
-	if got := rows(viaStdin); got[2].Mover != "OQ-1" {
+	if got := rows(viaStdin); got[2].Mover != "owner; answer docs/design/open.md#OQ-1" {
 		t.Fatalf("stdin index rows %+v", got)
 	}
 	code, out := invoke(t, append([]string{"why", "--questions-index", file, "--questions-cmd", command}, common...)...)

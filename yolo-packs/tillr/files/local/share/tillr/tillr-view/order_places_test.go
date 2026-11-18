@@ -53,7 +53,7 @@ func TestReadFacesCountPlacesBeforeAndAfterKeying(t *testing.T) {
 		if err := printWaiting(&out, rows); err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(out.Bytes(), []byte("secretkey")) || !bytes.HasPrefix(out.Bytes(), []byte("#")) {
+		if bytes.Contains(out.Bytes(), []byte("secretkey")) || !bytes.HasPrefix(out.Bytes(), []byte("summary: owner-waiting ")) {
 			t.Fatal(out.String())
 		}
 	}

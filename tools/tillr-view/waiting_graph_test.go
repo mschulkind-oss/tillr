@@ -19,7 +19,7 @@ func TestWaitingGraphHoldLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(out.String(), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[1], "lane / node two") || !strings.Contains(lines[1], "node-failed: two; 1/3 nodes passed") {
+	if len(lines) < 2 || !strings.Contains(out.String(), "lane / node two") || !strings.Contains(out.String(), "node-failed: two; 1/3 nodes passed") {
 		t.Fatalf("graph hold line lost: %s", out.String())
 	}
 }

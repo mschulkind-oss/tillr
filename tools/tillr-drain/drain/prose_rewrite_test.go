@@ -86,7 +86,7 @@ func TestProseRewriteImpossibleCriteriaWaitOnOwner(t *testing.T) {
 		}
 		for _, row := range answer.Rows {
 			if row.ItemID == "rewrite-item-declared" {
-				if row.Class != "needs you" || !strings.Contains(row.Mover, "owner") || !strings.Contains(row.Why, "preserving them cannot pass") {
+				if row.Class != "needs you" || !strings.HasPrefix(row.Mover, "operator;") || !strings.Contains(row.Why, "preserving them cannot pass") {
 					t.Fatalf("owner cause not shown: %+v", row)
 				}
 				return nil
@@ -116,7 +116,7 @@ func TestProseRewriteWhyShowsCurrentMover(t *testing.T) {
 		}
 		for _, row := range answer.Rows {
 			if row.ItemID == "item-declared" {
-				if row.Class != "waits on work" || row.Mover != "rewrite-item-declared" || row.Why != "awaits-rewrite" {
+				if row.Class != "waits on work" || row.Mover != "drain; rewrite-item-declared" || row.Why != "awaits-rewrite" {
 					t.Fatalf("wrong current face: %+v", row)
 				}
 				return nil

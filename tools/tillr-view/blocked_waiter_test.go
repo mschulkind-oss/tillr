@@ -43,7 +43,7 @@ func TestBlockedItemProjectionNamesStoredWaiterAndReason(t *testing.T) {
 	}
 	for _, row := range rows {
 		if row.ItemID == blocked.ItemID {
-			if !strings.HasPrefix(row.Mover, "owner") || row.Why != "choose the contract" {
+			if !strings.HasPrefix(row.Mover, "operator;") || row.Why != "choose the contract" {
 				t.Fatalf("waiting: %+v", row)
 			}
 			return

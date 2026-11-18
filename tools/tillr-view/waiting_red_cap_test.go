@@ -17,7 +17,7 @@ func TestWaitingTrunkUnprovedNamesHeavyRunner(t *testing.T) {
 	for _, v := range body["data"].([]any) {
 		row := v.(map[string]any)
 		if row["item_id"] == "proof-item" {
-			if row["class"] != "waits on work" || row["where"] != "trunk" || row["mover"] != "the heavy runner; prove the trunk" {
+			if row["class"] != "waits on work" || row["where"] != "trunk" || row["mover"] != "drain; the heavy runner; prove the trunk" {
 				t.Fatalf("proof hold loses cause/mover: %v", row)
 			}
 			return
@@ -46,7 +46,7 @@ func TestWaitingRedCapNamesFixer(t *testing.T) {
 	for _, v := range body["data"].([]any) {
 		row := v.(map[string]any)
 		if row["item_id"] == "cap-item" {
-			if row["class"] != "waits on work" || row["where"] != "land" || row["mover"] != "fixer-main-123456789012" || !strings.Contains(row["why"].(string), "checks: unit") {
+			if row["class"] != "waits on work" || row["where"] != "land" || row["mover"] != "drain; fixer-main-123456789012" || !strings.Contains(row["why"].(string), "checks: unit") {
 				t.Fatalf("cap wait loses cause/mover: %v", row)
 			}
 			return

@@ -49,7 +49,9 @@ func (l *Loop) designBlockAnswer(ctx context.Context, candidate Candidate, ref s
 	}
 	before, okBefore := blockSection(base, blockID)
 	after, okAfter := blockSection(head, blockID)
-	return true, okBefore && okAfter && before != after, nil
+	// Triage creates the block: an absent base block and a present head block
+	// is an amendment too, even when the stored request's anchor never existed.
+	return true, okAfter && (!okBefore || before != after), nil
 }
 
 // fileAt answers one file's content at a commit, or "" when the commit does not hold it.

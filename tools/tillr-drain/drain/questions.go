@@ -50,3 +50,7 @@ func ReadVantageIndex(ctx context.Context, root string, command []string) Vantag
 func firstUnanswered(questions []Question) (Question, bool) {
 	return vantage.FirstUnanswered(questions)
 }
+
+func withoutQuestions(questions []Question, ids []string) []Question {
+	return vantage.WithoutQuestions(questions, ids)
+}

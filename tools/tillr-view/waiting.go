@@ -140,6 +140,9 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, exitFor(err)
 	}
+	for i := range rows {
+		normalizeWaitingMover(&rows[i])
+	}
 	sortWaitingDocuments(rows)
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
@@ -327,11 +330,8 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			if last.Reason == "question-open" {
 				answer := readQuestions(questions, item.DesignDoc)
 				if answer.State == questionsOK && len(answer.Questions) > 0 {
-					row.Mover = answer.Questions[0].QuestionID
-					if c := conflicts[item.ItemID]; c.TriageVersion != "" {
-						row.Mover = "owner; answer " + row.Mover
-						row.Why += ": " + answer.Questions[0].Text
-					}
+					row.Mover = "owner; answer " + item.DesignDoc + "#" + answer.Questions[0].QuestionID
+					row.Why += ": " + answer.Questions[0].Text
 				} else if answer.State != "" && answer.State != questionsOK {
 					row.Mover = answer.State
 				}
@@ -377,7 +377,10 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			row.Class, row.Mover, row.Why = "waits on work", c.WaitingOn, c.ConflictID+": "+c.Text
 			row.Since = time.UnixMilli(c.Since).UTC().Format(time.RFC3339Nano)
 			if c.WaitingOn == "owner" {
-				row.Class = "needs you"
+				row.Class, row.Mover = "needs you", "operator; route the conflict into a document question"
+				if c.BodyRef == "" {
+					row.Why += "; no document exists; name or triage one for " + item.ItemID
+				}
 			}
 		}
 		if c := conflicts[item.ItemID]; item.State == "blocked" && item.Waiter != "" && c.TriageVersion == "" {
@@ -388,7 +391,13 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			row.ClassSource = "store"
 			row.Since = time.UnixMilli(item.UpdatedAtMS).UTC().Format(time.RFC3339Nano)
 			if item.Waiter == "owner" {
-				row.Class = "needs you"
+				row.Class, row.Mover = "needs you", "operator; resolve the recorded hold"
+				if c := conflicts[item.ItemID]; c.ConflictID != "" {
+					row.Mover = "operator; route the conflict into a document question"
+					if c.BodyRef == "" {
+						row.Why += "; no document exists; name or triage one for " + item.ItemID
+					}
+				}
 			}
 		} else if item.State == "blocked" && !found && row.Why == "not yet planned" {
 			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
@@ -477,6 +486,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				row.Mover = "the item's nodes to finish"
 			}
 		}
+		if c := conflicts[item.ItemID]; c.Status == "question" {
+			decorateOwnerQuestionWaiting(&row, c, questions)
+		}
 		out = append(out, row)
 	}
 	addConflictHistory(out, conflicts)
@@ -524,6 +536,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	}
 	if err := addGraphRevisionHistory(r, all); err != nil {
 		return nil, err
+	}
+	for i := range all {
+		normalizeWaitingMover(&all[i])
 	}
 	return all, nil
 }
@@ -707,7 +722,87 @@ func waitingRecordedStage(r *store.Reader, itemID string, run *storeRun) (string
 	return stage, nil
 }
 
+// decorateOwnerQuestionWaiting reads current document state even when the recorded
+// plan predates publication. The origin fields are references, not a second parser.
+func decorateOwnerQuestionWaiting(row *waitingRow, c waitingConflict, source vantage.QuestionSource) {
+	file, id, _ := strings.Cut(c.QuestionRef, "#")
+	row.Class, row.Mover, row.Why = "needs a cause", "operator; restore the question index or document", "questions-unknown: "+c.QuestionRef
+	if source == nil || file == "" || id == "" {
+		return
+	}
+	doc, err := source.Document(file)
+	if err != nil {
+		return
+	}
+	if !doc.Present {
+		row.Why = "no document exists for " + row.ItemID + ": " + file
+		return
+	}
+	for _, q := range doc.Questions {
+		if q.ID != id {
+			continue
+		}
+		row.Class, row.Mover, row.Why = "needs you", "owner; answer "+c.QuestionRef, "question-open: "+questionText(q)
+		return
+	}
+	// A compacted question is settled by the next sync; a missing index entry
+	// is never silently interpreted as an answer by this read face.
+}
+
+// normalizeWaitingMover keeps question answers separate from operational acts,
+// including rows read from older stores that named only an owner.
+func normalizeWaitingMover(row *waitingRow) {
+	if row.Class == "ready" || row.Class == "moving" || row.Class == "done" {
+		return
+	}
+	if strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-") {
+		return
+	}
+	for _, actor := range []string{"drain;", "design seat;", "operator;"} {
+		if strings.HasPrefix(row.Mover, actor) {
+			return
+		}
+	}
+	actor := "drain"
+	if row.Mover == "design" || row.Mover == "plan" || strings.HasPrefix(row.Mover, "design;") || strings.HasPrefix(row.Mover, "plan;") || strings.Contains(row.Mover, "design seat") {
+		actor = "design seat"
+	}
+	if row.Class == "needs you" || row.Class == "needs a cause" || strings.HasPrefix(row.Why, "trunk-path-dirty:") {
+		actor = "operator"
+	}
+	action := row.Mover
+	for _, prefix := range []string{"the owner; ", "owner; ", "owner: ", "the operator; ", "operator; ", "design seat; ", "design; ", "plan; ", "drain; "} {
+		action = strings.TrimPrefix(action, prefix)
+	}
+	switch action {
+	case "owner", "the owner", "operator", "the operator":
+		action = "resolve the recorded hold"
+	case "design", "plan":
+		action = "resolve the recorded planning hold"
+	}
+	row.Mover = actor + "; " + action
+}
+
 func printWaiting(w io.Writer, rows []waitingRow) error {
+	owner, drain, design, operator := 0, 0, 0, 0
+	for _, row := range rows {
+		if row.Class == "ready" || row.Class == "moving" || row.Class == "done" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-"):
+			owner++
+		case strings.HasPrefix(row.Mover, "design seat;") || strings.Contains(row.Mover, "design seat"):
+			design++
+		case strings.HasPrefix(row.Mover, "operator;") || row.Class == "needs you" || row.Class == "needs a cause":
+			operator++
+		default:
+			drain++
+		}
+	}
+	if _, err := fmt.Fprintf(w, "summary: owner-waiting %d; next [drain=%d, design seat=%d, operator=%d]\n", owner, drain, design, operator); err != nil {
+		return err
+	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(table, "#\titem_id\tclass\twhere\twhy\tmover\tsince"); err != nil {
 		return err

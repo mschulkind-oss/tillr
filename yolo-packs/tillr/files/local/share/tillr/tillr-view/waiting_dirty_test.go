@@ -58,7 +58,7 @@ func TestWaitingDirtyPathsAndElapsedStreak(t *testing.T) {
 			continue
 		}
 		seen++
-		if row["class"] != "waits on work" || row["where"] != "land" || row["mover"] != "commit or restore the path" {
+		if row["class"] != "waits on work" || row["where"] != "land" || row["mover"] != "operator; commit or restore the path" {
 			t.Fatalf("dirty wait unclassified: %v", row)
 		}
 		elapsed, err := time.ParseDuration(row["waited"].(string))

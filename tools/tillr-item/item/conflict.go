@@ -16,8 +16,10 @@ import (
 const ConflictKind = "item.conflict"
 
 // Conflict retains the report, its origin and the document the design seat may amend.
-// Status is raised, awaiting, owner, answered, or closed. Closed means the ordinary
-// worker has been dispatched against the answer, not that its criteria have passed.
+// Status is raised, awaiting, owner, question, answered, or closed. Question means
+// a decision was published in a document but has not yet been answered there.
+// Closed means the ordinary worker was dispatched against the answer, or a legacy
+// conflict was migrated into a document question; neither passes its criteria.
 type Conflict struct {
 	ConflictID      string   `json:"conflict_id"`
 	ItemID          string   `json:"item_id"`
@@ -29,6 +31,12 @@ type Conflict struct {
 	Status          string   `json:"status"`
 	DesignRunID     string   `json:"design_run_id,omitempty"`
 	AnswerHead      string   `json:"answer_head,omitempty"`
+	// QuestionRef and QuestionHead identify publication, not an owner ruling.
+	// The document and shared Vantage reader own whether it is still open.
+	QuestionRef   string `json:"question_ref,omitempty"`
+	QuestionHead  string `json:"question_head,omitempty"`
+	QuestionRunID string `json:"question_run_id,omitempty"`
+
 	// TriageVersion hashes the stored title, body reference, and criteria of a request
 	// that has no document block. Empty for an ordinary specification conflict.
 	TriageVersion string `json:"triage_version,omitempty"`
@@ -72,9 +80,12 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 		return Usagef("a conflict needs its identity, item, run, report, and waiting seat; owner triage with no run may omit the run")
 	}
 	switch c.Status {
-	case "raised", "awaiting", "owner", "answered", "closed":
+	case "raised", "awaiting", "owner", "question", "answered", "closed":
 	default:
 		return Usagef("unknown conflict status %q", c.Status)
+	}
+	if c.Status == "question" && (c.QuestionRef == "" || c.QuestionHead == "" || c.QuestionRunID == "" || c.WaitingOn != "owner") {
+		return Usagef("a published owner question needs its document reference, publication head, and owner waiter")
 	}
 	var previous []byte
 	err := tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind = ?
@@ -92,7 +103,7 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 		return err
 	}
 	state := "blocked"
-	if c.Status == "answered" || c.Status == "closed" {
+	if c.Status == "question" || c.Status == "answered" || c.Status == "closed" {
 		state = "in-queue"
 	}
 	reason, _, _ := strings.Cut(c.Text, "\n")

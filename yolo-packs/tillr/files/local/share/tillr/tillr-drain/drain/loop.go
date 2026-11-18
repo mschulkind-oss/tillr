@@ -305,6 +305,9 @@ type Steps interface {
 // LoopConfig is one loop's parameters: where it works, what it may dispatch, and how it
 // spends.
 type LoopConfig struct {
+	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
+	// command runs and the design gate, then exits without dispatching other work.
+	MigrateOwnerQuestions bool
 	// Root is the repository the loop stages lanes from and lands onto. It is the main
 	// checkout, and its refs and worktrees are the boundary every run is bracketed by.
 	Root string
@@ -458,6 +461,7 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	ownerMigrationItem    string
 	laneBootstrapReported bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
@@ -787,6 +791,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		}
 		return faultResult(result, err)
 	}
+	if l.cfg.MigrateOwnerQuestions {
+		if err := l.migrateOwnerQuestions(ctx, &result); err != nil {
+			return faultResult(result, err)
+		}
+		result.Stop, result.Detail = StopQueueDrained, "owner question migration finished"
+		return result, nil
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop
@@ -897,6 +908,9 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 			return "", err
 		}
 		if sha == l.syncedSHA && clearSeq == l.syncClearSeq {
+			if err := l.settleOwnerAnswers(ctx, sha); err != nil {
+				return "", err
+			}
 			return sha, nil
 		}
 		if err := l.syncDocuments(ctx, result); err != nil {
@@ -913,6 +927,9 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		l.syncClearSeq = clearSeq
 		l.waitingDetail = ""
 		l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		if err := l.settleOwnerAnswers(ctx, sha); err != nil {
+			return "", err
+		}
 		result.SyncedSHA = sha
 		l.reportf("loop: synced documents at %s\n", sha)
 		return sha, nil
@@ -1698,7 +1715,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// take the blocked route below. Any other ending is a missing output: with no commit it
 	// is returned to the same session saying what is missing, like a run that committed
 	// nothing, and a commit is a candidate like any other.
-	contract := workerContract(decision, request)
+	recoveredOwnerQuestion, err := l.recoverOwnerQuestion(ctx, &decision, log)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	contract := workerContract(decision, request) && !recoveredOwnerQuestion
 	endingNote := ""
 	if contract {
 		if problem := workerEndingProblem(log); problem != "" {
@@ -1724,11 +1745,23 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		} else if stale {
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked on a stale base")}
 		}
-		l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
-		if err := l.reportedBlock(ctx, decision, log); err != nil {
-			return laneOutcome{err: err}
+		written := recoveredOwnerQuestion
+		if !written {
+			written, err = l.prepareOwnerQuestion(ctx, &decision, log)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
 		}
-		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked")}
+		if !written {
+			l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
+			if err := l.reportedBlock(ctx, decision, log); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked")}
+		}
+		// The report remains pinned evidence, but the loop-authored document is now
+		// a design candidate, not the no-commit objection the report described.
+		class = AttemptAnswered
 	}
 	if request.Backend != "command" && item.IsCommentItem(request.ItemID) && reportFooter(log) != "done" {
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, Worktree: l.laneTarget(lane), HeadSHA: l.headOf(ctx, lane)}

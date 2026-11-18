@@ -74,7 +74,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 			t.Fatalf("unexplained row: %v", row)
 		}
 	}
-	if rows[0].(map[string]any)["reason"] != "no-policy" || rows[1].(map[string]any)["mover"] != "a" {
+	if rows[0].(map[string]any)["reason"] != "no-policy" || rows[1].(map[string]any)["mover"] != "drain; a" {
 		t.Fatalf("actual planner reasons: %s", rawBody)
 	}
 	summary := data["summary"].(map[string]any)
@@ -100,7 +100,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	if err := json.Unmarshal(out, &waiting); err != nil {
 		t.Fatal(err)
 	}
-	if len(waiting) != 2 || waiting[0].Why != "no-policy" || waiting[1].Mover != "a" {
+	if len(waiting) != 2 || waiting[0].Why != "no-policy" || waiting[1].Mover != "drain; a" {
 		t.Fatalf("waiting diverged: %s", out)
 	}
 	if storeFingerprint(t, path) != before {

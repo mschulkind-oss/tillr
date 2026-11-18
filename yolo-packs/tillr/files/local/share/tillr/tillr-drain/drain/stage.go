@@ -1125,6 +1125,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 			criteria = requestCriteria
 			settled = "Document-fed workflow prerequisite: an item needs a document block before it is built. This is its one triage run for this request version."
 		}
+		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report. Settlement preserves that question and those options in a numbered Vantage question beneath the item's block, gated like a design ruling. A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
 	}
 	// The order matters: it is the order a brace pair is attributed in, and the item's own
 	// fields come first so the record — not the run — is what a refusal names. TASK carries
