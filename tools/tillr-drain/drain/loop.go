@@ -454,10 +454,7 @@ type Loop struct {
 	laneBootstrapReported bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
-	staleBaseChecked map[string]bool
-	// designUnansweredChecked holds, per owner conflict an unanswered design run left,
-	// the trunk commit its inputs were last compared at (design_unanswered.go).
-	designUnansweredChecked     map[string]string
+	staleBaseChecked            map[string]bool
 	gatePolicy                  GatePolicy
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	heavyMu                     sync.Mutex
@@ -1562,7 +1559,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// A run that answers `blocked` is the model's own statement that the item cannot be
 	// done as written: a spec conflict, not a failing candidate. The item is blocked for a
 	// person to decide, its criteria are left as they were, and nothing is judged.
-	if footer := reportFooter(log); (request.Backend != "command" && footer == "blocked") || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) {
+	// A design run that names its next actor is an objection whatever its footer, when it
+	// committed nothing: a commit is the answer, and goes to the gate (designObjection).
+	if footer := reportFooter(log); (request.Backend != "command" && footer == "blocked") || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
 		// A report from a run staged on a base that lacked what made the item ready is
 		// about the staging, which neither the design seat nor the owner can change.
 		if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
@@ -1585,10 +1584,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
 	}
 	target := l.laneTarget(lane)
-	baseSHA := l.laneBase(lane)
-	if baseSHA == "" {
-		baseSHA = mainSHA
-	}
+	baseSHA := l.settleBase(lane, mainSHA)
 	baseRef := l.lanePatchRef(lane)
 	headSHA, err := l.revParse(ctx, target, "HEAD")
 	if err != nil {
@@ -1931,17 +1927,35 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 	}
 	if candidate.BlockConflict != nil {
+		triage := candidate.BlockConflict.TriageVersion != ""
 		exists, answered, err := l.designBlockAnswer(ctx, candidate, ref)
 		if err != nil {
 			return "", false, err
 		}
-		if !exists {
+		if !exists && triage {
 			c := *candidate.BlockConflict
 			c.Status, c.WaitingOn = "owner", "owner"
 			c.Text += "\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref
 			return "", false, l.saveBlockConflict(ctx, c)
 		}
+		if !triage && designReadingOf(true, exists, "") == designBlockRemoved {
+			// A commit that removes the block leaves no item for the worker to build, so it
+			// cannot be the answer: it goes back to the design seat, naming the commit, and
+			// never to the owner (the owner's ruling of 2026-11-17).
+			l.pinQuietly(ctx, candidate.RunID, candidate.HeadSHA)
+			c := *candidate.BlockConflict
+			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+			c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
+			l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s removed its item block\n", c.ItemID, c.ConflictID, candidate.RunID)
+			return "", false, l.saveBlockConflict(ctx, c)
+		}
 		changed = answered
+		if !triage && designReadingOf(true, exists, "") == designAmended {
+			// A design run's gated commit is its answer whatever it changed: the owner
+			// ruled on 2026-11-17 that a commit outside the block (the design document, a
+			// sibling) is the design seat's judgment and not "no answer".
+			changed = true
+		}
 	}
 	if candidate.BlockConflict != nil && !changed {
 		c := *candidate.BlockConflict
@@ -2024,6 +2038,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		return "", false, err
 	}
 	return l.landCandidate(ctx, candidate, result, timing)
+}
+
+// settleBase is the commit a finished run's lane was cut from: the lane's recorded base,
+// or the trunk the settlement read when the lane records none.
+func (l *Loop) settleBase(lane, mainSHA string) string {
+	if base := l.laneBase(lane); base != "" {
+		return base
+	}
+	return mainSHA
 }
 
 // candidateInItsLane holds a recorded candidate whose checkout is not its lane's target.

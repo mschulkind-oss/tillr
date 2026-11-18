@@ -44,8 +44,10 @@ func routeLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, stage dra
 	return loop
 }
 
+// The design run objects naming the owner, which is the only way a design conflict
+// reaches the owner (the owner's ruling of 2026-11-17).
 func TestBlockedReportRoutesOnceToDesignThenOwner(t *testing.T) {
-	f := blockedRouteFixture(t, counting+"printf 'Conflict: c1 contradicts the API\nRESULT: blocked\n'", counting+"printf 'Conflict: c1 requires an owner ruling\nRESULT: blocked\n'")
+	f := blockedRouteFixture(t, counting+"printf 'Conflict: c1 contradicts the API\nRESULT: blocked\n'", counting+"printf 'Conflict: c1 requires an owner ruling\nNEXT-ACTOR: owner\nRESULT: blocked\n'")
 	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt", "docs/work.md"}}}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	result, err := routeLoop(t, f, steps, stage, os.Stderr).Run(context.Background())

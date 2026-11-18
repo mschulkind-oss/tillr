@@ -356,11 +356,14 @@ its run history and other items' dependencies remain attached to the same id.
 Do not file a replacement item to escape a hold or mark the original resolved
 elsewhere when its intent has not been satisfied.
 
-An item held `conflict-owner` names the design run that ended without answering its
-conflict. When the cause is gone (a fixed trunk, a corrected brief), name the item and
-that design run to the same face: `tillr drain retry --item <id> --run <design run>
---by <who> --why <reason>`. The conflict is raised for one more design run, and the face
-records who asked and why. A design run the conflict no longer names is refused, naming
+An item held `conflict-owner` names the design run whose objection put the question to
+the owner: its report named `NEXT-ACTOR: owner`. A report naming no actor, even one
+ending `RESULT: blocked`, goes back to the design seat to state it. No count of design runs ever sends a conflict there: a gate refusal, a killed run
+or a run that committed nothing goes back to the design seat, and a gated design commit
+is the answer whatever it changed. To give the design seat another turn instead of
+ruling, name the item and that design run to the same face: `tillr drain retry --item
+<id> --run <design run> --by <who> --why <reason>`. The conflict is raised for one more
+design run, and the face records who asked and why. A design run the conflict no longer names is refused, naming
 the current one. Every retry refusal names the exact command the face would accept, or
 says that none exists and who moves, so read the refusal before trying another spelling.
 

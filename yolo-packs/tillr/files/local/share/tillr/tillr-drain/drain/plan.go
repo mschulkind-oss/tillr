@@ -647,7 +647,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	attempt := p.attempt(item)
 	retry := p.retryFor(item.ItemID)
 	changed, spent := "", false
-	if inputs := p.inputs[item.ItemID]; inputs != nil {
+	// A design-seat item is never re-admitted on a changed input: the owner ruled on
+	// 2026-11-17 that a change to an item's block (a metadata write, a prose rewrite) is no
+	// reason to spend a design run. It moves on an explicit retry.
+	if inputs := p.inputs[item.ItemID]; inputs != nil && item.Seat != "design" {
 		changed, spent = p.readmission(item.ItemID, inputs)
 	}
 	if p.history.refusals[p.latest[item.ItemID]] == RefusalTrunkAlreadyRed {

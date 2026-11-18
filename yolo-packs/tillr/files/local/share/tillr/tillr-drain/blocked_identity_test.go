@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+// A design commit that deletes or renames the blocked item's block is no answer: it never
+// reaches the gate, and it goes back to the design seat rather than to the owner (the
+// owner's ruling of 2026-11-17). The second design run here objects naming the owner,
+// which is the only way the owner is reached.
 func TestDesignAnswerCannotDeleteOrRenameTheBlockedItem(t *testing.T) {
 	for _, change := range []string{"delete", "rename"} {
 		t.Run(change, func(t *testing.T) {
@@ -15,7 +19,9 @@ func TestDesignAnswerCannotDeleteOrRenameTheBlockedItem(t *testing.T) {
 			if change == "rename" {
 				replacement = strings.ReplaceAll(blockedDefinition, "item-route", "item-other")
 			}
-			designer := counting + fmt.Sprintf("printf '%%s' '%s' > docs/work.md\n", replacement) + `git add docs/work.md
+			designer := counting + `if [ -e "$STUB_COUNT.erased" ]; then printf 'Only the owner can rule.\nNEXT-ACTOR: owner\nRESULT: blocked\n'; exit 0; fi
+touch "$STUB_COUNT.erased"
+` + fmt.Sprintf("printf '%%s' '%s' > docs/work.md\n", replacement) + `git add docs/work.md
 git -c user.name=stub -c user.email=stub@example.invalid commit -qm erase
 printf 'RESULT: done\n'
 `
@@ -28,6 +34,9 @@ printf 'RESULT: done\n'
 			}
 			if countMatching(lines(t, f.count), "gate") != 0 {
 				t.Fatal("identity removal reached gate")
+			}
+			if got := countMatching(lines(t, f.count), "designer"); got != 2 {
+				t.Fatalf("the removed block did not go back to the design seat: %d design runs", got)
 			}
 			if !strings.Contains(result.Detail, "conflict-owner") {
 				t.Fatalf("not held on owner: %+v", result)

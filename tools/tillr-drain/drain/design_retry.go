@@ -66,13 +66,13 @@ func latestRunCommand(r *store.Reader, itemID string) string {
 // caller writes nothing else; it answers nil, nil when the run is no design run, so the
 // build retry applies.
 //
-// The conflict must be with the owner and name this run: that is the hold a design run
-// that ended without answering leaves (settleUnansweredDesignRuns, and the settlement's
-// own "did not amend" and "removed or renamed" holds). The authorization raises the
-// conflict for one more design run, and spends nothing the loop's own allowance counts: if
-// that design run also ends without answering, the conflict returns to the owner by the
-// same rule. A design run the conflict no longer names is stale, and the refusal names the
-// current one; a conflict the loop is still settling, or has already raised, is the loop's.
+// The conflict must be with the owner and name this run: that is the hold a design run's
+// objection naming the owner leaves (reportedBlock), or one written before the owner's
+// ruling of 2026-11-17. The authorization raises the conflict for one more design run,
+// and that run is settled like any other: its answer lands, its objection routes, and its
+// other endings go back to the design seat (settleUnansweredDesignRuns). A design run the
+// conflict no longer names is stale, and the refusal names the current one; a conflict the
+// loop is still settling, or has already raised, is the loop's.
 func authorizeDesignRetry(ctx context.Context, tx *store.Tx, req RetryRequest, at time.Time) (*Retry, error) {
 	r := tx.Reader()
 	designRuns, err := designRunsOf(r, req.ItemID)
@@ -114,7 +114,7 @@ func authorizeDesignRetry(ctx context.Context, tx *store.Tx, req RetryRequest, a
 		RequestedAt:      at,
 		ReraisesConflict: c.ConflictID,
 	}
-	c.Text += "\n\n" + req.By + " raised the conflict again after design run " + req.RunID + " (tillr drain retry): " + req.Why + ". The design seat gets one more design run; if it also ends without answering, the owner decides again."
+	c.Text += "\n\n" + req.By + " raised the conflict again after design run " + req.RunID + " (tillr drain retry): " + req.Why + ". The design seat gets one more design run; the owner decides again only if it objects naming the owner."
 	c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
 	if err := item.RecordConflict(tx, c, at); err != nil {
 		return nil, Internalf("raising conflict %s for %q: %v", c.ConflictID, req.ItemID, err)

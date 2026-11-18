@@ -2,7 +2,7 @@
 title: "The Item Judge and Lifecycle in Tillr"
 status: accepted
 stage: DECIDED
-updated: 2026-11-16
+updated: 2026-11-17
 tags:
   - tillr
   - judge
@@ -190,6 +190,23 @@ Tillr splits **harness retry** from **inspected rework** on the same `item_id`:
 
 `resolved-elsewhere` then goes back to meaning only what [board-item-state-model.md](./board-item-state-model.md) [§4.1](./board-item-state-model.md#41-semantics) says: *intent satisfied by another path*. [Section 7](#7-what-the-tree-already-holds) records which of the three already hold, and the [last block](#prevent-cloning-a-held-item-under-a-new-id) of the build order is the refusal that enforces the prohibition.
 
+### 4.3 How a Design Run's Ending Moves Its Conflict (`D-JL9`)
+
+When a worker reports `RESULT: blocked`, the drain records a design conflict and dispatches one design-seat run to answer it. Until 2026-11-17 the drain counted that run's endings: a design run that ended without answering was an attempt, the conflict was raised once more only if the item's block, its design document or a proven trunk commit had changed, and otherwise the item went to the owner. The owner ruled on 2026-11-17 that this counting is wrong and must go. **Rule: no numeric threshold applies to design runs, and nothing is re-dispatched because something changed. An item reaches the owner only through an explicit objection that names the owner. Each ending does the one thing it means:**
+
+| Ending | What moves the conflict | Built |
+| :--- | :--- | :--- |
+| 1. The gate refuses the design run's commit (for example the `documents` lint) | Not an attempt, never counted, no cap. The refusal output goes back to the **same designer session** to fix, as many times as it takes, by the mechanism a landing call already has in [the board state machine](./board-state-machine.md#7-suspend-and-resume) (`D8`, `D12`): the session is suspended on its submission and the refusal is delivered as that call's answer. A refusal the trunk caused is the gate's to recognize, not a reason to re-run the designer on a file-change guess. | Partly. The conflict is raised again for the design seat with the failing checks and the pinned commit in its text, every time; the same-session delivery is [the block below](#return-a-design-runs-gate-refusal-to-its-own-session). |
+| 2. The loop misread a committed answer | A bug, fixed: the settlement reads the block by its id and section. No guard or count is kept around it. | Built. |
+| 3. The run was killed or interrupted (a loop stop, a lease reclaimed after its loop died, a signal) | The run is run again. Nothing is counted. | Built (a fresh design run; resuming the killed session is part of the block below). |
+| 4. The run committed, but not to the item's block | The design seat did what it judged right. The check that called this "did not amend" was the bug and is **removed**: a design commit that passes the gate and lands is the answer, and the item goes back to its worker. A commit that removes or renames the block leaves no item to build, so it goes back to the design seat naming the commit. | Built. |
+| 5. The run committed nothing | A legitimate objection. Its report names the next actor with a line `NEXT-ACTOR: <actor>`, and policy routes on it: `build` (the worker was wrong; build as written) answers the conflict and returns the item to its worker; `owner` (a ruling only the owner can make) holds it for the owner. A run that commits nothing and names no actor, even one whose report ends blocked, is a missing output rather than an objection: it goes back to the design seat, told the contract, and never defaults to the owner. | Built for `build` and `owner`. The owner's question as an open question in the design document is `item-owner-conflict-is-a-document-question` in [the tillr roadmap](../tillr/roadmap.md#route-an-owners-question-from-a-blocked-run-into-its-document); a whale or operator actor is [`OQ-JL4`](#OQ-JL4). |
+| 6. The run "ran out of time" | There are no timeouts: a budget is a target, never a cause of failure. No backend policy in `config/tillr/` sets `timeout_seconds`, so no run has a wall. Every `timed-out` run in the store on 2026-11-17 had the end cause `lease-reclaimed`: a replacement loop reclaimed the claim of a loop a jail relaunch had killed, and stamped the reclaim time as the finish. That label is a mislabel, not a limit; such a run is a killed run (ending 3). | Nothing to remove. The label is reported, not changed. |
+
+The owner also ruled out every re-dispatch on a guessed change. A metadata write, a prose rewrite or any edit to the item's block is not a reason to spend a design run, so the drain no longer compares the block, the design document or the trunk to raise a design conflict, and an item built on the design seat is no longer re-admitted on a changed input. The explicit operator command, `tillr drain retry --item <id> --run <design run>`, stays: it is explicit. An owner's answer to an objection is the event that moves the item to the actor the answer implies; until `item-owner-conflict-is-a-document-question` lands, that answer is an edit to the block followed by that command, or a release or close of the item.
+
+The drain README's section [A design run that ends without answering](../../tools/tillr-drain/README.md#a-design-run-that-ends-without-answering) states the built rule and its tests.
+
 ---
 
 ## 5. Core Boundary for External AutoQA (`D-JL7`)
@@ -224,10 +241,15 @@ Answering [autoqa-tillr-seams.md](./autoqa-tillr-seams.md) [OQ-AQA1](./autoqa-ti
 | OQ-JL3 | The loop may authorize one rework of an item by itself when a recorded basis exists: a triage of the red gate, a changed input, or a carry repair. A second failure is not retried; it goes up [the escalation ladder](./escalation-ladder.md), to the design seat before the owner. **Rejected:** every rework waiting for a person. | The owner ruled on 2026-11-15 that the loop does not wait for approvals and that a refusal by a worker goes to a seat that can answer it; one bounded rework keeps spend bounded. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 
 | `D-JL8` | The build order is cut against the tree as it stood on 2026-11-16, and four spellings change to fit it. A criterion's claim class is declared in its item block by the directive attribute `claims`, and an item asks for an agent judge with the attribute `judge="agent"`. The owner-ruling rows already in a store are typed by one migration when the column is added, in place of an edit to the frozen seed file. No `tillr drain rework` command is added: `tillr drain retry --acknowledge` and the one automatic re-admission on a changed input are that command. The judge-before-gate step is built in the loop for an item that opts in, and the item graphs build order connects a workflow's evaluator leaf to that same step. **Rejected:** building a second re-queue command beside the one that exists; waiting for item graphs before any judge runs. | Items are defined in documents since [tillr-convergence.md](./tillr-convergence.md), so a class nobody can write in a document would never be set. The seed file is frozen. A second command for one act is two places to be wrong. A judge that runs before the gate needs nothing the graph runtime adds, and [tillr-item-graphs.md](./tillr-item-graphs.md) [§6](./tillr-item-graphs.md#6-boundary-with-judge-policy-and-item-lifecycle) already puts the verdict contract on this side of the boundary. Settled on 2026-11-16 by the design seat while cutting the build order; the owner may overturn it. |
+| `D-JL9` | A design run's ending is never counted and nothing is re-dispatched because an input changed. A gate refusal goes back to the design seat (to the same session once [the block below](#return-a-design-runs-gate-refusal-to-its-own-session) lands), a killed run is run again, a gated design commit is the answer whatever it changed, and a run that commits nothing objects by naming the next actor (`NEXT-ACTOR: build` or `owner`). An item reaches the owner only by an objection naming the owner. **Rejected:** one automatic re-raise per input change, the trunk-suspect re-raise, and handing a second unanswered design run to the owner. | The owner's ruling of 2026-11-17, recorded in [Section 4.3](#43-how-a-design-runs-ending-moves-its-conflict-d-jl9). A count is a guard built around bugs; each ending has a mover that can act. |
 
 ### 6.2 Open Questions
 
-None. Every question this design carried is a row of the ledger above.
+1. 💬 **[OQ-JL4](#OQ-JL4): May a design run's objection name the whale or the operator as the next actor, and what does each then do?** The owner's ruling of 2026-11-17 named them as possible actors. Built today are `build` and `owner` only; a report naming any other actor is read as naming none.
+
+   <!-- vantage: question id=OQ-JL4 leaning="The two built actors only, until a design run is seen to need another; any other need goes through the owner." -->
+
+   _Leaning:_ the two built actors only; a whale or operator actor is added when a recorded design run needed one.
 
 ### 6.3 Amendments Owed
 
@@ -263,7 +285,7 @@ Three facts about the tree change how a block is written, and each is ruled in `
 
 ## 8. Build Order
 
-Thirteen blocks. Each is one run inside one fence, and each names what it waits on. A block's fence includes the pack mirror under `yolo-packs/tillr/` because every change under `tools/tillr*` is delivered there too.
+Fourteen blocks. Each is one run inside one fence, and each names what it waits on. A block's fence includes the pack mirror under `yolo-packs/tillr/` because every change under `tools/tillr*` is delivered there too.
 
 The first block is the smallest slice that runs from end to end: an author marks a criterion as the owner's in a document, the store keeps the mark, and the loop's own verdict step then leaves that criterion alone when the gate passes. It closes the defect this design opened with and waits on nothing.
 
@@ -284,6 +306,7 @@ The order after it follows what each block needs:
 | 11 | A judge's blocked and defective findings | 4, 6, 10 |
 | 12 | A second failed attempt goes to the design seat | nothing |
 | 13 | A held item is not cloned under a new id | 12 |
+| 14 | A design run's gate refusal returns to its own session | nothing |
 
 One piece of `D-JL1` is not a block here. A workflow's evaluator leaf is a node of the graph runtime, which [tillr-item-graphs.md](./tillr-item-graphs.md) owns and has not yet cut into items. Blocks 9 to 11 build everything on this side of that boundary: the file a judge writes, the check of it, the step before the gate, and what each outcome does. The item graphs build order connects its leaf to that step, and adds no second intake.
 
@@ -392,4 +415,24 @@ The loop may try a failed item once more by itself when something it recorded ha
 
 When an item could not be repaired in place, the workaround was to file a copy with `-v2` on its id and mark the original as resolved elsewhere. Six items went that way on 2026-11-14. Each copy lost the original's run history and its place in other items' dependencies, and each "resolved elsewhere" was untrue. With a failed attempt no longer freezing criteria, and with retry, re-admission and the design seat all working on the original id, the workaround has no remaining use. This block makes the sync refuse it, so the rule does not depend on anyone remembering.
 
+### Return a design run's gate refusal to its own session
 
+The owner ruled on 2026-11-17 that a design run whose commit the gate refuses has not failed. The refusal is feedback for the designer who wrote the commit, and it should go back to that same designer session, which still holds the document and its reasoning in its context, as many times as it takes. Today the drain does the next best thing: it raises the conflict again and starts a fresh design run, which has to read everything again and finds the refused commit only through the text the conflict carries. That costs a cold session per refusal and loses the reasoning the document does not record. The landing-call design already settles how a session waits on a submission and gets the refusal back as the answer to its call, and the build-commit continuation already resumes a finished worker's session on its lane. This block joins the two for the design seat, and it covers a killed design run too, which should resume rather than start over.
+
+- **Outcomes:**
+  - Deliver a gate refusal of a design commit to the session that made it, and settle the commit it then makes like any other design answer.
+  - Resume a killed design run's session instead of starting a fresh one, when its session is still there.
+  - Keep no count: the refusal goes back every time, and only an objection naming the owner reaches the owner.
+
+**Agent Details:**
+
+- **Ref:** [Section 4.3](#43-how-a-design-runs-ending-moves-its-conflict-d-jl9) of this document; [the board state machine, section 7](./board-state-machine.md#7-suspend-and-resume) and its decisions `D8` and `D12`; [the build-commit continuation](./tillr-build-commit.md); [the designer sessions design](./tillr-designer-sessions.md), whose desk already reuses a document's designer session.
+- **Where:** the gate-refusal branch of `verify` and the continuation in `settle` (`resumeAfterWall`, `continuationStarted`) in `tools/tillr-drain/drain/loop.go`, whose one-continuation-per-attempt rule must not apply to a design run's refusals; `settleUnansweredDesignRuns` and `designReraiseText` in `tools/tillr-drain/drain/design_unanswered.go`, which raise a fresh design run today; `conflictDecision` in `tools/tillr-drain/drain/blocked.go`; the designer session choice in `tools/tillr-drain/drain/designer.go`.
+- **Lane:** the refused run's lane is reset after the refusal today, so the block either keeps that lane and its session for the design run's next turn, or stages the continuation on another lane from the pinned commit at `refs/tillr/runs/<run>` with the recorded session. It states which and why.
+
+<!-- tillr: item id="item-design-refusal-resumes-session" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When the gate refuses a design run's commit, the drain continues that run's own session with the refusal (the failing checks and their output), and settles the commit the continued session makes through the fence and gate like any design answer. A test refuses a fixture design commit, asserts the continuation names the same session and the refusal, and asserts the second commit lands and answers the conflict.
+- **c2:** The refusal goes back every time it happens, with no count: a test refuses three successive commits of one design run and asserts three continuations and no owner hold.
+- **c3:** A killed design run whose session is still recorded is resumed rather than dispatched afresh; one whose session is gone is dispatched afresh, and the conflict's text says which. A test covers both.
+- **c4:** The fresh-dispatch path for a gate refusal in `settleUnansweredDesignRuns` is removed once c1 holds, and the drain README's section on a design run that ends without answering states the built rule.

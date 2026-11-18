@@ -115,13 +115,14 @@ type misreadAnswer struct {
 	head     string
 }
 
-// settleMisreadDesignAnswers re-reads the owner holds the settlement wrote before
-// designBlockAnswer found blocks by id. A conflict with the owner whose last line says its
-// design run did not amend, or removed or renamed, the item block, and whose committed
-// candidate does amend the block, is raised again for the design seat, naming the commit
-// that holds the earlier answer. The candidate is not gated as it stands: it was cut from
-// a base the trunk has since moved past in the same document, so the design seat carries
-// it onto the current trunk. Each run is re-read once, recorded by a
+// settleMisreadDesignAnswers re-reads the owner holds the settlement wrote before the
+// owner's ruling of 2026-11-17, when a design commit that did not amend the item's block,
+// or that the settlement could not find the block in, went to the owner without a gate. A
+// conflict with the owner whose last line says its design run did not amend, or removed or
+// renamed, the item block is raised again for the design seat, naming the commit that
+// holds the earlier answer when the run left one. The candidate is not gated as it stands:
+// it was cut from a base the trunk has since moved past in the same document, so the
+// design seat carries it onto the current trunk. Each run is re-read once, recorded by a
 // drain.design-unanswered record with misread set.
 func (l *Loop) settleMisreadDesignAnswers(ctx context.Context) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -164,29 +165,15 @@ func (l *Loop) settleMisreadDesignAnswers(ctx context.Context) error {
 			}
 			var raw []byte
 			err := r.QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_id = ? ORDER BY seq DESC LIMIT 1`, candidateReadyKind, c.DesignRunID).Scan(&raw)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			if err != nil {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
+			head := ""
 			var cand Candidate
-			if err := json.Unmarshal(raw, &cand); err != nil || cand.HeadSHA == "" || cand.BaseSHA == "" || cand.HeadSHA == cand.BaseSHA {
-				continue
+			if err == nil && json.Unmarshal(raw, &cand) == nil && cand.HeadSHA != "" && cand.HeadSHA != cand.BaseSHA {
+				head = cand.HeadSHA
 			}
-			var ref string
-			if err := r.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id = ?`, id).Scan(&ref); err != nil || ref == "" {
-				continue
-			}
-			cand.ItemID, cand.Worktree = id, l.cfg.Root
-			exists, changed, err := l.designBlockAnswer(ctx, cand, ref)
-			if err != nil {
-				// A head no longer readable is no evidence either way.
-				continue
-			}
-			if exists && changed {
-				found = append(found, misreadAnswer{conflict: c, head: cand.HeadSHA})
-			}
+			found = append(found, misreadAnswer{conflict: c, head: head})
 		}
 		return nil
 	})
@@ -208,7 +195,11 @@ func (l *Loop) settleMisreadDesignAnswers(ctx context.Context) error {
 				continue
 			}
 			runID := c.DesignRunID
-			c.Text += "\n\nDesign run " + runID + " did amend the block: commit " + shortSHA(f.head) + " holds its answer. The loop misread it before 2026-11-17, so it never reached the gate. The conflict is raised again for the design seat, to carry that answer onto the current trunk."
+			if f.head != "" {
+				c.Text += "\n\nDesign run " + runID + " committed an answer: commit " + shortSHA(f.head) + " holds it. The loop read it as no answer before 2026-11-17, so it never reached the gate. The conflict is raised again for the design seat, to carry that answer onto the current trunk."
+			} else {
+				c.Text += "\n\nDesign run " + runID + " was read as no answer before 2026-11-17 and sent to the owner without an objection. The conflict is raised again for the design seat."
+			}
 			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
 			if err := item.RecordConflict(tx, c, at); err != nil {
 				return err
@@ -217,7 +208,7 @@ func (l *Loop) settleMisreadDesignAnswers(ctx context.Context) error {
 			if err := appendEffect(tx, designUnansweredKind, runID, mark, at); err != nil {
 				return err
 			}
-			l.reportf("loop: %s conflict %s is raised again: design run %s committed an answer (%s) the loop misread\n", c.ItemID, c.ConflictID, runID, shortSHA(f.head))
+			l.reportf("loop: %s conflict %s is raised again: design run %s was read as no answer before 2026-11-17\n", c.ItemID, c.ConflictID, runID)
 		}
 		return nil
 	})

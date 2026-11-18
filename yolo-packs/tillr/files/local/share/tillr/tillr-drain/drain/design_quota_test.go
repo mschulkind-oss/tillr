@@ -134,9 +134,13 @@ func TestDesignQuotaRefusalRaisesConflictForNextSeat(t *testing.T) {
 	}
 }
 
-func TestDesignUnchangedBlockStillRoutesToOwner(t *testing.T) {
+// The owner ruled on 2026-11-17 that a design run that commits, but not to the item's
+// block, did what it judged right: its gated commit is the answer, and the item goes back
+// to its worker. Before the ruling the settlement called it "did not amend" and handed
+// the conflict to the owner without a gate.
+func TestADesignCommitThatLeavesTheBlockUnchangedIsGatedAsTheAnswer(t *testing.T) {
 	f, l := designQuotaFixture(t)
-	doc := "<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** the first criterion\n"
+	doc := "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** the first criterion\n"
 	if err := os.MkdirAll(filepath.Join(f.root, "briefs"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -158,12 +162,12 @@ func TestDesignUnchangedBlockStillRoutesToOwner(t *testing.T) {
 	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 	outcome := l.settle(context.Background(), d, rec, "RESULT: done\n", base, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
 	if outcome.err != nil || outcome.stop != "" {
-		t.Fatalf("settle normal design answer: %+v", outcome)
+		t.Fatalf("settle normal design answer: %v %q", outcome.err, outcome.stop)
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		cs, err := item.ReadConflicts(tx.Reader())
-		if c := cs[d.ItemID]; c.Status != "owner" || c.WaitingOn != "owner" || !strings.Contains(c.Text, "did not amend") {
-			t.Errorf("unchanged block lost owner route: %+v", c)
+		if c := cs[d.ItemID]; c.Status != "answered" || c.WaitingOn != "build" || strings.Contains(c.Text, "did not amend") {
+			t.Errorf("the gated design commit was not taken as the answer: %+v", c)
 		}
 		return err
 	})

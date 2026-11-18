@@ -392,10 +392,18 @@ gate refusal, and two of them over a committed design answer the settlement had 
   [`unlaunched_claim.go`](../../tools/tillr-drain/drain/unlaunched_claim.go), commit `b1fb121d5`;
   pinned by `TestACancelledClaimsRecordsAreRecognizedAndTheItemIsDispatchedAgain` in
   [`unlaunched_claim_test.go`](../../tools/tillr-drain/drain/unlaunched_claim_test.go)).
-- **A design conflict awaiting an ended design run** is raised again once when an input changed,
-  and is otherwise handed to the owner naming the run (`settleUnansweredDesignRuns` in
-  [`design_unanswered.go`](../../tools/tillr-drain/drain/design_unanswered.go), commit `09b171416`;
-  pinned in [`design_unanswered_test.go`](../../tools/tillr-drain/drain/design_unanswered_test.go)).
+- **A design conflict awaiting an ended design run** is raised again for the design seat, by how
+  the run ended and never by a count or by what changed since its dispatch: the owner's ruling of
+  2026-11-17, recorded in
+  [the judge and lifecycle design, Section 4.3](./tillr-judge-and-lifecycle.md#43-how-a-design-runs-ending-moves-its-conflict-d-jl9).
+  A gate refusal, a killed run and a run that committed nothing go back to the design seat; a
+  gated design commit is the answer; a run that commits nothing objects by naming the next actor,
+  and only an objection naming the owner reaches the owner (`settleUnansweredDesignRuns` in
+  [`design_unanswered.go`](../../tools/tillr-drain/drain/design_unanswered.go); pinned in
+  [`design_unanswered_test.go`](../../tools/tillr-drain/drain/design_unanswered_test.go) and
+  [`design_objection_test.go`](../../tools/tillr-drain/drain/design_objection_test.go)). The
+  first form, commit `09b171416`, re-raised once on an input change and otherwise handed the
+  conflict to the owner; the ruling removed that count.
 - **An interrupted triage run** is triaged again rather than sent to the owner (commit `15b3502b7`;
   `TestAnInterruptedTriageRunIsTriagedAgainNotSentToTheOwner` in
   [`triage_interrupted_test.go`](../../tools/tillr-drain/drain/triage_interrupted_test.go)).
@@ -404,17 +412,12 @@ gate refusal, and two of them over a committed design answer the settlement had 
   [`lane_rotation.go`](../../tools/tillr-drain/drain/lane_rotation.go), commit `5ad8aaaa8`;
   `TestPinnedCandidateOnALaneWithUncommittedFilesLeavesTheLoopRunning` in
   [`lane_dirty_test.go`](../../tools/tillr-drain/drain/lane_dirty_test.go)).
-- **A design run refused at the gate, or reporting `trunk-broken`,** is a trunk suspect: it is no
-  attempt, and the conflict is raised again once a trunk commit the heavy proof has proven changes
-  a file the run's candidate touched. A hand commit counts. A second identical refusal is an
-  attempt, so the re-raise cannot loop (`trunkChangeSince` in
-  [`design_unanswered.go`](../../tools/tillr-drain/drain/design_unanswered.go), commit `41790b724`;
-  pinned in [`design_trunk_test.go`](../../tools/tillr-drain/drain/design_trunk_test.go)).
 - **A committed design answer** is read by its block's id and section. A hold written by the old
-  reading is raised again naming the commit (`designBlockAnswer` and `settleMisreadDesignAnswers`
-  in [`design_answer.go`](../../tools/tillr-drain/drain/design_answer.go), commit `9d106bb9d`;
+  reading is raised again for the design seat, naming the commit (`designBlockAnswer` and
+  `settleMisreadDesignAnswers` in
+  [`design_answer.go`](../../tools/tillr-drain/drain/design_answer.go), commit `9d106bb9d`;
   pinned in [`design_answer_test.go`](../../tools/tillr-drain/drain/design_answer_test.go)).
-- **An owner hold over an unanswered design run** has an owner's command:
+- **An owner hold over a design run's objection** has an owner's command:
   `tillr drain retry --item <id> --run <design run>` raises the conflict for one more design run.
   Every retry refusal names the command the face would accept, or says that none exists and who
   moves (`authorizeDesignRetry` in
@@ -424,8 +427,10 @@ gate refusal, and two of them over a committed design answer the settlement had 
   [`main_test.go`](../../tools/tillr-drain/main_test.go)).
 
 What is not enforced yet: the gate's trunk-already-red replay cannot judge a fast-gate check id
-such as `documents`, so it never acquits a refusal the trunk caused. The trunk-suspect rule above
-works around that from the drain side; it does not fix the gate.
+such as `documents`, so it never acquits a refusal the trunk caused. A design run refused for the
+trunk's sake goes back to the design seat each time until the trunk is fixed; the trunk-suspect
+re-raise (commit `41790b724`) that worked around this from the drain side was removed by the
+owner's ruling of 2026-11-17, and the gap is the gate's to close.
 
 *Scope:* **not lander-scoped.** The dispatch side holds candidates in repair states and items out of
 dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held state of its own, so it

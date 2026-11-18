@@ -73,6 +73,71 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	return d
 }
 
+// DesignNextActorField is the report line by which a design run that commits nothing names
+// who acts next on its conflict: an objection, in the owner's ruling of 2026-11-17. The
+// line is `NEXT-ACTOR: <actor>`, its last occurrence wins, and two actors are read:
+//
+//   - DesignNextOwner: a ruling only the owner can make. The conflict goes to the owner.
+//   - DesignNextBuild: the block stands as written and the worker was wrong. The conflict is
+//     answered and the item goes back to its worker.
+//
+// A report that names no actor is a missing output, not an objection: it goes back to the
+// design seat to state its actor, and never to the owner by default. Any other value names
+// no actor.
+const (
+	DesignNextActorField = "NEXT-ACTOR"
+	DesignNextOwner      = "owner"
+	DesignNextBuild      = "build"
+)
+
+// designReading is what a design run's ending means for its conflict, read from the run's
+// pinned evidence alone (designReadingOf). Each is one route: an amendment is gated and
+// landed, an objection goes to the actor it names, and a removed block or a missing actor
+// goes back to the design seat.
+type designReading string
+
+const (
+	designAmended        designReading = "amended"
+	designObjectionBuild designReading = "objection-to-build"
+	designObjectionOwner designReading = "objection-to-owner"
+	designBlockRemoved   designReading = "block-removed"
+	designMissingActor   designReading = "missing-actor"
+)
+
+// designReadingOf answers what a non-triage design run's ending means: whether it left a
+// commit, whether that commit still holds the item block, and the next actor its report
+// names. A commit is the answer unless it removed the block; a run with no commit is an
+// objection only when it names its actor.
+func designReadingOf(committed, blockExists bool, actor string) designReading {
+	switch {
+	case committed && blockExists:
+		return designAmended
+	case committed:
+		return designBlockRemoved
+	case actor == DesignNextBuild:
+		return designObjectionBuild
+	case actor == DesignNextOwner:
+		return designObjectionOwner
+	}
+	return designMissingActor
+}
+
+// designNextActor answers the next actor a design run's report names, or "".
+func designNextActor(log string) string {
+	actor := ""
+	for _, line := range strings.Split(log, "\n") {
+		name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(strings.Trim(name, "*`")), DesignNextActorField) {
+			continue
+		}
+		switch v := strings.ToLower(strings.Trim(strings.TrimSpace(value), "*`")); v {
+		case DesignNextOwner, DesignNextBuild:
+			actor = v
+		}
+	}
+	return actor
+}
+
 func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -100,6 +165,21 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			c.DesignRunID = d.RunRequest.RunID
 		}
 		c.Status, c.WaitingOn = "owner", "owner"
+		if c.TriageVersion == "" {
+			switch designReadingOf(false, true, designNextActor(text)) {
+			case designObjectionBuild:
+				// The design seat says the block stands as written: the worker builds it,
+				// with no owner act and no design commit.
+				c.Status, c.WaitingOn = "answered", "build"
+				l.reportf("loop: %s conflict %s goes back to its worker: design run %s says the block stands as written\n", c.ItemID, c.ConflictID, d.RunRequest.RunID)
+			case designMissingActor:
+				// No commit and no actor is a missing output: the design seat states its
+				// actor. The owner is reached only by an objection naming the owner.
+				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+				c.Text += "\n\nDesign run " + d.RunRequest.RunID + " committed nothing and named no next actor. A design run either commits its answer, or objects with a report line `" + DesignNextActorField + ": owner` (a ruling only the owner can make) or `" + DesignNextActorField + ": build` (the block stands as written and the worker builds it). The design seat is dispatched again to state it."
+				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s named no next actor\n", c.ItemID, c.ConflictID, d.RunRequest.RunID)
+			}
+		}
 		return l.saveBlockConflict(ctx, c)
 	}
 	c := item.Conflict{ConflictID: "conflict-" + d.RunRequest.RunID, ItemID: d.ItemID, RunID: d.RunRequest.RunID, Text: text, Status: "raised", WaitingOn: "design", BlockedCriteria: []string{}}
