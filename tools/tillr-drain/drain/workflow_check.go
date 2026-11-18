@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -18,6 +19,7 @@ import (
 const WorkflowRules = `workflow-json, workflow-unknown-field, workflow-identity,
 workflow-edges, workflow-empty-stages, workflow-stage-id, workflow-duplicate-id,
 workflow-kind, workflow-command, workflow-timeout, workflow-unknown-seat,
+workflow-read-only-seat-writes,
 workflow-access, workflow-max-parallel, workflow-write-scope, workflow-write-scope-empty,
 workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcome,
 workflow-unknown-node, workflow-cycle,
@@ -275,6 +277,8 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 				}
 			} else if policy != nil && policy.Seats[stage.Seat] == "" {
 				findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy; %s", stage.ID, stage.Seat, policy.seatDeclaration()))
+			} else if policy != nil && stage.Access == "write" && slices.Contains(policy.ReadOnlySeats, stage.Seat) {
+				findings = append(findings, fmt.Errorf("workflow-read-only-seat-writes: %s: seat %s is read-only under policy; %s", stage.ID, stage.Seat, policy.seatDeclaration()))
 			}
 			copies := []WorkflowStage{stage}
 			if stage.Repeat != "" {
@@ -445,7 +449,7 @@ func writeWorkflowFinding(out io.Writer, path, line string) {
 	detail := strings.TrimSpace(line[location[1]:])
 	if stage == "graph" {
 		switch rule {
-		case "workflow-kind", "workflow-access", "workflow-write-scope", "workflow-write-scope-empty", "workflow-write-scope-read-only", "workflow-timeout", "workflow-unknown-seat", "workflow-input", "workflow-output", "workflow-outcome", "workflow-exit", "workflow-missing-reference", "workflow-unknown-field":
+		case "workflow-kind", "workflow-access", "workflow-write-scope", "workflow-write-scope-empty", "workflow-write-scope-read-only", "workflow-timeout", "workflow-unknown-seat", "workflow-read-only-seat-writes", "workflow-input", "workflow-output", "workflow-outcome", "workflow-exit", "workflow-missing-reference", "workflow-unknown-field":
 			if parts := strings.SplitN(detail, ":", 2); len(parts) == 2 {
 				stage = strings.TrimPrefix(parts[0], "stage=")
 				detail = strings.TrimSpace(parts[1])

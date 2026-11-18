@@ -440,6 +440,11 @@ killed, re-dispatch it or resume its session.
 
 ## Backend policy changes
 
+The optional `read_only_seats` list and `seat_purposes` map reference seats
+already mapped in `seats`. A purpose describes the seat's job in one sentence.
+When a policy is supplied, workflow loading rejects an `access: write` node
+on a read-only seat with `workflow-read-only-seat-writes`.
+
 At the start of each pass, `loop` reads its `--policy` file and compares its
 SHA-256 content hash with the previous reading. The same decoding and checks
 used at startup must pass before the new policy becomes the policy in force

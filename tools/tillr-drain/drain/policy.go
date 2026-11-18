@@ -35,7 +35,9 @@ type Backend = run.Backend
 // "whatever policy_ref names". So the policy's shape is drain's own, and Check is the
 // refusal that keeps a dispatch from carrying a request no runner would accept.
 type Policy struct {
-	Ref string `json:"-"` // Source path, when loaded from a file.
+	ReadOnlySeats []string          `json:"read_only_seats,omitempty"`
+	SeatPurposes  map[string]string `json:"seat_purposes,omitempty"`
+	Ref           string            `json:"-"` // Source path, when loaded from a file.
 
 	DefaultBackend string   `json:"default_backend"`
 	Preference     []string `json:"preference"`
@@ -245,6 +247,16 @@ func (p Policy) seatNames() []string {
 // the items it did read (design §2: the override map's rot is refused mechanically rather
 // than left to fall through a silent default).
 func (p Policy) Check() error {
+	for _, seat := range p.ReadOnlySeats {
+		if len(p.seatList(seat)) == 0 {
+			return Usagef("read_only_seats names seat %q, which the policy does not map", seat)
+		}
+	}
+	for seat := range p.SeatPurposes {
+		if len(p.seatList(seat)) == 0 {
+			return Usagef("seat_purposes names seat %q, which the policy does not map", seat)
+		}
+	}
 	if len(p.Backends) == 0 {
 		return Usagef("the policy names no backends: a dispatch's run.request needs an adapter program, a model and a timeout")
 	}
