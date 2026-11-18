@@ -1642,6 +1642,27 @@ Clearing a
 sync fault forces document sync again even at the same trunk commit, so a definition
 that is still broken is held again rather than run from stale store content.
 
+Clearing a fault re-examines the same recorded candidate, so it cannot help when the
+candidate itself is what fails: a retained retirement candidate whose tree pins a stale fork
+commit answers `gate-harness-error` again, and a candidate record that names a checkout no
+lane has re-raises `candidate-record-mismatch` at once (both on 2026-11-18). The release for
+those is an operator's retry naming the held run, `tillr drain retry --item <id> --run
+<run>`. Before each plan, a candidate held by `gate-harness-error`,
+`candidate-record-mismatch` or `land-harness-error` for its own run, whose item's latest
+retry names that run and still speaks (the run is the item's latest and the acknowledgment
+matches, as the plan requires), is superseded
+([`drain/retry_supersede.go`](./drain/retry_supersede.go)): the candidate is pinned under
+`refs/tillr/runs/<run>` (an existing pin is kept as it is), a lane HEAD that is neither the
+candidate nor on the trunk, such as the loop's retirement commit, is pinned under
+`refs/tillr/runs/<run>-superseded-head`, the lane's uncommitted work is preserved and the
+lane is reset to the trunk unless another run holds it, and one transaction records
+`drain.candidate-superseded`, ends the run's examination and clears the fault with the retry
+named as its reason. Superseded pins are never pruned. The plan then dispatches the item
+fresh on the latest trunk as the retry. The log reads
+`loop: retry <retry> supersedes <run>'s candidate <sha> (<reason>): kept at <ref>; lane
+<lane> reset to <sha>; <item> is dispatched fresh`. A boundary conviction is not superseded:
+it is acquitted (`tillr drain acquit`).
+
 A dispatch whose staging failed retracts its dispatch row and releases its claim
 in one transaction. Its aborted staging remains in the append-only event history,
 but a later plan may assign the same unstarted attempt to another lane without
