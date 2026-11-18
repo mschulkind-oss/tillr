@@ -2393,8 +2393,7 @@ func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons
 		reason = reasons[0]
 	}
 	if err := l.preserveWork(ctx, lane, runID, reason); err != nil {
-		l.reportf("loop: lane %s retained: could not preserve uncommitted work: %v\n", lane, err)
-		return StopFault
+		return l.retainUnpreserved(ctx, lane, runID, err)
 	}
 	if headSHA != "" {
 		l.pinQuietly(ctx, runID, headSHA)

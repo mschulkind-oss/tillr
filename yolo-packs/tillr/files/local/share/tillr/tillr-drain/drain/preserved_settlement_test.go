@@ -199,8 +199,8 @@ func TestPreservationFailureDoesNotResetOrExamine(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out := l.settle(context.Background(), d, rec, "RESULT: done\n", runGit(t, f.root, "rev-parse", TrunkRef), "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
-	if out.stop != StopFault {
-		t.Fatalf("preservation failure did not stop: %+v", out)
+	if out.stop != stopLaneRetained {
+		t.Fatalf("preservation failure did not retain the lane: %+v", out)
 	}
 	body, err := os.ReadFile(filepath.Join(l.laneTarget(d.LaneID), "base.txt"))
 	if err != nil || string(body) != "earlier work\n" {

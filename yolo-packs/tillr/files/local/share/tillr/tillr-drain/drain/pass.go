@@ -1368,6 +1368,10 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 			return "", err
 		}
 	}
+	if c.outcome.stop == stopLaneRetained && c.outcome.err == nil {
+		// One lane's retained work is that lane's condition; its item is held.
+		return "", nil
+	}
 	if c.outcome.stop != "" || c.outcome.err != nil {
 		result.StopItemID, result.StopStep = c.itemID, c.step
 		if c.result != nil && c.result.StopStep != "" {
@@ -1830,8 +1834,12 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				completion.outcome = laneOutcome{stop, err}
 			}
 		}
-		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
-			completion.outcome.err = err
+		// A retained lane keeps its lease: releasing it would let the next staging clear the
+		// work that could not be preserved.
+		if completion.outcome.stop != stopLaneRetained {
+			if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
+				completion.outcome.err = err
+			}
 		}
 		completion.detail = local.Detail
 		l.completions <- completion

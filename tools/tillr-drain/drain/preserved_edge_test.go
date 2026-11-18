@@ -110,7 +110,7 @@ func TestNewContentsAfterSnapshotRetainLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeForkFile(t, filepath.Join(target, "base.txt"), "newer work\n")
-	if stop := l.abandon(ctx, d.LaneID, d.RunRequest.RunID, l.headOf(ctx, d.LaneID)); stop != StopFault {
+	if stop := l.abandon(ctx, d.LaneID, d.RunRequest.RunID, l.headOf(ctx, d.LaneID)); stop != stopLaneRetained {
 		t.Fatalf("stale snapshot permitted reset: %q", stop)
 	}
 	body, err := os.ReadFile(filepath.Join(target, "base.txt"))

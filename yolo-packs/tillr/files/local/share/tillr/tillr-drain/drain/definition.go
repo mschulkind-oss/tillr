@@ -62,6 +62,7 @@ var generalHolds = map[string]string{
 	ReasonItemUnstagleable:   "", ReasonDefinitionSyncFailed: "",
 	ReasonReadmissionExhausted: "", ReasonNodeScopeOutsideFence: "",
 	ReasonLaneUnlandedChange: "", ReasonLaneBranchHeld: "", ReasonLaneUncommittedWork: "",
+	ReasonPreserveFailed:      "",
 	StopHostBoundaryViolation: "",
 	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeOutputMissing: "",
 	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
