@@ -88,7 +88,17 @@ func (s *emptyPassSteps) Index(context.Context) error {
 	return os.WriteFile(filepath.Join(LoopDir(s.root), "index-writes"), []byte(fmt.Sprint(s.indexed)), 0o644)
 }
 
-func TestOneThousandEmptyPassesWriteNothing(t *testing.T) {
+// emptyPassRepeats is how many empty passes follow the fixed point. Each pass starts about
+// thirteen git processes (trunk, identity, heavy-pointer and ref reads), so the count is the
+// test's cost. It was 1,000: about 13,000 processes, 28 s idle and 62 s to 324 s on the
+// loaded drain host, which two workers on 2026-11-18 read as a hang under a 90 s timeout
+// (the goroutine dumps were of the git call then in flight; five runs alone all passed).
+// The fixture's clock does not move, so nothing a pass could write on a schedule is reached
+// by more passes: what this asserts, that repeating an empty pass changes nothing, is the
+// same at 100.
+const emptyPassRepeats = 100
+
+func TestRepeatedEmptyPassesWriteNothing(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	steps := &emptyPassSteps{root: f.root}
 	l.cfg.Steps = steps
@@ -101,7 +111,7 @@ func TestOneThousandEmptyPassesWriteNothing(t *testing.T) {
 	if rows["dispatches"] != 0 {
 		t.Fatal("empty pass recorded a hold")
 	}
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < emptyPassRepeats; i++ {
 		if stop, err := l.pass(context.Background(), &result); err != nil || stop != StopQueueDrained {
 			t.Fatalf("pass %d: %s / %v", i, stop, err)
 		}

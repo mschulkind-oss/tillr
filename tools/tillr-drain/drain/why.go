@@ -390,6 +390,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				if d.Reason == ReasonConflictOwner {
 					c := conflicts[it.ItemID]
 					switch {
+					case IsGeneratedItem(it.ItemID):
+						// A generated item never has a document, so it is never triaged for one: it
+						// reaches the owner only by the loop's written question or an objection naming
+						// him (reportedBlock). Show that question, not triage wording.
+						actor = "owner"
+						if q := loopOwnerQuestion(c.Text); q != "" {
+							row.Why += ": " + q
+						} else {
+							row.Why += ": run " + c.RunID + "'s report names the owner as its next actor (conflict " + c.ConflictID + ")"
+						}
+						row.Mover = "answer conflict " + c.ConflictID + ", or close the item (tillr item close --item " + it.ItemID + ")"
 					case c.BodyRef == "":
 						actor, row.Why = "operator", row.Why+": no document exists; name or triage one for "+it.ItemID
 						row.Mover = "name or triage the item's document"
@@ -409,6 +420,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 					row.Mover = actor + "; " + nextActorAction(row.Mover)
 				}
 				switch actor {
+				case "owner":
+					row.Class = "needs you"
+					answer.Summary.OwnerWaiting++
 				case "drain":
 					answer.Summary.DrainNext++
 				case "design seat":
@@ -553,4 +567,19 @@ func (s WhySummary) String() string {
 		counts = append(counts, fmt.Sprintf("%s=%d", reason, s.Held[reason]))
 	}
 	return fmt.Sprintf("summary: lanes %d/%d busy; reserved %d; workers %d; examining %d; running %d; could run now %d; owner-waiting %d; next [drain=%d, design seat=%d, operator=%d]; held [%s]", s.LanesBusy, s.LanesOffered, s.LanesReserved, s.LanesWorkers, s.LanesExamining, s.Running, s.CouldRun, s.OwnerWaiting, s.DrainNext, s.DesignNext, s.OperatorNext, strings.Join(counts, ", "))
+}
+
+// loopOwnerQuestion is the last question the loop wrote into a conflict for the owner
+// (generatedQuestion, generatedRepeatQuestion): the paragraph that starts with
+// "Question for the owner". Empty when the conflict carries none.
+func loopOwnerQuestion(text string) string {
+	i := strings.LastIndex(text, "Question for the owner")
+	if i < 0 {
+		return ""
+	}
+	q := text[i:]
+	if end := strings.Index(q, "\n\n"); end >= 0 {
+		q = q[:end]
+	}
+	return strings.TrimSpace(q)
 }

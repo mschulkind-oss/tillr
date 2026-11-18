@@ -399,3 +399,44 @@ func TestGeneratedRepairBlockedTheSameWayTwiceGoesToTheOwner(t *testing.T) {
 		t.Fatalf("a block on a moved trunk is not a repeat: %+v", c)
 	}
 }
+
+// A generated item the loop sends to the owner with its own question is presented with
+// that question. It has no document and is never triaged for one, so the planner must not
+// tell the operator to name or triage one: on 2026-11-18 defect-7d60aca03d95 reported a
+// tooling obstacle and `tillr drain why` said "no document exists; name or triage one".
+func TestAGeneratedItemsOwnerHoldShowsTheLoopsQuestion(t *testing.T) {
+	f, l, fixer, _ := fixerRoutingFixture(t)
+	report := "OBSTACLE: tooling\nCOMMAND: `go test ./drain -run '^TestSlow$'`\nEVIDENCE: the test timed out\nPATHS: tools/x_test.go\nRESULT: blocked"
+	if err := l.reportedBlock(context.Background(), Decision{ItemID: fixer, RunRequest: &run.Request{RunID: "fixer-run"}}, report); err != nil {
+		t.Fatal(err)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID != fixer {
+				continue
+			}
+			if row.Reason != ReasonConflictOwner {
+				t.Fatalf("fixer not held on the owner: %+v", row)
+			}
+			if strings.Contains(row.Why, "no document exists") || strings.Contains(row.Mover, "triage") {
+				t.Fatalf("generated item presented as an undeclared request: %+v", row)
+			}
+			if !strings.Contains(row.Why, "Question for the owner") || !strings.Contains(row.Why, "TestSlow") {
+				t.Fatalf("hold does not say what the question is: %q", row.Why)
+			}
+			if !strings.HasPrefix(row.Mover, "owner; ") || !strings.Contains(row.Mover, "conflict-fixer-run") || row.Class != "needs you" {
+				t.Fatalf("mover does not name the owner and the conflict: %+v", row)
+			}
+			if answer.Summary.OwnerWaiting != 1 {
+				t.Fatalf("summary does not count the owner question: %+v", answer.Summary)
+			}
+			return nil
+		}
+		t.Fatalf("no row for %s", fixer)
+		return nil
+	})
+}

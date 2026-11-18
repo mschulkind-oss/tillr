@@ -821,7 +821,10 @@ a `fence`, `definition`, `owner` or `tooling` obstacle goes to the owner with a 
 loop writes from it, because a generated item has no design block to amend. For `fence`,
 the question names the paths and asks whether the fixer's `allowed_paths` may grow. A legacy
 `NEXT-ACTOR: owner` line is still read. Any other blocked report is answered back to the
-fixer's own worker, whose brief states this rule; it never reaches the owner by default.
+fixer's own worker, whose brief states this rule; it never reaches the owner by default. `tillr drain why` shows such a
+hold with the loop's question as its reason and the owner as its mover (answer the conflict,
+or close the item); a generated item has no document, so its hold never says to name or
+triage one.
 
 A green proof releases the trunk whatever the fixer's own state. A green run records
 the checks it passed beside its proof time. Before each plan, an open fixer is resolved
