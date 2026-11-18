@@ -66,6 +66,7 @@ var waitingRules = map[string]waitingRule{
 	"lane-holds-unlanded-change":  {"needs you", "lane", "land the change, or reset the lane deliberately"},
 	"lane-branch-held":            {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
 	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
+	"preserve-failed":             {"needs you", "lane", "repair why the lane's work could not be preserved and clear the fault"},
 	"triage-no-block":             {"waits on work", "queue", "triage on the design seat"},
 	"conflict-design":             {"waits on work", "queue", "design"},
 	"design-under-comment":        {"waits on work", "queue", "the comment item"},
