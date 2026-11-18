@@ -1,7 +1,7 @@
 ---
 title: "The Item Judge and Lifecycle in Tillr"
 status: in-review
-stage: DECIDED
+stage: DESIGN
 updated: 2026-11-18
 tags:
   - tillr
