@@ -177,6 +177,7 @@ type Candidate struct {
 	Writers         []JudgeWriter     `json:"-"`
 	Producers       []JudgeWriter     `json:"-"`
 	EvaluatorInputs map[string]string `json:"-"`
+	EvaluatorTask   string            `json:"-"`
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string `json:"refusal_detail,omitempty"`

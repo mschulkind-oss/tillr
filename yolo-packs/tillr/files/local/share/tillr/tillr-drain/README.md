@@ -57,6 +57,9 @@ are absent. The evaluator uses the same judge step, brief, verdict location, and
 intake as an opted-in item, using the evaluator node's configured route. An item
 that also asks for an agent judge still gets only this one evaluating run.
 Planning requires the same covering grant before the graph's first node starts.
+The evaluator brief also carries its stage prompt and, for each preceding producer,
+its node id, seat, access, prompt and output directory. The joined candidate diff
+is the retained `candidate.diff`.
 
 The evaluator's retained judgment records every writing node's run, session,
 backend, and route beside its own. The intake checks independence against all
@@ -81,8 +84,10 @@ The [item judge intake](https://github.com/mschulkind-oss/tillr/blob/main/tillr-
 file without recording verdicts. A missing or refused file holds the item as
 `judge-unreadable`, attributed to the review run rather than the worker, not to
 the worker's own endings. A valid
-`not-done` finding holds it as `eval-failed`, without a gate, landing, or criterion
-verdict. The waiting view includes the controlling criterion's reason.
+`not-done` finding from an ordinary judge holds it as `eval-failed`, without a gate,
+landing, or criterion verdict. The waiting view includes the controlling criterion's
+reason. A workflow evaluator's `not-done` instead returns the named criteria to the
+workflow's first node as `verify-not-done`, without a gate or criterion verdict.
 
 A valid `blocked` finding moves the item to blocked with the entry's reason and
 its structured `waiting_on.waiter`; it records no criterion verdict. A valid
@@ -348,7 +353,14 @@ and up to 12 pieces. The proposal and its graph revision are settled together;
 refusals leave the old graph intact. An unmapped seat records
 `proposal-seat-unmapped`, a writing piece on a policy read-only seat records
 `proposal-read-only-seat-writes`, and a scope outside the item fence records
-`proposal-scope-outside-fence`. No item selects this workflow by default.
+`proposal-scope-outside-fence`. The planner's brief includes the owner-editable
+[`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) when present.
+If a piece needs a design decision, the planner proposes nothing and reports an
+`owner` obstacle with its specific question; the design seat receives the conflict.
+The verifier asks for `node:<id>` evidence for each covered criterion and a
+`not-done` reason beginning `uncovered:` for each uncovered one. The judge intake
+does not enforce the node locator; the verifier makes that judgment. No item selects
+this workflow by default.
 
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
@@ -1196,6 +1208,11 @@ a new commit: the earlier refused head alone is not a new candidate. The complet
 from the original base is checked against the fence and sent through the gate and landing
 again. Loop-owned item-block retirement is removed from the retained checkout before the
 worker returns; the prepared head remains pinned as evidence.
+
+A workflow evaluator's `verify-not-done` return carries each not-done criterion id
+and reason, without a retained worker session. It starts a fresh workflow at its
+first node (the planner in `planned-build@v1`). Its repeat key is the sorted set
+of not-done criterion ids: the same finding again raises a design-seat conflict.
 
 The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
 that continuation, `cannot-resume` for an adapter without a positive resume declaration,

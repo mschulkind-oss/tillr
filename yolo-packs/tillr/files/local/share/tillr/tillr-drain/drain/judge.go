@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ type JudgeReceipt struct {
 	Writers       []JudgeWriter     `json:"writers,omitempty"`
 	Producers     []JudgeWriter     `json:"producers,omitempty"`
 	Inputs        map[string]string `json:"inputs,omitempty"`
+	EvaluatorTask string            `json:"evaluator_task,omitempty"`
 }
 
 // judgeGrant selects one unexpired grant covering every stored criterion class.
@@ -230,6 +232,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 		receipt = &JudgeReceipt{Build: buildHash, Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
 		receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
+		receipt.EvaluatorTask = c.EvaluatorTask
 		judged := c.Writers
 		if len(judged) == 0 {
 			judged = c.Producers
@@ -351,7 +354,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		// not the first failing entry, which may describe a lesser outcome.
 		for _, entry := range checked.Output.Verdicts {
 			if entry.Verdict == checked.Outcome {
-				return c, false, l.settleJudgeFailure(ctx, c, entry, options, result)
+				return c, false, l.settleJudgeFailure(ctx, c, entry, checked.Output.Verdicts, options, result)
 			}
 		}
 		return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
@@ -362,7 +365,25 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 
 // settleJudgeFailure routes a checked ruling without running the gate or landing.
 // Defective intake and closure share a transaction: neither can survive alone.
-func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
+func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, verdicts []item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
+	if c.Evaluator != nil && entry.Verdict == item.VerdictNotDone {
+		var findings []item.JudgeEntry
+		for _, v := range verdicts {
+			if v.Verdict == item.VerdictNotDone {
+				findings = append(findings, v)
+			}
+		}
+		sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
+		var lines []string
+		var checks []EndingCheck
+		for _, v := range findings {
+			lines = append(lines, v.CriterionID+": "+v.Reason)
+			checks = append(checks, EndingCheck{CheckID: v.CriterionID})
+		}
+		c.RefusalDetail = strings.Join(lines, "\n")
+		c.EvidenceKey = endingKey(RefusalVerifyNotDone, checks, "", c.RunID)
+		return l.refuse(ctx, c, result, RefusalVerifyNotDone)
+	}
 	reason := ReasonEvalFailed
 	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
 		var waiting item.WaitingOn
@@ -505,6 +526,9 @@ Never change the worker's candidate.
 	}
 	for _, name := range sortedNames(receipt.Inputs) {
 		brief += fmt.Sprintf("\nInput %s: %s\n", name, receipt.Inputs[name])
+	}
+	if receipt.EvaluatorTask != "" {
+		brief += "\n## Evaluator task\n\n" + receipt.EvaluatorTask + "\n"
 	}
 	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
 	if err := os.WriteFile(filepath.Join(dir, BriefFile), []byte(brief), 0644); err != nil {

@@ -112,6 +112,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 		return c, err
 	}
 	c.EvaluatorInputs = evaluatorInputFiles(inputs)
+	c.EvaluatorTask = d.Workflow.Stages[d.NodeIndex].Prompt
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return c, err
@@ -132,8 +133,10 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 			}
 			node, id := n.NodeID, n.RunID
 			writing := false
+			var producer WorkflowStage
 			for _, stage := range d.Workflow.Stages {
 				if stage.ID == node {
+					producer = stage
 					writing = stage.Access == "write"
 					break
 				}
@@ -152,6 +155,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 			req := work.Decision.RunRequest
 			identity := JudgeWriter{NodeID: node, RunID: id, SessionID: strings.TrimSpace(string(raw)), Backend: req.Backend, Route: req.Route()}
 			c.Producers = append(c.Producers, identity)
+			c.EvaluatorTask += fmt.Sprintf("\nNode %s: seat=%s; access=%s; prompt=%s; output directory=%s", node, producer.Seat, producer.Access, producer.Prompt, nodeOutputsDir(l.cfg.Root, id))
 			if writing {
 				c.Writers = append(c.Writers, identity)
 			}
@@ -167,14 +171,20 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 		return true, e
 	}
 	var outcome string
+	var refused bool
 	e = db.ReadTx(ctx, func(r *store.Reader) error {
-		return r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome)
+		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_extract(payload,'$.step')=?)`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&refused)
 	})
 	db.Close()
 	if e != nil {
 		return true, e
 	}
-	if outcome == "evaluated-fail" {
+	// A checked refusal is durable before cleanup and examination. Replaying it
+	// must not recheck a grant or the lane after cleanup has started.
+	if outcome == "evaluated-fail" || refused {
 		return true, l.finishEvaluatorHold(ctx, d, Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, HeadSHA: d.NodeBaseSHA})
 	}
 	c, err := l.evaluatorCandidate(ctx, d)
