@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // One tip's successful checks survive process replacement. The heavy lock owns
@@ -12,8 +13,13 @@ import (
 type heavyProgress struct {
 	TipSHA string                `json:"tip_sha"`
 	Checks map[string]HeavyCheck `json:"checks"`
-	dir    string
-	reused []string
+	// PassedAt is when each check in Checks passed on TipSHA. It makes one check's pass
+	// proof for a trunk fixer named for that check (resolveProvedFixers) while the rest of
+	// the run is still going or is red for another reason. A check without a time is no
+	// such proof.
+	PassedAt map[string]time.Time `json:"passed_at,omitempty"`
+	dir      string
+	reused   []string
 }
 type heavyProgressKey struct{}
 
@@ -32,6 +38,7 @@ func loadHeavyProgress(dir, tip string) (*heavyProgress, error) {
 	}
 	if prior.TipSHA == tip && prior.Checks != nil {
 		p.Checks = prior.Checks
+		p.PassedAt = prior.PassedAt
 	}
 	return p, nil
 }
@@ -53,6 +60,12 @@ func saveHeavyCheck(ctx context.Context, check HeavyCheck) error {
 		return nil
 	}
 	p.Checks[check.CheckID] = check
+	if p.PassedAt == nil {
+		p.PassedAt = map[string]time.Time{}
+	}
+	if _, known := p.PassedAt[check.CheckID]; !known {
+		p.PassedAt[check.CheckID] = time.Now().UTC()
+	}
 	return publishHeavyJSON(p.dir, "heavy-progress.json", p)
 }
 func publishHeavyJSON(dir, name string, value any) error {

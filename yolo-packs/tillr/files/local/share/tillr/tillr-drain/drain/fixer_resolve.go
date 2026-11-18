@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -143,29 +144,143 @@ func resolveCommit(ctx context.Context, root, sha string) (string, error) {
 	return "", Externalf("resolving fixer commit %s: %v", sha, err)
 }
 
-// provedFixer is one open fixer a green proof covers.
+// provedFixer is one open fixer a proof covers, and the proof that covers it.
 type provedFixer struct {
 	id     string
 	checks []string
+	proof  checkProof
 }
 
-// resolveProvedFixers settles every open trunk fixer a green heavy proof has made moot:
-// the proved commit contains the fixer's red commit, the proof was recorded after the
-// fixer's last red observation, and every check the fixer names passed in that proof.
+// checkProof is one commit's recorded passes, by check, each with the time it passed.
+// The green proof is a whole run's (every check it names passed at its proof time). The
+// tip run's progress is a run still going, or red for some other check: its passes are
+// proof for exactly the checks they name, which is what lets a fixer whose named check
+// already passes on the tip end without waiting for a whole green run.
+type checkProof struct {
+	commit   string
+	at       map[string]time.Time
+	whole    bool
+	provedAt time.Time
+}
+
+// passed answers whether every named check passed in this proof after seen (unix ms).
+// A partial proof never covers a fixer that names no check.
+func (p checkProof) passed(checks []string, seen int64) bool {
+	if p.whole && p.provedAt.UnixMilli() <= seen {
+		return false
+	}
+	if !p.whole && len(checks) == 0 {
+		return false
+	}
+	for _, check := range checks {
+		at, ok := p.at[check]
+		if !ok || at.UnixMilli() <= seen {
+			return false
+		}
+	}
+	return true
+}
+
+// describe is the reason a fixer this proof covers is resolved with.
+func (p checkProof) describe(checks []string) string {
+	named := "no named check"
+	if len(checks) > 0 {
+		named = strings.Join(checks, ", ")
+	}
+	if p.whole {
+		return "heavy proof green at " + p.commit + " (" + p.provedAt.UTC().Format("2006-01-02T15:04:05Z") + "), which contains the red commit and passed " + named
+	}
+	return "the heavy run of " + p.commit + ", which contains the red commit, passed " + named + " (" + p.provedAt.UTC().Format("2006-01-02T15:04:05Z") + "); the rest of that run is not needed to show this fixer's check repaired"
+}
+
+// readCheckProofs answers the green proof and the current tip run's recorded passes.
+// The tip run's passes come from the runner's own progress record and the legacy
+// program's, both keyed to the one tip they were judged on.
+func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
+	proofs := []checkProof{}
+	green, err := readGreenProof(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if green.Commit != "" && !green.ProvedAt.IsZero() && green.Passed != nil {
+		at := map[string]time.Time{}
+		for _, id := range green.Passed {
+			at[id] = green.ProvedAt
+		}
+		proofs = append(proofs, checkProof{commit: green.Commit, at: at, whole: true, provedAt: green.ProvedAt})
+	}
+	dir, err := heavyDirectory(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	tip, at := "", map[string]time.Time{}
+	add := func(sha, id string, when time.Time) {
+		if sha == "" || when.IsZero() || (tip != "" && sha != tip) {
+			return
+		}
+		tip = sha
+		if old, ok := at[id]; !ok || when.Before(old) {
+			at[id] = when
+		}
+	}
+	var progress heavyProgress
+	if raw, err := os.ReadFile(filepath.Join(dir, "heavy-progress.json")); err == nil {
+		if err := json.Unmarshal(raw, &progress); err != nil {
+			return nil, err
+		}
+		for id, check := range progress.Checks {
+			if check.Result == "pass" {
+				add(progress.TipSHA, id, progress.PassedAt[id])
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	var legacy struct {
+		TipSHA string `json:"tip_sha"`
+		Checks map[string]struct {
+			ProvedAt string `json:"proved_at"`
+		} `json:"checks"`
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "heavy-legacy-progress.json")); err == nil {
+		if err := json.Unmarshal(raw, &legacy); err != nil {
+			return nil, err
+		}
+		for id, check := range legacy.Checks {
+			if when, err := time.Parse(time.RFC3339, check.ProvedAt); err == nil {
+				add(legacy.TipSHA, id, when)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if tip != "" && len(at) > 0 {
+		latest := time.Time{}
+		for _, when := range at {
+			if when.After(latest) {
+				latest = when
+			}
+		}
+		proofs = append(proofs, checkProof{commit: tip, at: at, provedAt: latest})
+	}
+	return proofs, nil
+}
+
+// resolveProvedFixers settles every open trunk fixer a recorded pass has made moot: the
+// proved commit contains the fixer's red commit, and every check the fixer names passed on
+// it after the fixer's last red observation. The proof is either a whole green run or the
+// tip run's own passes of the fixer's checks, so a stale fixer — one whose check already
+// passes on the tip — ends as soon as that check passes, not when a whole run is green.
 // The fixer's own state does not matter — one parked on the owner is resolved the same
 // way — because the trunk-broken hold it carries is about the trunk, and the proof shows
-// the trunk green. An older proof that does not list its passed checks resolves nothing.
+// its check green. An older proof that does not list its passed checks resolves nothing.
 func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 	if l.cfg.Root == "" {
 		return nil
 	}
-	proof, err := readGreenProof(ctx, l.cfg.Root)
-	if err != nil || proof.Commit == "" || proof.ProvedAt.IsZero() || proof.Passed == nil {
+	proofs, err := readCheckProofs(ctx, l.cfg.Root)
+	if err != nil || len(proofs) == 0 {
 		return err
-	}
-	passed := map[string]bool{}
-	for _, id := range proof.Passed {
-		passed[id] = true
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -222,9 +337,6 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 	}
 	covered := []provedFixer{}
 	for _, o := range candidates {
-		if proof.ProvedAt.UnixMilli() <= o.seen {
-			continue
-		}
 		red, err := resolveCommit(ctx, l.cfg.Root, TrunkFixerSHA(o.id))
 		if err != nil {
 			return err
@@ -232,20 +344,19 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 		if red == "" {
 			continue
 		}
-		contains, err := containsCommit(ctx, l.cfg.Root, red, proof.Commit)
-		if err != nil {
-			return err
-		}
-		if !contains {
-			continue
-		}
 		checks := fixerChecks(o.text)
-		all := true
-		for _, check := range checks {
-			all = all && passed[check]
-		}
-		if all {
-			covered = append(covered, provedFixer{id: o.id, checks: checks})
+		for _, proof := range proofs {
+			if !proof.passed(checks, o.seen) {
+				continue
+			}
+			contains, err := containsCommit(ctx, l.cfg.Root, red, proof.commit)
+			if err != nil {
+				return err
+			}
+			if contains {
+				covered = append(covered, provedFixer{id: o.id, checks: checks, proof: proof})
+				break
+			}
 		}
 	}
 	if len(covered) == 0 {
@@ -266,18 +377,14 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			if finishedState(declared, state) {
 				continue
 			}
-			checks := "no named check"
-			if len(f.checks) > 0 {
-				checks = strings.Join(f.checks, ", ")
-			}
-			reason := "heavy proof green at " + proof.Commit + " (" + proof.ProvedAt.UTC().Format("2006-01-02T15:04:05Z") + "), which contains the red commit and passed " + checks
-			if _, err := item.SetStateWithReceipt(ctx, tx, f.id, StateResolvedElsewhere, at, item.MoveReceipt{Reason: reason, By: Utility, ResolvesVia: "commit:" + proof.Commit}); err != nil {
+			reason := f.proof.describe(f.checks)
+			if _, err := item.SetStateWithReceipt(ctx, tx, f.id, StateResolvedElsewhere, at, item.MoveReceipt{Reason: reason, By: Utility, ResolvesVia: "commit:" + f.proof.commit}); err != nil {
 				return err
 			}
 			if f.checks == nil {
 				f.checks = []string{}
 			}
-			if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: proof.Commit, ProvedAt: proof.ProvedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
+			if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: f.proof.commit, ProvedAt: f.proof.provedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
 				return err
 			}
 			l.reportf("loop: %s resolved: %s\n", f.id, reason)

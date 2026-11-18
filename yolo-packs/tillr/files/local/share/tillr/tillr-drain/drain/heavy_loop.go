@@ -97,6 +97,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; ")}, strings.Join(notes, ". "))
 				return err
 			}}
+			runner.Progress = func(line string) { l.reportf("%s", line) }
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}

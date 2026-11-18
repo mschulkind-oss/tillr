@@ -131,7 +131,13 @@ func designNextActor(log string) string {
 		if !ok || !strings.EqualFold(strings.TrimSpace(strings.Trim(name, "*`")), DesignNextActorField) {
 			continue
 		}
-		switch v := strings.ToLower(strings.Trim(strings.TrimSpace(value), "*`")); v {
+		// The actor is the value's first word; a reason may follow it ("owner — resolve
+		// the obsolete fixer"), and is the worker's, not part of the actor.
+		v := strings.ToLower(strings.TrimLeft(strings.TrimSpace(value), "*` "))
+		if end := strings.IndexFunc(v, func(r rune) bool { return r < 'a' || r > 'z' }); end >= 0 {
+			v = v[:end]
+		}
+		switch v {
 		case DesignNextOwner, DesignNextBuild:
 			actor = v
 		}
@@ -258,6 +264,15 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			c.Text += "\n\n" + question
 		} else if designNextActor(text) == DesignNextOwner {
 			c.WaitingOn, c.Status = "owner", "owner"
+		} else if earlier, key, err := l.generatedBlockRepeat(ctx, d.ItemID, d.RunRequest.RunID, obstacle); err != nil {
+			return err
+		} else if earlier != "" {
+			// The identical repeat: the same item ended blocked on the same trunk with the
+			// same obstacle (or none) as an earlier run, whatever its words. Its worker would
+			// be sent the same tree again, so the loop objects to the owner itself.
+			c.WaitingOn, c.Status = "owner", "owner"
+			c.Text += "\n\n" + generatedRepeatQuestion(d.ItemID, earlier, d.RunRequest.RunID, key)
+			l.reportf("loop: %s ended blocked as run %s did (%s): an identical repeat, so it goes to the owner\n", d.ItemID, earlier, key)
 		} else {
 			c.WaitingOn, c.Status = "build", "answered"
 			c.Text += "\n\n" + GeneratedRepairRule
