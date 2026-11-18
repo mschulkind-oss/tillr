@@ -18,14 +18,23 @@ func TestSyncOrderRecordInvalidAndDryRun(t *testing.T) {
 			s := syncStore(t)
 			root := orderRecordFixture(t, text)
 			err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-				_, err := item.Sync(context.Background(), tx.Reader(), tx, item.SyncInput{Root: root, At: syncAt, Documents: []item.SyncDocument{doc("docs/a.md", orderBlock("item-a", ""))}})
+				report, err := item.Sync(context.Background(), tx.Reader(), tx, item.SyncInput{Root: root, At: syncAt, Documents: []item.SyncDocument{doc("docs/a.md", orderBlock("item-a", ""))}})
+				found := false
+				for _, warning := range report.Warnings {
+					if warning.Rule == "order-record-unusable" {
+						found = true
+					}
+				}
+				if err == nil && !found {
+					t.Fatalf("missing record warning: %+v", report)
+				}
 				return err
 			})
-			if err == nil || !strings.Contains(err.Error(), "order record") {
-				t.Fatalf("expected record refusal: %v", err)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if n := count(t, s, "SELECT count(*) FROM items"); n != 0 {
-				t.Fatalf("refused record wrote %d items", n)
+			if n := count(t, s, "SELECT count(*) FROM items"); n != 1 {
+				t.Fatalf("unusable record blocked import: %d", n)
 			}
 		})
 	}
@@ -38,7 +47,7 @@ func TestSyncOrderRecordInvalidAndDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := item.Sync(context.Background(), nil, nil, item.SyncInput{Root: root, At: syncAt}); err == nil {
-		t.Fatal("directory accepted")
+		t.Fatal("invalid configured path accepted")
 	}
 }
 

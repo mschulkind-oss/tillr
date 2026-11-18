@@ -39,7 +39,8 @@ func OrderRecord(r *store.Reader) (string, error) {
 }
 
 // readOrderRecord never reads a file unless the repository opts in. A missing
-// file means the first record has not landed yet; other read errors refuse sync.
+// file means the first record has not landed yet; other read errors become sync
+// warnings so the loop can regenerate an unusable hand-edited record.
 // Unknown IDs are retained as historical lines but never create items.
 func readOrderRecord(root, path string) ([]string, error) {
 	if path == "" {

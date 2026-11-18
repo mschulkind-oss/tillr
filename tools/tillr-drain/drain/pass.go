@@ -1651,6 +1651,17 @@ planned:
 			l.index()
 		}
 	}()
+	landedBeforeRecord := result.Landed
+	if err := l.recordOrder(ctx, mainSHA, result, timing); err != nil {
+		return "", err
+	}
+	// Recording may have landed a new trunk tip. Item staging must use it.
+	if result.Landed != landedBeforeRecord {
+		mainSHA, err = l.refreshDocuments(ctx, result)
+		if err != nil {
+			return "", err
+		}
+	}
 	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
 	if err != nil {
 		return "", err
@@ -1685,6 +1696,9 @@ planned:
 	answers, counts, err := passAnswers(plans)
 	if err != nil {
 		return "", err
+	}
+	for action, count := range timing.DecisionCounts {
+		counts[action] += count
 	}
 	timing.DecisionCounts = counts
 	defer func() {

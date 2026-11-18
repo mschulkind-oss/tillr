@@ -783,7 +783,10 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		orderRecord, err = readOrderRecord(in.Root, config.Order.Record)
 		if err != nil {
-			return syncPlan{}, err
+			// A hand-edited rebuild file must not stop the loop that replaces
+			// it. Report the unusable anchors; retain ordinary source placement.
+			report.Warnings = append(report.Warnings, SyncNote{File: config.Order.Record, Rule: "order-record-unusable", Message: err.Error()})
+			orderRecord = nil
 		}
 		if config.Prose.Rewrite {
 			rewrites := proseRewriteWrites(&report, blocks, held, d.Ready)

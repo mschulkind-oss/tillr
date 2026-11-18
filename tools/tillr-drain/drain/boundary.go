@@ -530,6 +530,8 @@ func compareRunWorktrees(before, after *Boundary) (lanes, observed []Violation) 
 //
 //   - <lane root>/.rolling/worktree, detached: the rolling tier's checkout of the tip
 //     (ProcessSteps.rollingWorktree);
+//   - <lane root>/.order-record/run-order-record-<seq>-<claim>/worktree, detached:
+//     the loop's record-only maintenance candidate;
 //   - <lane root>/.replay/<sha>, detached: the trunk-already-red replay's checkout of one
 //     revision (ProcessSteps.replayWorktree);
 //   - <lane root>/desk-<doc>/worktree, on that desk's own lane branch: a review-comment
@@ -551,6 +553,17 @@ func (p loopPlaces) worktree(wt Worktree) bool {
 	dir, base := filepath.Dir(wt.Path), filepath.Base(wt.Path)
 	switch {
 	case wt.Path == filepath.Join(root, ".rolling", "worktree"):
+		return wt.Branch == ""
+	case base == WorktreeDir && filepath.Dir(dir) == filepath.Join(root, ".order-record"):
+		parts := strings.Split(strings.TrimPrefix(filepath.Base(dir), "run-order-record-"), "-")
+		if !strings.HasPrefix(filepath.Base(dir), "run-order-record-") || len(parts) != 2 {
+			return false
+		}
+		for _, part := range parts {
+			if part == "" || strings.Trim(part, "0123456789") != "" {
+				return false
+			}
+		}
 		return wt.Branch == ""
 	case dir == filepath.Join(root, ".replay"):
 		return wt.Branch == ""

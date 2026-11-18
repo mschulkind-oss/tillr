@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mschulkind-oss/tillr-drain/orderrecord"
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/stop"
@@ -31,12 +32,13 @@ import (
 // at (design §4.1), so a client can tell two responses apart and never renders one
 // request's items beside another request's runs.
 type serverSnapshot struct {
-	WritesEnabled    bool      `json:"writes_enabled"`
-	StorePath        string    `json:"store_path"`
-	SchemaVersion    int       `json:"schema_version"`
-	EventHeadSeq     int64     `json:"event_head_seq"`
-	TraceWatermarkNS *int64    `json:"trace_watermark_ns"`
-	GeneratedAt      time.Time `json:"generated_at"`
+	OrderRecording   *orderrecord.Status `json:"order_recording,omitempty"`
+	WritesEnabled    bool                `json:"writes_enabled"`
+	StorePath        string              `json:"store_path"`
+	SchemaVersion    int                 `json:"schema_version"`
+	EventHeadSeq     int64               `json:"event_head_seq"`
+	TraceWatermarkNS *int64              `json:"trace_watermark_ns"`
+	GeneratedAt      time.Time           `json:"generated_at"`
 	// Build is the program that answered. It is on every response, refusal included,
 	// because "is this the tree I am reading" is a question a stale server is the least
 	// likely one to answer any other way (build.go).
@@ -540,12 +542,19 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 				Build:            s.currentBuild(),
 				VantageBaseURL:   s.vantageBase,
 			}
+			if req.URL.Path == "/api/v1/waiting" || req.URL.Path == "/api/v1/why" {
+				cursor.OrderRecording, _, err = orderrecord.Read(ctx, r, s.root)
+				if err != nil {
+					fail = failure(codeStoreUnreadable, "order recording status could not be read: %v", err)
+					return nil
+				}
+			}
 			if !outside {
 				data, fail = fn(r, req)
 			}
 			return nil
 		})
-		if outside && err == nil {
+		if outside && err == nil && fail == nil {
 			data, fail = fn(nil, req)
 		}
 		// /why is planned in the drain process's own pinned read transaction.
