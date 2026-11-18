@@ -68,7 +68,10 @@ func TestAConflictFixCarryingTheLoopsRetirementIsNotTheWorkersEdit(t *testing.T)
 	// so the worker is told which commit is the loop's.
 	brief := stage.specs[1].Conflict
 	worktree := filepath.Join(f.laneRoot, "lane-1", "worktree")
-	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+stage.specs[0].RunID)
+	pinned := brief.PreparedHead
+	if refs := git(t, worktree, "for-each-ref", "--format=%(refname)", "refs/tillr/runs"); refs != "" {
+		t.Fatalf("landed repair kept attempt pins: %s", refs)
+	}
 	if brief.PreparedHead != pinned || brief.HeadSHA == pinned || git(t, worktree, "rev-parse", pinned+"^1") != brief.HeadSHA {
 		t.Fatalf("the brief does not separate the worker head %s from the pinned retirement %s (pin %s)", brief.HeadSHA, brief.PreparedHead, pinned)
 	}

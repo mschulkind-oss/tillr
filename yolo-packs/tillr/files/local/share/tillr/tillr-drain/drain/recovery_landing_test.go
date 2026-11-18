@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr/record"
@@ -63,6 +64,15 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 	var baseline []string
 	for _, manual := range []bool{false, true} {
 		p := newPendingTerminalFixture(t, true, "")
+		seedRefRun(t, p.f, "earlier-attempt", "item-a", 1)
+		for _, ref := range []string{"refs/tillr/runs/earlier-attempt", "refs/tillr/runs/" + p.runID, "refs/tillr/held/item-a"} {
+			runGit(t, p.f.root, "update-ref", ref, p.head)
+		}
+		runGit(t, p.f.root, "update-ref", "refs/tillr/recovery/operator", p.base)
+		runGit(t, p.f.root, "update-ref", GreenRef, p.base)
+		writeForkFile(t, filepath.Join(p.f.root, "sibling.txt"), "concurrent landing\n")
+		runGit(t, p.f.root, "add", "sibling.txt")
+		runGit(t, p.f.root, "commit", "-qm", "concurrent trunk change")
 		l := p.replacement(t, &terminalSteps{})
 		steps := &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{Root: p.f.root, Store: p.f.storePath, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now, ItemBin: filepath.Join(root, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + p.f.storePath + " --tillr-land " + filepath.Join(root, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict"}}
 		l.cfg.Steps = steps
@@ -77,6 +87,25 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 		}
 		if content := runGit(t, p.f.root, "show", "main:base.txt"); content != "candidate" {
 			t.Fatalf("not landed: %s", content)
+		}
+		refs := strings.Fields(runGit(t, p.f.root, "for-each-ref", "--format=%(refname)", "refs/tillr"))
+		for _, ref := range refs {
+			if ref != GreenRef && ref != "refs/tillr/held/item-a" && ref != "refs/tillr/recovery/operator" && !strings.HasPrefix(ref, "refs/tillr/trunk-history/") {
+				t.Fatalf("drained queue left an obsolete ref: %s (all: %v)", ref, refs)
+			}
+		}
+		if len(refs) < 4 {
+			t.Fatalf("drain lost retained namespaces: %v", refs)
+		}
+		if got := runGit(t, p.f.root, "rev-parse", "refs/tillr/held/item-a"); got != p.head {
+			t.Fatal("held ref changed")
+		}
+		if got := runGit(t, p.f.root, "rev-parse", "refs/tillr/recovery/operator"); got != p.base {
+			t.Fatal("recovery ref changed")
+		}
+		runGit(t, p.f.root, "cat-file", "-e", p.head)
+		if strings.Contains(runGit(t, p.f.root, "rev-list", TrunkRef), p.head) {
+			t.Fatal("run commit is an ancestor: fixture did not squash")
 		}
 		var facts []string
 		fixtureWrite(t, p.f, func(tx *store.Tx) error {

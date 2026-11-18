@@ -67,8 +67,11 @@ esac
 	if body := git(t, worktree, "show", workerHead+":docs/work.md"); !strings.Contains(body, "id=\"item-repair\"") {
 		t.Fatalf("repair input includes loop-owned retirement: %s", body)
 	}
-	prepared := git(t, worktree, "show", "refs/tillr/runs/"+stage.specs[0].RunID+":docs/work.md")
+	prepared := git(t, worktree, "show", stage.specs[1].Conflict.PreparedHead+":docs/work.md")
 	if strings.Contains(prepared, "id=\"item-repair\"") {
 		t.Fatal("prepared candidate evidence was not retained")
+	}
+	if refs := git(t, worktree, "for-each-ref", "--format=%(refname)", "refs/tillr/runs"); refs != "" {
+		t.Fatalf("landed repair kept attempt pins: %s", refs)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // A real fork build, real lander and two overlapping boundary brackets. The build
@@ -77,6 +78,25 @@ func testForkDelivery(t *testing.T, fresh bool) {
 		return out
 	}
 	beforeOrdinary := ordinarySnapshot("before")
+	// A sibling lease is store evidence that its boundary comparison is pending.
+	setSibling := func(leased bool) {
+		s, err := store.Open(context.Background(), f.store, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			state, run := "idle", ""
+			if leased {
+				state, run = "leased", "run-ordinary"
+			}
+			_, err := tx.Exec(`INSERT INTO lanes(lane_id,state,run_id) VALUES('lane-2',?,NULLIF(?,'')) ON CONFLICT(lane_id) DO UPDATE SET state=excluded.state,run_id=excluded.run_id`, state, run)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSibling(true)
 	candidate := func(run string) drain.Candidate {
 		return drain.Candidate{ItemID: "item_041", LaneID: "lane-1", RunID: run, Worktree: f.fork, BaseRef: "refs/heads/patch/pi", BaseSHA: f.forkBase, HeadSHA: git(t, f.fork, "rev-parse", "HEAD")}
 	}
@@ -125,6 +145,13 @@ func testForkDelivery(t *testing.T, fresh bool) {
 			t.Fatalf("%s %s at %s, want %s", checkout, ref, tip, first.HeadSHA)
 		}
 	}
+	if _, err := drain.SweepRefs(context.Background(), drain.RefSweepRequest{Root: f.root, Store: f.store}); err != nil {
+		t.Fatal(err)
+	}
+	marker := "refs/tillr/landed/" + first.RunID
+	if tip := git(t, f.root, "rev-parse", marker); tip != first.HeadSHA {
+		t.Fatal("fork marker not retained at built head")
+	}
 	// Neither delivery nor the lander's marker convicts a sibling ordinary run.
 	for _, pair := range [][2]string{{beforeFork, f.snapshot(t, "fork-after")}, {beforeOrdinary, ordinarySnapshot("after")}} {
 		load := func(path string) *drain.Boundary {
@@ -142,6 +169,13 @@ func testForkDelivery(t *testing.T, fresh bool) {
 		if err != nil || len(violations) != 0 || len(observed) != 0 {
 			t.Fatalf("fork delivery convicted or was misattributed to a run: violations=%+v observed=%+v error=%v", violations, observed, err)
 		}
+	}
+	setSibling(false)
+	if _, err := drain.SweepRefs(context.Background(), drain.RefSweepRequest{Root: f.root, Store: f.store}); err != nil {
+		t.Fatal(err)
+	}
+	if refs := git(t, f.root, "for-each-ref", "--format=%(refname)", marker); refs != "" {
+		t.Fatal("fork marker remains after sibling boundary compared")
 	}
 	// The main checkout's real driver can compare the cache against delivery.
 	driver, err := filepath.Abs("../../bin/pi-forks")

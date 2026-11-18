@@ -185,8 +185,13 @@ func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
 			if !pendingForTest(t, f, "item-a").Done {
 				t.Fatal("invalid graph still owns lane")
 			}
-			if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+old.Decision.RunRequest.RunID); got != head {
-				t.Fatalf("head not pinned %s / %s", got, head)
+			ref := "refs/tillr/runs/" + old.Decision.RunRequest.RunID
+			if mode == "closed" {
+				if refExists(t, f, ref) {
+					t.Fatal("closed workflow left its pin")
+				}
+			} else if got := runGit(t, f.root, "rev-parse", ref); got != head {
+				t.Fatalf("retryable head not pinned %s / %s", got, head)
 			}
 		})
 	}

@@ -99,22 +99,25 @@ func Reasons() []string {
 // reader never has to reconstruct a skip from a missing verdict.
 type Landing struct {
 	// LockObservation is returned after release; it is not part of the receipt.
-	LockObservation   *LockObservation `json:"lock_observation,omitempty"`
-	LandingID         string           `json:"landing_id"`
-	ItemID            string           `json:"item_id"`
-	RunID             string           `json:"run_id"`
-	VerdictID         string           `json:"verdict_id"`
-	Result            string           `json:"result"`
-	Reason            string           `json:"reason"`
-	BaseSHA           string           `json:"base_sha"`
-	HeadSHA           string           `json:"head_sha"`
-	TrunkBefore       string           `json:"trunk_before"`
-	TrunkAfter        string           `json:"trunk_after"`
-	GatedTree         string           `json:"gated_tree"`
-	LandedTree        string           `json:"landed_tree"`
-	ConflictPaths     []string         `json:"conflict_paths"`
-	GateSkippedReason string           `json:"gate_skipped_reason"`
-	RedCap            *redcap.Hold     `json:"red_cap,omitempty"`
+	LockObservation *LockObservation `json:"lock_observation,omitempty"`
+	LandingID       string           `json:"landing_id"`
+	ItemID          string           `json:"item_id"`
+	RunID           string           `json:"run_id"`
+	VerdictID       string           `json:"verdict_id"`
+	Result          string           `json:"result"`
+	Reason          string           `json:"reason"`
+	// BaseRef is retained in the event payload for marker lifetime readers. Older
+	// rows/events omit it; their cleanup is conservative while a run is in flight.
+	BaseRef           string       `json:"base_ref,omitempty"`
+	BaseSHA           string       `json:"base_sha"`
+	HeadSHA           string       `json:"head_sha"`
+	TrunkBefore       string       `json:"trunk_before"`
+	TrunkAfter        string       `json:"trunk_after"`
+	GatedTree         string       `json:"gated_tree"`
+	LandedTree        string       `json:"landed_tree"`
+	ConflictPaths     []string     `json:"conflict_paths"`
+	GateSkippedReason string       `json:"gate_skipped_reason"`
+	RedCap            *redcap.Hold `json:"red_cap,omitempty"`
 }
 
 // Landed reports whether this landing moved the trunk ref.
@@ -271,6 +274,7 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		ItemID:    req.ItemID,
 		RunID:     req.RunID,
 		VerdictID: req.Verdict.VerdictID,
+		BaseRef:   req.BaseRef,
 		BaseSHA:   req.BaseSHA,
 		HeadSHA:   req.HeadSHA,
 		GatedTree: tree,
@@ -367,7 +371,7 @@ func landingRecorded(r rowQueryer, commit string) (bool, error) {
 // storedLanding answers the landed row this item's run already recorded for this head at
 // commit, if there is one: the receipt a retry of a recorded landing is answered with.
 func storedLanding(r rowQueryer, req LandingRequest, commit string) (*Landing, error) {
-	var l Landing
+	l := Landing{BaseRef: req.BaseRef}
 	var conflicts string
 	err := r.QueryRow(`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
 		       trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason

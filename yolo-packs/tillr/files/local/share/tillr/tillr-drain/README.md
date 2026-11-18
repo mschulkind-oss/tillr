@@ -1325,9 +1325,9 @@ left the run unexamined. The terminal states are `landed`, `closed` and
 `resolved-elsewhere`. The next pass that can take the run's lane settles it with the decision
 reason `item-already-terminal` and judges nothing. It does not gate or land the candidate,
 and it records no fault, refusal or conflict against the item. The item's state and verdicts
-stay as they are. The pass pins the run's head under `refs/tillr/runs/<run>`, resets and
-releases the lane, and records one `drain.item-already-terminal` event that names the
-item's state. No retry or re-admission is spent.
+stay as they are. The pass pins the head while resetting and releasing the lane,
+records one `drain.item-already-terminal` event naming the item's state, then removes
+the finished item's run pins. No retry or re-admission is spent.
 
 An item can also be landed by hand while its run is being examined. Every step that would
 record something against the item reads the item's state again first: the gate, the land,
@@ -1613,7 +1613,8 @@ build re-offered in the same pass, and the recovery of the old records.
 
 A **lane copy** is our term for a lane commit that is kept somewhere else. Staging resets a
 lane copy rather than refusing the lane. Two things make a commit a lane copy. A run pin
-(`refs/tillr/runs/<run>`, which the loop never deletes) may contain it. Or a recorded
+(`refs/tillr/runs/<run>`, retained until the item finishes or the attempt ages out
+under [ref retention](#ref-lifetimes-and-backlog-cleanup)) may contain it. Or a recorded
 landing may name it as the landed head: a `land.landing` event with result `landed`. A
 squash landing puts the change on the trunk under a different sha, so the trunk's history
 never contains the candidate itself. Each reset writes one `drain.lane-copy-cleared` event.
@@ -1913,7 +1914,65 @@ store. A loop-owned landing cleans them up during its examination; an owner's
 closure is cleaned up on the next loop pass. The immutable settlement event remains
 in history, with a `drain.work-pruned` event marking that its ref is gone. Later
 briefs do not recommend a removed ref. The existing committed-head pins under
-`refs/tillr/runs/` have a separate lifetime and are not deleted by this rule.
+`refs/tillr/runs/` follow [their own retention rule](#ref-lifetimes-and-backlog-cleanup).
+
+## Ref lifetimes and backlog cleanup
+
+A **run pin** is the commit pointer for a worker attempt; a **landing marker** is
+the lander's crash-recovery pointer. Both names are defined by the
+[landing contract](https://github.com/mschulkind-oss/tillr/blob/main/tillr-land/README.md#known-cases-the-marker-does-not-settle).
+Cleanup uses the store's durable landing records and declared terminal item states,
+not candidate ancestry: a squash need not retain the worker commit on the trunk.
+
+| Namespace under `refs/tillr/` | Writer and lifetime |
+| :--- | :--- |
+| `runs/<run>` | The loop or lander pins an attempt. Settlement removes every attempt of a landed, closed, resolved-elsewhere or removed item, including conflict repairs, after any live lane for that item releases it and its pending examination settles. For retryable items, all live and unexamined/retained attempts stay; at most eight older examined attempt pins per item stay, ordered by attempt time and run id. There is no age limit on a live or retained candidate. |
+| `landed/<run>` | The lander writes before publication. Cleanup requires that run's durable `landed` row and a matching published commit. Ordinary markers leave in settlement; fork-delivery markers wait until no pending examination or leased lane remains, so every overlapping boundary comparison has finished. Missing receipts keep markers for crash recovery. |
+| `preserved/<run>` | The loop saves uncommitted edits. The [saved-edit retention rule](#earlier-uncommitted-work) removes them when the item finishes or is removed; the pruning event remains. |
+| `held/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
+| `recovery/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
+| `green` | The proof process advances this one pointer to proved trunk history. Cleanup never deletes it. |
+| `trunk-history/observed`, `trunk-history/lost`, `trunk-history/accepted/<lost-tip>` | The loop tracks the observed trunk and retains unresolved lost history. Accepting a rewrite removes `lost` and keeps its accepted-history pointer indefinitely. This cleanup deletes none of them. |
+
+Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
+destination so an interrupted reset can resume. It follows its owning run's
+retention rule and is removed with the finished item's other pins.
+
+A held or recovery pointer naming the same commit does **not** extend a run pin's
+lifetime. The operator's pointer alone retains that commit. Boundary checks still
+observe changes to operator refs without convicting the run.
+
+The loop cleans refs after each successful settlement and on later passes, so an
+operator's closure needs no special cleanup command. For accumulated refs, use
+`tillr-drain sweep-refs`: first inspect its dry-run plan, then apply it.
+
+```sh
+tillr-drain sweep-refs --root . --store .tillr/state.db --dry-run
+tillr-drain sweep-refs --root . --store .tillr/state.db
+```
+
+The sweep reports each ref as removed (or would remove) or kept, with its reason.
+Unknown run ownership, symbolic refs, unrecorded landings and mismatched markers are
+kept rather than guessed safe. An expired lease is also kept until the drain reaps
+and releases it; a live conflict repair may still need an earlier attempt's pin. Held and recovery refs are listed with their item's state when
+known and whether the trunk contains their commit. A removed pin also names any
+operator ref that still holds its commit. Saved edits use the same terminal-state
+retention as the loop. A second sweep removes nothing unless lifecycle state changed.
+
+Deletion is guarded by each ref's observed commit and never follows symbolic refs
+to their targets. A short store write transaction
+excludes lane allocation and state changes while Git atomically deletes the planned
+refs. It writes no item state. If Git rejects a changed ref, the command reports an
+error rather than deleting a newer pointer. Run this against the repository's own
+store; run ids must not be reused across stores sharing the repository.
+
+Only the operator removes a held or recovery ref, after deciding it is no longer
+needed:
+
+```sh
+git update-ref -d refs/tillr/held/<name>
+git update-ref -d refs/tillr/recovery/<name>
+```
 
 ## Conflict repair of a retired candidate
 
