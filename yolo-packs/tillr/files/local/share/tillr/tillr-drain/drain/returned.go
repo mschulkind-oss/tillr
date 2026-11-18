@@ -41,23 +41,27 @@ type EndingCheck struct {
 }
 
 // returnedCauses are the refusal steps whose ending goes back to the item's worker. Each
-// is a statement about the candidate the worker can act on. The other refusal steps keep
-// their own routes: a squash conflict has its conflict-fix run, a missing node output its
-// node rule, and a trunk already red its fixer.
+// is a statement about the candidate the worker can act on. A squash conflict is one: on a
+// moved trunk it is answered at once by a conflict-fix run (conflictFix), and otherwise the
+// next pass returns it like the others, on the latest trunk. The other refusal steps keep
+// their own routes: a missing node output its node rule, and a trunk already red its fixer.
 var returnedCauses = map[string]bool{
-	RefusalGate:  true,
-	RefusalNoOp:  true,
-	RefusalFence: true,
-	RefusalLand:  true,
+	RefusalGate:     true,
+	RefusalNoOp:     true,
+	RefusalFence:    true,
+	RefusalLand:     true,
+	RefusalConflict: true,
 }
 
 // returnedReasons are the hold reasons retryHoldReason answers for those causes, the
-// planner's spelling of the same four outcomes.
+// planner's spelling of the same outcomes. conflict-exhausted is the removed one-fix-run
+// rule's name for a conflict; an item it parked is returned at the next pass.
 var returnedReasons = map[string]string{
 	ReasonGateFailed:          RefusalGate,
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
 	ReasonLandRefused:         RefusalLand,
+	ReasonConflictExhausted:   RefusalConflict,
 }
 
 var (
@@ -116,6 +120,19 @@ func endingKey(cause string, checks []EndingCheck, detail, runID string) string 
 	return cause + ":" + strings.Join(parts, ",")
 }
 
+// conflictEndingKey is a squash conflict's evidence key: the conflicting paths, sorted, and
+// the digest of the normalized three-way hunks the merge wrote for them. The same conflict
+// against another trunk sha is the same key; a trunk that moved again inside the hunk is
+// another. It is "" when the lander named no conflicting path.
+func conflictEndingKey(reports []string, markers, runID string) string {
+	paths := conflictPaths(reports)
+	if len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	return RefusalConflict + ":paths=" + strings.Join(paths, ",") + ",hunks=" + evidenceDigest(markers, runID)
+}
+
 // chainEnding is one ending of an item's chain as the repeat rule reads it: the run, who
 // produced it (the seat the run acted for), the ending's cause and its evidence key.
 type chainEnding struct {
@@ -159,6 +176,8 @@ func returnedBrief(e ReturnedEnding) string {
 		b.WriteString("Its candidate changed paths outside the item's fence, so it was refused before the gate.")
 	case RefusalLand:
 		b.WriteString("The gate passed its candidate, but the landing was refused.")
+	case RefusalConflict:
+		b.WriteString("Its candidate no longer applied to the trunk: the squash onto the trunk conflicted in the paths below. This run starts from the latest trunk; redo the change on it.")
 	default:
 		fmt.Fprintf(&b, "It was refused at %s.", e.Cause)
 	}

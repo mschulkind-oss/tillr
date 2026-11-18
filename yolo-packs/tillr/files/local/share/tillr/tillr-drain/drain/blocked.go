@@ -280,7 +280,7 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 	// removal is the loop's, not the worker's, so the head is compared against exactly what
 	// the loop's retirement makes of this base — never excused as any edit to the block.
 	if raws[0] != "" && raws[1] != "" && isConflictFixRun(c.RunID) {
-		retired, err := l.retiredOriginal(ctx, strings.TrimSuffix(c.RunID, ConflictFixSuffix))
+		retired, err := l.retiredOriginal(ctx, conflictFixOriginal(c.RunID))
 		if err != nil {
 			return false, err
 		}

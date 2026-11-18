@@ -11,50 +11,83 @@ import (
 
 // A squash conflict is a fact about a moved trunk, not a verdict about the candidate's
 // work. The lander records `squash-conflict` with the CONFLICT lines git reported, and the
-// drain answers it with one bounded conflict-fix run: the same item, the same lane, the
-// same backend, staged from the new trunk with the conflicting paths and the three-way
-// conflict markers in its brief. The fix run's result is judged like any other change,
-// because the tree that lands is the tree the gate must see.
+// drain answers it with a conflict-fix run: the same item, the same lane, the same backend,
+// staged from the new trunk with the conflicting paths and the three-way conflict markers
+// in its brief. The fix run's result is judged like any other change, because the tree
+// that lands is the tree the gate must see.
 //
-// At most one such run is spent per candidate. The fix run's id carries
-// ConflictFixSuffix, so a conflict on the fix run is the second one: it holds the item with
-// ReasonConflictExhausted instead of staging another run. That boundary is structural and
-// does not depend on a budget a caller can forget to set.
+// The owner ruled on 2026-11-17 that a conflict is never counted: the removed rule spent
+// one fix run per candidate and then parked the item as conflict-exhausted. Now every
+// conflict goes back to its producer with the conflicting paths, on the latest trunk — at
+// once as a fix run when the trunk moved under the candidate, or else at the next pass as
+// a returned run (ReasonReturned) cut from the trunk. What stops the repetition is the
+// identical-repeat rule: a conflict whose paths and hunks digest (conflictEndingKey) equal
+// those of an earlier conflict ending of the item is not sent again, and markExamined
+// routes it to the design seat with both records.
 
 // isConflictFixRun reports whether this run is itself a conflict-fix run. A run id is the
 // one thing the loop can read from a candidate after the fact, and the suffix is the marker
-// that makes a second conflict distinguishable without a second store row.
+// that makes a fix run distinguishable without a second store row.
 func isConflictFixRun(runID string) bool {
 	return strings.HasSuffix(runID, ConflictFixSuffix)
 }
 
-// conflictFix records the conflict and, on a moved trunk, stages the one fix run the
-// candidate is allowed. The first conflict answers with a fix run; a conflict on that run
-// answers with the exhausted hold; a conflict on an unmoved trunk, a fork-series candidate,
-// or a candidate whose request the loop does not hold answers with the conflict event alone
-// and leaves the item held rather than failing it.
+// conflictFixOriginal is the run a chain of conflict-fix runs started from: a fix run of a
+// fix run carries the suffix once per conflict.
+func conflictFixOriginal(runID string) string {
+	for isConflictFixRun(runID) {
+		runID = strings.TrimSuffix(runID, ConflictFixSuffix)
+	}
+	return runID
+}
+
+// conflictFix records the conflict with its evidence and answers it. An identical repeat of
+// an earlier conflict ending is recorded and left to markExamined, which routes it to the
+// design seat. Any other conflict on a moved trunk stages a fix run at once; a conflict on
+// an unmoved trunk, a fork-series candidate, or a candidate whose request the loop does not
+// hold is recorded, and the next pass returns it to the worker on the latest trunk.
 func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "repair"); err != nil {
 		return "", false, err
-	}
-	if isConflictFixRun(candidate.RunID) {
-		return l.holdConflictExhausted(ctx, candidate, landed, result)
 	}
 	mainSHA, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 	if err != nil {
 		return "", false, err
 	}
+	// Reapply only the worker's change. The pinned prepared head retains the gate
+	// evidence, but its loop-owned retirement must be regenerated after repair, not
+	// attributed to the worker as an edit of its own item block.
+	reapplyHead, preparedHead := candidate.HeadSHA, ""
+	if candidate.WorkerHeadSHA != "" {
+		reapplyHead, preparedHead = candidate.WorkerHeadSHA, candidate.HeadSHA
+	}
+	// The markers are the worker's change against the moved trunk, so the brief never
+	// shows the worker a conflict the loop's own retirement made. They are also the
+	// conflict's evidence: a merge that cannot be replayed keys on its paths alone.
+	markers, markersErr := "", error(nil)
+	if mainSHA != "" && candidate.BaseSHA != "" && reapplyHead != "" {
+		markers, markersErr = l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, reapplyHead)
+	}
+	key := conflictEndingKey(landed.ConflictPaths, markers, candidate.RunID)
+	repeated, err := l.conflictRepeats(ctx, candidate, key)
+	if err != nil {
+		return "", false, err
+	}
+	if repeated {
+		if err := l.recordConflict(ctx, candidate, landed, "", key); err != nil {
+			return "", false, err
+		}
+		l.reportf("loop: %s conflicted again with the same paths and hunks as an earlier conflict; it is not sent back again\n", candidate.ItemID)
+		return "", false, nil
+	}
 	// The fix run only makes sense when the trunk actually moved: a conflict against the
 	// candidate's own base is not something a re-application onto the same tree can resolve.
 	if mainSHA == "" || mainSHA == candidate.BaseSHA || candidate.Request == nil || candidate.BaseRef != "" {
-		if err := l.recordConflict(ctx, candidate, landed, ""); err != nil {
+		if err := l.recordConflict(ctx, candidate, landed, "", key); err != nil {
 			return "", false, err
 		}
-		l.mu.Lock()
-		result.ConflictExhausted++
-		l.mu.Unlock()
-		l.reportf("loop: %s conflicted and no conflict-fix run is possible (trunk %s, base %s); holding it as %s\n",
-			candidate.ItemID, shortSHA(mainSHA), shortSHA(candidate.BaseSHA), ReasonConflictExhausted)
+		l.reportf("loop: %s conflicted and no conflict-fix run is possible (trunk %s, base %s); the next pass returns it to its worker on the latest trunk\n",
+			candidate.ItemID, shortSHA(mainSHA), shortSHA(candidate.BaseSHA))
 		return "", false, nil
 	}
 	policy := l.currentPolicy()
@@ -88,18 +121,8 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
-	// Reapply only the worker's change. The pinned prepared head above retains
-	// the gate evidence, but its loop-owned retirement must be regenerated after
-	// repair, not attributed to the worker as an edit of its own item block.
-	reapplyHead, preparedHead := candidate.HeadSHA, ""
-	if candidate.WorkerHeadSHA != "" {
-		reapplyHead, preparedHead = candidate.WorkerHeadSHA, candidate.HeadSHA
-	}
-	// The markers are the worker's change against the moved trunk, so the brief never
-	// shows the worker a conflict the loop's own retirement made.
-	markers, err := l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, reapplyHead)
-	if err != nil {
-		return "", false, l.holdRepair(ctx, basis, err)
+	if markersErr != nil {
+		return "", false, l.holdRepair(ctx, basis, markersErr)
 	}
 	spec := StageSpec{
 		LaneID: candidate.LaneID, ItemID: candidate.ItemID, RunID: fixRunID,
@@ -118,13 +141,13 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
-	if err := l.recordConflict(ctx, candidate, landed, fixRunID); err != nil {
+	if err := l.recordConflict(ctx, candidate, landed, fixRunID, key); err != nil {
 		return "", false, err
 	}
 	l.mu.Lock()
 	result.ConflictFixes++
 	l.mu.Unlock()
-	l.reportf("loop: %s conflicted on %s; staging one conflict-fix run %s with %d path(s)\n",
+	l.reportf("loop: %s conflicted on %s; staging conflict-fix run %s with %d path(s)\n",
 		candidate.ItemID, shortSHA(mainSHA), fixRunID, len(spec.Conflict.Paths))
 	// The fix keeps the candidate's id plus its suffix, but it is its own attempt.
 	// Count the preceding run rows, including a failover of the original candidate.
@@ -170,37 +193,53 @@ func (l *Loop) nextItemAttempt(ctx context.Context, itemID string) (int, error) 
 	return count + 1, nil
 }
 
-// holdConflictExhausted is the second conflict on one candidate: the one fix run is spent,
-// so the item is held with a distinct reason rather than failing a verdict or spending
-// another run.
-func (l *Loop) holdConflictExhausted(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult) (string, bool, error) {
-	if err := l.recordConflict(ctx, candidate, landed, ""); err != nil {
-		return "", false, err
-	}
-	l.mu.Lock()
-	result.ConflictExhausted++
-	l.mu.Unlock()
-	l.reportf("loop: %s conflicted again on its conflict-fix run; holding it as %s\n",
-		candidate.ItemID, ReasonConflictExhausted)
-	return "", false, nil
-}
-
-// recordConflict appends the `drain.refusal` that says the candidate hit a squash conflict
-// and, on the first one, names the fix run that answers it. It is the record a planner
-// reads to hold the item with ReasonConflictExhausted when no fix run can be staged, and
-// the record a person reads to see which run was the fix.
-func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed LandOutcome, fixRunID string) error {
+// recordConflict appends the `drain.refusal` that says the candidate hit a squash conflict,
+// with its evidence key (conflictEndingKey) and the conflict lines as its detail, and names
+// the fix run that answers it when one was staged. It is the record the identical-repeat
+// rule compares, the evidence a returned run's brief carries, and the record a person
+// reads to see which run was the fix.
+func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed LandOutcome, fixRunID, key string) error {
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "conflict"); err != nil {
 		return err
 	}
 	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, refusalPayload{
+		Detail:        strings.Join(landed.ConflictPaths, "\n"),
 		Step:          RefusalConflict,
 		ItemID:        candidate.ItemID,
 		LaneID:        candidate.LaneID,
 		TickID:        candidate.TickID,
 		ConflictPaths: landed.ConflictPaths,
 		FixRunID:      fixRunID,
+		Evidence:      key,
 	}, l.cfg.Now().UTC())
+}
+
+// conflictRepeats answers whether a conflict with this key repeats an earlier conflict
+// ending of the item by the same producer: the identical-repeat rule (repeatedEnding) over
+// the item's recorded chain. An empty key repeats nothing.
+func (l *Loop) conflictRepeats(ctx context.Context, candidate Candidate, key string) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, readFailure(err)
+	}
+	defer s.Close()
+	var repeated bool
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		history, err := readRunHistory(r)
+		if err != nil {
+			return err
+		}
+		chain, decisions, err := readItemChain(r, history, candidate.ItemID)
+		if err != nil {
+			return err
+		}
+		_, repeated = repeatedEnding(chain, chainEnding{RunID: candidate.RunID, Producer: producerOf(decisions[candidate.RunID]), Cause: RefusalConflict, Key: key})
+		return nil
+	})
+	return repeated, err
 }
 
 // conflictPaths answers the bare paths in the lander's conflict lines. The lander records

@@ -326,10 +326,13 @@ The trunk moves only through this step, and only for a candidate that passed. On
 is one stateless squashed commit for ordinary repository work; a fork delivery keeps
 the built fork head and refreshes its shared cache instead. A land that refuses records the item's verdict and is
 not retried by the loop. A land that conflicts — `squash-conflict`, because another
-landing moved the trunk first — is not a refusal: the loop stages one conflict-fix run for
+landing moved the trunk first — is not a refusal: the loop stages a conflict-fix run for
 the same candidate, carrying the conflicting paths and the three-way markers in its brief,
-and judges that run like any other change. A second conflict on the same candidate holds
-the item as `conflict-exhausted` instead of spending another run. If repair staging
+and judges that run like any other change. Conflicts are not counted: each one goes back
+to the worker with its paths on the latest trunk, and only a conflict with the same paths
+and the same hunks as an earlier one of the item stops that, going to the design seat with
+both records. `conflict-exhausted` is history: an item parked under it is returned at
+the next loop start. If repair staging
 fails, the affected item holds as `conflict-repair-staging-failed` without stopping
 siblings. Its original candidate and conflict evidence remain retained across restarts.
 Use the waiting view's cause to correct the item, backend policy, brief template, or
@@ -421,9 +424,9 @@ Stop the loop and read the record, rather than retrying, when:
 - the gate answers `4` — it could not judge, and a retry does not make it able to;
 - `tillr store check` answers non-zero — nothing built on that store is trustworthy;
 - a land refuses — the loop records it and sends the item back to its worker with the
-  lander's answer, as it does a gate refusal. Two negative land answers are not stops. On a squash
-  conflict the loop spends its one conflict-fix run and holds the item only if that run
-  conflicts too. On `already-on-trunk` (the trunk already carries the whole change) the
+  lander's answer, as it does a gate refusal. Two negative land answers are not stops. A squash
+  conflict goes back to the worker with its paths on the latest trunk, uncounted; an
+  identical repeat (same paths, same hunks) goes to the design seat. On `already-on-trunk` (the trunk already carries the whole change) the
   loop records the verdict and settles the item as `resolved-elsewhere`. A pending run whose
   item was already landed or closed by hand is not a stop either: the loop settles it as
   `item-already-terminal`, which judges nothing and releases the lane.

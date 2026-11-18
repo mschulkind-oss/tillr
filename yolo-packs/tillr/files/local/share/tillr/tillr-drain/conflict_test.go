@@ -155,46 +155,62 @@ func TestASquashConflictStagesOneConflictFixRunWithTheMarkersInItsBrief(t *testi
 	}
 }
 
-// TestASecondSquashConflictHoldsTheItemInsteadOfSpendingAnotherRun is the exhausted half:
-// the one fix run conflicts too, so the item is held with its own reason and no third run
-// is spent.
+// TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun replaces the exhausted half
+// (the owner's ruling of 2026-11-17): a conflict is never counted. The fix run conflicts
+// too, on an unmoved trunk, so it goes back to the worker with the conflict as evidence
+// and a fresh run on the latest trunk; that run's conflict is identical to the fix run's
+// (the same paths and the same hunks), so it is not sent again: the repeat goes to the
+// design seat, and with none in the fixture's policy it waits on the owner.
 //
-// Negative control: remove the isConflictFixRun branch in conflictFix and this case stages
-// a third run — the adapter count moves from two to three — and never reaches the hold.
-func TestASecondSquashConflictHoldsTheItemInsteadOfSpendingAnotherRun(t *testing.T) {
+// Negative control: drop the identical-repeat check in conflictFix and the conflicts keep
+// being returned to the worker; the stager's limit then cancels the loop.
+func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", conflictAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 	land := conflictLandScript(t, f.root, conflict, conflict, 1)
-	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}, limit: 6, stop: cancel}
 	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), land, always(t, "verdict", 0)), stage, os.Stderr)
 
-	result, err := loop.Run(context.Background())
+	result, err := loop.Run(ctx)
 	if err != nil {
-		t.Fatalf("the loop failed: %v", err)
+		t.Fatalf("the loop failed: %v (staged %d)", err, len(stage.specs))
 	}
-	if result.ConflictFixes != 1 || result.ConflictExhausted != 1 {
-		t.Fatalf("the loop recorded %d fix(es) and %d exhausted hold(s), want 1 and 1: %s",
-			result.ConflictFixes, result.ConflictExhausted, result.Detail)
+	if result.ConflictFixes != 1 {
+		t.Fatalf("the loop staged %d conflict-fix run(s), want 1 (on the moved trunk): %s", result.ConflictFixes, result.Detail)
 	}
 	if result.Landed != 0 {
 		t.Fatalf("the loop landed %d, want none: %s", result.Landed, result.Detail)
 	}
-	if result.Dispatched != 2 {
-		t.Fatalf("the loop dispatched %d run(s), want the original and one fix: %s", result.Dispatched, result.Detail)
+	if result.Dispatched != 3 || len(stage.specs) != 3 {
+		t.Fatalf("the loop dispatched %d run(s) and staged %d, want the original, its fix and one return: %s", result.Dispatched, len(stage.specs), result.Detail)
 	}
-	if len(stage.specs) != 2 {
-		t.Fatalf("staging saw %d dispatch(es), want no third run: %+v", len(stage.specs), stage.specs)
+	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("the repeated conflict does not wait on its mover: %s", result.Detail)
 	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the exhausted conflict left the item %q, want in-queue", got)
+	refusals := refusalsOf(t, eventsOf(t, f.store))
+	if len(refusals) != 3 {
+		t.Fatalf("refusals %+v, want one conflict per run", refusals)
 	}
-	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictExhausted+")") {
-		t.Fatalf("the stop does not name the exhausted hold: %s", result.Detail)
+	for _, r := range refusals {
+		if r.step != drain.RefusalConflict {
+			t.Fatalf("refusal %+v, want %q", r, drain.RefusalConflict)
+		}
 	}
-	runs := lines(t, f.count)
-	if got := countMatching(runs, "adapter"); got != 2 {
-		t.Fatalf("the adapter ran %d time(s), want 2 (the original and one fix): %v", got, runs)
+	returned := stage.specs[2]
+	if returned.Returned == nil || returned.Returned.Cause != drain.RefusalConflict || !strings.Contains(returned.Returned.Detail, "base.txt") {
+		t.Fatalf("the returned run's brief does not carry the conflict: %+v", returned.Returned)
+	}
+	var routed bool
+	for _, e := range eventsOf(t, f.store) {
+		if e.Kind == "item.conflict" && strings.Contains(string(e.Payload), drain.IdenticalRepeatPrefix) {
+			routed = true
+		}
+	}
+	if !routed {
+		t.Fatal("the identical conflict raised no repeat conflict for its mover")
 	}
 }
 

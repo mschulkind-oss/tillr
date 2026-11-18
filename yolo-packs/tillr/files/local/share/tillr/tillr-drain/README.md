@@ -961,8 +961,15 @@ in [`drain/returned_test.go`](./drain/returned_test.go); the loop's side is in
 [`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go), including the items the
 removed rules held being planned again at the next pass with no repair.
 
-A workflow node's refusal keeps its node rule, and a squash conflict keeps its conflict-fix
-run. Machinery failures keep the one failover and `run-infra-exhausted`: the owner ruled
+A squash conflict is one of these returned endings too: on a moved trunk the loop stages a
+conflict-fix run at once with the conflicting paths and three-way markers, and otherwise the
+next pass returns the item on the latest trunk with the conflict lines in its brief. Nothing
+counts them; the removed rule spent one fix run per candidate and then held the item as
+`conflict-exhausted`, a reason a pass now writes only as history, and an item it parked is
+returned at the next loop start. A conflict's evidence key (`conflictEndingKey` in
+[`drain/returned.go`](./drain/returned.go)) is its sorted conflicting paths and the digest
+of its normalized hunks, so the same conflict against another trunk sha repeats and a trunk
+that moved again inside the hunk does not. A workflow node's refusal keeps its node rule. Machinery failures keep the one failover and `run-infra-exhausted`: the owner ruled
 that each should move to the next open backend and wait when none is open, but the drain
 has no fact that says a backend is open again except a quota window, so a walk with no
 budget would re-dispatch a broken adapter at once and forever. That is the queue item
@@ -1541,7 +1548,7 @@ and trunk movement do not reopen it. Correct the reported staging cause in one o
 those inputs; the next pass stages repair of the retained candidate against the current
 trunk, using the current configuration of its original backend. It does not rerun the
 original model attempt or rejudge the same original conflict. A successful staging still
-spends at most the existing one conflict-fix run. The waiting view names the item,
+stages one conflict-fix run for that conflict. The waiting view names the item,
 staging cause, and this correction as the next action.
 
 Successful staging transfers pending ownership to the repair request and its new base

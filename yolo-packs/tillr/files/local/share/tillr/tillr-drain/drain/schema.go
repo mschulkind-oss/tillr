@@ -188,12 +188,14 @@ const (
 	ReasonTrunkBroken = "trunk-broken"
 	// ReasonConflictFix is a dispatch's reason: the candidate's change did not squash onto
 	// a moved trunk, so this run re-applies it with the conflict in its brief. It is a
-	// dispatch rather than a hold because the fix run is the item's one bounded answer to
-	// the conflict, and it is staged immediately rather than left for a later tick.
+	// dispatch rather than a hold, staged immediately rather than left for a later tick;
+	// what ends a chain of them is the identical-repeat rule, not a count.
 	ReasonConflictFix = "conflict-fix"
-	// ReasonConflictExhausted is a hold's reason: the candidate already spent its one
-	// conflict-fix run and the fix run conflicted too. Spending another run is the
-	// unbounded retry the design forbids, so the item waits for a person instead.
+	// ReasonConflictExhausted was a hold's reason: the candidate had spent its one
+	// conflict-fix run and the fix run conflicted too. The owner's ruling of 2026-11-17
+	// removed that count. A pass no longer writes it as a hold: an item whose latest run
+	// ended in a conflict no fix run answered is returned (returnedReasons), and the name
+	// stays so recorded decisions read as history.
 	ReasonConflictExhausted = "conflict-exhausted"
 	// ReasonItemUnstagleable is a hold's reason: the item's own record refused staging, so
 	// no brief could be written for it. It is a hold and not an infrastructure fault: an

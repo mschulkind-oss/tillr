@@ -80,21 +80,9 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	if work := works[d.ItemID]; work != nil && work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID == current && work.Orphaned {
 		return nil, nil
 	}
-	priors, err := readPriorRuns(r)
+	chain, _, err := readItemChain(r, history, d.ItemID)
 	if err != nil {
 		return nil, err
-	}
-	decisions, err := readInputDecisions(r)
-	if err != nil {
-		return nil, err
-	}
-	chain := []chainEnding{}
-	for _, prior := range priors[d.ItemID] {
-		e, ok := history.endings[prior.RunID]
-		if !ok {
-			continue
-		}
-		chain = append(chain, chainEnding{RunID: prior.RunID, Producer: producerOf(decisions[prior.RunID]), Cause: e.Step, Key: e.Evidence})
 	}
 	previous, repeated := repeatedEnding(chain, chainEnding{RunID: current, Producer: producerOf(d), Cause: latest.Step, Key: latest.Evidence})
 	if !repeated {
@@ -137,6 +125,28 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		}
 	}
 	return &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text}, nil
+}
+
+// readItemChain answers an item's recorded endings in run order, as the identical-repeat
+// rule compares them, and the decisions that dispatched its runs.
+func readItemChain(r *store.Reader, history runHistory, itemID string) ([]chainEnding, map[string]Decision, error) {
+	priors, err := readPriorRuns(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	decisions, err := readInputDecisions(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	chain := []chainEnding{}
+	for _, prior := range priors[itemID] {
+		e, ok := history.endings[prior.RunID]
+		if !ok {
+			continue
+		}
+		chain = append(chain, chainEnding{RunID: prior.RunID, Producer: producerOf(decisions[prior.RunID]), Cause: e.Step, Key: e.Evidence})
+	}
+	return chain, decisions, nil
 }
 
 // recordSecondFailure records the routing readSecondFailure read, inside the examination's

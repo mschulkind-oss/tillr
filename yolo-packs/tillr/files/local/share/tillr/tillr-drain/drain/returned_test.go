@@ -73,3 +73,28 @@ func TestRepeatedEnding(t *testing.T) {
 		})
 	}
 }
+
+// A landing conflict's key is its conflicting paths and the digest of its three-way hunks:
+// the same conflict on another trunk sha or run is the same key, and a different hunk or
+// path is another (the owner's ruling of 2026-11-17 replaced the one conflict-fix run with
+// this comparison).
+func TestConflictEndingKey(t *testing.T) {
+	sha1, sha2 := "0123456789abcdef0123456789abcdef01234567", "fedcba9876543210fedcba9876543210fedcba98"
+	hunk := func(sha, body string) string {
+		return "### base.txt\n<<<<<<< " + sha + "\n" + body + "\n=======\ncandidate\n>>>>>>> " + sha + "\n"
+	}
+	a := conflictEndingKey([]string{"CONFLICT (content): Merge conflict in base.txt", "CONFLICT (content): Merge conflict in a.txt"}, hunk(sha1, "trunk"), "run-x-a1")
+	b := conflictEndingKey([]string{"CONFLICT (content): Merge conflict in a.txt", "CONFLICT (content): Merge conflict in base.txt"}, hunk(sha2, "trunk"), "run-x-a2")
+	if a == "" || a != b {
+		t.Fatalf("the same conflict on another sha, run or path order has another key:\n%s\n%s", a, b)
+	}
+	if a == conflictEndingKey([]string{"CONFLICT (content): Merge conflict in base.txt", "CONFLICT (content): Merge conflict in a.txt"}, hunk(sha1, "trunk moved again"), "run-x-a1") {
+		t.Fatal("a different hunk has the same key")
+	}
+	if a == conflictEndingKey([]string{"CONFLICT (content): Merge conflict in base.txt"}, hunk(sha1, "trunk"), "run-x-a1") {
+		t.Fatal("a different path set has the same key")
+	}
+	if conflictEndingKey(nil, "", "run-x-a1") != "" {
+		t.Fatal("a conflict that names nothing has a key")
+	}
+}

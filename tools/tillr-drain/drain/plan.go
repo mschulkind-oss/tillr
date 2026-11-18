@@ -1109,9 +1109,9 @@ func (p *planner) retryHoldReason(itemID string) string {
 	case RefusalLand:
 		return ReasonLandRefused
 	case RefusalConflict:
-		// The latest run hit a squash conflict and no further fix run is staged, either
-		// because the one fix run already spent its turn or because the trunk did not
-		// move. Either way the item waits for a person rather than spending another run.
+		// The latest run hit a squash conflict that no conflict-fix run answered. Since the
+		// owner's ruling of 2026-11-17 it goes back to the worker on the latest trunk
+		// (returnedReasons); the name is the removed one-fix-run rule's.
 		return ReasonConflictExhausted
 	}
 	// The gate's verdict outranks the attempt class. A run a wall cut short can still have
@@ -1141,7 +1141,11 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 		return nil
 	}
 	e := p.history.endings[latest]
-	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: e.Detail, Checks: e.Checks}
+	detail := e.Detail
+	if cause == RefusalConflict && detail == "" {
+		detail = strings.Join(e.ConflictPaths, "\n")
+	}
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks}
 }
 
 // retry is one item's operator authorization, resolved against the store: which run it

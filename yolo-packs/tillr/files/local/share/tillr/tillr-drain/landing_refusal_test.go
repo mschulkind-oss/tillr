@@ -106,7 +106,7 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			if conflict {
 				envelope := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 				land = conflictLandScript(t, f.root, envelope, envelope, 1)
-				step, reason = drain.RefusalConflict, drain.ReasonConflictExhausted
+				step, reason = drain.RefusalConflict, drain.ReasonConflictOwner
 			}
 			stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt", "base.txt"}}}
 			steps := f.steps(t, always(t, "gate", 0), land, verdict)
@@ -133,6 +133,11 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			}
 			refusals := refusalsOf(t, events)
 			want := 2
+			if conflict {
+				// The conflict-fix run on the moved trunk, then its conflict's return on the
+				// latest trunk, whose identical conflict is the repeat.
+				want = 3
+			}
 			if len(refusals) != want {
 				t.Fatalf("refusals=%+v", refusals)
 			}
@@ -144,7 +149,7 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			if result.Dispatched != want || !strings.Contains(result.Detail, "item-landing ("+reason+")") {
 				t.Fatalf("missing landing hold: %+v", result)
 			}
-			if conflict && (result.ConflictFixes != 1 || len(stage.specs) != 2 || stage.specs[1].Conflict == nil || refusals[0].fixRunID != stage.specs[1].RunID) {
+			if conflict && (result.ConflictFixes != 1 || len(stage.specs) != 3 || stage.specs[1].Conflict == nil || refusals[0].fixRunID != stage.specs[1].RunID) {
 				t.Fatalf("conflict repair changed: %+v %+v", result, stage.specs)
 			}
 			syncLandingItem(t, f, strings.ReplaceAll(landingItemDefinition, "requirement", "revised requirement"))

@@ -124,7 +124,6 @@ var waitingRules = map[string]waitingRule{
 	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
-	"conflict-exhausted":             {"needs a cause", "land", "cause not recorded"},
 	"item-unstagleable":              {"needs a cause", "queue", "cause not recorded"},
 	// A terminal item leaves this view, so the rule names the settlement for history reads.
 	"item-already-terminal": {"moving", "lane", "the next pass settles the run without judging it"},
@@ -136,6 +135,9 @@ var waitingRules = map[string]waitingRule{
 	"inputs-changed":        {"ready", "queue", "the next pass"},
 	"readmission-exhausted": {"needs you", "lane", "automatic re-admission failed; run `tillr drain retry` after diagnosis"},
 	"retry-stale":           {"needs you", "lane", "the owner"},
+	// The same ruling removed the one conflict-fix run: a conflict goes back to its worker
+	// on the latest trunk, so an item parked under this reason is returned at the next pass.
+	"conflict-exhausted": {"ready", "queue", "the next pass"},
 }
 
 func waitingRuleFor(reason string) waitingRule {

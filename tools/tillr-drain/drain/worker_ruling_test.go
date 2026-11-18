@@ -232,3 +232,30 @@ func TestItemsTheRemovedRulesParkedAreReturnedAtTheNextPass(t *testing.T) {
 		t.Fatalf("the parked item was not returned: %+v", d)
 	}
 }
+
+// An item the removed one-fix-run rule parked as conflict-exhausted — its latest run, a
+// conflict-fix run, ended in a second squash conflict — is returned at the next pass with
+// the conflict as its evidence, with no migration step: holds are derived on every pass.
+func TestAnItemParkedAsConflictExhaustedIsReturnedAtTheNextPass(t *testing.T) {
+	f, l := designSeatFixture(t)
+	p := mustPlan(t, l)[0]
+	ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now())
+	if err != nil || !ok {
+		t.Fatalf("apply: %v %v", ok, err)
+	}
+	id := p.decision.RunRequest.RunID
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: p.decision.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), FinishedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit}); err != nil {
+			return err
+		}
+		// The second conflict as the removed rule recorded it: no fix run, no evidence key.
+		return appendEffect(tx, RefusalKind, id, map[string]any{"step": RefusalConflict, "item_id": "item-a", "conflict_paths": []string{"CONFLICT (content): Merge conflict in base.txt"}}, l.cfg.Now())
+	})
+	if err := l.markExamined(context.Background(), p.decision); err != nil {
+		t.Fatal(err)
+	}
+	d := mustPlan(t, l)[0].decision
+	if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Returned == nil || d.Returned.Cause != RefusalConflict {
+		t.Fatalf("the parked conflict was not returned: %+v", d)
+	}
+}

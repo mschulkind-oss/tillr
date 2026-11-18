@@ -2013,7 +2013,6 @@ func mergeExamination(dst, src *LoopResult) {
 	dst.Landed += src.Landed
 	dst.TrunkAcquitted += src.TrunkAcquitted
 	dst.ConflictFixes += src.ConflictFixes
-	dst.ConflictExhausted += src.ConflictExhausted
 	dst.Rejected += src.Rejected
 	dst.Candidates += src.Candidates
 	dst.InfraFailures += src.InfraFailures
