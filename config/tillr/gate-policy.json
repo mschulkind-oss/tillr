@@ -1,6 +1,6 @@
 {
   "landing_strategy": "after-merge",
-  "auto_revert": false,
+  "auto_revert": true,
   "budget_ms": 10000,
   "red_cap": {
     "landings": 20,
