@@ -1271,6 +1271,7 @@ type itemData struct {
 	Progress       []progressClaim     `json:"progress"`
 	Idea           *ideaWords          `json:"idea,omitempty"`
 	GraphRevisions []graphRevisionView `json:"graph_revisions"`
+	GraphAttempts  []itemGraphAttempt  `json:"graph_attempts"`
 	Usage          usageSum            `json:"usage"`
 	Comments       *commentItemView    `json:"comments,omitempty"`
 	Item           itemDetail          `json:"item"`
@@ -1358,7 +1359,8 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		Attempts:       []attemptView{},
 		ClosedBlockers: []string{},
 	}
-	out.Progress, _, err = readWorkerRecords(r, "", id)
+	var children map[string]childrenView
+	out.Progress, children, err = readWorkerRecords(r, "", id)
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -1366,7 +1368,8 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	out.Item.SelectedWorkflow, out.Item.WorkflowSource, _, err = workflowmeta.ReadSelection(r, id)
+	var graph string
+	out.Item.SelectedWorkflow, out.Item.WorkflowSource, graph, err = workflowmeta.ReadSelection(r, id)
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -1485,6 +1488,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		return itemRuns[i].RunID < itemRuns[j].RunID
 	})
 	out.Runs, err = readItemRunHistory(r, itemRuns)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	out.GraphAttempts, err = readItemGraph(r, id, graph, itemRuns, children)
 	if err != nil {
 		return nil, unreadable(err)
 	}

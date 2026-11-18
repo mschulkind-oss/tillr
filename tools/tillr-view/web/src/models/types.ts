@@ -534,7 +534,24 @@ export interface GraphRevisionView {
   recorded_at_ms: number;
 }
 
+export interface ItemGraphNode {
+  id: string;
+  parent: string;
+  kind: string;
+  seat: string;
+  command_ref: string;
+  command: string[] | null;
+  access: string;
+  state: string;
+  level: number;
+  runs: string[];
+  children: Record<string, ChildrenRecord>;
+  outputs: { name: string; type: string; run_id: string; body: string | null; note?: string }[];
+}
+export interface ItemGraphAttempt { attempt: number; nodes: ItemGraphNode[] }
+
 export interface ItemData {
+  graph_attempts?: ItemGraphAttempt[];
   progress?: ProgressClaim[];
   idea?: { words: string; words_path: string; in_tree: boolean; outcomes?: { item_id: string; title: string; state: string }[] };
   graph_revisions?: GraphRevisionView[];

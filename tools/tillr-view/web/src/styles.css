@@ -7,6 +7,13 @@
  * component inherits from these custom properties — no component names a hex value.
  */
 
+.item-graph-level { display: flex; flex-wrap: wrap; gap: 1rem; }
+.item-graph-level > section { flex: 1 1 16rem; min-width: 0; }
+.item-graph-row { display: flex; flex-wrap: wrap; gap: 1rem; }
+.item-graph-node { flex: 1 1 16rem; min-width: 0; border: 1px solid currentColor; padding: 0.75rem; }
+.item-graph-child { border: 1px solid currentColor; margin-left: 1rem; padding: 0.5rem; }
+.item-graph-node pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .trunk-nav { padding: 0.5rem 1rem; }
 .trunk { padding: 1rem; overflow: auto; }
 .trunk__head, .trunk__links { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
