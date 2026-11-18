@@ -142,7 +142,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 func TestWhyEmptyStoreAndMissingStore(t *testing.T) {
 	path := fixture(t)
 	code, out := invoke(t, "why", "--store", path)
-	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; owner-waiting 0; next [drain=0, design seat=0, operator=0]; held []" {
+	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; owner-waiting 0; next [drain=0, design seat=0, operator=0]; held []\nmedian cost, last 20 landed build items: unknown" {
 		t.Fatalf("empty: %d %s", code, out)
 	}
 	path = filepath.Join(scratch(t, "absent-why"), "absent.db")

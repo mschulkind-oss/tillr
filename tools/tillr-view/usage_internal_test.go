@@ -49,7 +49,9 @@ func TestUsageRoutesNeverExposePrices(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, clientTimingPath, strings.NewReader(`{"page":"usage","timings":[]}`))
 	h.srv.routes().ServeHTTP(response, request)
-	if strings.Contains(strings.ToLower(response.Body.String()), "cost") || strings.ContainsAny(response.Body.String(), "$€£¥") {
+	// Search keys, not arbitrary values: a read-only response also names the
+	// store path, and a scratch directory can legitimately contain "cost".
+	if regexp.MustCompile(`(?i)"[^"\n]*cost[^"\n]*"\s*:`).Match(response.Body.Bytes()) || strings.ContainsAny(response.Body.String(), "$€£¥") {
 		t.Fatalf("POST %s exposes pricing: %s", clientTimingPath, response.Body.String())
 	}
 }

@@ -8542,9 +8542,7 @@ The point of spreading work across seats is to spend less, and today nothing pri
   - Record each node run's seat, backend, model and cost.
   - Print cost per landed item and per seat, and the median of the last twenty landed build items.
 
-<!-- tillr: item id="item-plan-cost-per-seat" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Each node run records its seat, backend, model and cost, and `tillr drain why` or a read face prints cost per landed item and per seat. The item's report states the baseline, which is the median cost of the last twenty landed build items read from the run records. Once ten items have landed through `planned-build@v1`, the same output prints the same figure for those items. A test over fixture run records asserts both numbers and that a node with missing cost prints unknown and not zero.
 
 **Agent details:**
 

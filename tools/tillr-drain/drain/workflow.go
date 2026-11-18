@@ -359,8 +359,8 @@ func startNode(tx *store.Tx, d Decision) error {
 	if d.Workflow == nil {
 		return nil
 	}
-	result, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'running')
- ON CONFLICT(item_id,attempt,node_id) DO UPDATE SET run_id=excluded.run_id,outcome='running' WHERE node_runs.outcome='running'`, d.ItemID, d.Attempt, d.Workflow.Stages[d.NodeIndex].ID, d.RunRequest.RunID)
+	result, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome,seat,model) VALUES(?,?,?,?, 'running',?,?)
+ ON CONFLICT(item_id,attempt,node_id) DO UPDATE SET run_id=excluded.run_id,outcome='running',seat=excluded.seat,model=excluded.model WHERE node_runs.outcome='running'`, d.ItemID, d.Attempt, d.Workflow.Stages[d.NodeIndex].ID, d.RunRequest.RunID, d.Seat, d.RunRequest.Route())
 	if err != nil {
 		return err
 	}

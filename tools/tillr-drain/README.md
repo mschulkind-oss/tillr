@@ -2317,6 +2317,19 @@ including the planner decision. `--json` gives rows and summary as one object,
 or the selected item's record alone. The JSON answer also carries the event
 sequence at which the planner read the store.
 
+The unfiltered text face also lists each landed item's recorded run cost and the
+sum per seat. It joins node seats and models to the run's backend and usage;
+legacy node seats use recorded seat dispatches where available, otherwise
+`unknown`. Runs outside a node use their recorded seat dispatch or the item's
+seat (default `build`). Missing run cost makes its item and seat sums `unknown`,
+not zero. Runs started after the landing are excluded when the landing event's
+time is available. Retries are included, once per run. The last-twenty median
+uses landed items on the `build` or default seat, plus planned builds; if any
+of those items has an unknown sum the median is unknown. After ten landed
+`planned-build@v1` items, a separate median uses their last twenty (or all if
+fewer than twenty). With no eligible items the median is unknown. The JSON and
+single-item planner faces remain unchanged.
+
 A mover is the question, blocking item, run, lane, or operator action that can
 advance the item. The summary partitions the rows into running items, items the
 next pass could advance, and holds counted by reason. Busy lanes include unfinished

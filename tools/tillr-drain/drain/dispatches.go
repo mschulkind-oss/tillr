@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS node_runs (
  node_id TEXT NOT NULL,
  run_id TEXT NOT NULL UNIQUE,
  outcome TEXT NOT NULL,
+ seat TEXT,
+ model TEXT,
  PRIMARY KEY(item_id,attempt,node_id)
 );
 CREATE TABLE IF NOT EXISTS node_artifacts (
@@ -204,6 +206,11 @@ func init() {
 	// for.
 	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL+backendQuotaDDL+backendOutcomesDDL); err != nil {
 		panic(err)
+	}
+	for _, name := range []string{"seat", "model"} {
+		if err := store.RegisterColumn("drain", "node_runs", name, "TEXT"); err != nil {
+			panic(err)
+		}
 	}
 	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER"} {
 		if err := store.RegisterColumn("drain", "drain_sessions", name, definition); err != nil {
