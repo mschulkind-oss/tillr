@@ -90,6 +90,11 @@ type storeLane struct {
 	State         string
 	RunID         string
 	LeasedUntilMS *int64
+	// ResumedSeq is the seq of the latest run.resume for the run holding the lease. A
+	// resume newer than that run's `runs` row is a continuation of the same run, which
+	// keeps its earlier (paused) row until it finishes: the lease is live work, not a
+	// finished run settling.
+	ResumedSeq int64
 }
 
 // storeRun is one row of runs, with the spend the run recorded. UsageTokens and CostUSD
@@ -432,6 +437,14 @@ func readLanes(r *store.Reader) ([]storeLane, error) {
 		return nil, err
 	}
 	rows.Close()
+	for i := range out {
+		if out[i].State != laneStateLeased || out[i].RunID == "" {
+			continue
+		}
+		if err := r.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?`, resumeKind, out[i].RunID).Scan(&out[i].ResumedSeq); err != nil && !isMissingTable(err) {
+			return nil, err
+		}
+	}
 	exists, err := hasTable(r, "read_only_runs")
 	if err != nil {
 		return nil, err
@@ -1117,6 +1130,10 @@ type allocation struct {
 // pull the lease machinery into the read-only face. tests/tillr-observatory-*.test.* pins
 // the two spellings equal.
 const allocateKind = "run.allocate"
+
+// resumeKind is `run.ResumeKind` from tools/tillr-run, spelled here for the same reason as
+// allocateKind: a continuation's claim of its lane, newer than the run's terminal row.
+const resumeKind = "run.resume"
 
 // readAllocations answers the last allocation per run id. A run is allocated once, so a
 // second event for one run id would be a bug worth seeing rather than overwriting silently —

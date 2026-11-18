@@ -299,7 +299,15 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 		out.Lanes.Idle = append(out.Lanes.Idle, lane.LaneID)
 	}
 
-	for _, live := range liveRuns(domain.lanes, domain.runs, domain.allocations) {
+	// liveRuns answers the leases no row describes yet, and marks in place a row whose run
+	// a lease is continuing (a resumed run keeps its earlier row): both are live.
+	live := liveRuns(domain.lanes, domain.runs, domain.allocations)
+	for _, run := range domain.runs {
+		if run.State == liveRunState {
+			live = append(live, run)
+		}
+	}
+	for _, live := range live {
 		item := items[live.ItemID]
 		row := runningRun{
 			LaneID:      live.LaneID,

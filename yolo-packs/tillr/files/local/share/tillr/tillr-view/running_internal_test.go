@@ -489,3 +489,44 @@ func TestRunningJSONEmitsTheRecordEnvelope(t *testing.T) {
 		t.Fatalf("the envelope's finished block = %+v, want run-done", payload.Finished)
 	}
 }
+
+// TestRunningShowsAContinuedPausedRunAsLive: a paused run the loop continues as the same
+// attempt keeps its paused `runs` row until the continuation finishes, and the run.resume
+// event its continuation claims the lane with is newer than that row. The lease is the
+// continuation's, so the run is live, and it must not be listed as a paused finished run.
+// A lease held over a terminal row with no newer resume is a settling run, not a live one.
+func TestRunningShowsAContinuedPausedRunAsLive(t *testing.T) {
+	for _, resumed := range []bool{true, false} {
+		t.Run(strconv.FormatBool(resumed), func(t *testing.T) {
+			h := newRunningHarness(t)
+			finish := h.addEvent(h.now.Add(-time.Minute), "run.finish", "run-live", `{}`)
+			db, err := sql.Open("sqlite", "file:"+h.store+"?_pragma=busy_timeout(5000)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`INSERT INTO runs (run_id, item_id, lane_id, backend, state, exit_code, started_at, finished_at, event_seq)
+				VALUES ('run-live', 'item-live', 'lane-1', 'pi', 'paused', NULL, 1000, 3000, ?)`, finish); err != nil {
+				t.Fatal(err)
+			}
+			if resumed {
+				h.addEvent(h.now.Add(-30*time.Second), "run.resume", "run-live", `{"run_id":"run-live","lane_id":"lane-1"}`)
+			}
+			p, err := readRunning(context.Background(), h.store, h.loopDir, h.laneRoot, h.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active := false
+			for _, r := range p.Active {
+				active = active || r.RunID == "run-live"
+			}
+			finished := false
+			for _, r := range p.Finished {
+				finished = finished || r.RunID == "run-live"
+			}
+			if active != resumed || finished == resumed {
+				t.Fatalf("resumed=%v: active=%v finished=%v", resumed, active, finished)
+			}
+		})
+	}
+}

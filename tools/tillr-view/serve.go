@@ -832,15 +832,14 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 				continue
 			}
 			if have[id] {
-				// A continued group member has an earlier terminal segment on
-				// its same run row. Keep one row and project its current lease.
-				if len(lane.ActiveNodes) > 0 {
-					for i := range known {
-						if known[i].RunID == id {
-							known[i].State = liveRunState
-							known[i].FinishedAtMS = 0
-							known[i].ExitCode = nil
-						}
+				// A continued group member, or a continued single run (a resume newer
+				// than its row), has an earlier terminal segment on its same run row.
+				// Keep one row and project its current lease.
+				for i := range known {
+					if known[i].RunID == id && (len(lane.ActiveNodes) > 0 || lane.ResumedSeq > known[i].EventSeq) {
+						known[i].State = liveRunState
+						known[i].FinishedAtMS = 0
+						known[i].ExitCode = nil
 					}
 				}
 				continue

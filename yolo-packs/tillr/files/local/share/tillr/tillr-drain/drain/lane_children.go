@@ -34,17 +34,23 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 	}
 	ended := map[string]string{}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		rows, err := r.Query(`SELECT run_id, lane_id FROM runs UNION SELECT run_id, lane_id FROM read_only_runs WHERE settled=1`)
+		// endedAt is the seq of the latest record that ended each run: its runs row's
+		// finish event, or a release. A run.resume after it is a continuation of the same
+		// run that has not ended yet (tillr-run claimLane), so that run is live again.
+		endedAt := map[string]int64{}
+		rows, err := r.Query(`SELECT run_id, lane_id, event_seq FROM runs UNION SELECT run_id, lane_id, 0 FROM read_only_runs WHERE settled=1`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var id, lane string
-			if err := rows.Scan(&id, &lane); err != nil {
+			var seq int64
+			if err := rows.Scan(&id, &lane, &seq); err != nil {
 				return err
 			}
 			ended[id] = lane
+			endedAt[id] = max(endedAt[id], seq)
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -52,15 +58,16 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 		rows.Close()
 		// Legacy leases can be released without a terminal row. The recorded
 		// release still binds their run to its lane, including after a restart.
-		releases, err := r.Query(`SELECT kind, object_id, payload FROM events WHERE kind IN (?, ?) ORDER BY seq`, run.ReleaseKind, laneReleasedKind)
+		releases, err := r.Query(`SELECT seq, kind, object_id, payload FROM events WHERE kind IN (?, ?) ORDER BY seq`, run.ReleaseKind, laneReleasedKind)
 		if err != nil {
 			return err
 		}
 		defer releases.Close()
 		for releases.Next() {
+			var seq int64
 			var kind, id string
 			var raw []byte
-			if err := releases.Scan(&kind, &id, &raw); err != nil {
+			if err := releases.Scan(&seq, &kind, &id, &raw); err != nil {
 				return err
 			}
 			if kind == run.ReleaseKind {
@@ -70,6 +77,7 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 				}
 				if release.Result == run.ReleaseReleased && release.RunID != "" {
 					ended[release.RunID] = release.LaneID
+					endedAt[release.RunID] = max(endedAt[release.RunID], seq)
 				}
 			} else {
 				var release laneReleased
@@ -77,9 +85,29 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 					return err
 				}
 				ended[id] = release.LaneID
+				endedAt[id] = max(endedAt[id], seq)
 			}
 		}
-		return releases.Err()
+		if err := releases.Err(); err != nil {
+			return err
+		}
+		releases.Close()
+		resumes, err := r.Query(`SELECT object_id, MAX(seq) FROM events WHERE kind = ? AND object_type = 'run' GROUP BY object_id`, run.ResumeKind)
+		if err != nil {
+			return err
+		}
+		defer resumes.Close()
+		for resumes.Next() {
+			var id string
+			var seq int64
+			if err := resumes.Scan(&id, &seq); err != nil {
+				return err
+			}
+			if _, ok := ended[id]; ok && seq > endedAt[id] {
+				delete(ended, id)
+			}
+		}
+		return resumes.Err()
 	})
 	s.Close()
 	if err != nil {

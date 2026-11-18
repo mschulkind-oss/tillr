@@ -6,6 +6,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 	"os"
 	"os/exec"
@@ -223,4 +224,51 @@ func TestEndedRunChildrenHoldOnlyTheirLaneDirectory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A paused run continued as the same attempt keeps its paused runs row until the
+// continuation finishes, and its run.resume event is the record that the run is live
+// again. The continuation's own processes are that live run's, not an ended run's
+// leftovers, so they must not take the lane out of rotation; once the continuation's
+// terminal record lands, a process it left behind holds the lane again.
+func TestContinuedPausedRunChildrenDoNotHoldTheirLane(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	lane, id := l.cfg.Lanes[0], "continued-paused-run"
+	at := l.cfg.Now().Format(time.RFC3339)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: lane, Backend: "fixture", State: run.StatePaused, StartedAt: at, FinishedAt: at})
+	})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		req := run.Request{RunID: id, ItemID: "item-a", Backend: "fixture", Resume: true}
+		if _, err := run.ClaimLease(context.Background(), tx, req, lane, l.cfg.Now()); err != nil {
+			return err
+		}
+		body, err := json.Marshal(map[string]string{"run_id": id, "item_id": "item-a", "lane_id": lane, "backend": "fixture", "resumed_at": at})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Append(event.Event{Kind: run.ResumeKind, ObjectType: "run", ObjectID: &id, Payload: body, At: l.cfg.Now()})
+		return err
+	})
+	child := startLaneChild(t, l, lane, id)
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c != nil && c.out {
+		t.Fatalf("a continued run's own process took its lane out of rotation: %+v", c)
+	}
+	if laneEvents(t, f, laneRefusedKind, lane) != 0 {
+		t.Fatal("a continued run's own process recorded a lane refusal")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: lane, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit, Resumed: true})
+	})
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c == nil || !c.out || c.reason != ReasonLaneChildren {
+		t.Fatalf("a process left by the finished continuation did not hold the lane: %+v", c)
+	}
+	_ = child.Process.Kill()
+	_ = child.Wait()
 }
