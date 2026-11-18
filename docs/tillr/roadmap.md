@@ -4785,6 +4785,74 @@ The owner ruled on 2026-11-17 that a machinery failure is not counted. Each fail
 - **c4:** A workflow node whose backend failed takes the same walk, and a node with no open backend waits rather than faulting into `run-infra-exhausted`. A test covers a node.
 - **c5:** The waiting view classifies the new hold with its mover, and the `run-infra-exhausted` rule stays only as history.
 
+**Build this item with the four steps below. Read this section first; it is the fifth ruling, of
+2026-11-18, and it answers the ninth run's conflict.** Everything in this block after "Agent
+details" is the record of how the change was designed. A builder does not act on it. No criterion,
+path or rule changes here.
+
+The ninth run applied the seventh run's preserved tree and nothing else. Its session log shows that
+it read the head of this block and the first ruling, and never reached the patch the fourth ruling
+gave. The tests it reported red are the ones that patch repairs: the plan that dispatched where it
+should hold, quota continuation, the workflow restart, and the view's rule for `backend-closed`.
+So the two patches are now one, and the commands come before the history. The patch at the end of
+this block is the whole change to `config/`, `tests/` and `tools/`: 38 files, 1087 lines added and
+240 removed. It needs no preserved ref. The refs your brief lists under "Facts carried" are the
+earlier runs' trees; do not apply, inspect or recover any of them.
+
+- **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of
+  a step is not an ending, and the commit is made once, at step 4.
+  1. **Apply the patch.** From the lane worktree:
+
+     ```bash
+     awk '/^# backend-open-patch end$/{p=0} p; /^# backend-open-patch begin$/{p=1}' docs/tillr/roadmap.md > "$YOLO_DURABLE_DIR/backend-open.diff"
+     git apply --index "$YOLO_DURABLE_DIR/backend-open.diff"
+     git diff --cached --shortstat HEAD
+     (cd tools/tillr-drain && gofmt -l . && go build ./...)
+     ```
+
+     The third command prints `38 files changed, 1087 insertions(+), 240 deletions(-)`, and the
+     fourth prints nothing. Do not rewrite what the patch produces: after this step no code
+     remains to be written.
+  2. **Regenerate the mirror.** Run `just pack-sync`, then `yolo pack lint yolo-packs/tillr`,
+     which prints `pack ok`.
+  3. **Run the suites,** each with the two trace variables unset and its output in a file, and
+     read only the last line of each file:
+
+     ```bash
+     env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR TMPDIR="$YOLO_DURABLE_DIR" python3 tools/go-test-shards.py tools/tillr-view -k 6 > "$YOLO_DURABLE_DIR/view.log" 2>&1; echo "view rc=$?"
+     env -u TILLR_SQLITE_TRACE -u TILLR_TRACE_DIR TMPDIR="$YOLO_DURABLE_DIR" python3 tools/go-test-shards.py tools/tillr-drain -k 6 > "$YOLO_DURABLE_DIR/drain.log" 2>&1; echo "drain rc=$?"
+     python3 tests/tillr-muse-backend.test.py > "$YOLO_DURABLE_DIR/muse.log" 2>&1; echo "muse rc=$?"
+     tail -n 1 "$YOLO_DURABLE_DIR/view.log" "$YOLO_DURABLE_DIR/drain.log" "$YOLO_DURABLE_DIR/muse.log"
+     ```
+
+     The drain suite ran for about 25 minutes here. Give the command a timeout of at least an
+     hour, and do not run a narrower `go test` in its place.
+  4. **Commit.** `git add -A config tests tools yolo-packs`, then one commit. It holds 71 files:
+     the 38 of the patch and the 33 mirror copies. `docs/tillr/roadmap.md` is not part of it.
+     Append `c1` to `c5` to the progress file before the commit.
+- **What does stop this build:** the patch failing to apply after the fallback below, a build
+  failure after step 1, or a failing test in step 3. Report it with the step number, the command
+  and its output. A report that lists steps not yet done is not one of these, and neither is the
+  size of the change.
+- **If the patch does not apply,** the trunk has moved under one of its files. Run the second
+  command of step 1 again as `git apply --index -3`, resolve each conflict towards the patch and
+  keep what the trunk added, and continue. The third ruling below describes every hunk by file.
+- **If a test fails in step 3,** run it alone once, with the trace variables unset. A test that
+  passes alone is recorded in the report and does not stop the commit. For a test that fails
+  alone, run it alone at the base with `git stash -u`, and restore the work with `git stash pop`.
+  Red at the base is a `trunk` obstacle naming that test. Red only with the patch applied is this
+  item's to fix, by the rule in the third ruling that covers the file.
+- **What this section measured,** in the lane at `b045866f2` on 2026-11-18 with the patch applied
+  and the mirror regenerated:
+  - `python3 tools/go-test-shards.py tools/tillr-drain -k 6` printed `2093 tests passed, 6 shards
+    per package` and exited 0. `TestRestartGatesAndLandsTheRetiredHead`, which the fourth ruling
+    records as red on the trunk, passed: the trunk has repaired it.
+  - `python3 tools/go-test-shards.py tools/tillr-view -k 6` printed `504 tests passed, 6 shards
+    per package` and exited 0.
+  - `python3 tests/tillr-muse-backend.test.py` and `python3 tests/tillr-docs.test.py` exited 0,
+    and `yolo pack lint yolo-packs/tillr` printed `pack ok`. The lint ran the jail's binary, so
+    the host's render was not verified.
+
 **Agent details:**
 
 - **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10), ending 8; finding F-04 in [the graph design's audit table](../design/tillr-graph-is-the-path.md#124-audit-findings).
@@ -5145,56 +5213,17 @@ run's tree and resolved the four conflicts as the table says. It then reported t
 exceeds it and listed steps 3 to 11 as missing. The plan itself is sound. The design seat applied
 steps 2 to 10 on top of the seventh run's tree in a lane at `6a75bf6dc` on 2026-11-18, exactly as
 written, and the result is stated under "What this ruling measured" below. That work was then
-discarded, because the design seat's commit is this document. What is kept is its difference from
-the seventh run's tree, as the patch at the end of this ruling. This ruling changes no criterion,
-no path and no rule above. It replaces the eleven steps with four commands.
+discarded, because the design seat's commit is this document. What was kept was its difference
+from the seventh run's tree, as a second patch. This ruling changes no criterion, no path and no
+rule above.
 
-- **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of
-  a step is not an ending, and the commit is made once, at step 4. Run every `go test` with the
-  quiet form the third ruling gives.
-  1. **Apply the seventh run's tree.** It is kept at
-     `refs/tillr/preserved/run-item-backend-open-is-a-fact-a7` in the main checkout, and it is
-     step 1 of the plan with its conflicts already resolved. From the lane worktree:
-
-     ```bash
-     git -C /workspace diff 'refs/tillr/preserved/run-item-backend-open-is-a-fact-a7^1' refs/tillr/preserved/run-item-backend-open-is-a-fact-a7 | git apply -3 -
-     ```
-
-     At `6a75bf6dc` this applies 36 files with no conflict.
-  2. **Apply the patch in this ruling.** It is steps 2 to 10 of the plan: 15 files under
-     `tools/tillr-drain/`, 244 lines added and 95 removed. From the lane worktree:
-
-     ```bash
-     awk '/^# backend-open-delta end$/{p=0} p; /^# backend-open-delta begin$/{p=1}' docs/tillr/roadmap.md > "$YOLO_DURABLE_DIR/delta.diff"
-     git apply "$YOLO_DURABLE_DIR/delta.diff"
-     ```
-
-     Then `gofmt -l .` in `tools/tillr-drain` prints nothing and `go build ./...` passes. Do not
-     rewrite what the two patches produce.
-  3. **Run the suites.** Run `just pack-sync` first. Then run
-     `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, the same command for
-     `tools/tillr-view`, and `python3 tests/tillr-muse-backend.test.py`, each with
-     `TILLR_SQLITE_TRACE` and `TILLR_TRACE_DIR` unset and its output in a file in the run's
-     scratch directory.
-  4. **Commit.** Make one commit holding the source changes and the mirror. `docs/tillr/roadmap.md`
-     is not part of it.
-- **One drain test is red on the trunk, and it is not a reason to stop.**
-  `TestRestartGatesAndLandsTheRetiredHead` in `tools/tillr-drain/retire_test.go` failed in the
-  lane at `6a75bf6dc` on 2026-11-18 with none of this work applied, twice in two runs alone, and
-  it fails the same way with the work applied. The second loop lands nothing, and the report holds
-  `candidate-record-mismatch` with "retirement intent has no completed commit". This item touches
-  neither that test nor the retirement code. If it is the only failure in the drain suite and its
-  text holds the words quoted here, commit, and name the test and the base sha in the report. If the trunk has repaired
-  it by the time this is built, it passes.
-- **What does stop this build:** the command in step 1 or step 2 failing to apply; a build failure
-  after step 2; or a failing test other than the one named above. Report it with the step number,
-  the command and its output. A report that lists the steps not yet done is not one of these, and
-  neither is the size of the change: after step 2 no code remains to be written.
-- **If a patch does not apply.** The trunk has moved under one of the files. For step 1, the
-  command already merges three ways; resolve a conflict towards the candidate and keep what the
-  trunk added, as the third ruling's table does. For step 2, apply it with `git apply -3` after
-  `git add -A config tests tools`, and for a hunk that still fails make that edit by hand from the
-  third ruling's step of the same file. Steps 2 to 10 there describe every hunk of the patch.
+- **The build order this ruling gave is replaced.** It applied the seventh run's preserved tree
+  and then a second patch printed here. The ninth run did the first and not the second. The fifth
+  ruling, at the head of this block, joins the two into the one patch at the end of the block,
+  and its four steps are the build order. The second patch is no longer printed separately.
+- **The drain test this ruling found red on the trunk is repaired.**
+  `TestRestartGatesAndLandsTheRetiredHead` in `tools/tillr-drain/retire_test.go` failed at
+  `6a75bf6dc` with none of this work applied. It passes at `b045866f2`, with and without the work.
 - **What this ruling measured,** in the lane at `6a75bf6dc` on 2026-11-18 with steps 1 and 2
   applied and the mirror regenerated:
   - Before the three base tests of step 9 were changed, the ten tests of step 8 gave the result
@@ -5210,100 +5239,639 @@ no path and no rule above. It replaces the eleven steps with four commands.
   - `TestTheComposedPipelineRunsEndToEndOnAFixture` passed in the lane with the work applied, so
     the third ruling's caution about it is closed.
 
-The patch for step 2. The two marker lines are not part of it, and the command in step 2 leaves
-them out.
+The patch for step 1 of the build order at the head of this block. The two marker lines are not
+part of it, and the command in step 1 leaves them out. It was made in the lane at `b045866f2` on
+2026-11-18 with `git diff --cached HEAD -- config tests tools`, after the seventh run's tree and
+the fourth ruling's patch were applied there and the suites above had passed on the result.
 
-```diff
-# backend-open-delta begin
+````diff
+# backend-open-patch begin
+diff --git a/config/tillr/backend-policy.bedrock.json b/config/tillr/backend-policy.bedrock.json
+index 9e68d151f..8dad9123c 100644
+--- a/config/tillr/backend-policy.bedrock.json
++++ b/config/tillr/backend-policy.bedrock.json
+@@ -4,7 +4,6 @@
+   "preference": [
+     "pi"
+   ],
+-  "max_failovers": 1,
+   "seats": {
+     "design": "pi-designer",
+     "build": "pi-build",
+diff --git a/config/tillr/backend-policy.claude.json b/config/tillr/backend-policy.claude.json
+index 73083fc2b..76acf2241 100644
+--- a/config/tillr/backend-policy.claude.json
++++ b/config/tillr/backend-policy.claude.json
+@@ -5,7 +5,6 @@
+     "claude",
+     "pi"
+   ],
+-  "max_failovers": 1,
+   "seats": {
+     "design": ["claude-designer", "pi-designer"],
+     "build": ["claude", "pi"],
+diff --git a/config/tillr/backend-policy.json b/config/tillr/backend-policy.json
+index 98fe6ba66..ce8589c5f 100644
+--- a/config/tillr/backend-policy.json
++++ b/config/tillr/backend-policy.json
+@@ -4,7 +4,6 @@
+   "preference": [
+     "pi"
+   ],
+-  "max_failovers": 1,
+   "seats": {
+     "design": "pi-designer",
+     "build": "pi",
+diff --git a/config/tillr/backend-policy.mixed.json b/config/tillr/backend-policy.mixed.json
+index 8f09fed57..a55cbb70e 100644
+--- a/config/tillr/backend-policy.mixed.json
++++ b/config/tillr/backend-policy.mixed.json
+@@ -4,7 +4,6 @@
+   "preference": [
+     "pi"
+   ],
+-  "max_failovers": 1,
+   "seats": {
+     "design": [
+       "claude-designer",
+diff --git a/tests/tillr-muse-backend.test.py b/tests/tillr-muse-backend.test.py
+index fb8246de9..86318ff33 100644
+--- a/tests/tillr-muse-backend.test.py
++++ b/tests/tillr-muse-backend.test.py
+@@ -473,8 +473,8 @@ def test_policy():
+         "agy: an effort key, but its effort lives inside the model id and the "
+         "adapter refuses --effort",
+     )
+-    # D-MM11: failover walks one ordered preference whose head is the default, bounded by
+-    # max_failovers; a backend with an ordered model list starts at its own `model`.
++    # Failover walks an ordered preference, skipping backends closed by run facts.
++    # No policy carries the retired dispatch budget.
+     preference = policy.get("preference", [])
+     check(preference, "the policy names no failover preference")
+     check(
+@@ -485,10 +485,8 @@ def test_policy():
+         all(name in backends for name in preference),
+         f"the preference {preference} names a backend with no entry",
+     )
+-    check(
+-        policy.get("max_failovers") == 1,
+-        "max_failovers is not 1: an item could be dispatched past the one bounded failover",
+-    )
++    for path in (ROOT / "config/tillr").glob("backend-policy*.json"):
++        check("max_failovers" not in json.loads(path.read_text()), f"{path.name}: retired max_failovers key")
+     for name, entry in backends.items():
+         if "models" in entry:
+             check(
+@@ -533,7 +531,7 @@ def test_claude_policy(policy):
+     backends = policy["backends"]
+     check(policy["default_backend"] == "claude", f"the Claude default is {policy['default_backend']!r}")
+     check(policy.get("preference") == ["claude", "pi"], f"the Claude preference is {policy.get('preference')}")
+-    check(policy.get("max_failovers") == 1, "the Claude policy's max_failovers is not 1")
++    check("max_failovers" not in policy, "the Claude policy names the retired max_failovers key")
+     check(
+         policy.get("seats") == {
+             "design": ["claude-designer", "pi-designer"],
 diff --git a/tools/tillr-drain/README.md b/tools/tillr-drain/README.md
-index 59f5ff07a..a81db9087 100644
+index 91a40a70a..f4d5e9345 100644
 --- a/tools/tillr-drain/README.md
 +++ b/tools/tillr-drain/README.md
-@@ -1148,7 +1148,11 @@ not a dispatch count.
- An infrastructure failure means the harness could not produce a judgable answer:
- it failed to start, refused before running, or died without a report. The latest
- terminal run on a backend closes that backend only in this class. A later run
--ending in any other class reopens it. The loop records the class once, from the
+@@ -404,7 +404,8 @@ The command runs through `tillr run exec` in the item's existing worktree with
+ backend `command`, no model route, no model spend, and no backend quota window.
+ Exit 0 passes and exit 1 fails, irrespective of any report footer. Other exits,
+ a program that cannot start, and an explicit `timeout_ms` wall hold the item as
+-`run-infra-exhausted`, without backend failover. An omitted wall imposes none.
++`command-fault`, without backend failover. Repair the command process and
++explicitly retry the node. An omitted wall imposes none.
+ A failed command follows a matching `when_outcome: fail` edge if one is ready;
+ otherwise the item is held as `node-failed: <node>`, later nodes and the gate do
+ not run, and the work is preserved for inspection.
+@@ -1130,12 +1131,72 @@ counts them; the removed rule spent one fix run per candidate and then held the
+ returned at the next loop start. A conflict's evidence key (`conflictEndingKey` in
+ [`drain/returned.go`](./drain/returned.go)) is its sorted conflicting paths and the digest
+ of its normalized hunks, so the same conflict against another trunk sha repeats and a trunk
+-that moved again inside the hunk does not. A workflow node's refusal keeps its node rule. Machinery failures keep the one failover and `run-infra-exhausted`: the owner ruled
+-that each should move to the next open backend and wait when none is open, but the drain
+-has no fact that says a backend is open again except a quota window, so a walk with no
+-budget would re-dispatch a broken adapter at once and forever. That is the queue item
+-`item-backend-open-is-a-fact` in
+-[the tillr roadmap](../../docs/tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend).
++that moved again inside the hunk does not. A workflow node's refusal keeps its node rule.
++Machinery failures follow [recorded backend availability](#recorded-backend-availability),
++not a dispatch count.
++
++### Recorded backend availability
++
++An infrastructure failure means the harness could not produce a judgable answer:
++it failed to start, refused before running, or died without a report. The latest
++terminal run on a backend closes that backend only in this class. A later run
 +ending in any other class reopens it. Three infrastructure endings are answered
 +by another rule and do not close a backend: a run the loop interrupted itself
 +(a stop, an orphaned run or a stale base), a refusal with a stated reset time
 +(the quota window closes and reopens that backend), and a resumed session that
 +is gone (a fresh session replaces it). The loop records the class once, from the
- terminal event and its pinned evidence, in `backend_outcomes` and a
- `drain.backend-outcome` event. It orders terminal events, not mutable run-row
- metadata: spend corrections do not count as new outcomes, and deleting or changing
-@@ -1156,9 +1160,11 @@ a report after classification cannot change availability. These facts include ru
- from other items and judge runs. A restart, policy edit, elapsed time, or successful
- quota reading is not evidence that a broken harness works again.
-
--The loop captures every newly observed terminal event's class before planning,
--including endings already present when it starts. Read-only views use only saved
--classes and probe results, never an unsaved classification or a report reread.
++terminal event and its pinned evidence, in `backend_outcomes` and a
++`drain.backend-outcome` event. It orders terminal events, not mutable run-row
++metadata: spend corrections do not count as new outcomes, and deleting or changing
++a report after classification cannot change availability. These facts include runs
++from other items and judge runs. A restart, policy edit, elapsed time, or successful
++quota reading is not evidence that a broken harness works again.
++
 +The loop saves the class where it settles a run, and when a loop starts for
 +endings that arrived while none was running. A reader that finds an ending with
 +no saved class (`plan`, `why` or the view, before the next save) classifies it
 +from the record and the log as they are, and does not save it. Once a class is
 +saved it wins over the report.
- This migration does not require an operator to certify an outcome or run a probe.
-
- After a failure, dispatch walks the item's backends in order, wrapping at the end
-@@ -1186,7 +1192,10 @@ records a failed probe and leaves it closed. Output is discarded to keep credent
- out of recorded state. The probe does not dispatch an item or consume its criteria.
- Its cost is the command's cost: a harness/model smoke check can spend provider tokens
- and quota, while the event write itself spends no model tokens. It is explicit,
--never automatic. A probe completed before a later failed run cannot reopen it.
++This migration does not require an operator to certify an outcome or run a probe.
++
++After a failure, dispatch walks the item's backends in order, wrapping at the end
++and skipping closed backends. A multi-backend seat stays within its own list;
++a single-backend seat keeps its existing fallback to the policy preference.
++When every allowed backend is unavailable, the item waits. An infrastructure hold
++is `backend-closed`, with the closed backend names in `deferred_by` and the mover
++shown by `why` and `waiting`: a successful explicit probe or a later run ending
++outside the infrastructure class. Quota holds remain independent; reopening the
++harness does not erase an unexpired quota refusal. No automatic probe or timer
++spends work on a closed backend. Legacy `max_failovers` policy keys are accepted
++but ignored; `run-infra-exhausted` is readable only as history.
++
++An operator can exercise the repaired backend with a smoke-check command and
++record the result:
++
++```bash
++tillr-drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smoke-check-command> <args>
++```
++
++Use a command that actually exercises that named backend's harness and route,
++not a quota query or a command that merely exits zero. Exit zero records a
++successful `drain.backend-probe` event and reopens the backend; every other exit
++records a failed probe and leaves it closed. Output is discarded to keep credentials
++out of recorded state. The probe does not dispatch an item or consume its criteria.
++Its cost is the command's cost: a harness/model smoke check can spend provider tokens
++and quota, while the event write itself spends no model tokens. It is explicit,
 +never automatic. A retry the owner authorized is the only dispatch to a closed
 +backend: it starts once on the item's own backend, reopens that backend if it
 +ends in any other class, and leaves it closed if it fails in the infrastructure
 +class again. A probe completed before a later failed run cannot reopen it.
- A report changed or deleted before the drain first reads the ended run can affect
- that first classification; capturing the class at run completion is outside this
- mechanism, and a successful probe or a later recorded run corrects availability.
++A report changed or deleted before the drain first reads the ended run can affect
++that first classification; capturing the class at run completion is outside this
++mechanism, and a successful probe or a later recorded run corrects availability.
++
++A workflow failure retains the same node, attempt, base, and completed siblings.
++Its ready continuation waits on the same backend facts, then walks the same order
++when a backend reopens rather than faulting the graph or restarting earlier nodes.
++The implementation lives in `readInfrastructureClosed`, `ProbeBackend`, and the
++workflow continuation planner in the drain package.
+
+ ### Owner decisions in documents
+
+diff --git a/tools/tillr-drain/backend_probe.go b/tools/tillr-drain/backend_probe.go
+new file mode 100644
+index 000000000..51195dd29
+--- /dev/null
++++ b/tools/tillr-drain/backend_probe.go
+@@ -0,0 +1,44 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"os"
++	"os/signal"
++	"syscall"
++
++	"github.com/mschulkind-oss/tillr-drain/drain"
++	"github.com/mschulkind-oss/tillr/record"
++)
++
++func probeBackendFace(args []string) int {
++	fs := newFlagSet("probe-backend")
++	path := fs.String("store", "", "store holding backend run history (required)")
++	backend := fs.String("backend", "", "backend exercised by the smoke-check command (required)")
++	if err := fs.Parse(args); err != nil {
++		if errors.Is(err, flag.ErrHelp) {
++			printHelp(fs)
++			return record.ExitOK
++		}
++		return fail(drain.Usagef("%v", err))
++	}
++	if *path == "" || *backend == "" || fs.NArg() == 0 {
++		return fail(drain.Usagef("probe-backend needs --store <path>, --backend <name> -- <smoke-check command>"))
++	}
++	if _, err := os.Stat(*path); err != nil {
++		return fail(openFailure(err))
++	}
++	root, err := os.Getwd()
++	if err != nil {
++		return fail(err)
++	}
++	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
++	defer cancel()
++	if err := drain.ProbeBackend(ctx, *path, root, *backend, fs.Args()); err != nil {
++		return fail(err)
++	}
++	fmt.Printf("backend %s: successful probe recorded\n", *backend)
++	return record.ExitOK
++}
+diff --git a/tools/tillr-drain/backend_probe_test.go b/tools/tillr-drain/backend_probe_test.go
+new file mode 100644
+index 000000000..54b6e569c
+--- /dev/null
++++ b/tools/tillr-drain/backend_probe_test.go
+@@ -0,0 +1,30 @@
++package main_test
++
++import (
++	"github.com/mschulkind-oss/tillr-drain/drain"
++	"github.com/mschulkind-oss/tillr-run/run"
++	"testing"
++)
++
++func TestProbeBackendFaceRecordsSuccessAndFailure(t *testing.T) {
++	path := fixture(t, itemRecord("item_042", "in-queue"), runRecord("broken", "item_042", "lane-9", "first", run.StateExited, exitCode(2), ""))
++	tickPath := tick(t, "2026-11-18T00:00:00Z", []string{"lane-1"}, 1, policyDoc(t, map[string]any{"default_backend": "first", "preference": []string{"first"}, "backends": map[string]any{"first": map[string]any{"adapter": "/bin/true", "model": "route"}}}))
++	if got := plan(t, path, tickPath)[0].Payload; got.Reason != drain.ReasonBackendClosed {
++		t.Fatalf("before probe: %+v", got)
++	}
++	if code, out := invoke(t, "probe-backend", "--store", path, "--backend", "first", "--", "/bin/false"); code == 0 {
++		t.Fatalf("failed probe passed: %s", out)
++	}
++	if got := plan(t, path, tickPath)[0].Payload; got.Action != drain.ActionHold {
++		t.Fatalf("failed probe reopened: %+v", got)
++	}
++	if code, out := invoke(t, "probe-backend", "--store", path, "--backend", "first", "--", "/bin/true"); code != 0 {
++		t.Fatalf("successful probe refused: %d %s", code, out)
++	}
++	if got := plan(t, path, tickPath)[0].Payload; got.Action != drain.ActionDispatch {
++		t.Fatalf("successful probe did not reopen: %+v", got)
++	}
++	if code, out := invoke(t, "probe-backend", "--help"); code != 0 {
++		t.Fatalf("probe help: %d %s", code, out)
++	}
++}
 diff --git a/tools/tillr-drain/drain/backend_availability.go b/tools/tillr-drain/drain/backend_availability.go
-index 90feead63..9fc400da1 100644
---- a/tools/tillr-drain/drain/backend_availability.go
+new file mode 100644
+index 000000000..9fc400da1
+--- /dev/null
 +++ b/tools/tillr-drain/drain/backend_availability.go
-@@ -25,13 +25,13 @@ func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
- 	sequences := map[string]int64{}
- 	for _, o := range outcomes {
- 		name := o.rec.Backend
--		if _, seen := sequences[name]; seen || o.class == "" {
+@@ -0,0 +1,150 @@
++package drain
++
++import (
++	"context"
++	"io"
++	"os/exec"
++	"strings"
++	"time"
++
++	"github.com/mschulkind-oss/tillr-run/run"
++	"github.com/mschulkind-oss/tillr/store"
++)
++
++const backendProbeKind = "drain.backend-probe"
++
++// readInfrastructureClosed projects availability from recorded facts. A run's
++// terminal event and an explicit successful probe share the store's event order;
++// a clock, policy edit, restart, or quota reading cannot reopen infrastructure.
++func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
++	outcomes, err := readBackendOutcomes(r)
++	if err != nil {
++		return nil, err
++	}
++	closed := map[string]bool{}
++	sequences := map[string]int64{}
++	for _, o := range outcomes {
++		name := o.rec.Backend
 +		if _, seen := sequences[name]; seen {
- 			continue
- 		}
--		// Only captured classes are availability facts. The loop records newly
--		// ended runs before planning; read-only faces never classify evidence.
++			continue
++		}
 +		// The latest ending decides. A saved ending keeps its saved fact; an
 +		// unsaved one was classified by the read above, which saves nothing.
- 		sequences[name] = o.seq
--		closed[name] = o.class == AttemptInfrastructure
++		sequences[name] = o.seq
 +		closed[name] = o.closes
- 	}
- 	probes, err := r.Query(`SELECT object_id,MAX(seq) FROM events WHERE kind=? AND json_extract(payload,'$.success')=1 GROUP BY object_id`, backendProbeKind)
- 	if err != nil {
++	}
++	probes, err := r.Query(`SELECT object_id,MAX(seq) FROM events WHERE kind=? AND json_extract(payload,'$.success')=1 GROUP BY object_id`, backendProbeKind)
++	if err != nil {
++		return nil, err
++	}
++	defer probes.Close()
++	for probes.Next() {
++		var backend string
++		var seq int64
++		if err := probes.Scan(&backend, &seq); err != nil {
++			return nil, err
++		}
++		if seq > sequences[backend] {
++			delete(closed, backend)
++		}
++	}
++	return closed, probes.Err()
++}
++
++// ProbeBackend runs an operator-chosen smoke check, not a quota reading or a
++// timer. Its exit is recorded even on failure; only exit zero reopens a backend.
++// Output is discarded so credentials cannot enter the event log.
++func ProbeBackend(ctx context.Context, path, root, backend string, argv []string) error {
++	if strings.TrimSpace(backend) == "" || backend == "command" || len(argv) == 0 || argv[0] == "" {
++		return Usagef("probe-backend needs --store, --backend and a smoke-check command after --")
++	}
++	if err := RecordBackendOutcomes(ctx, path); err != nil {
++		return err
++	}
++	s, err := store.Open(ctx, path, true)
++	if err != nil {
++		return err
++	}
++	defer s.Close()
++	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
++	cmd.Dir = root
++	cmd.Stdout = io.Discard
++	cmd.Stderr = io.Discard
++	probeErr := runCheckGroup(cmd)
++	err = s.WriteTx(ctx, func(tx *store.Tx) error {
++		return appendEffect(tx, backendProbeKind, backend, struct {
++			Success bool `json:"success"`
++		}{probeErr == nil}, time.Now().UTC())
++	})
++	if err != nil {
++		return err
++	}
++	if probeErr != nil {
++		return Externalf("backend %s probe failed: %v; backend remains closed", backend, probeErr)
++	}
++	return nil
++}
++
++// A mixed quota/infrastructure hold names the closed backends on this route and
++// their mover. The walk uses the same seat boundary as dispatch.
++func describeBackendHold(r *store.Reader, d *Decision, policy *Policy) error {
++	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || policy == nil {
++		return nil
++	}
++	closed, err := readInfrastructureClosed(r)
++	if err != nil {
++		return err
++	}
++	start := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
++	if d.RunRequest != nil {
++		start = d.RunRequest.Backend
++	}
++	if d.DeferredBy != "" {
++		start = d.DeferredBy
++	} else if len(d.Parallel) > 0 {
++		for _, node := range parallelNodes(*d) {
++			if node.RunRequest == nil || !closed[node.RunRequest.Backend] {
++				continue
++			}
++			rec, err := terminalRecord(r, node.RunRequest.RunID)
++			if err != nil {
++				return err
++			}
++			if rec == nil {
++				start, d.Seat = node.RunRequest.Backend, node.Seat
++				break
++			}
++		}
++	}
++	names := []string{}
++	seen := map[string]bool{}
++	for name := start; name != "" && !seen[name]; {
++		seen[name] = true
++		if closed[name] {
++			names = append(names, name)
++		}
++		next, _, ok := policy.nextBackend(name, d.Seat)
++		if !ok {
++			break
++		}
++		name = next
++	}
++	d.DeferredBy = ""
++	if len(names) > 0 {
++		d.Reason = ReasonBackendClosed
++		d.DeferredBy = strings.Join(names, ", ")
++		identifyDecision(d)
++	}
++	return nil
++}
++
++// Retain node identity, timeout, and parallel-group provenance while changing
++// only the backend's execution fields.
++func rerouteNodeRequest(policy *Policy, d Decision, name string) *run.Request {
++	request := *policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
++	request.TimeoutMS = d.RunRequest.TimeoutMS
++	request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
++	request.NodeID = d.RunRequest.NodeID
++	request.CorrelationID = d.RunRequest.CorrelationID
++	return &request
++}
+diff --git a/tools/tillr-drain/drain/backend_availability_test.go b/tools/tillr-drain/drain/backend_availability_test.go
+new file mode 100644
+index 000000000..6a42c145b
+--- /dev/null
++++ b/tools/tillr-drain/drain/backend_availability_test.go
+@@ -0,0 +1,169 @@
++package drain
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/mschulkind-oss/tillr-run/run"
++	"github.com/mschulkind-oss/tillr/store"
++)
++
++func backendRun(t *testing.T, f refusalLoopFixture, id, backend string, exit int) {
++	t.Helper()
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		return applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: "lane-1", Backend: backend, State: run.StateExited, ExitCode: code(exit), StartedAt: "2026-11-18T00:00:00Z", FinishedAt: "2026-11-18T00:00:01Z"})
++	})
++}
++
++func TestBackendInfrastructureClosureAndRecordedReopening(t *testing.T) {
++	for _, event := range []string{"run", "probe"} {
++		t.Run(event, func(t *testing.T) {
++			f, l := passFixture(t, "item-a")
++			backendRun(t, f, "broken", "fixture", 2)
++			d := mustPlan(t, l)[0].decision
++			if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture" {
++				t.Fatalf("closed backend dispatched: %+v", d)
++			}
++			// Neither a later clock nor reconstructing a loop is a reopening event.
++			l.cfg.Now = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
++			if got := mustPlan(t, l)[0].decision; got.Action != ActionHold {
++				t.Fatalf("clock reopened backend: %+v", got)
++			}
++			if event == "run" {
++				backendRun(t, f, "answered", "fixture", 0)
++			} else {
++				if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/false"}); err == nil {
++					t.Fatal("failed probe accepted")
++				}
++				if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
++					t.Fatalf("failed probe reopened: %+v", got)
++				}
++				if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
++					t.Fatal(err)
++				}
++			}
++			// Inspect availability directly: an answered item may independently wait for a retry.
++			if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++				t.Fatal(err)
++			}
++			fixtureWrite(t, f, func(tx *store.Tx) error {
++				closed, err := readInfrastructureClosed(tx.Reader())
++				if err == nil && closed["fixture"] {
++					t.Error("recorded event did not reopen backend")
++				}
++				return err
++			})
++			if event == "probe" && mustPlan(t, l)[0].decision.Action != ActionDispatch {
++				t.Fatal("probe did not release item")
++			}
++			backendRun(t, f, "broken-again", "fixture", 2)
++			if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
++				t.Fatalf("old reopening event won over new failure: %+v", got)
++			}
++		})
++	}
++}
++
++func TestBackendWalkWrapsAndKeepsSeat(t *testing.T) {
++	p := Policy{Preference: []string{"a", "b", "c"}, SeatLists: map[string][]string{"design": {"a", "b"}}}
++	name, left, ok := p.availableBackend("c", "", map[string]bool{"c": true})
++	if !ok || name != "a" || left != "" {
++		t.Fatalf("preference did not wrap: %s %s %v", name, left, ok)
++	}
++	name, left, ok = p.availableBackend("b", "design", map[string]bool{"b": true})
++	if !ok || name != "a" || left != "" {
++		t.Fatalf("seat did not wrap: %s %s %v", name, left, ok)
++	}
++	if _, _, ok := p.availableBackend("b", "design", map[string]bool{"a": true, "b": true}); ok {
++		t.Fatal("escaped closed seat")
++	}
++}
++
++func TestWorkflowBackendFailureWaitsAndReopensSameNode(t *testing.T) {
++	f, l, _ := workflowLoopFixture(t, "")
++	p := mustPlan(t, l)[0]
++	if ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now()); err != nil || !ok {
++		t.Fatalf("claim: %v %v", ok, err)
++	}
++	d := p.decision
++	backendRun(t, f, d.RunRequest.RunID, "fixture", 2)
++	if err := l.retryWorkflowNode(context.Background(), d, runGit(t, f.root, "rev-parse", TrunkRef), run.Record{RunID: d.RunRequest.RunID, Backend: "fixture", State: run.StateExited, ExitCode: code(2)}, &LoopResult{}); err != nil {
++		t.Fatal(err)
++	}
++	wait := mustPlan(t, l)[0].decision
++	if wait.Action != ActionHold || wait.Reason != ReasonBackendClosed || wait.NodeIndex != d.NodeIndex {
++		t.Fatalf("node did not wait: %+v", wait)
++	}
++	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
++		t.Fatal(err)
++	}
++	next := mustPlan(t, l)[0].decision
++	if next.Action != ActionDispatch || next.NodeIndex != d.NodeIndex || next.Attempt != d.Attempt {
++		t.Fatalf("node not resumed: %+v", next)
++	}
++}
++
++func TestBackendAvailabilityIgnoresMetadataAndReportEdits(t *testing.T) {
++	f, l := passFixture(t, "item-a")
++	report := filepath.Join(f.root, "answer.md")
++	writeForkFile(t, report, "RESULT: failed\n")
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		return applyTerminal(tx, run.Record{RunID: "answered", ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: code(1), StartedAt: "2026-11-18T00:00:00Z", FinishedAt: "2026-11-18T00:00:01Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: report}}})
++	})
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	check := func(want bool) {
++		t.Helper()
++		fixtureWrite(t, f, func(tx *store.Tx) error {
++			closed, err := readInfrastructureClosed(tx.Reader())
++			if err == nil && closed["fixture"] != want {
++				t.Errorf("closed=%v, want %v", closed, want)
++			}
++			return err
++		})
++	}
++	check(false)
++	if err := os.Remove(report); err != nil {
++		t.Fatal(err)
++	}
++	check(false)
++	writeForkFile(t, report, "stream without a footer\n")
++	check(false)
++	backendRun(t, f, "broken", "fixture", 2)
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	check(true)
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		_, err := tx.Exec(`UPDATE runs SET event_seq=999999 WHERE run_id='answered'`)
++		return err
++	})
++	check(true)
++	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
++		t.Fatalf("metadata reopened backend: %+v", got)
++	}
++}
++
++func TestBackendHoldNamesOnlyThePostFailureWalk(t *testing.T) {
++	f, l := passFixture(t, "item-a")
++	b := l.cfg.Policy.Backends["fixture"]
++	l.cfg.Policy.Backends["override"] = b
++	l.cfg.Policy.Backends["alternate"] = b
++	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
++	l.cfg.Policy.Overrides = map[string]string{"item-a": "override"}
++	backendRun(t, f, "override-failed", "override", 2)
++	// Other items close the route without changing this item's failover start.
++	for _, backend := range []string{"fixture", "alternate"} {
++		fixtureWrite(t, f, func(tx *store.Tx) error {
++			return applyTerminal(tx, run.Record{RunID: backend + "-failed", ItemID: "item-b", LaneID: "lane-1", Backend: backend, State: run.StateExited, ExitCode: code(2), StartedAt: "2026-11-18T00:00:00Z", FinishedAt: "2026-11-18T00:00:01Z"})
++		})
++	}
++	d := mustPlan(t, l)[0].decision
++	if d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture, alternate" {
++		t.Fatalf("hold named an unreachable reopening: %+v", d)
++	}
++}
 diff --git a/tools/tillr-drain/drain/backend_outcomes.go b/tools/tillr-drain/drain/backend_outcomes.go
-index 5b827b428..703f1325e 100644
---- a/tools/tillr-drain/drain/backend_outcomes.go
+new file mode 100644
+index 000000000..703f1325e
+--- /dev/null
 +++ b/tools/tillr-drain/drain/backend_outcomes.go
-@@ -12,46 +12,139 @@ import (
-
- // Terminal classifications are captured once, keyed to the immutable run.finish
- // event, never the mutable runs.event_seq (usage corrections advance that field).
+@@ -0,0 +1,195 @@
++package drain
++
++import (
++	"context"
++	"encoding/json"
++	"strings"
++	"time"
++
++	"github.com/mschulkind-oss/tillr-run/run"
++	"github.com/mschulkind-oss/tillr/store"
++)
++
++// Terminal classifications are captured once, keyed to the immutable run.finish
++// event, never the mutable runs.event_seq (usage corrections advance that field).
 +// class is what ClassifyAttempt answered, which routing reads; closes is the
 +// availability fact: an infrastructure ending that no other rule answers.
- const backendOutcomesDDL = `CREATE TABLE IF NOT EXISTS backend_outcomes (
-  terminal_seq INTEGER PRIMARY KEY REFERENCES events(seq),
-- class TEXT NOT NULL
++const backendOutcomesDDL = `CREATE TABLE IF NOT EXISTS backend_outcomes (
++ terminal_seq INTEGER PRIMARY KEY REFERENCES events(seq),
 + class TEXT NOT NULL,
 + closes INTEGER NOT NULL DEFAULT 0
- );`
-
++);`
++
 +const backendOutcomeKind = "drain.backend-outcome"
 +
- type backendOutcome struct {
--	seq   int64
--	rec   run.Record
--	class AttemptClass
++type backendOutcome struct {
 +	seq    int64
 +	rec    run.Record
 +	class  AttemptClass
@@ -5311,39 +5879,33 @@ index 5b827b428..703f1325e 100644
 +	// saved says the class and closes were read from backend_outcomes. An unsaved
 +	// ending is classified in memory by whoever reads it; only the loop saves.
 +	saved bool
- }
-
++}
++
 +// readBackendOutcomes answers every agent run ending, newest first. A saved
 +// ending keeps its saved facts; an unsaved one is classified from the record and
 +// the log as they are now. It writes nothing, so a read-only face may call it.
- func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
--	rows, err := r.Query(`SELECT e.seq,e.payload,COALESCE(o.class,'') FROM events e
++func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
 +	rows, err := r.Query(`SELECT e.seq,e.payload,COALESCE(o.class,''),COALESCE(o.closes,0) FROM events e
-  LEFT JOIN backend_outcomes o ON o.terminal_seq=e.seq WHERE e.kind=? ORDER BY e.seq DESC`, run.FinishKind)
- 	if err != nil && strings.Contains(err.Error(), "no such table: backend_outcomes") {
--		rows, err = r.Query(`SELECT seq,payload,'' FROM events WHERE kind=? ORDER BY seq DESC`, run.FinishKind)
++ LEFT JOIN backend_outcomes o ON o.terminal_seq=e.seq WHERE e.kind=? ORDER BY e.seq DESC`, run.FinishKind)
++	if err != nil && strings.Contains(err.Error(), "no such table: backend_outcomes") {
 +		rows, err = r.Query(`SELECT seq,payload,'',0 FROM events WHERE kind=? ORDER BY seq DESC`, run.FinishKind)
- 	}
- 	if err != nil {
- 		return nil, err
- 	}
--	defer rows.Close()
- 	out := []backendOutcome{}
++	}
++	if err != nil {
++		return nil, err
++	}
++	out := []backendOutcome{}
 +	unsaved := false
- 	for rows.Next() {
- 		var o backendOutcome
- 		var raw string
--		if err := rows.Scan(&o.seq, &raw, &o.class); err != nil {
++	for rows.Next() {
++		var o backendOutcome
++		var raw string
 +		if err := rows.Scan(&o.seq, &raw, &o.class, &o.closes); err != nil {
 +			rows.Close()
- 			return nil, err
- 		}
- 		if err := json.Unmarshal([]byte(raw), &o.rec); err != nil {
++			return nil, err
++		}
++		if err := json.Unmarshal([]byte(raw), &o.rec); err != nil {
 +			rows.Close()
- 			return nil, err
- 		}
--		if o.rec.Backend != "command" {
--			out = append(out, o)
++			return nil, err
++		}
 +		if o.rec.Backend == "command" {
 +			continue
 +		}
@@ -5367,17 +5929,14 @@ index 5b827b428..703f1325e 100644
 +	for i := range out {
 +		if out[i].saved {
 +			continue
- 		}
++		}
 +		rec := out[i].rec
 +		out[i].class = ClassifyAttempt(rec, logTail(rec.ArtifactRefs))
 +		out[i].closes = out[i].class == AttemptInfrastructure && !answeredByAnotherRule(rec, interrupted, byRun)
- 	}
--	return out, rows.Err()
++	}
 +	return out, nil
- }
-
--// RecordBackendOutcomes observes newly finished runs, including standalone and
--// judge runs. Classification reads pinned evidence once and survives its loss.
++}
++
 +// answeredByAnotherRule says an infrastructure-class ending is not evidence that
 +// its backend is broken: the loop interrupted the run itself, the provider
 +// refused it with a stated reset time (the quota window closes and reopens that
@@ -5435,52 +5994,81 @@ index 5b827b428..703f1325e 100644
 +// ending not saved yet, including standalone and judge runs. The loop calls it
 +// where it settles a run and when it starts; a saved ending survives a later
 +// edit or loss of its report.
- func RecordBackendOutcomes(ctx context.Context, path string) error {
- 	reader, err := store.OpenRead(ctx, path)
- 	if err != nil {
-@@ -65,8 +158,7 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
- 	}
- 	pending := []backendOutcome{}
- 	for _, o := range outcomes {
--		if o.class == "" {
--			o.class = ClassifyAttempt(o.rec, logTail(o.rec.ArtifactRefs))
++func RecordBackendOutcomes(ctx context.Context, path string) error {
++	reader, err := store.OpenRead(ctx, path)
++	if err != nil {
++		return err
++	}
++	var outcomes []backendOutcome
++	err = reader.ReadTx(ctx, func(r *store.Reader) error { var err error; outcomes, err = readBackendOutcomes(r); return err })
++	reader.Close()
++	if err != nil {
++		return err
++	}
++	pending := []backendOutcome{}
++	for _, o := range outcomes {
 +		if !o.saved {
- 			pending = append(pending, o)
- 		}
- 	}
-@@ -80,7 +172,7 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
- 	defer s.Close()
- 	return s.WriteTx(ctx, func(tx *store.Tx) error {
- 		for _, o := range pending {
--			inserted, err := tx.Exec(`INSERT OR IGNORE INTO backend_outcomes(terminal_seq,class) VALUES (?,?)`, o.seq, o.class)
++			pending = append(pending, o)
++		}
++	}
++	if len(pending) == 0 {
++		return nil
++	}
++	s, err := store.Open(ctx, path, true)
++	if err != nil {
++		return err
++	}
++	defer s.Close()
++	return s.WriteTx(ctx, func(tx *store.Tx) error {
++		for _, o := range pending {
 +			inserted, err := tx.Exec(`INSERT OR IGNORE INTO backend_outcomes(terminal_seq,class,closes) VALUES (?,?,?)`, o.seq, o.class, o.closes)
- 			if err != nil {
- 				return err
- 			}
-@@ -92,7 +184,8 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
- 				if err := appendEffect(tx, backendOutcomeKind, o.rec.Backend, struct {
- 					TerminalSeq int64        `json:"terminal_seq"`
- 					Class       AttemptClass `json:"class"`
--				}{o.seq, o.class}, time.Now().UTC()); err != nil {
++			if err != nil {
++				return err
++			}
++			count, err := inserted.RowsAffected()
++			if err != nil {
++				return err
++			}
++			if count > 0 {
++				if err := appendEffect(tx, backendOutcomeKind, o.rec.Backend, struct {
++					TerminalSeq int64        `json:"terminal_seq"`
++					Class       AttemptClass `json:"class"`
 +					Closes      bool         `json:"closes"`
 +				}{o.seq, o.class, o.closes}, time.Now().UTC()); err != nil {
- 					return err
- 				}
- 			}
-@@ -100,5 +193,3 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
- 		return nil
- 	})
- }
--
--const backendOutcomeKind = "drain.backend-outcome"
++					return err
++				}
++			}
++		}
++		return nil
++	})
++}
 diff --git a/tools/tillr-drain/drain/backend_recorded_test.go b/tools/tillr-drain/drain/backend_recorded_test.go
-index 1670af732..2fd4750a7 100644
---- a/tools/tillr-drain/drain/backend_recorded_test.go
+new file mode 100644
+index 000000000..2fd4750a7
+--- /dev/null
 +++ b/tools/tillr-drain/drain/backend_recorded_test.go
-@@ -19,6 +19,20 @@ func TestSavedInfrastructureClassKeepsItemWaitingAfterReportEdit(t *testing.T) {
- 	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
- 		t.Fatalf("failed stream did not wait: %+v", got)
- 	}
+@@ -0,0 +1,140 @@
++package drain
++
++import (
++	"context"
++	"path/filepath"
++	"testing"
++
++	"github.com/mschulkind-oss/tillr-run/run"
++	"github.com/mschulkind-oss/tillr/store"
++)
++
++func TestSavedInfrastructureClassKeepsItemWaitingAfterReportEdit(t *testing.T) {
++	f, l := passFixture(t, "item-a")
++	report := filepath.Join(f.root, "report.md")
++	writeForkFile(t, report, "dropped stream without footer\n")
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		return applyTerminal(tx, run.Record{RunID: "stream-failed", ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: code(1), StartedAt: "2026-11-18T00:00:00Z", FinishedAt: "2026-11-18T00:00:01Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: report}}})
++	})
++	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
++		t.Fatalf("failed stream did not wait: %+v", got)
++	}
 +	// A plan only reads: the class is saved where the loop settles or starts.
 +	fixtureWrite(t, f, func(tx *store.Tx) error {
 +		var count int
@@ -5495,19 +6083,23 @@ index 1670af732..2fd4750a7 100644
 +	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
 +		t.Fatal(err)
 +	}
- 	writeForkFile(t, report, "RESULT: failed\n")
- 	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
- 		t.Fatalf("edited report displaced saved infrastructure class: %+v", got)
-@@ -31,23 +45,35 @@ func TestSavedInfrastructureClassKeepsItemWaitingAfterReportEdit(t *testing.T) {
- 	}
- }
-
--func TestBackendAvailabilityUsesOnlySavedClass(t *testing.T) {
++	writeForkFile(t, report, "RESULT: failed\n")
++	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
++		t.Fatalf("edited report displaced saved infrastructure class: %+v", got)
++	}
++	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
++		t.Fatal(err)
++	}
++	if got := mustPlan(t, l)[0].decision; got.Action != ActionDispatch {
++		t.Fatalf("probe did not release failed item: %+v", got)
++	}
++}
++
 +// An ending nobody has saved is classified by whoever reads it, and the read
 +// saves nothing: a plan made before the loop's first save still sees the closure.
 +func TestUnsavedEndingClosesItsBackendWithoutAWrite(t *testing.T) {
- 	f, _ := passFixture(t, "item-a")
- 	backendRun(t, f, "not-observed", "fixture", 2)
++	f, _ := passFixture(t, "item-a")
++	backendRun(t, f, "not-observed", "fixture", 2)
 +	events := func() (count int) {
 +		fixtureWrite(t, f, func(tx *store.Tx) error {
 +			return tx.Reader().QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
@@ -5515,34 +6107,147 @@ index 1670af732..2fd4750a7 100644
 +		return count
 +	}
 +	before := events()
- 	fixtureWrite(t, f, func(tx *store.Tx) error {
- 		closed, err := readInfrastructureClosed(tx.Reader())
--		if closed["fixture"] {
--			t.Error("unobserved ending became an availability fact")
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		closed, err := readInfrastructureClosed(tx.Reader())
 +		if !closed["fixture"] {
 +			t.Error("unsaved infrastructure ending did not close its backend")
- 		}
- 		return err
- 	})
++		}
++		return err
++	})
 +	if after := events(); after != before {
 +		t.Errorf("reading availability wrote %d event(s)", after-before)
 +	}
- 	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
- 		t.Fatal(err)
- 	}
- 	fixtureWrite(t, f, func(tx *store.Tx) error {
- 		closed, err := readInfrastructureClosed(tx.Reader())
- 		if !closed["fixture"] {
--			t.Error("saved infrastructure class did not close backend")
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		closed, err := readInfrastructureClosed(tx.Reader())
++		if !closed["fixture"] {
 +			t.Error("saved infrastructure ending did not keep its backend closed")
- 		}
- 		return err
- 	})
++		}
++		return err
++	})
++}
++
++func TestBackendOutcomesCaptureEveryEndedRunOnce(t *testing.T) {
++	f, _ := passFixture(t, "item-a")
++	backendRun(t, f, "older", "fixture", 2)
++	backendRun(t, f, "newer", "fixture", 0)
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	fixtureWrite(t, f, func(tx *store.Tx) error {
++		var count int
++		if err := tx.Reader().QueryRow(`SELECT COUNT(*) FROM backend_outcomes`).Scan(&count); err != nil {
++			return err
++		}
++		if count != 2 {
++			t.Errorf("saved %d classes, want both endings once", count)
++		}
++		return nil
++	})
++}
++
++func TestParallelBackendHoldNamesWaitingNodeNotFirstSibling(t *testing.T) {
++	f, l, _ := parallelFixture(t)
++	d := mustPlan(t, l)[0].decision
++	first := d
++	first.WorkflowRestart = true
++	first.RunRequest = rerouteNodeRequest(l.cfg.Policy, first, "fixture")
++	first.RunRequest.RunID = "first-ready"
++	second := first
++	second.RunRequest = rerouteNodeRequest(l.cfg.Policy, second, "fixture")
++	second.RunRequest.Backend = "broken"
++	second.RunRequest.RunID = "second-ready"
++	second.NodeIndex = 1
++	second.Seat = "review"
++	first.Parallel = []Decision{second}
++	l.cfg.Policy.Backends["broken"] = l.cfg.Policy.Backends["fixture"]
++	l.cfg.Policy.Seats["review"] = "broken"
++	backendRun(t, f, "broken-ending", "broken", 2)
++	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
++		t.Fatal(err)
++	}
++	for _, restart := range []bool{false, true} {
++		first.WorkflowRestart = restart
++		fixtureWrite(t, f, func(tx *store.Tx) error {
++			hold, err := pendingDecision(tx.Reader(), &pendingWork{Decision: first, Ready: true}, l.cfg.Now(), nil, nil, l.cfg.Policy, map[string]bool{"broken": true}, 0)
++			if err != nil {
++				return err
++			}
++			if err := describeBackendHold(tx.Reader(), &hold, l.cfg.Policy); err != nil {
++				return err
++			}
++			if hold.Reason != ReasonBackendClosed || hold.DeferredBy != "broken" {
++				t.Errorf("restart=%v hold names wrong backend: %+v", restart, hold)
++			}
++			return nil
++		})
++	}
++}
+diff --git a/tools/tillr-drain/drain/command_loop_test.go b/tools/tillr-drain/drain/command_loop_test.go
+index 52bbda189..7ac04a336 100644
+--- a/tools/tillr-drain/drain/command_loop_test.go
++++ b/tools/tillr-drain/drain/command_loop_test.go
+@@ -150,7 +150,7 @@ func TestCommandWorkflowOutcomesAndPreservation(t *testing.T) {
+ 				}
+ 				want := "node-failed: check"
+ 				if mode == "fault" || mode == "missing" || mode == "wall" {
+-					want = ReasonInfraExhausted
++					want = ReasonCommandFault
+ 				}
+ 				if mode == "dirty" || mode == "escape-commit" {
+ 					want = ScopeEscape
+diff --git a/tools/tillr-drain/drain/command_restart_test.go b/tools/tillr-drain/drain/command_restart_test.go
+index 2b1687e64..c3aaf7916 100644
+--- a/tools/tillr-drain/drain/command_restart_test.go
++++ b/tools/tillr-drain/drain/command_restart_test.go
+@@ -25,7 +25,7 @@ func TestCommandHoldRestartKeepsOutcomeAndBuilderPin(t *testing.T) {
+ 			base := runGit(t, f.root, "rev-parse", "HEAD")
+ 			outcome, want := "failed", "node-failed: check"
+ 			if mode == "fault" {
+-				outcome, want = "fault", ReasonInfraExhausted
++				outcome, want = "fault", ReasonCommandFault
+ 			}
+ 			// Reproduce the crash window after hold classification and reset, before
+ 			// markExamined. These are the same operations terminal settlement performs.
+diff --git a/tools/tillr-drain/drain/definition.go b/tools/tillr-drain/drain/definition.go
+index ac8d18c47..d53195e0e 100644
+--- a/tools/tillr-drain/drain/definition.go
++++ b/tools/tillr-drain/drain/definition.go
+@@ -52,9 +52,9 @@ var landingHolds = map[string]string{
+ // checks. These are not landing-specific; the value names an optional prerequisite.
+ var generalHolds = map[string]string{
+ 	ReasonCompleteItemFault: "", ReasonCriteriaUnjudged: "", ReasonCandidateNoOp: "",
+-	ReasonBackendWindow: "", ReasonBlocked: "", ReasonNotReady: "",
++	ReasonBackendWindow: "", ReasonBackendClosed: "", ReasonBlocked: "", ReasonNotReady: "",
+ 	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "",
+-	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "",
++	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "", ReasonCommandFault: "",
+ 	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",
+ 	ReasonRetryJudged: "", ReasonRetryUnjudged: "", ReasonToolingDefect: "",
+ 	ReasonDecisionCollision: "", ReasonSettleFailed: "",
+diff --git a/tools/tillr-drain/drain/dispatches.go b/tools/tillr-drain/drain/dispatches.go
+index 879cb62f4..26ac3a935 100644
+--- a/tools/tillr-drain/drain/dispatches.go
++++ b/tools/tillr-drain/drain/dispatches.go
+@@ -195,7 +195,7 @@ func init() {
+ 	// the same statement. A store created before drain_passes or retries existed gains each
+ 	// on its next write-open, which is what the migration's CREATE TABLE IF NOT EXISTS is
+ 	// for.
+-	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL+backendQuotaDDL); err != nil {
++	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL+backendQuotaDDL+backendOutcomesDDL); err != nil {
+ 		panic(err)
+ 	}
+ 	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER"} {
 diff --git a/tools/tillr-drain/drain/failover.go b/tools/tillr-drain/drain/failover.go
-index 11d25a682..1334b684d 100644
+index 409e24cbc..1334b684d 100644
 --- a/tools/tillr-drain/drain/failover.go
 +++ b/tools/tillr-drain/drain/failover.go
-@@ -156,28 +156,10 @@ type priorRun struct {
+@@ -156,36 +156,31 @@ type priorRun struct {
  // store and what the store points at, and a log that is gone reads as "no report" rather
  // than as an error.
  func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
@@ -5567,22 +6272,48 @@ index 11d25a682..1334b684d 100644
 -			interrupted[*e.ObjectID], restaged[*e.ObjectID] = true, true
 -		case run.ResumeKind:
 -			delete(interrupted, *e.ObjectID)
--		}
--	}
- 	// Once the loop observes an ending, routing and availability share that
- 	// saved class; a report edit cannot move the item to a different retry rule.
- 	outcomes, err := readBackendOutcomes(r)
-@@ -186,7 +168,7 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
- 	}
- 	classes := map[string]AttemptClass{}
- 	for _, o := range outcomes {
--		if _, seen := classes[o.rec.RunID]; !seen {
++	// Once the loop observes an ending, routing and availability share that
++	// saved class; a report edit cannot move the item to a different retry rule.
++	outcomes, err := readBackendOutcomes(r)
++	if err != nil {
++		return nil, err
++	}
++	classes := map[string]AttemptClass{}
++	for _, o := range outcomes {
 +		if _, seen := classes[o.rec.RunID]; !seen && o.saved {
- 			classes[o.rec.RunID] = o.class
++			classes[o.rec.RunID] = o.class
  		}
  	}
+-	// Timestamp ties follow recording order, not lexical run-id order (a10 sorts
+-	// before a9). event_seq is the store event's sequence; SQLite's insertion row
+-	// number, rowid, breaks ties for legacy rows with no event sequence.
++	// Endings define run order, not mutable row metadata: a usage correction
++	// can advance runs.event_seq without ending a run again. Legacy rows with
++	// no ending event retain their recorded sequence, timestamp, and row order.
+ 	rows, err := r.Query(
+ 		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs
+ 		   FROM runs WHERE item_id IS NOT NULL AND NOT EXISTS
+               (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id)
+-           ORDER BY item_id, started_at, event_seq, rowid`)
++           ORDER BY item_id, COALESCE((SELECT MAX(e.seq) FROM events e
++             WHERE e.kind='run.finish' AND e.object_id=runs.run_id), event_seq), started_at, rowid`)
+ 	if err != nil {
+ 		return nil, readFailure(err)
+ 	}
+@@ -209,7 +204,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
+ 		if err := json.Unmarshal([]byte(artifactRefs), &refs); err != nil {
+ 			return nil, Internalf("reading the artifact refs of run %q: %v", rec.RunID, err)
+ 		}
+-		class := ClassifyAttempt(rec, logTail(refs))
++		class := classes[rec.RunID]
++		if class == "" {
++			class = ClassifyAttempt(rec, logTail(refs))
++		}
+ 		if interrupted[rec.RunID] {
+ 			class = AttemptInterrupted
+ 		}
 diff --git a/tools/tillr-drain/drain/loop.go b/tools/tillr-drain/drain/loop.go
-index 5b0650255..1fac1bd7d 100644
+index 254a6859d..85b13199f 100644
 --- a/tools/tillr-drain/drain/loop.go
 +++ b/tools/tillr-drain/drain/loop.go
 @@ -772,6 +772,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
@@ -5606,7 +6337,39 @@ index 5b0650255..1fac1bd7d 100644
  	lane := decision.LaneID
  	worktree := l.lanePath(lane)
  	request := *decision.RunRequest
-@@ -1702,6 +1709,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
+@@ -1642,7 +1649,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
+ 		}
+ 	}
+ 	class := ClassifyAttempt(record, log)
+-	if class == AttemptInfrastructure {
++	for class == AttemptInfrastructure {
+ 		if err := l.recordBackendWindow(ctx, record); err != nil {
+ 			return laneOutcome{err: err}
+ 		}
+@@ -1652,8 +1659,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
+ 		streak := l.infraStreak
+ 		l.mu.Unlock()
+ 		l.reportf("loop: %s failed in the infrastructure class (%d consecutive)\n", request.ItemID, streak)
+-		// The one permitted failover: the machinery failed and the item learned nothing,
+-		// so the same work goes to the next backend once, after the worktree is reset. It
++		// Machinery failed: close that backend and walk to the next open one after reset.
++		// A fully closed route ends this walk until recorded evidence reopens it. It
+ 		// runs in this lane's own goroutine, so its bracket has one target and a violation
+ 		// there names this run.
+ 		if deferJudge {
+@@ -1665,7 +1672,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
+ 		if err != nil {
+ 			return laneOutcome{err: err}
+ 		}
++		if !ok {
++			break
++		}
+ 		if ok {
++			decision.Attempt++
+ 			failover.CorrelationID = tick
+ 			if err := l.preserveWork(ctx, lane, request.RunID, "infrastructure failure before failover"); err != nil {
+ 				return laneOutcome{err: err}
+@@ -1698,6 +1709,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
  			if err != nil || stop != "" {
  				return laneOutcome{stop: stop, err: err}
  			}
@@ -5616,24 +6379,99 @@ index 5b0650255..1fac1bd7d 100644
  			class = ClassifyAttempt(record, log)
  			if class == AttemptInfrastructure {
  				if err := l.recordBackendWindow(ctx, record); err != nil {
+@@ -1707,8 +1721,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
+ 		}
+ 	}
+ 	if class == AttemptInfrastructure {
+-		// The failover failed too, or the policy has no hop left: the item holds and the
+-		// next tick plans it as `run-infra-exhausted`. The criteria are untouched, the
++		// No backend is open: the next pass waits on recorded backend recovery.
++		// The criteria are untouched, the
+ 		// head is pinned, and the loop moves on.
+ 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+ 	}
+diff --git a/tools/tillr-drain/drain/parallel_failover.go b/tools/tillr-drain/drain/parallel_failover.go
+index 244e81275..e589f226a 100644
+--- a/tools/tillr-drain/drain/parallel_failover.go
++++ b/tools/tillr-drain/drain/parallel_failover.go
+@@ -21,8 +21,11 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
+ 	if err != nil {
+ 		return node, false, err
+ 	}
+-	if !ok || node.NodeInfraFailures >= l.cfg.Policy.failovers() {
+-		return node, false, nil
++	if !ok {
++		request, _, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, node.RunRequest.RunID+"-failover", rec.Backend, node.Seat)
++		if request == nil {
++			return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
++		}
+ 	}
+ 	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
+ 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
 diff --git a/tools/tillr-drain/drain/pass.go b/tools/tillr-drain/drain/pass.go
-index dd1679789..614cd0c8d 100644
+index 518019001..614cd0c8d 100644
 --- a/tools/tillr-drain/drain/pass.go
 +++ b/tools/tillr-drain/drain/pass.go
-@@ -500,7 +500,11 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
- 		} else {
- 			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
+@@ -41,7 +41,7 @@ const (
+ )
+
+ func init() {
+-	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
++	for _, kind := range []string{backendProbeKind, backendOutcomeKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
+ 		if err := event.Register(kind, Utility); err != nil {
+ 			panic(err)
+ 		}
+@@ -432,17 +432,28 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
+ 	}
+ 	if work.Ready {
+ 		if len(d.Parallel) > 0 && d.WorkflowRestart {
+-			for _, node := range parallelNodes(d) {
++			nodes := parallelNodes(d)
++			for i, node := range nodes {
+ 				rec, err := terminalRecord(r, node.RunRequest.RunID)
+ 				if err != nil {
+ 					return Decision{}, err
+ 				}
+-				if rec == nil && !commandStage(node) && shut[node.RunRequest.Backend] {
++				if rec == nil && !commandStage(node) && node.NodeInfraFailures > 0 {
++					name, _, ok := policy.availableBackend(node.RunRequest.Backend, node.Seat, shut)
++					if ok {
++						nodes[i].RunRequest = rerouteNodeRequest(policy, node, name)
++					}
++				}
++				if rec == nil && !commandStage(node) && shut[nodes[i].RunRequest.Backend] {
++					d.Seat = node.Seat
++					d.DeferredBy = nodes[i].RunRequest.Backend
+ 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+ 					identifyDecision(&d)
+ 					return d, nil
+ 				}
+ 			}
++			d = nodes[0]
++			d.Parallel = nodes[1:]
+ 		}
+ 		if len(d.Parallel) > 0 {
+ 			open, err := dispatchQuotaOpen(r, d, shut, policy)
+@@ -480,7 +491,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
+ 			name = d.RunRequest.Backend
+ 		}
+ 		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
+-		if d.WorkflowRestart {
++		if d.WorkflowRestart && d.NodeInfraFailures == 0 {
+ 			name, degraded = d.RunRequest.Backend, ""
+ 			ok = !shut[name]
+ 		}
+@@ -491,6 +502,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
  			if d.WorkflowRestart {
--				request = rerouteNodeRequest(policy, d, name)
-+				retained := *d.RunRequest
-+				request = &retained
+ 				retained := *d.RunRequest
+ 				request = &retained
 +				if name != retained.Backend {
 +					request = rerouteNodeRequest(policy, d, name)
 +				}
  			}
  			if request == nil {
  				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
-@@ -1065,7 +1069,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
+@@ -1055,7 +1069,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
  		}
  		d := p.decision
  		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
@@ -5642,7 +6480,7 @@ index dd1679789..614cd0c8d 100644
  			if err != nil {
  				return err
  			}
-@@ -1253,7 +1257,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
+@@ -1243,7 +1257,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
  			if err := l.claimParallel(tx, &d); err != nil {
  				return err
  			}
@@ -5652,7 +6490,7 @@ index dd1679789..614cd0c8d 100644
  				return err
  			}
 diff --git a/tools/tillr-drain/drain/plan.go b/tools/tillr-drain/drain/plan.go
-index 6160171be..f749ad047 100644
+index e232c3fe7..f749ad047 100644
 --- a/tools/tillr-drain/drain/plan.go
 +++ b/tools/tillr-drain/drain/plan.go
 @@ -219,6 +219,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
@@ -5674,7 +6512,17 @@ index 6160171be..f749ad047 100644
  		forks:     forks,
  		tick:      tick, policy: policy, held: lanes, deskOwners: deskOwners, itemStates: states, history: history,
  		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
-@@ -666,10 +671,13 @@ type planner struct {
+@@ -634,6 +639,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
+ 			request.NodeID = decision.Workflow.Stages[decision.NodeIndex].ID
+ 			decision.RunRequest = &request
+ 		}
++		if err := describeBackendHold(r, &decision, policy); err != nil {
++			return nil, err
++		}
+ 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
+ 			request := *decision.RunRequest
+ 			request.WorkingDir = PlainDir
+@@ -663,10 +671,13 @@ type planner struct {
  	definition  *definition.Definition
  	// An open review batch holds new build dispatches for its document; workers
  	// already running settle normally, without being interrupted by intake.
@@ -5692,11 +6540,37 @@ index 6160171be..f749ad047 100644
  	conflicts      map[string]item.Conflict
  	inputs         map[string]*RunInputs
  	inputDecisions map[string]Decision
-@@ -801,7 +809,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+@@ -756,7 +767,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+ 		// A released acquittal starts fresh, including one whose dispatch had
+ 		// consumed an owner retry.
+ 		retry = nil
+-		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
++		attempt.failover, attempt.degraded = false, ""
+ 		if p.policy != nil {
+ 			attempt.backend = p.firstBackend(item)
+ 		}
+@@ -783,20 +794,26 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+ 		// A returned ending is about the candidate, not the machinery: the next run starts
+ 		// on the item's own backend.
+ 		attempt.backend = p.firstBackend(item)
+-		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
++		attempt.failover, attempt.degraded = false, ""
+ 	}
+ 	if hasConflict && conflict.Status == "answered" && p.policy != nil {
+ 		attempt.backend = p.firstBackend(item)
+-		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
++		attempt.failover, attempt.degraded = false, ""
+ 		decision.ConflictID = conflict.ConflictID
+ 	}
+ 	windowShut := false
++	backendWaitStart := ""
+ 	if p.policy != nil && item.Command == nil {
+ 		if retry != nil {
+ 			attempt.backend = p.firstBackend(item)
  		}
  		if attempt.backend != "" {
- 			backendWaitStart = attempt.backend
 -			next, degraded, ok := p.policy.availableBackend(attempt.backend, item.Seat, p.shut)
++			backendWaitStart = attempt.backend
 +			shut := p.shut
 +			if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {
 +				shut = p.quotaShut
@@ -5705,21 +6579,312 @@ index 6160171be..f749ad047 100644
  			windowShut = !ok
  			attempt.backend = next
  			if degraded != "" {
+@@ -852,8 +869,6 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+ 		decision.Action, decision.Reason = ActionHold, retry.refusal
+ 		decision.RetryID = retry.retryID
+ 		decision.SupersedesRunID = retry.supersedesRunID
+-	case retry == nil && attempt.exhausted:
+-		decision.Action, decision.Reason = ActionHold, ReasonInfraExhausted
+ 	case retry == nil && !interrupted && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+ 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
+ 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
+@@ -865,6 +880,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+ 		decision.Action, decision.Reason = ActionHold, ReasonNoPolicy
+ 	case windowShut:
+ 		decision.Action, decision.Reason = ActionHold, ReasonBackendWindow
++		decision.DeferredBy = backendWaitStart
+ 	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
+ 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
+ 	default:
+@@ -1376,26 +1392,7 @@ func attemptRunID(itemID string, attempt int) string {
+ 	return "run-" + itemID + "-a" + strconv.Itoa(attempt)
+ }
+
+-// attempt is what the item's own run history says its next dispatch is: which backend it
+-// names, whether that dispatch is a failover re-dispatch, whether that walk leaves the
+-// backend the item's seat names, and whether its failover budget is spent so the item must
+-// hold instead.
+-//
+-// The chain is read from the item's terminal runs, oldest first. An item with no
+-// infrastructure-class failure starts at its first backend — its override, else the
+-// policy's default (design §2's precedence). An item whose runs include an
+-// infrastructure-class failure is a failover in progress: it walks to the backend after
+-// the last run's backend, and holds once the walk has no hop left or the policy's budget
+-// is spent. Counting every infrastructure-class run rather than only the last one is the
+-// conservative direction the budget wants: a chain is refused early rather than walked
+-// again. A walk that leaves the backend the item's seat names is a model switch and is
+-// recorded as one (nextBackend answers the seat), never read as an ordinary failover.
+-//
+-// A run that failed for a candidate reason leaves no chain here. Such an item holds with
+-// ReasonRunLinkMissing unless a person authorized a retry, and the retry rule then checks
+-// the run's class: nothing in this face spends a second backend on judged work. The
+-// failover chain is the machinery's automatic answer; a retry is the operator's, and it
+-// starts from the first backend rather than walking a chain the budget already spent.
++// An interruption retains the same backend; it is not a failover.
+ func attemptForInterruption(priors []priorRun) attempt {
+ 	return attempt{backend: priors[len(priors)-1].Backend}
+ }
+@@ -1406,23 +1403,13 @@ func (p *planner) attempt(row itemRow) attempt {
+ 		return a
+ 	}
+ 	priors := p.priors[row.ItemID]
+-	failures := 0
+-	for _, prior := range priors {
+-		if prior.Class == AttemptInfrastructure {
+-			failures++
+-		}
+-	}
+-	if failures == 0 {
++	if len(priors) == 0 || priors[len(priors)-1].Class != AttemptInfrastructure {
+ 		a.backend = p.firstBackend(row)
+ 		return a
+ 	}
+-	if failures > p.policy.failovers() || len(priors) == 0 {
+-		a.exhausted = true
+-		return a
+-	}
+ 	next, degraded, ok := p.policy.nextBackend(priors[len(priors)-1].Backend, row.Seat)
+ 	if !ok {
+-		a.exhausted = true
++		a.backend = p.policy.firstBackend(row)
+ 		return a
+ 	}
+ 	a.backend = next
+@@ -1438,8 +1425,6 @@ type attempt struct {
+ 	// failover says this dispatch re-stages an item whose last run failed in the
+ 	// infrastructure class, so the decision's reason says so and the spend is visible.
+ 	failover bool
+-	// exhausted says the item's failover chain has no hop left: hold, do not walk.
+-	exhausted bool
+ 	// degraded names the seat whose backend this walk leaves, or "": the failed backend
+ 	// was the one the item's seat names, so the re-dispatch reaches another model and the
+ 	// decision says so (seatDegradedReason).
+diff --git a/tools/tillr-drain/drain/policy.go b/tools/tillr-drain/drain/policy.go
+index ec24e6138..d902632de 100644
+--- a/tools/tillr-drain/drain/policy.go
++++ b/tools/tillr-drain/drain/policy.go
+@@ -39,7 +39,6 @@ type Policy struct {
+
+ 	DefaultBackend string   `json:"default_backend"`
+ 	Preference     []string `json:"preference"`
+-	MaxFailovers   *int     `json:"max_failovers"`
+ 	// Seats maps each seat the item model defines (seat.go) to the backend that fills it. It is where a role reaches a model: an item names the seat and never a model
+ 	// id, so swapping which model designs, or moving the design seat to another backend, is
+ 	// an edit here and touches no item.
+@@ -236,11 +235,6 @@ func (p Policy) seatNames() []string {
+ 	return names
+ }
+
+-// DefaultMaxFailovers is the failover budget a policy that names none carries: one
+-// re-dispatch per item, which is the whole multiplication a tick can do to an item's cost
+-// (design §2, "What bounds the spend").
+-const DefaultMaxFailovers = 1
+-
+ // Check refuses a policy that cannot produce a complete request for every backend it
+ // names, before the store is read: a dispatch built from such a policy would carry a
+ // run.request a runner refuses, which is a record asserting a request that cannot run.
+@@ -276,9 +270,6 @@ func (p Policy) Check() error {
+ 		}
+ 		seen[name] = true
+ 	}
+-	if p.MaxFailovers != nil && *p.MaxFailovers < 0 {
+-		return Usagef("the policy names max_failovers %d: a failover budget is zero or more re-dispatches", *p.MaxFailovers)
+-	}
+ 	for _, name := range backendNames(p.Backends) {
+ 		if err := checkBackend(name, p.Backends[name]); err != nil {
+ 			return err
+@@ -345,15 +336,6 @@ func checkBackend(name string, b Backend) error {
+ 	return nil
+ }
+
+-// failovers is the failover budget, with the policy's default filled in: a policy that
+-// names none carries one re-dispatch per item.
+-func (p Policy) failovers() int {
+-	if p.MaxFailovers == nil {
+-		return DefaultMaxFailovers
+-	}
+-	return *p.MaxFailovers
+-}
+-
+ // firstBackend answers the backend an item's first dispatch names: its per-item override
+ // when the policy carries one, else the backend its seat maps to, else the tick's default.
+ //
+@@ -378,31 +360,11 @@ func (p Policy) firstBackend(row itemRow) string {
+ 	return p.DefaultBackend
+ }
+
+-// nextBackend answers the backend a failover after `failed` walks to: the next one in the
+-// preference order, never one before it (design §2, "never backward"). A backend that is
+-// not in the preference at all — one reached by an override — starts the walk at the head,
+-// because there is no position in the order to continue from.
+-//
+-// It also answers the seat whose backend the walk leaves, or "" when it leaves no seat. A
+-// seat is a statement about the work — the design seat runs on the design backend — so a
+-// walk that leaves that backend is a model switch, and it is named rather than performed
+-// silently: the caller records the seat on the decision and spells it into the reason. The
+-// seat is the item's, not a reverse lookup of the backend: several seats may share one
+-// backend (build, review and scout all reach the default), and only the failed backend's
+-// identity against the item's own seat says whether the walk is a degradation.
+-//
+-// It answers false when the walk has nowhere to go, which the caller reports as the
+-// item's failover budget being spent rather than dispatching on the backend that just
+-// failed.
+-//
+-// A seat that names a list of backends (docs/design/tillr-claude-backend.md §4) has its own
+-// order, and that list replaces the preference for the item's walk: forward from the failed
+-// backend, and no hop at the list's end, so a design item never falls onto the build
+-// backend. Every backend on the list was named for that seat, so a step along it is not a
+-// degradation and names no seat. A failed backend that is not on the list (one an
+-// override reached) has no position to continue from, so the walk starts at the list's
+-// head, the same rule the preference walk uses. A seat with one backend, and an item with
+-// no seat, walk the preference exactly as before lists existed.
++// nextBackend walks after failed in the item's ordered seat list, wrapping at
++// the end. Multi-backend seats never leave their list. Single-backend seats
++// retain their fallback through the preference, naming any seat the walk leaves.
++// An override outside the order starts at its head. Availability is checked by
++// availableBackend, not by this order-only helper.
+ func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok bool) {
+ 	if list := p.seatList(seat); seat != "" && len(list) > 1 {
+ 		for i, name := range list {
+@@ -412,7 +374,7 @@ func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok b
+ 			if i+1 < len(list) {
+ 				return list[i+1], "", true
+ 			}
+-			return "", "", false
++			return list[0], "", true
+ 		}
+ 		return list[0], "", true
+ 	}
+@@ -434,25 +396,19 @@ func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok b
+ 			next := p.Preference[i+1]
+ 			return next, leavesSeat(next), true
+ 		}
+-		return "", "", false
++		next := p.Preference[0]
++		return next, leavesSeat(next), true
+ 	}
+ 	if len(p.Preference) > 0 {
+ 		next := p.Preference[0]
+ 		return next, leavesSeat(next), true
+ 	}
+-	return "", "", false
++	return failed, "", failed != ""
+ }
+
+-// NextRequest is the request a failover after failedBackend dispatches: the same item on
+-// the same lane, on the next backend in the policy's preference. It also answers the seat
+-// the walk left, or "" when the walk leaves no seat, so the caller can record the
+-// degradation rather than let a model switch pass as an ordinary failover. It answers false
+-// when the walk has no hop left, which the caller reports as an exhausted failover budget
+-// rather than spending the backend that just failed.
+-//
+-// It is exported because the loop performs the one failover the design permits inside a
+-// tick (design §4.1 step 5), and the walk is the policy's: a second spelling of "the next
+-// backend" outside this file is a second answer to the same question.
++// NextRequest builds the next request in order without admitting it. The loop
++// uses nextAvailableRequest for dispatch; a waiting workflow uses this request
++// to retain its continuation until the planner finds an open backend.
+ func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (*run.Request, string, bool) {
+ 	next, degraded, ok := p.nextBackend(failedBackend, seat)
+ 	if !ok {
+diff --git a/tools/tillr-drain/drain/policy_test.go b/tools/tillr-drain/drain/policy_test.go
+index 30191f8cc..cc1106ed7 100644
+--- a/tools/tillr-drain/drain/policy_test.go
++++ b/tools/tillr-drain/drain/policy_test.go
+@@ -103,10 +103,6 @@ func TestPolicyCheckRefusesADocumentThatCannotBuildARequest(t *testing.T) {
+ 			mutate: func(p *Policy) { p.Preference = []string{"first", "first"} },
+ 			names:  "twice",
+ 		},
+-		"negative failover budget": {
+-			mutate: func(p *Policy) { n := -1; p.MaxFailovers = &n },
+-			names:  "max_failovers",
+-		},
+ 		"backend with no adapter": {
+ 			mutate: func(p *Policy) {
+ 				b := p.Backends["second"]
+@@ -253,8 +249,8 @@ func TestSelectionFollowsOverrideThenPreference(t *testing.T) {
+ 	if got, degraded, ok := policy.nextBackend("first", ""); !ok || got != "second" || degraded != "" {
+ 		t.Fatalf("the failover after first is %q / %q / %v, want second with no seat", got, degraded, ok)
+ 	}
+-	if got, _, ok := policy.nextBackend("second", ""); ok {
+-		t.Fatalf("the failover after the last backend is %q, want no hop", got)
++	if got, _, ok := policy.nextBackend("second", ""); !ok || got != "first" {
++		t.Fatalf("the failover after the last backend is %q, want wrapped first", got)
+ 	}
+ 	if got, degraded, ok := policy.nextBackend("unlisted", ""); !ok || got != "first" || degraded != "" {
+ 		t.Fatalf("the failover after an unlisted backend is %q / %q / %v, want the preference head", got, degraded, ok)
+@@ -287,17 +283,28 @@ func TestAFailoverOffTheSeatsBackendNamesTheSeat(t *testing.T) {
+ 	}
+ }
+
+-// A policy that names no failover budget carries the default, and a policy that names zero
+-// walks nowhere: the budget is the policy's, not the code's.
+-func TestFailoverBudgetComesFromThePolicy(t *testing.T) {
+-	policy := twoBackends()
+-	if got := policy.failovers(); got != DefaultMaxFailovers {
+-		t.Fatalf("a policy naming no budget has %d failovers, want the default %d", got, DefaultMaxFailovers)
++// Legacy budgets are accepted but ignored, even when their old value was invalid.
++func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
++	raw, err := json.Marshal(twoBackends())
++	if err != nil {
++		t.Fatal(err)
++	}
++	var doc map[string]any
++	if err := json.Unmarshal(raw, &doc); err != nil {
++		t.Fatal(err)
++	}
++	doc["max_failovers"] = -1
++	raw, _ = json.Marshal(doc)
++	var policy Policy
++	if err := json.Unmarshal(raw, &policy); err != nil {
++		t.Fatal(err)
++	}
++	if err := policy.Check(); err != nil {
++		t.Fatal(err)
+ 	}
+-	none := 0
+-	policy.MaxFailovers = &none
+-	if got := policy.failovers(); got != 0 {
+-		t.Fatalf("a policy naming zero failovers has %d", got)
++	next, _, ok := policy.nextBackend("second", "")
++	if !ok || next != "first" {
++		t.Fatalf("legacy budget changed walk: %s %v", next, ok)
+ 	}
+ }
+
+@@ -424,13 +431,13 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
+ 		ok                 bool
+ 	}{
+ 		{"the design list's next backend", "designer-a", "design", "designer-b", "", true},
+-		{"the end of the design list", "designer-b", "design", "", "", false},
++		{"the end of the design list wraps", "designer-b", "design", "designer-a", "", true},
+ 		{"the build list's next backend", "builder-a", "build", "builder-b", "", true},
+-		{"the end of the build list", "builder-b", "build", "", "", false},
++		{"the end of the build list wraps", "builder-b", "build", "builder-a", "", true},
+ 		{"a backend off the list starts at its head", "builder-b", "design", "designer-a", "", true},
+ 		{"a one-element seat walks the preference and names the seat", "builder-a", "review", "builder-b", "review", true},
+ 		{"no seat walks the preference", "builder-a", "", "builder-b", "", true},
+-		{"no seat stops at the preference's end", "builder-b", "", "", "", false},
++		{"no seat wraps at the preference's end", "builder-b", "", "builder-a", "", true},
+ 	}
+ 	for _, c := range cases {
+ 		t.Run(c.name, func(t *testing.T) {
+@@ -448,8 +455,8 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
+ 	if !ok || request.Backend != "designer-b" || degraded != "" {
+ 		t.Fatalf("the loop's failover off designer-a is %+v / %q / %v, want designer-b, not degraded", request, degraded, ok)
+ 	}
+-	if _, _, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); ok {
+-		t.Fatalf("the loop's failover walked past the end of the design seat's list")
++	if req, _, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); !ok || req.Backend != "designer-a" {
++		t.Fatalf("the loop's failover did not wrap within the design seat's list")
+ 	}
+ }
+
 diff --git a/tools/tillr-drain/drain/quota_probe.go b/tools/tillr-drain/drain/quota_probe.go
-index 70b0ac0e2..0ecb4bfc1 100644
+index 19a89d4da..0ecb4bfc1 100644
 --- a/tools/tillr-drain/drain/quota_probe.go
 +++ b/tools/tillr-drain/drain/quota_probe.go
-@@ -88,9 +88,6 @@ func quotaFresh(q QuotaStatus, command string, at time.Time) bool {
- // error. Failed readings close only that backend, never silently admit work.
- // The mutex serializes pass and examination/failover probes in this process.
- func (l *Loop) refreshQuotas(ctx context.Context) error {
--	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
--		return err
--	}
- 	l.quotaMu.Lock()
- 	defer l.quotaMu.Unlock()
- 	policy := l.currentPolicy()
-@@ -220,8 +217,36 @@ func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string)
+@@ -217,8 +217,36 @@ func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string)
  	return name, open, err
  }
 
@@ -5758,46 +6923,111 @@ index 70b0ac0e2..0ecb4bfc1 100644
  	if err != nil {
  		return nil, err
 diff --git a/tools/tillr-drain/drain/quota_window.go b/tools/tillr-drain/drain/quota_window.go
-index 9b39f0d08..0d6b84fbd 100644
+index e3c17d3d5..0d6b84fbd 100644
 --- a/tools/tillr-drain/drain/quota_window.go
 +++ b/tools/tillr-drain/drain/quota_window.go
-@@ -127,15 +127,6 @@ func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
- 	for name := range windows {
- 		shut[name] = true
- 	}
--	if err != nil {
--		return nil, err
--	}
--	closed, err := readInfrastructureClosed(r)
--	for name, isClosed := range closed {
--		if isClosed {
--			shut[name] = true
--		}
--	}
- 	return shut, err
+@@ -153,7 +153,7 @@ func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, er
  }
 
-diff --git a/tools/tillr-drain/drain/readmit_test.go b/tools/tillr-drain/drain/readmit_test.go
-index 47d315064..3a00c7f28 100644
---- a/tools/tillr-drain/drain/readmit_test.go
-+++ b/tools/tillr-drain/drain/readmit_test.go
-@@ -195,16 +195,6 @@ func TestStoppedLoopSettlementExaminesTheTreeBeforeFailover(t *testing.T) {
- 			if err := l.releaseExamination(context.Background(), d); err != nil {
- 				t.Fatal(err)
- 			}
--			if cause == run.EndSignal {
--				// Tree examination still wins over failover, but a signal with
--				// no report closes the backend until it is exercised successfully.
--				if next := mustPlan(t, l)[0].decision; next.Reason != ReasonBackendClosed {
--					t.Fatalf("signal did not wait on backend: %+v", next)
--				}
--				if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
--					t.Fatal(err)
--				}
--			}
- 			if next := mustPlan(t, l)[0].decision; next.Action != ActionDispatch || !strings.Contains(next.Reason, "orphaned by a loop stop") {
- 				t.Fatalf("orphan settlement did not admit: %+v", next)
- 			}
+ // Skipping a shut backend walks the same seat order as failover, without starting
+-// a run or spending an item's failover budget. Cycles cannot make a shut backend
++// a run. Cycles cannot make a shut backend
+ // eligible when an override falls back to the preference head.
+ func (p Policy) availableBackend(name, seat string, shut map[string]bool) (string, string, bool) {
+ 	seen := map[string]bool{}
+diff --git a/tools/tillr-drain/drain/schema.go b/tools/tillr-drain/drain/schema.go
+index 56b5f6dd9..081c6aa81 100644
+--- a/tools/tillr-drain/drain/schema.go
++++ b/tools/tillr-drain/drain/schema.go
+@@ -78,6 +78,10 @@ const (
+ 	// ReasonBackendWindow holds an item when every backend on its route has a
+ 	// reported spent window; the reset time releases it without an operator retry.
+ 	ReasonBackendWindow = "backend-window"
++	// ReasonBackendClosed waits for recorded evidence that the backend works again.
++	ReasonBackendClosed = "backend-closed"
++	// ReasonCommandFault is a command process failure, not an agent backend route.
++	ReasonCommandFault = "command-fault"
+ 	// ReasonReady is a dispatch's reason: the item is queued, unblocked, and a lane and
+ 	// a policy were available.
+ 	ReasonReady = "ready"
+@@ -145,8 +149,9 @@ const (
+ 	// ruling's degraded mode is an allowed, stamped run: the floor may produce the document,
+ 	// and this is the stamp that keeps it from being read as a full seat's work.
+ 	ReasonSeatDegraded = "seat-degraded"
+-	// ReasonInfraExhausted is a hold's reason: the item's failover chain has no hop left.
+-	// Either the policy's max_failovers budget is spent or the preference has no backend
++	// ReasonInfraExhausted is retained for historical records only. New infrastructure
++	// holds use ReasonBackendClosed and wait for evidence, not a budget.
++	// Previously the preference had no backend
+ 	// after the one that failed, and a chain is refused rather than walked on past what
+ 	// the policy allows.
+ 	ReasonInfraExhausted = "run-infra-exhausted"
+diff --git a/tools/tillr-drain/drain/why.go b/tools/tillr-drain/drain/why.go
+index 702bf15af..5ba746388 100644
+--- a/tools/tillr-drain/drain/why.go
++++ b/tools/tillr-drain/drain/why.go
+@@ -236,6 +236,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
+ 			row.Mover = "restore " + ref + " under the item's block and land it"
+ 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
+ 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
++		case d.Reason == ReasonBackendClosed && d.DeferredBy != "":
++			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
+ 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
+ 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
+ 		case d.Reason == ReasonBlocked:
+@@ -477,6 +479,10 @@ func whyPresentation(d Decision) (class, where, mover string) {
+ 		return "needs you", "gate", "inspect the verdict; tillr drain retry --help"
+ 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:
+ 		return "needs a cause", "fence", "inspect the boundary report"
++	case ReasonBackendClosed, ReasonInfraExhausted:
++		return "waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"
++	case ReasonCommandFault:
++		return "needs a cause", "lane", "repair the command process and authorize a retry"
+ 	case ReasonBackendWindow:
+ 		return "waits on work", "backend", "the backend reset time"
+ 	case ReasonQuestionRemoved:
+diff --git a/tools/tillr-drain/drain/workflow_failover.go b/tools/tillr-drain/drain/workflow_failover.go
+index dba18f5b1..211381e7d 100644
+--- a/tools/tillr-drain/drain/workflow_failover.go
++++ b/tools/tillr-drain/drain/workflow_failover.go
+@@ -23,18 +23,13 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
+ 	if err != nil {
+ 		return err
+ 	}
+-	if !ok || d.NodeInfraFailures >= l.cfg.Policy.failovers() {
+-		if err := l.nodeOutcome(ctx, d, "fault"); err != nil {
+-			return err
+-		}
+-		head := ""
+-		if !l.nonLanding {
+-			head = l.headOf(ctx, d.LaneID)
+-		}
+-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node infrastructure exhausted"); stop != "" {
+-			return retainedAfter(d.LaneID, stop)
++	if !ok {
++		// Persist a ready continuation even when the whole route is closed.
++		// Planning holds it until a recorded reopening, retaining this node/base.
++		request, _, _ = l.currentPolicy().NextRequest(d.ItemID, d.LaneID, d.RunRequest.RunID+"-failover", rec.Backend, d.Seat)
++		if request == nil {
++			return Usagef("workflow seat %s has no backend route", d.Seat)
+ 		}
+-		return l.markExamined(ctx, d)
+ 	}
+ 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
+ 	request.WorkingDir = d.RunRequest.WorkingDir
+diff --git a/tools/tillr-drain/drain/workflow_order.go b/tools/tillr-drain/drain/workflow_order.go
+index c9f431f23..c948e9a9f 100644
+--- a/tools/tillr-drain/drain/workflow_order.go
++++ b/tools/tillr-drain/drain/workflow_order.go
+@@ -88,7 +88,7 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
+ 		return ReasonBoundaryScopeEscape, nil
+ 	}
+ 	if outcome == "fault" {
+-		return ReasonInfraExhausted, nil
++		return ReasonCommandFault, nil
+ 	}
+ 	// A successful harness with a missing declared file is not a failed task.
+ 	// Read the refusal for this producer, not the last sibling to finish.
 diff --git a/tools/tillr-drain/holdrules/holdrules.go b/tools/tillr-drain/holdrules/holdrules.go
 index d078fb631..06c4370d5 100644
 --- a/tools/tillr-drain/holdrules/holdrules.go
@@ -5816,6 +7046,146 @@ index d078fb631..06c4370d5 100644
  	// A worker run's refused ending goes back to the item's worker with its evidence,
  	// uncounted (the owner's ruling of 2026-11-17).
  	"returned-with-evidence": {"ready", "queue", "the next pass"},
+diff --git a/tools/tillr-drain/loop_test.go b/tools/tillr-drain/loop_test.go
+index 83f9ccb9b..d25f13e68 100644
+--- a/tools/tillr-drain/loop_test.go
++++ b/tools/tillr-drain/loop_test.go
+@@ -560,15 +560,8 @@ func TestACandidateFailureDoesNotStopTheLoopAndDoesNotFailOver(t *testing.T) {
+ 	}
+ }
+
+-// Consecutive infrastructure failures do not stop the loop: it works every item it can and
+-// ends where the pile ends. Nothing about an item was learned from a run that ran nothing, so
+-// each item is held as `run-infra-exhausted` and each attempt is reported with its reason.
+-//
+-// This case is the removed circuit breaker's rewrite. It used to stop with
+-// `infra-circuit-breaker` at the third failure, which is a stop with work still queued; it
+-// now pins that three failures buy three attempts and no stop, and that no backoff was
+-// applied — a tick that dispatched a run always has work to be getting on with, so the wait
+-// (which belongs to a tick that dispatched nothing) never rations it.
++// An infrastructure failure closes the shared backend. Other queued items wait
++// without redispatching to it; a recorded successful probe permits one new attempt.
+ func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
+ 	f := newLoopFixture(t, stub(t, "adapter", failingAdapter))
+ 	fixtureAt(t, f.store,
+@@ -591,24 +584,35 @@ func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
+ 		t.Fatalf("the loop stopped %q (%s), want %q: a fault is not a budget",
+ 			result.Stop, result.Detail, drain.StopQueueDrained)
+ 	}
+-	if result.InfraFailures != 3 || result.Ticks != 6 {
+-		t.Fatalf("the loop saw %d infrastructure failure(s) over %d tick(s), want 3 over 3",
++	if result.InfraFailures != 1 {
++		t.Fatalf("the loop saw %d infrastructure failure(s) over %d tick(s), want one before closure",
+ 			result.InfraFailures, result.Ticks)
+ 	}
+-	if result.Rejected != 0 || result.Dispatched != 3 {
+-		t.Fatalf("the loop dispatched %d and rejected %d, want 3 and 0: a failed harness is not a verdict",
++	if result.Rejected != 0 || result.Dispatched != 1 {
++		t.Fatalf("the loop dispatched %d and rejected %d, want 1 and 0: a failed harness is not a verdict",
+ 			result.Dispatched, result.Rejected)
+ 	}
+ 	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {
+ 		t.Fatalf("the loop gated a run that failed in the infrastructure class: %v", gates)
+ 	}
+-	// One report line per failure, each naming the attempt, and no wait: every tick here had
+-	// an item to dispatch, so there was nothing for a backoff to make visible.
+-	if countMatching(strings.Split(report.String(), "\n"), "failed in the infrastructure class") != 3 {
++	if countMatching(strings.Split(report.String(), "\n"), "failed in the infrastructure class") != 1 {
+ 		t.Fatalf("the loop did not report one line per infrastructure failure: %s", report.String())
+ 	}
+-	if strings.Contains(report.String(), "nothing dispatched; waiting ") {
+-		t.Fatalf("the loop backed off while it had items it could dispatch: %s", report.String())
++	// Starting another loop and moving its clock cannot reopen the backend.
++	closed := f.newLoopWith(t, 1, f.steps(t, gate, land, verdict),
++		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
++	again, err := closed.Run(context.Background())
++	if err != nil || again.Dispatched != 0 {
++		t.Fatalf("closed backend retried: %+v / %v", again, err)
++	}
++	if err := drain.ProbeBackend(context.Background(), f.store, f.root, "fixture", []string{"/bin/true"}); err != nil {
++		t.Fatal(err)
++	}
++	reopened := f.newLoopWith(t, 1, f.steps(t, gate, land, verdict),
++		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
++	afterProbe, err := reopened.Run(context.Background())
++	if err != nil || afterProbe.Dispatched != 1 {
++		t.Fatalf("reopened backend did not run once: %+v / %v", afterProbe, err)
+ 	}
+ }
+
+diff --git a/tools/tillr-drain/main.go b/tools/tillr-drain/main.go
+index 1aa7a73a7..2cadef1b5 100644
+--- a/tools/tillr-drain/main.go
++++ b/tools/tillr-drain/main.go
+@@ -62,6 +62,8 @@ func dispatch(args []string) int {
+ 	}
+ 	face, rest := args[0], args[1:]
+ 	switch face {
++	case "probe-backend":
++		return probeBackendFace(rest)
+ 	case "workflow":
+ 		return workflowFace(rest)
+ 	case "why":
+@@ -736,7 +738,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
+
+ // faceList is this binary's faces, in the order the usage lines print them. One home,
+ // so the refusal, the unknown-face line and `--help` cannot disagree.
+-const faceList = "workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
++const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+
+ func stopFace(args []string) int {
+ 	fs := newFlagSet("stop")
+diff --git a/tools/tillr-drain/main_test.go b/tools/tillr-drain/main_test.go
+index 41b2c6b3b..a37695573 100644
+--- a/tools/tillr-drain/main_test.go
++++ b/tools/tillr-drain/main_test.go
+@@ -1253,10 +1253,8 @@ func TestPlanDoesNotFailOverACandidateFailure(t *testing.T) {
+ 	}
+ }
+
+-// The budget: the policy says one failover, and a chain longer than that refuses rather
+-// than walking. Two infrastructure failures in the item's history are one failover already
+-// spent, so the item holds with the reason day-2's vocabulary names.
+-func TestPlanHoldsWhenTheFailoverBudgetIsSpent(t *testing.T) {
++// Both backends have failed: no open backend exists until a recorded reopening.
++func TestPlanHoldsWhenEveryBackendIsClosed(t *testing.T) {
+ 	storePath := fixture(t,
+ 		itemRecord("item_042", "in-queue"),
+ 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-8", "first", run.StateFailedToStart, nil, ""),
+@@ -1265,17 +1263,16 @@ func TestPlanHoldsWhenTheFailoverBudgetIsSpent(t *testing.T) {
+ 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 1, nil))
+
+ 	got := plan(t, storePath, tickPath)[0].Payload
+-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonInfraExhausted {
+-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonInfraExhausted)
++	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed {
++		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonBackendClosed)
+ 	}
+ 	if got.RunRequest != nil {
+-		t.Fatalf("a spent budget still dispatched to %q", got.RunRequest.Backend)
++		t.Fatalf("closed backends still dispatched to %q", got.RunRequest.Backend)
+ 	}
+ }
+
+-// The same chain with a budget of zero: the first infrastructure failure already exhausts
+-// it, so the policy's number is what decides and not the code's.
+-func TestPlanWalksNoFailoverWhenThePolicyBudgetIsZero(t *testing.T) {
++// A legacy zero budget cannot stop the walk to an open backend.
++func TestPlanIgnoresLegacyZeroFailoverBudget(t *testing.T) {
+ 	storePath := fixture(t,
+ 		itemRecord("item_042", "in-queue"),
+ 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "first", run.StateFailedToStart, nil, ""),
+@@ -1283,8 +1280,8 @@ func TestPlanWalksNoFailoverWhenThePolicyBudgetIsZero(t *testing.T) {
+ 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 0, nil))
+
+ 	got := plan(t, storePath, tickPath)[0].Payload
+-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonInfraExhausted {
+-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonInfraExhausted)
++	if got.Action != drain.ActionDispatch || got.RunRequest == nil || got.RunRequest.Backend != "second" {
++		t.Fatalf("legacy zero budget changed routing: %+v", got)
+ 	}
+ }
+
 diff --git a/tools/tillr-drain/quota_window_test.go b/tools/tillr-drain/quota_window_test.go
 index e66432435..5b46d67e7 100644
 --- a/tools/tillr-drain/quota_window_test.go
@@ -5842,10 +7212,22 @@ index e66432435..5b46d67e7 100644
  		})
  	}
 diff --git a/tools/tillr-drain/seat_test.go b/tools/tillr-drain/seat_test.go
-index 0d487059f..e5894bf0b 100644
+index f2d1a19e5..e5894bf0b 100644
 --- a/tools/tillr-drain/seat_test.go
 +++ b/tools/tillr-drain/seat_test.go
-@@ -428,8 +428,8 @@ func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
+@@ -299,11 +299,9 @@ func TestASeatDegradedFailoverIsNamedInTheLoopReport(t *testing.T) {
+ 	floor := stub(t, "floor-adapter", counting+committingAdapterBody+`printf 'RESULT: done\n'`)
+
+ 	f := newLoopFixture(t, floor)
+-	one := 1
+ 	f.policy = &drain.Policy{
+ 		DefaultBackend: "pi",
+ 		Preference:     []string{"pi"},
+-		MaxFailovers:   &one,
+ 		Seats:          map[string]string{"design": "pi-designer"},
+ 		Backends: map[string]drain.Backend{
+ 			"pi":          {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
+@@ -430,8 +428,8 @@ func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
  		},
  	})
  	got = decisionFor(t, plan(t, spent, tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)), "item_042")
@@ -5884,8 +7266,68 @@ index 0742f6ff7..56c4b7351 100644
  		"item_retry":     {drain.ActionRetry, "queued", "running", 2},
  	}
  	if len(decisions) != len(want) {
-# backend-open-delta end
-```
+diff --git a/tools/tillr-view/waiting.go b/tools/tillr-view/waiting.go
+index a1e66ec33..939d90e9a 100644
+--- a/tools/tillr-view/waiting.go
++++ b/tools/tillr-view/waiting.go
+@@ -326,6 +326,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
+ 			row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
+ 			if deferredBy != "" {
+ 				row.Mover = deferredBy
++				if last.Reason == "backend-closed" {
++					row.Mover += ": " + rule.mover
++				}
+ 			}
+ 			if last.Reason == "question-open" {
+ 				var excluded []string
+diff --git a/tools/tillr-view/waiting_backend_closed_test.go b/tools/tillr-view/waiting_backend_closed_test.go
+new file mode 100644
+index 000000000..f4c252119
+--- /dev/null
++++ b/tools/tillr-view/waiting_backend_closed_test.go
+@@ -0,0 +1,40 @@
++package main
++
++import (
++	"context"
++	"database/sql"
++	"strings"
++	"testing"
++)
++
++func TestWaitingBackendClosedNamesBackendAndReopeningMover(t *testing.T) {
++	h := newServeHarness(t)
++	db, err := sql.Open("sqlite", "file:"+h.store)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	for _, q := range []string{
++		`ALTER TABLE dispatches ADD COLUMN deferred_by TEXT`,
++		`DELETE FROM dispatches`,
++		`INSERT INTO items(item_id,title,state,updated_at) VALUES ('item-backend','backend wait','in-queue',1000)`,
++		`INSERT INTO dispatches(decision_id,item_id,action,reason,dispatched_at,deferred_by) VALUES ('closed-backend','item-backend','hold','backend-closed',1000,'fixture')`,
++	} {
++		if _, err := db.Exec(q); err != nil {
++			t.Fatal(err)
++		}
++	}
++	rows, err := readWaiting(context.Background(), h.store, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, row := range rows {
++		if row.ItemID == "item-backend" {
++			if row.Class != "waits on work" || row.Where != "queue" || !strings.Contains(row.Mover, "fixture") || !strings.Contains(row.Mover, "probe-backend") || !strings.Contains(row.Mover, "non-infrastructure run") {
++				t.Fatalf("hold lacks mover: %+v", row)
++			}
++			return
++		}
++	}
++	t.Fatal("missing held item")
++}
+# backend-open-patch end
+````
 
 ## Filed 2026-11-18: plan first, then spend each model where it is enough
 
