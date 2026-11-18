@@ -785,6 +785,12 @@ def main():
     )
     if keeper_tests.returncode:
         fail("the repository keeper's regression tests failed")
+    roll_tests = subprocess.run(
+        [sys.executable, str(ROOT / "tests/tillr-roll.test.py")],
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    if roll_tests.returncode:
+        fail("the repository roll regression tests failed")
     case_callout()
     case_no_flag_table()
     scratch = Path(tempfile.mkdtemp(dir=os.environ.get("YOLO_DURABLE_DIR")))
