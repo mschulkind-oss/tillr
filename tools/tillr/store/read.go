@@ -52,6 +52,10 @@ type Reader struct {
 	ctx        context.Context
 	q          queryer
 	readValues map[any]readValue
+	// events is the process's committed-event cache for this store, nil when it is off
+	// (eventcache.go). Only a read-only transaction's reads extend it: readValues is
+	// non-nil exactly for those.
+	events *eventCache
 }
 
 type readValue struct {
@@ -91,7 +95,7 @@ func (s *Store) ReadTx(ctx context.Context, fn func(*Reader) error) error {
 		return fmt.Errorf("store: beginning the read transaction: %w", err)
 	}
 	defer tx.Rollback()
-	return fn(&Reader{ctx: ctx, q: tx, readValues: map[any]readValue{}})
+	return fn(&Reader{ctx: ctx, q: tx, readValues: map[any]readValue{}, events: s.events})
 }
 
 // Query runs one query inside the read transaction. It is the domain-row half of the
@@ -107,7 +111,14 @@ func (r *Reader) QueryRow(query string, args ...any) *sql.Row {
 }
 
 // Events answers the events with seq greater than since, in seq order.
-func (r *Reader) Events(since int64) ([]event.Event, error) { return events(r.ctx, r.q, since) }
+// With the committed-event cache on (CacheCommittedEvents), only the events committed
+// since this process last read the log are read from the store.
+func (r *Reader) Events(since int64) ([]event.Event, error) {
+	if r.events != nil {
+		return r.events.read(r.ctx, r.q, since, r.readValues != nil)
+	}
+	return events(r.ctx, r.q, since)
+}
 
 // SchemaVersion answers the highest migration the store has applied.
 func (r *Reader) SchemaVersion() (int, error) { return schemaVersion(r.ctx, r.q) }
@@ -305,6 +316,7 @@ func events(ctx context.Context, q queryer, since int64) ([]event.Event, error) 
 			e.Revision = &rev
 		}
 		events = append(events, e)
+		eventRowsRead.Add(1)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: reading the events: %w", err)

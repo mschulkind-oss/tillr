@@ -9,3 +9,18 @@ func SetAfterCheckpoint(f func()) func() {
 	afterCheckpoint = f
 	return func() { afterCheckpoint = previous }
 }
+
+// EventRowsRead answers how many event rows this process has read from SQLite.
+func EventRowsRead() int64 { return eventRowsRead.Load() }
+
+// WritersWaiting answers how many of this process's writers wait for their turn on the
+// store at path (writequeue.go).
+func WritersWaiting(path string) int64 { return writeQueueFor(path).waiting.Load() }
+
+// SetEventCache turns the committed-event cache on or off for stores opened afterwards,
+// and answers the function that restores the previous setting.
+func SetEventCache(on bool) func() {
+	previous := eventCacheEnabled.Load()
+	eventCacheEnabled.Store(on)
+	return func() { eventCacheEnabled.Store(previous) }
+}

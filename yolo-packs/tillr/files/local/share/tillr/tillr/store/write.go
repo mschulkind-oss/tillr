@@ -15,8 +15,9 @@ import (
 // counterpart of Reader — a utility writes and reads its own rows through these two
 // and never opens the database itself.
 type Tx struct {
-	ctx context.Context
-	tx  *sql.Tx
+	ctx    context.Context
+	tx     *sql.Tx
+	events *eventCache
 }
 
 // WriteTx runs fn inside one write transaction and commits it. An error from fn rolls
@@ -43,6 +44,16 @@ func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) error {
 func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) error) (result error) {
 	trace := startSQLiteTrace(s.path, operation)
 	defer func() { trace.finish(result) }()
+	// This process's writers take turns before asking SQLite (writequeue.go), so the
+	// busy handler only ever arbitrates between processes.
+	leave, waited, err := writeQueueFor(s.path).enter(ctx, s.busyTimeout)
+	if err != nil {
+		return fmt.Errorf("store: waiting for this process's turn to write: %w", err)
+	}
+	defer leave()
+	if waited {
+		trace.record("queue.waited", nil)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: beginning the write transaction: %w", err)
@@ -51,7 +62,7 @@ func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) erro
 	// Rollback after a successful commit answers ErrTxDone, which is the state the
 	// transaction is already in; the commit's own error is the one reported.
 	defer tx.Rollback()
-	if err := fn(&Tx{ctx: ctx, tx: tx}); err != nil {
+	if err := fn(&Tx{ctx: ctx, tx: tx, events: s.events}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -84,4 +95,4 @@ func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
 // state it is about to change in the same transaction that changes it. A reader built
 // over the store's own handle instead would not see the transaction's uncommitted
 // rows, and the read and the write would describe two different moments.
-func (t *Tx) Reader() *Reader { return &Reader{ctx: t.ctx, q: t.tx} }
+func (t *Tx) Reader() *Reader { return &Reader{ctx: t.ctx, q: t.tx, events: t.events} }
