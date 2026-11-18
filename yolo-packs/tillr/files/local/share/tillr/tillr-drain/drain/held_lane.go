@@ -42,7 +42,7 @@ func init() {
 // the repair handoff owns worktree-dependent progress; the others wait on inputs.
 func retainLane(err error) (held, keep bool) {
 	switch {
-	case errors.Is(err, errRepairPending), errors.Is(err, errJudgeGrantHeld), errors.Is(err, errJudgeBackendHeld):
+	case errors.Is(err, errRepairPending), errors.Is(err, errJudgeGrantHeld), errors.Is(err, errJudgeBackendHeld), errors.Is(err, errGateNoVerdict):
 		return true, true
 	case errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten), errors.Is(err, errForeignIdentity):
 		return true, false

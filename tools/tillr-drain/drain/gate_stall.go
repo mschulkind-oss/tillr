@@ -21,6 +21,11 @@ const (
 	ReasonGateStallRerun = "gate-stall-rerun"
 	ReasonGateStalled    = "gate-stalled"
 	gateStallHeldKind    = "drain.gate-stall"
+	// ReasonGateNoVerdict is the wait between a gate that answered "error" -- it ran and
+	// reached no verdict, so nothing about the candidate was judged -- and the next pass,
+	// which gates the same candidate again on the same lane (gate_no_verdict.go). It is
+	// uncounted and its mover is the loop, never a person.
+	ReasonGateNoVerdict = "gate-no-verdict"
 )
 
 var errGateStallHeld = errors.New("candidate waits for a gate stall rerun")

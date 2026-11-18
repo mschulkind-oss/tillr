@@ -2386,7 +2386,13 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		return "", false, nil
+	case GateErrored:
+		// The gate ran and reached no verdict: nothing was judged, so the same candidate is
+		// gated again on the next pass (gate_no_verdict.go), never held for an operator.
+		return "", false, l.holdGateNoVerdict(ctx, candidate)
 	default:
+		// An outcome the drain does not know is a contract defect between the drain and its
+		// gate step; gating again would answer the same unknown word.
 		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
 	}
 	// The lane is released after landing, possibly long before a rolling check

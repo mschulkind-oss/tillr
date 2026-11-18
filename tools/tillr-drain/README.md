@@ -1696,7 +1696,21 @@ rerun state survive restarts: the first-stall transition and observations commit
 with its judgment and measurements. Each gate starts with fresh measurement
 artifacts, so a fast-tier stall cannot import remaining checks from a prior run.
 
-A gate that could not start or crashed (`gate-harness-error`), a recorded boundary conviction
+A gate that ran and reached no verdict is not a candidate failure either. Its answer is
+"error" (the gate's no-verdict exits, such as fork-check's `NOT VERIFIED`), and the loop
+records the wait as `gate-no-verdict` -- a reason this drain coined on 2026-11-18 for "the
+gate judged nothing; the loop gates this candidate again" -- keeps the candidate on its
+lane, and gates the same commit again on the next pass
+([`drain/gate_no_verdict.go`](./drain/gate_no_verdict.go)). Nothing is counted, no fault is
+written, and no retry or acknowledgment is asked for, so the hold's mover is the loop and
+never a person. The `gate.verdict` with result `error` stays as the evidence of each
+answer. A no-verdict answer that would repeat on every machine is a classification defect
+in the gate, fixed there: fork-check reads a fork build's `FAILED: build` and npm's
+lockfile refusal as verdicts, so such a red goes back to the worker as a gate refusal.
+
+A gate step that could not be run at all (`gate-harness-error`): the drain could not start
+the gate program or read or record what it answered, so the same step would fail the same
+way until someone repairs it. That, a recorded boundary conviction
 (`host-boundary-violation`), a lane whose HEAD differs from the recorded candidate
 (`candidate-record-mismatch`), or an item definition that cannot be synced
 (`definition-sync-failed`) holds only the affected item. Other items keep running

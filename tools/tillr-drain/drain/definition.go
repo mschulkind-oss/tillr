@@ -43,6 +43,7 @@ var landingHolds = map[string]string{
 	ReasonRepairStagingFailed: "",
 	ReasonGateStallRerun:      "",
 	ReasonGateStalled:         "",
+	ReasonGateNoVerdict:       "",
 	ReasonTriageNoBlock:       definition.PrerequisiteDesignDocument,
 	ReasonAwaitsRewrite:       definition.PrerequisiteDesignDocument,
 	ReasonProseCriteriaCount:  definition.PrerequisiteDesignDocument,
