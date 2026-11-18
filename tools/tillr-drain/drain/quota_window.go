@@ -81,7 +81,10 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
    VALUES (?,?,?,'rejected',?,?) ON CONFLICT(backend) DO UPDATE SET
    kind=excluded.kind,fraction=excluded.fraction,status=excluded.status,reset_at=excluded.reset_at,run_id=excluded.run_id
    WHERE excluded.reset_at >= backend_windows.reset_at`, rec.Backend, kind, fraction, reset.UnixMilli(), rec.RunID)
-		return err
+		if err != nil {
+			return err
+		}
+		return l.pauseQuotaPeers(tx, rec.Backend, rec.RunID)
 	})
 }
 

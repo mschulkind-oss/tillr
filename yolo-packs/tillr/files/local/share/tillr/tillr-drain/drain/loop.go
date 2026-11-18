@@ -1403,6 +1403,48 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
+	if quotaSingleRun(decision) {
+		interrupted, err := l.quotaInterrupted(ctx, record.RunID)
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+		_, _, _, refused := refusedWindow(record)
+		if refused {
+			if err := l.recordBackendWindow(ctx, record); err != nil {
+				return laneOutcome{err: err}
+			}
+			paths, err := l.uncommittedPaths(ctx, l.laneTarget(lane))
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			head, err := l.revParse(ctx, l.laneTarget(lane), "HEAD")
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			interrupted = interrupted || len(paths) > 0 || head != l.settleBase(lane, mainSHA)
+		}
+		if interrupted && (refused || record.State == run.StatePaused) {
+			prepared = true
+			resumed, resumedLog, stop, err := l.resumeQuotaRun(ctx, decision, record, tick, at, result, watched)
+			if err != nil || stop != "" || resumed.RunID == "" {
+				return laneOutcome{stop: stop, err: err}
+			}
+			if resumed.Backend != request.Backend {
+				next := requestForQuotaBackend(l.currentPolicy(), request, resumed.Backend)
+				if next == nil {
+					return laneOutcome{err: Usagef("quota continuation lost backend %s from policy", resumed.Backend)}
+				}
+				decision.RunRequest = next
+			}
+			return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+		}
+		// A peer that finished before the pause reached it is settled normally.
+		if interrupted && record.State != run.StatePaused {
+			if err := l.clearQuotaPause(ctx, record.RunID); err != nil {
+				return laneOutcome{err: err}
+			}
+		}
+	}
 	if record.State == run.StatePaused {
 		// Pausing is not settlement: even an already committed tree belongs to
 		// the continuing session until it answers. Keep pending work running.
@@ -1731,7 +1773,16 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 // segment committed nothing but may still have written to the worktree, and a resumed
 // segment has to answer for what it writes from where it actually starts.
 func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
-	if (record.Resumed && record.State != run.StatePaused) || ctx.Err() != nil {
+	if record.Resumed && record.State != run.StatePaused {
+		return run.Record{}, "", "", nil
+	}
+	return l.runContinuation(ctx, lane, request, worktree, record, tick, at, result, watched)
+}
+
+// Quota can interrupt multiple segments of an attempt. The ordinary wall path
+// retains its one-continuation bound; quota uses the same executor without it.
+func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
+	if ctx.Err() != nil {
 		return run.Record{}, "", "", nil
 	}
 	laneDir := l.laneDirPath(lane)

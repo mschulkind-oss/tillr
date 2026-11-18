@@ -541,8 +541,24 @@ without a new probe. Removing a command clears its latest observation on the nex
 pass, not its history. Checks happen while choosing and claiming a backend, never
 after staging; a claimed dispatch always starts. Reserve is a threshold on the
 last reading, not a guarantee against runs overshooting it within one interval.
-Already-running work is not stopped. A failed designer resume remains unsettled
-until a replacement backend is open, before staging its new session.
+Readings and reserves do not stop already-running work. A failed designer resume
+remains unsettled until a replacement backend is open, before staging its new session.
+
+For a single-worker item, a recorded quota refusal stops other live runs on that
+backend through the normal pause request. If the refusing run changed its head or
+left uncommitted paths, it continues under the same run id and attempt in the same
+lane and worktree, without resetting files or spending a retry. The next open
+backend in the seat's list receives a fresh session whose first message names the
+quota interruption, earlier transcript, report when present, and uncommitted paths.
+Only the completed candidate is judged. A first-message refusal that left no work
+keeps the existing fresh-dispatch failover, without a continuation message.
+
+When no backend is open, the loop records the run in `quota_pauses`, keeps its lane
+and `running` position, and waits rather than exiting. Each pass checks the seat's
+list again, preferring the original backend when it reopens. That backend resumes
+its own session; another backend starts a fresh one. The executor removes the pause
+row in the continuation's claim transaction. Workflow nodes, parallel readers, and
+conflict-design runs retain their existing refusal handling.
 
 The [Claude quota command](../tillr-run/backends/claude/quota) uses one authenticated
 HTTP GET, not a Claude model session. Its authentication, live measurement, and

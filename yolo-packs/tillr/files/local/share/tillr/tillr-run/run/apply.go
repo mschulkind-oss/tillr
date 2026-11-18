@@ -208,6 +208,14 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		return record.Envelope{}, Internalf("writing the run: %v", err)
 	}
 
+	if payload.State == StatePaused {
+		// A replacement loop may hold this run before another settlement pass.
+		// Make the quota wait visible in the same transaction as the paused finish.
+		if _, err := tx.Exec(`UPDATE quota_pauses SET state='waiting' WHERE run_id=? AND backend=?`, payload.RunID, payload.Backend); err != nil {
+			return record.Envelope{}, Internalf("recording quota pause: %v", err)
+		}
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return record.Envelope{}, Internalf("encoding the finish event: %v", err)

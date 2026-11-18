@@ -142,12 +142,13 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			// not continuation authorization. Replayed segment events must not
 			// undo a later examination of that same segment.
 			var segment struct {
-				RunID     string `json:"run_id"`
-				ItemID    string `json:"item_id"`
-				LaneID    string `json:"lane_id"`
-				Backend   string `json:"backend"`
-				SessionID string `json:"session_id"`
-				ResumedAt string `json:"resumed_at"`
+				Request   *run.Request `json:"request,omitempty"`
+				RunID     string       `json:"run_id"`
+				ItemID    string       `json:"item_id"`
+				LaneID    string       `json:"lane_id"`
+				Backend   string       `json:"backend"`
+				SessionID string       `json:"session_id"`
+				ResumedAt string       `json:"resumed_at"`
 			}
 			if err := json.Unmarshal(e.Payload, &segment); err != nil {
 				return nil, nil, err
@@ -168,7 +169,18 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 					break
 				}
 			}
-			if segment.RunID != req.RunID || segment.ItemID != req.ItemID || segment.LaneID != work.Decision.LaneID || segment.Backend != req.Backend || !run.IsSessionID(segment.SessionID) || segment.ResumedAt == "" {
+			if segment.RunID != req.RunID || segment.ItemID != req.ItemID || segment.LaneID != work.Decision.LaneID || !run.IsSessionID(segment.SessionID) || segment.ResumedAt == "" {
+				continue
+			}
+			if segment.Request != nil && segment.Backend != req.Backend && quotaSingleRun(work.Decision) {
+				next := *segment.Request
+				if next.RunID == req.RunID && next.ItemID == req.ItemID && next.LaneID == req.LaneID && next.Backend == segment.Backend && next.Resume && next.FreshSession {
+					next.Resume, next.FreshSession, next.ResumePrompt = false, false, ""
+					work.Decision.RunRequest = &next
+					req = &next
+				}
+			}
+			if segment.Backend != req.Backend {
 				continue
 			}
 			work.Done, work.Orphaned, work.Examining = false, false, false
@@ -597,6 +609,24 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			}
 		}
 		if finished {
+			if rec != nil && quotaSingleRun(d) {
+				backend, err := quotaPauseBackend(r, rec.RunID)
+				if err != nil {
+					return Decision{}, err
+				}
+				_, _, _, refused := refusedWindow(*rec)
+				if backend != "" && (rec.State == run.StatePaused || refused) && (policy == nil || shut[backend]) {
+					open := false
+					if policy != nil {
+						_, _, open = policy.availableBackend(backend, d.Seat, shut)
+					}
+					if !open {
+						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+						identifyDecision(&d)
+						return d, nil
+					}
+				}
+			}
 			if rec != nil {
 				failed, err := failedDesignerResume(d, *rec)
 				if err != nil {
@@ -1756,6 +1786,15 @@ plans:
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
 	for _, hold := range holds {
+		if hold.RunRequest != nil && hold.From == "running" && hold.Reason == ReasonBackendWindow {
+			paused, err := l.quotaInterrupted(ctx, hold.RunRequest.RunID)
+			if err != nil {
+				return "", err
+			}
+			if paused {
+				return l.waitForTrigger(ctx, leases, at, result)
+			}
+		}
 		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonNoLane) {
 			// A replacement has no local completion channel for surviving runs.
 			// Their durable claims are still work, not foreign leased lanes.
@@ -1854,7 +1893,14 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			if err == nil {
 				l.countSettledSpend(local, *rec, work.LoopID)
 				log := logTail(rec.ArtifactRefs)
-				if rec.State == run.StatePaused {
+				quotaPaused := false
+				if quotaSingleRun(d) {
+					quotaPaused, err = l.quotaInterrupted(ctx, rec.RunID)
+					if err != nil {
+						completion.outcome.err = err
+					}
+				}
+				if rec.State == run.StatePaused && !quotaPaused && completion.outcome.err == nil {
 					resumed, resumedLog, stop, resumeErr := l.resumeAfterWall(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched)
 					if resumeErr != nil || stop != "" {
 						completion.outcome = laneOutcome{stop: stop, err: resumeErr}

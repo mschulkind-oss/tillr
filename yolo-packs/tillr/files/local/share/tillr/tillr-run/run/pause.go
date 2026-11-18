@@ -192,18 +192,65 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, kind, 
 	}
 }
 
+// continuationSessionID recovers the durably claimed session even if the executor
+// died after its claim committed but before publishing the lane's session-id file.
+func continuationSessionID(ctx context.Context, s *store.Store, req Request, lane string) (string, error) {
+	// The staged session file remains a required part of the lane. Recover a
+	// stale id, not an unstaged lane whose session file was deliberately removed.
+	staged, err := ReadSessionID(lane)
+	if err != nil || staged == "" {
+		return staged, err
+	}
+	var claimed *resume
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var body []byte
+		err := r.QueryRow(`SELECT payload FROM events WHERE object_type='run' AND object_id=? AND kind=? ORDER BY seq DESC LIMIT 1`, req.RunID, ResumeKind).Scan(&body)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var segment resume
+		if err := json.Unmarshal(body, &segment); err != nil {
+			return err
+		}
+		if segment.RunID == req.RunID && segment.ItemID == req.ItemID && segment.LaneID == req.LaneID && segment.Backend == req.Backend {
+			if !IsSessionID(segment.SessionID) {
+				return Internalf("run %s has an invalid claimed session id", req.RunID)
+			}
+			claimed = &segment
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if claimed != nil {
+		return claimed.SessionID, nil
+	}
+	return staged, nil
+}
+
 // prepareContinuation supplies the adapter's first prompt without replacing the
 // staged brief. A non-resumable adapter gets a new UUID, but the run and lane stay.
 func prepareContinuation(req Request, kind, lane, worktree, durable string) (string, string, error) {
-	mode := "new"
+	mode, prompt, _, err := prepareContinuationSession(req, kind, lane, worktree, durable)
+	return mode, prompt, err
+}
+
+// Mint in memory. Publishing session-id before the resume claim would lose the
+// original session if the executor died before claiming a backend handoff.
+func prepareContinuationSession(req Request, kind, lane, worktree, durable string) (string, string, string, error) {
+	mode, session := "new", ""
 	if !req.Resume {
-		return mode, "", nil
+		return mode, "", "", nil
 	}
 	mode = "resume"
 	noticePath := filepath.Join(durable, "pause-notice")
 	notice, err := os.ReadFile(noticePath)
 	if err != nil && !os.IsNotExist(err) {
-		return "", "", Internalf("reading pause notice: %v", err)
+		return "", "", "", Internalf("reading pause notice: %v", err)
 	}
 	restarting := len(notice) > 0
 	if req.ResumePrompt != "" {
@@ -212,18 +259,15 @@ func prepareContinuation(req Request, kind, lane, worktree, durable string) (str
 	if len(notice) == 0 {
 		notice = []byte("Continue the same attempt from where you stopped. The session was interrupted; keep existing work and make only the one requested commit.\n")
 	}
-	if kind == PauseCannotResume {
+	if req.FreshSession || kind == PauseCannotResume {
 		mode = "new"
 		var uuid [16]byte
 		if _, err := rand.Read(uuid[:]); err != nil {
-			return "", "", Internalf("minting fresh session: %v", err)
+			return "", "", "", Internalf("minting fresh session: %v", err)
 		}
 		uuid[6] = (uuid[6] & 15) | 64
 		uuid[8] = (uuid[8] & 63) | 128
-		session := fmt.Sprintf("%x-%x-%x-%x-%x", uuid[:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
-		if err := os.WriteFile(filepath.Join(lane, SessionIDFile), []byte(session+"\n"), 0600); err != nil {
-			return "", "", Internalf("writing fresh session: %v", err)
-		}
+		session = fmt.Sprintf("%x-%x-%x-%x-%x", uuid[:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
 		reason := "The earlier session was cut short."
 		if restarting {
 			reason = "The earlier session was stopped for a restart and was interrupted by a restart."
@@ -238,16 +282,16 @@ func prepareContinuation(req Request, kind, lane, worktree, durable string) (str
 		}
 		brief, err := os.ReadFile(filepath.Join(lane, "brief.md"))
 		if err != nil {
-			return "", "", Usagef("reading the fresh session's brief: %v", err)
+			return "", "", "", Usagef("reading the fresh session's brief: %v", err)
 		}
 		notice = append(notice, brief...)
 	}
 	prompt := filepath.Join(durable, "resume-prompt")
 	if err := os.WriteFile(prompt, notice, 0600); err != nil {
-		return "", "", Internalf("writing continuation prompt: %v", err)
+		return "", "", "", Internalf("writing continuation prompt: %v", err)
 	}
 	if err := os.Remove(noticePath); err != nil && !os.IsNotExist(err) {
-		return "", "", Internalf("consuming restart notice: %v", err)
+		return "", "", "", Internalf("consuming restart notice: %v", err)
 	}
-	return mode, prompt, nil
+	return mode, prompt, session, nil
 }

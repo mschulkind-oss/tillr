@@ -514,6 +514,14 @@ dispatch that launched the stopped run. A hold tied with the stop therefore wins
 Signals, exit codes, and run state alone do not establish a stop. None of these
 history labels changes the default face's fresh planner answer.
 
+A run recorded as waiting in `quota_pauses` reads `waits on work` at `backend`,
+with its run id, lane, backend, and reopening time in **Why**. This replaces the
+item's generic explanation rather than labeling the pause an unjudged fault.
+JSON adds `run_id`, `lane_id`, and `backend`. The reopening time comes from the
+same reading or refusal window as the backend row; stale or failed readings show
+`reopening unknown`. A requested pause that has not yet stopped the run is not a
+waiting row, and a closed backend alone never establishes that a run is paused.
+
 A landing held by owner content reads `waits on work` at `land`, with
 `trunk-path-dirty: ` and the dirty paths in **Why**, and `commit or restore the path`
 as **Mover**. Its JSON row adds **waited**, a duration rounded to the nearest

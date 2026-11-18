@@ -32,6 +32,9 @@ type waitingRow struct {
 	GraphChanges []string           `json:"graph_changes,omitempty"`
 	Place        int                `json:"place,omitempty"`
 	ItemID       string             `json:"item_id"`
+	RunID        string             `json:"run_id,omitempty"`
+	Backend      string             `json:"backend,omitempty"`
+	LaneID       string             `json:"lane_id,omitempty"`
 	Document     string             `json:"document"`
 	// Observation identifies a publication hold, never an item or design document.
 	Observation string `json:"observation,omitempty"`
@@ -196,7 +199,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 				if e != nil {
 					return e
 				}
-				rows = append(rows, quotas...)
+				rows = mergeQuotaWaiting(rows, quotas)
 				extra, e := waitingCommentIntake(r)
 				if e != nil {
 					return e
@@ -612,7 +615,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		return nil, err
 	}
 	out = append(out, moves...)
-	all, err := appendWaitingDesigns(r, append(append(append(out, windows...), extra...), laneRows...))
+	all, err := appendWaitingDesigns(r, append(append(mergeQuotaWaiting(out, windows), extra...), laneRows...))
 	if err != nil {
 		return nil, err
 	}

@@ -67,8 +67,69 @@ func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) 
 		default:
 			parts = append(parts, "open now")
 		}
+		if q.Error != "" || now.Sub(q.ObservedAt) > quota.ProbeInterval || resetReached {
+			reopen = time.Time{}
+		}
 		q := q
-		out = append(out, waitingRow{ItemID: id, Class: class, Where: "backend", Why: strings.Join(parts, "; "), Mover: mover, Since: q.ObservedAt.Format(time.RFC3339), ClassSource: "store", Quota: &q})
+		out = append(out, waitingRow{ItemID: id, Class: class, Where: "backend", Why: strings.Join(parts, "; "), Mover: mover, Since: q.ObservedAt.Format(time.RFC3339), ClassSource: "store", Quota: &q, backendReset: reopen})
 	}
-	return out, nil
+	// Reuse the backend row's reopening decision, including an explicit unknown
+	// after a failed or stale reading. Never infer a pause from a closed window.
+	backends := refusal
+	for _, row := range out {
+		backends[row.ItemID] = row
+	}
+	paused, err := waitingQuotaPauses(r, backends)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, paused...), nil
+}
+
+func waitingQuotaPauses(r *store.Reader, backends map[string]waitingRow) ([]waitingRow, error) {
+	rows, err := r.Query(`SELECT run_id,item_id,lane_id,backend,paused_at FROM quota_pauses WHERE state='waiting' ORDER BY run_id`)
+	if isMissingTable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []waitingRow
+	for rows.Next() {
+		var id, item, lane, backend string
+		var at int64
+		if err := rows.Scan(&id, &item, &lane, &backend, &at); err != nil {
+			return nil, err
+		}
+		reopening := "reopening unknown"
+		q := backends["backend:"+backend]
+		if !q.backendReset.IsZero() {
+			reopening = "reopens " + q.backendReset.UTC().Format(time.RFC3339)
+		}
+		out = append(out, waitingRow{ItemID: item, RunID: id, Backend: backend, LaneID: lane, Class: "waits on work", Where: "backend", Why: fmt.Sprintf("run %s paused on lane %s waiting on backend %s; %s", id, lane, backend, reopening), Mover: "an open backend in the seat's list and the loop", Since: time.UnixMilli(at).UTC().Format(time.RFC3339), ClassSource: "store", Quota: q.Quota})
+	}
+	return out, rows.Err()
+}
+
+// Replace the item's generic history/planner explanation, not its metadata.
+// The paused run's durable row is the reason it waits, not an unjudged fault.
+func mergeQuotaWaiting(rows, quotas []waitingRow) []waitingRow {
+	for _, q := range quotas {
+		found := false
+		if q.RunID != "" {
+			for i, row := range rows {
+				if row.ItemID == q.ItemID && row.RunID == "" {
+					q.Place, q.Document = row.Place, row.Document
+					rows[i] = q
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			rows = append(rows, q)
+		}
+	}
+	return rows
 }
