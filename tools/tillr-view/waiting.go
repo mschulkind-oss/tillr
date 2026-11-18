@@ -87,6 +87,8 @@ var waitingRules = map[string]waitingRule{
 	"boundary-scope-escape":        {"needs you", "fence", "inspect the named node and escaped path, then authorize a retry"},
 	"node-scope-outside-fence":     {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
 	"candidate-no-op":              {"needs a cause", "lane", "cause not recorded"},
+	"complete-item-fault":          {"needs a cause", "lane", "cause not recorded"},
+	"criteria-unjudged":            {"needs a cause", "lane", "cause not recorded"},
 	"run-unjudged":                 {"needs a cause", "lane", "cause not recorded"},
 	"judge-grant-absent":           {"needs you", "queue", "issue a grant covering the item's criteria"},
 	"judge-unreadable":             {"needs a cause", "judge", "inspect the judge run"},
