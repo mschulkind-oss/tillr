@@ -10,7 +10,7 @@ tags:
   - observability
   - design
 summary: "Reads three days of tillr history as three structural causes rather than many defects — derived copies that are checked instead of derived, failures that become holds only a person can clear, and decisions that are recorded but not shown — and sets one target: a cold machine rebuilds the queue from documents, drains it, and shows every stopped item with the act that moves it."
-next: "Build the D-TC3 remainder: a post-run hold's cause statement, then the rule that one failure on two unrelated items is the machinery's. The other three remainders wait on a design decision or an open question named in the Decision Ledger."
+next: "Build the two D-TC3 units at the end of Section 4, written with no item directive until the owner rules on how documents declare work: the cause statement, then the stop on two unrelated items. The other three remainders wait on a design decision or an open question named in the Decision Ledger."
 depends-on:
   - queue-persistence-ruling.md
   - landing-principles.md
@@ -349,6 +349,116 @@ those files from the preserved tree, which would undo the trunk's edits to them.
 
 Built: this landed in commit `72dc84e4a4`.
 
+### Record a cause statement with each post-run hold
+
+When a run fails after it starts, the loop holds its item for one of six reasons. The hold
+says which reason, but not what went wrong or what would have to change for a second run to
+succeed. So a person who reads a held item must open the run's log to find the stage that
+failed and the error it printed. The loop already records the run's inputs when it dispatches
+the run: the item's block, its allowed paths, the backend policy and the tillr build. Re-admission
+compares those inputs, but the hold does not point at them. [Section 3.2](#32-every-hold-names-a-mover-that-can-act)
+asks that each post-run hold carry a **cause statement**, made of three parts: the stage that
+failed, the error in a normalized form that two runs can share, and the run's recorded inputs.
+The waiting face then shows that statement beside the mover, so the reader sees what to change.
+
+**Outcomes:**
+
+- Record what failed, and with which inputs, whenever a run's item is held.
+- Show the cause beside the hold wherever the owner reads why an item is not moving.
+- Give the next unit a normalized error it can compare across items.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
+directive while the owner reviews how documents declare work. This unit is written to become
+an item however that ruling lands. It waits on nothing.
+
+- **c1:** Each of the six post-run holds named in
+  [Section 2.2](#22-a-failure-becomes-a-hold-only-a-person-can-clear) records a cause statement
+  with the hold. The statement names the stage, the normalized error and the inputs the held run
+  had.
+- **c2:** The normalized error has no run id, lane path, worktree path, timestamp or temporary
+  directory in it. Two runs that fail the same check with the same message, in different lanes
+  and at different times, produce the same normalized error.
+- **c3:** The statement's inputs are the ones the loop recorded when it dispatched that run, not
+  a second reading taken at hold time.
+- **c4:** `tillr drain why` and the waiting face show the stage and the normalized error on the
+  held item's row, and a hold recorded before this change shows that it has no cause statement.
+- **c5:** The drain README states the cause statement's fields, and the convergence Decision
+  Ledger's `D-TC3` cell names where it is built.
+
+**Agent Details:**
+
+- **Proposed id:** `item-drain-hold-cause-statement`.
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-view/`,
+  `yolo-packs/tillr/files/local/share/tillr/tillr-drain/`,
+  `yolo-packs/tillr/files/local/share/tillr/tillr-view/`, and this document.
+- **Ref:** [Section 3.2](#32-every-hold-names-a-mover-that-can-act) and `D-TC3` in the
+  [Decision Ledger](#decision-ledger).
+- **Where:** the six reasons are in `tools/tillr-drain/drain/schema.go`. The recorded inputs are
+  the `drain.inputs` event, whose shape is `RunInputs` in `tools/tillr-drain/drain/readmit.go`.
+  The waiting rows are built in `tools/tillr-view/waiting.go` and `tools/tillr-view/why.go`.
+  Run `just pack-sync` after the last source edit and commit the regenerated mirror.
+- **Verify:** Add drain tests that drive each of the six holds with a stub run and check the
+  recorded statement. Add a test that two failures in different lanes normalize to the same
+  error. Add a view test for the row text and for a hold that has no statement. Run
+  `go test ./...` in `tools/tillr-drain` and `tools/tillr-view`.
+
+### Stop dispatch when one failure holds two unrelated items
+
+A failure that holds two items which share no file is unlikely to be either item's fault. It is
+far more often the machinery's: a broken gate, a missing tool, a backend that refuses every
+request. Today the loop holds each such item on its own and keeps dispatching more work into
+the same failure, so the queue fills with held items while the real defect goes unnamed. The
+loop already counts refused items, but that count only reports and holds nothing.
+[Section 3.2](#32-every-hold-names-a-mover-that-can-act) sets the rule: when one stage and one
+normalized error hold two items whose allowed paths share nothing, the loop stops dispatching,
+says why, and files one defect item. It does not hold the items one by one.
+
+**Outcomes:**
+
+- Stop new dispatch when one failure reaches two unrelated items.
+- File one defect item that names the stage, the error and both items.
+- Resume dispatch once that defect item lands, with no command to run.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
+directive while the owner reviews how documents declare work. This unit is written to become
+an item however that ruling lands. It waits on the cause statement unit above, whose
+normalized error it compares.
+
+- **c1:** When two post-run holds carry the same stage and normalized error, and their items'
+  allowed paths share no path, the loop dispatches no new run. Runs already in flight finish.
+- **c2:** The loop files exactly one defect item for that stage and error, through its existing
+  defect path. The item's text names the stage, the normalized error and both held items. A
+  third item held by the same failure files nothing new.
+- **c3:** Two items whose allowed paths overlap, held by the same failure, are held one by one as
+  they are today, and dispatch continues.
+- **c4:** The loop's status and `tillr drain why` say in one line that dispatch is stopped, why,
+  and which defect item will release it.
+- **c5:** When the defect item lands, the next pass dispatches again, and the two held items are
+  re-admitted under the existing rule for a changed input.
+- **c6:** The repeated-refusal report keeps its meaning, as a report that holds nothing. Its
+  comment no longer cites the closed stop set of the day-two design as the reason no failure
+  stops the loop.
+
+**Agent Details:**
+
+- **Proposed id:** `item-drain-unrelated-failure-stop`.
+- **Paths:** `tools/tillr-drain/`, `tools/tillr-view/`,
+  `yolo-packs/tillr/files/local/share/tillr/tillr-drain/`,
+  `yolo-packs/tillr/files/local/share/tillr/tillr-view/`, and this document.
+- **Waits on:** `item-drain-hold-cause-statement`, the unit above.
+- **Ref:** [Section 3.2](#32-every-hold-names-a-mover-that-can-act) and
+  [the risks table](#6-risks), whose third row relies on this rule.
+- **Where:** the defect path is `fileDefectItem`, with `DefectItemPrefix` and
+  `ReasonToolingDefect`, in `tools/tillr-drain/drain/defect.go`. The report is
+  `RepeatedRefusalThreshold` in `tools/tillr-drain/drain/refusal.go`. A new stop reason is
+  entered in `tools/tillr-drain/drain/definition.go`, and its row goes in
+  `tools/tillr-view/waiting.go` in the same commit. Run `just pack-sync` after the last source
+  edit and commit the regenerated mirror.
+- **Verify:** Add drain tests: two unrelated items held by one failure stop dispatch and file
+  one defect; two overlapping items do not stop it; a third item files nothing new; and landing
+  the defect resumes dispatch. Add a view test for the stopped line. Run `go test ./...` in
+  `tools/tillr-drain` and `tools/tillr-view`.
+
 ## 5. What this does not propose
 
 - No new item state, and no schema change for steps 1 to 4.
@@ -374,7 +484,7 @@ Built: this landed in commit `72dc84e4a4`.
 | :--- | :--- | :--- | :--- | :--- |
 | `D-TC1` | A directive counts only when its opening `<!--` starts a line outside a fenced block. **Rejected:** skipping fences alone, which reads about forty inline mentions as malformed blocks. | 2026-11-15 | [Section 1](#1-what-a-cold-machine-finds-today) | ✅ (`tools/tillr-item/item/sync.go`; the suite syncs this repository's tracked documents and asserts zero findings) |
 | `D-TC2` | Sync is the only intake, is idempotent, never rewrites rank, runs or `landed`, and treats a changed block as a changed item. A block may name a `seat` (amended 2026-11-15, [ruling Section 1](queue-persistence-ruling.md#1-shared-item-block-shape)), which is part of the definition a changed block changes. **Rejected:** a `-v2` clone as the way to revise a judged item. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | Partial. Built: `tillr-item sync`, which the loop runs at start and after each trunk change, is the only intake now that `item-seed-retire` has landed. It is idempotent, never moves state, rank or runs, and updates a changed definition through an `item.update` event; once a criterion carries a state, the row is left alone and reported `definition-frozen`. **Not built, and not filed:** a removed block retiring its item. The landed `item-sync-hold-unshared-items` handles that same case another way: an open item with no block (`UnsharedOpenIDs` in `tools/tillr-item/item/sync.go`) goes to triage on the design seat (`triageDecision` in `tools/tillr-drain/drain/plan.go`) and is not retired. Which of the two rules stands is a design decision this document owes, so no item is filed for it |
-| `D-TC3` | Every hold carries one of three classes and a mover; a post-run hold records a cause statement with its inputs. **Rejected:** a retry door per hold reason. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Partial. Built: the classes and movers, in the definitions every hold reason is entered in (`tools/tillr-drain/drain/definition.go`) and the waiting face that shows them (`tools/tillr-view/waiting.go`). Not built: the cause statement and the two-unrelated-items rule; their item blocks are in [Section 4](#4-what-i-would-build-in-order) |
+| `D-TC3` | Every hold carries one of three classes and a mover; a post-run hold records a cause statement with its inputs. **Rejected:** a retry door per hold reason. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Partial. Built: the classes and movers, in the definitions every hold reason is entered in (`tools/tillr-drain/drain/definition.go`) and the waiting face that shows them (`tools/tillr-view/waiting.go`). Not built: the cause statement and the two-unrelated-items rule, written as the last two units of [Section 4](#4-what-i-would-build-in-order) |
 | `D-TC4` | One read face answers why each unlanded item is not moving, text first; a new hold or stop ships its row in the same commit. **Rejected:** fixing the board one field at a time. | 2026-11-15 | [Section 3.3](#33-every-decision-is-shown-where-the-owner-looks) | ✅ (`tools/tillr-view/waiting.go` and `tools/tillr-view/why.go`) |
 | `D-TC5` | The pipeline regenerates derived copies between commit and gate; tests assert structure and never a count. **Rejected:** asking the worker to regenerate, and a pre-commit hook, which fixes the human path only. | 2026-11-15 | [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) | — Not filed. It waits on [OQ-SH2](tillr-selfhosted-build.md#OQ-SH2) in [the self-hosted build design](tillr-selfhosted-build.md), which [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) leaves there. That question decides what becomes of the pack mirror and its check. Until it is ruled, the module list keeps its two homes: `MODULES` in `tests/pack-sync.test.py` and the module list in `tools/fork-check.py` |
 | OQ-TC1 | Delete `config/tillr/seed-items.json` and the `seed` face of `tillr-item`; sync is the only intake. The seven rows that are neither landed nor a restated open question become prose entries on [`docs/pi/roadmap.md`](../pi/roadmap.md), and the row-count pin goes. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the owner's standing goal that state lives in documents, and [`queue-persistence-ruling.md`](queue-persistence-ruling.md)'s ruling that documents are the only intake. The owner may overturn it. **Rejected:** pruning the file and keeping it; teaching sync to ignore the seed's state. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | ✅ (`item-seed-retire`) |

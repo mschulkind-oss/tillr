@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "Build the drift probe of D-GR12, the one decision here that is not built; every slice of Section 11 has landed."
+next: "The drift probe of D-GR12 is written as the last unit of Section 11, with no item directive; it becomes an item once the owner rules on how documents declare work, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -26,7 +26,7 @@ vantage:
 [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)); the
 [Decision Ledger](#decision-ledger)'s `Built` column names the code for each. One decision is not
 built: the drift probe of `D-GR12`, because `series` and `patch-branch-inv2` are still
-landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). Every timing is from one run made for this design at
+landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger). Its three open
 questions were settled the same day by the session's designer on recorded principle, at the
@@ -1040,3 +1040,64 @@ milliseconds. This item finds what each check spends its time on and removes the
 - **Evidence:** 2026-11-17, `git log --since=2026-11-14 --format=%h -- docs/tillr/roadmap.md | wc -l` is 112, against 365 for `git log --since=2026-11-14 --format=%h`.
 - **Evidence:** 2026-11-17, a document's remembered-pass key includes its own blob (`document_keys`), and the check judges only the documents the change touches, so a remembered pass is reused only when the same content is gated again.
 - **Evidence:** 2026-11-17, `python3 tools/gate/checks/go-build.py` in the main checkout: 2.72 s on the first run after the working tree's Go files changed, then 0.88 and 0.89 s with nothing changed. The drain's operator measured 2.7 to 3.3 s on warm lanes the same day. The check builds and compiles the tests of every module under ten tool directories on every run that is not remembered.
+
+### Move the upstream drift checks out of the gate into a probe
+
+Two gate checks ask about an upstream, not about the change under review. One asks whether
+each patch series still applies. The other asks whether each fork's patch branch still merges
+the release a launch would build. Both fetch from the network, so a new upstream release can
+turn them red with no change in this repository. When that happens, every landing waits on a
+repair that none of them caused. [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) rules
+that a verdict on a commit must depend only on that commit. So these two questions leave both
+tiers of the gate and become a **drift probe**: a run, outside the gate, of the same two
+questions against the release a launch would build. The loop runs the probe when it starts and
+after any landing that changes a series or a pack declaration. A red probe files one repair
+item that names the fork and the release. It never holds the green pointer or moves it. A
+series that a landing changes is still checked against its own recorded base by a heavy tree
+check that needs no network.
+
+**Outcomes:**
+
+- Let an upstream release no longer stop landings; report it as a repair item instead.
+- Keep checking a changed series against its own base, as part of the landing that changed it.
+- Show each probe run's result and the item it filed.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
+directive while the owner reviews how documents declare work. This unit is written to become
+an item however that ruling lands. It waits on `item-gate-pinned-fork-inputs` on
+[the tillr roadmap](../tillr/roadmap.md), which is queued and changes the same checks in the
+same files.
+
+- **c1:** With no tree change and a fork whose upstream has a new release the series does not
+  merge, the landing gate and the heavy tier both pass. Neither tier plans the series check or
+  the patch-branch merge check.
+- **c2:** The drift probe asks both questions for every fork and series a pack delivers. The
+  loop runs it once at start and once after each landing that changes a series or a pack
+  declaration, and at no other time.
+- **c3:** A red probe files one repair item through the loop's defect path. The item names the
+  fork, the release and the failing question. A second red probe for the same fork and release
+  files nothing new.
+- **c4:** A red probe does not move or hold the green pointer, and a landing in progress
+  finishes as it would have without it.
+- **c5:** A landing that changes a series still runs a heavy tree check of that series against
+  its own recorded base, and that check makes no network call.
+- **c6:** The probe's last result for each fork, and the item it filed, can be read from the
+  loop's status, and the drain README states when the probe runs.
+
+**Agent Details:**
+
+- **Proposed id:** `item-gate-drift-probe`.
+- **Paths:** `tools/fork-check.py`, `tests/fork-check.test.py`, `tools/gate/`,
+  `tools/tillr-drain/`, `yolo-packs/tillr/files/local/share/tillr/tillr-drain/`, and this
+  document.
+- **Ref:** [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) and `D-GR12` in the
+  [Decision Ledger](#decision-ledger).
+- **Where:** `series` and `patch-branch-inv2` are `TIER_LANDING` in the tier table of
+  `tools/fork-check.py`; the probe can be a fork-check mode that plans only those two kinds. The
+  defect path is `fileDefectItem` in `tools/tillr-drain/drain/defect.go`. The loop's start and
+  post-landing hooks are in `tools/tillr-drain/drain/loop.go`. Run `just pack-sync` after the
+  last source edit and commit the regenerated mirror.
+- **Verify:** Run `python3 tests/fork-check.test.py` with a fixture fork whose upstream gains a
+  release the series does not merge, and check that both tiers stay green and the probe goes
+  red. Add drain tests that use a stub probe and check the filing, the deduplication, the
+  untouched green pointer and the two run times. Run `go test ./...` in `tools/tillr-drain`.
