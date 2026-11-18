@@ -142,6 +142,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 		if node.RunRequest == nil {
 			return fmt.Errorf("parallel node %s has no backend", stage.ID)
 		}
+		node.RunRequest.WorkingDir = d.RunRequest.WorkingDir
 		node.RunRequest.NodeID = stage.ID
 		node.RunRequest.TimeoutMS = stage.TimeoutMS
 		node.RunRequest.ReadOnlyGroup = group

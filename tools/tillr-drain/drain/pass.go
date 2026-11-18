@@ -458,9 +458,10 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 		if commandStage(d) {
 			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
-			group := d.RunRequest.ReadOnlyGroup
-			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, d.RunRequest.RunID)
-			d.RunRequest.ReadOnlyGroup = group
+			previous := d.RunRequest
+			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, previous.RunID)
+			d.RunRequest.ReadOnlyGroup = previous.ReadOnlyGroup
+			d.RunRequest.WorkingDir = previous.WorkingDir
 			d.Inputs = inputs
 			identifyDecision(&d)
 			return d, nil
@@ -500,6 +501,8 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 				request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
 				request.NodeID = d.RunRequest.NodeID
 			}
+			request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
+			request.WorkingDir = d.RunRequest.WorkingDir
 			d.RunRequest = request
 			if degraded != "" {
 				d.Reason = seatDegradedReason(degraded, name)

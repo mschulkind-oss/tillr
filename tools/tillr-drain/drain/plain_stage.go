@@ -102,6 +102,10 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if err != nil {
 		return err
 	}
+	brief, err = s.workflowNodeBrief(spec, brief, false)
+	if err != nil {
+		return err
+	}
 	sessionID, err := sessionIDFor(spec.SessionID)
 	if err != nil {
 		return err

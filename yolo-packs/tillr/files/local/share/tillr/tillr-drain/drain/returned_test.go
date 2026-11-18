@@ -24,6 +24,27 @@ func TestNormalizeEvidenceKeepsWhatTellsFailuresApart(t *testing.T) {
 	}
 }
 
+func TestReturnedEndingRequiresLandingDefinition(t *testing.T) {
+	for _, landing := range []bool{true, false} {
+		d := defaultDefinition()
+		if !landing {
+			d.Completes = "hook"
+		}
+		p := planner{
+			definition: &d,
+			latest:     map[string]string{"finding": "run-finding"},
+			history:    runHistory{refusals: map[string]string{"run-finding": RefusalNoOp}},
+		}
+		ending := p.returnedEnding("finding")
+		if landing && (ending == nil || ending.Cause != RefusalNoOp) {
+			t.Fatalf("Git candidate refusal was not returned: %+v", ending)
+		}
+		if !landing && ending != nil {
+			t.Fatalf("completion-hook refusal was returned as a Git candidate: %+v", ending)
+		}
+	}
+}
+
 func TestEndingKey(t *testing.T) {
 	a := []EndingCheck{{CheckID: "go", Digest: "1"}, {CheckID: "documents", Digest: "2"}}
 	b := []EndingCheck{{CheckID: "documents", Digest: "2"}, {CheckID: "go", Digest: "1"}}

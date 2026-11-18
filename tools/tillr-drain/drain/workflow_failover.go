@@ -27,11 +27,17 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 		if err := l.nodeOutcome(ctx, d, "fault"); err != nil {
 			return err
 		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, l.headOf(ctx, d.LaneID), "workflow node infrastructure exhausted"); stop != "" {
+		head := ""
+		if !l.nonLanding {
+			head = l.headOf(ctx, d.LaneID)
+		}
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node infrastructure exhausted"); stop != "" {
 			return Externalf("lane %s retained after preservation failed", d.LaneID)
 		}
 		return l.markExamined(ctx, d)
 	}
+	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
+	request.WorkingDir = d.RunRequest.WorkingDir
 	d.RunRequest = request
 	d.NodeInfraFailures++
 	d.WorkflowRestart = true

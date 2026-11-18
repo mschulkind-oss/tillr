@@ -955,12 +955,7 @@ to that block, because that block is ready and may be dispatched at any time.
 **Agent details:** the run request's `node_id` field comes from the run-environment item; the drain
 sets it here for every workflow node.
 
-<!-- tillr: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A command node of an item whose definition does not land runs through `tillr run exec` in the item's plain lane directory. Under Git landing it still runs in the item's worktree, as the command-node block's c2 says.
-- **c2:** Every workflow node's run request carries `node_id`, so its program sees `TILLR_NODE_ID` beside `TILLR_ITEM_ID`.
-- **c3:** A test runs a two-stage workflow, a command stub and then an agent stub, on an item of a fixture definition that does not land, and asserts each program's working directory and environment.
-- **c4:** Under the Git-landing definition the existing workflow and loop suites pass unchanged.
 
 ### Add a worked definition that lands nothing, runnable end to end
 
@@ -978,7 +973,7 @@ to `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md` in any works
 pack. The test lives in the drain's suite because the drain module already links the item and run
 utilities.
 
-<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory" prose="2" -->
+<!-- tillr: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
 - **c2:** The README gives one fenced command sequence that a Product QA agent runs from an empty directory with no Git repository: `tillr store init --definition`, `tillr item apply` of three findings, `tillr drain loop --exit-when-drained`, then `tillr item list` and `tillr item show` to read the outcomes.

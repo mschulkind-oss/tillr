@@ -161,6 +161,9 @@ func selectSeatDispatch(tx *store.Tx, d *Decision, p *Policy, shut map[string]bo
 	// the backend-derived adapter command and model fields.
 	copy := *old
 	copy.Backend, copy.Command, copy.WorkingDir = request.Backend, request.Command, request.WorkingDir
+	if old.WorkingDir == PlainDir {
+		copy.WorkingDir = PlainDir
+	}
 	copy.TimeoutMS = request.TimeoutMS
 	if d.Workflow != nil && d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 		copy.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS

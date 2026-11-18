@@ -527,6 +527,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 		} else {
 			w, selected, source, loadErr := selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
+			if loadErr == nil && def.Completes != "landing" && evaluatorSlot(w) != "" {
+				loadErr = fmt.Errorf("workflow-evaluator-requires-landing: evaluator_slot judges a Git candidate; use an ordinary agent node and the definition's completion hook instead")
+			}
 			routed := item
 			resumeNode := 0
 			retainedGraph := false
@@ -609,6 +612,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				}
 			}
 			identifyDecision(&decision)
+		}
+		if decision.Workflow != nil && decision.RunRequest != nil {
+			request := *decision.RunRequest
+			request.NodeID = decision.Workflow.Stages[decision.NodeIndex].ID
+			decision.RunRequest = &request
 		}
 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
 			request := *decision.RunRequest
@@ -1184,6 +1192,11 @@ func (p *planner) retryHoldReason(itemID string) string {
 // retryHoldReason reads it, for the four outcomes a worker can act on; the refusal's own
 // record supplies the evidence.
 func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
+	// Returning candidate refusals to a Git worker is landing policy. A negative
+	// completion hook has no candidate to repair and keeps its definition's hold.
+	if !p.lands() {
+		return nil
+	}
 	latest := p.latest[itemID]
 	if latest == "" || !p.mayBeARetry(itemID) {
 		return nil
