@@ -208,6 +208,10 @@ file and result memory have landed. Fifth because the owner's target is a gate m
 seconds and landings that outpace ten lanes, and the remaining slices are a chain behind the
 change-checks slice, which has failed its own gate twice and is being reworked.
 
+Automatic revert landed on 2026-11-18 and is on here. First of the gate's remaining work is
+[shortening the time from a red landing to its revert](#shorten-the-time-from-a-red-landing-to-its-revert),
+because every lane waits on that revert.
+
 ## 6. The observatory answers the owner's questions
 
 [The observatory redesign](../design/observatory-redesign.md) has its first screens built: the
@@ -304,6 +308,50 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 The sections from here down are the queue items filed on this page (see
 [entry 9](#9-move-the-queues-items-off-this-page)). Their order is the order they were filed,
 not priority.
+
+## Filed 2026-11-18: the time from a red landing to its revert
+
+### Shorten the time from a red landing to its revert
+
+**Theme:** Heavy runner
+
+**Description:** Since 2026-11-18 tillr reverts a landing by itself when the full suite proves
+that it broke the trunk, as the owner ruled in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1). Every lane that lands after a broken
+change waits on that revert, so the time it takes is the time the whole drain is held. Today a
+revert can only start once the entire heavy run has finished, because the runner reports its
+verdicts at the end. On the loaded machine of 2026-11-18 one check, the sharded Go test run,
+took a median of fourteen minutes and up to fifty-three, and the drain's own test suite ran
+twice in every proof, once sharded and once whole. Meanwhile the workers' test runs compete with
+the proof for the same CPUs. The owner's ruling is to remedy a red fast; these three changes
+let the first failing check start the remedy, run the checks a landing touches before the
+others, and give the proof the CPU first, all without adding any time limit.
+
+**Outcomes**
+
+- Start the culprit search and the revert as soon as one check fails, while the rest of the run continues.
+- Run first the checks whose inputs the recent landings changed, and run the drain suite once per proof.
+- Give the proof priority over workers' test processes while it runs, and never stop either on time.
+
+**Agent Details**
+
+- **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph.
+- **Where:** the heavy runner and its revert in `tools/tillr-drain/drain/` (`heavy.go`,
+  `heavy_revert.go`, `heavy_supervisor.go`), the run order in `tools/tillr-gate/`, the legacy
+  check list in `tools/fork-check.py`, and worker process launch in `tools/tillr-run/`.
+- **Verify:** a fake judge whose first check fails quickly and second runs long: the revert
+  event is recorded before the second check ends, and the pointer does not move until the whole
+  run is green. A plan whose range touches one check's reads runs that check first. Only one
+  whole run of the `tillr-drain` suite appears per proof. A worker test process started during
+  a proof runs at a lower priority than the proof's processes and is never killed for time.
+
+<!-- tillr: item id="item-heavy-revert-time-to-verdict" paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-run/,tools/fork-check.py,tests/fork-check.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A failing heavy check starts its culprit search and automatic revert when it ends, not when the whole heavy run ends.
+- **c2:** The green pointer still moves only on a heavy run in which every check passed.
+- **c3:** Checks whose declared reads intersect the paths changed since the green pointer start before the other checks.
+- **c4:** Each proof runs the `tillr-drain` test suite once, not both sharded and whole.
+- **c5:** While a heavy run is in progress, worker test processes run at a lower CPU priority than the proof, and nothing is stopped for time.
+- **c6:** Regression tests cover c1 to c5, and the gate design and the drain README describe the order and the priority.
 
 ## Filed 2026-11-15: the observatory redesign's remaining slices
 

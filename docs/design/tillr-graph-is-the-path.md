@@ -667,7 +667,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | [The judge and the lifecycle](./tillr-judge-and-lifecycle.md#return-a-design-runs-gate-refusal-to-its-own-session) | The gate refusal's return to its own session | Kept, and made the rule for every producer |
 | [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Withdrawn; replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk) |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |
-| | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); an amendment to that document is owed |
+| | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); amended in [gate rework Section 6.8](gate-rework.md#68-a-red-heavy-check) and built 2026-11-18 |
 | [The retired board state machine](./board-state-machine.md#7-suspend-and-resume) | Suspend and resume by a tool result | The only written design for "done is a suspended tool call". It is retired with the board; its mechanism is the target form of [Section 3.3](#33-endings), rule 1 |
 
 ### 12.3 Mechanisms of the drain

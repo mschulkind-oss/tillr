@@ -803,9 +803,33 @@ base contains the proved commit. A proof from before this rule, which lists no c
 resolves nothing. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.
 With no pointer yet the report says there is no proved baseline to accuse a landing; it
-does not claim that a nonexistent pointer was judged red. Automatic revert
-is not implemented: selecting `auto_revert` reports that limitation and holds the pointer
-instead of silently filing a fixer in its place.
+does not claim that a nonexistent pointer was judged red.
+
+With `auto_revert` on, a red that the bisection pins on landing L is reverted before any
+fixer is filed (the owner's ruling
+[`OQ-GP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP1) of the graph design). The runner builds
+the inverse of L on the tip in `<lane-root>/.revert/worktree`, gates it with the fast gate as
+item `revert-main-<sha12>`, replays the failing check on it, and lands it through `tillr-land`
+only when all three pass. L's item moves from `landed` back to `in-queue` with a reason, and
+its run carries a returned `reverted` ending with the check's output, so the next pass hands it
+back to its worker (a fresh session on the same backend). Its next gate runs that check as a
+required one until it lands again. L is not reverted when it is a revert, a fixer's landing,
+or a landed item's dependency; a revert that does not apply, does not pass the fast gate, or
+leaves the check red ends "not possible" and files the fixer with that reason in its brief
+(against the tip when the check is still red without L). The loop log reads, for a reverted
+red:
+
+```text
+loop: heavy unit red from landing 1a2b3c4d5e6f (item item-x); reverting it on tip 7a8b9c0d1e2f
+loop: reverted 1a2b3c4d5e6f as 3c4d5e6f7a8b; unit passes on the tip with it
+loop: reverted 1a2b3c4d5e6f, item-x back with its author
+loop: heavy run green at 3c4d5e6f7a8b
+```
+
+and, when it is not possible,
+`loop: heavy unit red from 1a2b3c4d5e6f: automatic revert not possible: <reason>; filing a fixer`.
+Each attempt is a `drain.revert` event; the landings history of `tillr-view serve` (`/api/v1/landings`) shows it as a `revert` row, and
+the item waits as `landing-reverted` until the pass that returns it.
 
 Budgets are reported targets, never deadlines. The summary names each overrun's measured
 and declared times without changing the verdict. A sampled stall is retried once on the

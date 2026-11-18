@@ -102,7 +102,7 @@ The owner ruled six things on 2026-11-15. They are inputs, not proposals.
 | The landing strategy is a **per-repository setting with two values**: heavy checks before the merge, so the trunk is always green, or after it, so the trunk is briefly red | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) |
 | **This repository takes the second** | The trunk here may be red between a landing and its heavy checks |
 | tillr **deploys only from the last trunk commit whose after-merge checks passed** | The green pointer, [Section 6.7](#67-deploys-read-the-green-pointer) |
-| **Automatic revert** of an offending landing is a setting, **off here to start** | A red files a fixer; nothing is reverted without a person, [Section 6.8](#68-a-red-heavy-check) |
+| **Automatic revert** of an offending landing is a setting, **off here to start** (overturned 2026-11-17: on here) | A red the bisection pins on one landing is reverted by tillr; a fixer is filed only when the revert is not possible, [Section 6.8](#68-a-red-heavy-check) |
 
 ## 3. What exists today, measured
 
@@ -475,7 +475,7 @@ One tracked file, `config/tillr/gate-policy.json`, holds the repository's settin
 | Key | Values | Default when the file or key is absent | This repository |
 | :--- | :--- | :--- | :--- |
 | `landing_strategy` | `before-merge`, `after-merge` | `before-merge` | `after-merge` |
-| `auto_revert` | `true`, `false` | `false` | `false` |
+| `auto_revert` | `true`, `false` | `false` | `true` (since 2026-11-18) |
 | `budget_ms` | milliseconds | 10,000 | 10,000 |
 | `red_cap` | `landings` and `minutes`, each a non-negative integer | 20 landings, 60 minutes | 20 landings, 60 minutes |
 | `lane_base` | `green`, `tip` | `green` | `green` |
@@ -565,14 +565,50 @@ pointer and the tip, by bisection, and remembered results make repeated steps fr
 | Attribution answers no verdict | No landing is named. As built on 2026-11-18, one fixer is filed against the tip, and its brief says why attribution failed. A loop stop is not this row: nothing is filed. |
 | Red, then green with no input change | `flaky`, per [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint). |
 
-**With `auto_revert` on**, the lander builds a revert of L and lands it through the same fast
-gate; L's item returns to the queue as rework, as
-[landing velocity](landing-velocity.md#7-a-rolling-red-attribution-and-remedy) ruled. A revert
-that does not apply cleanly, because a later landing touched the same lines, is not forced: the
-fixer is filed instead.
+**With `auto_revert` on** (built 2026-11-18, on in this repository), the heavy runner builds
+the inverse of L on the tip, as one commit in its own checkout, and lands it only when three
+things hold: it applies cleanly, the fast gate passes with it, and the failing check, replayed
+on the tip with the revert, passes. It lands through the same lander as any change, as the item
+`revert-main-<L's first twelve hex digits>`, which the red cap never holds. L's item then moves
+from `landed` back to `in-queue` (the one move out of `landed`, which needs a reason and an
+actor), and its run carries a returned ending, `reverted`, with the check's output and log. The
+item's next gate runs that check as a required one until the item lands again: a fail refuses
+the candidate with the output, and a check that answers no verdict does not refuse, because
+unproven is never red. The moved trunk is then proved again, so a green proof releases every
+hold. Nothing is counted: every red that names one landing is offered for revert.
+
+The revert is not attempted when L is itself a revert or a trunk fixer's landing, or when a
+landed item declares a dependency on L's item. It ends "not possible" when it does not apply
+cleanly, when nothing is left to revert, when the fast gate does not pass, when the check still
+fails with L reverted, or when the lander does not land it. In each of those cases the fixer is
+filed as with `auto_revert` off, and its brief names the reason; when the check still fails
+with L reverted, the fixer is filed against the tip, because L alone is not the cause. Each
+attempt is recorded as a `drain.revert` event, which the landings history in `tillr-view` shows
+as a `revert` row. An unattributed red is never reverted.
 
 A check that reaches its timeout is "no verdict": the pointer does not move, nothing is
 attributed, and the line says which check and how long it ran.
+
+**Time to a revert (measured 2026-11-18, proposed, not built).** A revert can start only once
+the heavy run has named a red check, and today that is at the end of the whole run. Over the
+recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
+minutes and at most 52.7, and it runs the `tillr-drain` suite sharded while the legacy check
+`go-tool/tools-tillr-drain` runs the same suite whole (298 seconds in one run); the declaration
+checks run one after another before the legacy program starts. Three changes shorten the time
+from a landing to its revert, in order of cost:
+
+1. **A verdict per check.** The runner reports a failing check the moment it ends and starts the
+   bisection and the revert for it while the rest of the suite keeps running, so the fastest red
+   check, not the slowest check, sets the time to a revert. The pointer still moves only on a
+   whole green run.
+2. **Checks the change reaches go first.** Checks whose declared reads intersect the paths the
+   landings since the pointer changed are started before the rest, and the duplicate whole-suite
+   run of `tillr-drain` is dropped in favor of the sharded one.
+3. **The proof has the CPU first.** While a heavy run is in progress, workers' own test processes
+   run at a lower scheduling priority (a `nice` level or a cgroup weight), never under a time
+   limit, so a loaded machine slows the workers rather than the proof every one of them waits on.
+
+These are filed as one roadmap item, [the time to a revert](../tillr/roadmap.md#shorten-the-time-from-a-red-landing-to-its-revert).
 
 ### 6.9 Upstream drift is a probe, not a check
 
@@ -665,7 +701,7 @@ as each row says.
 | `D-GR3` | The landing strategy is a per-repository setting with two values: heavy checks before the merge (the trunk is always green) or after it (the trunk is briefly red). | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — |
 | `D-GR4` | This repository takes the second value: heavy checks after the merge. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — |
 | `D-GR5` | tillr deploys only from the last trunk commit whose after-merge checks passed. | 2026-11-15 | [Section 6.7](#67-deploys-read-the-green-pointer) | — |
-| `D-GR6` | Automatic revert of an offending landing is a setting, and it is off in this repository to start. | 2026-11-15 | [Section 6.8](#68-a-red-heavy-check) | — |
+| `D-GR6` | Automatic revert of an offending landing is a setting, and it is off in this repository to start. **Overturned by the owner on 2026-11-17** ([OQ-GP1](tillr-graph-is-the-path.md#OQ-GP1)): tillr reverts by itself when the full suite proves a landing broke the trunk, and a fixer is filed only when the revert is unsafe, does not repair, or the red is unattributed. | 2026-11-15, amended 2026-11-17 | [Section 6.8](#68-a-red-heavy-check) | 2026-11-18 (`auto_revert` true in `config/tillr/gate-policy.json`) |
 | `D-GR7` | A change check gets its base from the caller, runs once at landing, and never against a remembered commit. **Rejected:** repairing the remembered baseline's cold start. Structural fix. | 2026-11-15 | [Section 6.1](#61-the-caller-names-the-base) | — (the `--since` argument exists; the default path still reads the record) |
 | `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | — |
 | `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | — |
