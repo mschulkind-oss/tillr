@@ -362,6 +362,39 @@ The verifier asks for `node:<id>` evidence for each covered criterion and a
 does not enforce the node locator; the verifier makes that judgment. No item selects
 this workflow by default.
 
+A containing stage is not the only source of `args`. An item that names a workflow
+in its own `workflow` field may also carry `workflow_args`
+([item record](../tillr-item/README.md#workflow-arguments-and-store-declared-items)).
+Selection binds the workflow's top-level `args` from those values and validates them
+by the same rules. A workflow that declares `args` and is named by an item without
+them is refused at selection with `workflow-argument-missing`, which holds the item.
+
+### Document triage
+
+[`doc-triage@v1`](../../config/tillr/workflows/doc-triage@v1.json) checks a list of
+documents for relevance and accuracy, and is not tied to any design document.
+`tillr-item doc-triage` files the item and supplies the list
+([how](../tillr-item/README.md#filing-a-document-triage)). The workflow has two stages:
+
+1. `read` repeats over `args.docs`, with a declared `most` of 48. It makes one
+   read-only node per document on the `scout` seat, numbered `read-1` through
+   `read-N`, and the readers run in parallel under the default `max_parallel`. Each
+   reader writes a `finding` output in Markdown that answers five questions with
+   evidence: is the document still relevant, is it accurate, is its status line true,
+   are its open questions still askable, and what action is recommended. The action is
+   one of keep as is, correct facts, mark built or graduate, supersede by another
+   document, retire, or merge into another document. Like every reader, it changes no
+   file.
+2. `report` is the one writing node, on the `design` seat. It receives every finding,
+   and inherits the item's fence, which is exactly the report path. It writes one
+   report: a table with one row per document (the document, a verdict of `current`,
+   `stale` or `obsolete`, the recommended action, and one sentence of evidence), then
+   the detail for each document. It edits no other file. The gate and judge then treat
+   the item like any other.
+
+The triage item is a store-declared item, so the
+[document-fed prerequisite](#document-fed-workflow-prerequisite) does not apply to it.
+
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
 unless it declares a narrower one. A scope outside its container or the item's
@@ -711,6 +744,13 @@ own to be declared in. A generated item an older build parked on a triage confli
 that conflict closed before the next plan and returns to its worker; a gate-budget
 alarm is closed instead, because a budget is a reported target and the loop files no
 item for it.
+
+A **store-declared item** is also exempt. The term is coined in
+[tillr-item](../tillr-item/README.md#workflow-arguments-and-store-declared-items) for
+an item whose record carries `workflow_args`, such as a
+[document triage](#document-triage). No block can carry workflow arguments, so its
+record is its declaration, and sync does not count it as unshared. Sending it to
+triage would add a block for it to a document, a marker the owner did not ask for.
 
 An open item without a block goes to **triage**, the design-seat run that shapes a
 stored request into a document declaration, with reason `triage-no-block`. It runs

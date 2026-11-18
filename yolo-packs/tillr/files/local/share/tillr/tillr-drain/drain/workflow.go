@@ -252,11 +252,22 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 }
 
 func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
+	return loadWorkflowWith(root, ref, policy, nil)
+}
+
+// loadWorkflowWith binds the workflow's top-level args from the item's own record, the
+// one source of them outside a containing stage. Validation is the same as for a stage's
+// args: a missing, unknown, mistyped or oversized argument refuses the load.
+func loadWorkflowWith(root, ref string, policy *Policy, args map[string]any) (*Workflow, error) {
 	if !item.WorkflowRefValid(ref) {
 		return nil, fmt.Errorf("workflow-reference: %q", ref)
 	}
 	path := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
-	return readWorkflow(root, path, policy, map[string]bool{})
+	w, err := expandWorkflow(root, path, policy, map[string]bool{}, args, nil)
+	if err == nil {
+		err = validateOutputWiring(w)
+	}
+	return w, err
 }
 
 // scopePaths expands a node's explicit paths by the same rules as an item's fence.

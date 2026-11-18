@@ -109,7 +109,8 @@ type SyncReport struct {
 	// SkippedFiles are the documents no item was written from because they carry a finding.
 	SkippedFiles []string `json:"skipped_files"`
 
-	// UnsharedOpen counts the store's non-terminal items that no document block declares:
+	// UnsharedOpen counts the store's non-terminal items that no document block declares and
+	// that are not store-declared (an item carrying workflow_args, which its record declares):
 	// private residue (docs/design/queue-persistence-ruling.md Section 4). The oldest one's
 	// last write is named so the residue's age is visible, not only its size.
 	DocumentFed        bool     `json:"document_fed"`
@@ -649,7 +650,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		oldestSet := false
 		for _, id := range ids {
 			st := held[id]
-			if !unshared[id] || ProseRewriteOriginal(id) != "" {
+			if !unshared[id] || ProseRewriteOriginal(id) != "" || st.storeDeclared {
 				continue
 			}
 			report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
@@ -870,10 +871,21 @@ type storedState struct {
 	state     string
 	designDoc string
 	updatedAt int64
+	// storeDeclared is an item whose record carries its workflow's arguments, which no
+	// document block can carry: its record is its declaration, so it is never unshared.
+	storeDeclared bool
 }
 
 func readStoredStates(r *store.Reader) (map[string]storedState, error) {
-	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, '') FROM items`)
+	var hasArgs bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'workflow_args')`).Scan(&hasArgs); err != nil {
+		return nil, Internalf("checking workflow arguments: %v", err)
+	}
+	argsColumn := "0"
+	if hasArgs {
+		argsColumn = "COALESCE(workflow_args, '') != ''"
+	}
+	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, ''), ` + argsColumn + ` FROM items`)
 	if err != nil {
 		return nil, Internalf("reading the stored items: %v", err)
 	}
@@ -882,7 +894,7 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 	for rows.Next() {
 		var id string
 		var st storedState
-		if err := rows.Scan(&id, &st.state, &st.updatedAt, &st.designDoc); err != nil {
+		if err := rows.Scan(&id, &st.state, &st.updatedAt, &st.designDoc, &st.storeDeclared); err != nil {
 			return nil, Internalf("reading a stored item: %v", err)
 		}
 		held[id] = st

@@ -141,6 +141,61 @@ An `item.idea` result carries `item_id`, `place`, `count`, `event_seq`, and
 No tracked file is written by saving; the words reach the tree through the
 idea's own landing. There is no reserved priority prefix.
 
+## Filing a document triage
+
+`doc-triage` files one item that checks a set of documents: is each still relevant,
+and is it still accurate. The item runs the
+[`doc-triage@v1`](../../config/tillr/workflows/doc-triage@v1.json) workflow, described
+in the [drain README](../tillr-drain/README.md#document-triage), and its only
+deliverable is one report. Name the documents as arguments after the flags, or name a
+roadmap with `--roadmap`, or both:
+
+```sh
+tillr-item doc-triage --store .tillr/state.db --title "Two designs" docs/design/a.md docs/design/b.md
+tillr-item doc-triage --store .tillr/state.db --title "Tillr roadmap designs" --roadmap docs/tillr/roadmap.md
+```
+
+A roadmap expands to every Markdown document under `docs/design/` that it links, in
+first-link order and each once. Anchors, links outside `docs/design/` and links to
+missing files are skipped. A named document must exist, or the face refuses. Named
+documents come first, then the roadmap's. Run `tillr-item doc-triage --help` for the flags.
+
+The item is written straight to the store. No document carries a block or a marker for
+it, and nothing tracked is written when it is filed. Its fields:
+
+- id `item-doc-triage-<date>-<slug>`, where the slug comes from the title. A second
+  triage with the same id is refused as `item-exists`.
+- the design seat and the `doc-triage@v1` workflow.
+- `workflow_args` holding `{"docs": [...]}`, the document list.
+- a fence of exactly one path, the report. It defaults to
+  `docs/triage/<date>-<slug>.md`, and `--report` names another Markdown path under `docs/`.
+- three fixed criteria: the report has one row per named document; every verdict cites
+  its evidence; and no other file is changed.
+
+It is placed last unless `--to`, `--before` or `--after` says otherwise. Every refusal
+comes before the first write: `no-documents`, `too-many-documents` (above the `most`
+the workflow file declares for `docs`), `title-required`, `report-path` (outside
+`docs/`, or one of the triaged documents), `document-missing`, `document-not-markdown`
+and `item-exists`. The answer is an `item.doc-triage` record carrying `item_id`,
+`place`, `count`, `report` and `documents`.
+
+The report recommends and edits nothing else. Acting on a recommendation is separate
+work that the owner approves.
+
+### Workflow arguments and store-declared items
+
+An item record may carry `workflow_args`: the values for the top-level `args` of the
+workflow it names. Its `workflow` field must name that workflow, or the record is refused
+as `workflow-args-without-workflow`. Show answers the arguments. The drain binds them
+when it loads the item's workflow, and refuses a missing, unknown, mistyped or oversized
+argument there, as it does for a containing stage's `args`.
+
+A **store-declared item** is an item whose record carries `workflow_args`. The term is
+coined here. No document block has an attribute for workflow arguments, so the record
+is the item's only declaration. Sync therefore never counts a store-declared item in
+`unshared_open`, and the drain never sends it to document triage. The `doc-triage` face
+files items of this kind.
+
 ## State invariants
 
 Item states, finished states, the ready/blocked/closed roles, and allowed moves come
