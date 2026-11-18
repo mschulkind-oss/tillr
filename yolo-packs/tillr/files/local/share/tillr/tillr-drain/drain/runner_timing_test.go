@@ -72,7 +72,7 @@ func TestRunnerTimingUpgradeReplacesTheLegacyCopyTrigger(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`DROP TRIGGER drain_copy_legacy_passes;
+		_, err := tx.Exec(`DROP TRIGGER drain_copy_legacy_runner_passes;
 CREATE TRIGGER drain_copy_legacy_passes BEFORE INSERT ON schema_migrations BEGIN
  INSERT OR IGNORE INTO drain_passes
  SELECT tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
@@ -89,7 +89,22 @@ END;`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	defer s.Close()
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var legacy, current int
+		if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='drain_copy_legacy_passes'`).Scan(&legacy); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='drain_copy_legacy_runner_passes'`).Scan(&current); err != nil {
+			return err
+		}
+		if legacy != 0 || current != 1 {
+			t.Errorf("after the upgrade the legacy copy trigger count is %d and the current one %d, want 0 and 1", legacy, current)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRunnerChangePaths(t *testing.T) {

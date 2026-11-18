@@ -22,6 +22,11 @@ func TestWriterTraceCorrelatesMigrationAndRollbackWithoutChangingOutcome(t *test
 	original := os.Stderr
 	os.Stderr = capture
 	defer func() { os.Stderr = original; capture.Close() }()
+	// An open of a current store migrates nothing and takes no write lock, so the store
+	// forgets its migration first: this open is one that migrates.
+	if err := s.ForgetMigrations(); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TILLR_SQLITE_TRACE", "1")
 	migrated, err := store.Open(context.Background(), s.Path(), true)
 	if err != nil {

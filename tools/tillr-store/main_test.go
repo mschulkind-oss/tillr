@@ -300,7 +300,9 @@ func TestCheckReportsEveryContractField(t *testing.T) {
 	if p.EventHeadSeq != 0 {
 		t.Fatalf("event_head_seq is %d, want 0 on a store with no events", p.EventHeadSeq)
 	}
-	for table, want := range map[string]int{"meta": 1, "schema_migrations": 1, "events": 0} {
+	// Two meta rows: the fixture mark and the applied-schema record an open reads instead
+	// of migrating again.
+	for table, want := range map[string]int{"meta": 2, "schema_migrations": 1, "events": 0} {
 		if got, ok := p.TableCounts[table]; !ok || got != want {
 			t.Fatalf("table_counts[%q] is %d (present %v), want %d: %v", table, got, ok, want, p.TableCounts)
 		}

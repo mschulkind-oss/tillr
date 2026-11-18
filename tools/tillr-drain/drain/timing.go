@@ -97,9 +97,17 @@ CREATE TABLE IF NOT EXISTS drain_passes (
 // version (INSERT OR IGNORE still fires it). This keeps migration in the store's
 // opening transaction, without fabricating absent historical measurements.
 // New measurements only write drain_passes; repeated opens never replace them.
+//
+// The trigger is created IF NOT EXISTS under a name of its own, and the older name, whose
+// body predates the runner columns, is dropped. Dropping and re-creating one name on every
+// migration changed SQLite's schema cookie every time, and an open reads that cookie to
+// decide whether the schema is current (store.schemaApplied): each program's migration
+// would have made every other program's schema look stale, and opens would have gone on
+// taking the write lock to migrate. Dropping a trigger that is already gone changes
+// nothing.
 var legacyPassMigrationDDL = strings.Replace(PassDDL, "drain_passes", "drain_ticks", 1) + `
 DROP TRIGGER IF EXISTS drain_copy_legacy_passes;
-CREATE TRIGGER drain_copy_legacy_passes
+CREATE TRIGGER IF NOT EXISTS drain_copy_legacy_runner_passes
 BEFORE INSERT ON schema_migrations BEGIN
  INSERT OR IGNORE INTO drain_passes
  (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
