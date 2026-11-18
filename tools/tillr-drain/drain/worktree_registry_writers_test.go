@@ -4,6 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestRegistryLockCoversDetachedReplayAndLaneStaging(t *testing.T) {
@@ -26,7 +29,13 @@ func TestRegistryLockCoversDetachedReplayAndLaneStaging(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	loop := &Loop{cfg: LoopConfig{Root: root, LaneRoot: filepath.Join(scratch, "loop-lanes"), Lanes: []string{"desk-1"}}}
+	// Startup reads persisted lane conditions before recording any new hold.
+	s, err := store.InitFixture(context.Background(), filepath.Join(scratch, "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	loop := &Loop{cfg: LoopConfig{Root: root, Store: s.Path(), Now: time.Now, LaneRoot: filepath.Join(scratch, "loop-lanes"), Lanes: []string{"desk-1"}}}
 	if err := loop.stageLanes(context.Background()); err != nil {
 		t.Fatal(err)
 	}

@@ -3099,12 +3099,7 @@ that need to be removed.
 - Show which checkout holds each blocked lane, and return the lane to service when it is free.
 - Refuse to start when no lane is available, and name every blocking checkout.
 
-<!-- tillr: item id="item-loop-start-holds-blocked-lane" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** At loop start, a lane whose branch another worktree holds is taken out of rotation with the existing `lane-branch-held` condition, and the loop starts with the other lanes. A test starts a loop with one such lane and asserts the loop runs and the lane is not offered.
-- **c2:** The held lane shows on `tillr view waiting` with the path of the worktree that holds the branch. A test asserts the row.
-- **c3:** When the holder is removed, the lane returns to rotation at the next re-check. A test asserts it.
-- **c4:** A start where every lane is held still refuses to run, with a message that names each holder. A test asserts it.
 
 **Agent details:**
 
