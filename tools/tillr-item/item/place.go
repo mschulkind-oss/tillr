@@ -141,18 +141,7 @@ func insertOrdered(tx *store.Tx, target orderedItem, rest []orderedItem, pos int
 	if err := tx.Reader().QueryRow(`SELECT event_seq FROM items WHERE item_id=?`, target.id).Scan(&seq); err != nil {
 		return 0, Internalf("reading the placement receipt: %v", err)
 	}
-	lo, hi := "", ""
-	if pos > 0 {
-		lo = rest[pos-1].rank
-	}
-	if pos < len(rest) {
-		hi = rest[pos].rank
-	}
-	key, ok := betweenKeys(lo, hi)
-	// Empty or equal keys inside the list have no unambiguous sparse gap.
-	if (pos > 0 && lo == "") || (pos < len(rest) && hi == "") || (pos > 0 && pos < len(rest) && lo >= hi) {
-		ok = false
-	}
+	key, respaced := insertionKeys(rest, pos)
 	write := func(v orderedItem, key string) error {
 		payload, _, err := readStoredItem(tx.Reader(), v.id)
 		if err != nil {
@@ -191,23 +180,14 @@ func insertOrdered(tx *store.Tx, target orderedItem, rest []orderedItem, pos int
 		}
 		return nil
 	}
-	if ok {
+	if respaced == nil {
 		if err := write(target, key); err != nil {
 			return 0, err
 		}
 	} else {
 		final := append(append(append([]orderedItem{}, rest[:pos]...), target), rest[pos:]...)
-		// Eight base-36 digits leave wide gaps on both ends and between every pair.
-		const space int64 = 2821109907456 // 36^8
-		stride := space / int64(len(final)+1)
 		for i, v := range final {
-			n := int64(i+1) * stride
-			buf := [8]byte{}
-			for j := 7; j >= 0; j-- {
-				buf[j] = RankAlphabet[n%36]
-				n /= 36
-			}
-			key := string(buf[:])
+			key := respaced[i]
 			if v.rank != key || (v.id == target.id && from != "") {
 				if err := write(v, key); err != nil {
 					return 0, err
@@ -216,6 +196,39 @@ func insertOrdered(tx *store.Tx, target orderedItem, rest []orderedItem, pos int
 		}
 	}
 	return seq, nil
+}
+
+// insertionKeys is the shared allocation for writing placement and scoped
+// previews. A non-nil slice supplies every key after crowded-order respacing.
+func insertionKeys(rest []orderedItem, pos int) (string, []string) {
+	lo, hi := "", ""
+	if pos > 0 {
+		lo = rest[pos-1].rank
+	}
+	if pos < len(rest) {
+		hi = rest[pos].rank
+	}
+	key, ok := betweenKeys(lo, hi)
+	if (pos > 0 && lo == "") || (pos < len(rest) && hi == "") || (pos > 0 && pos < len(rest) && lo >= hi) {
+		ok = false
+	}
+	if ok {
+		return key, nil
+	}
+	// Eight base-36 digits leave wide gaps on both ends and between every pair.
+	const space int64 = 2821109907456 // 36^8
+	keys := make([]string, len(rest)+1)
+	stride := space / int64(len(keys)+1)
+	for i := range keys {
+		n := int64(i+1) * stride
+		buf := [8]byte{}
+		for j := 7; j >= 0; j-- {
+			buf[j] = RankAlphabet[n%36]
+			n /= 36
+		}
+		keys[i] = string(buf[:])
+	}
+	return "", keys
 }
 
 // betweenKeys returns a strict lexical gap, or false when a prefix ending in

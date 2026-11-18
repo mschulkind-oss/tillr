@@ -167,7 +167,8 @@ func (e SubdirectoryError) Error() string {
 	return fmt.Sprintf("--root %s is the subdirectory %s of a repository, not its top level", e.Root, e.Prefix)
 }
 
-func ReadTracked(root string) ([]Document, error) {
+// TrackedPaths lists tracked Markdown paths without opening their contents.
+func TrackedPaths(root string) ([]string, error) {
 	probe := exec.Command("git", "-C", root, "rev-parse", "--show-prefix")
 	var stderr bytes.Buffer
 	probe.Stderr = &stderr
@@ -185,11 +186,23 @@ func ReadTracked(root string) ([]Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing the tracked documents of %s with git: %v: %s", root, err, strings.TrimSpace(stderr.String()))
 	}
-	docs := []Document{}
+	paths := []string{}
 	for _, name := range strings.Split(string(out), "\x00") {
-		if name == "" || !strings.HasSuffix(name, ".md") {
-			continue
+		if strings.HasPrefix(name, "docs/") && strings.HasSuffix(name, ".md") {
+			paths = append(paths, name)
 		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func ReadTracked(root string) ([]Document, error) {
+	paths, err := TrackedPaths(root)
+	if err != nil {
+		return nil, err
+	}
+	docs := []Document{}
+	for _, name := range paths {
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
 		if errors.Is(err, os.ErrNotExist) {
 			continue

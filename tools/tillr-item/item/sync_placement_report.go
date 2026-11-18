@@ -76,6 +76,10 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 	newIDs := map[string]bool{}
 	keyed := map[string]bool{}
 	order := []string{}
+	parking := map[string]bool{}
+	for _, id := range plan.report.Parked {
+		parking[id] = true
+	}
 	for _, v := range all {
 		if v.rank != "" {
 			order = append(order, v.id)
@@ -84,7 +88,7 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 		}
 	}
 	for _, v := range all {
-		if InOrder(v.state) && v.rank == "" {
+		if InOrder(v.state) && v.rank == "" && !parking[v.id] && (plan.allowed == nil || plan.allowed[v.id]) {
 			order = append(order, v.id)
 			placed[v.id] = ""
 			keyed[v.id] = true
@@ -93,6 +97,9 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 	}
 	writes, err := previewAcceptedWrites(r, plan.writes, all)
 	if err != nil {
+		return nil, err
+	}
+	if err := previewScopedRanks(plan, all, writes, siblings); err != nil {
 		return nil, err
 	}
 	payloads := map[string]itemPayload{}

@@ -270,6 +270,30 @@ The following rules describe Git-landing, including its established refusal name
   definition rather than the changed block. A second run
   over unchanged documents changes no item and appends no event; it refreshes the
   saved sync observation.
+- **Choose the documents with repeated `--roadmap <path>` flags.** Without the flag,
+  sync reads every tracked Markdown document under `docs/`. With it, sync reads only
+  the named roadmaps and the tracked Markdown documents under `docs/` they link
+  directly, including parked sections. Links in those documents are not followed.
+  Paths are repository-relative, must name existing tracked Markdown files, and
+  need not have the filename `roadmap.md`. Invalid selections refuse with exit `2`
+  before opening a store writer. Scoped reads refuse symlink traversal, including
+  linked symlinks, rather than import their untracked targets. Repeated copies of
+  one path are read once.
+  First-import entries interleave in flag order instead of roadmap path order.
+  Items whose blocks were not read retain their definitions, states and rank keys;
+  missing keys are filled only for declared items. If source or saved-order placement
+  would rewrite an unread item's crowded rank key, the entire narrowed sync refuses
+  without writing; run a sync of every document for that placement.
+  The `item.sync` payload's `scope` is `"all-documents"` or the ordered list of selected
+  roadmap paths. Narrowed reports encode `unshared_open` and `stale_doc_blocks` as
+  JSON `null` (not computed), and text says they need a sync of every document.
+  They do not replace the last whole-sync residue observation or erase warnings
+  for documents outside the selected set. `--dry-run` works with either scope.
+
+  ```bash
+  tillr item sync --store .tillr/state.db --root . --roadmap docs/tillr/roadmap.md --roadmap docs/pi/roadmap.md
+  ```
+
 - **Read faces show places, not stored keys.** A [place](../../docs/design/observatory-actions.md#3-principles-and-words)
   counts from 1 across the full order; parked and finished items have no place.
   Empty keys count after keyed items, in item id order. A writing sync fills those
