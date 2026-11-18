@@ -625,23 +625,23 @@ attributed, and the line says which check and how long it ran.
 **Time to a revert (measured 2026-11-18, proposed, not built).** A revert can start only once
 the heavy run has named a red check, and today that is at the end of the whole run. Over the
 recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
-minutes and at most 52.7, and it runs the `tillr-drain` suite sharded while the legacy check
-`go-tool/tools-tillr-drain` runs the same suite whole (298 seconds in one run); the declaration
-checks run one after another before the legacy program starts. Three changes shorten the time
-from a landing to its revert, in order of cost:
+minutes and at most 52.7. The legacy check `go-tool/tools-tillr-drain` runs the `tillr-drain`
+suite sharded. The parity case used to run it twice more; now it only lists and plans the suite,
+so each proof runs it once. The declaration checks run one after another before the legacy
+program starts. Three further changes shorten the time from a landing to its revert:
 
 1. **A verdict per check.** The runner reports a failing check the moment it ends and starts the
    bisection and the revert for it while the rest of the suite keeps running, so the fastest red
    check, not the slowest check, sets the time to a revert. The pointer still moves only on a
    whole green run.
 2. **Checks the change reaches go first.** Checks whose declared reads intersect the paths the
-   landings since the pointer changed are started before the rest, and the duplicate whole-suite
-   run of `tillr-drain` is dropped in favor of the sharded one.
+   landings since the pointer changed are started before the rest. The duplicate `tillr-drain`
+   runs are already gone.
 3. **The proof has the CPU first.** While a heavy run is in progress, workers' own test processes
    run at a lower scheduling priority (a `nice` level or a cgroup weight), never under a time
    limit, so a loaded machine slows the workers rather than the proof every one of them waits on.
 
-These are filed as one roadmap item, [the time to a revert](../tillr/roadmap.md#shorten-the-time-from-a-red-landing-to-its-revert).
+The four roadmap items start at [faster recovery from red landings](../tillr/roadmap.md#add-faster-recovery-from-red-landings).
 
 ### 6.9 Upstream drift is a probe, not a check
 

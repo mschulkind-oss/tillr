@@ -3009,6 +3009,14 @@ with tempfile.TemporaryDirectory() as tmp:
                 if tier == suite_tier:
                     expected.append(expected_suite_kind)
                 assert selected == expected, (directory, tier, selected)
+                # A proof runs the drain's suite once: one rolling command names it, the
+                # sharded one. The parity case in tests/go-test-shards.test.py starts no run of it.
+                if directory == "tools/tillr-drain" and tier == module.TIER_ROLLING:
+                    drain_runs = [check.argv[-1] for check in plan.checks
+                                  if "tools/tillr-drain" in check.argv[-1]
+                                  and ("go-test-shards.py" in check.argv[-1]
+                                       or "go test" in check.argv[-1])]
+                    assert len(drain_runs) == 1 and "go-test-shards.py" in drain_runs[0], drain_runs
                 assert any(skip.owed and skip.kind == "go-tool" for skip in plan.skips) == (
                     directory == "tools/tillr-drain" and tier == module.TIER_LANDING
                 ), (directory, tier, plan.skips)
