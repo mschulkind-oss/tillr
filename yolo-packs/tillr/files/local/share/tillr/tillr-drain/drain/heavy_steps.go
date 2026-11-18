@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -43,6 +44,36 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		if check.Scope == "tree" && check.Tier == "heavy" {
 			declared[check.ID] = struct{ Reads, Needs, Tools []string }{check.Reads, check.Needs, check.Tools}
 		}
+	}
+	if only == "" {
+		ids := []string{}
+		for id := range declared {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		result := []HeavyCheck{}
+		for _, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if check, ok := reuseHeavyCheck(ctx, id); ok {
+				result = append(result, check)
+				continue
+			}
+			checks, err := s.JudgeHeavy(ctx, dir, id)
+			if err != nil {
+				return nil, err
+			}
+			if len(checks) != 1 || checks[0].CheckID != id {
+				return nil, Externalf("heavy check %s gave no verdict", id)
+			}
+			if err := saveHeavyCheck(ctx, checks[0]); err != nil {
+				return nil, err
+			}
+			result = append(result, checks...)
+		}
+		legacy, err := s.runHeavyLegacy(ctx, dir, "")
+		return append(result, legacy...), err
 	}
 	result := []HeavyCheck{}
 	if _, exists := declared[only]; only == "" || exists {
@@ -86,6 +117,11 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			return result, nil
 		}
 	}
+	return s.runHeavyLegacy(ctx, dir, only)
+}
+
+func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+	result := []HeavyCheck{}
 	program := s.RollingProgram
 	selector := ""
 	if only != "" {
@@ -110,7 +146,17 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 	for i := range argv {
 		argv[i] = strings.ReplaceAll(argv[i], "{only}", selector)
 	}
+	if only == "" {
+		var err error
+		argv, err = heavyLegacyArgv(ctx, argv)
+		if err != nil {
+			return nil, err
+		}
+	}
 	spans := filepath.Join(s.LaneRoot, ".rolling", "heavy.spans.json")
+	if err := os.MkdirAll(filepath.Dir(spans), 0755); err != nil {
+		return nil, err
+	}
 	if err := os.Remove(spans); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -130,6 +176,11 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		return nil, Externalf("legacy heavy program did not start: %v: %s", runErr, stderr.String())
 	}
 	code := cmd.ProcessState.ExitCode()
+	if only == "" {
+		if err := readLegacyReuse(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if only != "" {
 		verdict := "error"
 		switch code {

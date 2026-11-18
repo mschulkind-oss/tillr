@@ -223,6 +223,9 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if err == nil {
 		rows, err = policyWaitingRows(*root, rows)
 	}
+	if err == nil {
+		rows, err = heavyWaitingRows(ctx, *root, *path, rows)
+	}
 	if err != nil {
 		var mismatch schemaMismatch
 		if errors.As(err, &mismatch) {
@@ -291,6 +294,9 @@ func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFa
 	rows, err := assembleWaiting(r, s.vantage.source(req.Context()), s.storePath)
 	if err == nil {
 		rows, err = policyWaitingRows(s.root, rows)
+	}
+	if err == nil {
+		rows, err = heavyWaitingRows(req.Context(), s.root, s.storePath, rows)
 	}
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)

@@ -3455,12 +3455,7 @@ repair work that identifies the affected commit range rather than ending the run
 - Show the owner how long ago the last successful proof finished.
 - File repair work for the affected commit range when no landing explains the failure.
 
-<!-- tillr: item id="item-heavy-restart-keeps-proof-and-names-red-landing" paths="tools/tillr-drain/,tools/tillr-view/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A heavy check that passed on a tip is recorded with that tip. After a restart the loop does not run it again for the same tip, and the log says which checks were reused. A test restarts a loop between two checks and asserts the first is not run twice. This holds on both ways the proof runs its checks, the declared checks and the older single gate program, and it holds for a check that stalled and then passed on retry: that pass is saved before the next check starts. A test covers each.
-- **c2:** A restart starts the proof for the current tip at its first tick, without waiting for a new landing. A test asserts it. This already held before the item, as recorded under **Already held** below, so the test is a regression guard and no code change is expected.
-- **c3:** The loop's log line and the waiting view show the green commit and how long ago it was proved. A test asserts both. A proof that is cancelled or refused before the green commit advances leaves the previous green commit's proof time unchanged, and a repository that has no green commit yet gains no extra row or fault in the waiting view. A test asserts each.
-- **c4:** A red batch whose range cannot be narrowed, because the base is red or the last landing is green, files a fixer that names the first and last commit of the range, instead of ending the run with an error. A test asserts the fixer's text. With several landings in the range, the last landing is checked before the search narrows, so a green last landing files the range fixer and does not blame an earlier landing. A test covers a range of more than one landing.
 
 **Agent Details:**
 

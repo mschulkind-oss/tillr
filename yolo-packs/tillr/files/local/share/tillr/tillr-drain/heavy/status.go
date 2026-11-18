@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // GreenRef is the single proof pointer. No rolling_state row is consulted.
@@ -31,19 +32,26 @@ type HeavyCheck struct {
 	Detail          string   `json:"detail,omitempty"`
 	Stalls          int      `json:"stalls,omitempty"`
 }
+type GreenProof struct {
+	Commit   string    `json:"commit"`
+	ProvedAt time.Time `json:"proved_at"`
+}
+
 type HeavyRun struct {
-	DurationMS int64        `json:"duration_ms"`
-	BaseSHA    string       `json:"base_sha"`
-	TipSHA     string       `json:"tip_sha"`
-	Result     string       `json:"result"`
-	Checks     []HeavyCheck `json:"checks"`
-	Detail     string       `json:"detail,omitempty"`
+	ReusedChecks []string     `json:"reused_checks,omitempty"`
+	DurationMS   int64        `json:"duration_ms"`
+	BaseSHA      string       `json:"base_sha"`
+	TipSHA       string       `json:"tip_sha"`
+	Result       string       `json:"result"`
+	Checks       []HeavyCheck `json:"checks"`
+	Detail       string       `json:"detail,omitempty"`
 }
 type HeavyOutcome struct {
 	Busy bool       `json:"busy,omitempty"`
 	Runs []HeavyRun `json:"runs"`
 }
 type HeavyStatus struct {
+	GreenProvedAt     time.Time    `json:"green_proved_at"`
 	GreenCommit       string       `json:"green_commit"`
 	TipCommit         string       `json:"tip_commit"`
 	LandingsSince     int          `json:"landings_since"`
@@ -140,6 +148,23 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 	status.GreenCommit, err = Green(ctx, root)
 	if err != nil {
 		return status, err
+	}
+	rawProof, e := os.ReadFile(filepath.Join(dir, "green-"+status.GreenCommit+".json"))
+	if os.IsNotExist(e) {
+		// Older runners recorded one proof; accept it only when its commit
+		// matches the pointer, just as with commit-specific evidence.
+		rawProof, e = os.ReadFile(filepath.Join(dir, "green.json"))
+	}
+	if e == nil {
+		var proof GreenProof
+		if e = json.Unmarshal(rawProof, &proof); e != nil {
+			return status, e
+		}
+		if proof.Commit == status.GreenCommit {
+			status.GreenProvedAt = proof.ProvedAt
+		}
+	} else if !os.IsNotExist(e) {
+		return status, e
 	}
 	status.TipCommit, err = GitOutput(ctx, root, "rev-parse", "refs/heads/main"+"^{commit}")
 	if err != nil {

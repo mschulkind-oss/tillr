@@ -2,7 +2,6 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,24 +39,7 @@ func heavyDirectory(ctx context.Context, root string) (string, error) {
 }
 func heavyGreen(ctx context.Context, root string) (string, error) { return heavy.Green(ctx, root) }
 func publishHeavy(dir string, run HeavyRun) error {
-	raw, err := json.Marshal(run)
-	if err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(dir, ".heavy-")
-	if err != nil {
-		return err
-	}
-	name := file.Name()
-	defer os.Remove(name)
-	if _, err = file.Write(append(raw, '\n')); err != nil {
-		file.Close()
-		return err
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, filepath.Join(dir, "heavy.json"))
+	return publishHeavyJSON(dir, "heavy.json", run)
 }
 func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 	if r.Judge == nil || r.Work == "" {
@@ -131,14 +113,25 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 				return out, Externalf("%s", run.Detail)
 			}
 		}
+		progress, e := loadHeavyProgress(dir, tip)
+		if e != nil {
+			return out, e
+		}
 		started := r.Now()
-		run, e = r.judgeTip(ctx, run)
+		run, e = r.judgeTip(context.WithValue(ctx, heavyProgressKey{}, progress), run)
+		run.ReusedChecks = progress.reused
 		if e == nil && run.Result == "green" {
 			old := base
 			if old == "" {
 				old = strings.Repeat("0", len(tip))
 			}
-			if _, e = heavyGitOutput(ctx, r.Root, "update-ref", GreenRef, tip, old); e != nil {
+			// Publish evidence by commit before moving the pointer. Cancellation or
+			// a refused compare-and-swap cannot replace the old pointer's time.
+			e = publishHeavyJSON(dir, "green-"+tip+".json", heavy.GreenProof{Commit: tip, ProvedAt: r.Now().UTC()})
+			if e == nil {
+				_, e = heavyGitOutput(ctx, r.Root, "update-ref", GreenRef, tip, old)
+			}
+			if e != nil {
 				e = Externalf("green compare-and-swap refused: %v", e)
 				run.Result = "unknown"
 			}
@@ -244,6 +237,11 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 					check.DurationMS += original.DurationMS
 				}
 			}
+			// A completed retry is proof too. Persist it before another retry
+			// can be interrupted, just like the initial individual checks.
+			if err := saveHeavyCheck(ctx, *check); err != nil {
+				return err
+			}
 			if check.BudgetMS > 0 && check.DurationMS > check.BudgetMS {
 				check.OverBudgetMS = check.DurationMS - check.BudgetMS
 			}
@@ -289,7 +287,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 				if run.BaseSHA == "" {
 					check.Detail = "no proved baseline; attribution unavailable"
 				} else {
-					check.Detail = "gate fault: check is red at the green pointer"
+					check.Detail = "cannot establish a single red landing: baseline or recorded landing range does not explain the red tip"
 				}
 				check.Detail += "; needs=" + strings.Join(check.Needs, ",") + " tools=" + strings.Join(check.Tools, ",")
 				check.Detail += "; fixer filed against the tip"
@@ -298,6 +296,9 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			if against == "" {
 				against = run.TipSHA
 			}
+		}
+		if check.FirstRedLanding == "" {
+			check.Detail += "; attribution unavailable; red batch range " + run.BaseSHA + ".." + run.TipSHA
 		}
 		if len(byLanding[against]) == 0 {
 			order = append(order, against)
@@ -314,6 +315,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	return run, nil
 }
 func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
+	ctx = context.WithValue(ctx, heavyProgressKey{}, (*heavyProgress)(nil))
 	var red bool
 	err := r.inTree(ctx, sha, func(dir string) error {
 		checks, err := r.Judge(ctx, dir, id)
@@ -363,7 +365,16 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string
 		return "", false, err
 	}
 	if len(commits) == 0 {
-		return "", false, Externalf("%s is red but the range contains no recorded landing", id)
+		return "", true, nil
+	}
+	// The search needs a red upper bound. A later green landing means this
+	// range cannot explain the tip, even if an earlier landing was red.
+	red, err = r.one(ctx, commits[len(commits)-1], id)
+	if err != nil {
+		return "", false, err
+	}
+	if !red {
+		return "", true, nil
 	}
 	low, high := 0, len(commits)-1
 	for low < high {
@@ -377,13 +388,6 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string
 		} else {
 			low = mid + 1
 		}
-	}
-	red, err = r.one(ctx, commits[low], id)
-	if err != nil {
-		return "", false, err
-	}
-	if !red {
-		return "", false, Externalf("%s is red at tip but green at the last landing; attribution unavailable", id)
 	}
 	return commits[low], false, nil
 }

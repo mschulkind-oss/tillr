@@ -241,6 +241,8 @@ type GateOutcome struct {
 	// CheckWatches maps a check id to the read and write paths its plan declared, the
 	// second half of a fixer's fence.
 	CheckWatches map[string][]string
+	// RepairDetail carries an unattributable heavy batch's endpoints into its fixer.
+	RepairDetail string
 }
 
 // Steps is what the loop drives and does not own: one run on a lane, then the gate, land

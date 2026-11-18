@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 )
@@ -32,6 +33,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.heavyMu.Unlock()
 			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: step.JudgeHeavy, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+				if len(run.ReusedChecks) > 0 {
+					l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
+				}
 				landings, countErr := heavy.Landings(ctx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
 				if countErr != nil {
 					l.reportf("loop: landings per heavy run=unavailable: %v\n", countErr)
@@ -79,7 +83,13 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					return err
 				}
 				paths := l.rangePaths(ctx, green, tip)
-				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches}, strings.Join(notes, ". "))
+				detail := []string{}
+				for _, check := range checks {
+					if check.FirstRedLanding == "" {
+						detail = append(detail, check.Detail)
+					}
+				}
+				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; ")}, strings.Join(notes, ". "))
 				return err
 			}}
 			out, err := runner.Run(ctx)
@@ -114,7 +124,7 @@ func (l *Loop) heavyInFlight() bool {
 	return l.heavyRunning
 }
 func heavyStatusLine(status HeavyStatus) string {
-	return fmt.Sprintf("green=%s landings_since=%d heavy=%s unavailable=%s", shortSHA(status.GreenCommit), status.LandingsSince, status.Result, strings.Join(heavyIDs(status.UnavailableChecks), ","))
+	return fmt.Sprintf("green=%s proved_age=%s landings_since=%d heavy=%s unavailable=%s", shortSHA(status.GreenCommit), heavy.ProofAge(status, time.Now()), status.LandingsSince, status.Result, strings.Join(heavyIDs(status.UnavailableChecks), ","))
 }
 func heavyIDs(checks []HeavyCheck) []string {
 	ids := []string{}

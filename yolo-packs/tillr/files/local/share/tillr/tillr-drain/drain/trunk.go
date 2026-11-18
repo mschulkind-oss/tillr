@@ -610,6 +610,9 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 	if note = strings.TrimSpace(note); note != "" {
 		criteria += ". " + note
 	}
+	if gate.RepairDetail != "" && !strings.Contains(criteria, gate.RepairDetail) {
+		criteria += ". " + gate.RepairDetail
+	}
 	// A generated fixer has no body reference: its criteria are the whole brief body.
 	if len(dropped) > 0 {
 		criteria += ". Dropped paths outside the repository-relative fence: " + strings.Join(dropped, ", ")
@@ -715,6 +718,9 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 				} else {
 					text += " " + label
 				}
+			}
+			if gate.RepairDetail != "" && !strings.Contains(text, gate.RepairDetail) {
+				text += ". " + gate.RepairDetail
 			}
 			if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(raw), fixerID); err != nil {
 				return err
