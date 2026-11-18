@@ -46,11 +46,15 @@ that no longer exist or cannot be named, and
 owner has since removed. One is blocked: [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), until
 AutoQA leaves the [Icebox](#icebox).
 
-1. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
-   workspaces run follows every landing or is refreshed only when it is published. First because
+1. [Who made the decisions recorded in the tillr designs](./decision-provenance-review.md): the
+   owner keeps, overturns or reopens the decisions he did not make. First because every other
+   design on this page is built on some of them.
+
+2. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
+   workspaces run follows every landing or is refreshed only when it is published. Next because
    it is a cost on every landing but stops nothing.
 
-2. [Criterion repair](../design/criterion-repair.md), one question,
+3. [Criterion repair](../design/criterion-repair.md), one question,
    [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): who may replace a criterion's text once a
    verdict has frozen it. The owner's ruling of 2026-11-17 gave that act to a role that was
    deleted with the board. The rest of that day's four rulings stands: a replacement carries a
