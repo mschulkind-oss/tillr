@@ -2107,6 +2107,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				completion.outcome = laneOutcome{stop, err}
 			}
 		}
+		completion.outcome = retainedOutcome(completion.outcome)
 		// A retained lane keeps its lease: releasing it would let the next staging clear the
 		// work that could not be preserved.
 		if completion.outcome.stop != stopLaneRetained {

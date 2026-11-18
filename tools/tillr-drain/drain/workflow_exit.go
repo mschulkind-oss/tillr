@@ -114,7 +114,7 @@ func (l *Loop) finishWorkflow(ctx context.Context, d Decision, rec run.Record, b
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow exit has unpassed required nodes"); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}
@@ -126,7 +126,7 @@ func (l *Loop) finishWorkflow(ctx context.Context, d Decision, rec run.Record, b
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, candidate.RefusalDetail); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}
@@ -143,7 +143,7 @@ func (l *Loop) finishWorkflow(ctx context.Context, d Decision, rec run.Record, b
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, candidate.RefusalDetail); stop != "" {
-			return true, Externalf("lane %s retained after preservation failed", d.LaneID)
+			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
 	}

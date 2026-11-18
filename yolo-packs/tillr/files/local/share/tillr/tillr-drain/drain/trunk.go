@@ -1172,8 +1172,10 @@ func (l *Loop) rangePaths(ctx context.Context, base, tip string) []string {
 // work lands around it; gating the pre-rebase tree and landing the post-land tree would
 // judge one tree and ship another.
 //
-// A fixer that cannot be rebased cleanly answers an error: the trunk moved under it, and a
-// conflict is a person's to resolve rather than a gate's to guess at.
+// A fixer that cannot be rebased cleanly answers a *fixerRebaseConflict, with the rebase
+// aborted and the lane back on the fixer's own head: the trunk moved under it, and the
+// verify step treats that as a landing conflict (fixerRebaseConflicted), never as the
+// loop's fault.
 func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candidate, error) {
 	if !IsTrunkFixer(candidate.ItemID) {
 		return candidate, nil
@@ -1198,7 +1200,7 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 		candidate.FixerBaseSHA = state.WatermarkSHA
 	}
 	if _, err := l.git(ctx, candidate.Worktree, "rebase", mainSHA); err != nil {
-		return candidate, Externalf("rebasing the fixer %s onto %s failed: %v", candidate.ItemID, shortSHA(mainSHA), err)
+		return candidate, l.abortFixerRebase(ctx, candidate, mainSHA, err)
 	}
 	head, err := l.revParse(ctx, candidate.Worktree, "HEAD")
 	if err != nil {
