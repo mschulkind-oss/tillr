@@ -2,9 +2,13 @@ package drain
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // RepeatedRefusalThreshold is how many refused items, with no landing, make the loop's own
@@ -161,4 +165,45 @@ func refusalStepsWords(steps map[string]int) string {
 		return "no step recorded"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// concludingRefusals are the refusal steps that end their run's examination: refuse()
+// records them, the caller then abandons the lane, and the item's next attempt is a new
+// run.
+var concludingRefusals = []string{RefusalLand, RefusalGate, RefusalFence, RefusalNoOp, RefusalNodeOutput}
+
+// concludedByRefusal answers whether runID's examination already ended in a refusal: a
+// concluding drain.refusal recorded after the run's latest candidate, assignment or
+// retirement. A run re-staged after its refusal (candidate-assigned) is a new examination
+// and is not concluded.
+func (l *Loop) concludedByRefusal(ctx context.Context, runID string) (bool, error) {
+	if runID == "" {
+		return false, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	concluded := false
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var step sql.NullString
+		var refusalSeq sql.NullInt64
+		if err := r.QueryRow(`SELECT seq, json_extract(payload, '$.step') FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&refusalSeq, &step); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if !slices.Contains(concludingRefusals, step.String) {
+			return nil
+		}
+		var later int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE object_type = 'run' AND object_id = ? AND seq > ? AND kind IN (?, ?, ?)`, runID, refusalSeq.Int64, candidateReadyKind, candidateAssignedKind, candidateRetirementKind).Scan(&later); err != nil {
+			return err
+		}
+		concluded = later == 0
+		return nil
+	})
+	return concluded, err
 }

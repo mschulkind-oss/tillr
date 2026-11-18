@@ -1310,6 +1310,15 @@ reclaims a lane that is leased with no expiry to a run whose examination is reco
 when no examination in this loop holds the lane, its examiner is absent, dead or this loop,
 and its run face is gone. The reap prints one `loop: reclaimed lane ...` line for it.
 
+An examination that ended in a refusal (a `drain.refusal` at the land, gate, fence, no-op
+or node-output step, after the run's latest candidate, assignment or retirement record)
+has already released and recut its lane. When the loop stops between that refusal and the
+`drain.examined` record, the next examination replays the ending: it reports `loop: <item>
+run <run> already ended in a refusal; its examination concludes without a second gate`,
+records the run examined, and neither gates again nor compares the recut lane with the
+candidate it no longer holds. `TestARefusedRunExaminedAgainAfterItsLaneWasRecutIsNotConvicted`
+in [`drain/refused_reexamination_test.go`](./drain/refused_reexamination_test.go) covers it.
+
 ## Owner edits and waiting landings
 
 Uncommitted content in the main checkout belongs to the owner, including edits

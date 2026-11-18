@@ -2062,6 +2062,16 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
 	}
+	if concluded, err := l.concludedByRefusal(ctx, candidate.RunID); err != nil || concluded {
+		// The run's examination already ended in a refusal, which released and recut its
+		// lane, and only the examination's done record is missing. Replay that ending: no
+		// second gate, and no comparison of the recut lane with the candidate it no longer
+		// holds. The caller records the examination done.
+		if concluded {
+			l.reportf("loop: %s run %s already ended in a refusal; its examination concludes without a second gate\n", candidate.ItemID, candidate.RunID)
+		}
+		return "", false, err
+	}
 	if published, err := l.recoverJudgePublication(ctx, candidate, result); published || err != nil {
 		return "", published && err == nil, err
 	}
