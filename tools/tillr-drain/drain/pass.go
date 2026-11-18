@@ -1517,6 +1517,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		local := LoopResult{}
 		var evaluatorHold *Candidate
 		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
+		if err != nil {
+			err = fmt.Errorf("run boundary before: %w", err)
+		}
 		if err == nil {
 			if evaluatorNode(d) {
 				c, candidateErr := l.evaluatorCandidate(ctx, d)
@@ -1534,10 +1537,13 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			} else if len(d.Parallel) > 0 {
 				err = l.runParallel(ctx, d)
 			} else {
-				_, _, err = l.cfg.Steps.Run(ctx, *d.RunRequest)
+				_, _, err = l.runRestartable(ctx, *d.RunRequest)
 			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
+				if err != nil {
+					err = fmt.Errorf("run boundary after: %w", err)
+				}
 			}
 		}
 		if err == nil && evaluatorHold != nil {
@@ -1554,6 +1560,10 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 }
 
 func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, error) {
+	if errors.Is(c.outcome.err, errRestartPending) {
+		delete(l.active, c.id)
+		return "", nil
+	}
 	// The worker's durable outcome belongs to its already applied transition.
 	// Index it even when no successor is dispatchable, or when shutdown is
 	// consuming the completion. Empty polls never call this path.
@@ -1625,8 +1635,16 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+	defer func() {
+		if errors.Is(err, errRestartPending) {
+			_, stop, err = l.gateRestart(ctx, result)
+		}
+	}()
 	if handled, stop, err := l.gateRestart(ctx, result); handled || err != nil {
 		return stop, err
+	}
+	if err := l.migrateBuildRuns(ctx, result); err != nil {
+		return "", err
 	}
 	if !l.nonLanding {
 		if err := l.prunePreservedWork(ctx); err != nil {
@@ -1965,6 +1983,14 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 		defer l.examinations.Done()
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
+		stepCtx, unlock, lockErr := l.lockRestartMechanical(ctx)
+		if lockErr != nil {
+			completion.outcome.err = lockErr
+			l.completions <- completion
+			return
+		}
+		ctx = stepCtx
+		defer unlock()
 		if work.NeedsStage {
 			if err := l.stagePinnedCandidate(ctx, work); err != nil {
 				if refusal := asLaneRefusal(err); refusal != nil {

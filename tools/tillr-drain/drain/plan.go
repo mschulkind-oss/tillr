@@ -88,6 +88,9 @@ type Decision struct {
 	WorkerSessionReason string `json:"worker_session_reason,omitempty"`
 	// Parallel lists sibling readers claimed with this node; the item retains one pending owner.
 	Parallel []Decision `json:"parallel,omitempty"`
+	// BuildRestartFrom is the interrupted reader whose face must end before this
+	// replacement uses its shared lane. It is drain-owned, never a run field.
+	BuildRestartFrom string `json:"build_restart_from,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
 	DeskDocument      string         `json:"desk_document,omitempty"`
 	Designer          *lastDesigner  `json:"-"`

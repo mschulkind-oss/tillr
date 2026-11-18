@@ -131,8 +131,11 @@ func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 		}
 	}
 	if decision.Inputs != nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
-		if err := appendEffect(tx, inputRecordedKind, decision.RunRequest.RunID, decision, at); err != nil {
-			return err
+		for _, node := range parallelNodes(decision) {
+			node.Inputs = decision.Inputs
+			if err := appendEffect(tx, inputRecordedKind, node.RunRequest.RunID, node, at); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -17,10 +17,10 @@ import (
 const inputRecordedKind = "drain.inputs"
 
 // RunInputs records the definition and execution inputs at dispatch, not at failure.
-// Hashes avoid duplicating document prose in the store. No rule re-runs an item because
-// one of them changed: the owner ruled on 2026-11-17 that a hash change is no fact for
-// the work (audit finding F-01). They remain the claim's check that the pass that planned
-// a dispatch read the definition the claim applies, and the evidence a reader inspects.
+// Hashes avoid duplicating document prose in the store. Definition and policy changes
+// do not re-run an item: the owner's 2026-11-17 ruling (audit finding F-01) says those
+// changes are no fact about its work. They bind dispatch to the definition it read.
+// TillrBuild separately identifies older sessions for same-attempt build migration.
 type RunInputs struct {
 	ItemBlock          string `json:"item_block"`
 	WorkflowDefinition string `json:"workflow_definition,omitempty"`

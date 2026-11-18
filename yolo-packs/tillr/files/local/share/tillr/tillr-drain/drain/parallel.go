@@ -263,12 +263,20 @@ func (l *Loop) runParallel(ctx context.Context, d Decision) error {
 			continue
 		}
 		wg.Add(1)
-		go func(i int, node Decision) { defer wg.Done(); _, _, errs[i] = l.cfg.Steps.Run(ctx, *node.RunRequest) }(i, node)
+		go func(i int, node Decision) {
+			defer wg.Done()
+			if node.BuildRestartFrom != "" {
+				if errs[i] = l.awaitBuildReader(ctx, node.BuildRestartFrom); errs[i] != nil {
+					return
+				}
+			}
+			_, _, errs[i] = l.runRestartable(ctx, *node.RunRequest)
+		}(i, node)
 	}
 	wg.Wait()
-	for _, err := range errs {
+	for i, err := range errs {
 		if err != nil {
-			return err
+			return fmt.Errorf("reader %s: %w", nodes[i].RunRequest.RunID, err)
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -154,8 +155,8 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if s.BackendsDir != "" {
 		args = append(args, "--backends-dir", s.BackendsDir)
 	}
-	// A run face owns its lifetime. Only EndRuns may signal it; a canceled
-	// supervisor context must not propagate into an already handed-off run.
+	// A run face owns its lifetime. Only an explicit stop or build migration
+	// may signal it; canceling this wait never signals an already handed-off run.
 	cmd := exec.Command(s.RunBin, args...)
 	// A terminal Ctrl-C targets the foreground process group, not just the
 	// supervisor. Keep the face outside that group as well as outside its context.
@@ -189,9 +190,15 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return run.Record{}, "", observeErr
 	}
 	started := time.Now().UnixMilli()
-	err = s.startRunFace(cmd, req)
+	err = s.startRunFaceContext(ctx, cmd, req)
 	stdout.Close()
 	stderr.Close()
+	if errors.Is(err, errRestartPending) {
+		return run.Record{}, "", err
+	}
+	if err != nil && ctx.Err() != nil {
+		return run.Record{}, "", ctx.Err()
+	}
 	if err == nil {
 		finished := make(chan error, 1)
 		go func() { finished <- cmd.Wait() }()
@@ -884,6 +891,11 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	if len(argv) == 0 {
 		return RollingOutcome{Known: false}, nil
 	}
+	ctx, releaseOwnership, err := rollingOwnership(ctx, s.Root)
+	if err != nil {
+		return RollingOutcome{Known: false}, err
+	}
+	defer releaseOwnership()
 	dir, cleanup, err := s.rollingWorktree(ctx, tipSHA)
 	if err != nil {
 		return RollingOutcome{Known: false}, err
@@ -896,8 +908,9 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	cmd.Env = append(append(os.Environ(), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
-	runErr := runCheckGroup(cmd)
-	if cmd.ProcessState == nil {
+	runErr := runOwnedHeavy(ctx, cmd, "legacy")
+	var notStarted *heavyCommandNotStarted
+	if cmd.ProcessState == nil || errors.As(runErr, &notStarted) {
 		return RollingOutcome{Known: false, ExitCode: -1,
 			Detail: fmt.Sprintf("rolling program did not start: %v: %s", runErr, stderr.String())}, nil
 	}

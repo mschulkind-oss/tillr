@@ -60,12 +60,17 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 	return nil
 }
 
-// gateRestart is the first action of a pass. A pass that sees a request starts no new
-// dispatch, gate or landing; replacement leaves in-flight runs untouched. Recovery of
-// other in-flight work is the sibling restart block's responsibility.
+// gateRestart is the first action of a pass and is also called by unbounded waits.
+// A refused or current-build request leaves their work running. Only accepted exec
+// relinquishes examination ownership, after bounded mechanical steps finish.
 func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, string, error) {
 	if l.cfg.Restart == nil {
 		return false, "", nil
+	}
+	l.restartMu.Lock()
+	defer l.restartMu.Unlock()
+	if l.restartReplaced {
+		return true, StopRestarted, nil
 	}
 	rs := l.restarter()
 	pending, err := rs.Pending(ctx)
@@ -81,7 +86,19 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 		return true, "", nil
 	}
 	l.reportf("loop: restart %s: replacing build %s in place\n", request.ID, l.build)
-	if err := rs.Replace(ctx, request, l.cfg.Restart.Argv, l.cfg.Restart.Exec); err != nil {
+	l.restartMechanical.Lock()
+	defer l.restartMechanical.Unlock()
+	execute := l.cfg.Restart.Exec
+	if execute == nil {
+		execute = syscall.Exec
+	}
+	execReplacement := func(path string, argv, env []string) error {
+		if err := l.releaseRestartExaminations(ctx); err != nil {
+			return err
+		}
+		return execute(path, argv, env)
+	}
+	if err := rs.Replace(ctx, request, l.cfg.Restart.Argv, execReplacement); err != nil {
 		if errors.Is(err, restart.ErrSuperseded) {
 			return true, "", nil
 		}
@@ -90,6 +107,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 		}
 		return true, "", rs.Refuse(ctx, request, "exec: "+err.Error())
 	}
+	l.restartReplaced = true
 	return true, StopRestarted, nil
 }
 

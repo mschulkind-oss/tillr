@@ -468,6 +468,9 @@ type Loop struct {
 	staleBaseChecked            map[string]bool
 	gatePolicy                  GatePolicy
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
+	restartMu                   sync.Mutex
+	restartReplaced             bool
+	restartMechanical           sync.RWMutex
 	heavyMu                     sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
@@ -1386,7 +1389,7 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 	l.mu.Unlock()
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n",
 		tickNumber, request.ItemID, request.Backend, lane)
-	_, _, err = l.cfg.Steps.Run(ctx, request)
+	_, _, err = l.runRestartable(ctx, request)
 	if err != nil {
 		return laneOutcome{err: err}
 	}
@@ -1680,7 +1683,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			// snapshot was just preserved. Reusing its ref would lose failover edits.
 			request = *failover
 			decision.RunRequest = failover
-			record, log, err = l.cfg.Steps.Run(ctx, request)
+			record, log, err = l.runRestartable(ctx, request)
 			if err != nil {
 				return laneOutcome{err: err}
 			}
@@ -2010,7 +2013,7 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 	} else {
 		l.reportf("loop: %s hit the wall before committing; continuing its session once on %s\n", request.ItemID, lane)
 	}
-	record, log, err := l.cfg.Steps.Run(ctx, resumed)
+	record, log, err := l.runRestartable(ctx, resumed)
 	if err != nil {
 		return run.Record{}, "", "", err
 	}
@@ -2241,6 +2244,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.gatesInFlight++
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
+	ctx, unlock, err := l.lockRestartMechanical(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
 	l.mu.Lock()
 	stalledGateCount := l.gatesInFlight
@@ -2333,6 +2341,11 @@ func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) erro
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	ctx, unlock, lockErr := l.lockRestartMechanical(ctx)
+	if lockErr != nil {
+		return "", false, lockErr
+	}
+	defer unlock()
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "land"); err != nil {
 		return "", false, err
 	}

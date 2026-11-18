@@ -962,6 +962,12 @@ func trunkFixerOpen(items []itemRow, declarations ...definition.Definition) stri
 // proved, and a red range proves nothing. An unknown run — the program was not there or
 // could not judge — likewise advances nothing.
 func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, result *LoopResult) error {
+	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if err != nil {
+			return err
+		}
+		return errRestartPending
+	}
 	if l.nonLanding {
 		return nil
 	}
@@ -1000,7 +1006,9 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 		return nil
 	}
 	base := state.WatermarkSHA
-	out, err := step.Rolling(ctx, base, mainSHA)
+	out, err := restartWork(ctx, l, func(child context.Context) (RollingOutcome, error) {
+		return step.Rolling(child, base, mainSHA)
+	})
 	if err != nil {
 		return err
 	}
