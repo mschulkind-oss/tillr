@@ -824,6 +824,66 @@ stand: the conflict in that one file was already measured and already assigned t
   second run's answer lists: the test deadline repair, the full item and drain suites, the
   high-effort review, `just pack-sync`, and one commit.
 
+A second build run on 2026-11-18 also changed no file and reported `blocked`, for the same reason
+in nearly the same words: it piped the draft to `git apply --check`, was refused at
+[pass.go](../../tools/tillr-drain/drain/pass.go), and asked for the patch to be reconciled. The
+answer above already ruled on that, so the ruling is not what was missing. What was missing is a
+form a run can follow without reading this history first. This answers the conflict it raised. No
+criterion changes and no ruling above changes. The steps below replace the prose above as the
+place a run starts, and they were run again, in this order, on 2026-11-18 on the trunk at
+`d9cb0ca2e`.
+
+1. Apply the draft with the three-way command. A plain `git apply`, with or without `--check`, is
+   the wrong command, and its refusal is not a result to report.
+
+   ```bash
+   git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- \
+     tools/tillr-drain tools/tillr-item | git apply --3way -
+   ```
+
+   It prints `Applied patch to 'tools/tillr-drain/drain/pass.go' with conflicts.` and applies the
+   other 16 files cleanly. That one line is the expected output. The run goes on to step 2.
+2. Resolve the one conflict in `pass.go`, in `applyPlanGeneration`. Keep every line of the side
+   Git marks `ours`, which is the trunk's quota block, and change only the condition on that
+   side's last line, so that the section reads as follows with no conflict markers left:
+
+   ```go
+   		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
+   			shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
+   			if err != nil {
+   				return err
+   			}
+   			open, err := dispatchQuotaOpen(tx.Reader(), d, shut, l.currentPolicy())
+   			if err != nil {
+   				return err
+   			}
+   			if !open {
+   				return nil
+   			}
+   		}
+   		if !l.nonLanding && (d.Action == ActionDispatch || d.Action == ActionRetry) {
+   ```
+
+   If the trunk has changed the `ours` side again by the time a run reads this, the rule is the
+   same: the trunk's lines stay, and the only line the draft contributes is the last one.
+3. Check the starting point. With step 2 done, measured on `d9cb0ca2e` and then discarded:
+   `go build ./...` and `go vet ./...` exit 0 in `tools/tillr-drain` and in `tools/tillr-item`;
+   `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in `tools/tillr-drain`; and
+   `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion` passes in
+   `tools/tillr-item`.
+4. Finish the work the second run's answer lists: remove the 10-second deadline from
+   `TestFailedDesignerResumeStartsNewSessionOnce`, run the full item and drain suites, run the
+   high-effort review, run `just pack-sync`, and commit once.
+
+- **A conflict in a draft is work, never a blocker.** A run of this item may report `blocked` only
+  for something outside its paths, or for a conflict whose right side it cannot name, and then it
+  quotes the lines. "The patch does not apply" names neither, and a third report of it would give
+  the next answer nothing new to rule on.
+- **If the steps above fail as written, the run builds without the draft.** Should the ref be
+  gone, or the three-way apply leave conflicts in more than `pass.go`, the run does not stop. It
+  builds c1 to c8 from the tree as it stands, using this block's rulings as the design. The draft
+  saves work; it is not a requirement of the item.
+
 <!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
