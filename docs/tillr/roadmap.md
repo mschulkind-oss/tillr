@@ -8416,9 +8416,7 @@ Once a seat is whatever the policy maps, the policies can name more kinds of wor
   - Declare six new seats, their purposes and the read-only ones in every tracked policy.
   - Refuse a writing workflow node on a seat the policy lists as read-only.
 
-<!-- tillr: item id="item-plan-policies-declare-seats" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/,tests/tillr-muse-backend.test.py" blocked_by="" prose="2" -->
 
-- **c1:** The four existing seats keep their meaning, and every policy under `config/tillr/` maps the six new seats in the starting set below. The bedrock policy maps them to the backends that set names, and each other policy maps them to backends it already has. A policy may list seats as read-only under a `read_only_seats` key and may give each seat one sentence under a `seat_purposes` key. Every policy lists `scout` and `test-run` as read-only and gives all ten seats a purpose. The policy loader refuses an entry under either key that names a seat the policy does not map, and the workflow loader refuses a node whose `access` is `write` on a seat the policy lists as read-only. A test asserts that every policy under `config/tillr/` maps all ten seats, that the bedrock policy maps no seat outside its read-only list to the Luna backend, and that each of the two refusals is made.
 
 **Agent details:**
 
@@ -8444,7 +8442,7 @@ A planning node can already propose replacing a later node that has not started,
   - Add the `planned-build@v1` workflow and the template its plan node expands.
   - Refuse a piece on a seat the policy does not map, outside the fence, or writing on a read-only seat.
 
-<!-- tillr: item id="item-plan-pieces-workflow" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-plan-policies-declare-seats" prose="2" -->
+<!-- tillr: item id="item-plan-pieces-workflow" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A tracked workflow `planned-build@v1` starts with a read-only `plan` node on the plan seat. It reads the item and the tree and proposes replacing the later fan-out stage with a tracked template and bounded arguments, one entry per piece, each naming a seat, a write scope inside the item's fence, and the named outputs it produces. A test runs the workflow with a fixture planner and asserts the graph after the proposal holds the pieces, and that a proposal naming a seat the policy does not map, a scope outside the fence, or a write scope on a seat the policy lists as read-only is refused with its reason recorded.
 - **c2:** Writing pieces run one at a time on the item's one worktree, in the order the plan lists them, and read-only pieces that are ready at the same time run together under the scheduler the drain already has. A test with three writing pieces and two read-only pieces asserts that the writers start in plan order, that no writer starts before the writer ahead of it has ended, and that the two readers' runs overlap.
@@ -8501,7 +8499,7 @@ A worker that builds an item alone does every step on its own model, and its bri
   - List every seat the policy maps in the implementer brief, with the read-only ones marked.
   - Tell a worker to give mechanical work to its own harness's cheaper sub-agents.
 
-<!-- tillr: item id="item-plan-brief-lists-seats" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/,tests/tillr-muse-backend.test.py" blocked_by="item-plan-policies-declare-seats" prose="2" -->
+<!-- tillr: item id="item-plan-brief-lists-seats" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/,tests/tillr-muse-backend.test.py" blocked_by="" prose="2" -->
 
 - **c1:** The implementer brief template lists every seat the policy in force maps, one line each on what it is for, under a heading that says these are seats tillr runs as nodes and that a worker cannot start one. Each seat the policy lists under `read_only_seats` is marked read-only on its line. A separate fixed paragraph tells the worker to give mechanical searching, editing and checking to the cheaper sub-agents its own harness offers, and says the harness's configuration chooses those sub-agents' models and tillr's policy does not. The pi adapter passes no seat to pi and is not changed for this criterion. A test asserts the filled brief lists exactly the policy's seats with the read-only ones marked, that the paragraph is present, and that the adapter's command line and exported environment are the same for a policy with the six new seats as for one without them.
 

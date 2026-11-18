@@ -9,7 +9,26 @@
     "design": ["claude-designer", "pi-designer"],
     "build": ["claude", "pi"],
     "review": ["claude", "pi"],
-    "scout": ["claude", "pi"]
+    "scout": ["claude", "pi"],
+    "plan": ["claude", "pi"],
+    "edit": ["claude", "pi"],
+    "test-write": ["claude", "pi"],
+    "test-run": ["claude", "pi"],
+    "docs": ["claude", "pi"],
+    "verify": ["claude", "pi"]
+  },
+  "read_only_seats": ["scout", "test-run"],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result."
   },
   "escalate": {"build": ["claude"]},
   "backends": {

@@ -538,6 +538,12 @@ def test_claude_policy(policy):
             "build": ["claude", "pi"],
             "review": ["claude", "pi"],
             "scout": ["claude", "pi"],
+            "plan": ["claude", "pi"],
+            "edit": ["claude", "pi"],
+            "test-write": ["claude", "pi"],
+            "test-run": ["claude", "pi"],
+            "docs": ["claude", "pi"],
+            "verify": ["claude", "pi"],
         },
         f"the Claude seats are {policy.get('seats')}",
     )

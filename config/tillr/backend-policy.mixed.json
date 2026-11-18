@@ -11,7 +11,26 @@
     ],
     "build": "pi",
     "review": "pi",
-    "scout": "pi"
+    "scout": "pi",
+    "plan": "pi",
+    "edit": "pi",
+    "test-write": "pi",
+    "test-run": "pi",
+    "docs": "pi",
+    "verify": "pi"
+  },
+  "read_only_seats": ["scout", "test-run"],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result."
   },
   "escalate": {"build": ["pi"]},
   "backends": {

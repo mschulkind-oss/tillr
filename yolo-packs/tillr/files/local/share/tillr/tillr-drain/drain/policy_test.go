@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -509,5 +510,101 @@ func TestPolicyCheckRefusesASeatListItCannotWalk(t *testing.T) {
 	policy.Seats["design"] = "builder-a"
 	if err := policy.Check(); err == nil || !strings.Contains(err.Error(), "read two ways") {
 		t.Fatalf("a seat whose head disagrees with its list was not refused: %v", err)
+	}
+}
+
+func TestPolicyStartingSeats(t *testing.T) {
+	paths, err := filepath.Glob("../../../config/tillr/backend-policy*.json")
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no backend policies: %v", err)
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			p, err := LoadPolicy(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readOnly := map[string]bool{}
+			for _, seat := range p.ReadOnlySeats {
+				readOnly[seat] = true
+			}
+			for _, seat := range []string{"design", "build", "review", "scout", "plan", "edit", "test-write", "test-run", "docs", "verify"} {
+				if len(p.seatList(seat)) == 0 || strings.TrimSpace(p.SeatPurposes[seat]) == "" {
+					t.Errorf("missing mapping or purpose for %s", seat)
+				}
+			}
+			if !readOnly["scout"] || !readOnly["test-run"] {
+				t.Error("scout and test-run must be read-only")
+			}
+			if filepath.Base(path) == "backend-policy.bedrock.json" {
+				for seat, backend := range map[string]string{"plan": "pi", "verify": "pi", "edit": "pi-build", "test-write": "pi-build", "docs": "pi-build", "test-run": "pi-scout"} {
+					if got := p.seatList(seat); !slices.Equal(got, []string{backend}) {
+						t.Errorf("%s mapped to %v, want %s", seat, got, backend)
+					}
+				}
+				for _, seat := range p.seatNames() {
+					for _, backend := range p.seatList(seat) {
+						if backend == "pi-scout" && !readOnly[seat] {
+							t.Errorf("Luna assigned to writing seat %s", seat)
+						}
+					}
+				}
+			} else {
+				for seat, source := range map[string]string{"plan": "review", "verify": "review", "edit": "build", "test-write": "build", "docs": "build", "test-run": "scout"} {
+					_, seatIsList := p.SeatLists[seat]
+					_, sourceIsList := p.SeatLists[source]
+					if !slices.Equal(p.seatList(seat), p.seatList(source)) || seatIsList != sourceIsList {
+						t.Errorf("%s must copy %s including its list form", seat, source)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPolicyRejectsUnmappedSeatMetadata(t *testing.T) {
+	for _, key := range []string{"read_only_seats", "seat_purposes"} {
+		t.Run(key, func(t *testing.T) {
+			p := twoBackends()
+			if key == "read_only_seats" {
+				p.ReadOnlySeats = []string{"unmapped"}
+			} else {
+				p.SeatPurposes = map[string]string{"unmapped": "Not mapped."}
+			}
+			raw, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "policy.json")
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadPolicy(path)
+			if err == nil || !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "unmapped") {
+				t.Fatalf("expected %s refusal naming unmapped seat, got %v", key, err)
+			}
+		})
+	}
+}
+
+func TestWorkflowRejectsReadOnlySeatWrites(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scout-then-build@v1.json")
+	if err := os.WriteFile(path, []byte(workflowFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := twoBackends()
+	p.Seats = map[string]string{"scout": "first", "build": "first"}
+	p.ReadOnlySeats = []string{"scout", "build"}
+	_, err := readWorkflow(root, path, &p, map[string]bool{})
+	if err == nil || !strings.Contains(err.Error(), "workflow-read-only-seat-writes: work") {
+		t.Fatalf("expected read-only seat refusal for work, got %v", err)
+	}
+	if _, err := readWorkflow(root, path, nil, map[string]bool{}); err != nil {
+		t.Fatalf("workflow without policy refused: %v", err)
+	}
+	p.ReadOnlySeats = []string{"scout"}
+	if _, err := readWorkflow(root, path, &p, map[string]bool{}); err != nil {
+		t.Fatalf("read-only scout refused: %v", err)
 	}
 }
