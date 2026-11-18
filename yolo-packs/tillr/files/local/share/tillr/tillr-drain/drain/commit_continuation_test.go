@@ -64,7 +64,11 @@ case "$prompt" in *candidate.txt*"one requested commit"*) ;; *) exit 71 ;; esac
 			l.cfg.Steps = steps
 			var result LoopResult
 			settleContinuation(t, l, &result)
-			settleContinuation(t, l, &result)
+			if commit {
+				settleContinuation(t, l, &result)
+			}
+			// The still-dirty worker's one continuation changed nothing, so it is an identical
+			// repeat and is refused; the worker that committed needed only the one.
 			if steps.resumed != 1 {
 				t.Fatalf("worker given %d continuations, want one before refusal", steps.resumed)
 			}
@@ -109,16 +113,27 @@ case "$prompt" in *candidate.txt*"one requested commit"*) ;; *) exit 71 ;; esac
 			}); err != nil {
 				t.Fatal(err)
 			}
-			// A finished refusal or candidate must not execute again on later passes.
-			settleContinuation(t, l, &result)
-			if steps.resumed != 1 {
-				t.Fatal("unbounded continuation")
+			if commit {
+				// A finished candidate must not execute again on later passes.
+				settleContinuation(t, l, &result)
+				if steps.resumed != 1 {
+					t.Fatal("unbounded continuation")
+				}
+				return
+			}
+			// The refused run is not continued again: the item goes back to its worker as a
+			// fresh run with the ending in its brief.
+			if d := mustPlan(t, l)[0].decision; d.Reason != ReasonReturned || d.Returned == nil || d.Returned.Cause != RefusalNoOp {
+				t.Fatalf("refused run not returned to its worker: %+v", d)
 			}
 		})
 	}
 }
 
-func TestDirtyExitDoesNotContinueAgainAfterResumeWithoutFinish(t *testing.T) {
+// A continuation a stop killed is continued again by the replacement loop, uncounted (the
+// owner's ruling of 2026-11-17); the identical-repeat rule then ends it when that segment
+// leaves the work as it found it.
+func TestDirtyExitContinuesAKilledContinuationAgain(t *testing.T) {
 	f, l, original, d := continuationDispatchFixture(t, "echo work > candidate.txt", false)
 	// The continued face persisted its claim, then died before run.finish. The
 	// dead supervisor's lease has been released; the only finish is the first exit.
@@ -138,8 +153,8 @@ func TestDirtyExitDoesNotContinueAgainAfterResumeWithoutFinish(t *testing.T) {
 	}
 	var result LoopResult
 	settleContinuation(t, replacement, &result)
-	if steps.resumed != 0 || result.RefusedSteps[RefusalNoOp] != 1 {
-		t.Fatalf("replacement repeated consumed continuation: resumes=%d result=%+v", steps.resumed, result)
+	if steps.resumed != 1 || result.RefusedSteps[RefusalNoOp] != 1 {
+		t.Fatalf("replacement did not continue the killed continuation once and refuse the repeat: resumes=%d refused=%v", steps.resumed, result.RefusedSteps)
 	}
 	db := openFixture(t, f.storePath)
 	defer db.Close()
@@ -193,5 +208,28 @@ func TestDirtyExitWithoutSessionNamesWork(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The owner ruled on 2026-11-17 that uncommitted fenced work is continued uncounted (audit
+// finding F-09): a session that changes its work on every continuation is continued again
+// until it commits, and only a continuation that leaves the work as it was ends it.
+func TestDirtyExitContinuesForAsLongAsEachContinuationChangesTheWork(t *testing.T) {
+	command := `echo step >> candidate.txt
+if [ "$TILLR_SESSION_MODE" = new ]; then exit 0; fi
+if [ "$(wc -l < candidate.txt)" -ge 4 ]; then git add candidate.txt; git commit -qm finished; fi
+exit 0
+`
+	_, l, original, _ := continuationDispatchFixture(t, command, false)
+	steps := &commitContinuationSteps{continuationSteps: original}
+	l.cfg.Steps = steps
+	var result LoopResult
+	settleContinuation(t, l, &result)
+	settleContinuation(t, l, &result)
+	if steps.resumed != 3 || steps.gates != 1 || steps.lands != 1 {
+		t.Fatalf("continuations=%d gates=%d lands=%d, want three continuations and one landing", steps.resumed, steps.gates, steps.lands)
+	}
+	if got := runGit(t, steps.candidate.Worktree, "show", steps.candidate.HeadSHA+":candidate.txt"); strings.Count(got, "step") != 4 {
+		t.Fatalf("lost a segment's work: %q", got)
 	}
 }

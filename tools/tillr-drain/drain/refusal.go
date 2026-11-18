@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-// RepeatedRefusalThreshold is how many refusals in a row, with no landing, make the
-// loop's own report call the run a repeated refusal rather than list one more rejected
-// candidate. Two is the smallest number that is a pattern: one refusal is a bad item,
-// and every drain has one.
+// RepeatedRefusalThreshold is how many refused items, with no landing, make the loop's own
+// report call the run a repeated refusal rather than list one more rejected candidate. Two
+// is the smallest number that is a pattern: one refused item is a bad item, and every drain
+// has one. It counts items, not refusals: since the owner's ruling of 2026-11-17 one item's
+// refusal goes back to its worker, so one bad item is refused more than once. It is a
+// report and holds nothing.
 const RepeatedRefusalThreshold = 2
 
 // The steps that can refuse a candidate, as the report names them. A refusal is a verdict
@@ -34,7 +36,7 @@ const (
 // RepeatedRefusal is the drain's own answer to "has this loop ever landed anything?".
 //
 // It is set when the loop has landed nothing and refused at least
-// RepeatedRefusalThreshold runs: every candidate the drain produced was refused, which
+// RepeatedRefusalThreshold items: every candidate the drain produced was refused, which
 // is a fact about the loop's judging — a fence that admits nothing, a gate that fails
 // everything — and not N unlucky items. It is a report, not a stop: the design's stop
 // set is closed (docs/design/tillr-day2.md §4.3) and a refusal is a verdict about the
@@ -83,7 +85,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 		result.RefusedItems = append(result.RefusedItems, candidate.ItemID)
 	}
 	var line string
-	if result.Landed == 0 && result.Rejected >= RepeatedRefusalThreshold {
+	if result.Landed == 0 && len(result.RefusedItems) >= RepeatedRefusalThreshold {
 		result.RepeatedRefusal = repeatedRefusal(result)
 		line = RepeatedRefusalLine(*result)
 	}
@@ -103,7 +105,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 // window it spent, and a loop that landed something never reports a refusal it recovered
 // from.
 func (l *Loop) finalizeRepeatedRefusal(result *LoopResult) {
-	if result.Landed > 0 || result.Rejected < RepeatedRefusalThreshold {
+	if result.Landed > 0 || len(result.RefusedItems) < RepeatedRefusalThreshold {
 		result.RepeatedRefusal = nil
 		return
 	}

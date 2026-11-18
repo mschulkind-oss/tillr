@@ -99,7 +99,8 @@ func nonLandingOutcomes() []dispatchFixture {
 //   - Each class re-dispatches as an authorized retry, with no `tillr-item state` surgery.
 //   - `ProjectItemState` never emits "working" without a live run.
 //   - `boardCountsOf(...).Dispatchable` is the exact count `drain.Plan` dispatches given a
-//     lane for every item -- one before recovery (the control item nobody has run) and five
+//     lane for every item -- three before recovery (the control item nobody has run, and the
+//     fence escape and the gate refusal returned to their worker) and five
 //     after it (the four retries plus the control).
 //
 // The planner is the real one: the case builds the `tillr-drain` binary and runs its `plan`
@@ -110,17 +111,17 @@ func TestEveryNonLandingOutcomeRecoversAndAgreesWithView(t *testing.T) {
 	outcomes := nonLandingOutcomes()
 	path := dispatchStore(t, outcomes)
 
-	// The four held, and the control item nothing has run: the planner dispatches the
-	// control alone, and the view must say one.
+	// Two of the four held, and the control item nothing has run. The fence escape and the
+	// gate refusal go back to their worker with the evidence, uncounted (the owner's ruling
+	// of 2026-11-17), so the planner dispatches them with the control, and the view must
+	// say three.
 	assertAgreesWithPlan(t, path, "after the four outcomes", map[string]string{
-		"item_041": planReasonBoundaryScopeEscape,
 		"item_042": planReasonBlocked,
-		"item_043": planReasonGateFailed,
 		"item_044": planReasonRunUnjudged,
 		// The legacy row is held for its stored state, which is the one hold here that is
 		// the retired spelling: it is not one of the four outcomes.
 		"item_046": planReasonNotReady,
-	}, 1)
+	}, 3)
 
 	// The recovery: a `blocked` report moves the item back to the queue (its criteria were
 	// never frozen), and every one of the four gets an operator's retry authorization naming

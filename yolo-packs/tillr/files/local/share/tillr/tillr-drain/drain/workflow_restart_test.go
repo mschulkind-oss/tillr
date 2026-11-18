@@ -160,8 +160,11 @@ func pendingForTest(t *testing.T, f refusalLoopFixture, id string) *pendingWork 
 	}
 	return work
 }
+
+// An edit to the item's definition is not among these: the owner ruled on 2026-11-17 that
+// it releases nothing (TestAnInFlightWorkflowIsNotInvalidatedByABlockOrFenceEdit).
 func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
-	for _, mode := range []string{"closed", "blocked", "definition"} {
+	for _, mode := range []string{"closed", "blocked"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, steps := restartGraphFixture(t)
 			result := &LoopResult{}
@@ -171,10 +174,6 @@ func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
 			old := pendingForTest(t, f, "item-a")
 			head := runGit(t, l.laneTarget("lane-1"), "rev-parse", "HEAD")
 			fixtureWrite(t, f, func(tx *store.Tx) error {
-				if mode == "definition" {
-					_, err := tx.Exec(`UPDATE items SET title='Changed definition' WHERE item_id='item-a'`)
-					return err
-				}
 				_, err := tx.Exec(`UPDATE items SET state=? WHERE item_id='item-a'`, mode)
 				return err
 			})
@@ -188,12 +187,6 @@ func TestWorkflowRestartReleasesInvalidItem(t *testing.T) {
 			}
 			if got := runGit(t, f.root, "rev-parse", "refs/tillr/runs/"+old.Decision.RunRequest.RunID); got != head {
 				t.Fatalf("head not pinned %s / %s", got, head)
-			}
-			if mode == "definition" {
-				d := mustPlan(t, next)[0].decision
-				if d.Workflow == nil || d.NodeIndex != 0 || d.Attempt != 2 || d.Action != ActionDispatch {
-					t.Fatalf("changed item not replanned from start: %+v", d)
-				}
 			}
 		})
 	}

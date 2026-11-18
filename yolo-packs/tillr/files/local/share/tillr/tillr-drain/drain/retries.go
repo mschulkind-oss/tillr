@@ -135,9 +135,9 @@ type retryRow struct {
 // wall cut short is inspected rather than retried.
 //
 // The one check this face deliberately leaves to `plan` is "the run is still the latest":
-// a newer run can appear between the authorization and the next tick, and `plan` reports
-// that as `retry-stale` rather than this face refusing work the operator can still fix by
-// authorizing the newer run.
+// a newer run can appear between the authorization and the next tick, and `plan` then
+// reads the authorization as no longer speaking: the item routes by its latest run, as
+// it would with no authorization.
 func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry, error) {
 	if req.ItemID == "" {
 		return Retry{}, Usagef("a retry authorization needs an item: --item <id>")

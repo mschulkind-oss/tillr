@@ -138,7 +138,10 @@ func TestExpiredPostLandGrantResumesSettlementOnly(t *testing.T) {
 	})
 }
 
-func TestTwoUnreadableJudgesDoNotSpendWorkerReadmission(t *testing.T) {
+// An unreadable judge file is the review run's, not the worker's: the item is held as
+// `judge-unreadable` in the queue, and since the owner's ruling of 2026-11-17 a changed
+// backend policy re-dispatches nothing.
+func TestAnUnreadableJudgeIsNotChargedToTheWorker(t *testing.T) {
 	f, l, s := judgeRouteFixture(t, "missing", true)
 	result := &LoopResult{}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -150,8 +153,8 @@ func TestTwoUnreadableJudgesDoNotSpendWorkerReadmission(t *testing.T) {
 		}
 		l.cfg.Policy.Backends["fixture"] = Backend{Adapter: "fixture", Model: "changed-model-" + string(rune('a'+attempt))}
 	}
-	if len(s.runs) != 4 {
-		t.Fatalf("expected two workers and two judges: %v", s.runs)
+	if len(s.runs) != 2 {
+		t.Fatalf("expected one worker and one judge: %v", s.runs)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var state string
@@ -164,8 +167,8 @@ func TestTwoUnreadableJudgesDoNotSpendWorkerReadmission(t *testing.T) {
 		return nil
 	})
 	for _, p := range mustPlan(t, l) {
-		if p.decision.ItemID == "item-a" && p.decision.Action != ActionDispatch {
-			t.Errorf("worker allowance consumed: %s", p.decision.Reason)
+		if p.decision.ItemID == "item-a" && p.decision.Reason != ReasonJudgeUnreadable {
+			t.Errorf("an unreadable judge is held as %q, want %q", p.decision.Reason, ReasonJudgeUnreadable)
 		}
 	}
 }

@@ -518,10 +518,13 @@ type Loop struct {
 	policyRecorded bool
 	// active owns only completion triggers, never terminal outcomes. Outcomes are
 	// reconstructed from the store by the next pass or a replacement Loop.
-	examinations    sync.WaitGroup
-	active          map[string]bool
-	completions     chan runCompletion
-	laneChanges     map[string]int
+	examinations sync.WaitGroup
+	active       map[string]bool
+	completions  chan runCompletion
+	laneChanges  map[string]int
+	// segmentEvidence is each settling run's uncommitted-work evidence as it stood before
+	// its session was last continued (segmentRepeated).
+	segmentEvidence map[string]string
 	runDurations    map[string]int64
 	sessionID       string
 	sessionMu       sync.Mutex
@@ -1146,6 +1149,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			LaneID: decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
+			Returned: decision.Returned,
 		}
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
 			return nil, err
@@ -1657,12 +1661,21 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{err: err}
 			}
 		}
-		if len(paths) > 0 && !item.IsCommentItem(request.ItemID) && (decision.Seat == "" || decision.Seat == "build") && class == AttemptAnswered && record.State == run.StateExited && record.EndCause == run.EndNormalExit && !record.Resumed {
+		// Uncommitted fenced work is continued in its own session for as long as each
+		// segment changes it. The owner ruled on 2026-11-17 that this is not counted (audit
+		// finding F-09): what ends it is a segment that left the work exactly as the one
+		// before it did, an identical repeat, which is refused as `candidate-no-op` and goes
+		// back to the item's worker with that evidence (returned.go).
+		repeated := false
+		if len(paths) > 0 && !item.IsCommentItem(request.ItemID) && (decision.Seat == "" || decision.Seat == "build") && class == AttemptAnswered && record.State == run.StateExited && record.EndCause == run.EndNormalExit {
 			fenced, err := l.fencedUncommittedPaths(ctx, lane, target, paths)
 			if err != nil {
 				return laneOutcome{err: err}
 			}
 			if len(fenced) > 0 {
+				repeated = l.segmentRepeated(request.RunID, l.uncommittedEvidence(ctx, target))
+			}
+			if len(fenced) > 0 && !repeated {
 				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted fenced paths: " + strings.Join(fenced, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or commit outside the fence. If you cannot finish, report the blocker explicitly."
 				resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, request, worktree, record, tick, at, result, watched)
 				if err != nil || stop != "" {
@@ -1670,7 +1683,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				}
 				if resumed.RunID != "" {
 					prepared = deferJudge
-					return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+					outcome := l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+					l.forgetSegment(request.RunID)
+					return outcome
 				}
 			}
 		}
@@ -1710,13 +1725,17 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick, Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA}
 		if len(paths) > 0 {
 			candidate.RefusalDetail = "No commit; uncommitted paths: " + strings.Join(paths, ", ")
-			if record.Resumed {
-				candidate.RefusalDetail += "; a continuation was already started, but no commit was produced"
+			if repeated {
+				candidate.RefusalDetail += "; the last continuation of its session left this work exactly as the one before it did, and no commit was produced"
+			} else if record.Resumed {
+				candidate.RefusalDetail += "; a continuation was started, but no commit was produced"
 			} else {
 				candidate.RefusalDetail += "; no commit continuation was available (requires an eligible build exit, brief and session, and no operator stop)"
 			}
 		}
-		if err := l.refuse(ctx, candidate, result, RefusalNoOp); err != nil {
+		err = l.refuse(ctx, candidate, result, RefusalNoOp)
+		l.forgetSegment(request.RunID)
+		if err != nil {
 			return laneOutcome{err: err}
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "ended without a candidate commit")}
@@ -1763,6 +1782,28 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
 }
 
+// segmentRepeated records the evidence of a run's uncommitted work before its session is
+// continued, and answers whether it equals the evidence recorded before the previous
+// continuation: the segment in between changed nothing. A replacement loop has no earlier
+// evidence, so a continuation a stop killed is continued again, uncounted.
+func (l *Loop) segmentRepeated(runID, evidence string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.segmentEvidence == nil {
+		l.segmentEvidence = map[string]string{}
+	}
+	previous, seen := l.segmentEvidence[runID]
+	l.segmentEvidence[runID] = evidence
+	return seen && previous == evidence
+}
+
+// forgetSegment drops a run's continuation evidence once its settlement is done.
+func (l *Loop) forgetSegment(runID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.segmentEvidence, runID)
+}
+
 // resumeAfterWall continues a time-limited, paused, or uncommitted build run in place,
 // when the lane still holds everything the continuation needs: the brief, the harness
 // session staging pinned, and the worktree the previous segment was working in. It is one attempt's second segment, not a
@@ -1770,8 +1811,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 // spends nothing the retry budget tracks (design D-RW3).
 //
 // An empty Record means nothing was resumed, and the caller holds the item as unjudged:
-// the run already had its continuation (`Record.Resumed`, which bounds this at one per
-// run_id), the lane carries no brief or no session id to continue, or the operator asked
+// a wall-cut run already had its continuation (`Record.Resumed`, which bounds that at one
+// per run_id; a continuation of uncommitted fenced work has no such bound), the lane carries no brief or no session id to continue, or the operator asked
 // the loop to stop. Never resuming in `expire` is deliberate: that is a runner that
 // vanished unobserved, not one a wall cut short.
 //
@@ -1779,7 +1820,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 // segment committed nothing but may still have written to the worktree, and a resumed
 // segment has to answer for what it writes from where it actually starts.
 func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
-	if record.Resumed && record.State != run.StatePaused {
+	// A continuation of uncommitted fenced work (ResumePrompt) is bounded by its own
+	// identical-repeat rule (segmentRepeated), not by Record.Resumed.
+	if record.Resumed && record.State != run.StatePaused && request.ResumePrompt == "" {
 		return run.Record{}, "", "", nil
 	}
 	return l.runContinuation(ctx, lane, request, worktree, record, tick, at, result, watched)
@@ -1825,7 +1868,7 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 	if record.State == run.StatePaused {
 		l.reportf("loop: continuing paused run %s on %s as the same attempt\n", request.RunID, lane)
 	} else if request.ResumePrompt != "" {
-		l.reportf("loop: %s exited with uncommitted fenced work; continuing its session once on %s to finish and commit\n", request.ItemID, lane)
+		l.reportf("loop: %s exited with uncommitted fenced work; continuing its session on %s to finish and commit\n", request.ItemID, lane)
 	} else {
 		l.reportf("loop: %s hit the wall before committing; continuing its session once on %s\n", request.ItemID, lane)
 	}
@@ -1943,6 +1986,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if escape != "" {
 		l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, escape)
+		if candidate.RefusalDetail == "" {
+			candidate.RefusalDetail = escape
+		}
 		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
 			return "", false, err
 		}
@@ -2211,6 +2257,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if landed.Result != LandLanded {
 		l.reportf("loop: land did not take %s (%s): recording a refusal\n", candidate.ItemID, landed.Result)
+		if candidate.RefusalDetail == "" {
+			candidate.RefusalDetail = strings.TrimSpace("the lander answered " + landed.Result + " " + landed.Reason)
+		}
 		if err := l.refuse(ctx, candidate, result, RefusalLand); err != nil {
 			return "", false, err
 		}

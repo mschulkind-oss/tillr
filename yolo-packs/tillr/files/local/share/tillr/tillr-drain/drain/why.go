@@ -245,7 +245,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			}
 		case d.RunRequest != nil && (d.From == "running" || d.From == "candidate"):
 			row.WaitingOn = append(row.WaitingOn, d.RunRequest.RunID)
-		case (d.Reason == ReasonRetryJudged || d.Reason == ReasonRetryUnjudged || d.Reason == ReasonRetryStale) && d.SupersedesRunID != "":
+		case (d.Reason == ReasonRetryJudged || d.Reason == ReasonRetryUnjudged) && d.SupersedesRunID != "":
 			row.WaitingOn = append(row.WaitingOn, d.SupersedesRunID)
 		}
 		if d.Reason == ReasonBackendWindow && d.ConflictID != "" && policy != nil {
@@ -415,8 +415,6 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", "gate", "inspect the verdict; tillr drain retry --help"
 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:
 		return "needs a cause", "fence", "inspect the boundary report"
-	case ReasonReadmissionExhausted:
-		return "needs you", "lane", "automatic re-admission failed; run tillr drain retry after diagnosis"
 	case ReasonBackendWindow:
 		return "waits on work", "backend", "the backend reset time"
 	case ReasonQuestionOpen:

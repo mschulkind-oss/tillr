@@ -87,8 +87,8 @@ worktree is refused; the drain restores the original committed candidate.
 
 The [item judge intake](https://github.com/mschulkind-oss/tillr/blob/main/tillr-item/README.md#written-judge-verdicts) checks the written
 file without recording verdicts. A missing or refused file holds the item as
-`judge-unreadable`, attributed to the review run rather than the worker; it does
-not consume the worker's automatic re-admission or second-failure allowance. A valid
+`judge-unreadable`, attributed to the review run rather than the worker, not to
+the worker's own endings. A valid
 `not-done` finding holds it as `eval-failed`, without a gate, landing, or criterion
 verdict. The waiting view includes the controlling criterion's reason.
 
@@ -845,27 +845,33 @@ without an authorized retry; acquitted runs do not consume the failure walk. A f
 closed without landing releases nothing. A check green on the base, or a candidate with
 an additional failure of its own, keeps the ordinary refusal.
 
-## Automatic second attempts after an input changes
+## Nothing re-runs because an input changed
 
-A held item's next pass compares its current item definition (including the referenced
-body section), allowed paths, backend policy, and running tillr build with the inputs
-recorded when its failed run was dispatched. A change permits one automatic dispatch;
-its recorded decision names every changed input. This is the
-[design's re-admission rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md#32-every-hold-names-a-mover-that-can-act),
-not a retry of unchanged work. Queue rank, timestamps, criterion verdicts, and an advancing
-base commit do not grant another attempt.
+The owner ruled on 2026-11-17 that nothing re-runs, is invalidated or is reset because a
+hash, a document, a policy, a build or the trunk changed without knowing what the change
+means. A pass no longer compares a held item's block (including the referenced body
+section), workflow file, allowed paths, backend policy or running tillr build with the
+inputs recorded at its dispatch, so an edit to any of them does nothing to the item's
+work. A prose-only edit to an item's block re-dispatches nothing, and an edit to the
+block or fence of an item whose workflow is in flight does not settle that workflow
+(`TestAChangedInputReDispatchesNothing` and `TestADefinitionProseEditReadmitsNothing` in
+[`drain/readmit_test.go`](./drain/readmit_test.go),
+`TestAnInFlightWorkflowIsNotInvalidatedByABlockOrFenceEdit` in
+[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go)). This removes audit
+findings F-01 and F-07, as mapped in
+[the graph design's audit table](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#124-audit-findings).
 
-An item built on the design seat is never re-admitted this way: the owner ruled on
-2026-11-17 that a change to an item's block (a metadata write, a prose rewrite) is no
-reason to spend a design run, so it moves only on an explicit retry
-(`TestADesignSeatItemIsNotReadmittedOnAChangedInput` in
-[`drain/readmit_test.go`](./drain/readmit_test.go)).
+An item moves on an event that names it: the operator's `tillr drain retry`, a design
+answer for the item, or the recovery of a killed run. The recorded inputs stay on each
+dispatch. They are the claim's check that the pass which planned a dispatch read the
+definition the claim applies, and they are evidence a reader can inspect. Neither
+`inputs-changed` nor `readmission-exhausted` is written any more. A recorded decision that
+carries one is history, and `tillr-view waiting --history` still reads it.
 
-If that automatic attempt fails, later input changes do not dispatch it again.
-`tillr-view waiting` says that the automatic attempt failed and names `tillr drain retry`
-as the owner's next act. An authorized retry begins a fresh allowance, but unchanged
-inputs still hold. Older runs with no recorded inputs need an owner retry rather than a
-guessed comparison.
+A retry authorization that names a run which is no longer the item's latest run no
+longer speaks. Either the retry it authorized consumed it, or a newer run ended after it
+was written. The item then routes by its latest run, as it would with no authorization;
+the `retry-stale` hold is gone.
 
 A loop stop or fault leaves in-flight runs alone. Their terminal records survive the
 supervisor, and the next loop settles and judges each normally, including runs that
@@ -880,9 +886,8 @@ The explicit flag is the drain's only run-ending path. It sends SIGTERM to each 
 face, not a `tillr run pause` request: the flag was built before the pause command
 existed, and no item has changed it since; the face ends its adapter and writes
 its terminal record. Ending a run this way starts the item over, not the session.
-The interruption is recorded before signaling. It is no attempt outcome: no retry,
-failover, or automatic re-admission allowance is spent, regardless of how often it
-happens. The next pass dispatches the item again on its interrupted backend.
+The interruption is recorded before signaling. It is no attempt outcome: no retry or
+failover is spent, regardless of how often it happens. The next pass dispatches the item again on its interrupted backend.
 
 A stop acts on what this process domain (boot, PID namespace and user) can see and
 reports the rest on stderr, one `loop: stop left alone:` line each. A session from
@@ -920,6 +925,49 @@ no timeout. A proven-gone loop's run with no writer is reclaimed like a local on
 next pass. A claim without that evidence, including any whose files cannot be judged,
 remains protected. A normal offline finish is still judged;
 a worker signal without evidence of supervisor interruption is not exempted.
+
+### A refused run goes back to its worker
+
+The owner ruled on 2026-11-17 that a worker run's failure is not counted and does not park
+its item (audit findings F-02, F-03 and F-09; the ruling is `D-JL10` in
+[the judge and lifecycle design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)).
+When the gate refuses a candidate, a run ends with no commit, a candidate escapes its
+fence, or a landing is refused, the next pass dispatches the item again with the reason
+`returned-with-evidence`, every time. The new run's brief carries a section on the previous
+attempt: the refusal's own words, each failing gate check with its log, and the two refs
+that keep the earlier run's work (`refs/tillr/runs/<run>` for its committed head and
+`refs/tillr/preserved/<run>` for uncommitted work). It starts on the item's own backend.
+Continuing the worker's own session, where the adapter can resume one, is not built yet; it
+is the queue item `item-worker-refusal-resumes-session` in
+[the tillr roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md#route-a-workers-refused-ending-to-its-own-session).
+
+What stops endless repetition is an identical repeat, not a count. A refusal records its
+evidence when it is written: the failing gate checks, each with a digest of its normalized
+log, or for a run with no commit the uncommitted paths and a digest of their content, or
+otherwise the refusal's normalized words. Normalizing drops the run id, timestamps,
+durations, full hashes and temporary directories, and keeps messages and line numbers.
+When an ending's producer (the seat it ran for), cause and evidence equal those of any
+earlier ending of the same item, the item goes to the design seat with both runs' reports,
+gate verdicts and refusals, as a run that reports blocked does. Two endings that differ are
+never a repeat, however many there are, and a refusal recorded before evidence keys
+existed repeats nothing. An item with no design document still goes to the owner on a
+repeat, because there is no document for the design seat to amend, and so does an item
+whose backend policy names no design seat (a design route there would stop the loop for
+every item). The run named as repeated is the latest earlier match, so a repeat after the
+owner put the item back and authorized a retry raises its own conflict on the new pair;
+the older conflict no longer holds the item and is not a reason to skip. The rule is the pure
+function `repeatedEnding` in [`drain/returned.go`](./drain/returned.go), with table tests
+in [`drain/returned_test.go`](./drain/returned_test.go); the loop's side is in
+[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go), including the items the
+removed rules held being planned again at the next pass with no repair.
+
+A workflow node's refusal keeps its node rule, and a squash conflict keeps its conflict-fix
+run. Machinery failures keep the one failover and `run-infra-exhausted`: the owner ruled
+that each should move to the next open backend and wait when none is open, but the drain
+has no fact that says a backend is open again except a quota window, so a walk with no
+budget would re-dispatch a broken adapter at once and forever. That is the queue item
+`item-backend-open-is-a-fact` in
+[the tillr roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend).
 
 ### A design run that ends without answering
 
@@ -1749,11 +1797,18 @@ re-derives the fence from the item's `allowed_paths`, because the killed segment
 committed before it died. It refuses a run the gate judged: continuing judged work is a
 retry, which a person authorizes.
 
-A normal build exit with no commit and uncommitted fenced work gets one automatic
-continuation before a `no-op` refusal. It preserves the worktree and asks the worker to
-finish verification and commit, using the same attempt and the existing resume bracket.
-A committed continuation is settled normally; a still-dirty refusal names the remaining
-paths. Clean exits, design/comment work and outside-fence-only edits do not trigger it.
+A normal build exit with no commit and uncommitted fenced work is continued in its own
+session, uncounted, for as long as each continuation changes that work (the owner's ruling
+of 2026-11-17, audit finding F-09). Each continuation preserves the worktree and asks the
+worker to finish verification and commit, using the same attempt and the existing resume
+bracket. A committed continuation is settled normally. A continuation that leaves the
+uncommitted paths and their content exactly as the previous one did is refused as `no-op`,
+naming the remaining paths, and goes back to the worker as
+[a refused run](#a-refused-run-goes-back-to-its-worker) does. A replacement loop continues
+a continuation a stop killed again
+(`TestDirtyExitContinuesForAsLongAsEachContinuationChangesTheWork` and
+`TestDirtyExitContinuesAKilledContinuationAgain` in
+[`drain/commit_continuation_test.go`](./drain/commit_continuation_test.go)). Clean exits, design/comment work and outside-fence-only edits do not trigger it.
 Missing brief/session state is named rather than replaced by a cold build. See the
 [design choice and limits](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-build-commit.md).
 

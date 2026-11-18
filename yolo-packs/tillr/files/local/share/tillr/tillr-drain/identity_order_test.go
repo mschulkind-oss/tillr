@@ -22,7 +22,7 @@ func TestFixedClockRetriesFollowDoubleDigitAttemptOrder(t *testing.T) {
 	}
 	fixtureAt(t, path, runRecord("run-item_041-a10", "item_041", "lane-9", "first", run.StateFailedToStart, nil, ""))
 	consumed, _ := transitionPlan(t, path, at, []string{"lane-1"}, 1, transitionPolicy())
-	if consumed[0].Action != drain.ActionHold || consumed[0].Reason != drain.ReasonRetryStale {
+	if consumed[0].Action == drain.ActionRetry || consumed[0].RetryID != "" {
 		t.Fatalf("authorization nine was not consumed: %+v", consumed[0])
 	}
 	seedRetry(t, path, "item_041", "run-item_041-a10", "the owner", "retry ten", at)
@@ -32,7 +32,7 @@ func TestFixedClockRetriesFollowDoubleDigitAttemptOrder(t *testing.T) {
 	}
 	fixtureAt(t, path, runRecord("run-item_041-a11", "item_041", "lane-9", "first", run.StateFailedToStart, nil, ""))
 	final, _ := transitionPlan(t, path, at, []string{"lane-1"}, 1, transitionPolicy())
-	if final[0].Action != drain.ActionHold || final[0].Reason != drain.ReasonRetryStale {
+	if final[0].Action == drain.ActionRetry || final[0].RetryID != "" {
 		t.Fatalf("authorization ten was not consumed: %+v", final[0])
 	}
 }

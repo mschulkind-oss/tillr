@@ -220,7 +220,9 @@ func replayToStop(t *testing.T, advance time.Duration, pollOnly bool) []string {
 	f, l := passFixture(t, "item-a", "item-b")
 	l.cfg.Lanes = []string{"lane-1"}
 	l.pollOnly = pollOnly
-	steps := &triggerSteps{started: make(chan string, 2), release: make(chan struct{}), store: f.storePath}
+	// Each item's run commits nothing, goes back to its worker once, and its identical
+	// second ending waits on the owner (the owner's ruling of 2026-11-17): two starts each.
+	steps := &triggerSteps{started: make(chan string, 4), release: make(chan struct{}), store: f.storePath}
 	close(steps.release)
 	l.cfg.Steps = steps
 	var mu sync.Mutex
@@ -268,7 +270,8 @@ func replayToStop(t *testing.T, advance time.Duration, pollOnly bool) []string {
 	if counts["drain_generations"] != result.Ticks || counts["drain_passes"] != result.Ticks {
 		t.Fatalf("applied passes lack generation/timing rows: %v, passes %d", counts, result.Ticks)
 	}
-	if result.Dispatched != 2 || result.Ticks != 4 {
+	// Two dispatches and two settles per item: the run and its return.
+	if result.Dispatched != 4 || result.Ticks != 8 {
 		t.Fatalf("replay did not dispatch and settle both items: %+v", result)
 	}
 	return identities
@@ -388,7 +391,9 @@ func TestGenerationTimingSumsIndependentExaminationsAndEnforcesBudget(t *testing
 
 func TestDispatchTimingBelongsOnlyToItsDispatchGeneration(t *testing.T) {
 	f, l := passFixture(t, "item-a")
-	steps := &triggerSteps{started: make(chan string, 1), release: make(chan struct{}), store: f.storePath, delay: 20 * time.Millisecond}
+	// The run commits nothing, so it goes back to its worker once and its identical second
+	// ending waits on the owner (the owner's ruling of 2026-11-17): room for both starts.
+	steps := &triggerSteps{started: make(chan string, 2), release: make(chan struct{}), store: f.storePath, delay: 20 * time.Millisecond}
 	close(steps.release)
 	l.cfg.Steps = steps
 	if result, err := l.Run(context.Background()); err != nil || result.Stop != StopQueueDrained {

@@ -330,9 +330,22 @@ dead at 17:53:45 — `No API key found for openrouter` — and was benched for a
 1,083 child logs carry that one error. The cooldown worked exactly as designed; converting a
 permanent configuration error into a recurring wait was the design.
 
-*Enforced by:* **nothing in the tree today.** The mechanism was built in the board CLI and deleted
-with it on 2026-11-11 (`afdc9a9571`); `tillr-drain`'s answer to a failed run is a hold, not a
-diagnosis. The surviving specification is
+*Enforced by:* **partly, since 2026-11-17, and no test asserts the principle as a whole.** The
+mechanism was built in the board CLI and deleted with it on 2026-11-11 (`afdc9a9571`). Under the
+owner's ruling of 2026-11-17 (`D-JL10` in
+[the judge and lifecycle design](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)),
+`tillr-drain` no longer holds a refused worker run. It sends the refusal back to the worker with its
+evidence, so the next run has the failure named in its brief, and nothing in that path waits on a
+clock. A repeat is established by observation: an ending whose producer, cause and normalized
+evidence equal an earlier ending of the item goes to the design seat to be diagnosed, with both
+records (`repeatedEnding` in `tools/tillr-drain/drain/returned.go`, table-tested in
+`returned_test.go`). The same ruling removed re-admission on a changed input hash, so a "named
+change" in the sense above is now an event that names the item: an operator's retry, a design answer,
+or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the
+fingerprint store of the design below; the one infrastructure failover with its
+`run-infra-exhausted` hold, which is still a budget
+([`item-backend-open-is-a-fact`](../tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend));
+and the infrastructure backoff on elapsed time. The surviving specification is
 [the cooldown-removal design](./failure-diagnosed-not-waited-out.md), which carries the whole
 mechanism: a fingerprint over the failing stage and the normalized error, an inputs hash recorded
 with every failure, an admission rule keyed on a named change rather than a clock, a fleet trip at

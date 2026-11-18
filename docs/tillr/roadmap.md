@@ -3623,3 +3623,53 @@ This item waits on one prerequisite and builds on landed work for the rest. The 
 - **Evidence, the index:** `uvx vantage-check index --format json` lists open questions per document, and none of the six conflicts appears in it.
 - **The prerequisite is checked before any edit.** In the staged tree, `rg -n 'tillr-drain/vantage' tools -g '*.go'` and `rg -n 'func parseQuestions' tools/tillr-item` both return nothing once `item-qp-one-question-reader` has landed. If either prints a match, the lane was staged from a base without the prerequisite. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner. The worker reports it as such and does not move the reader itself, because `tools/tillr/` is outside this item's paths.
 - **Evidence, 2026-11-17 about 19:00Z:** a worker run staged for this item stopped before editing. `rg -n 'tillr-drain/vantage' tools/tillr-drain/drain/questions.go tools/tillr-view/waiting.go` printed one import in each file, `rg --files tools/tillr | rg '/vantage/'` printed nothing, and `rg -n 'func parseQuestions' tools/tillr-item/item/questions.go` printed the hand-written parser. The same three commands printed the same results when this block was amended later that day.
+
+## Filed 2026-11-17: a worker's failure goes back to the worker
+
+The owner ruled on 2026-11-17 that a worker run's ending is never counted. A refused run now goes back to its worker with its evidence, every time, and only an identical repeat goes to the design seat. That is `D-JL10` in [the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10). Two parts of the ruling are not built, and each has an item below.
+
+### Route a worker's refused ending to its own session
+
+When the gate refuses a worker's candidate, or the worker ends without committing, the next run of the item now starts as a fresh session. Its brief carries the refusal, the failing checks with their logs, and the refs that keep the earlier run's work. That works, but the new session has to read the whole item again and rebuild the reasoning the earlier session already had, and it pays for that context a second time. The ruling asks for the refusal to go back to the session that produced it, where the harness can resume one. The drain already continues a worker's own session for uncommitted work and after a wall, so the mechanism exists on the lane. What is missing is keeping the lane and its session after a refusal, instead of resetting the lane, and handing the refusal to that session as its next turn. The design seat has the same gap, and its item is `item-design-refusal-resumes-session`. The two should share one mechanism.
+
+- **Outcomes:**
+  - Deliver a refused worker run's evidence to that run's own session when the harness can resume it.
+  - Fall back to the fresh run with the evidence when it cannot, and record which one happened.
+  - Keep no count: a refusal goes back every time, and an identical repeat still goes to the design seat.
+
+<!-- tillr: item id="item-worker-refusal-resumes-session" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** When the gate refuses a worker's candidate, the run's lane and its recorded session are kept, and the next turn continues that session with a prompt that carries the same evidence the fresh brief does today. The commit the continued session makes is settled through the fence and the gate like any candidate. A test refuses a fixture candidate, asserts that the continuation names the same session and the refusal's failing checks, and asserts that the second commit lands.
+- **c2:** A run that ended with no commit, a fence escape and a refused landing take the same path as c1. A test covers each of the three.
+- **c3:** When the adapter cannot resume a session, or the session is gone, the item is dispatched as a fresh run with the evidence in its brief, as it is today, and the decision records which path was taken. A test covers both.
+- **c4:** The identical-repeat rule reads a continued session's ending exactly as it reads a fresh run's ending. A test continues one session twice into the same refusal and asserts that the item goes to the design seat with both records.
+- **c5:** The drain README's section on a refused run going back to its worker states the built rule, and the ending table in the judge and lifecycle design marks ending 1 as built.
+
+**Agent details:**
+
+- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10); the section "A refused run goes back to its worker" in `tools/tillr-drain/README.md`; [the board state machine, section 7](../design/board-state-machine.md#7-suspend-and-resume).
+- **Where:** `returnedEnding` and the `returned-with-evidence` dispatch in `decide` in `tools/tillr-drain/drain/plan.go`; `returnedBrief` and `repeatedEnding` in `tools/tillr-drain/drain/returned.go`; the refusal paths of `settle` and `verify` and the continuation `resumeAfterWall` in `tools/tillr-drain/drain/loop.go`, where `abandon` resets the lane today; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
+- **Evidence:** on 2026-11-17, `tillr drain why` held `rewrite-item-design-refusal-resumes-session` as `gate-failed` because the fast check `documents` refused a dead anchor in its commit. Under the ruling that run's own session is the one that knows which anchor it wrote.
+
+### Route an infrastructure failure to the next open backend
+
+The owner ruled on 2026-11-17 that a machinery failure is not counted. Each failure should move the item to the next backend that is open, and when no backend is open the item should wait on the backend. Today the drain still allows one failover per item and then holds it as `run-infra-exhausted`, which names nobody who can move it. That hold was not removed with the other counts, because the drain has no fact that says a backend is open. It knows one only from a quota window, a refusal the provider stated with a reset time. An adapter that crashes, or a stream that drops, records no window. Without the budget, the planner would send the item straight back to a broken adapter on the next pass. A pass that dispatched a run never backs off, so the loop would spin on that adapter forever and never drain. So "open" has to become a recorded fact before the budget can go: a backend whose latest run failed in the infrastructure class is closed until something shows it is working again, such as a probe that succeeds or another run that ends normally.
+
+- **Outcomes:**
+  - Record when a backend is closed and what reopens it, without a clock or a count.
+  - Move each machinery failure to the next open backend, and hold the item waiting on the backend when none is open.
+  - Remove the failover budget and the `run-infra-exhausted` hold, for single runs and for workflow nodes.
+
+<!-- tillr: item id="item-backend-open-is-a-fact" paths="tools/tillr-drain/,tools/tillr-view/,config/tillr/,tests/tillr-muse-backend.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
+
+- **c1:** A backend whose latest run failed in the infrastructure class is recorded as closed, and it reopens only on a recorded event: a probe of that backend that succeeds, or a run on it that ends in any other class. The README names the probe and what it costs. A test closes a backend with a failed run and reopens it with each of the two events.
+- **c2:** The planner walks an item's backends in order, wrapping at the end, skipping closed ones and leaving the item's seat list only as it does today. When every backend the item may use is closed, the item is held as waiting on the backend, and the hold names the backend and its reopening event. A test fails the only backend and asserts the item waits and the loop does not dispatch it again until the backend reopens.
+- **c3:** The policy's `max_failovers` is no longer read, and the four policies under `config/tillr/` drop it. A policy that still names it is accepted. `tests/tillr-muse-backend.test.py` asserts that the policies do not name it.
+- **c4:** A workflow node whose backend failed takes the same walk, and a node with no open backend waits rather than faulting into `run-infra-exhausted`. A test covers a node.
+- **c5:** The waiting view classifies the new hold with its mover, and the `run-infra-exhausted` rule stays only as history.
+
+**Agent details:**
+
+- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10), ending 8; finding F-04 in [the graph design's audit table](../design/tillr-graph-is-the-path.md#124-audit-findings).
+- **Where:** `attempt` in `tools/tillr-drain/drain/plan.go`, which counts every infrastructure-class run against `failovers()`; `nextBackend`, `failovers` and `NextRequest` in `tools/tillr-drain/drain/policy.go`; `availableBackend`, `recordBackendWindow` and `nextAvailableRequest` in `tools/tillr-drain/drain/quota_window.go`; the in-tick failover in `settle` in `tools/tillr-drain/drain/loop.go`; `retryWorkflowNode` in `tools/tillr-drain/drain/workflow_failover.go` and `parallelFailover` in `tools/tillr-drain/drain/parallel_failover.go`; the `fault` branch of `commandNodeHold` in `tools/tillr-drain/drain/workflow_order.go`.
+- **Evidence:** on 2026-11-17 a version of this change that removed the budget and wrapped the walk was written and taken back before it landed, from reading the code rather than from a run. `recordBackendWindow` in `tools/tillr-drain/drain/quota_window.go` records a window only for a refusal that states a reset time, and `TestConsecutiveInfrastructureFailuresDoNotStopTheLoop` in `tools/tillr-drain/loop_test.go` drives a loop with one always-failing backend that must drain. With no budget, nothing closes that backend, so every pass would dispatch it again and the loop would not drain.

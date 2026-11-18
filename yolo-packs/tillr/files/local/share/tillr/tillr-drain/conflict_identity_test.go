@@ -31,21 +31,15 @@ if [ "$n" -gt 2 ]; then printf 'RESULT: done\n'; exit 0; fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Dispatched != 3 {
-		t.Fatalf("dispatches=%d, want original, fix and one failover", result.Dispatched)
+	// The original, its conflict fix, the fix's failover (which commits nothing), and that
+	// no-op's return to its worker with the evidence, which starts on the first backend
+	// again: the owner's ruling of 2026-11-17 returns a refusal instead of holding it.
+	if result.Dispatched != 4 {
+		t.Fatalf("dispatches=%d, want original, fix, one failover and its return", result.Dispatched)
 	}
 	runs := runsForItem(t, f.store, "item_041")
-	if len(runs) != 3 {
-		t.Fatalf("conflict-fix reused an earlier run: %+v", runs)
-	}
 	if runs[0].Backend != "first" {
 		t.Fatalf("original run overwritten: %+v", runs[0])
-	}
-	if code, out := authorizeRetry(t, f.store, "item_041", "run-item_041-a3", "the owner", "retry no-op", steps.Now().Format("2006-01-02T15:04:05Z")); code != 0 {
-		t.Fatalf("retry exited %d: %s", code, out)
-	}
-	if _, err := f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(context.Background()); err != nil {
-		t.Fatal(err)
 	}
 	runs = runsForItem(t, f.store, "item_041")
 	want := []string{"run-item_041-a1", "run-item_041-a1" + drain.ConflictFixSuffix, "run-item_041-a3", "run-item_041-a4"}

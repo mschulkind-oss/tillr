@@ -179,13 +179,14 @@ func TestResumeSecondFailureHonorsContinuedHistory(t *testing.T) {
 			}
 			// A prior a loop stop interrupted is no attempt outcome (item-drain-stop-keeps-runs
 			// c4): its item is dispatched again without spending a re-admission. A judged
-			// prior still needs the changed build to be re-admitted.
+			// prior goes back to its worker with the evidence: since the owner's ruling of
+			// 2026-11-17 a changed build re-admits nothing, and nothing is counted.
 			if mode == "prior-still-orphaned" {
 				if second.decision.Readmitted || second.decision.Reason != "earlier run orphaned by a loop stop" {
 					t.Fatalf("interrupted prior spent a re-admission: %+v", second.decision)
 				}
-			} else if !second.decision.Readmitted {
-				t.Fatalf("not re-admitted: %+v", second.decision)
+			} else if second.decision.Readmitted || second.decision.Reason != ReasonReturned {
+				t.Fatalf("not returned with its evidence: %+v", second.decision)
 			}
 			second.decision.RunRequest.Command = []string{continuationShell(t), "-c", "kill -TERM $$"}
 			steps.at = steps.at.Add(100 * time.Millisecond)
@@ -234,7 +235,7 @@ func TestResumeSecondFailureHonorsContinuedHistory(t *testing.T) {
 				if mode == "owner" {
 					seat, status = "owner", "owner"
 				}
-				if c.WaitingOn != seat || c.Status != status || c.RunID != req.RunID || !strings.Contains(c.Text, first.RunRequest.RunID) || !strings.Contains(c.Text, "Second failed attempt:") {
+				if c.WaitingOn != seat || c.Status != status || c.RunID != req.RunID || !strings.Contains(c.Text, first.RunRequest.RunID) || !strings.Contains(c.Text, IdenticalRepeatPrefix) {
 					t.Fatalf("missing second-failure disposition: %+v", c)
 				}
 				var count int

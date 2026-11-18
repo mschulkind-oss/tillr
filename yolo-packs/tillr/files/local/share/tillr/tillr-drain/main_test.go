@@ -561,10 +561,11 @@ func TestPlanHoldsAnItemThatMayBeARetry(t *testing.T) {
 	}
 }
 
-// A previously run item is held with the outcome of its latest run, not with a generic
-// `not-ready`: a fence refusal, a run that produced no commit, a wall that cut a run short
-// and a red gate are four different next acts, and the hold says which. A run the store
-// cannot classify falls back to `run-link-missing`, which is the conservative answer.
+// A previously run item is planned by the outcome of its latest run, not with a generic
+// `not-ready`. A fence refusal, a run that produced no commit and a red gate go back to the
+// worker with their evidence (`returned-with-evidence`, the owner's ruling of 2026-11-17);
+// a wall that cut a run short is held with its own reason. A run the store cannot classify
+// falls back to `run-link-missing`, which is the conservative answer.
 func TestAPreviouslyRunItemHoldsWithItsOwnOutcomeReason(t *testing.T) {
 	const runID = "run-item_042-20261109T000000Z"
 	cases := []struct {
@@ -577,12 +578,12 @@ func TestAPreviouslyRunItemHoldsWithItsOwnOutcomeReason(t *testing.T) {
 		{
 			name: "fence refused", state: run.StateExited, exit: exitCode(0),
 			seed: func(t *testing.T, storePath string) { seedRefusal(t, storePath, runID, drain.RefusalFence) },
-			want: drain.ReasonBoundaryScopeEscape,
+			want: drain.ReasonReturned,
 		},
 		{
 			name: "no commit", state: run.StateExited, exit: exitCode(0),
 			seed: func(t *testing.T, storePath string) { seedRefusal(t, storePath, runID, drain.RefusalNoOp) },
-			want: drain.ReasonCandidateNoOp,
+			want: drain.ReasonReturned,
 		},
 		{
 			name: "timed out", state: run.StateTimedOut, exit: nil,
@@ -591,7 +592,7 @@ func TestAPreviouslyRunItemHoldsWithItsOwnOutcomeReason(t *testing.T) {
 		{
 			name: "gate failed", state: run.StateExited, exit: exitCode(0),
 			seed: func(t *testing.T, storePath string) { seedGateVerdict(t, storePath, runID) },
-			want: drain.ReasonGateFailed,
+			want: drain.ReasonReturned,
 		},
 		{
 			name: "unclassifiable answer", state: run.StateExited, exit: exitCode(0),
@@ -609,8 +610,12 @@ func TestAPreviouslyRunItemHoldsWithItsOwnOutcomeReason(t *testing.T) {
 			}
 			tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 			got := plan(t, storePath, tickPath)[0].Payload
-			if got.Action != drain.ActionHold || got.Reason != c.want {
-				t.Fatalf("the decision is %q / %q, want hold / %q", got.Action, got.Reason, c.want)
+			action := drain.ActionHold
+			if c.want == drain.ReasonReturned {
+				action = drain.ActionDispatch
+			}
+			if got.Action != action || got.Reason != c.want {
+				t.Fatalf("the decision is %q / %q, want %s / %q", got.Action, got.Reason, action, c.want)
 			}
 			if got.Reason == drain.ReasonNotReady {
 				t.Fatalf("a previously run item was held as %s", drain.ReasonNotReady)
@@ -1614,9 +1619,9 @@ func TestPlanHoldsARetryWhoseRunAWallCutShort(t *testing.T) {
 }
 
 // A run a wall cut short can also have committed, and a committed candidate is judged
-// before its wall status (design D-RW2). Once the gate has spoken, the hold is
-// `gate-failed` — the action a person takes — even though the run is also
-// `AttemptUnjudged`.
+// before its wall status (design D-RW2). Once the gate has spoken, the item goes back to its
+// worker with the gate's evidence (`returned-with-evidence`), even though the run is also
+// `AttemptUnjudged`: a judged candidate's next act is the gate's.
 func TestPlanHoldsAWalledRunByTheGatesVerdict(t *testing.T) {
 	const cutShort = "run-item_042-20261109T000000Z"
 	storePath := fixture(t,
@@ -1627,9 +1632,9 @@ func TestPlanHoldsAWalledRunByTheGatesVerdict(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:01:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonGateFailed {
-		t.Fatalf("the decision is %q / %q, want hold / %s: a judged candidate's hold is the gate's",
-			got.Action, got.Reason, drain.ReasonGateFailed)
+	if got.Action != drain.ActionDispatch || got.Reason != drain.ReasonReturned {
+		t.Fatalf("the decision is %q / %q, want dispatch / %s: a judged candidate's next act is the gate's",
+			got.Action, got.Reason, drain.ReasonReturned)
 	}
 }
 
@@ -1675,8 +1680,9 @@ func TestRetryFaceRefusesTheWallsAcknowledgmentOnAJudgedRun(t *testing.T) {
 }
 
 // An authorization naming a run that is no longer the item's latest terminal run cannot be
-// the retry's link: the newer run is the one an operator would have to authorize.
-func TestPlanHoldsAStaleRetryAuthorization(t *testing.T) {
+// the retry's link, and it no longer speaks: the item routes by its latest run, as with no
+// authorization. It is not held as `retry-stale` (the owner's ruling of 2026-11-17).
+func TestPlanIgnoresAStaleRetryAuthorization(t *testing.T) {
 	const (
 		older = "run-item_042-20261109T000000Z"
 		newer = "run-item_042-20261109T010000Z"
@@ -1690,11 +1696,8 @@ func TestPlanHoldsAStaleRetryAuthorization(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:01:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonRetryStale {
-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonRetryStale)
-	}
-	if got.SupersedesRunID != older {
-		t.Fatalf("the hold supersedes %q, want %q", got.SupersedesRunID, older)
+	if got.Action == drain.ActionRetry || got.Reason == "retry-stale" || got.RetryID != "" || got.SupersedesRunID != "" {
+		t.Fatalf("a stale authorization still spoke: %+v", got)
 	}
 }
 

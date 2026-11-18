@@ -533,17 +533,19 @@ func TestACandidateFailureDoesNotStopTheLoopAndDoesNotFailOver(t *testing.T) {
 		t.Fatalf("the loop failed: %v", err)
 	}
 	// The loop ran both items and then found nothing dispatchable: a red gate is a verdict
-	// about one candidate, never a reason to stop or to re-run it.
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 6 {
+	// about one candidate, never a reason to stop. Each refusal goes back to its worker
+	// with the evidence once; the second, identical refusal is a repeat, which waits on the
+	// owner because the fixture's policy names no design seat (the ruling of 2026-11-17).
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 12 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
 		t.Fatalf("a candidate failure stopped the loop after %d pass(es): %q (%s)", result.Ticks, result.Stop, result.Detail)
 	}
-	if result.Rejected != 2 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
+	if result.Rejected != 4 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 4 and 0", result.Rejected, result.Landed)
 	}
-	// Two ticks, two candidates, and the adapter ran exactly twice: one attempt per item,
-	// because judged work never fails over.
-	if runs := lines(t, f.count); countMatching(runs, "adapter") != 2 {
-		t.Fatalf("the adapter ran %d time(s), want 2 with no failover: %v", countMatching(runs, "adapter"), runs)
+	// Two runs per item, and the adapter ran exactly four times: the returned run starts on
+	// the same backend, because judged work never fails over.
+	if runs := lines(t, f.count); countMatching(runs, "adapter") != 4 {
+		t.Fatalf("the adapter ran %d time(s), want 4 with no failover: %v", countMatching(runs, "adapter"), runs)
 	}
 	// The stub writes "$0 $*", so the land program is named by its path and not by the
 	// bare word: the scratch directory a lane runs under can hold "landed" (this lane's
@@ -1073,8 +1075,11 @@ func TestACandidateOutsideItsFenceIsRefusedWithoutTheGate(t *testing.T) {
 	if result.Stop != drain.StopQueueDrained {
 		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopQueueDrained)
 	}
-	if result.Rejected != 1 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 1 and 0", result.Rejected, result.Landed)
+	// The refusal goes back to the worker with its evidence; the second run escapes the
+	// same way, an identical repeat, which waits on the owner because the fixture's policy
+	// names no design seat (the owner's ruling of 2026-11-17).
+	if result.Rejected != 2 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
 	}
 	runs := lines(t, f.count)
 	if countMatching(runs, "gate --item") != 0 {
@@ -1085,19 +1090,19 @@ func TestACandidateOutsideItsFenceIsRefusedWithoutTheGate(t *testing.T) {
 	if countMatching(runs, "verdict") != 0 {
 		t.Fatalf("the fence refusal recorded %d verdict(s), want none: %v", countMatching(runs, "verdict"), runs)
 	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the fence refusal left the item %q, want in-queue", got)
+	if got := itemStateOf(t, f.store, "item_041"); got != "blocked" {
+		t.Fatalf("the repeated fence refusal left the item %q, want blocked on its conflict", got)
 	}
 	refusals := refusalsOf(t, eventsOf(t, f.store))
-	if len(refusals) != 1 || refusals[0].step != drain.RefusalFence {
-		t.Fatalf("the fence refusal recorded %+v, want one %q refusal", refusals, drain.RefusalFence)
+	if len(refusals) != 2 || refusals[0].step != drain.RefusalFence || refusals[1].step != drain.RefusalFence {
+		t.Fatalf("the fence refusals recorded %+v, want two %q refusals", refusals, drain.RefusalFence)
 	}
 	if !strings.Contains(report.String(), drain.ScopeEscape) || !strings.Contains(report.String(), "candidate.txt") {
 		t.Fatalf("the report does not name the escape and the path: %s", report.String())
 	}
-	// The next tick names the outcome rather than the retired `not-ready` dead end.
-	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonBoundaryScopeEscape+")") {
-		t.Fatalf("the stop does not name the fence refusal's own hold: %s", result.Detail)
+	// The stop names the item's mover rather than the retired `not-ready` dead end.
+	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("the stop does not name the repeat's owner hold: %s", result.Detail)
 	}
 }
 
@@ -1140,6 +1145,30 @@ func refusalsOf(t *testing.T, log []event.Event) []refusalEvent {
 	return refusals
 }
 
+// returnedThenRepeated fails unless the item's run was refused at step twice: the first
+// refusal went back to its worker with the evidence, and the second, identical one is a
+// repeat, which waits on the owner because the fixture's policy names no design seat (the
+// owner's ruling of 2026-11-17). The item is blocked on that conflict and the drained stop
+// names the owner's hold.
+func returnedThenRepeated(t *testing.T, store string, result drain.LoopResult, itemID, step string) {
+	t.Helper()
+	refusals := []refusalEvent{}
+	for _, r := range refusalsOf(t, eventsOf(t, store)) {
+		if strings.Contains(r.runID, itemID+"-") {
+			refusals = append(refusals, r)
+		}
+	}
+	if len(refusals) != 2 || refusals[0].step != step || refusals[1].step != step {
+		t.Fatalf("%s recorded %+v, want two %q refusals: returned once, then repeated", itemID, refusals, step)
+	}
+	if got := itemStateOf(t, store, itemID); got != "blocked" {
+		t.Fatalf("the repeat left %s %q, want blocked on its conflict", itemID, got)
+	}
+	if !strings.Contains(result.Detail, itemID+" ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("the stop does not name %s's owner hold: %s", itemID, result.Detail)
+	}
+}
+
 // noOpAdapter answers with a report and commits nothing: the honest shape of a run that read
 // the brief and found nothing to change. The loop must not treat it as a judged candidate.
 const noOpAdapter = counting + `printf 'RESULT: done\n'
@@ -1167,24 +1196,15 @@ func TestARunThatCommitsNothingLeavesTheItemQueuedAndHoldsItAsANoOp(t *testing.T
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Landed != 0 || result.Rejected != 1 || result.Candidates != 0 {
-		t.Fatalf("the loop landed %d, rejected %d and counted %d candidate(s), want 0, 1 and 0: %s",
+	if result.Landed != 0 || result.Rejected != 2 || result.Candidates != 0 {
+		t.Fatalf("the loop landed %d, rejected %d and counted %d candidate(s), want 0, 2 and 0: %s",
 			result.Landed, result.Rejected, result.Candidates, result.Detail)
-	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the no-op left the item %q, want in-queue", got)
 	}
 	runs := lines(t, f.count)
 	if countMatching(runs, "gate --item") != 0 || countMatching(runs, "verdict") != 0 {
 		t.Fatalf("a no-op was judged: %v", runs)
 	}
-	refusals := refusalsOf(t, eventsOf(t, f.store))
-	if len(refusals) != 1 || refusals[0].step != drain.RefusalNoOp {
-		t.Fatalf("the no-op recorded %+v, want one %q refusal", refusals, drain.RefusalNoOp)
-	}
-	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonCandidateNoOp+")") {
-		t.Fatalf("the stop does not name the no-op's own hold: %s", result.Detail)
-	}
+	returnedThenRepeated(t, f.store, result, "item_041", drain.RefusalNoOp)
 }
 
 // A run whose report answers `blocked` is a spec conflict, not a failing candidate: the item
@@ -1286,9 +1306,10 @@ func TestADirtyCandidateWorktreeIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Rejected != 1 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 1 and 0", result.Rejected, result.Landed)
+	if result.Rejected != 2 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
 	}
+	returnedThenRepeated(t, f.store, result, "item_041", drain.RefusalFence)
 	if runs := lines(t, f.count); countMatching(runs, "gate --item") != 0 {
 		t.Fatalf("the gate judged a worktree that does not match its commit: %v", runs)
 	}
@@ -1380,16 +1401,15 @@ func TestALandedCandidateMovesItsItemToLanded(t *testing.T) {
 	}
 }
 
-// A failed candidate keeps its item in the queue, records the gate's failing verdict, and
-// the next tick holds it with the gate's own outcome, `gate-failed` — work a person must
-// look at again, not a retry and not a stop. The item's disposition is the owner's, so the
-// loop does not move it.
+// A failed candidate keeps its item's criteria, freezes no verdict, and goes back to its
+// worker with the gate's evidence: the owner ruled on 2026-11-17 that a refusal is not
+// counted and does not park the item. The second run fails the gate the same way, an
+// identical repeat, so the worker is not sent the same thing a third time: with no design
+// seat in the fixture's policy it waits on the owner.
 //
-// The negative control is the pair this case has: the state is `in-queue` and not `blocked`
-// or `closed`, and the tick after it holds the item instead of dispatching it, so a loop
-// that moved the item (or re-dispatched it) fails here, and a loop that stopped the night
-// over one red gate fails the tick-budget assertion.
-func TestAFailedCandidateLeavesItsItemQueuedAndTheNextTickHoldsIt(t *testing.T) {
+// The negative control is the run count: a loop that parked the item after one red gate ran
+// the adapter once, and a loop that returned it without the repeat rule never drains.
+func TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	loop := f.newLoop(t, 1, f.steps(t, always(t, "gate", 1), always(t, "land", 0), always(t, "verdict", 0)))
@@ -1398,27 +1418,18 @@ func TestAFailedCandidateLeavesItsItemQueuedAndTheNextTickHoldsIt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Rejected != 1 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 1 and 0", result.Rejected, result.Landed)
-	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the failed item is %q in the store, want in-queue", got)
-	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 3 {
-		t.Fatalf("the loop stopped %q after %d tick(s), want %q after one: %s",
-			result.Stop, result.Ticks, drain.StopQueueDrained, result.Detail)
+	if result.Rejected != 2 || result.Landed != 0 || result.Stop != drain.StopQueueDrained {
+		t.Fatalf("the loop rejected %d and landed %d, stopping %q, want 2, 0 and %q: %s", result.Rejected, result.Landed, result.Stop, drain.StopQueueDrained, result.Detail)
 	}
 	runs := lines(t, f.count)
-	if countMatching(runs, "adapter") != 1 {
-		t.Fatalf("the adapter ran %d time(s) for one failed candidate, want 1: %v", countMatching(runs, "adapter"), runs)
+	if countMatching(runs, "adapter") != 2 {
+		t.Fatalf("the adapter ran %d time(s), want 2: the refusal returned once, then repeated: %v", countMatching(runs, "adapter"), runs)
 	}
 	if countMatching(runs, "--verdict fail") != 0 {
 		t.Fatalf("the gate's failure recorded %d failing verdict(s), want none: a red gate freezes no verdict (MQ1): %v",
 			countMatching(runs, "--verdict fail"), runs)
 	}
-	if !strings.Contains(result.Detail, "item_041") || !strings.Contains(result.Detail, drain.ReasonGateFailed) {
-		t.Fatalf("the stop does not name the held item and its reason: %s", result.Detail)
-	}
+	returnedThenRepeated(t, f.store, result, "item_041", drain.RefusalGate)
 }
 
 // A drain that has refused every candidate it produced is not N unlucky items: the fence
@@ -1446,25 +1457,26 @@ func TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal(t *testing.T) 
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Landed != 0 || result.Rejected != 2 || result.Candidates != 2 {
-		t.Fatalf("the loop stopped %q with %d landed, %d rejected and %d candidate(s), want %q with 0, 2 and 2: %s",
+	// Each item's refusal goes back to its worker once, and the second is a repeat.
+	if result.Stop != drain.StopQueueDrained || result.Landed != 0 || result.Rejected != 4 || result.Candidates != 4 {
+		t.Fatalf("the loop stopped %q with %d landed, %d rejected and %d candidate(s), want %q with 0, 4 and 4: %s",
 			result.Stop, result.Landed, result.Rejected, result.Candidates, drain.StopQueueDrained, result.Detail)
 	}
 	if result.RepeatedRefusal == nil {
 		t.Fatalf("a drain that refused every candidate reported no repeated refusal: %s", report.String())
 	}
 	got := result.RepeatedRefusal
-	if got.Candidates != 2 || got.Rejected != 2 || got.Steps[drain.RefusalFence] != 2 {
-		t.Fatalf("the repeated refusal is %+v, want 2 candidates and 2 refusals at the fence", got)
+	if got.Candidates != 4 || got.Rejected != 4 || got.Steps[drain.RefusalFence] != 4 {
+		t.Fatalf("the repeated refusal is %+v, want 4 candidates and 4 refusals at the fence", got)
 	}
 	if strings.Join(got.Items, ",") != "item_041,item_042" {
 		t.Fatalf("the repeated refusal names items %v, want both in the order they were refused", got.Items)
 	}
 	line := drain.RepeatedRefusalLine(result)
 	for _, want := range []string{
-		"every one of its 2 candidate(s) was refused",
-		"fence=2",
-		"window: 6 tick(s)",
+		"every one of its 4 candidate(s) was refused",
+		"fence=4",
+		"window: 12 tick(s)",
 		"items left in the queue: item_041, item_042",
 	} {
 		if !strings.Contains(line, want) {
@@ -1485,13 +1497,14 @@ func TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal(t *testing.T) 
 	if !ok {
 		t.Fatalf("the loop's record carries no repeated_refusal: %v", payload)
 	}
-	if kept["candidates"] != float64(2) {
-		t.Fatalf("the recorded repeated refusal names %v candidates, want 2", kept["candidates"])
+	if kept["candidates"] != float64(4) {
+		t.Fatalf("the recorded repeated refusal names %v candidates, want 4", kept["candidates"])
 	}
 }
 
-// One refusal is a bad item, not a pattern: the threshold is what keeps the report from
-// firing on the first candidate every drain refuses.
+// One refused item is a bad item, not a pattern, even though its refusal went back to its
+// worker and was refused again: the threshold counts items, which is what keeps the report
+// from firing on the first item every drain refuses.
 func TestASingleRefusalIsNotARepeatedRefusal(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
@@ -1503,8 +1516,8 @@ func TestASingleRefusalIsNotARepeatedRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Rejected != 1 || result.Landed != 0 {
-		t.Fatalf("the loop rejected %d and landed %d, want 1 and 0", result.Rejected, result.Landed)
+	if result.Rejected != 2 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
 	}
 	if result.RepeatedRefusal != nil {
 		t.Fatalf("one refusal was reported as a repeated refusal: %+v", result.RepeatedRefusal)
@@ -1561,10 +1574,10 @@ func TestARepeatedRefusalNamesTheGateWhenTheGateRefused(t *testing.T) {
 	if result.RepeatedRefusal == nil {
 		t.Fatalf("a drain whose gate refused every candidate reported no repeated refusal: %s", report.String())
 	}
-	if got := result.RepeatedRefusal.Steps[drain.RefusalGate]; got != 2 {
-		t.Fatalf("the repeated refusal names %d gate refusals, want 2: %+v", got, result.RepeatedRefusal)
+	if got := result.RepeatedRefusal.Steps[drain.RefusalGate]; got != 4 {
+		t.Fatalf("the repeated refusal names %d gate refusals, want 4: %+v", got, result.RepeatedRefusal)
 	}
-	if line := drain.RepeatedRefusalLine(result); !strings.Contains(line, "gate=2") {
+	if line := drain.RepeatedRefusalLine(result); !strings.Contains(line, "gate=4") {
 		t.Fatalf("the repeated-refusal line does not name the gate: %s", line)
 	}
 }
@@ -1992,7 +2005,10 @@ func TestTheLoopDispatchesAnAuthorizedRetry(t *testing.T) {
 // TestEveryNonLandingOutcomeRecovers drives the four outcomes a non-landing run can leave
 // and proves each one recovers through the verb it needs: a fence refusal and a `blocked`
 // report through a bare retry, a gate failure through `--acknowledge gate-failed`, and a
-// wall cut short through `--acknowledge unjudged`.
+// wall cut short through `--acknowledge unjudged`. Since the owner's ruling of 2026-11-17 a
+// fence refusal and a gate failure first go back to their worker, and the identical second
+// one waits on the owner (the fixture's policy names no design seat), so those two items are
+// blocked on a conflict and are put back in the queue by apply, like the blocked report.
 //
 // The recovery must not move an item through `tillr-item state`: the item is already in the
 // queue (or, for `blocked`, moved back by `tillr-item apply`, which is the record that its
@@ -2089,9 +2105,9 @@ exec "$STUB_ITEM_REAL" "$@"
 		t.Fatalf("the first loop held an item with %s: %s", drain.ReasonNotReady, got.Detail)
 	}
 	for _, want := range []string{
-		"item_041 (" + drain.ReasonBoundaryScopeEscape + ")",
+		"item_041 (" + drain.ReasonConflictOwner + ")",
 		"item_042 (" + drain.ReasonConflictOwner + ")",
-		"item_043 (" + drain.ReasonGateFailed + ")",
+		"item_043 (" + drain.ReasonConflictOwner + ")",
 		"item_044 (" + drain.ReasonRunUnjudged + ")",
 	} {
 		if !strings.Contains(got.Detail, want) {
@@ -2100,12 +2116,13 @@ exec "$STUB_ITEM_REAL" "$@"
 	}
 
 	failed := map[string]string{}
+	wantRuns := map[string]int{"item_041": 2, "item_042": 1, "item_043": 2, "item_044": 1}
 	for _, id := range []string{"item_041", "item_042", "item_043", "item_044"} {
 		runs := runsForItem(t, f.store, id)
-		if len(runs) != 1 {
-			t.Fatalf("item %s has %d run(s) after the first pass, want 1", id, len(runs))
+		if len(runs) != wantRuns[id] {
+			t.Fatalf("item %s has %d run(s) after the first pass, want %d", id, len(runs), wantRuns[id])
 		}
-		failed[id] = runs[0].RunID
+		failed[id] = runs[len(runs)-1].RunID
 	}
 
 	// The recovery: apply is the blocked item's record that its criteria were never frozen,
@@ -2114,11 +2131,13 @@ exec "$STUB_ITEM_REAL" "$@"
 	if err := os.Remove(calls); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clearing the item calls failed: %v", err)
 	}
-	itemPath := filepath.Join(scratch(t, "recover"), "item_042.json")
-	writeFile(t, itemPath, itemRecord("item_042", "in-queue"))
-	driveOK(t, item, "apply", "--store", f.store, "--input", itemPath, "--now", "2026-11-12T00:00:30Z")
-	if got := itemStateOf(t, f.store, "item_042"); got != "in-queue" {
-		t.Fatalf("the blocked item is %q after apply, want in-queue", got)
+	for _, id := range []string{"item_041", "item_042", "item_043"} {
+		itemPath := filepath.Join(scratch(t, "recover-"+id), id+".json")
+		writeFile(t, itemPath, itemRecord(id, "in-queue"))
+		driveOK(t, item, "apply", "--store", f.store, "--input", itemPath, "--now", "2026-11-12T00:00:30Z")
+		if got := itemStateOf(t, f.store, id); got != "in-queue" {
+			t.Fatalf("the blocked item %s is %q after apply, want in-queue", id, got)
+		}
 	}
 	for _, c := range []struct {
 		id, ack string
@@ -2223,9 +2242,12 @@ func TestARedGatePinsTheHeadAndFreezesNoVerdict(t *testing.T) {
 	if pinned == "" {
 		t.Fatal("the refused head was not pinned")
 	}
-	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
-		t.Fatalf("the failed item is %q in the store, want in-queue", got)
+	// The refusal goes back to the worker, and the second, identical one waits on the owner
+	// as a conflict: the item is blocked by that conflict, not by a verdict.
+	if strings.TrimSpace(git(t, f.root, "rev-parse", "refs/tillr/runs/run-item_041-a2")) == "" {
+		t.Fatal("the returned run's refused head was not pinned")
 	}
+	returnedThenRepeated(t, f.store, result, "item_041", drain.RefusalGate)
 	if runs := lines(t, f.count); countMatching(runs, "--verdict fail") != 0 {
 		t.Fatalf("a red gate froze a failing verdict: %v", runs)
 	}

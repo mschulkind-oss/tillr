@@ -267,6 +267,9 @@ type StageSpec struct {
 	// ordinary dispatch; a non-nil value is what makes the brief state the conflicting
 	// paths and the three-way markers rather than the item's ordinary task alone.
 	Conflict *ConflictBrief
+	// Returned is the earlier run's ending this dispatch carries back to the worker
+	// (Decision.Returned). A non-nil value appends its evidence to the brief.
+	Returned *ReturnedEnding
 }
 
 // ConflictBrief is the conflict a conflict-fix run is asked to resolve: the paths git
@@ -474,6 +477,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	if item.IsCommentItem(spec.ItemID) {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
+	}
+	if spec.Returned != nil {
+		brief += returnedBrief(*spec.Returned)
 	}
 	if !spec.Continue {
 		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {

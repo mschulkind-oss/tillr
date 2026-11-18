@@ -78,7 +78,7 @@ or `superseded`. Nothing restarts without a request.
 Without `--end-runs`, stop ends supervision only. With it, the drain records the
 interruption before sending SIGTERM to each in-flight run face. It does not ask the
 runs to pause, so those items start over on the next pass without
-spending a retry, failover, or automatic re-admission allowance. Repeated stops
+spending a retry or a failover. Repeated stops
 need no authorization.
 
 After a jail relaunch, a new loop recovers the old container's runs on its own: a
@@ -379,6 +379,13 @@ correcting the cause, clear the recorded hold with `tillr drain clear-fault` and
 authorize rework through `tillr drain retry`, still under the same item id.
 Learn each face's required inputs from its `--help`.
 
+A worker run the gate refused, that committed nothing, that escaped its fence or whose
+landing was refused needs no retry: the next pass sends it back to its worker with the
+refusal's evidence in the brief (`returned-with-evidence`), every time and uncounted. Only
+an identical repeat of an earlier ending (same seat, cause and normalized evidence) goes to
+the design seat instead, with both records. An edit to an item's block, fence or policy
+re-runs nothing.
+
 Retry a failed item under its own id with `tillr drain retry`. Read the failed
 run's record, correct the cause, and authorize the retry through that face; learn
 its required inputs from `tillr drain retry --help`. Keep the original item so
@@ -408,8 +415,8 @@ Stop the loop and read the record, rather than retrying, when:
 
 - the gate answers `4` — it could not judge, and a retry does not make it able to;
 - `tillr store check` answers non-zero — nothing built on that store is trustworthy;
-- a land refuses — the loop records it and moves on; a second attempt is a decision for
-  a human, not for the loop. Two negative land answers are not stops. On a squash
+- a land refuses — the loop records it and sends the item back to its worker with the
+  lander's answer, as it does a gate refusal. Two negative land answers are not stops. On a squash
   conflict the loop spends its one conflict-fix run and holds the item only if that run
   conflicts too. On `already-on-trunk` (the trunk already carries the whole change) the
   loop records the verdict and settles the item as `resolved-elsewhere`. A pending run whose

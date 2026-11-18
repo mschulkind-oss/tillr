@@ -99,7 +99,10 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			}
 			verdict := fmt.Sprintf("python3 %q verdict --root %q --tillr-item %q", verdictAdapter, f.root, sibling(t, "item"))
 			land := always(t, "land", 1)
-			step, reason := drain.RefusalLand, "land-refused"
+			// A refused landing goes back to its worker with the evidence; the second,
+			// identical refusal is a repeat, and with no design seat in the fixture's
+			// policy it waits on the owner (the owner's ruling of 2026-11-17).
+			step, reason := drain.RefusalLand, drain.ReasonConflictOwner
 			if conflict {
 				envelope := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 				land = conflictLandScript(t, f.root, envelope, envelope, 1)
@@ -129,10 +132,7 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 				}
 			}
 			refusals := refusalsOf(t, events)
-			want := 1
-			if conflict {
-				want = 2
-			}
+			want := 2
 			if len(refusals) != want {
 				t.Fatalf("refusals=%+v", refusals)
 			}
