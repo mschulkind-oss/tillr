@@ -207,6 +207,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			places[it.ItemID] = len(places) + 1
 		}
 	}
+	itemFaults, err := ReadItemFaults(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	assigned := map[string]string{}
 	for i, env := range envs {
 		it := items[i]
@@ -219,6 +223,11 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
+		// A fault hold says what is wrong in its recorded detail; a mover such as "the
+		// process the detail names" is read from it.
+		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
+			row.Why += ": " + fault.Detail
+		}
 		if d.Reason == ReasonEvalFailed || d.Reason == ReasonJudgeUnreadable {
 			detail, err := judgeFailureDetail(r, it.ItemID, d.Reason)
 			if err != nil {
@@ -501,6 +510,11 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	case ReasonDecisionCollision, ReasonSettleFailed:
 		return "needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"
 	default:
+		// A reason with a recorded rule and no case above is shown by that rule. Only a
+		// reason with no rule at all is a run to diagnose.
+		if rule := holdrules.For(d.Reason); rule != holdrules.Unknown {
+			return rule.Class, rule.Where, rule.Mover
+		}
 		return "needs a cause", "lane", "diagnose the run; tillr drain retry --help"
 	}
 }

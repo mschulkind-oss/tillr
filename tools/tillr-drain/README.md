@@ -2210,7 +2210,12 @@ dependency so the read-only `tillr view` face can import it. To add a reason:
 The view's `waiting` face and its lane conditions read the table; they keep only
 presentation. `tillr drain why` builds its mover from the live planner decision
 (deferrals, conflicts, workflow nodes), so its `whyPresentation` is a per-decision
-computation, not a second copy of this table, and is unchanged by adding a row.
+computation, not a second copy of this table. A reason it has no case for is shown by
+its row here, so adding a row also gives `why` its mover; only a reason with no row reads
+`diagnose the run; tillr drain retry --help`. A fault hold's row also carries the fault's
+recorded detail after its reason, because a mover such as "the process the detail names"
+is read from it (`TestAFaultHoldShowsItsRecordedMoverAndDetail` in
+[`drain/why_fault_mover_test.go`](./drain/why_fault_mover_test.go)).
 
 ## Standalone invocation
 
