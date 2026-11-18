@@ -116,6 +116,9 @@ func TestFixerBlockedReportReachesTheOwnerOnlyByName(t *testing.T) {
 		{"no actor", "Cannot see why the suite fails.\nRESULT: blocked", "answered", "build", StateInQueue},
 		{"build", "Retrying is the next step.\nNEXT-ACTOR: build\nRESULT: blocked", "answered", "build", StateInQueue},
 		{"owner", "Fix needs `tests/outside_test.go`, outside the fence.\nNEXT-ACTOR: owner\nRESULT: blocked", "owner", "owner", StateBlocked},
+		{"fence obstacle", "OBSTACLE: fence\nPATHS: tests/outside_test.go\nEVIDENCE: the failing test lives there\nRESULT: blocked", "owner", "owner", StateBlocked},
+		{"owner obstacle", "OBSTACLE: owner\nQUESTION: may the fixer skip the flaky check?\nRESULT: blocked", "owner", "owner", StateBlocked},
+		{"incomplete obstacle", "OBSTACLE: fence\nRESULT: blocked", "answered", "build", StateInQueue},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, l, fixer, _ := fixerRoutingFixture(t)
@@ -136,8 +139,13 @@ func TestFixerBlockedReportReachesTheOwnerOnlyByName(t *testing.T) {
 				if c.Status != tc.status || c.WaitingOn != tc.waiting || state != tc.state {
 					t.Fatalf("report routed to %s/%s (item %s), want %s/%s (%s): %+v", c.Status, c.WaitingOn, state, tc.status, tc.waiting, tc.state, c)
 				}
-				if tc.waiting != "owner" && !strings.Contains(c.Text, "NEXT-ACTOR") {
-					t.Fatalf("returned report does not state the next-actor rule: %q", c.Text)
+				if tc.waiting != "owner" && !strings.Contains(c.Text, "OBSTACLE: <kind>") {
+					t.Fatalf("returned report does not state the obstacle contract: %q", c.Text)
+				}
+				// A generated repair has no block to widen, so its fence obstacle reaches the
+				// owner as an explicit question naming the paths.
+				if tc.name == "fence obstacle" && (!strings.Contains(c.Text, "Question for the owner") || !strings.Contains(c.Text, "tests/outside_test.go")) {
+					t.Fatalf("the owner is not asked a question naming the paths: %q", c.Text)
 				}
 				return nil
 			})

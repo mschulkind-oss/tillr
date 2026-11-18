@@ -38,7 +38,7 @@ func TestSettlementSavesBlockedNoCandidateAndOrphanedWork(t *testing.T) {
 			log := "RESULT: done\n"
 			want := "ended without a candidate commit"
 			if cause == "blocked" {
-				log = "cannot finish\nRESULT: blocked\n"
+				log = "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: the block contradicts the tree\nRESULT: blocked\n"
 				want = "reported RESULT: blocked"
 			}
 			if cause == "orphaned" {

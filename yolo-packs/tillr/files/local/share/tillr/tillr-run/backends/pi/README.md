@@ -137,14 +137,25 @@ reports it as ended. These are the only endings it lets settle:
 | Ending | Why it settles |
 | :--- | :--- |
 | HEAD is off the base, the worktree is clean, and the last message has a footer | The goal is met. |
-| `RESULT: blocked` or `RESULT: trunk-broken` | The worker named a stop condition. The drain routes it as before. |
+| `RESULT: blocked` with a complete obstacle: an `OBSTACLE: <kind>` line and that kind's fields | The worker named an obstacle, and the drain routes it by kind. The kinds and their fields are listed in the drain's [obstacle contract](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#a-worker-ends-with-its-commit-or-a-named-obstacle). |
 | The tree and the report (whitespace aside) match the last nudge exactly | An identical repeat. Another nudge would change nothing, so the drain's own repeat rule takes over. A different report on an unchanged tree is nudged again. |
 | An error, an abort, a stop that is not `stop`, or a requested pause | These endings were not the model's choice, and each has its own route. |
 
 The extension keeps no count and no time limit of its own. The run's wall, if staging
-set one, still bounds the whole process. `RESULT: failed` with no commit is not an
-ending it accepts. On 2026-11-18, Sol 6.2 at medium ended 19 of 61 drain runs with that
+set one, still bounds the whole process. `RESULT: failed`, and a blocked report whose
+obstacle is missing its kind or a field, are not endings it accepts. The nudge names what
+is missing. The extension and the drain read obstacles against the same case file,
+[`testdata/obstacle-cases.json`](./testdata/obstacle-cases.json). On 2026-11-18, Sol 6.2 at medium ended 19 of 61 drain runs with that
 footer and no blocker, after one to five read-only commands, and nothing answered them.
+
+A keep-going writer's session is also trimmed. `run-pi` starts pi with
+`--no-extensions --no-skills --no-context-files --no-prompt-templates`. It then loads back
+the subagent and background-task packages and every single-file extension in the agent's
+own `extensions/` directory except `steering-timer.ts`, because the provider, billing-tier,
+usage-ledger and quota extensions live there. It appends the worktree's `AGENTS.md` as the
+system prompt's project text. The worker no longer gets the house briefing, the memory
+package, session search, web tools, the todo list, code mode, steering tools or skills. On 2026-11-18 the first turn's prompt dropped from 23354 to
+9350 tokens on Luna. Judges and read-only runs are not trimmed.
 
 The claude, muse and agy adapters have no such hook yet. Each needs the same check at its
 harness's last actionable boundary, with the same three settling endings. Claude Code's

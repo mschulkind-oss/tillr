@@ -1,0 +1,104 @@
+[
+ {
+  "name": "done",
+  "report": "1. Paths changed: a.go\n\nRESULT: done",
+  "ending": true
+ },
+ {
+  "name": "failed is not an ending",
+  "report": "Could not finish.\n\nRESULT: failed",
+  "ending": false
+ },
+ {
+  "name": "no footer",
+  "report": "I stopped here.",
+  "ending": false
+ },
+ {
+  "name": "blocked with no kind",
+  "report": "4. Blockers: the design contradicts criterion 2.\n\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "unknown kind",
+  "report": "OBSTACLE: time\nEVIDENCE: it is late\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "definition complete",
+  "report": "OBSTACLE: definition\nCRITERIA: c2\nEVIDENCE: criterion 2 asks for a flag the roadmap removed\n\nRESULT: blocked",
+  "ending": true,
+  "kind": "definition"
+ },
+ {
+  "name": "definition missing evidence",
+  "report": "OBSTACLE: definition\nCRITERIA: c2\n\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "fence complete with markdown",
+  "report": "- **OBSTACLE:** fence\n- **PATHS:** tools/tillr-view/waiting.go, tools/tillr-view/waiting_test.go\n- **EVIDENCE:** the view must show the new hold\n\nRESULT: blocked",
+  "ending": true,
+  "kind": "fence"
+ },
+ {
+  "name": "fence absolute path",
+  "report": "OBSTACLE: fence\nPATHS: /etc/passwd\nEVIDENCE: needed\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "fence parent path",
+  "report": "OBSTACLE: fence\nPATHS: ../other/repo.go\nEVIDENCE: needed\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "trunk complete",
+  "report": "OBSTACLE: trunk\nCHECKS: go-build\nBASE: 0123456789ab\nRESULT: blocked",
+  "ending": true,
+  "kind": "trunk"
+ },
+ {
+  "name": "legacy trunk-broken with fields",
+  "report": "CHECKS: go-build\nBASE: 0123456789ab\n\nRESULT: trunk-broken",
+  "ending": true,
+  "kind": "trunk"
+ },
+ {
+  "name": "legacy trunk-broken without fields",
+  "report": "The base is red.\n\nRESULT: trunk-broken",
+  "ending": false
+ },
+ {
+  "name": "tooling multi-line evidence",
+  "report": "OBSTACLE: tooling\nCOMMAND: go test ./tools/tillr-drain/...\nEVIDENCE:\npanic: test timed out after 10m0s\nrunning tests: TestX (10m0s)\nPATHS: tools/tillr-drain/drain/loop_test.go\nRESULT: blocked",
+  "ending": true,
+  "kind": "tooling"
+ },
+ {
+  "name": "tooling missing paths",
+  "report": "OBSTACLE: tooling\nCOMMAND: go test ./...\nEVIDENCE: hung\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "seat complete",
+  "report": "OBSTACLE: seat\nTRIED: three designs for the scheduler\nMISSING: a way to keep the lock order\nRESULT: blocked",
+  "ending": true,
+  "kind": "seat"
+ },
+ {
+  "name": "seat missing tried",
+  "report": "OBSTACLE: seat\nMISSING: everything\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "owner complete",
+  "report": "obstacle: owner\nquestion: may the drain push to the remote?\nRESULT: blocked",
+  "ending": true,
+  "kind": "owner"
+ },
+ {
+  "name": "last obstacle wins",
+  "report": "OBSTACLE: owner\nOBSTACLE: seat\nQUESTION: q\nRESULT: blocked",
+  "ending": false
+ }
+]

@@ -38,8 +38,9 @@ func TestARenderedBriefIsAddressedToAnUnattendedWorker(t *testing.T) {
 	shape := rendered[strings.Index(rendered, "## Report shape"):]
 	for _, want := range []string{
 		"The goal of this run is one commit in the target",
-		"Ending without the commit and without a named stop condition is not a valid\nending",
-		"Unfinished work is not a failure",
+		"The only other ending is an **obstacle**",
+		"`OBSTACLE:`",
+		"are not obstacles, and are work to continue",
 	} {
 		if !strings.Contains(shape, want) {
 			t.Fatalf("Report shape does not state %q:\n%s", want, shape)

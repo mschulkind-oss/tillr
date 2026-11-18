@@ -258,12 +258,12 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	attemptPriors := map[string][]priorRun{}
 	for id, runs := range priors {
 		for _, prior := range runs {
-			if history.refusals[prior.RunID] != RefusalTrunkAlreadyRed {
+			if !acquittedRefusal(history.refusals[prior.RunID]) {
 				attemptPriors[id] = append(attemptPriors[id], prior)
 			}
 		}
 	}
-	trunkWaiters := map[string]string{}
+	trunkWaiters, defectWaiters := map[string]string{}, map[string]string{}
 	for _, row := range items {
 		if def.Completes != "landing" || row.State != def.Blocked {
 			continue
@@ -277,7 +277,18 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if strings.HasPrefix(waiting.Waiter, "item:") && IsTrunkFixer(fixer) {
 				trunkWaiters[row.ItemID] = fixer
 			}
+			if strings.HasPrefix(waiting.Waiter, "item:") && IsDefectItem(fixer) {
+				defectWaiters[row.ItemID] = fixer
+			}
 		}
+	}
+	escalations, err := readEscalations(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	escalated := map[string]string{}
+	for id, list := range escalations {
+		escalated[id] = escalatedBackend(list)
 	}
 	inputDecisions, err := readInputDecisions(r)
 	if err != nil {
@@ -413,8 +424,8 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		forks:     forks,
 		tick:      tick, policy: policy, held: lanes, deskOwners: deskOwners, itemStates: states, history: history,
 		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
-		trunkWaiters: trunkWaiters,
-		at:           at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
+		trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
+		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
 	p.workerLanes = map[string]string{}
@@ -685,6 +696,22 @@ type planner struct {
 	unproved  map[string]bool
 	// A blocked acquittal names its own fixer even after the fixer closed unlanded.
 	trunkWaiters map[string]string
+	// defectWaiters names, per item, the tooling-defect item its tooling obstacle holds it
+	// behind (defect.go).
+	defectWaiters map[string]string
+	// escalated is each item's backend after a seat obstacle (seat_escalation.go).
+	escalated map[string]string
+}
+
+// firstBackend is the item's first backend: its seat escalation's when it has one, else the
+// policy's.
+func (p *planner) firstBackend(row itemRow) string {
+	if name := p.escalated[row.ItemID]; name != "" {
+		if _, ok := p.policy.Backends[name]; ok {
+			return name
+		}
+	}
+	return p.policy.firstBackend(row)
 }
 
 // plannedFork is one dispatched item and the fork whose patch branch it delivers, when it
@@ -720,13 +747,13 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// policy or the tillr build changed without knowing what the change means (audit
 	// finding F-01). An item moves on an event that names it: the operator's retry, a
 	// design answer for it, or the recovery of a killed run.
-	if p.history.refusals[p.latest[item.ItemID]] == RefusalTrunkAlreadyRed {
+	if acquittedRefusal(p.history.refusals[p.latest[item.ItemID]]) {
 		// A released acquittal starts fresh, including one whose dispatch had
 		// consumed an owner retry.
 		retry = nil
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
 		if p.policy != nil {
-			attempt.backend = p.policy.firstBackend(item)
+			attempt.backend = p.firstBackend(item)
 		}
 	}
 	// A gate refusal, a run with no commit, a fence escape and a refused landing go back to
@@ -750,18 +777,18 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	if returned != nil && p.policy != nil {
 		// A returned ending is about the candidate, not the machinery: the next run starts
 		// on the item's own backend.
-		attempt.backend = p.policy.firstBackend(item)
+		attempt.backend = p.firstBackend(item)
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
 	}
 	if hasConflict && conflict.Status == "answered" && p.policy != nil {
-		attempt.backend = p.policy.firstBackend(item)
+		attempt.backend = p.firstBackend(item)
 		attempt.failover, attempt.exhausted, attempt.degraded = false, false, ""
 		decision.ConflictID = conflict.ConflictID
 	}
 	windowShut := false
 	if p.policy != nil && item.Command == nil {
 		if retry != nil {
-			attempt.backend = p.policy.firstBackend(item)
+			attempt.backend = p.firstBackend(item)
 		}
 		if attempt.backend != "" {
 			next, degraded, ok := p.policy.availableBackend(attempt.backend, item.Seat, p.shut)
@@ -789,6 +816,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case p.lands() && p.trunkWaiters[item.ItemID] != "":
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkBroken
 		decision.DeferredBy = p.trunkWaiters[item.ItemID]
+	case p.lands() && p.defectWaiters[item.ItemID] != "":
+		decision.Action, decision.Reason = ActionHold, ReasonToolingDefect
+		decision.DeferredBy = p.defectWaiters[item.ItemID]
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
 	case p.lands() && p.unproved[item.ItemID]:
@@ -1135,7 +1165,7 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 // operator authorized is applied before that too: the person's decision outranks the
 // automatic walk.
 func (p *planner) mayBeARetry(itemID string) bool {
-	if p.history.refusals[p.latest[itemID]] == RefusalTrunkAlreadyRed {
+	if acquittedRefusal(p.history.refusals[p.latest[itemID]]) {
 		return false
 	}
 	return len(p.priors[itemID]) > 0 || !p.history.known[itemID] || p.history.ranBefore[itemID]
@@ -1383,7 +1413,7 @@ func (p *planner) attempt(row itemRow) attempt {
 		}
 	}
 	if failures == 0 {
-		a.backend = p.policy.firstBackend(row)
+		a.backend = p.firstBackend(row)
 		return a
 	}
 	if failures > p.policy.failovers() || len(priors) == 0 {

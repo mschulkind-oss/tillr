@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -26,8 +27,11 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 		return "", err
 	}
 	fixer := strings.TrimPrefix(waiting.Waiter, "item:")
-	if !strings.HasPrefix(waiting.Waiter, "item:") || !IsTrunkFixer(fixer) ||
-		!strings.HasPrefix(waiting.Reason, RefusalTrunkAlreadyRed+":") {
+	trunk := IsTrunkFixer(fixer) && strings.HasPrefix(waiting.Reason, RefusalTrunkAlreadyRed+":")
+	// A tooling obstacle's wait is released by the same rule: its defect item landed in
+	// the base staging will select (defect.go).
+	defect := IsDefectItem(fixer) && strings.HasPrefix(waiting.Reason, RefusalToolingDefect+":")
+	if !strings.HasPrefix(waiting.Waiter, "item:") || (!trunk && !defect) {
 		return "", nil
 	}
 	if underlying != StateInQueue && underlying != "not-started" {
@@ -39,6 +43,18 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 	}
 	if err != nil {
 		return "", err
+	}
+	if defect && state != StateLanded {
+		// A defect item someone closed or resolved without landing is that person's ruling
+		// that the tooling no longer stands in the way: the waiter is released with it.
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return "", err
+		}
+		if finishedState(declared.Parsed, state) {
+			return underlying, nil
+		}
+		return "", nil
 	}
 	if state != StateLanded && state != StateResolvedElsewhere {
 		return "", nil

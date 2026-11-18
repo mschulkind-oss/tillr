@@ -139,10 +139,30 @@ func designNextActor(log string) string {
 	return actor
 }
 
-// FixerNextActorRule is what a trunk fixer is told about a blocked report: it either
-// repairs the trunk or objects to the owner by name. A report naming no actor is a
-// missing output and returns the fixer to its own worker, never to the owner.
-const FixerNextActorRule = "A trunk fixer either commits the repair, or objects with a report line `" + DesignNextActorField + ": owner` naming what only the owner can decide or grant (paths outside the fence, a ruling). A blocked report that names no next actor goes back to this fixer's worker to repair the trunk or state its actor; it never reaches the owner by default."
+// GeneratedRepairRule is what a generated repair item (a trunk fixer or a tooling-defect
+// item) is told about its endings. It has no design document, so the design seat has no block
+// to amend for it: an obstacle that needs a ruling or a wider fence reaches the owner with a
+// question the loop writes from the obstacle (generatedQuestion). Any other report goes back
+// to the item's own worker with the contract; it never reaches the owner by default.
+const GeneratedRepairRule = "This item was filed by the loop and has no design document. " + ObstacleContract + " For this item a `fence`, `definition`, `owner` or `tooling` obstacle goes to the owner with the paths or question it names, because no design block exists to amend; a `seat` obstacle moves the item to a stronger backend. A report that is neither the commit nor a complete obstacle goes back to this item's worker."
+
+// generatedQuestion is the owner's question for a generated repair item's obstacle, written
+// from the obstacle's own fields so the owner reads one explicit ask.
+func generatedQuestion(itemID string, o Obstacle) string {
+	switch o.Kind {
+	case ObstacleFence:
+		return "Question for the owner: generated item " + itemID + " needs paths outside its fence: " + strings.Join(o.List("PATHS"), ", ") + ". Its worker says: " + o.Field("EVIDENCE") + " A generated item has no design block the design seat could widen. May its fence grow to include these paths (edit its allowed_paths), or should the item be closed?"
+	case ObstacleTooling:
+		return "Question for the owner: generated item " + itemID + " cannot proceed because `" + o.Field("COMMAND") + "` is defective (paths " + strings.Join(o.List("PATHS"), ", ") + "). Evidence: " + o.Field("EVIDENCE") + " A repair item waiting on another repair item could not pass its own gate, so the loop files no defect item for it. Who repairs the tool?"
+	case ObstacleDefinition:
+		return "Question for the owner: generated item " + itemID + "'s criterion is wrong or contradicts the tree (" + o.Field("CRITERIA") + "): " + o.Field("EVIDENCE") + " Should the criterion be corrected, or the item closed?"
+	case ObstacleOwner:
+		return "Question for the owner from generated item " + itemID + ": " + o.Field("QUESTION")
+	case ObstacleSeat:
+		return "Question for the owner: generated item " + itemID + " exceeds every backend its seat escalates to. Tried: " + o.Field("TRIED") + " Missing: " + o.Field("MISSING") + " Who takes it?"
+	}
+	return ""
+}
 
 func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -227,20 +247,25 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	if len(c.BlockedCriteria) == 0 {
 		c.BlockedCriteria = []string{"not stated in report"}
 	}
-	if IsTrunkFixer(d.ItemID) {
-		// A generated repair has no design decision to dispatch, and it reaches the
-		// owner only by an objection naming him: a report line `NEXT-ACTOR: owner`,
-		// with what only the owner can grant (a fence refusal's paths) in the pinned
-		// report. Any other report sends the fixer back to its own worker, told to
-		// repair the trunk or name its next actor.
-		if designNextActor(text) == DesignNextOwner {
+	obstacle := parseObstacle(text)
+	if IsGeneratedRepair(d.ItemID) {
+		// A generated repair has no design block to amend, so an obstacle that needs a
+		// ruling or a wider fence reaches the owner with the question the loop writes from
+		// it. A legacy `NEXT-ACTOR: owner` objection is still read. Any other report sends
+		// the item back to its own worker with the contract.
+		if question := generatedQuestion(d.ItemID, obstacle); obstacle.Problem == "" && question != "" {
+			c.WaitingOn, c.Status = "owner", "owner"
+			c.Text += "\n\n" + question
+		} else if designNextActor(text) == DesignNextOwner {
 			c.WaitingOn, c.Status = "owner", "owner"
 		} else {
 			c.WaitingOn, c.Status = "build", "answered"
-			c.Text += "\n\n" + FixerNextActorRule
+			c.Text += "\n\n" + GeneratedRepairRule
 		}
 	} else if c.BodyRef == "" {
 		c.WaitingOn, c.Status = "owner", "owner"
+	} else if instruction := obstacleDesignInstruction(obstacle); obstacle.Problem == "" && instruction != "" {
+		c.Text += "\n\n" + instruction
 	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)
 	return l.saveBlockConflict(ctx, c)
