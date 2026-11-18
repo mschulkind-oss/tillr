@@ -496,20 +496,21 @@ A change to the gate's own runner can break the gate for every lane, so the runn
 
 ### Add stall detection without the kernel counter
 
-**Start here (2026-11-18, answers the thirteenth run's report of blocked):** read this block to
-its end before running a command; the rulings below are the instructions. The kept work the brief
-names is starting material, not the change to commit: it holds the tracing supervisor
-`tools/tillr-gate/process_accounting.py`, which hangs a check and which the second ruling
-removes. Four runs restored it and tested it unchanged. Do these in order:
+**Start here (2026-11-18, answers the seventeenth run's report of blocked):** read this block to
+its end before running a command; the rulings below are the instructions, the last one first. The
+change was built, landed as `36e74e541` and was reverted by `e30659c1e`, because one test outside
+the item's paths expected a silent check's log to be empty. The kept work the brief names is that
+same change and holds no tracing supervisor: it is the change to commit, with one test added. Do
+these in order:
 
-1. Apply the kept work's `tools/`, `tests/` and `docs/` paths only, not `yolo-packs/`.
-2. Delete the supervisor and write the fallback that only reads `/proc`, as the second ruling's
-   four points say. Do not test or sync while
-   `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` returns a line.
+1. Apply the kept work's `tools/`, `tests/` and `docs/` paths. Do not redesign or rewrite it.
+   `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` must return no line.
+2. Change the one assertion in `tools/gate/checks/change_checks_test.py` as the last ruling says,
+   and run `python3 tools/gate/checks/change_checks_test.py` to its end.
 3. Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6`, then
-   `python3 tests/fork-check.test.py` by the third ruling's steps. Give each command a limit of
-   3600 seconds, on its own, not chained with another. A command that was cut off is no result:
-   run it again, and do not report blocked for it.
+   `python3 tests/fork-check.test.py`. Give each command a limit of 3600 seconds, on its own, not
+   chained with another. A command that was cut off is no result: run it again, and do not report
+   blocked for it.
 4. Run `just pack-sync` last, to its end, then check `git status --short` and commit once.
 
 **Theme:** Repo gate
@@ -757,7 +758,47 @@ question this block does not answer.
 
 The criteria below are unchanged.
 
-<!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md" blocked_by="" prose="2" -->
+**Ruling, 2026-11-18 (answers the seventeenth run's fence conflict):** the seventeenth run
+restored the reverted change and stopped on a test outside the item's paths. The run was right to
+stop. The paths now name that test, `tools/gate/checks/change_checks_test.py`, and nothing else
+about the change is reopened. These were read on `e30659c1e` on 2026-11-18, in the same jail, with
+the kept work of `refs/tillr/preserved/run-item-gate-stall-watch-without-perf-counter-a17` applied
+and then removed:
+
+- **The kept work is the read-only change.** Its ten files apply cleanly, none of them is
+  `tools/tillr-gate/process_accounting.py`, and
+  `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` returns no line. It is the change that
+  landed as `36e74e541`.
+- **Why it was reverted.** `e30659c1e` reverted it because the check `change-checks-test` failed
+  on the trunk. `test_markdown_change_runs_all_declared_checks_against_caller_base` in
+  `tools/gate/checks/change_checks_test.py` expected the log of a silent check to be empty when
+  the watchdog is available, and failed with
+  `'watchdog CPU source: process accounting\n' != ''`. That log line is what c2 asks for, so the
+  test is what changes, not the log.
+- **The amended test passes.** With the assertion changed as below,
+  `python3 tools/gate/checks/change_checks_test.py` ran 39 tests in 46 seconds and passed.
+- **The stale timing declaration is gone.** The `rg` command in the third ruling returns no line
+  on this base, so `python3 tests/fork-check.test.py` runs on the unchanged tree and the third
+  ruling's steps for removing and restoring the declaration no longer apply.
+
+Three points settle the test:
+
+1. **What the silent check's log holds.** Exactly one line. When the verdict's check carries
+   `watchdog_unavailable`, the log is that text and a newline, as the test says today. Otherwise
+   the check carries `cpu_source`, and the log is `watchdog CPU source: `, the value of
+   `cpu_source` and a newline. The test reads the name from the verdict and does not fix which
+   source it is, because the jail decides that.
+2. **Exactly one of the two fields is set.** The test asserts that each check carries
+   `watchdog_unavailable` or `cpu_source` and not both. A check that carries neither is being
+   watched by nothing that the verdict names, which c2 and c5 together rule out.
+3. **Only that assertion changes.** The rest of the file, the check's declaration
+   `tools/gate/checks/change-checks-test.json` and the other tests under `tools/gate/` stay as
+   they are. `tools/gate/` has no copy under `yolo-packs/`, so the sync in the last step adds no
+   path for it.
+
+The criteria below are unchanged.
+
+<!-- tillr: item id="item-gate-stall-watch-without-perf-counter" paths="tools/tillr-gate/,yolo-packs/tillr/programs/tillr-gate/,tools/tillr-gate/cpu_linux.go,tools/tillr-gate/watchdog.go,tools/tillr-gate/cpu_linux_test.go,tools/tillr-gate/watchdog_test.go,tools/fork-check.py,tests/fork-check.test.py,tools/tillr-gate/README.md,docs/design/gate-rework.md,tools/gate/checks/change_checks_test.py" blocked_by="" prose="2" -->
 
 - **c1:** When the kernel counter is refused, the gate reads the check's CPU time from unprivileged process accounting that still counts exited children, and stall detection stays on.
 - **c2:** The check log and the verdict name the source that supplied CPU time, so a reader can tell the kernel counter from the fallback.
