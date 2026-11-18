@@ -2,7 +2,7 @@
 title: "The Idea Pipeline: From Owner Sentence to Landed Commit"
 status: accepted
 stage: DECIDED
-updated: 2026-11-17
+updated: 2026-11-18
 tags:
   - tillr
   - pipeline
@@ -10,12 +10,23 @@ tags:
   - design
   - queue
 summary: "How a sentence the owner dumps in chat becomes a priority item, flows through scouting, paired design, Vantage question rulings, and fenced implementation to a landed commit, and renders as an evolving tree in the observatory from item and edge data alone."
-next: "Build the remaining idea runner and lineage work; observatory-actions governs terminal and browser intake."
+next: "Build Slice 1b, the items.kind column and the typed derived_from edge, then Slice 3, the lineage tree; Slices 1a, 2 and 5a are built and Slices 4 and 5b are superseded."
 ---
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
 
-**Status:** 2026-11-13. Unbuilt design, measured against `/workspace/.tillr/state.db` (schema 5, 49 items: 33 `in-queue`, 13 `blocked`, 2 `landed`, 1 `closed`), `tillr-*` CLI faces, and the served `/api/v1/*` observatory wire.
+**Status:** 2026-11-13; reconciled against the tree at `dcb76fe41` on 2026-11-18, and partly
+built. [Slice reconciliation](#slice-reconciliation-2026-11-18) under Section 5 names each
+slice's state. In short:
+- **Built:** clean intake (Slice 1a, the observatory's idea save), the numbered question hold
+  (Slice 2), and the idea's design-seat turn (Slice 5a).
+- **Superseded:** answer return (Slice 4) and `derived-items.json` (Slice 5b).
+- **Not built:** the `items.kind` column and the typed `derived_from` edge (Slice 1b), and the
+  lineage tree (Slice 3).
+
+The first measurement was taken against `/workspace/.tillr/state.db` (49 items: 33 `in-queue`,
+13 `blocked`, 2 `landed`, 1 `closed`), the `tillr-*` CLI faces, and the served `/api/v1/*`
+observatory wire.
 
 > **In short.** Record every owner idea immediately as a top-ranked `idea` item in `.tillr/state.db` without dirtying `/workspace`, evolve it through `derived_from` edges into `1:1` `design` items and fenced `build` items under the existing closed seven-state model, route open questions through Vantage and `tillr item mail` back into same-minute designer revisions, and render that exact item-and-edge graph as a lineage tree in the observatory.
 
@@ -94,6 +105,41 @@ Per the owner's staged preference — **capture and browse in the observatory fi
 | **4. Instant Answer Return** (`tools/tillr-item`, `tools/tillr-drain` preflight) | Needs [OQ-IP2](#61-settled-decisions) | `tillr item answer <id>` (and Vantage blockquote edit test) leaves `/workspace` clean, unblocks `<id>` as express work, and injects answers into staged `brief.md`. | Answering 7 questions moves the `design` item from `blocked` to top `in-queue` (`pending_answers: 1`) within one poll with zero manual re-ranking. |
 | **5. Autonomous `idea` & `design` Drain Lanes** (`tools/tillr-run`, `tools/tillr-drain`) | Needs [OQ-IP1](#61-settled-decisions), [OQ-IP4](#61-settled-decisions) | Integration test seeds one `idea` under `tillr drain loop --lanes 2`, autonomously lands a design doc, applies `derived-items.json`, and lands a `build` child. | Unattended momentum from sentence to landed commit, with live scouting/designing runs in `NowBand` and `scout-dossier` in `EvidencePane`. |
 
+#### Slice reconciliation, 2026-11-18
+
+Read in the tree at `dcb76fe41`. The store has no single schema number to move to 6. Each
+module owns its own tables (`RegisterDDL`). `item_edges` in `tools/tillr-item/item/schema.go`
+is still `(item_id, blocked_by)`. So "schema 6" below means the additive change to the
+`tillr-item` tables that Slice 1b makes.
+
+- **Slice 1a, clean intake: built.** [Observatory actions](./observatory-actions.md#5-adding-an-idea)
+  replaced this slice's intake (`D-IP3`). `tillr-item idea` saves the words and the place, and
+  the observatory saves an idea through it (`tools/tillr-view/serveidea.go`). The wire shows
+  `kind: "idea"`, but the view derives it from the intake record: no `items.kind` column
+  exists.
+- **Slice 1b, the `items.kind` column and a typed `derived_from` edge: not built.** Sync reads a
+  block's `from` attribute ([observatory actions, Section 5.4](./observatory-actions.md#54-what-the-design-seat-does-with-it))
+  but keeps it only as a `placed_from` receipt on the item's update event
+  (`tools/tillr-item/item/place.go`, whose comment says it is not this edge). The idea page
+  finds an idea's outcomes through that receipt (`tools/tillr-view/idea_words.go`).
+- **Slice 2, the numbered question hold: built.** The `question-open` hold and its index reader
+  are in `tools/tillr-drain/drain/`.
+- **Slice 3, the lineage tree and `--tree`: not built.** It needs Slice 1b's edge. The queue
+  rail lens of [OQ-IP3](#61-settled-decisions) is withdrawn, so the tree belongs on the item
+  page and the dependency graph page of [the observatory redesign](./observatory-redesign.md).
+- **Slice 4, instant answer return: superseded.** [OQ-IP2](#61-settled-decisions) was
+  withdrawn. An owner's answer reaches a design as a review comment, which the loop delivers to
+  the document's last designer session
+  ([designer sessions](./tillr-designer-sessions.md)). No `tillr item answer` face is wanted.
+- **Slice 5a, autonomous idea and design runs: built.** An idea runs on the design seat through
+  the [`scouted-design@v1`](../../config/tillr/workflows/scouted-design@v1.json) workflow. The
+  loop refuses a turn that leaves no outcome (`idea-no-outcome` in
+  `tools/tillr-drain/drain/idea.go`).
+- **Slice 5b, `derived-items.json`: superseded.** `D-QP3` of
+  [queue persistence](./tillr-queue-persistence.md#91-decision-ledger) replaced it: a child
+  item exists only as a block in the landed document, and its `from` attribute names its idea.
+  Nothing reads `derived-items.json`.
+
 **Accounting for today's 48 store items:**
 - **Covered directly as substrate or absorbed (14 `in-queue`):** The **7 `item-obs-*` items** (`ranks` `p`–`v`, ready today, supplying `DocumentPane`'s Vantage link, `Archive`, `NowBand`, `Pause`, state glyphs, refusal, and CLI counts), **`item-drain-question-hold`** (absorbed as Slice 2), and the **6 `in-queue` items with un-ruled design questions** (`item-tillr-stop-reason`, `item-trace-correlation`, and four siblings, which Slice 2 converts into visible Vantage question holds).
 - **Covered by the questions & decomposition mechanics (11 of the 13 `blocked`):** The **ten open-question ruling items** and **three seed rows** (overlapping to 11 rows among the 13 owner-blocked items) gain Vantage click-through, `tillr item answer` unblocking, and automated `derived-items.json` emission in place of manual seed cutting.
@@ -110,7 +156,7 @@ Per the owner's staged preference — **capture and browse in the observatory fi
 | `D-IP3` | Original intake ruling: Markdown words files and a reserved rank prefix. Replaced by [observatory-actions](./observatory-actions.md#5-adding-an-idea): `.txt` words files, terminal and browser saving, and owner-selected place; the `00..` prefix ends. | Keeps the original ruling visible without prescribing the superseded intake mechanism. |
 | `D-IP4` | Each `design` item owns one `docs/design/<slug>.md`; draft commits with `open_questions > 0` land on `main` and checkpoint the item to `blocked` until `open_questions == 0`. | Makes drafts immediately readable in Vantage while keeping unruled designs on the active spine instead of prematurely archiving them as `landed`. |
 | `D-IP5` | Keep questions canonical in `docs/design/<slug>.md`; carry pending owner answers in existing `tillr item mail` (`tillr item answer`). | Avoids duplicating question prose in SQLite ([OQ-OBD2](./observatory-design.md#11-decision-ledger)) while giving unread `tillr item mail` a concrete single-purpose job. |
-| `D-IP6` | Lanes emit `.tillr/loop/<run_id>/derived-items.json`; only `tillr-drain` applies child items to `.tillr/state.db` after `tillr-land pass` succeeds. | Preserves single-writer store safety and prevents failed or rejected runs from leaking orphan child items onto the board. |
+| `D-IP6` | **Superseded by `D-QP3` of [queue persistence](./tillr-queue-persistence.md#91-decision-ledger):** a child item is a block in the landed document. The original ruling: lanes emit `.tillr/loop/<run_id>/derived-items.json`; only `tillr-drain` applies child items to `.tillr/state.db` after `tillr-land pass` succeeds. | Preserves single-writer store safety and prevents failed or rejected runs from leaking orphan child items onto the board. |
 | OQ-IP1 | Scouting and designing inside one idea are nodes of one item's workflow, [`scouted-design@v1`](../../config/tillr/workflows/scouted-design@v1.json): the read-only `open` designer may propose replacing the unstarted `write` node with scouts and `join`, as [item graphs](./tillr-item-graphs.md#34-several-nodes-or-one-node-with-child-sessions) allow. Lineage between items is for separate deliverables; a separate design item is created only when the idea splits into several documents. **Rejected:** a second item for every idea. | The owner described this flow on 2026-11-15 (a rambling ticket becomes an item whose first node is a designer that may fan out to scouts), and the item graphs design already resolves the choice as a template inside one item. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 | OQ-IP3 | Withdrawn: the queue rail it asked about is removed by [the observatory redesign](./observatory-redesign.md). Items are listed in rank order on the Items page, and lineage and dependencies are drawn on the dependency graph page. | The screen the question concerned no longer exists in the accepted design. Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
 | OQ-IP4 | Work the owner is waiting on, a new idea or answers to a design, runs on lanes that do not count against the lane cap. Nothing running is stopped to make room. **Rejected:** a shared pool, and stopping a build run. | The owner ruled this on 2026-11-15; it is recorded as `D-IG10` in [item graphs](./tillr-item-graphs.md#71-decision-ledger). Settled on 2026-11-15 by the session's designer on recorded principle, at the owner's request to answer what principle can answer; the owner may overturn it. |
