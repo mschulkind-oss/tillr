@@ -326,6 +326,9 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
 			if deferredBy != "" {
 				row.Mover = deferredBy
+				if last.Reason == "backend-closed" {
+					row.Mover += ": " + rule.mover
+				}
 			}
 			if last.Reason == "question-open" {
 				var excluded []string

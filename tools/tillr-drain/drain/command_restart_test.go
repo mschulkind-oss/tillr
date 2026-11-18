@@ -25,7 +25,7 @@ func TestCommandHoldRestartKeepsOutcomeAndBuilderPin(t *testing.T) {
 			base := runGit(t, f.root, "rev-parse", "HEAD")
 			outcome, want := "failed", "node-failed: check"
 			if mode == "fault" {
-				outcome, want = "fault", ReasonInfraExhausted
+				outcome, want = "fault", ReasonCommandFault
 			}
 			// Reproduce the crash window after hold classification and reset, before
 			// markExamined. These are the same operations terminal settlement performs.

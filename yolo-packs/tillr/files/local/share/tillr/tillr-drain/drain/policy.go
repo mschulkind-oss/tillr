@@ -39,7 +39,6 @@ type Policy struct {
 
 	DefaultBackend string   `json:"default_backend"`
 	Preference     []string `json:"preference"`
-	MaxFailovers   *int     `json:"max_failovers"`
 	// Seats maps each seat the item model defines (seat.go) to the backend that fills it. It is where a role reaches a model: an item names the seat and never a model
 	// id, so swapping which model designs, or moving the design seat to another backend, is
 	// an edit here and touches no item.
@@ -236,11 +235,6 @@ func (p Policy) seatNames() []string {
 	return names
 }
 
-// DefaultMaxFailovers is the failover budget a policy that names none carries: one
-// re-dispatch per item, which is the whole multiplication a tick can do to an item's cost
-// (design §2, "What bounds the spend").
-const DefaultMaxFailovers = 1
-
 // Check refuses a policy that cannot produce a complete request for every backend it
 // names, before the store is read: a dispatch built from such a policy would carry a
 // run.request a runner refuses, which is a record asserting a request that cannot run.
@@ -275,9 +269,6 @@ func (p Policy) Check() error {
 			return Usagef("the policy's preference names %q twice: the walk would visit it twice", name)
 		}
 		seen[name] = true
-	}
-	if p.MaxFailovers != nil && *p.MaxFailovers < 0 {
-		return Usagef("the policy names max_failovers %d: a failover budget is zero or more re-dispatches", *p.MaxFailovers)
 	}
 	for _, name := range backendNames(p.Backends) {
 		if err := checkBackend(name, p.Backends[name]); err != nil {
@@ -345,15 +336,6 @@ func checkBackend(name string, b Backend) error {
 	return nil
 }
 
-// failovers is the failover budget, with the policy's default filled in: a policy that
-// names none carries one re-dispatch per item.
-func (p Policy) failovers() int {
-	if p.MaxFailovers == nil {
-		return DefaultMaxFailovers
-	}
-	return *p.MaxFailovers
-}
-
 // firstBackend answers the backend an item's first dispatch names: its per-item override
 // when the policy carries one, else the backend its seat maps to, else the tick's default.
 //
@@ -378,31 +360,11 @@ func (p Policy) firstBackend(row itemRow) string {
 	return p.DefaultBackend
 }
 
-// nextBackend answers the backend a failover after `failed` walks to: the next one in the
-// preference order, never one before it (design §2, "never backward"). A backend that is
-// not in the preference at all — one reached by an override — starts the walk at the head,
-// because there is no position in the order to continue from.
-//
-// It also answers the seat whose backend the walk leaves, or "" when it leaves no seat. A
-// seat is a statement about the work — the design seat runs on the design backend — so a
-// walk that leaves that backend is a model switch, and it is named rather than performed
-// silently: the caller records the seat on the decision and spells it into the reason. The
-// seat is the item's, not a reverse lookup of the backend: several seats may share one
-// backend (build, review and scout all reach the default), and only the failed backend's
-// identity against the item's own seat says whether the walk is a degradation.
-//
-// It answers false when the walk has nowhere to go, which the caller reports as the
-// item's failover budget being spent rather than dispatching on the backend that just
-// failed.
-//
-// A seat that names a list of backends (docs/design/tillr-claude-backend.md §4) has its own
-// order, and that list replaces the preference for the item's walk: forward from the failed
-// backend, and no hop at the list's end, so a design item never falls onto the build
-// backend. Every backend on the list was named for that seat, so a step along it is not a
-// degradation and names no seat. A failed backend that is not on the list (one an
-// override reached) has no position to continue from, so the walk starts at the list's
-// head, the same rule the preference walk uses. A seat with one backend, and an item with
-// no seat, walk the preference exactly as before lists existed.
+// nextBackend walks after failed in the item's ordered seat list, wrapping at
+// the end. Multi-backend seats never leave their list. Single-backend seats
+// retain their fallback through the preference, naming any seat the walk leaves.
+// An override outside the order starts at its head. Availability is checked by
+// availableBackend, not by this order-only helper.
 func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok bool) {
 	if list := p.seatList(seat); seat != "" && len(list) > 1 {
 		for i, name := range list {
@@ -412,7 +374,7 @@ func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok b
 			if i+1 < len(list) {
 				return list[i+1], "", true
 			}
-			return "", "", false
+			return list[0], "", true
 		}
 		return list[0], "", true
 	}
@@ -434,25 +396,19 @@ func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok b
 			next := p.Preference[i+1]
 			return next, leavesSeat(next), true
 		}
-		return "", "", false
+		next := p.Preference[0]
+		return next, leavesSeat(next), true
 	}
 	if len(p.Preference) > 0 {
 		next := p.Preference[0]
 		return next, leavesSeat(next), true
 	}
-	return "", "", false
+	return failed, "", failed != ""
 }
 
-// NextRequest is the request a failover after failedBackend dispatches: the same item on
-// the same lane, on the next backend in the policy's preference. It also answers the seat
-// the walk left, or "" when the walk leaves no seat, so the caller can record the
-// degradation rather than let a model switch pass as an ordinary failover. It answers false
-// when the walk has no hop left, which the caller reports as an exhausted failover budget
-// rather than spending the backend that just failed.
-//
-// It is exported because the loop performs the one failover the design permits inside a
-// tick (design §4.1 step 5), and the walk is the policy's: a second spelling of "the next
-// backend" outside this file is a second answer to the same question.
+// NextRequest builds the next request in order without admitting it. The loop
+// uses nextAvailableRequest for dispatch; a waiting workflow uses this request
+// to retain its continuation until the planner finds an open backend.
 func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (*run.Request, string, bool) {
 	next, degraded, ok := p.nextBackend(failedBackend, seat)
 	if !ok {

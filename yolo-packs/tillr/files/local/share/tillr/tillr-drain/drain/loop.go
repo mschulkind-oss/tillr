@@ -772,6 +772,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	if err := l.startDefinition(ctx); err != nil {
 		return faultResult(result, err)
 	}
+	// Runs that ended while no loop was running have no saved class yet.
+	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+		return faultResult(result, err)
+	}
 	// The documents are synced before anything is planned: an item block committed since
 	// the last drain is work this drain should see, and the sync is the only way an item
 	// enters the store. A finding does not stop the loop — the documents without one were
@@ -1502,6 +1506,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			outcome.err = l.markExamined(ctx, decision)
 		}
 	}()
+	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+		return laneOutcome{err: err}
+	}
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
@@ -1642,7 +1649,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}
 	class := ClassifyAttempt(record, log)
-	if class == AttemptInfrastructure {
+	for class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {
 			return laneOutcome{err: err}
 		}
@@ -1652,8 +1659,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		streak := l.infraStreak
 		l.mu.Unlock()
 		l.reportf("loop: %s failed in the infrastructure class (%d consecutive)\n", request.ItemID, streak)
-		// The one permitted failover: the machinery failed and the item learned nothing,
-		// so the same work goes to the next backend once, after the worktree is reset. It
+		// Machinery failed: close that backend and walk to the next open one after reset.
+		// A fully closed route ends this walk until recorded evidence reopens it. It
 		// runs in this lane's own goroutine, so its bracket has one target and a violation
 		// there names this run.
 		if deferJudge {
@@ -1665,7 +1672,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		if err != nil {
 			return laneOutcome{err: err}
 		}
+		if !ok {
+			break
+		}
 		if ok {
+			decision.Attempt++
 			failover.CorrelationID = tick
 			if err := l.preserveWork(ctx, lane, request.RunID, "infrastructure failure before failover"); err != nil {
 				return laneOutcome{err: err}
@@ -1698,6 +1709,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			if err != nil || stop != "" {
 				return laneOutcome{stop: stop, err: err}
 			}
+			if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+				return laneOutcome{err: err}
+			}
 			class = ClassifyAttempt(record, log)
 			if class == AttemptInfrastructure {
 				if err := l.recordBackendWindow(ctx, record); err != nil {
@@ -1707,8 +1721,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}
 	if class == AttemptInfrastructure {
-		// The failover failed too, or the policy has no hop left: the item holds and the
-		// next tick plans it as `run-infra-exhausted`. The criteria are untouched, the
+		// No backend is open: the next pass waits on recorded backend recovery.
+		// The criteria are untouched, the
 		// head is pinned, and the loop moves on.
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
 	}

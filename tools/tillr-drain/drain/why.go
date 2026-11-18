@@ -245,6 +245,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Mover = "restore " + ref + " under the item's block and land it"
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
+		case d.Reason == ReasonBackendClosed && d.DeferredBy != "":
+			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case d.Reason == ReasonBlocked:
@@ -486,6 +488,10 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", "gate", "inspect the verdict; tillr drain retry --help"
 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:
 		return "needs a cause", "fence", "inspect the boundary report"
+	case ReasonBackendClosed, ReasonInfraExhausted:
+		return "waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"
+	case ReasonCommandFault:
+		return "needs a cause", "lane", "repair the command process and authorize a retry"
 	case ReasonBackendWindow:
 		return "waits on work", "backend", "the backend reset time"
 	case ReasonQuestionRemoved:

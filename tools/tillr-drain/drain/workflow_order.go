@@ -88,7 +88,7 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 		return ReasonBoundaryScopeEscape, nil
 	}
 	if outcome == "fault" {
-		return ReasonInfraExhausted, nil
+		return ReasonCommandFault, nil
 	}
 	// A successful harness with a missing declared file is not a failed task.
 	// Read the refusal for this producer, not the last sibling to finish.

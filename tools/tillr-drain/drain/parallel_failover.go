@@ -21,8 +21,11 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	if err != nil {
 		return node, false, err
 	}
-	if !ok || node.NodeInfraFailures >= l.cfg.Policy.failovers() {
-		return node, false, nil
+	if !ok {
+		request, _, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, node.RunRequest.RunID+"-failover", rec.Backend, node.Seat)
+		if request == nil {
+			return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
+		}
 	}
 	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID

@@ -97,11 +97,15 @@ func TestLoopDoesNotSkipBackendWithoutWindowFacts(t *testing.T) {
 			if _, err := f.newLoop(t, 1, steps).Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			for _, id := range []string{"item_051", "item_052"} {
-				runs := runsForItem(t, f.store, id)
-				if len(runs) != 2 || runs[0].Backend != "pi" {
-					t.Fatalf("legacy failure changed: %+v", runs)
-				}
+			// The failure records no window, and it closes pi: the first item fails
+			// over, and the second starts on the open backend.
+			first := runsForItem(t, f.store, "item_051")
+			if len(first) != 2 || first[0].Backend != "pi" || first[1].Backend != "fallback" {
+				t.Fatalf("first item did not fail over: %+v", first)
+			}
+			second := runsForItem(t, f.store, "item_052")
+			if len(second) != 1 || second[0].Backend != "fallback" {
+				t.Fatalf("second item was sent to the closed backend: %+v", second)
 			}
 		})
 	}

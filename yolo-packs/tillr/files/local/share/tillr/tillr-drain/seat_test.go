@@ -299,11 +299,9 @@ func TestASeatDegradedFailoverIsNamedInTheLoopReport(t *testing.T) {
 	floor := stub(t, "floor-adapter", counting+committingAdapterBody+`printf 'RESULT: done\n'`)
 
 	f := newLoopFixture(t, floor)
-	one := 1
 	f.policy = &drain.Policy{
 		DefaultBackend: "pi",
 		Preference:     []string{"pi"},
-		MaxFailovers:   &one,
 		Seats:          map[string]string{"design": "pi-designer"},
 		Backends: map[string]drain.Backend{
 			"pi":          {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
@@ -430,8 +428,8 @@ func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
 		},
 	})
 	got = decisionFor(t, plan(t, spent, tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)), "item_042")
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonInfraExhausted {
-		t.Fatalf("the item past its list's end was %q / %q, want a hold with %q", got.Action, got.Reason, drain.ReasonInfraExhausted)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-a, designer-b" {
+		t.Fatalf("the item past its list's end was %q / %q waiting on %q, want a hold with %q on both designers", got.Action, got.Reason, got.DeferredBy, drain.ReasonBackendClosed)
 	}
 }
 

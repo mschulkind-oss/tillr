@@ -23,18 +23,13 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 	if err != nil {
 		return err
 	}
-	if !ok || d.NodeInfraFailures >= l.cfg.Policy.failovers() {
-		if err := l.nodeOutcome(ctx, d, "fault"); err != nil {
-			return err
+	if !ok {
+		// Persist a ready continuation even when the whole route is closed.
+		// Planning holds it until a recorded reopening, retaining this node/base.
+		request, _, _ = l.currentPolicy().NextRequest(d.ItemID, d.LaneID, d.RunRequest.RunID+"-failover", rec.Backend, d.Seat)
+		if request == nil {
+			return Usagef("workflow seat %s has no backend route", d.Seat)
 		}
-		head := ""
-		if !l.nonLanding {
-			head = l.headOf(ctx, d.LaneID)
-		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node infrastructure exhausted"); stop != "" {
-			return retainedAfter(d.LaneID, stop)
-		}
-		return l.markExamined(ctx, d)
 	}
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
