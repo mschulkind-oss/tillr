@@ -31,6 +31,12 @@ type HeavyCheck struct {
 	GateFault       bool     `json:"gate_fault,omitempty"`
 	Detail          string   `json:"detail,omitempty"`
 	Stalls          int      `json:"stalls,omitempty"`
+	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and
+	// RevertRefused is why the automatic revert ended "not possible" so a fixer was filed
+	// instead (gate rework Section 6.8, graph design OQ-GP1). Both are empty when the
+	// revert was not attempted.
+	RevertedBy    string `json:"reverted_by,omitempty"`
+	RevertRefused string `json:"revert_refused,omitempty"`
 }
 type GreenProof struct {
 	Commit   string    `json:"commit"`

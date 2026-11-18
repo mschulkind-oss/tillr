@@ -37,6 +37,9 @@ func TestTerminalStateMoves(t *testing.T) {
 					if code != 0 {
 						t.Fatalf("same state: %d %s", code, out)
 					}
+				} else if from == "landed" && to == "in-queue" {
+					// The one move out of landed, for a reverted landing, needs a receipt.
+					assertRefused(t, code, out, "transition-reason-missing")
 				} else {
 					assertRefused(t, code, out, "state-terminal")
 					got := decode(t, out)
@@ -247,5 +250,32 @@ func TestTerminalOldStoreRemainsReadable(t *testing.T) {
 	}
 	if before != after {
 		t.Fatal("reads changed old store")
+	}
+}
+
+// A landing the drain reverted sends its item back to the queue: the one move out of
+// landed, with the reason and actor on the record (graph design OQ-GP1).
+func TestRevertedLandingReturnsToTheQueueWithAReceipt(t *testing.T) {
+	db := filepath.Join(scratch(t, "landed-return"), "state.db")
+	p := base("item_042", "reverted work")
+	p.State = "landed"
+	if code, out := apply(t, db, envelope(t, "item.record", "seed", p)); code != 0 {
+		t.Fatalf("seed: %d %s", code, out)
+	}
+	code, out := run(t, "state", "--store", db, "--item", p.ItemID, "--state", "in-queue", "--reason", "landing abc reverted: unit failed", "--by", "tillr-drain", "--now", "2026-11-18T00:00:00Z")
+	if code != 0 {
+		t.Fatalf("return: %d %s", code, out)
+	}
+	shown := string(terminalSnapshot(t, db, p.ItemID))
+	if !strings.Contains(shown, `"state":"in-queue"`) {
+		t.Fatalf("item did not return to the queue: %s", shown)
+	}
+	for _, to := range []string{"blocked", "not-started", "resolved-elsewhere"} {
+		p.ItemID = "item_" + to
+		if code, out := apply(t, db, envelope(t, "item.record", "seed", p)); code != 0 {
+			t.Fatalf("seed: %d %s", code, out)
+		}
+		code, out := run(t, "state", "--store", db, "--item", p.ItemID, "--state", to, "--reason", "r", "--by", "b", "--now", "2026-11-18T00:00:00Z")
+		assertRefused(t, code, out, "state-terminal")
 	}
 }

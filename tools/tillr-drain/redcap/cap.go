@@ -46,8 +46,10 @@ func git(ctx context.Context, root string, args ...string) (string, error) {
 }
 
 // Exempt identifies fixer items and fork patch deliveries before resolving a trunk ref.
+// An automatic revert (revert-main-) is a remedy too: holding it would keep the red it
+// removes.
 func Exempt(ref, itemID string) bool {
-	return strings.HasPrefix(itemID, "fixer-main-") || strings.HasPrefix(ref, "patch/") || strings.HasPrefix(ref, "refs/heads/patch/")
+	return strings.HasPrefix(itemID, "fixer-main-") || strings.HasPrefix(itemID, "revert-main-") || strings.HasPrefix(ref, "patch/") || strings.HasPrefix(ref, "refs/heads/patch/")
 }
 
 // Check reads today's bound against tip. The lander calls it under land.lock;

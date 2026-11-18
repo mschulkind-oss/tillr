@@ -26,9 +26,32 @@ type HeavyRunner struct {
 	Root, Work, Trunk, Store string
 	Judge                    func(context.Context, string, string) ([]HeavyCheck, error)
 	Fix                      func(context.Context, string, []HeavyCheck) error
-	Report                   func(HeavyRun)
+	// Revert is the automatic remedy for a red the bisection attributed to one landing
+	// (graph design Section 8.2, OQ-GP1). It is called before Fix for each such landing,
+	// with a replay that judges one check on any commit, and answers whether the landing
+	// was reverted. A landing it reverted gets no fixer; one it could not revert gets the
+	// fixer, with the reason on its checks. Nil files fixers only.
+	Revert func(ctx context.Context, tip, landing string, checks []HeavyCheck, replay HeavyReplay) (RevertOutcome, error)
+	Report func(HeavyRun)
 	// Now observes the run; injected judges can use this same clock for check timings.
 	Now func() time.Time
+}
+
+// HeavyReplay judges one check on one commit, in the runner's own checkout and under
+// its lock: red is true for a failing verdict, and anything that is not a verdict is
+// an error.
+type HeavyReplay func(ctx context.Context, sha, checkID string) (red bool, err error)
+
+// RevertOutcome is what the automatic revert did with one attributed landing.
+type RevertOutcome struct {
+	// Reverted is the trunk commit the revert landed as; "" when it did not land.
+	Reverted string
+	// Refused is why the revert path ended "not possible", in words a fixer's brief can
+	// carry. It is "" exactly when Reverted is set.
+	Refused string
+	// StillRed is set when a failing check still fails on the tip with the landing
+	// reverted: the attribution did not explain the red, so the fixer starts from the tip.
+	StillRed bool
 }
 
 func heavyGitOutput(ctx context.Context, root string, args ...string) (string, error) {
@@ -268,6 +291,10 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	}
 	byLanding := map[string][]HeavyCheck{}
 	order := []string{}
+	// bisected names the landings the bisection itself found: only those may be
+	// reverted. A judge's own FirstRedLanding (a second stall names the tip) is a place
+	// to start a fixer, not an attribution.
+	bisected := map[string]bool{}
 	for i := range run.Checks {
 		check := &run.Checks[i]
 		if check.Result != "fail" {
@@ -301,6 +328,8 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			against = red
 			if against == "" {
 				against = run.TipSHA
+			} else if !fault {
+				bisected[red] = true
 			}
 		}
 		if check.FirstRedLanding == "" {
@@ -311,6 +340,10 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		}
 		byLanding[against] = append(byLanding[against], *check)
 	}
+	order, err = r.revert(ctx, &run, order, byLanding, bisected)
+	if err != nil {
+		return run, err
+	}
 	if r.Fix != nil {
 		for _, sha := range order {
 			if err := r.Fix(ctx, sha, byLanding[sha]); err != nil {
@@ -319,6 +352,58 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		}
 	}
 	return run, nil
+}
+
+// revert offers each bisected landing to Revert before any fixer is filed, and answers
+// the landings that still need one. A reverted landing leaves the list and its checks
+// name the revert. A refused revert keeps its fixer, and the reason rides on its checks
+// into the fixer's brief; when the check stayed red with the landing reverted, its
+// fixer moves to the tip, because the landing did not explain the red. A revert that
+// failed for its own reasons is a refusal too: the red keeps a mover either way.
+func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, byLanding map[string][]HeavyCheck, bisected map[string]bool) ([]string, error) {
+	if r.Revert == nil {
+		return order, nil
+	}
+	remaining := []string{}
+	moved := []HeavyCheck{}
+	for _, sha := range order {
+		if !bisected[sha] {
+			remaining = append(remaining, sha)
+			continue
+		}
+		out, err := r.Revert(ctx, run.TipSHA, sha, byLanding[sha], r.one)
+		if err != nil {
+			if ctx.Err() != nil || cleanupLost(err) {
+				return nil, err
+			}
+			out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
+		}
+		if out.Reverted == "" && out.Refused == "" {
+			out.Refused = "the revert answered neither a landing nor a reason"
+		}
+		for i := range byLanding[sha] {
+			byLanding[sha][i].RevertedBy, byLanding[sha][i].RevertRefused = out.Reverted, out.Refused
+		}
+		for i := range run.Checks {
+			if run.Checks[i].Result == "fail" && run.Checks[i].FirstRedLanding == sha {
+				run.Checks[i].RevertedBy, run.Checks[i].RevertRefused = out.Reverted, out.Refused
+			}
+		}
+		switch {
+		case out.Reverted != "":
+		case out.StillRed && sha != run.TipSHA:
+			moved = append(moved, byLanding[sha]...)
+		default:
+			remaining = append(remaining, sha)
+		}
+	}
+	if len(moved) > 0 {
+		if len(byLanding[run.TipSHA]) == 0 {
+			remaining = append(remaining, run.TipSHA)
+		}
+		byLanding[run.TipSHA] = append(byLanding[run.TipSHA], moved...)
+	}
+	return remaining, nil
 }
 func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 	ctx = context.WithValue(ctx, heavyProgressKey{}, (*heavyProgress)(nil))

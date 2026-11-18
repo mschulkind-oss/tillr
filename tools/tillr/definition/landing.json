@@ -22,6 +22,7 @@
     {"from": "in-queue", "to": "landed"},
     {"from": "in-queue", "to": "resolved-elsewhere"},
     {"from": "in-queue", "to": "closed"},
+    {"from": "landed", "to": "in-queue"},
     {"from": "closed", "to": "not-started"},
     {"from": "closed", "to": "blocked"},
     {"from": "closed", "to": "in-queue"}

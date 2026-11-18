@@ -2198,6 +2198,20 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	case GateStalled:
 		return "", false, l.holdGateStall(ctx, candidate, gate, stalledGateCount)
 	case GatePassed:
+		// An item whose landing was reverted must pass the check that proved it broke
+		// the trunk: the fast gate has shown it cannot see that failure.
+		detail, err := l.judgeRequired(ctx, candidate)
+		if err != nil {
+			return "", false, err
+		}
+		if detail != "" {
+			l.reportf("loop: gate passed %s, but a required full-suite check failed: recording a refusal\n", candidate.ItemID)
+			candidate.RefusalDetail = detail
+			if err := l.refuse(ctx, candidate, result, RefusalGate); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
 	case GateFailed:
 		// A red gate is a suspect, not a conviction. Replay the failing checks on the base
 		// first: a failure that is red there is the trunk's, and the item is acquitted with

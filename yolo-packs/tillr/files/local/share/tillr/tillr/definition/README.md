@@ -194,8 +194,12 @@ The embedded file states the six writable states, `in-queue` as ready,
 and `closed` as finished. It completes through landing, keeps artifacts, supplies
 no brief template, and names no hook program.
 
-Its transitions preserve Git-landing's finished-item policy: neither `landed` nor
-`resolved-elsewhere` has an outgoing move. Close allows the three unfinished states
+Its transitions preserve Git-landing's finished-item policy with one exception:
+`resolved-elsewhere` has no outgoing move, and `landed` has exactly one, back to
+`in-queue`. That move is how an automatically reverted landing's item returns to its
+worker (graph design [`OQ-GP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP1), ruled 2026-11-17): the full suite proved the landing broke
+the trunk, the drain reverted it, and the item's work is no longer on the trunk. Like
+any move out of a finished state it needs a reason and an actor. Close allows the three unfinished states
 to enter `closed`; reopen restores one of those three saved prior states. An unchanged
 state is not a move, so the file has no self-transitions. Command-specific requirements
 such as a close reason, the saved reopen state, and block metadata are enforced by

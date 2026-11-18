@@ -159,6 +159,7 @@ func TestGitLandingLiteralValues(t *testing.T) {
 			{"not-started", "blocked"}, {"not-started", "in-queue"}, {"not-started", "landed"}, {"not-started", "resolved-elsewhere"}, {"not-started", "closed"},
 			{"blocked", "not-started"}, {"blocked", "in-queue"}, {"blocked", "landed"}, {"blocked", "resolved-elsewhere"}, {"blocked", "closed"},
 			{"in-queue", "not-started"}, {"in-queue", "blocked"}, {"in-queue", "landed"}, {"in-queue", "resolved-elsewhere"}, {"in-queue", "closed"},
+			{"landed", "in-queue"},
 			{"closed", "not-started"}, {"closed", "blocked"}, {"closed", "in-queue"},
 		},
 		Prerequisites: []string{"fence", "design-document", "design-questions", "owner-clean"},
