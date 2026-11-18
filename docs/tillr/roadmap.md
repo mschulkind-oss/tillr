@@ -96,24 +96,21 @@ pipeline reported them, and says which of them he has since made directly.
 idea of 2026-11-15 to 2026-11-17 that each way work enters (an agent files an item, the owner dumps
 a ramble) runs its own small graph and ends in one item shape, and lists what is not yet settled.
 
-[Planning and model tiering](../design/tillr-planning-node-model-tiering.md) is the proposal for the
-owner's ask to spend less by giving each kind of work the cheapest model that can do it. A cheaper
-model such as Terra runs only work that a command checks the moment it finishes, and climbs to Sol
-when the check fails; a planning node first cuts a large build item into such checked slices. It
-carries eight more questions,
-[`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) to
-[`OQ-PT8`](../design/tillr-planning-node-model-tiering.md#OQ-PT8), from 2026-11-16, and the document
-opens with [a box](../design/tillr-planning-node-model-tiering.md#what-i-am-asking-you-to-decide) that
-puts each in one line with its recommendation and its cost if wrong. Answer the first two first.
-[`OQ-PT1`](../design/tillr-planning-node-model-tiering.md#OQ-PT1) asks again the October ruling that
-on Bedrock only Sol and Luna are worth setting up; a yes lets the two stage 2 items be filed, which put
-test fixes on Terra behind a check.
-[`OQ-PT2`](../design/tillr-planning-node-model-tiering.md#OQ-PT2) is the only part that can start in
-hours; a yes is one policy edit that runs five named items on Terra and measures it. The other six
-shape the planning items, and each item is written to its question's recommended answer, so on a yes
-[the written-out items](../design/tillr-planning-node-model-tiering.md#15-ready-to-file-on-your-word)
-are filed as they stand. Two faults in the run record that the proposal found wait on no question and
-are [filed below](#filed-2026-11-17-the-run-records-spend-corrected-before-it-is-compared).
+[Planning and model tiering](../design/tillr-planning-node-model-tiering.md) is the design for the
+owner's ask to spend less by giving each kind of work the cheapest model that is enough for it. The
+owner ruled on 2026-11-18 that Terra implements and Luna scouts, and the planning stage
+[filed below](#filed-2026-11-18-plan-first-then-spend-each-model-where-it-is-enough) landed that
+day; no item runs through it yet. Nothing in it needs the owner today: its questions wait until
+planned items have run and their cost can be read, and its ledger holds designer's decisions he has
+not reviewed. Two faults in the run record that the design found are
+[filed below](#filed-2026-11-17-the-run-records-spend-corrected-before-it-is-compared).
+
+[Replaying the drain's recorded tasks against several models](../design/model-benchmarks-from-drain-records.md)
+is the owner's request of 2026-11-17 to compare models on work this repository has really done,
+read side by side before any rubric exists. It sits beside planning and model tiering because it
+is the other way to learn which model is enough for which work. He said he is not ready to run
+it, so its questions wait on him. Its first step, copying the shortlisted records before Git
+deletes them, runs no model and is work to file.
 
 [The judge and lifecycle](../design/tillr-judge-and-lifecycle.md) left this list: every question
 it carried is a row of its ledger, and on 2026-11-16 it was cut into
