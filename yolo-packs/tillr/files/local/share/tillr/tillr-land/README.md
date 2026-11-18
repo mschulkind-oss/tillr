@@ -192,15 +192,166 @@ by hand produces the same row as an unattended one.
   about this change to act on.
 - **A head that does not squash onto the trunk** — the row records `squash-conflict` and the
   paths git reported; the head is pinned and the verdict stands.
-- **A trunk worktree that holds uncommitted content on a path the squash changes** — a
-  fast-forward would stop on it, and a landing that went through anyway would leave it mixed
-  into what the trunk now holds.
+- **A predicted conflict between the owner's content and the landed result, or a main checkout
+  in the middle of a merge, rebase, cherry-pick or revert** — see
+  [the owner's working tree](#the-owners-working-tree). Uncommitted content that restores
+  cleanly is not a refusal.
 - **A repository that states no landing identity, or states one a lane can write** — the
   identity a commit carries is not a value a lane may choose.
 - **A patch branch that is already at the head, or that the head does not descend from** — a
   patch branch is a delivery, and moving it back would drop commits another writer published.
 
+## The owner's working tree
+
+The main checkout is the owner's: an editor may be open on any file in it, and the landing
+lock does not hold the editor. A landing behaves as `git pull --autostash` does, and never waits
+for the owner. The rule, in the order the lander applies it:
+
+1. **Paths the landing does not change are not touched.** No rewrite, no index change, no stash:
+   the same bytes, inode and modification time, whether the file is modified, staged, untracked,
+   ignored or merely open. The checkout changes only the paths the landing changed.
+2. **Everything is prepared before the store's write transaction opens**, under the landing lock,
+   after the verdict, the squash and the observed-trunk check, and none of it changes the working
+   tree or the index: the prediction, the final disk content and index entry of each touched path,
+   and the recovery copy of the owner's content on them. The recovery copy is a ref under
+   `refs/tillr/owner-recovery/<run>` (never `refs/stash`, which is the owner's list). It copies;
+   nothing leaves the disk. A landing that records no fault removes it.
+3. **The write transaction does the comparison and the final move only**: the checkout still
+   has the trunk branch, the trunk is at the tip the prediction read, and every touched path (disk
+   and index) still holds what the prediction read. Then it replaces each file once, writes the
+   touched index entries, and moves the trunk ref with a guarded `update-ref` (carrying
+   `-c tillr.move=final`, the marker the tests' Git wrappers stop on). `tillr item close` is still
+   excluded until the receipt, as before.
+4. **A path whose final content equals what is on disk is not rewritten.** A touched file is written
+   to a temporary file beside it and renamed over the path: one replacement, a new inode. The
+   intermediate states that exist are a temporary file and the half-installed set of paths, inside
+   the lock and the transaction; the number of touched paths is the minimum.
+
+**Staged and unstaged edits keep their split.** The final index entry is the three-way merge of the
+base, the landed blob and the owner's staged blob; the final file is the same merge over the
+owner's file. A staged edit and an unstaged edit on the same file stay staged and unstaged.
+
+### The prediction cases
+
+| Case | Outcome |
+| :--- | :--- |
+| owner's edit and the landed change on different hunks | lands; both are in the file (`git merge-file`) |
+| both change the same hunk | **conflict**: nothing is written, no recovery ref, no markers |
+| owner deleted or renamed away a path the landing modifies, or edited one the landing deletes | conflict; identical results (both deleted) land |
+| mode (executable bit) changed on one side | merged; on both sides differently, conflict |
+| binary (an attribute says `binary` or `-diff`, or Git finds a NUL in the first 8000 bytes) | any overlap is a conflict unless the bytes are identical |
+| owner's untracked or ignored file on a path the landing adds | conflict unless identical, and an identical file is not rewritten |
+| a file becomes a directory, or the reverse, and the owner has no content there | lands, including when the directory held tracked files in subdirectories the landing deletes |
+| a file becomes a directory and the owner has content at the file path | conflict |
+| a directory becomes a file | every file still under the directory after the landing's own deletions is the owner's content, whether modified, untracked, ignored or an editor side file: conflict naming the landed path and each file in the way. The lander never deletes a file it does not track |
+| a path that attributes convert (line endings, a clean or smudge filter) | compared in Git's stored form, so a clean checked-out file is never a false conflict; written in its checked-out form |
+| a touched path whose parent directory in the checkout is a symlink | conflict: the lander never writes through a symlink, and does not claim Git's own checkout handles it safely |
+| submodule entries | conflict |
+| a merge, rebase, cherry-pick or revert in progress in the checkout | pause, the reason names the state |
+
+A predicted conflict is the only pause the owner's tree causes. The landing is refused as
+`trunk-worktree-uncommitted` with the conflicting paths, the drain holds the gated candidate as
+`trunk-path-dirty` and re-evaluates it as the owner's content or the trunk changes.
+
+**Editor side files** (Vim `.<name>.swp`, `.swo`, `<name>~`, `4913`; Emacs `.#<name>`, `#<name>#`;
+anything ignored) are never touched and never counted as the owner's content on a landed path.
+The two exceptions are a path the landing adds itself, and a directory the landing replaces with a
+file. A file the owner has open with nothing saved is simply updated on disk, as `git pull` does;
+the lander logs nothing about editor side files, because a touched path is judged by its own
+content and an informational line would be noise on every landing.
+
+### What a save is, and the limit
+
+The owner can save at any moment, so the prediction can go stale. A **save is the bytes readable
+at a touched path**. The lander writes only through directory handles it opens one component at a
+time without following a symlink, and confirms before and after each replacement that the handle
+still is the directory the checkout path names; a parent the owner turns into a link or renames away
+is never written through, and an undo goes back through the handle it wrote in, not through the path.
+This needs Linux (`renameat2` with `RENAME_EXCHANGE`) on a filesystem that supports it; elsewhere
+the landing fails with the system's error and changes nothing.
+
+**The index lock.** From before the first replacement until the trunk ref has moved (and through
+any rollback), the lander holds `<git dir>/index.lock`, the lock Git's own checkout, commit and add
+take. A branch switch or an `add` cannot happen in the middle: it fails with Git's usual lock message
+and can be run again a moment later, and a rollback never overwrites something the owner did. The
+lander checks the branch after taking the lock, so a switch that won leaves the other branch's files
+unwritten. It never waits inside the write transaction: a lock someone else holds is ordinary Git
+work in progress, which is contention and not a fact about the owner's content. The attempt is
+rolled back, nothing is held, refused or recorded, and the landing tries again after a short pause
+(25 ms doubling to 1 s; the request's context ends it). The lock is created by linking a file that
+already carries the lander's ownership record (kind, host, process id, token), so record and lock
+appear together. A lock whose record names this host and a process that no longer exists is the
+lander's own leftover and the next landing removes it; any other lock is never touched. A lander
+killed during the final move leaves this lock, as a killed Git command leaves its own. Git then
+refuses the owner's commands with its usual `index.lock: File exists` message. The file is JSON
+whose `kind` is `tillr-land-index-lock` and whose `host` and `pid` name the lander, and removing it
+is safe once that process is gone. The index is
+replaced once, from a copy with only the touched entries changed, so untouched entries keep their
+stat data. Because a file is replaced by an exchange with a temporary, the displaced inode exists
+under a temporary name beside the path from the replacement until the trunk ref has moved; that is
+the one intermediate on-disk state, inside the lock, and the names are removed right after.
+
+**A directory that becomes a file is exchanged whole.** The lander does not empty the directory
+file by file. One exchange puts the prepared file at the path and leaves the directory, with
+everything in it, under a temporary name beside the path; the deletions the landing makes under it
+appear only in the index. The lander reads the whole displaced directory after the exchange and
+lists it again once every path is installed. A file the prediction did not read, or one whose
+content differs, is the owner's: before the trunk moves the directory is exchanged back and the
+landing predicts again, which is then a conflict. After the trunk has moved the lander unlinks the
+files it read, by name, and the directories that are then empty, never a tree recursively. Anything
+else found there stays, the directory keeps its temporary name (`.tillr-<random>.tmp` beside the
+path), and the landing records a `land.fault` event naming it. If the owner saves a file at the
+path while an install is being undone, that file stays at the path, the directory stays under its
+temporary name, and the fault names both.
+
+**A landing predicts again only when something was read differently.** When the comparison or the
+install answers that the owner changed a path, the next prediction's readings of the touched paths,
+their index entries and the branch are compared with the previous prediction's. If all are the
+same, the owner changed nothing: the landing ends as a failed install does, with the owner's
+content put back and a `land.fault` event, so a landing never repeats without a save in between.
+
+- A change found **before the trunk moves** puts the owner's files back (symlinks included), saved
+  bytes included, and predicts again under the same lock. The comparison, the branch check before
+  every mutation and a parent that changed do the same.
+- A change found **after the trunk moves** undoes nothing: the landed checkout and index stay. The
+  last read happens after the receipt is durable, or after a receipt that failed (the published
+  checkout is never undone, and the descriptors are read and closed on that path too). The bytes go to
+  a ref under `refs/tillr/owner-recovery/saved/` and the landing records a `land.fault` event, in a
+  transaction of its own, naming the path and the ref. A receipt that was rolled back leaves the
+  ref and the event; the recovery that later records the landing reports the ref.
+- A failed install puts the owner's content back, records a `land.fault` event naming the failure
+  and the recovery copy, and fails the landing; no conflict markers are written. While undoing, the
+  lander reads each file before it replaces it; bytes that are not what it installed are an owner's
+  save, and every newer version found is kept (the newest at the path, the rest in the saved ref).
+  An undo step that fails is reported with the path, the error and the ref holding the owner's
+  original bytes; the landing never says "exactly" unless every restoration was confirmed, and a
+  failed index restoration keeps the original entries of the touched paths in the saved ref.
+- The last read and the fault event run with a context the request cannot cancel, and every answer
+  that does not install (a stored receipt, a recovered landing) first reports and records what an
+  earlier attempt of the run left: stale copies, saved refs, and a fault event that never reached
+  the store.
+- The recovery copy is `refs/tillr/owner-recovery/copy/<run>-<random>`, new for each preparation. A
+  copy a crashed landing left stays until a later landing finds the disk matching it (and removes
+  it) or reports its ref and the differing paths; it is never overwritten, not even by the same run.
+  A preparation that installs nothing (a conflict, a closed item, a switched branch) removes its own
+  copy.
+- The checkout's rendering of each file uses the **landed** `.gitattributes`; the comparison with
+  what is on disk uses the attributes the checkout has now.
+
+**The limit.** No save is promised past the lander's last read of the displaced file. Bytes written
+through a descriptor opened before the replacement, after that last read and before the lander
+closes it, are outside the promise. `git pull` protects none of these either. The lander does not
+wait for a writer and does not keep the replaced file after the landing, so a clean landing leaves
+nothing behind. A save made through the path after the replacement goes into the new file and stays.
+
+### The owner moving the trunk
+
+The owner pulling, committing or rebasing forward on `main` while candidates are gated or in
+flight needs no intervention: the squash is recomputed onto the tip read under the lock and the
+verdict still binds the head's tree. A rewritten history is refused with `trunk-rewritten`.
+
 ## Test
+
 
 `go test ./...` in this directory builds the binary and drives the faces against scratch
 repositories. The land package's own suite pins the squash, the identity refusals, the pin,

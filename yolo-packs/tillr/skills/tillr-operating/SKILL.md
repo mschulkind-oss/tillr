@@ -353,6 +353,14 @@ Use the waiting view's cause to correct the item, backend policy, brief template
 build; the next pass retries the retained repair only when those inputs change.
 Queue rank, timestamps, and advancing trunk do not authorize that retry.
 
+The owner's uncommitted edits in the main checkout do not delay a landing: the lander
+carries them across as `git pull --autostash` does, leaves untouched paths alone, and keeps
+a recovery copy under `refs/tillr/owner-recovery/` while it works. The only pause the owner's
+tree causes is a predicted conflict (or a merge, rebase or cherry-pick in progress), held as
+`trunk-path-dirty` with the conflicting paths; the advice is to commit, restore, or change
+the edit, and the landing proceeds as soon as it no longer conflicts. A landing fault names a
+path and a `refs/tillr/owner-recovery/` ref that holds bytes the owner saved.
+
 ## 6. Verify — check store and invariant integrity
 `tillr store check`
 

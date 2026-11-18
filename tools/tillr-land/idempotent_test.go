@@ -3,6 +3,7 @@ package main_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +67,7 @@ func passBoth(t *testing.T, args []string) (int, []byte, string) {
 
 // killAfterMove runs `pass` and SIGKILLs it after the trunk's fast-forward has completed
 // and before the receipt transaction commits. A git wrapper on PATH runs the real
-// `merge --ff-only` — Move's write in a repository whose trunk is checked out — and then
+// the `update-ref` the final move makes — Move's write in a repository whose trunk is checked out — and then
 // waits on a barrier file, so the kill lands exactly in the window, with no clock. It
 // answers the commit the killed landing left the trunk at.
 func killAfterMove(t *testing.T, f fixture, args []string) string {
@@ -77,7 +78,7 @@ func killAfterMove(t *testing.T, f fixture, args []string) string {
 	}
 	dir := scratch(t, "git-after-move")
 	entered, release := filepath.Join(dir, "entered"), filepath.Join(dir, "release")
-	script := "#!/bin/sh\n'" + realGit + "' \"$@\"\nstatus=$?\nfor arg do\n if [ \"$arg\" = \"--ff-only\" ]; then\n  touch '" + entered + "'\n  while [ ! -e '" + release + "' ]; do sleep 0.01; done\n fi\ndone\nexit $status\n"
+	script := "#!/bin/sh\n'" + realGit + "' \"$@\"\nstatus=$?\nfor arg do\n if [ \"$arg\" = \"tillr.move=final\" ]; then\n  touch '" + entered + "'\n  while [ ! -e '" + release + "' ]; do sleep 0.01; done\n fi\ndone\nexit $status\n"
 	write(t, filepath.Join(dir, "git"), script)
 	if err := os.Chmod(filepath.Join(dir, "git"), 0o755); err != nil {
 		t.Fatal(err)
@@ -108,6 +109,40 @@ func killAfterMove(t *testing.T, f fixture, args []string) string {
 		t.Fatal("the killed landing did not reach the trunk move")
 	}
 	return tip
+}
+
+// ownerRemovesLandersIndexLock is the owner's step after a lander was killed during the final
+// move: the checkout's index.lock is still there, as a killed Git command leaves it. The owner
+// reads it, sees the lander's record naming a process that is gone, and removes it, which is
+// what Git's own message says to do.
+func ownerRemovesLandersIndexLock(t *testing.T, f fixture) {
+	t.Helper()
+	landersIndexLock(t, f)
+	if err := os.Remove(filepath.Join(f.dir, ".git", "index.lock")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// landersIndexLock asserts that the checkout's index lock carries the record of a lander that
+// is no longer running.
+func landersIndexLock(t *testing.T, f fixture) {
+	t.Helper()
+	path := filepath.Join(f.dir, ".git", "index.lock")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the killed lander left no index lock: %v", err)
+	}
+	var record struct {
+		Kind string `json:"kind"`
+		Pid  int    `json:"pid"`
+		Host string `json:"host"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil || record.Kind != "tillr-land-index-lock" || record.Pid <= 0 || record.Host == "" {
+		t.Fatalf("the index lock does not name the lander, its host and its process: %q (%v)", data, err)
+	}
+	if err := syscall.Kill(record.Pid, 0); err != syscall.ESRCH {
+		t.Fatalf("the lander the lock names (pid %d) is not gone: %v", record.Pid, err)
+	}
 }
 
 // landingRows answers every landing row's run, result, reason and trunk_after, in
@@ -212,6 +247,24 @@ func TestARecoveredLandingIsRecordedBeneathAnotherItemsLaterLanding(t *testing.T
 	}
 }
 
+// TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt: the kill lands
+// during the final move, while the lander holds the checkout's index lock. The lock stays, as
+// a killed Git command's does, and says whose it is; the next landing removes it and lands.
+func TestALanderKilledWithTheIndexLockLeavesItNamedAndTheNextLandingRemovesIt(t *testing.T) {
+	f := newFixture(t)
+	other := f.candidateFrom(t, "other-item", "second.txt", "second\n")
+	db := filepath.Join(scratch(t, "store"), "state.db")
+	killAfterMove(t, f, f.passArgs(t, db, "item_042", "run-1"))
+	landersIndexLock(t, f)
+	code, out, stderr := passBoth(t, other.passArgs(t, db, "item_043", "run-2"))
+	if code != 0 || decodeLanding(t, out).Payload.Result != "landed" {
+		t.Fatalf("the next landing exited %d: %s %s", code, out, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, ".git", "index.lock")); err == nil {
+		t.Fatal("the dead lander's index lock is still there")
+	}
+}
+
 // TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding: the trunk holds the
 // candidate's exact tree, but in a commit this landing did not write — the owner rewound
 // the killed landing and committed the same change by hand. Tree equality is not the
@@ -221,6 +274,7 @@ func TestAnUnrelatedCommitWithTheSameTreeIsNotTakenForTheLanding(t *testing.T) {
 	db := filepath.Join(scratch(t, "store"), "state.db")
 	args := f.passArgs(t, db, "item_042", "run-1")
 	killed := killAfterMove(t, f, args)
+	ownerRemovesLandersIndexLock(t, f)
 	git(t, f.dir, "reset", "-q", "--hard", f.baseSHA)
 	write(t, filepath.Join(f.dir, "candidate.txt"), "candidate\n")
 	git(t, f.dir, "add", "candidate.txt")
@@ -282,6 +336,7 @@ func TestTheSameRunLandingADifferentHeadIsNotTakenForItsEarlierLanding(t *testin
 	f := newFixture(t)
 	db := filepath.Join(scratch(t, "store"), "state.db")
 	earlier := killAfterMove(t, f, f.passArgs(t, db, "item_042", "run-1"))
+	ownerRemovesLandersIndexLock(t, f)
 	git(t, f.dir, "checkout", "-q", "-b", "candidate-2", f.headSHA)
 	write(t, filepath.Join(f.dir, "more.txt"), "more\n")
 	git(t, f.dir, "add", "more.txt")

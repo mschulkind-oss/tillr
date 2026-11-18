@@ -98,7 +98,7 @@ var Rules = map[string]Rule{
 	"question-open":                  {"needs you", "queue", "question not recorded"},
 	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
-	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
+	"trunk-path-dirty":               {"waits on work", "land", "commit, restore, or change your edit; the landing proceeds as soon as it no longer conflicts"},
 	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
 	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land, or a heavy proof green past its red commit"},
 	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},

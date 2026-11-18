@@ -2,12 +2,14 @@ package drain
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -28,27 +30,33 @@ func (s *dirtyPathSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
 }
 func (s *dirtyPathSteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
 	s.lands++
-	dirty := runGit(s.t, s.root, "diff", "--name-only", "HEAD")
-	changed := runGit(s.t, s.root, "diff", "--name-only", c.BaseSHA, c.HeadSHA)
-	var paths []string
-	for _, p := range strings.Fields(changed) {
-		for _, d := range strings.Fields(dirty) {
-			if p == d {
-				paths = append(paths, p)
-			}
-		}
-	}
-	if len(paths) > 0 {
-		return LandOutcome{Result: LandRefused, Reason: "trunk-worktree-uncommitted", ConflictPaths: paths}, nil
-	}
 	tip := runGit(s.t, s.root, "rev-parse", "HEAD")
 	tree := strings.Split(runGit(s.t, s.root, "merge-tree", "--write-tree", "--merge-base="+c.BaseSHA, tip, c.HeadSHA), "\n")[0]
+	// The lander's own prediction decides, as the real lander does.
+	trunk, err := land.OpenTrunk(s.root)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if paths, err := trunk.PredictOwner(TrunkRef, tip, tree); err != nil {
+		s.t.Fatal(err)
+	} else if len(paths) > 0 {
+		return LandOutcome{Result: LandRefused, Reason: "trunk-worktree-uncommitted", ConflictPaths: paths}, nil
+	}
 	if tree == runGit(s.t, s.root, "rev-parse", tip+"^{tree}") {
 		// The real lander's finding for a change the trunk already carries.
 		return LandOutcome{Result: LandRefused, Reason: LandAlreadyOnTrunk}, nil
 	}
 	commit := runGit(s.t, s.root, "commit-tree", tree, "-p", tip, "-m", "land")
-	runGit(s.t, s.root, "merge", "--ff-only", commit)
+	// The real lander's overlay carries the owner's content across the move.
+	plan, err := trunk.PlanOwner(TrunkRef, c.RunID, tip, commit)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	install, err := trunk.MoveOwner(plan, TrunkRef, commit, tip)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	install.Finish()
 	return LandOutcome{Result: LandLanded}, nil
 }
 func (s *dirtyPathSteps) Verdict(context.Context, Candidate, string) error { s.verdicts++; return nil }
@@ -257,5 +265,107 @@ func TestUnrelatedDirtyPathDoesNotDelayLanding(t *testing.T) {
 	}
 	if got := runGit(t, f.root, "diff", "--name-only"); got != "base.txt" {
 		t.Fatalf("owner edit lost: %q", got)
+	}
+}
+
+// The wait re-evaluates with the lander's prediction: dirt that restores cleanly on top of the
+// landed result is not a hold, and an owner edit on the same line is.
+func TestDirtyHoldPathsFollowThePredictionNotAnyOverlap(t *testing.T) {
+	root := filepath.Join(scratchUnderDurable(t), "hold")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "init", "-q", "-b", TrunkRef)
+	body := "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n"
+	writeForkFile(t, filepath.Join(root, "a.txt"), body)
+	runGit(t, root, "add", "a.txt")
+	runGit(t, root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+	base := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	runGit(t, root, "checkout", "-q", "-b", "cand")
+	writeForkFile(t, filepath.Join(root, "a.txt"), "L1\n"+strings.TrimPrefix(body, "l1\n"))
+	runGit(t, root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "cand")
+	head := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	runGit(t, root, "checkout", "-q", TrunkRef)
+	hold := &dirtyHold{Root: root, Candidate: Candidate{BaseRef: TrunkRef, BaseSHA: base, HeadSHA: head, RunID: "run-x"}}
+
+	writeForkFile(t, filepath.Join(root, "a.txt"), "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nW9\n")
+	if paths, err := hold.paths(context.Background()); err != nil || len(paths) != 0 {
+		t.Fatalf("a non-overlapping edit held the landing: %v %v", paths, err)
+	}
+	writeForkFile(t, filepath.Join(root, "a.txt"), "OWN1\n"+strings.TrimPrefix(body, "l1\n"))
+	if paths, err := hold.paths(context.Background()); err != nil || len(paths) != 1 || paths[0] != "a.txt" {
+		t.Fatalf("a conflicting edit did not hold: %v %v", paths, err)
+	}
+}
+
+// A retained conflict reopens when the owner's edit stops conflicting, even though the file is
+// still dirty; the owner's edit stays on disk and the landing is the candidate's gated change.
+func TestDirtyWaitReopensWhenTheEditStopsConflictingWhileStillDirty(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	steps := &dirtyPathSteps{t: t, root: f.root, store: f.storePath}
+	l.cfg.Steps = steps
+	body := "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n"
+	writeForkFile(t, filepath.Join(f.root, "base.txt"), body)
+	runGit(t, f.root, "add", "base.txt")
+	runGit(t, f.root, "commit", "-qm", "multi-line base")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths='["base.txt"]' WHERE item_id='item-a'`)
+		return err
+	})
+	plan := mustPlan(t, l)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	if ok, _, err := l.applyPlan(context.Background(), plan, base, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("dispatch: %v / %v", ok, err)
+	}
+	lane := l.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "base.txt\n")
+	writeForkFile(t, filepath.Join(lane, "base.txt"), "L1\n"+strings.TrimPrefix(body, "l1\n"))
+	runGit(t, lane, "add", "base.txt")
+	runGit(t, lane, "commit", "-qm", "candidate")
+	c := Candidate{ItemID: "item-a", RunID: plan.decision.RunRequest.RunID, LaneID: "lane-1", Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD"), Request: plan.decision.RunRequest}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), FinishedAt: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), ArtifactRefs: []run.ArtifactRef{}})
+	})
+	if err := appendJudgment(context.Background(), f.storePath, candidateReadyKind, "run", c.RunID, c, l.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "base.txt"), "OWN1\n"+strings.TrimPrefix(body, "l1\n"))
+	var result LoopResult
+	if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
+		t.Fatalf("judge %s / %v", stop, err)
+	}
+	drainOwned(t, l, &result)
+	if result.Landed != 0 || steps.lands != 1 {
+		t.Fatalf("a conflicting edit did not hold: %+v / %+v", result, steps)
+	}
+	// Another item, whose change does not conflict, lands meanwhile.
+	lane2 := l.lanePath("lane-2")
+	runGit(t, lane2, "reset", "-q", "--hard", base) // the lane starts from the trunk the candidate was cut from
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-2"), FenceFile), "other.txt\n")
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-2"), ItemFenceFile), "other.txt\n")
+	writeForkFile(t, filepath.Join(lane2, "other.txt"), "other\n")
+	runGit(t, lane2, "add", "other.txt")
+	runGit(t, lane2, "commit", "-qm", "item b")
+	var other LoopResult
+	stop, landedB, err := l.Verify(context.Background(), Candidate{ItemID: "item-b", RunID: "run-item-b-a1", LaneID: "lane-2", Worktree: lane2, BaseSHA: base, HeadSHA: runGit(t, lane2, "rev-parse", "HEAD")}, &other, nil)
+	if err != nil || stop != "" || !landedB {
+		t.Fatalf("a second item did not land while the first waits: %s / %v / %v / %+v / %+v", stop, landedB, err, other, steps)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "base.txt")); string(got) != "OWN1\n"+strings.TrimPrefix(body, "l1\n") {
+		t.Fatalf("the second landing disturbed the owner's file: %q", got)
+	}
+	// Still dirty, no longer conflicting: the owner moved the edit to another line.
+	mine := strings.Replace(body, "l9", "W9", 1)
+	writeForkFile(t, filepath.Join(f.root, "base.txt"), mine)
+	if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
+		t.Fatalf("reopen %s / %v", stop, err)
+	}
+	drainOwned(t, l, &result)
+	if result.Landed != 1 || steps.lands != 3 || steps.gates != 2 { // held, item-b, reopened
+		t.Fatalf("the wait did not reopen: %+v / %+v", result, steps)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "base.txt")); string(got) != "L1\n"+strings.TrimPrefix(mine, "l1\n") {
+		t.Fatalf("base.txt = %q", got)
 	}
 }

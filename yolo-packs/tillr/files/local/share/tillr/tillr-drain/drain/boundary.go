@@ -389,8 +389,12 @@ func trunkHistoryRef(ref string) bool {
 // lost. A sibling lane's landing writes both while this bracket's run is in flight.
 func landerRef(ref string) bool {
 	// The heavy runner owns the proof ref, just as the lander owns its receipt refs.
-	return ref == GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, preservedPrefix)
+	return ref == GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, preservedPrefix) || strings.HasPrefix(ref, ownerRecoveryPrefix)
 }
+
+// ownerRecoveryPrefix is the lander's recovery copy of the owner's uncommitted content on the
+// paths a landing replaces. It is its own prefix, apart from refs/stash, which is the owner's.
+const ownerRecoveryPrefix = "refs/tillr/owner-recovery/"
 
 // runRefExcused answers whether a ref may move without convicting this run.
 // Ordinary refs belong to other Git users; registered sibling branches and the

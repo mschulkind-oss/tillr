@@ -1411,17 +1411,21 @@ Uncommitted content in the main checkout belongs to the owner, including edits
 made while runs are in flight. Boundary snapshots do not attribute that content
 to any run. Writes into another lane's worktree still convict the writing run.
 
-When the lander reports uncommitted content on a path its change touches, the
+When the lander predicts that the owner's content would conflict with the landed result
+(or finds the checkout in the middle of a merge, rebase or cherry-pick), the
 drain retains the already-gated candidate and verdict, and releases an ordinary
 lane after verifying its run pin, following [held candidate capacity](#held-candidate-capacity).
-It records `trunk-path-dirty: ` followed by the sorted dirty paths as an
-ordinary item decision. Unrelated dirty paths do not delay a landing.
+It records `trunk-path-dirty: ` followed by the sorted conflicting paths as an
+ordinary item decision; the advice is "commit, restore, or change your edit on
+<paths>; the landing proceeds as soon as it no longer conflicts". Dirty paths that
+restore cleanly, and paths the landing does not touch, never delay a landing: the lander
+carries the owner's content across, as [`git pull --autostash` does](../tillr-land/README.md#the-owners-working-tree).
 
-Commit or restore the named paths. The next pass retries only the landing with
+Change the named paths. The next pass retries only the landing with
 the original candidate and verdict, including after a supervisor restart; it
 neither dispatches a replacement run nor reruns the gate. Each wait check uses the
-change reapplied onto the current trunk, so an already-applied path does not keep
-blocking the remainder; a merge conflict reaches the lander's conflict handling.
+lander's own prediction for the change reapplied onto the current trunk, so an
+already-applied path or an edit that no longer conflicts does not keep blocking; a merge conflict reaches the lander's conflict handling.
 When the owner commits the candidate's whole change, the lander finds it already
 there and refuses the landing as `already-on-trunk`. The drain records the passing
 verdict and moves the item to `resolved-elsewhere`; it does not hold the item as
@@ -1521,7 +1525,7 @@ lands in one of three outcomes:
 | :--- | :--- | :--- |
 | Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
 | Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, and the two trunk-history refs | Ignored | These are deliveries or concurrent loop work. |
+| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, the lander's recovery copy of the owner's content under `refs/tillr/owner-recovery/`, the heavy runner's proof ref `refs/tillr/green`, and the two trunk-history refs (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`) | Ignored | These are deliveries or concurrent loop work. |
 | `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the built fork head before it moves the patch branch. |
 | The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
 | A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |
