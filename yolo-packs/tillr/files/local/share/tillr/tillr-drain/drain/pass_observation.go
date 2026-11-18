@@ -65,7 +65,7 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if l.beforeSessionOpen != nil {
 		l.beforeSessionOpen(!l.sessionInitialized)
 	}
-	s, err := store.Open(ctx, l.cfg.Store, !l.sessionInitialized)
+	s, err := store.Open(ctx, l.cfg.Store, !l.sessionInitialized, l.sessionOptions...)
 	if err != nil {
 		return Incompatiblef("%v", err)
 	}
@@ -112,9 +112,32 @@ func (l *Loop) newHeartbeatTicker() heartbeatTicker {
 	return heartbeatTicker{C: t.C, Stop: t.Stop}
 }
 
+// beat is one heartbeat of a running loop: refreshSession, except that a store too busy
+// to take the write is reported and not a fault. The heartbeat is liveness bookkeeping.
+// A beat that could not be written leaves refreshed_at where it was, so every reader of
+// the session -- the view's "missed heartbeat", another process domain's stop judging
+// the session stale after SessionGrace -- sees exactly what happened: a stale beat, never
+// a false one. The next tick, a second later, writes the next beat; that is the
+// heartbeat's ordinary schedule, not a retry of this one. What a failed beat must not do
+// is stop the loop: on 2026-11-18 a beat that waited out the busy timeout behind the
+// loop's own plan applications stopped the loop twice, and each stop cancelled the
+// full-suite proof trunk was waiting on. Whatever held the lock is the defect, and the
+// store's trace records it; the loop's own work goes on and meets the same store with
+// its own errors. Any other refresh failure -- a store this program cannot open, an
+// unrecordable presence -- is still a fault.
+func (l *Loop) beat(ctx context.Context, next time.Time) error {
+	err := l.refreshSession(ctx, next)
+	if err != nil && store.IsBusy(err) && ctx.Err() == nil {
+		l.reportf("loop: the session heartbeat was not recorded, the store was busy: %v\n", err)
+		return nil
+	}
+	return err
+}
+
 // keepSessionAlive refreshes the same session while synchronous startup, staging,
 // planning, or rolling work prevents the pass goroutine from reaching its next read.
-// A failed heartbeat cancels that work and returns a fault, never false liveness.
+// A failed heartbeat cancels that work and returns a fault, never false liveness; a
+// busy store is not a failed heartbeat (beat).
 func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) func() error {
 	stop := make(chan struct{})
 	done := make(chan error, 1)
@@ -130,7 +153,7 @@ func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) 
 				done <- nil
 				return
 			case <-ticker.C:
-				err := l.refreshSession(ctx, l.cfg.Now().Add(PassInterval))
+				err := l.beat(ctx, l.cfg.Now().Add(PassInterval))
 				if err == nil {
 					err = l.checkpointIfDue(ctx)
 				}
