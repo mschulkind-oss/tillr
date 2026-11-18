@@ -97,6 +97,11 @@ type Record struct {
 	Usage        *Usage        `json:"usage,omitempty"`
 	SpendStatus  string        `json:"spend_status"`
 	SpendNote    string        `json:"spend_note,omitempty"`
+	// EndingException states that the adapter, not the harness, ended a session that
+	// had already settled: the harness did not exit, and the adapter says what it
+	// signalled. The run is still the ordinary exit it reports, judged on its answer;
+	// it is neither a failure nor an interruption to replay.
+	EndingException string `json:"ending_exception,omitempty"`
 }
 
 // Usage is one run's spend, as its backend reported it. Each field is a pointer because
@@ -273,6 +278,9 @@ func checkRecord(payload Record) error {
 		}
 	} else if payload.SettledAt != "" || payload.HarnessEndedAt != "" {
 		return Usagef("settlement observations require settled-idle")
+	}
+	if payload.EndingException != "" && payload.State != StateExited {
+		return Usagef("an ending_exception requires an exited run")
 	}
 	switch payload.State {
 	case StateExited:

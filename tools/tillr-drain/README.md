@@ -439,6 +439,12 @@ and gate follow, not backend failover or an infrastructure retry. A `blocked` or
 `failed` footer still follows the ordinary handling for that answer. Self-exiting
 harnesses keep their existing records.
 
+A Pi run whose adapter ended its settled session has a different record: an
+ordinary exit 0 (`end_cause: normal-exit`) that carries an `ending_exception`
+([Pi's settled-session ending](../tillr-run/backends/pi/README.md#ending-a-settled-session-pi-does-not-exit)).
+The drain judges it on its answer like any exit 0. It must not treat the run as
+killed, re-dispatch it or resume its session.
+
 ## Backend policy changes
 
 At the start of each pass, `loop` reads its `--policy` file and compares its

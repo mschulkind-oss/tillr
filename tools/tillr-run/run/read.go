@@ -215,6 +215,7 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 				payload.Usage.Details = finish.Usage.Details
 			}
 			payload.SpendNote = finish.SpendNote
+			payload.EndingException = finish.EndingException
 			payload.SettledAt = finish.SettledAt
 			payload.HarnessEndedAt = finish.HarnessEndedAt
 		}

@@ -199,6 +199,54 @@ notice, and a tool child checks that it did not receive SIGUSR1. The pause is re
 before print-mode readiness to cover startup, and split header writes plus startup
 diagnostics verify that the JSON stream is forwarded unchanged.
 
+## Ending a settled session pi does not exit
+
+Pi's print mode exits once its agent settles and no extension holds the session
+open. Only one extension takes a hold. pi-background-tasks takes one for each
+`completionPolicy: "wake"` task, and it releases the hold when the completion's turn
+settles. On 2026-11-18 that release was missed for completions that the extension's
+`context` hook injected as a fallback into a model call already in progress. The
+journal records those as `fallback-injected` and `observed via fallback`, with no
+`enqueued`. Print mode then waited forever, and `session_shutdown` never ran, so
+every extension timer stayed armed. Three workers had committed, and their settled
+reports said `RESULT: done`, but they sat for seven hours. The fix belongs in that
+extension's patch series. Until it ships, and for any other way pi can fail to exit,
+the [`stop-at-gap`](./stop-at-gap) watcher ends the session on pi's own statements:
+
+1. The stream carries a top-level `agent_settled`, and no `agent_start` follows it.
+   keep-going acts at `agent_before_settle`, so a settle is already its verdict.
+2. The extension's journal (`PI_BACKGROUND_TASK_JOURNAL`, else
+   `$XDG_STATE_HOME/pi-background-tasks/journal.sqlite`) has an instance row for this
+   pi process since its launch, the row is not disabled, and the journal shows no wake
+   still owed. A wake is owed by a wake-policy task that has not ended. It is also owed
+   by an ended one whose completion was neither observed by the session, nor stopped
+   (`wake_requested` 0), nor failed to enqueue. A wake turn after a settle is ordinary
+   work: on 2026-11-18, 16 of about 760 footer-bearing settles were followed by one in
+   the same process. A journal that cannot answer never ends a session.
+
+Then the watcher sends pi its documented shutdown, SIGTERM. Pi disposes the runtime,
+emits `session_shutdown` and exits 143. The watcher forwards what pi flushed, appends
+`{"type":"tillr_harness_ended","after":"agent_settled",…,"actions":[…],"harness_exit":143}`
+and exits 0. The executor records that as the run's
+[`ending_exception`](../../README.md#ending-a-settled-harness-that-lingers).
+
+Two waits are involved. Neither decides that work is over:
+
+- **The grace.** The journal is first read 30 seconds after the settle
+  (`TILLR_SETTLED_EXIT_GRACE_SECONDS`). A healthy pi exits by itself within that
+  time, and that exit is recorded as ordinary, not as an exception.
+- **The exit bound.** A pi that is still alive 120 seconds after its shutdown
+  (`TILLR_HARNESS_EXIT_BOUND_SECONDS`) gets a second SIGTERM, which pi's handler
+  turns into an immediate exit. After a second bound, only pi gets SIGKILL.
+
+The watcher never signals its own process group, a tool child or the runner.
+
+`TestPiSettledHarnessThatNeverExitsIsEndedByTheAdapter` runs the real adapter and
+runner against a stand-in pi that settles with a footer and a leaked-hold journal,
+then never exits. The settled-idle samples are withheld, so only this ending can end
+the run. `TestPiSettledOwedWorkReadsTheBackgroundTaskJournal` covers the journal
+shapes, and `TestPiSettledShutdownEscalates` covers the escalation with no clock.
+
 **Historical persistence measurement, 2026-11-16 (not the current pause kind):**
 Pi entered a bash tool call whose command was `sleep 60`;
 SIGTERM to the harness returned 143. Opening the same session returned 0 and answered
