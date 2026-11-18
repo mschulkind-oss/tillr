@@ -8442,11 +8442,7 @@ A planning node can already propose replacing a later node that has not started,
   - Add the `planned-build@v1` workflow and the template its plan node expands.
   - Refuse a piece on a seat the policy does not map, outside the fence, or writing on a read-only seat.
 
-<!-- tillr: item id="item-plan-pieces-workflow" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A tracked workflow `planned-build@v1` starts with a read-only `plan` node on the plan seat. It reads the item and the tree and proposes replacing the later fan-out stage with a tracked template and bounded arguments, one entry per piece, each naming a seat, a write scope inside the item's fence, and the named outputs it produces. A test runs the workflow with a fixture planner and asserts the graph after the proposal holds the pieces, and that a proposal naming a seat the policy does not map, a scope outside the fence, or a write scope on a seat the policy lists as read-only is refused with its reason recorded.
-- **c2:** Writing pieces run one at a time on the item's one worktree, in the order the plan lists them, and read-only pieces that are ready at the same time run together under the scheduler the drain already has. A test with three writing pieces and two read-only pieces asserts that the writers start in plan order, that no writer starts before the writer ahead of it has ended, and that the two readers' runs overlap.
-- **c3:** A test asserts that every seat `planned-build@v1` and `build-pieces@v1` name is mapped in every policy under `config/tillr/`.
 
 **Agent details:**
 
@@ -8473,7 +8469,7 @@ Once a plan can cut a build into pieces, nothing yet checks that the pieces toge
   - Send a criterion no piece covers back to the plan node by name.
   - Put the model-use rule in a tracked file the owner edits without a code change.
 
-<!-- tillr: item id="item-plan-verify-and-guidance" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-plan-pieces-workflow" prose="2" -->
+<!-- tillr: item id="item-plan-verify-and-guidance" paths="config/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The `verify` node of `planned-build@v1`, on the verify seat, runs after the pieces and before the gate, reads the item's criteria, the joined diff and the pieces' outputs, and names for each criterion the piece that satisfies it. A criterion no piece covers sends the item back to the plan node with that criterion named, and a test asserts it. The gate and the judge still decide landing.
 - **c2:** The plan node's brief carries the model-use rule in the Agent details, and a test asserts the brief text names it. When the planner cannot cut a piece without a design decision, it reports blocked with the specific question and no piece is invented. The test asserts the item is routed to the design seat.
@@ -8524,7 +8520,7 @@ The point of spreading work across seats is to spend less, and today nothing pri
   - Record each node run's seat, backend, model and cost.
   - Print cost per landed item and per seat, and the median of the last twenty landed build items.
 
-<!-- tillr: item id="item-plan-cost-per-seat" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-plan-pieces-workflow" prose="2" -->
+<!-- tillr: item id="item-plan-cost-per-seat" paths="tools/tillr-drain/,tools/tillr-run/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** Each node run records its seat, backend, model and cost, and `tillr drain why` or a read face prints cost per landed item and per seat. The item's report states the baseline, which is the median cost of the last twenty landed build items read from the run records. Once ten items have landed through `planned-build@v1`, the same output prints the same figure for those items. A test over fixture run records asserts both numbers and that a node with missing cost prints unknown and not zero.
 

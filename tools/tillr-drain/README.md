@@ -306,8 +306,8 @@ node in the inner exit's `requires_nodes`. For example:
 
 The top-level `args` declares required parameters. A containing stage passes
 values in its own `args`. Paths are repository-relative and cannot traverse
-outside it; strings have a declared `most`; commands name registered entries,
-never command lines. Missing, unknown, wrongly typed, and oversized arguments
+outside it; strings and pieces have a declared `most`; commands name registered
+entries, never command lines. Missing, unknown, wrongly typed, and oversized arguments
 are refused before dispatch. A whole value spelled `${args.name}` substitutes
 that parameter's typed value, including when forwarding to another workflow.
 No expression is evaluated. Example declarations and a read-only repeated stage:
@@ -332,6 +332,24 @@ no runs and preserve ordering between the steps around them. A workflow must
 still contain executable nodes. A named output crossing a repeated stage must
 have a single producer, rather than silently choosing one copy's file.
 
+A `pieces` argument is a bounded list of objects with exactly `id`, `seat`,
+`access`, `prompt`, optional `outputs`, and, for a writer, a nonempty
+`write_scope` list. IDs follow output-name rules and must be unique; access is
+`write` or `read_only`, and readers must omit the scope. A stage repeating over
+pieces becomes one agent per entry in list order, with those fields copied into
+the graph. Ready writers run one at a time in that order; ready readers share
+the existing parallel scheduler. Named outputs are declared per piece.
+
+[`planned-build@v1`](../../config/tillr/workflows/planned-build@v1.json) starts
+with a read-only planner, falls back to a build node when it proposes nothing,
+and ends at the verify evaluator. Its optional `graph.proposal` may replace
+`work` with [`build-pieces@v1`](../../config/tillr/workflows/build-pieces@v1.json)
+and up to 12 pieces. The proposal and its graph revision are settled together;
+refusals leave the old graph intact. An unmapped seat records
+`proposal-seat-unmapped`, a writing piece on a policy read-only seat records
+`proposal-read-only-seat-writes`, and a scope outside the item fence records
+`proposal-scope-outside-fence`. No item selects this workflow by default.
+
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
 unless it declares a narrower one. A scope outside its container or the item's
@@ -344,7 +362,7 @@ hashes of all contributing workflow files. Continuation and restart use this
 snapshot, not edited templates. The file check uses the same expansion and
 refusals, printing executable node count, dependency depth, outgoing edge count,
 and expansion depth. For a parameterized library checked on its own, it uses
-one representative string or registered command per parameter. Path parameters
+one representative string, piece, or registered command per parameter. Path parameters
 remain symbolic: their unknown scope is constrained by enclosing stages rather
 than rejected against an invented path. Each real invocation validates its
 concrete paths and reports its actual expansion.

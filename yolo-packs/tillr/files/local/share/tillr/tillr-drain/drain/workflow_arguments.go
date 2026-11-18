@@ -13,7 +13,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 )
 
-// WorkflowArgument declares a typed parameter. Most bounds only string lists.
+// WorkflowArgument declares a typed parameter. Most bounds string and piece lists.
 type WorkflowArgument struct {
 	Type string `json:"type"`
 	Most int    `json:"most,omitempty"`
@@ -101,6 +101,68 @@ func scopeForLane(paths []string, lane string) []string {
 	return result
 }
 
+type workflowPiece struct {
+	ID         string            `json:"id"`
+	Seat       string            `json:"seat"`
+	Access     string            `json:"access"`
+	WriteScope []string          `json:"write_scope,omitempty"`
+	Prompt     string            `json:"prompt"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
+}
+
+func parseWorkflowPiece(root string, value any) (workflowPiece, error) {
+	var p workflowPiece
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return p, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return p, fmt.Errorf("expected piece object")
+	}
+	for _, key := range []string{"id", "seat", "access", "prompt"} {
+		if _, ok := fields[key].(string); !ok {
+			return p, fmt.Errorf("piece requires string %s", key)
+		}
+	}
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&p); err != nil {
+		return p, err
+	}
+	if !outputNameValid(p.ID) || !item.ValidSeatName(p.Seat) || strings.ContainsRune(p.Prompt, 0) {
+		return p, fmt.Errorf("invalid piece id, seat or prompt")
+	}
+	if p.Access != "write" && p.Access != "read_only" {
+		return p, fmt.Errorf("invalid piece access")
+	}
+	_, hasScope := fields["write_scope"]
+	if p.Access == "read_only" && hasScope || p.Access == "write" && (!hasScope || len(p.WriteScope) == 0) {
+		return p, fmt.Errorf("invalid piece write_scope for %s", p.Access)
+	}
+	if p.Access == "write" {
+		if _, err := (WorkflowStage{ID: p.ID, WriteScope: WorkflowScope{Paths: p.WriteScope}}).scopePaths(nil); err != nil {
+			return p, err
+		}
+	}
+	for _, scope := range p.WriteScope {
+		if err := commandPath(root, scope); err != nil {
+			return p, err
+		}
+	}
+	if outputs, ok := fields["outputs"]; ok {
+		if _, ok := outputs.(map[string]any); !ok {
+			return p, fmt.Errorf("piece outputs must be a map")
+		}
+	}
+	for name, typ := range p.Outputs {
+		if !outputNameValid(name) || !outputTypeValid(typ) {
+			return p, fmt.Errorf("invalid piece output %s", name)
+		}
+	}
+	return p, nil
+}
+
 // The file check binds representative strings and commands and symbolic paths.
 // Actual calls validate every supplied value before expansion.
 func workflowCheckArguments(root, path string) ([]map[string]any, error) {
@@ -127,6 +189,8 @@ func workflowCheckArguments(root, path string) ([]map[string]any, error) {
 			args[name] = []any{fmt.Sprintf("%s%x/%s/", workflowCheckPathPrefix, symbol, name)}
 		case "strings":
 			args[name] = []any{"check"}
+		case "pieces":
+			args[name] = []any{map[string]any{"id": "check", "seat": "build", "access": "read_only", "prompt": "check"}}
 		case "command":
 			raw, err := os.ReadFile(filepath.Join(root, "config/tillr/commands.json"))
 			if err != nil {
@@ -180,7 +244,7 @@ func bindWorkflow(root string, raw []byte, supplied map[string]any) ([]byte, err
 	}
 	for _, name := range sortedNames(defs) {
 		def := defs[name]
-		if !outputNameValid(name) || (def.Type != "paths" && def.Type != "strings" && def.Type != "command") || def.Type == "strings" && def.Most <= 0 || def.Type != "strings" && def.Most != 0 {
+		if !outputNameValid(name) || (def.Type != "paths" && def.Type != "strings" && def.Type != "command" && def.Type != "pieces") || (def.Type == "strings" || def.Type == "pieces") && def.Most <= 0 || def.Type != "strings" && def.Type != "pieces" && def.Most != 0 {
 			return nil, fmt.Errorf("workflow-argument-type: %s: invalid declaration", name)
 		}
 		value, ok := supplied[name]
@@ -201,10 +265,22 @@ func bindWorkflow(root string, raw []byte, supplied map[string]any) ([]byte, err
 		if !ok {
 			return nil, fmt.Errorf("workflow-argument-type: %s: expected list", name)
 		}
-		if def.Type == "strings" && len(values) > def.Most {
+		if (def.Type == "strings" || def.Type == "pieces") && len(values) > def.Most {
 			return nil, fmt.Errorf("workflow-argument-most: %s: %d exceeds %d", name, len(values), def.Most)
 		}
+		seenPieces := map[string]bool{}
 		for _, value := range values {
+			if def.Type == "pieces" {
+				piece, err := parseWorkflowPiece(root, value)
+				if err != nil {
+					return nil, fmt.Errorf("workflow-argument-type: %s: %w", name, err)
+				}
+				if seenPieces[piece.ID] {
+					return nil, fmt.Errorf("workflow-argument-type: %s: duplicate piece id %s", name, piece.ID)
+				}
+				seenPieces[piece.ID] = true
+				continue
+			}
 			s, ok := value.(string)
 			if !ok || strings.ContainsRune(s, 0) {
 				return nil, fmt.Errorf("workflow-argument-type: %s: expected strings", name)
@@ -275,8 +351,8 @@ func bindWorkflow(root string, raw []byte, supplied map[string]any) ([]byte, err
 		if name == "" {
 			continue
 		}
-		if defs[name].Type != "strings" || s["access"] != "read_only" || s["kind"] == "workflow" {
-			return nil, fmt.Errorf("workflow-repeat: %v: repeat needs a strings argument and a read-only run", s["id"])
+		if s["kind"] == "workflow" || (defs[name].Type == "pieces" && s["kind"] != "agent") || (defs[name].Type != "pieces" && (defs[name].Type != "strings" || s["access"] != "read_only")) {
+			return nil, fmt.Errorf("workflow-repeat: %v: repeat needs pieces on an agent or strings on a read-only run", s["id"])
 		}
 	}
 	return json.Marshal(obj)
