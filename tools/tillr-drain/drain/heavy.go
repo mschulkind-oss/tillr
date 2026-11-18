@@ -33,6 +33,11 @@ type HeavyRunner struct {
 	// fixer, with the reason on its checks. Nil files fixers only.
 	Revert func(ctx context.Context, tip, landing string, checks []HeavyCheck, replay HeavyReplay) (RevertOutcome, error)
 	Report func(HeavyRun)
+	// Progress receives one line as each step of a run ends: each check's verdict on the
+	// tip, the start of a culprit search, and each replay it makes with its outcome or the
+	// reason it gave no verdict. Report fires once, when the whole run ends; Progress is
+	// what an operator reads while a long search is still going.
+	Progress func(string)
 	// Now observes the run; injected judges can use this same clock for check timings.
 	Now func() time.Time
 }
@@ -101,6 +106,9 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 	}
 	defer owner.Close()
 	defer life.Close()
+	if r.Progress != nil {
+		ctx = context.WithValue(ctx, heavyProgressReportKey{}, r.Progress)
+	}
 	ctx = context.WithValue(ctx, heavyOwnershipKey{}, heavyOwnership{Lock: lock, Owner: owner, Guard: filepath.Join(dir, heavyCleanupGuard)})
 	for {
 		if err = ctx.Err(); err != nil {
@@ -306,7 +314,16 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		// never left holding landings while nobody acts.
 		against := check.FirstRedLanding
 		if check.FirstRedLanding == "" {
+			r.progressf("loop: heavy %s failed at tip %s; searching for the first red landing since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 			red, fault, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID)
+			switch {
+			case err != nil && ctx.Err() == nil && !cleanupLost(err):
+				r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
+			case err == nil && fault:
+				r.progressf("loop: heavy %s culprit search names no landing (red at the green base, or the recorded landings do not explain the tip); the fixer is filed against the tip\n", check.CheckID)
+			case err == nil:
+				r.progressf("loop: heavy %s first red landing %s\n", check.CheckID, shortSHA(red))
+			}
 			if err != nil {
 				// A stop or a lost cleanup is the run's own fault, not attribution's.
 				if ctx.Err() != nil || cleanupLost(err) {
@@ -431,6 +448,22 @@ func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 	})
 	return red, err
 }
+func (r HeavyRunner) progressf(format string, args ...any) {
+	if r.Progress != nil {
+		r.Progress(fmt.Sprintf(format, args...))
+	}
+}
+
+// heavyProgressReportKey carries the runner's Progress into the judge, so a judge that
+// runs checks one at a time reports each verdict as it ends.
+type heavyProgressReportKey struct{}
+
+func heavyProgressReport(ctx context.Context, format string, args ...any) {
+	if report, ok := ctx.Value(heavyProgressReportKey{}).(func(string)); ok && report != nil {
+		report(fmt.Sprintf(format, args...))
+	}
+}
+
 func joinDetail(old, add string) string {
 	if old = strings.TrimSpace(old); old == "" {
 		return add
@@ -440,11 +473,31 @@ func joinDetail(old, add string) string {
 func heavyLandings(ctx context.Context, root, storePath, base, tip string) ([]string, error) {
 	return heavy.Landings(ctx, root, storePath, base, tip)
 }
+
+// replay is one attribution replay with its outcome on the progress log: what was
+// replayed where and why, how long it took, and its verdict or why it gave none.
+func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, error) {
+	started := r.Now()
+	r.progressf("loop: heavy %s replaying at %s (%s)\n", id, shortSHA(sha), why)
+	red, err := r.one(ctx, sha, id)
+	took := r.Now().Sub(started).Round(time.Second)
+	switch {
+	case err != nil && ctx.Err() != nil:
+	case err != nil:
+		r.progressf("loop: heavy %s at %s: no verdict after %s, because %v\n", id, shortSHA(sha), took, err)
+	case red:
+		r.progressf("loop: heavy %s at %s: red after %s\n", id, shortSHA(sha), took)
+	default:
+		r.progressf("loop: heavy %s at %s: green after %s\n", id, shortSHA(sha), took)
+	}
+	return red, err
+}
+
 func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string, bool, error) {
 	if base == "" {
 		return "", true, nil
 	} // no proved baseline: never accuse a landing without one
-	red, err := r.one(ctx, base, id)
+	red, err := r.replay(ctx, base, id, "the green base")
 	if err != nil {
 		return "", false, err
 	}
@@ -460,7 +513,7 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string
 	}
 	// The search needs a red upper bound. A later green landing means this
 	// range cannot explain the tip, even if an earlier landing was red.
-	red, err = r.one(ctx, commits[len(commits)-1], id)
+	red, err = r.replay(ctx, commits[len(commits)-1], id, fmt.Sprintf("the last of %d recorded landings since green", len(commits)))
 	if err != nil {
 		return "", false, err
 	}
@@ -470,7 +523,7 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string
 	low, high := 0, len(commits)-1
 	for low < high {
 		mid := (low + high) / 2
-		red, err := r.one(ctx, commits[mid], id)
+		red, err := r.replay(ctx, commits[mid], id, fmt.Sprintf("landing %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
 		if err != nil {
 			return "", false, err
 		}

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // HeavyStep supplies the judge used by the one asynchronous trunk runner.
@@ -70,9 +71,22 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			if err := saveHeavyCheck(ctx, checks[0]); err != nil {
 				return nil, err
 			}
+			heavyProgressReport(ctx, "loop: heavy %s %s in %s\n", id, checks[0].Result, (time.Duration(checks[0].DurationMS) * time.Millisecond).Round(time.Second))
 			result = append(result, checks...)
 		}
 		legacy, err := s.runHeavyLegacy(ctx, dir, "")
+		if err == nil {
+			failed := []string{}
+			for _, check := range legacy {
+				if check.Result == "fail" {
+					failed = append(failed, check.CheckID)
+				}
+			}
+			if len(failed) == 0 {
+				failed = append(failed, "none")
+			}
+			heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+		}
 		return append(result, legacy...), err
 	}
 	result := []HeavyCheck{}

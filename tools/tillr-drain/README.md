@@ -802,7 +802,12 @@ last red observation (its filing or a later attached tip), and every check the f
 names is among the proof's passed checks. The `trunk-broken` holds behind it are then
 gone on that plan, and an acquittal waiting on it is released once the selected lane
 base contains the proved commit. A proof from before this rule, which lists no checks,
-resolves nothing. The
+resolves nothing. The tip run's own passes are proof too, check by check: the runner
+and the legacy program's adapter record when each check passed on the tip
+(`heavy-progress.json`, `heavy-legacy-progress.json`), so a stale fixer, one whose named
+checks already pass on a tip containing its red commit, is resolved by those passes
+while the rest of the run is still going or is red for another check. A fixer that names
+no check needs a whole green run. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.
 With no pointer yet the report says there is no proved baseline to accuse a landing; it
 does not claim that a nonexistent pointer was judged red.
@@ -832,6 +837,23 @@ and, when it is not possible,
 `loop: heavy unit red from 1a2b3c4d5e6f: automatic revert not possible: <reason>; filing a fixer`.
 Each attempt is a `drain.revert` event; the landings history of `tillr-view serve` (`/api/v1/landings`) shows it as a `revert` row, and
 the item waits as `landing-reverted` until the pass that returns it.
+
+A heavy run logs as it goes, not only when it ends. Each declaration check's verdict is a
+line as the check ends (`loop: heavy <check> <result> in <time>`), and the legacy program
+gives one line with its failing checks. A failing check starts the culprit search with
+`loop: heavy <check> failed at tip <sha>; searching for the first red landing since green
+<sha>`, and each replay is two lines: where and why it replays (the green base, the last
+recorded landing, or a bisection step), then its verdict and time, or `no verdict after
+<time>, because <reason>`. A replay with no verdict is not retried: the search ends there,
+says so, and files the fixer against the tip.
+
+A generated repair item (a trunk fixer or a tooling-defect item) that reports `blocked`
+is sent back to its worker, except on an identical repeat. Its ending is keyed by the
+obstacle, not the prose: the trunk tip it was reported against and the obstacle kind its
+report named (`drain.generated-block`). A second blocked ending with the same key goes to
+the owner with the loop's own question instead of to the worker a third time. A moved
+trunk is a new key. A `NEXT-ACTOR:` line followed by a reason (`NEXT-ACTOR: owner —
+...`) still names its actor.
 
 Budgets are reported targets, never deadlines. The summary names each overrun's measured
 and declared times without changing the verdict. A sampled stall is retried once on the

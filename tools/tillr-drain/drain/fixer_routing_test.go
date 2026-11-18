@@ -266,3 +266,136 @@ func TestHeavyGreenProofNamesItsPassedChecks(t *testing.T) {
 		t.Fatalf("proof = %+v, want %s passing only unit", proof, tip)
 	}
 }
+
+// writeTipProgress records the tip run's per-check passes the way the heavy runner and the
+// legacy program's adapter do while a run is still going.
+func writeTipProgress(t *testing.T, l *Loop, tip string, passed map[string]time.Time, legacy map[string]time.Time) {
+	t.Helper()
+	dir, err := heavyDirectory(context.Background(), l.cfg.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	p := heavyProgress{TipSHA: tip, Checks: map[string]HeavyCheck{}, PassedAt: map[string]time.Time{}}
+	for id, at := range passed {
+		p.Checks[id] = HeavyCheck{CheckID: id, Result: "pass"}
+		p.PassedAt[id] = at
+	}
+	if err := publishHeavyJSON(dir, "heavy-progress.json", p); err != nil {
+		t.Fatal(err)
+	}
+	checks := map[string]map[string]any{}
+	for id, at := range legacy {
+		checks[id] = map[string]any{"seconds": 1, "proved_at": at.UTC().Format(time.RFC3339)}
+	}
+	if err := publishHeavyJSON(dir, "heavy-legacy-progress.json", map[string]any{"tip_sha": tip, "checks": checks, "reused": []string{}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stale fixer — its named check already passes on a tip that contains its red commit —
+// is resolved by that one recorded pass, while the rest of the tip run is still going or
+// is red for another check. This is the 2026-11-18 fixer-main-8ab93d9ace80, dispatched
+// seven times while the tip run had already passed its check and no whole run could be
+// green.
+func TestTipRunPassOfTheFixersCheckResolvesAStaleFixer(t *testing.T) {
+	ctx := context.Background()
+	f, l, fixer, red := fixerRoutingFixture(t)
+	report := &strings.Builder{}
+	l.cfg.Report = report
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.SetState(ctx, tx, "item-spare", StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "item:" + fixer, Reason: RefusalTrunkAlreadyRed + ": go-tool/unit"})
+		return err
+	})
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "repair lands")
+	tip := runGit(t, f.root, "rev-parse", TrunkRef)
+	before, later := l.cfg.Now().UTC().Add(-time.Minute), l.cfg.Now().UTC().Add(time.Minute)
+
+	// Not evidence: another check's pass, a pass older than the red observation, and a
+	// pass on a commit that does not contain the red commit.
+	for _, tc := range []struct {
+		name   string
+		commit string
+		legacy map[string]time.Time
+	}{
+		{"another check", tip, map[string]time.Time{"go-tool/other": later}},
+		{"older than the red", tip, map[string]time.Time{"go-tool/unit": before}},
+		{"below the red commit", runGit(t, f.root, "rev-parse", red+"^"), map[string]time.Time{"go-tool/unit": later}},
+	} {
+		writeTipProgress(t, l, tc.commit, nil, tc.legacy)
+		if err := l.resolveProvedFixers(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixerState(t, f, fixer); got == StateResolvedElsewhere {
+			t.Fatalf("%s resolved the fixer", tc.name)
+		}
+	}
+
+	// The tip run passed the fixer's check (recorded by the legacy adapter) and failed
+	// another: no green proof exists, and the fixer is resolved anyway.
+	writeTipProgress(t, l, tip, map[string]time.Time{"go-tool/other": later}, map[string]time.Time{"go-tool/unit": later})
+	if err := l.resolveProvedFixers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+		t.Fatalf("a tip pass of the fixer's check did not resolve it: %s", got)
+	}
+	if err := l.releaseTrunkAcquittals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixerState(t, f, "item-spare"); got != StateInQueue {
+		t.Fatalf("acquittal behind the resolved fixer not released: %s", got)
+	}
+	if d := planFor(t, l, "item-declared"); d.Reason == ReasonTrunkBroken {
+		t.Fatalf("still held trunk-broken: %+v", d)
+	}
+	if out := report.String(); !strings.Contains(out, fixer+" resolved: the heavy run of "+tip) {
+		t.Fatalf("log lacks the resolution: %s", out)
+	}
+}
+
+// A generated repair that ends blocked twice on the same trunk with the same obstacle is
+// an identical repeat, however its report is worded: the second goes to the owner with
+// the loop's own question rather than back to its worker. A moved trunk is a new obstacle.
+func TestGeneratedRepairBlockedTheSameWayTwiceGoesToTheOwner(t *testing.T) {
+	ctx := context.Background()
+	f, l, fixer, _ := fixerRoutingFixture(t)
+	report := &strings.Builder{}
+	l.cfg.Report = report
+	waiting := func(run string) item.Conflict {
+		t.Helper()
+		var c item.Conflict
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			all, err := item.ReadConflicts(tx.Reader())
+			c = all[fixer]
+			return err
+		})
+		if c.ConflictID != "conflict-"+run {
+			t.Fatalf("latest conflict %s, want conflict-%s", c.ConflictID, run)
+		}
+		return c
+	}
+	block := func(runID, text string) item.Conflict {
+		t.Helper()
+		if err := l.reportedBlock(ctx, Decision{ItemID: fixer, RunRequest: &run.Request{RunID: runID}}, text+"\nRESULT: blocked"); err != nil {
+			t.Fatal(err)
+		}
+		return waiting(runID)
+	}
+	if c := block("fixer-a1", "The repair is already an ancestor of the staged base."); c.WaitingOn != "build" {
+		t.Fatalf("first blocked report: %+v", c)
+	}
+	c := block("fixer-a2", "**Blocker:** the named tip is red, but its repair is already in my base; I stopped.")
+	if c.WaitingOn != "owner" || !strings.Contains(c.Text, "exactly as run fixer-a1 did") {
+		t.Fatalf("an identical repeat went back to its worker: %+v", c)
+	}
+	if !strings.Contains(report.String(), fixer+" ended blocked as run fixer-a1 did") {
+		t.Fatalf("log: %s", report.String())
+	}
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "the trunk moves")
+	if c := block("fixer-a3", "The repair is already an ancestor of the staged base."); c.WaitingOn != "build" {
+		t.Fatalf("a block on a moved trunk is not a repeat: %+v", c)
+	}
+}
