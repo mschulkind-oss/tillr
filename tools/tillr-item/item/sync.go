@@ -156,7 +156,8 @@ func ReadSyncDocuments(root string) ([]SyncDocument, error) {
 // syncPlan is what one sync decided before writing: per file, the items to write in write
 // order, and the report as a dry run would print it.
 type syncPlan struct {
-	report SyncReport
+	orderRecord []string
+	report      SyncReport
 	// writes are the files with something to write, in the order they may be written, and
 	// each file's payloads in the order its items may be written.
 	writes []fileWrites
@@ -267,10 +268,40 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			return SyncReport{}, Internalf("releasing the savepoint for %s: %v", fw.file, err)
 		}
 	}
-	// Apply files under their savepoints first, then place only successful imports
-	// in original block order. Dependency ordering must not change priority.
+	// Apply under per-file savepoints, then place successful imports. Record
+	// items come first; the remaining items keep block order, not dependency order.
+	available := map[string]bool{}
+	places, err := OrderPlaces(tx.Reader())
+	if err != nil {
+		return SyncReport{}, err
+	}
+	for id := range places {
+		if !created[id] {
+			available[id] = true
+		}
+	}
+	recorded := map[string]bool{}
+	for _, id := range plan.orderRecord {
+		if created[id] {
+			if err := placeRecorded(tx, id, plan.orderRecord, available, in.At); err != nil {
+				return SyncReport{}, err
+			}
+			recorded[id], available[id] = true, true
+		}
+	}
 	for _, p := range plan.placements {
-		if created[p.id] {
+		if created[p.id] && !recorded[p.id] {
+			if len(plan.orderRecord) != 0 && places[p.id] != 0 {
+				if _, err := Place(ctx, tx, p.id, Destination{To: "last"}, in.At, "", "sync"); err != nil {
+					return SyncReport{}, err
+				}
+			}
+		}
+	}
+	// Finish append placement before following source marks: a source imported
+	// later in block order must not subsequently move away from its children.
+	for _, p := range plan.placements {
+		if created[p.id] && !recorded[p.id] && p.from != "" {
 			if err := placeFrom(tx, p.id, p.from, in.At); err != nil {
 				return SyncReport{}, err
 			}
@@ -592,9 +623,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 			fw.payloads = append(fw.payloads, desired)
 			fw.created[desired.ItemID] = true
-			if from := b.attributes["from"]; from != "" {
-				placements = append(placements, sourcePlacement{desired.ItemID, from})
-			}
+			placements = append(placements, sourcePlacement{desired.ItemID, b.attributes["from"]})
 			report.Created = append(report.Created, desired.ItemID)
 			continue
 		}
@@ -642,8 +671,13 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if err != nil {
 		return syncPlan{}, err
 	}
+	var orderRecord []string
 	if in.Root != "" {
 		config, err := settings.Read(in.Root)
+		if err != nil {
+			return syncPlan{}, err
+		}
+		orderRecord, err = readOrderRecord(in.Root, config.Order.Record)
 		if err != nil {
 			return syncPlan{}, err
 		}
@@ -651,7 +685,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			writes = append(writes, proseRewriteWrites(&report, blocks, held, d.Ready)...)
 		}
 	}
-	return syncPlan{report: report, writes: writes, placements: placements}, nil
+	return syncPlan{report: report, writes: writes, placements: placements, orderRecord: orderRecord}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after

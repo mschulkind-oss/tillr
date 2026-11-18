@@ -25,6 +25,7 @@ type Intake struct {
 // and false after_landing disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
+	Order    Order
 	Intake   Intake
 	Lanes    Lanes
 	Roll     Roll
@@ -33,6 +34,13 @@ type Settings struct {
 	Prose    Prose
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
+}
+
+// Order opts into a repository-relative order record. SettleMinutes is the delay
+// after a hand move before the loop may record it; Read defaults it to ten.
+type Order struct {
+	Record        string
+	SettleMinutes int64
 }
 
 // Prose enables automatic rewrite items; its zero value leaves findings advisory.
@@ -81,7 +89,7 @@ func ReadWithoutLanding(root, definitionName string) (Settings, error) {
 }
 
 func read(root, nonLandingDefinition string) (Settings, error) {
-	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}}
+	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Order: Order{SettleMinutes: 10}}
 	path := filepath.Join(root, ".tillr.toml")
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -109,8 +117,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake or lanes)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "order" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes or order)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -123,6 +131,18 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 			value := values[key]
 			full := table + "." + key
 			switch full {
+			case "order.record":
+				str, ok := value.(string)
+				if !ok || (str != "" && (str == "." || !filepath.IsLocal(str) || filepath.ToSlash(filepath.Clean(str)) != str || strings.ContainsAny(str, "*?\n\r"))) {
+					return Settings{}, refuse(full, "a clean repository-relative file path, or empty to disable")
+				}
+				s.Order.Record = str
+			case "order.settle_minutes":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuse(full, "a nonnegative integer number of minutes")
+				}
+				s.Order.SettleMinutes = n
 			case "lanes.express":
 				n, ok := value.(int64)
 				if !ok || n < 0 {
@@ -222,6 +242,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				s.Push.AfterLanding = flag
 			default:
 				expected := "a known push key (after_landing, remote or ref)"
+				if table == "order" {
+					expected = "a known order key (record or settle_minutes)"
+				}
 				if table == "intake" {
 					expected = "a known intake key (dir or paths)"
 				}
