@@ -8,7 +8,8 @@ package main
 // one of those payloads is a change to the record contract, and this copy is where a
 // reader sees that the change was not honoured here.
 //
-// The JSON tags are frozen. Each struct names the utility that owns the shape.
+// Each struct names the utility that owns its input shape. Item presentation hides
+// the legacy rank key and adds the computed place.
 
 // itemRecord is the item.record payload, owned by tools/tillr-item/item (itemPayload):
 // design §5.3's field list, plus the two fields the store sets and the input never
@@ -24,7 +25,8 @@ type itemRecord struct {
 	// sparse lexical token over the store's rank alphabet, compared as a plain string,
 	// and empty for an item the queue sorts after every ranked one. It is the same
 	// spelling the store column has, because the two are the same fact.
-	Rank      string `json:"rank"`
+	Rank      string `json:"rank"` // decoded from legacy records; hidden by MarshalJSON
+	Place     int    `json:"place,omitempty"`
 	DesignDoc string `json:"design_doc,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
 	EventSeq  int64  `json:"event_seq,omitempty"`

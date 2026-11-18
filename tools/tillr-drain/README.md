@@ -1648,7 +1648,7 @@ tillr drain why <item-id> --store /path/to/.tillr/state.db --policy /path/to/pol
 ```
 
 `why` runs the same planner as `plan` without a pass input file, writes nothing,
-prints rank, item id, position, reason, and mover for every item not stored as
+prints place, item id, position, reason, and mover for every item not stored as
 `landed`, and ends with a summary. Naming an item prints its full explanation,
 including the planner decision. `--json` gives rows and summary as one object,
 or the selected item's record alone. The JSON answer also carries the event
@@ -1657,7 +1657,7 @@ sequence at which the planner read the store.
 A mover is the question, blocking item, run, lane, or operator action that can
 advance the item. The summary partitions the rows into running items, items the
 next pass could advance, and holds counted by reason. Busy lanes include unfinished
-candidate examinations, not just live leases. Capacity is consumed in rank order,
+candidate examinations, not just live leases. Capacity is consumed in queue order,
 so an earlier predicted dispatch can leave a later item waiting on a lane.
 Closed and resolved-elsewhere items remain visible with no further work required.
 

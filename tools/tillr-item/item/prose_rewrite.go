@@ -49,7 +49,7 @@ func proseRewriteWrites(report *SyncReport, blocks []syncBlock, held map[string]
 		if _, exists := held[id]; exists {
 			continue
 		}
-		p := itemPayload{ItemID: id, Title: "Add clear prose for " + original, BodyRef: b.payload.BodyRef, State: ready, Seat: SeatBuild, Rank: "0", AllowedPaths: []string{b.file}, BlockedBy: []string{}, Criteria: []criterion{}}
+		p := itemPayload{ItemID: id, Title: "Add clear prose for " + original, BodyRef: b.payload.BodyRef, State: ready, Seat: SeatBuild, AllowedPaths: []string{b.file}, BlockedBy: []string{}, Criteria: []criterion{}}
 		for i, text := range ProseRewriteCriteria {
 			p.Criteria = append(p.Criteria, criterion{CriterionID: fmt.Sprintf("c%d", i+1), Text: text})
 		}

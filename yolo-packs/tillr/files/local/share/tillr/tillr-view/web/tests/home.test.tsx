@@ -9,14 +9,14 @@ const drain = { ...snapshotData.drain_summary, session_grace_ms: 5000,
   session: { session_id: "session-a", started_at_ms: now - 60000, refreshed_at_ms: now,
     next_pass_at_ms: now + 10000, ended_at_ms: now }, last_stop_reason: "queue-drained" };
 const passes = [
-  { dispatched_at_ms: now - 10000, decisions: [{ item_id: "item-cause", rank: "a", action: "hold", reason: "gate-failed" }], stop: "queue-drained", detail: "nothing dispatchable" },
-  { dispatched_at_ms: now - 5000, decisions: [{ item_id: "item-owner", rank: "b", action: "dispatch", reason: "ready" }], stop: "moves", detail: "one dispatched" },
+  { dispatched_at_ms: now - 10000, decisions: [{ item_id: "item-cause", place: 1, action: "hold", reason: "gate-failed" }], stop: "queue-drained", detail: "nothing dispatchable" },
+  { dispatched_at_ms: now - 5000, decisions: [{ item_id: "item-owner", place: 2, action: "dispatch", reason: "ready" }], stop: "moves", detail: "one dispatched" },
 ];
 const waiting = [
-  { rank: "b", item_id: "item-owner-b", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "2h", class_source: "rule" },
-  { rank: "a", item_id: "item-cause", class: "needs a cause", where: "gate", why: "gate-failed", mover: "cause not recorded", since: "1h", class_source: "rule" },
-  { rank: "c", item_id: "item-work", class: "waits on work", where: "queue", why: "blocked", mover: "item-cause", since: "1h", class_source: "rule" },
-  { rank: "a", item_id: "item-owner-a", class: "needs you", where: "queue", why: "question-open", mover: "OQ-2", since: "2h", class_source: "rule" },
+  { place: 2, item_id: "item-owner-b", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "2h", class_source: "rule" },
+  { place: 1, item_id: "item-cause", class: "needs a cause", where: "gate", why: "gate-failed", mover: "cause not recorded", since: "1h", class_source: "rule" },
+  { place: 3, item_id: "item-work", class: "waits on work", where: "queue", why: "blocked", mover: "item-cause", since: "1h", class_source: "rule" },
+  { place: 1, item_id: "item-owner-a", class: "needs you", where: "queue", why: "question-open", mover: "OQ-2", since: "2h", class_source: "rule" },
 ];
 afterEach(cleanup);
 
@@ -45,7 +45,7 @@ test("Home shows dirty landing paths and elapsed waiting time beside since", () 
 });
 
 test("Home caps each group at eight and names remaining rows", () => {
-  const rows = Array.from({ length: 11 }, (_, i) => ({ ...waiting[0], item_id: `item-${i}`, rank: String(i).padStart(2, "0") }));
+  const rows = Array.from({ length: 11 }, (_, i) => ({ ...waiting[0], item_id: `item-${i}`, place: i + 1 }));
   const { container } = render(<Home snapshot={snapshotData} waiting={rows} />);
   expect(container.querySelectorAll('tbody [data-entity-kind="item"]')).toHaveLength(8);
   expect(screen.getByText("3 more needs you", { exact: false })).toBeTruthy();
@@ -87,7 +87,7 @@ test.each([true, false])("old stop note is hidden only with a live session: %s",
 });
 
 test("quoted stop detail links item identities instead of leaking plain-text IDs", () => {
-  const row = { ...passes[0], detail: "nothing dispatchable: item_042 held behind item-missing", decisions: [{ item_id: "item_042", rank: "a", action: "hold", reason: "blocked" }] };
+  const row = { ...passes[0], detail: "nothing dispatchable: item_042 held behind item-missing", decisions: [{ item_id: "item_042", place: 1, action: "hold", reason: "blocked" }] };
   const { container } = render(<LoopSummary drain={drain} passes={[row]} now={now} />);
   for (const id of ["item_042", "item-missing"]) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);

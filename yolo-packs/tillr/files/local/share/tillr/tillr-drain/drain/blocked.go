@@ -330,7 +330,7 @@ func (l *Loop) recordBlockAnswer(ctx context.Context, candidate Candidate) error
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "conflict-answer"); err != nil {
 			return err
 		}
-		report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: l.cfg.Root, Documents: []item.SyncDocument{{Path: file, Content: []byte(raw)}}, At: l.cfg.Now().UTC()})
+		report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: l.cfg.Root, Partial: true, Documents: []item.SyncDocument{{Path: file, Content: []byte(raw)}}, At: l.cfg.Now().UTC()})
 		if err != nil {
 			return err
 		}

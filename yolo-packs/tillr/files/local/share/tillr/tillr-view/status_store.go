@@ -252,6 +252,7 @@ func (v view) assembleStoreSubject(itemID string, source vantage.QuestionSource)
 		return assembly, nil
 	}
 	record := v.domain.itemRecordOf(it)
+	record.Place = itemPlaces(v.domain.items)[it.ItemID]
 	assembly.item = &record
 
 	lanes := map[string]bool{}

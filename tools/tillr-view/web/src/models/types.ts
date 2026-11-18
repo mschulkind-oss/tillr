@@ -86,7 +86,7 @@ export interface ApiFailure {
 
 export interface WaitingRow {
   graph_changes?: string[];
-  rank: string;
+  place?: number;
   item_id: string;
   document?: string;
   /** Publication observation identity; not an item and has no item controls. */
@@ -140,7 +140,7 @@ export interface PassRow {
   spend_started_in_loop?: SpendTotals | null;
   spend_carried_over?: SpendTotals | null;
   dispatched_at_ms: number;
-  decisions: { item_id: string; rank: string; action: string; reason: string; lane_id?: string; run_id?: string }[];
+  decisions: { item_id: string; place?: number; action: string; reason: string; lane_id?: string; run_id?: string }[];
   phases?: { stage_ms: number | null; dispatch_ms: number | null; gate_ms: number | null; land_ms: number | null } | null;
   session_id?: string;
   stop?: string;
@@ -193,10 +193,8 @@ export interface ItemView {
   cost_usd: number | null;
   latest_decision: DispatchView | null;
   latest_run: RunSummary | null;
-  /** The queue's order token, ascending, sparse and lexical (`'3'`, `'k'`). The board
-   * serves it; a server that predates it sends nothing, so the queue renders unranked
-   * rather than inventing an order. */
-  rank?: string | null;
+  /** Position in the full order, counted from 1; absent for parked or finished items. */
+  place?: number;
   /** How many of the item's criteria are still open, when the server counts them. */
   open_criteria?: number | null;
 }

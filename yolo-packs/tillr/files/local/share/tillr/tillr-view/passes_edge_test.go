@@ -38,7 +38,7 @@ func TestPassesRanksRemovedItemsAndExactMilliseconds(t *testing.T) {
 	}
 	decisions := rows[1].(map[string]any)["decisions"].([]any)
 	last := decisions[2].(map[string]any)
-	if last["item_id"] != "removed-item" || last["rank"] != "" || last["lane_id"] != nil || last["run_id"] != nil {
+	if last["item_id"] != "removed-item" || last["place"] != nil || last["lane_id"] != nil || last["run_id"] != nil {
 		t.Fatalf("removed hold: %v", last)
 	}
 	if rows[1].(map[string]any)["stop"] != nil {
@@ -84,7 +84,7 @@ func TestPassesRetryRetainsDispatchLinksAndPhases(t *testing.T) {
 	perfExec(t, h, `UPDATE dispatches SET action = 'retry' WHERE decision_id = 'd1'`)
 	rows := passData(t, h, "")
 	oldest := rows[2].(map[string]any)
-	d := oldest["decisions"].([]any)[1].(map[string]any)
+	d := oldest["decisions"].([]any)[0].(map[string]any)
 	if d["action"] != "retry" || d["lane_id"] != "lane-a" || d["run_id"] != "run-1" || oldest["phases"] == nil {
 		t.Fatalf("retry lost dispatched data: %v", oldest)
 	}

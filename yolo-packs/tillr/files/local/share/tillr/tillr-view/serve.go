@@ -724,14 +724,14 @@ func summarizeRun(r storeRun) runSummary {
 }
 
 // itemView is one item as the snapshot lists it: the projected state an operator reads,
-// with the machinery subordinated to the attempt history. Rank is the queue's own token,
+// with the machinery subordinated to the attempt history. Place is counted in the full order,
 // carried beside the order it produced: a client told the order and not the token could
 // not say where the next item goes.
 type itemView struct {
 	Kind           string         `json:"kind,omitempty"`
 	ItemID         string         `json:"item_id"`
 	Title          string         `json:"title"`
-	Rank           string         `json:"rank"`
+	Place          int            `json:"place,omitempty"`
 	Projected      itemProjection `json:"projected_state"`
 	UpdatedAtMS    int64          `json:"updated_at_ms"`
 	CostUSD        *float64       `json:"cost_usd"`
@@ -948,6 +948,7 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// The four figures are boardCountsOf's, not this loop's: the same function answers
 	// `tillr view status --store`, so the two faces cannot disagree (§5.6).
 	counts := boardCountsOf(items, runs, candidates, attempts, waiting, holds, history)
+	places := itemPlaces(items)
 	out.Items = make([]itemView, 0, len(items))
 	for _, it := range items {
 		itemRuns := runsByItem[it.ItemID]
@@ -975,7 +976,7 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 			BlockedBy:   blockers,
 			ItemID:      it.ItemID,
 			Title:       it.Title,
-			Rank:        it.Rank,
+			Place:       places[it.ItemID],
 			UpdatedAtMS: it.UpdatedAtMS,
 			Projected:   ProjectItemState(it, enqueuedCandidate, active, waiting[it.ItemID], holds[it.ItemID]),
 		}
@@ -1259,9 +1260,8 @@ type itemDetail struct {
 	BodyRef          string   `json:"body_ref"`
 	DesignDoc        string   `json:"design_doc"`
 	AllowedPaths     []string `json:"allowed_paths"`
-	// Rank is the item's place in the queue's order, the same token the board carries and
-	// sorts by: an item's dossier has to say which item comes first.
-	Rank      string         `json:"rank"`
+	// Place is counted in the full order, just as in the snapshot.
+	Place     int            `json:"place,omitempty"`
 	Projected itemProjection `json:"projected_state"`
 }
 
@@ -1298,9 +1298,14 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if !found {
 		return nil, itemNotFound(id)
 	}
+	items, err := readItems(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	places := itemPlaces(items)
 	out := itemData{
 		Item: itemDetail{ItemID: it.ItemID, Title: it.Title, BodyRef: it.BodyRef,
-			DesignDoc: it.DesignDoc, AllowedPaths: it.AllowedPaths, Rank: it.Rank},
+			DesignDoc: it.DesignDoc, AllowedPaths: it.AllowedPaths, Place: places[it.ItemID]},
 		Criteria:       []criterionView{},
 		BlockedBy:      []string{},
 		Decisions:      []dispatchView{},

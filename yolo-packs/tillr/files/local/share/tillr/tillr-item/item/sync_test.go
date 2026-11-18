@@ -173,8 +173,8 @@ func TestSyncReadsAMultiLineDirectiveAndMapsItsFields(t *testing.T) {
 	if stored.paths != `["tools/view/","tools/view-web/"]` {
 		t.Errorf("allowed_paths %s", stored.paths)
 	}
-	if stored.state != "in-queue" || stored.rank != "" || stored.seat != "" {
-		t.Errorf("state %q rank %q seat %q, want in-queue, unranked, no seat", stored.state, stored.rank, stored.seat)
+	if stored.state != "in-queue" || stored.rank == "" || stored.seat != "" {
+		t.Errorf("state %q rank %q seat %q, want in-queue, keyed, no seat", stored.state, stored.rank, stored.seat)
 	}
 	if got := column(t, s, `SELECT text FROM item_criteria WHERE item_id = 'item-read-api' AND criterion_id = 'c1'`); got != "The route answers with the payload, and nothing else." {
 		t.Errorf("c1 text %q", got)

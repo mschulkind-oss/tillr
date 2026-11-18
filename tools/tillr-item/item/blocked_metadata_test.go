@@ -31,6 +31,9 @@ func TestDefinitionUpdatePreservesBlockedMetadataAndReleaseClearsIt(t *testing.T
 	if p["waiting_on"].(map[string]any)["waiter"] != "plan" || p["underlying_state"] != "in-queue" {
 		t.Fatalf("sync lost metadata: %+v", p)
 	}
+	// Show carries a derived place, not the legacy write record's ordering key.
+	delete(p, "place")
+	p["rank"] = column(t, s, "SELECT rank FROM items WHERE item_id='item-read-api'")
 	p["title"] = "new definition"
 	env.Payload, _ = json.Marshal(p)
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error { _, err := item.Apply(ctx, tx, env); return err }); err != nil {

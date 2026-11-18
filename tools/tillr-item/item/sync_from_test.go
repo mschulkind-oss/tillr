@@ -52,8 +52,8 @@ func TestSyncFromValidation(t *testing.T) {
 			if len(report.Findings) != 0 || report.CreatedCount != 1 {
 				t.Fatalf("report %+v", report)
 			}
-			if rank := column(t, s, `SELECT rank FROM items WHERE item_id='item-new'`); rank != "" {
-				t.Fatalf("unknown/unkeyed source placed item at %q", rank)
+			if last := column(t, s, `SELECT item_id FROM items ORDER BY rank DESC LIMIT 1`); last != "item-new" {
+				t.Fatalf("new item did not append after an unknown/unkeyed source: last item is %q", last)
 			}
 		})
 	}

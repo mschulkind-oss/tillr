@@ -19,7 +19,7 @@ test.each(["focus", "scroll"])("socket order changes wait behind the Items contr
   let changed = false;
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    const rows = ["a", "b"].map(id => ({ item_id: id, rank: changed && id === "b" ? "0" : id, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }));
+    const rows = ["a", "b"].map(id => ({ item_id: id, place: changed ? (id === "b" ? 1 : 2) : (id === "a" ? 1 : 2), class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }));
     return new Response(JSON.stringify(envelope(path === "/api/v1/why" ? { rows } : path === "/api/v1/snapshot" ? snapshotData : [])));
   });
   vi.stubGlobal("fetch", fetch);
@@ -44,11 +44,11 @@ test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than th
   let arrived = false;
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    const data: unknown = path === "/api/v1/snapshot" ? snapshotData : path === "/api/v1/why" ? [{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "today", class_source: "rule" }] : path === "/api/v1/passes" ? [{ dispatched_at_ms: 1000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }] }] : null;
+    const data: unknown = path === "/api/v1/snapshot" ? snapshotData : path === "/api/v1/why" ? [{ place: 1, item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "today", class_source: "rule" }] : path === "/api/v1/passes" ? [{ dispatched_at_ms: 1000, decisions: [{ item_id: "item-held", place: 1, action: "hold", reason: "question-open" }] }] : null;
     if (data === null) throw new Error(`Unexpected route: ${path}`);
     if (arrived && Array.isArray(data)) {
-      if (path === "/api/v1/why") data.unshift({ ...data[0], item_id: "item-new", rank: "0" });
-      if (path === "/api/v1/passes") data.unshift({ dispatched_at_ms: 2000, decisions: [{ item_id: "item-new", rank: "0", action: "hold", reason: "blocked" }] });
+      if (path === "/api/v1/why") data.unshift({ ...data[0], item_id: "item-new", place: 1 });
+      if (path === "/api/v1/passes") data.unshift({ dispatched_at_ms: 2000, decisions: [{ item_id: "item-new", place: 1, action: "hold", reason: "blocked" }] });
     }
     return new Response(JSON.stringify(envelope(path === "/api/v1/why" ? { rows: data, summary: {} } : data)));
   });

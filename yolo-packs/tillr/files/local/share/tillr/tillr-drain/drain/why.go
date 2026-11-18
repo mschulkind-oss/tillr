@@ -16,7 +16,7 @@ import (
 // WhyRow decorates a planner decision with references a human can follow. Decision
 // retains the full planner record; the presentation fields do not decide readiness.
 type WhyRow struct {
-	Rank        string   `json:"rank"`
+	Place       int      `json:"place,omitempty"`
 	ItemID      string   `json:"item_id"`
 	State       string   `json:"state"`
 	Position    string   `json:"position"`
@@ -178,6 +178,25 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			seen[lane] = true
 		}
 	}
+	// The planner promotes repair work independently of the owner's order.
+	// Places describe keys, not that dispatch preference.
+	ordered := append([]itemRow(nil), items...)
+	sort.Slice(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if (a.Rank == "") != (b.Rank == "") {
+			return b.Rank == ""
+		}
+		if a.Rank != b.Rank {
+			return a.Rank < b.Rank
+		}
+		return a.ItemID < b.ItemID
+	})
+	places := map[string]int{}
+	for _, it := range ordered {
+		if item.InOrder(it.State) {
+			places[it.ItemID] = len(places) + 1
+		}
+	}
 	assigned := map[string]string{}
 	for i, env := range envs {
 		it := items[i]
@@ -189,7 +208,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			return answer, Internalf("reading planner decision: %v", err)
 		}
 		class, where, mover := whyPresentation(d)
-		row := WhyRow{Rank: it.Rank, ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
+		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
 		if d.Reason == ReasonEvalFailed || d.Reason == ReasonJudgeUnreadable {
 			detail, err := judgeFailureDetail(r, it.ItemID, d.Reason)
 			if err != nil {

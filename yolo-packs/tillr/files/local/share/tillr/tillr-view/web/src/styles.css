@@ -759,58 +759,6 @@ kbd {
   list-style: none;
 }
 
-/* The unranked block. The queue is one order, and its tail is the store's silence: every
- * item the store never ranked sorts here, by id. The heading is what keeps that tail from
- * reading as a recorded priority — so it is a rule the eye cannot miss, not a caption. */
-.queue-unranked {
-  border-top: 2px solid var(--line-strong);
-  background: var(--surface-sunken);
-}
-
-.queue-unranked__head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s1);
-  padding: var(--s2) var(--s3);
-  border-left: 3px solid var(--line-strong);
-}
-
-.queue-unranked__title {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  line-height: 1.3;
-  text-transform: uppercase;
-}
-
-/* A server older than the rank field is a defect to fix, not a state to live with: it gets
- * the blocked hue so the one notice an operator must not skim is not drawn in the same ink
- * as a store that simply has not been ranked yet. */
-.queue-unranked__head[data-provenance="server-unranked"] {
-  border-left-color: var(--blocked);
-}
-
-.queue-unranked__head[data-provenance="server-unranked"] .queue-unranked__title {
-  color: var(--blocked);
-}
-
-.queue-unranked__note {
-  margin: 0;
-  color: var(--ink-3);
-  font-size: var(--t-11);
-  line-height: 1.45;
-}
-
-.queue-unranked__note code {
-  padding: 0 3px;
-  border-radius: var(--r-1);
-  background: var(--surface-3);
-  color: var(--ink-2);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
 
 .queue-row {
   --row-state: var(--ink-3);
@@ -818,8 +766,8 @@ kbd {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "glyph rank title count"
-    "glyph rank meta count";
+    "glyph place title count"
+    "glyph place meta count";
   column-gap: var(--s2);
   align-items: center;
   width: 100%;
@@ -879,8 +827,8 @@ kbd {
   color: var(--row-state);
 }
 
-.queue-row__rank {
-  grid-area: rank;
+.queue-row__place {
+  grid-area: place;
   align-self: stretch;
   display: grid;
   place-items: center;
@@ -893,7 +841,7 @@ kbd {
   background: color-mix(in srgb, var(--surface-3) 55%, transparent);
 }
 
-.queue-row[aria-current="true"] .queue-row__rank {
+.queue-row[aria-current="true"] .queue-row__place {
   color: var(--row-state);
   font-weight: 700;
 }

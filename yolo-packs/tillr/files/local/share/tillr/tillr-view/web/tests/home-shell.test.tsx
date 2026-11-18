@@ -17,8 +17,8 @@ function mount(refused = false, lanes: LaneRow[] = []) {
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/designs": return new Response(JSON.stringify(envelope({designs:[{path:"docs/design.md",last_designer:null}],arrivals:{within_lifetime:2,after_lifetime:1,no_session:1,unmeasured:0}})));
       case "/api/v1/questions": return new Response(JSON.stringify(envelope({ items: [], unknown: [], missing: [], counts: { items: 0, questions: 0, holds: 0 }, state: "questions-ok" })));
-      case "/api/v1/passes": return new Response(JSON.stringify(envelope([{ dispatched_at_ms: 1794840000000, decisions: [{ item_id: "item-held", rank: "a", action: "hold", reason: "question-open" }], stop: "queue-drained", detail: "all held: item-held waits on OQ-1" }])));
-      case "/api/v1/why": return refused ? new Response(JSON.stringify({ error: { code: "store-unreadable", message: "waiting is locked" } }), { status: 503 }) : new Response(JSON.stringify(envelope({ rows: [{ rank: "a", item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "current plan", class_source: "planner" }], summary: { lanes_busy: 0, lanes_offered: 1, running: 0, could_run: 0, held: { "question-open": 1 } } })));
+      case "/api/v1/passes": return new Response(JSON.stringify(envelope([{ dispatched_at_ms: 1794840000000, decisions: [{ item_id: "item-held", place: 1, action: "hold", reason: "question-open" }], stop: "queue-drained", detail: "all held: item-held waits on OQ-1" }])));
+      case "/api/v1/why": return refused ? new Response(JSON.stringify({ error: { code: "store-unreadable", message: "waiting is locked" } }), { status: 503 }) : new Response(JSON.stringify(envelope({ rows: [{ place: 1, item_id: "item-held", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "current plan", class_source: "planner" }], summary: { lanes_busy: 0, lanes_offered: 1, running: 0, could_run: 0, held: { "question-open": 1 } } })));
       default: throw new Error(`Unexpected route: ${input}`);
     }
   });

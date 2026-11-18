@@ -4,7 +4,7 @@ import { ItemsView } from "../src/components/ItemsPasses";
 import type { WaitingRow } from "../src/models/types";
 
 const rows: WaitingRow[] = ["a", "hidden", "b", "c"].map((id, index) => ({
-  item_id: id, rank: String(index + 1), class: id === "hidden" ? "ready" : "needs you",
+  item_id: id, place: index + 1, class: id === "hidden" ? "ready" : "needs you",
   where: "queue", why: "question", mover: "owner", since: "today", class_source: "rule",
 }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
@@ -102,7 +102,7 @@ test("a fresh unchanged order after a concurrent restoration still offers accept
 test("keyboard moves do not jump over an ineligible adjacent visible row", () => {
   route(true);
   const fetch = vi.fn(async () => new Response("{}")); vi.stubGlobal("fetch", fetch);
-  const waiting = [rows[0], { ...rows[2], item_id: "parked", rank: "2" }, rows[2]];
+  const waiting = [rows[0], { ...rows[2], item_id: "parked", place: 2 }, rows[2]];
   const snapshot = { items: [{ item_id: "parked", projected_state: { raw_state: "not-started", state: "not-started" } }] } as import("../src/models/types").SnapshotData;
   render(<ItemsView waiting={waiting} snapshot={snapshot} writesEnabled />);
   fireEvent.focus(row("a")); fireEvent.keyDown(row("a"), { key: "J" });
@@ -147,7 +147,7 @@ test("a confirmed local move does not hide a later return to the original server
   await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Drag b" }).disabled).toBe(false));
   expect(order()).toEqual(["b", "a", "c"]);
   expect(screen.queryByRole("button", { name: "order changed ↑" })).toBeNull();
-  view.rerender(<ItemsView waiting={rows.map(item => item.item_id === "b" ? { ...item, rank: "0" } : item)} writesEnabled />);
+  view.rerender(<ItemsView waiting={rows.map(item => ({ ...item, place: item.item_id === "b" ? 1 : item.place! + 1 }))} writesEnabled />);
   expect(screen.queryByRole("button", { name: "order changed ↑" })).toBeNull();
   view.rerender(<ItemsView waiting={rows} writesEnabled />);
   expect(order()).toEqual(["b", "a", "c"]);
@@ -160,7 +160,7 @@ test.each(["focus", "scroll"])("incoming order waits while held by %s; facts sti
   const view = render(<ItemsView waiting={rows} />);
   if (heldBy === "focus") fireEvent.focus(row("b"));
   else fireEvent.scroll(screen.getByTestId("stable-list"), { target: { scrollTop: 100 } });
-  view.rerender(<ItemsView waiting={rows.map(item => ({ ...item, rank: item.item_id === "c" ? "0" : item.rank, why: "updated fact" }))} />);
+  view.rerender(<ItemsView waiting={rows.map(item => ({ ...item, place: item.item_id === "c" ? 1 : item.place! + 1, why: "updated fact" }))} />);
   expect(order()).toEqual(["a", "hidden", "b", "c"]);
   expect(screen.getAllByRole("cell", { name: "updated fact" })).toHaveLength(4);
   fireEvent.click(screen.getByRole("button", { name: "order changed ↑" }));

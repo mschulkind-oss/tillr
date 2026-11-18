@@ -21,7 +21,9 @@ func TestLandingRetiresItsDocumentBlockBeforeGateOutsideFence(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, "docs", "fixture.md"), before)
 	dependency := "# Other\n<!-- tillr: item id=\"item-other\" paths=\"other.txt\"\n blocked_by=\"item-target\" -->\n- **c1:** Keep this criterion.\n"
 	writeFile(t, filepath.Join(f.root, "docs", "other.md"), dependency)
-	git(t, f.root, "add", "docs/fixture.md", "docs/other.md")
+	// The other item must remain parked when sync reads its unchanged block.
+	writeFile(t, filepath.Join(f.root, "docs", "roadmap.md"), "## Icebox\n- [Other](other.md)\n")
+	git(t, f.root, "add", "docs/fixture.md", "docs/other.md", "docs/roadmap.md")
 	git(t, f.root, "commit", "-m", "fixture document")
 	t.Setenv("RETIRE_WANT", want)
 	gate := stub(t, "gate", counting+`set -eu

@@ -5,7 +5,7 @@ import type { PassRow } from "../src/models/types";
 afterEach(() => vi.unstubAllGlobals());
 const page: PassRow[] = Array.from({ length: 50 }, (_, index) => ({ dispatched_at_ms: 2000 - index, decisions: [] }));
 test("bounded history follows the exclusive cursor past 50 rows to cover the range", async () => {
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(envelope(url.includes("before=") ? [{ dispatched_at_ms: 1900, decisions: [{ item_id: "old-match", rank: "a", action: "hold", reason: "blocked" }] }] : page))));
+  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(envelope(url.includes("before=") ? [{ dispatched_at_ms: 1900, decisions: [{ item_id: "old-match", place: 1, action: "hold", reason: "blocked" }] }] : page))));
   vi.stubGlobal("fetch", fetch);
   const result = await fetchPassHistory(1000, 1);
   expect(result.data.rows).toHaveLength(51);

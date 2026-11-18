@@ -726,11 +726,16 @@ def case_seed_retirement_documented():
         if re.search(r'<!-- tillr: item\b[^>]*\bid="' + re.escape(item) + '"', roadmap, re.S):
             fail(f"retired seed work became dispatchable instead of prose: {item}")
     for path in (ROOT / "tools/tillr-view/web/README.md",
-                 ROOT / "tools/tillr-view/web/src/components/QueueRail.tsx", SKILL):
+                 SKILL):
         text = text_of(path)
-        if "tillr item rank" not in text:
+        if "tillr item place" not in text:
             fail(f"{path.relative_to(ROOT)} omits the replacement priority command")
-    ok("seed intake is retired; seven unfinished rows survive as prose and priority has a writer")
+    rail = text_of(ROOT / "tools/tillr-view/web/src/components/QueueRail.tsx")
+    if "queue-row__place" not in rail or "UnrankedHeading" in rail:
+        fail("queue rail must show places in one list")
+    if (ROOT / "tools/tillr-view/web/tests/queue-unranked.test.tsx").exists():
+        fail("retired unranked block test remains")
+    ok("seed intake is retired; seven unfinished rows survive as prose and places have a writer")
 
 
 def main():

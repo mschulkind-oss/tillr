@@ -8,7 +8,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { ClaimAuditBanner } from "../src/components/ClaimAuditBanner";
-import { QueueRail } from "../src/components/QueueRail";
+
 import { InterToolExchangeView } from "../src/components/InterToolExchangeView";
 import { ItemWithoutRun } from "../src/components/ItemWithoutRun";
 import { ObservatoryHeaderBar } from "../src/components/ObservatoryHeaderBar";
@@ -16,7 +16,7 @@ import { PayloadInspectorDrawer } from "../src/components/PayloadInspectorDrawer
 import { SpanViewer } from "../src/components/SpanViewer";
 import { assembleSpans, barStyle, windowOf } from "../src/models/spans";
 import { TranscriptView } from "../src/components/TranscriptView";
-import { EMPTY_FILTER, queueOrder } from "../src/models/board";
+import { EMPTY_FILTER } from "../src/models/board";
 import {
   blockedItemData,
   dispatchedItemData,
@@ -450,46 +450,6 @@ addCase("an item the store has a run for says the run is not selected", () => {
   expect(container.textContent).not.toContain("No run for item-seed-02");
 });
 
-// The queue's order is the store's statement of priority, and the gutter shows it. An
-// item with no rank is placed after the ranked ones under their own heading and shows
-// `—`, never a number: a count in the rank gutter is indistinguishable from a recorded
-// priority, which is the confusion the block exists to end.
-addCase("the queue orders by rank, unranked last, and shows the token", () => {
-  const ranked = [
-    { ...snapshotData.items[0], item_id: "item-third", title: "third", rank: null },
-    { ...snapshotData.items[0], item_id: "item-second", title: "second", rank: "k" },
-    { ...snapshotData.items[0], item_id: "item-first", title: "first", rank: "3" },
-  ];
-  const { container } = render(
-    <QueueRail
-      items={queueOrder(ranked)}
-      total={3}
-      selectedItem={null}
-      onSelectItem={() => {}}
-      filter={EMPTY_FILTER}
-      onFilterChange={() => {}}
-      onClearFilter={() => {}}
-      hidden={0}
-      filterRef={{ current: null }}
-      storeAbsent={false}
-    />,
-  );
-  const titles = Array.from(container.querySelectorAll(".queue-row__title")).map(
-    (node) => node.textContent,
-  );
-  expect(titles).toEqual(["first", "second", "third"]);
-  const ranks = Array.from(container.querySelectorAll(".queue-row__rank")).map(
-    (node) => node.textContent,
-  );
-  // Two ranked rows show their tokens; the unranked one says the store recorded none.
-  expect(ranks).toEqual(["3", "k", "—"]);
-  const rows = Array.from(container.querySelectorAll(".queue-row"));
-  expect(rows[2]?.getAttribute("data-rank")).toBe("absent");
-  expect(rows[0]?.getAttribute("data-state")).toBe("working");
-  // The unranked row is under the heading, not inside the ranked list.
-  expect(container.querySelector(".queue-unranked .queue-row[data-rank=\"absent\"]")).not.toBeNull();
-  expect(container.querySelector(".queue > .queue-row[data-rank=\"absent\"]")).toBeNull();
-});
 
 addCase("a tool call renders the arguments it passed and what came back", () => {
   const { container } = render(
