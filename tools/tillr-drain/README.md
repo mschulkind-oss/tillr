@@ -733,6 +733,12 @@ its recorded decision names every changed input. This is the
 not a retry of unchanged work. Queue rank, timestamps, criterion verdicts, and an advancing
 base commit do not grant another attempt.
 
+An item built on the design seat is never re-admitted this way: the owner ruled on
+2026-11-17 that a change to an item's block (a metadata write, a prose rewrite) is no
+reason to spend a design run, so it moves only on an explicit retry
+(`TestADesignSeatItemIsNotReadmittedOnAChangedInput` in
+[`drain/readmit_test.go`](./drain/readmit_test.go)).
+
 If that automatic attempt fails, later input changes do not dispatch it again.
 `tillr-view waiting` says that the automatic attempt failed and names `tillr drain retry`
 as the owner's next act. An authorized retry begins a fresh allowance, but unchanged
@@ -796,83 +802,70 @@ a worker signal without evidence of supervisor interruption is not exempted.
 ### A design run that ends without answering
 
 A raised conflict gets one design-seat dispatch, and the claim marks the conflict
-`awaiting` that design run. The design run's settlement answers the conflict in most
-outcomes. An amended block that lands answers it. A `blocked` report, a removed block or
-an unchanged block hands it to the owner. A design run can also end before any of those:
-its candidate refused at the gate, no commit, a refused landing, or a loop stop. Before
-2026-11-17 such a conflict stayed `awaiting` an ended run, and every view said
-`conflict-design`, "waits on work: design", with nobody working. At each pass the loop
-now applies this rule to every blocked item whose conflict awaits an ended design run:
+`awaiting` that design run. The owner ruled on 2026-11-17 how every ending of that run
+moves the conflict, and no ending is counted: there is no attempt cap, no comparison of
+what changed since the dispatch, and no timer. An item reaches the owner only through an
+objection that names the owner. The ruling is recorded in
+[the judge and lifecycle design, Section 4.3](../../docs/design/tillr-judge-and-lifecycle.md#43-how-a-design-runs-ending-moves-its-conflict-d-jl9).
 
-1. A design run a loop stop interrupted (`drain.orphaned`) is no attempt. The conflict is
-   raised again and the design seat is dispatched.
-2. A design run that ended any other way is an attempt. Its inputs are the item's block
-   and its design document, compared between the run's base and the trunk tip, and any
-   trunk fixer that landed after its dispatch. When one of them changed, the conflict is
-   raised once more. That is the one automatic attempt per input change, as for a build
-   run above.
-3. A design run whose candidate the gate refused, or whose report answered
-   `RESULT: trunk-broken`, may have been refused for the trunk's sake rather than its own.
-   On 2026-11-17 two design runs were refused at the gate only for two dead anchors already
-   in the roadmap at their base, and a hand commit then fixed the anchors. The gate's own
-   trunk-already-red replay could not tell, because it does not know the fast-gate check
-   ids and answers unknown. So such a refusal is a **trunk suspect**: no attempt yet. The
-   conflict goes to the owner with text that says so, and the loop raises it again, without
-   spending the input-change attempt, once a trunk commit that changes a file the run's
-   candidate touched is contained in the heavy proof's green commit (`refs/tillr/green`).
-   For a run with no candidate, any trunk commit after its base counts. A hand commit
-   counts like a recorded fixer: the evidence is the proven trunk, not who changed it.
-   A second refusal with the same outcome and the same failing checks after such a re-raise
-   is the candidate's, and is an attempt.
-4. Otherwise the conflict goes to the owner (`conflict-owner`, "needs you"). Its text
-   names the design run and how it ended, such as `refused at gate`, and `tillr drain why`
-   names the run beside the conflict.
-5. An owner hold that rule 3 or 4 wrote is compared again when the trunk moves. An input
-   change that lands later still earns the one automatic attempt if it was not spent, and a
-   proven trunk change raises a trunk suspect. A record written before rule 3 existed names
-   no base; one whose outcome blames the trunk is read as a trunk suspect.
-6. A design run that also ends without answering after that automatic attempt goes to the
-   owner, whatever changed since. There is no further automatic run and no timer.
+1. **A commit that passes the gate and lands is the answer**, whatever it changed: the
+   item's block, its design document, or a sibling. The conflict is `answered` and the item
+   goes back to its worker. Before the ruling a commit that left the block unchanged was
+   called "did not amend" and handed to the owner without a gate. A commit that removes or
+   renames the block leaves no item for a worker, so it goes back to the design seat,
+   naming the commit.
+2. **A commit the gate refuses** is no attempt. The conflict is raised again for the design
+   seat with the failing checks and the pinned commit (`refs/tillr/runs/<run>`) in its text,
+   as many times as it takes. The ruling sends the refusal to the same designer session;
+   until `item-design-refusal-resumes-session` is built, a fresh design run is dispatched
+   instead. Any other refusal (the fence, the lander) goes back the same way.
+3. **An interrupted or killed run** — a loop stop (`drain.orphaned`), a lease reclaimed
+   after its loop died, a signal — is no attempt: the design seat is dispatched again.
+4. **An objection.** A design run that commits nothing names who acts next with a report
+   line `NEXT-ACTOR: <actor>`. `NEXT-ACTOR: build` says the block stands as written: the
+   conflict is `answered` and the item goes back to its worker. `NEXT-ACTOR: owner` says
+   only the owner can rule: the conflict goes to the owner (`conflict-owner`, "needs
+   you"). The owner is reached only this way.
+5. **A run that committed nothing and named no actor**, even one that ends `RESULT:
+   blocked`, is a missing output, not an objection: the design seat is dispatched again,
+   and the conflict's text states the contract. It never defaults to the owner.
 
-Each unanswered design run except an interrupted one writes one `drain.design-unanswered`
-event naming the conflict, the run, its outcome, what changed, and whether the conflict was
-raised again. A record with `reraised` true spends the conflict's automatic attempt. A
-trunk suspect's record also names the run's base and failing checks (`base_sha`,
-`failing_checks`) and carries `trunk_suspect`; the re-raise it later earns carries
-`trunk_reraised`, which spends nothing. The
-owner's remedy is to amend the item block or the design document, which raises the conflict
-once more if the attempt is unspent, or to release or close the item, or to raise the
-conflict for one more design run with `tillr drain retry --item <id> --run <design run>
---by <who> --why <reason>`, naming the design run the hold names. That design retry records a
-`drain.retry.design` event with who asked and why, adds both to the conflict's text, and
-writes no `retries` row, so the plan does not read it as a build retry. If the design run it
-earns also ends without answering, the conflict returns to the owner by the rules above. A
-design run the conflict no longer names is refused, and the refusal names the current one;
-a conflict the loop is still settling, or has already raised, is refused as the loop's. The
+A change to the item's block, its design document or the trunk raises nothing. The rules
+that re-raised on such a change (one automatic attempt per input change, and the
+trunk-suspect re-raise after a proven trunk commit) were removed by the same ruling. A
+design run's gate refusal that the trunk caused is the gate's to recognize; until it can
+(the trunk-already-red replay cannot replay fast-gate check ids), such a refusal goes back
+to the design seat on each re-raise, and a run staged after the trunk is fixed passes.
+
+Each re-raise except an interrupted one writes one `drain.design-unanswered` event naming
+the conflict, the run, its outcome, its base and failing checks. An owner hold the removed
+count wrote (its last such record names the design run the hold names) is raised again for
+the design seat once, recorded with `uncounted` true. A hold written before 2026-11-17 whose
+last line says the design run "did not amend" or "removed or renamed" its block is raised
+again too, naming the run's commit, recorded with `misread` true.
+
+The owner's command for a conflict held on an objection is `tillr drain retry --item <id>
+--run <design run> --by <who> --why <reason>`, naming the design run the hold names. That
+design retry records a `drain.retry.design` event with who asked and why, adds both to the
+conflict's text, and writes no `retries` row, so the plan does not read it as a build retry.
+The design run it earns is settled by the rules above. A design run the conflict no longer
+names is refused, and the refusal names the current one; a conflict the loop is still
+settling, or has already raised, is refused as the loop's. The
 [design retry tests](./drain/design_retry_test.go) cover the re-raise and both refusals.
 Every `tillr drain retry` refusal names the exact command the face would accept, or says
 that none exists and who moves instead (`TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover`
-in [`main_test.go`](./main_test.go)). A triage conflict
-keeps its own rule, one triage run per request version. The
-[unanswered-design tests](./drain/design_unanswered_test.go) cover the owner hand-off, the
-re-raise after an input change, the later re-raise from the owner, and the interrupted run;
-the [trunk-suspect tests](./drain/design_trunk_test.go) cover rule 3, including the records
-written before it.
+in [`main_test.go`](./main_test.go)). A triage conflict keeps its own rule, one triage run per
+request version. The [unanswered-design tests](./drain/design_unanswered_test.go) cover
+rules 2, 3 and 5 and the two migrations; the [objection tests](./drain/design_objection_test.go)
+cover rule 4 and the removed block; `TestADesignCommitThatLeavesTheBlockUnchangedIsGatedAsTheAnswer`
+in [`drain/design_quota_test.go`](./drain/design_quota_test.go) covers rule 1.
 
-The settlement reads a design run's answer from the item's block, found by its id. A rewrite
-item's block carries the original item's id (the id without `rewrite-`), so an answer that
-retitles the block's section is still that block, amended. When the item's `body_ref`
-heading is missing on the run's base, because the run was staged before the heading was
-renamed, the settlement compares the block's own section between base and head, so a ruling
-written inside the block reads as an amendment. Before 2026-11-17 the first case read as
-"removed or renamed" and the second as "did not amend", and two committed design answers
-never reached the gate. At each pass the loop looks for such a hold: its conflict text ends
-with one of those two findings, the design run's recorded candidate holds a commit, and that
-commit amends the block under the reading above. It raises the conflict again for the design
-seat, with text naming the commit, so the answer is carried onto the current trunk rather
-than gated on its stale base. It writes a `drain.design-unanswered` record with `misread`
-true, which spends nothing. The [design answer tests](./drain/design_answer_test.go) cover
-both readings, the recovery, and a run that truly did not amend.
+The settlement reads a design run's block by its id. A rewrite item's block carries the
+original item's id (the id without `rewrite-`), so an answer that retitles the block's
+section is still that block. When the item's `body_ref` heading is missing on the run's
+base, because the run was staged before the heading was renamed, the settlement compares
+the block's own section between base and head. The
+[design answer tests](./drain/design_answer_test.go) cover both readings and the migration.
 
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
 no expiry while it works, and releases that lease once it ends, on every path. The write

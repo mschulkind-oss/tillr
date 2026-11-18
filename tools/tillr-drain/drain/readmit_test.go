@@ -245,3 +245,24 @@ func TestTerminationWithoutLoopStopEvidenceDoesNotReadmit(t *testing.T) {
 		}
 	}
 }
+
+// The owner ruled on 2026-11-17 that a change to an item's block (a metadata write, a
+// prose rewrite) is no reason to spend a design run. An item built on the design seat is
+// not re-admitted on a changed input: it waits for an explicit retry.
+func TestADesignSeatItemIsNotReadmittedOnAChangedInput(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
+	l.cfg.Policy.SeatLists = map[string][]string{"design": {"fixture"}}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET seat = 'design' WHERE item_id = 'item-a'`)
+		return err
+	})
+	finishHeldPass(t, f, l, mustPlan(t, l)[0], run.EndNormalExit)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE item_criteria SET text = 'revised criterion' WHERE item_id = 'item-a'`)
+		return err
+	})
+	if d := mustPlan(t, l)[0].decision; d.Action != ActionHold || d.Readmitted || strings.Contains(d.Reason, ReasonInputsChanged) {
+		t.Fatalf("a design-seat item was re-admitted on a changed input: %+v", d)
+	}
+}

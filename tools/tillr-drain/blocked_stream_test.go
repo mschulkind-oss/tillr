@@ -16,7 +16,7 @@ func piBlockedStream(text string) string {
 }
 
 func TestPiStructuredBlockedReportsReachDesignAndOwner(t *testing.T) {
-	f := blockedRouteFixture(t, piBlockedStream("Conflict: c1 contradicts the API"), piBlockedStream("Conflict: c1 requires an owner ruling"))
+	f := blockedRouteFixture(t, piBlockedStream("Conflict: c1 contradicts the API"), piBlockedStream("Conflict: c1 requires an owner ruling\nNEXT-ACTOR: owner"))
 	extractor, err := filepath.Abs(filepath.Join("..", "tillr-run", "backends", "pi", "extract-report"))
 	if err != nil {
 		t.Fatal(err)

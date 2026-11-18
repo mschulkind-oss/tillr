@@ -133,18 +133,23 @@ func TestADesignAnswerMisreadBeforeTheFixIsRaisedAgainNamingItsCommit(t *testing
 	}
 }
 
-// A recorded "did not amend" that is true stays with the owner.
-func TestADesignRunThatTrulyDidNotAmendStaysWithTheOwner(t *testing.T) {
+// A recorded "did not amend" that is true is no objection naming the owner either: the
+// owner ruled on 2026-11-17 that a design run's gated commit is its answer whatever it
+// changed, so the hold is raised again for the design seat like a misread one.
+func TestADesignRunThatTrulyDidNotAmendIsRaisedAgainToo(t *testing.T) {
 	f, l := designConflictFixture(t)
-	misreadDesignAnswer(t, f, l, false)
+	design, _ := misreadDesignAnswer(t, f, l, false)
+	if err := l.settleMisreadDesignAnswers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := conflictOf(t, f, "item-a"); c.Status != "raised" || c.WaitingOn != "design" || !strings.Contains(c.Text, design) {
+		t.Fatalf("a recorded no-amendment stayed with the owner: %+v", c)
+	}
 	before := eventCount(t, f.storePath)
 	if err := l.settleMisreadDesignAnswers(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" {
-		t.Fatalf("a true no-amendment was raised: %+v", c)
-	}
 	if got := eventCount(t, f.storePath); got != before {
-		t.Fatalf("a true no-amendment wrote %d event(s)", got-before)
+		t.Fatalf("a second pass wrote %d event(s)", got-before)
 	}
 }

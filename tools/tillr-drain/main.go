@@ -294,11 +294,11 @@ Records one operator's authorization, with who asked and why. Two forms, chosen 
   superseding that run. A run the gate judged needs --acknowledge gate-failed, and a run
   a wall cut short needs --acknowledge unjudged.
 
-  A design retry names the design run that ended without answering the item's conflict,
-  now held for the owner (conflict-owner). It raises the item's conflict again for one
-  more design run, and records a drain.retry.design event; it writes no build retry. If
-  that design run also ends without answering, the conflict returns to the owner. A
-  design run the conflict no longer names is refused, naming the current one.
+  A design retry names the design run whose objection holds the item's conflict for the
+  owner (conflict-owner). It raises the item's conflict again for one more design run,
+  and records a drain.retry.design event; it writes no build retry. That design run is
+  settled like any other: the conflict returns to the owner only if it objects naming
+  the owner. A design run the conflict no longer names is refused, naming the current one.
 
 Every refusal names the exact command it would accept, or says that none exists and who
 moves instead.
@@ -309,7 +309,7 @@ func retryFace(args []string) int {
 	fs := newFlagSet("retry")
 	path := fs.String("store", "", "the store to record the authorization in")
 	itemID := fs.String("item", "", "the item whose run is retried")
-	runID := fs.String("run", "", "the run the retry supersedes, or the item's unanswered design run")
+	runID := fs.String("run", "", "the run the retry supersedes, or the design run whose objection the owner holds")
 	by := fs.String("by", "", "who asked for the retry")
 	why := fs.String("why", "", "why the retry is authorized")
 	acknowledge := fs.String("acknowledge", "", "the outcome the retry acknowledges: gate-failed or unjudged (default: neither)")

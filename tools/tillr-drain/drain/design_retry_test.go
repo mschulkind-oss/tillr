@@ -59,13 +59,13 @@ func designRetries(t *testing.T, f refusalLoopFixture) []Retry {
 
 // On 2026-11-17 eight items held as conflict-owner, each naming a design run that ended
 // without answering, and no command could raise the conflict again: `drain retry` only
-// supersedes a run with a new attempt of the same work. Naming the item and its
-// unanswered design run raises the conflict for one more design run, records who asked and
-// why, and writes no retries row a plan would read as a build retry.
+// supersedes a run with a new attempt of the same work. Naming the item and the design run
+// whose objection the owner holds raises the conflict for one more design run, records who
+// asked and why, and writes no retries row a plan would read as a build retry.
 func TestARetryNamingTheUnansweredDesignRunRaisesItsConflictOnceMore(t *testing.T) {
 	f, l := designConflictFixture(t)
-	design := endDesignRun(t, f, l, RefusalGate)
-	settleDesign(t, l)
+	design := endDesignRun(t, f, l, RefusalNoOp)
+	objectToOwner(t, f, l, design)
 	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" || c.DesignRunID != design {
 		t.Fatalf("fixture: the conflict is not with the owner: %+v", c)
 	}
@@ -103,13 +103,13 @@ func TestARetryNamingTheUnansweredDesignRunRaisesItsConflictOnceMore(t *testing.
 // design run and the exact command that would be accepted.
 func TestADesignRetryNamingAStaleDesignRunNamesTheCurrentOne(t *testing.T) {
 	f, l := designConflictFixture(t)
-	first := endDesignRun(t, f, l, RefusalGate)
-	settleDesign(t, l)
+	first := endDesignRun(t, f, l, RefusalNoOp)
+	objectToOwner(t, f, l, first)
 	if _, err := retryDesignRun(t, f, l, first); err != nil {
 		t.Fatalf("the first design retry was refused: %v", err)
 	}
 	second := endDesignRun(t, f, l, RefusalNoOp)
-	settleDesign(t, l)
+	objectToOwner(t, f, l, second)
 	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" || c.DesignRunID != second {
 		t.Fatalf("fixture: the second design run did not reach the owner: %+v", c)
 	}

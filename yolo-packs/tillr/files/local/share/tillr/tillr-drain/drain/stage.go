@@ -1139,7 +1139,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		c := spec.BlockConflict
 		task = fmt.Sprintf("Answer conflict %s raised by run %s against %s. Your brief is the complete conflict record at %s. Read it before editing. Amend only that item's block; do not implement the original work.", c.ConflictID, c.RunID, c.BodyRef, filepath.Join(filepath.Dir(target), "conflict.json"))
 		criteria = "The document's item block is amended to answer the recorded conflict. Leave its directive and item identity intact."
-		settled = "This run acts on the design seat. A report of blocked routes the conflict to the owner; landing an amendment returns the original work to its own seat."
+		settled = "This run acts on the design seat. A commit that passes the gate and lands is your answer, whatever it changes, and returns the original work to its own seat; a commit the gate refuses comes back to the design seat to fix. To object without a commit, end your report with a line `" + DesignNextActorField + ": build` when the block stands as written and the worker should build it, or `" + DesignNextActorField + ": owner` when only the owner can rule; a report that commits nothing and names no next actor, even one of blocked, comes back to the design seat to state it."
 		if c.TriageVersion != "" {
 			task = triageTask(recorded)
 			criteria = requestCriteria

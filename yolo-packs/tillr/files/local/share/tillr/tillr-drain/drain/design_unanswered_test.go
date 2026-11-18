@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -29,7 +30,8 @@ func designConflictFixture(t *testing.T) (refusalLoopFixture, *Loop) {
 }
 
 // endDesignRun claims item-a's design-seat dispatch and ends that run without answering
-// its conflict: refused at step, or interrupted by a loop stop when step is "orphaned".
+// its conflict: refused at step, interrupted by a loop stop when step is "orphaned", or
+// reclaimed after its loop died when step is "reclaimed".
 // It answers the design run's id.
 func endDesignRun(t *testing.T, f refusalLoopFixture, l *Loop, step string) string {
 	t.Helper()
@@ -50,7 +52,7 @@ func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, re
 	}
 	d := work.Decision
 	state, cause, exit := run.StateExited, run.EndNormalExit, countPtr(0)
-	if step == "orphaned" {
+	if step == "orphaned" || step == "reclaimed" {
 		state, cause, exit = run.StateTimedOut, run.EndLeaseReclaimed, nil
 	}
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: state, ExitCode: exit, StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: cause, ArtifactRefs: []run.ArtifactRef{}}
@@ -68,6 +70,11 @@ func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, re
 		if step == "orphaned" {
 			return appendEffect(tx, loopOrphanedKind, rec.RunID, struct{}{}, l.cfg.Now())
 		}
+		if step == "reclaimed" {
+			// A lease reclaimed after its loop died (a jail relaunch): no refusal and no
+			// orphan record, only the terminal record the reclaim wrote.
+			return nil
+		}
 		return appendEffect(tx, RefusalKind, rec.RunID, refusalPayload{Step: step, ItemID: d.ItemID, LaneID: d.LaneID}, l.cfg.Now())
 	})
 	if err := l.markExamined(context.Background(), d); err != nil {
@@ -79,6 +86,37 @@ func endDesignRunReporting(t *testing.T, f refusalLoopFixture, l *Loop, step, re
 	return rec.RunID
 }
 
+func lastDesignMark(t *testing.T, f refusalLoopFixture, conflict string) designUnanswered {
+	t.Helper()
+	var marks map[string][]designUnanswered
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var err error
+		marks, err = readDesignUnanswered(r)
+		return err
+	})
+	m := marks[conflict]
+	if len(m) == 0 {
+		t.Fatalf("no drain.design-unanswered record for %s", conflict)
+	}
+	return m[len(m)-1]
+}
+
+// objectToOwner moves item-a's conflict, awaiting the ended design run, to the owner as
+// that run's objection naming the owner would (reportedBlock).
+func objectToOwner(t *testing.T, f refusalLoopFixture, l *Loop, design string) {
+	t.Helper()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		cs, err := item.ReadConflicts(tx.Reader())
+		if err != nil {
+			return err
+		}
+		c := cs["item-a"]
+		c.Status, c.WaitingOn = "owner", "owner"
+		c.Text += "\n\nDesign run " + design + ":\nNeeds a ruling.\n" + DesignNextActorField + ": owner\nRESULT: blocked"
+		return item.RecordConflict(tx, c, l.cfg.Now())
+	})
+}
+
 func settleDesign(t *testing.T, l *Loop) {
 	t.Helper()
 	if err := l.settleUnansweredDesignRuns(context.Background()); err != nil {
@@ -86,22 +124,30 @@ func settleDesign(t *testing.T, l *Loop) {
 	}
 }
 
-// On 2026-11-17 five design conflicts sat awaiting a design run the gate had refused, or
-// one that never launched, and every view said "waits on work: design" with nobody
-// working. A design run that ends without answering, when nothing it read has changed,
-// hands the conflict to the owner and names the run.
-func TestADesignRunRefusedAtTheGateWithNothingChangedGoesToTheOwner(t *testing.T) {
-	f, l := designConflictFixture(t)
-	design := endDesignRun(t, f, l, RefusalGate)
-	settleDesign(t, l)
+// raisedForDesign fails unless item-a's conflict is raised again for the design seat with
+// text naming the design run and want, and the next plan dispatches the design seat.
+func raisedForDesign(t *testing.T, f refusalLoopFixture, l *Loop, design, want string) {
+	t.Helper()
 	c, _ := conflictOf(t, f, "item-a")
-	if c.Status != "owner" || c.WaitingOn != "owner" || c.DesignRunID != design || !strings.Contains(c.Text, "Design run "+design+" ended without answering") || !strings.Contains(c.Text, "refused at gate") {
-		t.Fatalf("the unanswered conflict was not handed to the owner naming %s: %+v", design, c)
+	if c.Status != "raised" || c.WaitingOn != "design" || c.DesignRunID != "" || !strings.Contains(c.Text, design) || !strings.Contains(c.Text, want) {
+		t.Fatalf("the conflict was not raised for the design seat naming %s and %q: %+v", design, want, c)
 	}
-	if d := decisionFor(t, l, "item-a").decision; d.Action != ActionHold || d.Reason != ReasonConflictOwner || d.DeferredBy != design {
-		t.Fatalf("the item is not held for the owner naming %s: %+v", design, d)
+	if d := decisionFor(t, l, "item-a").decision; d.Action != ActionDispatch || d.BlockConflict == nil {
+		t.Fatalf("the design seat is not dispatched: %+v", d)
 	}
-	// A second pass with nothing changed writes nothing.
+}
+
+// The owner ruled on 2026-11-17 that a gate refusal of a design run's commit is no
+// attempt and has no cap: the refusal goes back to the design seat to fix, as many times
+// as it takes, and never to the owner by count.
+func TestAGateRefusedDesignRunGoesBackToTheDesignSeatEveryTime(t *testing.T) {
+	f, l := designConflictFixture(t)
+	for i := 0; i < 3; i++ {
+		design := endDesignRun(t, f, l, RefusalGate)
+		settleDesign(t, l)
+		raisedForDesign(t, f, l, design, "was refused at the gate")
+	}
+	// A pass with nothing new to settle writes nothing.
 	before := eventCount(t, f.storePath)
 	settleDesign(t, l)
 	if got := eventCount(t, f.storePath); got != before {
@@ -109,65 +155,76 @@ func TestADesignRunRefusedAtTheGateWithNothingChangedGoesToTheOwner(t *testing.T
 	}
 }
 
-// When something the design run read has changed since its dispatch — here the item's
-// block on trunk — the conflict is raised once more and the design seat is dispatched
-// again. That is the one automatic attempt per input change: when the second design run
-// also ends unanswered, the owner decides, whatever changed since.
-func TestADesignRunThatEndedUnansweredIsRaisedOnceMoreAfterAnInputChange(t *testing.T) {
-	f, l := designConflictFixture(t)
-	first := endDesignRun(t, f, l, RefusalGate)
-	commitBlock(t, f.root, "item-a", "- **c1:** the criterion, amended on trunk")
-	settleDesign(t, l)
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "raised" || c.WaitingOn != "design" || c.DesignRunID != "" || !strings.Contains(c.Text, "briefs/item-a.md") {
-		t.Fatalf("the changed input did not raise the conflict again: %+v", c)
-	}
-	second := endDesignRun(t, f, l, RefusalNoOp)
-	if second == first {
-		t.Fatalf("the second design run reused %s", first)
-	}
-	commitBlock(t, f.root, "item-a", "- **c1:** the criterion, amended again")
-	settleDesign(t, l)
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" || c.DesignRunID != second || !strings.Contains(c.Text, "already spent") {
-		t.Fatalf("a second unanswered design run did not reach the owner: %+v", c)
-	}
-}
-
-// An owner hold this rule wrote is re-read when the trunk moves: an input change that
-// lands later still earns the one automatic design run that was not spent.
-func TestAnUnansweredDesignConflictWithTheOwnerIsRaisedWhenAnInputChangesLater(t *testing.T) {
-	f, l := designConflictFixture(t)
-	endDesignRun(t, f, l, RefusalGate)
-	settleDesign(t, l)
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" {
-		t.Fatalf("fixture: not with the owner: %+v", c)
-	}
-	commitBlock(t, f.root, "item-a", "- **c1:** the criterion, fixed after the refusal")
-	settleDesign(t, l)
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "raised" || c.WaitingOn != "design" {
-		t.Fatalf("the later input change did not raise the conflict: %+v", c)
-	}
-	if d := decisionFor(t, l, "item-a").decision; d.Action != ActionDispatch || d.BlockConflict == nil {
-		t.Fatalf("the design seat is not dispatched again: %+v", d)
-	}
-}
-
-// A design run a loop stop interrupted said nothing about the conflict, and an interrupted
-// run is no attempt: the conflict is raised again, with no input change and no allowance
-// spent.
+// A run a loop stop interrupted said nothing about the conflict: it is run again.
 func TestAnInterruptedDesignRunRaisesItsConflictAgain(t *testing.T) {
 	f, l := designConflictFixture(t)
 	design := endDesignRun(t, f, l, "orphaned")
 	settleDesign(t, l)
-	c, _ := conflictOf(t, f, "item-a")
-	if c.Status != "raised" || c.WaitingOn != "design" || c.DesignRunID != "" || !strings.Contains(c.Text, design) {
-		t.Fatalf("the interrupted design run left the conflict %+v", c)
+	raisedForDesign(t, f, l, design, "interrupted")
+}
+
+// A run whose lease was reclaimed after its loop died, as a jail relaunch leaves it, is
+// recorded timed-out although no time limit ended it. It is a killed run: it is run
+// again, and nothing is counted.
+func TestAKilledDesignRunIsRunAgain(t *testing.T) {
+	f, l := designConflictFixture(t)
+	for i := 0; i < 2; i++ {
+		design := endDesignRun(t, f, l, "reclaimed")
+		settleDesign(t, l)
+		raisedForDesign(t, f, l, design, "no attempt")
 	}
-	// The interruption spent no allowance: a gate refusal after a later input change
-	// still earns the one automatic re-raise.
-	endDesignRun(t, f, l, RefusalGate)
-	commitBlock(t, f.root, "item-a", "- **c1:** amended after the interruption")
+}
+
+// A design run that commits nothing and names no next actor has neither answered nor
+// objected: the conflict goes back to the design seat, which is told the contract.
+func TestADesignRunThatCommitsNothingAndNamesNoNextActorGoesBackToTheDesignSeat(t *testing.T) {
+	f, l := designConflictFixture(t)
+	design := endDesignRun(t, f, l, RefusalNoOp)
 	settleDesign(t, l)
-	if c, _ := conflictOf(t, f, "item-a"); c.Status != "raised" {
-		t.Fatalf("the interruption spent the automatic re-raise: %+v", c)
+	raisedForDesign(t, f, l, design, DesignNextActorField)
+}
+
+// The owner ruled on 2026-11-17 that a change to the item's block, its design document or
+// the trunk is no reason to spend a design run. A conflict the owner holds on an explicit
+// objection stays with the owner however the block changes, and nothing is written.
+func TestAnInputChangeNeverRaisesADesignConflictAgain(t *testing.T) {
+	f, l := designConflictFixture(t)
+	objectToOwner(t, f, l, endDesignRun(t, f, l, RefusalNoOp))
+	commitBlock(t, f.root, "item-a", "- **c1:** the criterion, amended on trunk")
+	before := eventCount(t, f.storePath)
+	settleDesign(t, l)
+	if c, _ := conflictOf(t, f, "item-a"); c.Status != "owner" {
+		t.Fatalf("an input change moved the owner's conflict: %+v", c)
+	}
+	if got := eventCount(t, f.storePath); got != before {
+		t.Fatalf("an input change wrote %d event(s)", got-before)
+	}
+}
+
+// An owner hold the removed count wrote (a drain.design-unanswered record naming the
+// design run the hold names) is no objection naming the owner. It is raised again for
+// the design seat once, and nothing re-raises it after that.
+func TestAnOwnerHoldTheRemovedCountWroteIsRaisedAgain(t *testing.T) {
+	f, l := designConflictFixture(t)
+	design := endDesignRun(t, f, l, RefusalGate)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		cs, err := item.ReadConflicts(tx.Reader())
+		if err != nil {
+			return err
+		}
+		c := cs["item-a"]
+		c.Status, c.WaitingOn = "owner", "owner"
+		c.Text += "\n\nDesign run " + design + " ended without answering this conflict (refused at gate). The automatic second design run was already spent, so the owner decides."
+		if err := item.RecordConflict(tx, c, l.cfg.Now()); err != nil {
+			return err
+		}
+		return appendEffect(tx, designUnansweredKind, design, designUnanswered{ConflictID: c.ConflictID, ItemID: c.ItemID, RunID: design, Outcome: "refused at gate", Changes: []string{}}, l.cfg.Now())
+	})
+	settleDesign(t, l)
+	raisedForDesign(t, f, l, design, "never counted")
+	before := eventCount(t, f.storePath)
+	settleDesign(t, l)
+	if got := eventCount(t, f.storePath); got != before {
+		t.Fatalf("the migration wrote again: %d event(s)", got-before)
 	}
 }
