@@ -1128,7 +1128,12 @@ budget would re-dispatch a broken adapter at once and forever. That is the queue
 Answer sync indexes the trunk commit, not the checkout. A question counts as
 answered when the index marks it answered, or when it is absent from the
 question list and its ID survives in the document's decision ledger. An open
-entry takes precedence over the ledger; deletion alone does not release the item.
+entry takes precedence over the ledger. If the ID is in neither place, the conflict
+stays open and the item is held `question-removed`. `tillr drain why` names the
+missing question and counts the operator, not the owner, as next to act. Restore
+the entry under the item's block with the same run marker and land it. The next
+sync returns an open entry to `question-open` without publishing a duplicate;
+a restored entry with the ruling releases the item.
 
 An owner decision is a report's question together with at least two alternatives,
 not merely an actor line. Design briefs ask for a sentence ending in a question mark

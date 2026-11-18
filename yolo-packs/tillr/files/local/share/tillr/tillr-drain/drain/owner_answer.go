@@ -15,7 +15,8 @@ import (
 )
 
 // settleOwnerAnswers distinguishes publication from a ruling. An absent
-// question needs positive evidence of compaction in the index's ledger.
+// question needs positive evidence of compaction in the index's ledger;
+// otherwise the operator must restore it.
 func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -80,7 +81,14 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 		if !found {
 			answered = slices.Contains(doc.LedgerIDs, id)
 		}
-		if !answered {
+		removedHead := ""
+		if !found && !answered {
+			removedHead = c.QuestionRemovedHead
+			if removedHead == "" {
+				removedHead = sha
+			}
+		}
+		if !answered && removedHead == c.QuestionRemovedHead {
 			l.ownerAnswerBlobs[c.ConflictID] = blob
 			continue
 		}
@@ -103,7 +111,7 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 				return e
 			}
 			latest := current[c.ItemID]
-			if latest.ConflictID != c.ConflictID || latest.Status != c.Status || latest.QuestionRef != c.QuestionRef || latest.AnswerHead != c.AnswerHead {
+			if latest.ConflictID != c.ConflictID || latest.Status != c.Status || latest.QuestionRef != c.QuestionRef || latest.AnswerHead != c.AnswerHead || latest.QuestionRemovedHead != c.QuestionRemovedHead {
 				return nil
 			}
 			var state string
@@ -113,7 +121,10 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 			if state != StateInQueue && state != StateBlocked {
 				return nil
 			} // An explicit disposition is not undone.
-			latest.Status, latest.WaitingOn, latest.AnswerHead = "answered", "build", sha
+			latest.QuestionRemovedHead = removedHead
+			if answered {
+				latest.Status, latest.WaitingOn, latest.AnswerHead = "answered", "build", sha
+			}
 			return item.RecordConflict(tx, latest, l.cfg.Now().UTC())
 		})
 		writer.Close()
@@ -121,7 +132,14 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 			return e
 		}
 		l.ownerAnswerBlobs[c.ConflictID] = blob
-		l.reportf("loop: %s owner answered %s at %s; conflict %s is answered\n", c.ItemID, c.QuestionRef, sha, c.ConflictID)
+		switch {
+		case answered:
+			l.reportf("loop: %s owner answered %s at %s; conflict %s is answered\n", c.ItemID, c.QuestionRef, sha, c.ConflictID)
+		case removedHead != "":
+			l.reportf("loop: %s question %s was removed without a ruling at %s\n", c.ItemID, c.QuestionRef, sha)
+		default:
+			l.reportf("loop: %s question %s was restored at %s\n", c.ItemID, c.QuestionRef, sha)
+		}
 	}
 	return nil
 }

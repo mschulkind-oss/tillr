@@ -21,16 +21,17 @@ const ConflictKind = "item.conflict"
 // Closed means the ordinary worker was dispatched against the answer, or a legacy
 // conflict was migrated into a document question; neither passes its criteria.
 type Conflict struct {
-	ConflictID      string   `json:"conflict_id"`
-	ItemID          string   `json:"item_id"`
-	RunID           string   `json:"run_id"`
-	BodyRef         string   `json:"body_ref"`
-	Text            string   `json:"text"`
-	BlockedCriteria []string `json:"blocked_criteria"`
-	WaitingOn       string   `json:"waiting_on"`
-	Status          string   `json:"status"`
-	DesignRunID     string   `json:"design_run_id,omitempty"`
-	AnswerHead      string   `json:"answer_head,omitempty"`
+	ConflictID          string   `json:"conflict_id"`
+	ItemID              string   `json:"item_id"`
+	RunID               string   `json:"run_id"`
+	BodyRef             string   `json:"body_ref"`
+	Text                string   `json:"text"`
+	BlockedCriteria     []string `json:"blocked_criteria"`
+	WaitingOn           string   `json:"waiting_on"`
+	Status              string   `json:"status"`
+	DesignRunID         string   `json:"design_run_id,omitempty"`
+	QuestionRemovedHead string   `json:"question_removed_head,omitempty"`
+	AnswerHead          string   `json:"answer_head,omitempty"`
 	// QuestionRef and QuestionHead identify publication, not an owner ruling.
 	// The document and shared Vantage reader own whether it is still open.
 	QuestionRef   string `json:"question_ref,omitempty"`
