@@ -1255,6 +1255,16 @@ missing rather than report that the change failed verification.
   landing and boundary-check requirements. Those requirements belong to
   [routing a landing around the owner's uncommitted edits](#route-a-landing-around-the-owners-uncommitted-edits),
   which carries its own c2 and c3. Do not change the lander or drain for this item.
+- **Publishing (2026-11-18, answers the fourth run's report of blocked):** The recorded commit is
+  what a check reads. It does not constrain publication, so do not change
+  [the publisher](../../bin/patch-branches-publish) or [the push hook](../../hooks/pre-push);
+  both stay outside this item's paths. In c1, "must be at" states what a check judges: exporting
+  moves the local branch and the record in one change, so the two agree after every export. A
+  branch moved any other way is not this item's concern. What the remote holds is still proved
+  by the existing `bin/pi-forks patch-branch published` command, which this item leaves as it is.
+  A publisher that refused a branch differing from the record would refuse every push made
+  between a lane's export and that lane's landing, because the branch moves at export and the
+  record reaches the trunk only when the lane lands.
 - **Verify:** Use [fork-check tests](../../tests/fork-check.test.py) and
   [fork export tests](../../tests/pi-forks.test.sh) to check that exporting updates the recorded
   commit, deleting all local `patch/*` branches changes no result, and empty, current, and
@@ -1263,7 +1273,7 @@ missing rather than report that the change failed verification.
 
 <!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,tests/pi-forks.test.sh,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change.
+- **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change. The record is the input a check reads; publishing a branch is not changed.
 - **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
 - **c3:** The commit is fetched into a cache directory when the cache lacks it and is never refreshed otherwise, so a cache holding older or newer commits changes no answer; a test runs the check against a cache that is empty, one that is current and one that holds only stale commits.
 - **c4:** A machine that cannot fetch the commit is told which commit and which remote it lacks, and the check answers `could not judge`, not `failed`.
