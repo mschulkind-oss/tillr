@@ -953,9 +953,33 @@ fence, or a landing is refused, the next pass dispatches the item again with the
 attempt: the refusal's own words, each failing gate check with its log, and the two refs
 that keep the earlier run's work (`refs/tillr/runs/<run>` for its committed head and
 `refs/tillr/preserved/<run>` for uncommitted work). It starts on the item's own backend.
-Continuing the worker's own session, where the adapter can resume one, is not built yet; it
-is the queue item `item-worker-refusal-resumes-session` in
-[the tillr roadmap](../../docs/tillr/roadmap.md#route-a-workers-refused-ending-to-its-own-session).
+The worker keeps the same lane and session when the adapter can resume it. The refusal
+records that session and the original base before the lane is released; planning reserves
+that lane for the returned worker, including after a loop restart. A workflow returns to
+the producing node, with its original node boundary and accepted predecessor inputs;
+predecessor records are referenced, not rerun or copied into fictional runs. The node and
+its successors settle again before the candidate is admitted. The next turn has a
+distinct run record, not an overwrite of the refused run. Its prompt carries the same
+evidence as the fresh brief, plus the current run's identity and requirements. It must make
+a new commit: the earlier refused head alone is not a new candidate. The complete change
+from the original base is checked against the fence and sent through the gate and landing
+again. Loop-owned item-block retirement is removed from the retained checkout before the
+worker returns; the prepared head remains pinned as evidence.
+
+The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
+that continuation, `cannot-resume` for an adapter without a positive resume declaration,
+`session-missing` for a missing session handle, or `seat-changed` when the backend or model
+no longer matches. A retained lane removed from the offered set uses an offered lane and
+records `lane-unavailable`. A workflow whose producing node cannot resume restarts at
+its entry; `workflow-restarted` distinguishes a fresh graph from a continued node when
+the entry and producing seats happen to share the same backend. These fresh paths carry
+the evidence in the brief.
+A harness that refuses to open the retained session before producing an answer is replaced
+by a fresh run, with `resume-failed` recorded and the same evidence carried forward. Pi
+opens an existing session explicitly rather than using the session-id option that creates
+one when the id is gone. The behavior and its regression tests live in
+[`drain/worker_session.go`](./drain/worker_session.go) and
+[`drain/worker_session_execution_test.go`](./drain/worker_session_execution_test.go).
 
 What stops endless repetition is an identical repeat, not a count. A refusal records its
 evidence when it is written: the failing gate checks, each with a digest of its normalized

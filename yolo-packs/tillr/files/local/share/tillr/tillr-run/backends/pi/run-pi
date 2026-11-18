@@ -149,7 +149,14 @@ fi
 
 set -- pi --print --mode json --model "$model" --thinking "$effort"
 if [ -n "$session" ]; then
-    set -- "$@" --session-id "$session"
+    if [ "${TILLR_SESSION_MODE:-new}" = resume ]; then
+        # --session-id creates a cold session when the id is gone. --session
+        # requires an existing session, so the drain can record and replace a
+        # failed continuation instead of mislabeling that cold start.
+        set -- "$@" --session "$session"
+    else
+        set -- "$@" --session-id "$session"
+    fi
 fi
 
 # Only runner-managed launches have a pause file. Keep pi's PID private to the

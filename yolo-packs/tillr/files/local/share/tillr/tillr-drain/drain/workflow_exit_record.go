@@ -43,19 +43,14 @@ func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Can
 		}
 		exit := graphExitRecord{ItemID: d.ItemID, Workflow: d.Workflow.Name + fmt.Sprintf("@v%d", d.Workflow.Version), WorkflowSHA256: d.Workflow.SHA256, Attempt: d.Attempt, BaseSHA: c.BaseSHA, Reason: "no commit by design"}
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
-			rows, err := r.Query(`SELECT node_id,run_id,outcome FROM node_runs WHERE item_id=? AND attempt=? ORDER BY rowid`, d.ItemID, d.Attempt)
+			rows, err := effectiveNodeRuns(r, d.ItemID, d.Attempt)
 			if err != nil {
 				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var n graphExitNode
-				if err := rows.Scan(&n.NodeID, &n.RunID, &n.Outcome); err != nil {
-					return err
-				}
-				exit.Nodes = append(exit.Nodes, n)
+			for _, n := range rows {
+				exit.Nodes = append(exit.Nodes, graphExitNode{NodeID: n.NodeID, RunID: n.RunID, Outcome: n.Outcome})
 			}
-			return rows.Err()
+			return nil
 		})
 		s.Close()
 		if err != nil {
@@ -108,8 +103,12 @@ func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Can
 		}
 		seen := map[string]bool{}
 		for _, n := range exit.Nodes {
+			source, err := nodeSourceAttempt(tx.Reader(), d.ItemID, d.Attempt, n.NodeID)
+			if err != nil {
+				return err
+			}
 			var runID string
-			if err := tx.QueryRow(`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, d.Attempt, n.NodeID).Scan(&runID); err != nil {
+			if err := tx.QueryRow(`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, source, n.NodeID).Scan(&runID); err != nil {
 				return err
 			}
 			if seen[n.NodeID] || outcomes[n.NodeID] != n.Outcome || runID != n.RunID {

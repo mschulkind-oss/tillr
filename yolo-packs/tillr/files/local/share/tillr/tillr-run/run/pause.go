@@ -243,7 +243,7 @@ func prepareContinuation(req Request, kind, lane, worktree, durable string) (str
 // original session if the executor died before claiming a backend handoff.
 func prepareContinuationSession(req Request, kind, lane, worktree, durable string) (string, string, string, error) {
 	mode, session := "new", ""
-	if !req.Resume {
+	if !req.Resume && !req.SessionTurn {
 		return mode, "", "", nil
 	}
 	mode = "resume"
@@ -258,6 +258,14 @@ func prepareContinuationSession(req Request, kind, lane, worktree, durable strin
 	}
 	if len(notice) == 0 {
 		notice = []byte("Continue the same attempt from where you stopped. The session was interrupted; keep existing work and make only the one requested commit.\n")
+	}
+	if req.SessionTurn {
+		brief, err := os.ReadFile(filepath.Join(lane, "brief.md"))
+		if err != nil {
+			return "", "", "", Usagef("reading returned turn brief: %v", err)
+		}
+		notice = append(notice, []byte("\nThis is a new run record in your existing session. Keep the earlier work, repair the refusal, and make one new commit for this turn; the prior commit is not the new candidate. The current run identity, scratch directory and requirements follow.\n")...)
+		notice = append(notice, brief...)
 	}
 	if req.FreshSession || kind == PauseCannotResume {
 		mode = "new"

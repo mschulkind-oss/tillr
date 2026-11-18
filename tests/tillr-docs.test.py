@@ -646,6 +646,21 @@ def case_designer_session_selection_documented():
     ok("session selection and the Pi compact step are documented")
 
 
+def case_worker_refusal_session_documented():
+    readme = text_of(ROOT / "tools/tillr-drain/README.md")
+    section = readme.split("### A refused run goes back to its worker", 1)[1].split("\n### ", 1)[0]
+    for phrase in ("same lane and session", "distinct run record", "worker_session_reason",
+                   "cannot-resume", "session-missing", "resume-failed", "new commit"):
+        if phrase not in section:
+            fail(f"worker refusal continuation omits {phrase!r}")
+    design = text_of(ROOT / "docs/design/tillr-judge-and-lifecycle.md")
+    table = design.split("### 4.4 How a Worker Run's Ending", 1)[1]
+    ending = next(line for line in table.splitlines() if line.startswith("| 1. "))
+    if not ending.endswith("| Built. |"):
+        fail("worker ending 1 must be marked built")
+    ok("worker refusal continuation and its fresh fallback are documented as built")
+
+
 def case_cache_safe_working_loop_documented():
     brief = ROOT / "tools/tillr-run/backends/brief-template.md"
     for path in (brief, SKILL):
@@ -747,6 +762,7 @@ def main():
     if green_build_tests.returncode:
         fail("the green-tree deployment regression tests failed")
     case_run_environment_documented()
+    case_worker_refusal_session_documented()
     case_cache_safe_working_loop_documented()
     case_fork_filing_documented()
     cleanup_tests = subprocess.run(

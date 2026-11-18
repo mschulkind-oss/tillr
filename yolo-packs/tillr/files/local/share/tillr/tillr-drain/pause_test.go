@@ -19,7 +19,7 @@ import (
 func TestTwoPausesContinueOneAttemptAndLandOnce(t *testing.T) {
 	harness := harnessCount + `prev=
 for arg in "$@"; do
-    if [ "$prev" = "--session-id" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
+    if [ "$prev" = "--session-id" ] || [ "$prev" = "--session" ]; then printf 'session-id %s\n' "$arg" >> "$STUB_ARGV"; fi
     prev=$arg
 done
 n=0; [ ! -f "$STUB_SEGMENT" ] || n=$(cat "$STUB_SEGMENT")

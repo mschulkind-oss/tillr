@@ -1,8 +1,8 @@
 ---
 title: "The Item Judge and Lifecycle in Tillr"
-status: accepted
-stage: DECIDED
-updated: 2026-11-17
+status: in-review
+stage: DESIGN
+updated: 2026-11-18
 tags:
   - tillr
   - judge
@@ -13,7 +13,7 @@ tags:
   - drain
   - design
 summary: "How pre-approved item graphs with evaluator nodes and opt-in generic judging issue grant-backed item.verdict records, block mechanical retirement of owner-only criteria, enforce an owner-disposition state machine alongside derived execution state, and sunset -v2 failure-cloning scaffolding."
-next: "Build the first block of the build order: a gate pass no longer retires a criterion only the owner can settle."
+next: "Rule OQ-JL4 — decide whether design objections may name additional actors."
 depends-on:
   - tillr-item-graphs.md
   - board-item-state-model.md
@@ -23,7 +23,7 @@ depends-on:
 
 # The Item Judge and Lifecycle in Tillr
 
-**Status:** 2026-11-16. Decided, and cut into the [build order](#8-build-order) that ends this page. Sections 1 to 5 were verified on 2026-11-14 against `tools/tillr-item/`, `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `tools/tillr-loop/tillr-loop`, and `config/tillr/seed-items.json` as the tree stood that day. The tree has moved since: [Section 7](#7-what-the-tree-already-holds) measures what is built at `bdd6b3c82`, and where it and an earlier section disagree about a name or a mechanism, Section 7 and the build order are what a builder follows.
+**Status:** 2026-11-18. The worker-return rule in [Section 4.4](#44-how-a-worker-runs-ending-moves-its-item-d-jl10) is built; [OQ-JL4](#OQ-JL4) remains open. Settled work is cut into the [build order](#8-build-order) that ends this page. Sections 1 to 5 were verified on 2026-11-14 against `tools/tillr-item/`, `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `tools/tillr-loop/tillr-loop`, and `config/tillr/seed-items.json` as the tree stood that day. The tree has moved since: [Section 7](#7-what-the-tree-already-holds) measures what is built at `bdd6b3c82`, and where it and an earlier section disagree about a name or a mechanism, Section 7 and the build order are what a builder follows.
 
 > **In short.** Put independent judgment inside pre-approved item graphs ([tillr-item-graphs.md](./tillr-item-graphs.md)) as a read-only `evaluator_slot` leaf **before** `tillr-land pass` so bad candidates never move `main`, trust `tillr-gate` + `tillr-land` without a second judge pass when the graph already judged, and keep standalone generic judging over the exact same intake contract for non-pipeline completions and opted-in single-node items. Store `claim_class` on `item_criteria` so `actor_kind: "mechanical"` can never retire `owner-only` or `direction` criteria, restrict `items.state` to owner disposition while deriving `working` from live runs beside `mayBeARetry` holds, stop writing `not-done` criterion freezes on candidate failures, and retire `ActorAutoQA` / `qa-verification` / `DecidedByAutoQA` so external AutoQA uses standard `mechanical` and grant-backed `agent` verdicts.
 
@@ -37,9 +37,9 @@ depends-on:
 
 **Cost.** Additive columns on `items` (`waiting_on`, `underlying_state`, `resolves_via`, `close_reason`, `closed_at`, `closed_by`, `closed_from`) and `item_criteria` (`claim_class`), a settlement intake pass in `tillr-drain`, `close`/`reopen`/`rework` CLI faces, and backfilling `claim_class: "owner-only"` + SM-3 metadata in `config/tillr/seed-items.json`. Zero new utilities.
 
-**Needs your ruling:** None.
+**Needs your ruling:** [OQ-JL4](#OQ-JL4).
 
-**Next:** build [the first block](#prevent-a-gate-pass-from-retiring-an-owners-criterion) of the build order. It waits on nothing.
+**Next:** rule [OQ-JL4](#OQ-JL4); the settled blocks of the [build order](#8-build-order) can continue independently.
 
 **Reads with:** [tillr-item-graphs.md](./tillr-item-graphs.md) ([§3.3](./tillr-item-graphs.md#33-producer-bound-artifacts-exit-conditions-and-the-evaluator-slot) and [§6](./tillr-item-graphs.md#6-boundary-with-judge-policy-and-item-lifecycle), fixed upstream graph and `evaluator_slot` contract), [board-item-state-model.md](./board-item-state-model.md) ([§2](./board-item-state-model.md#2-classification-of-every-status-the-board-can-show)–[§8](./board-item-state-model.md#8-implementation-sequence), closed seven-state projector and SM-3 records), [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) ([Ruling: MIGRATE](./work-control-judge-in-tillr.md#ruling-migrate) and [Retirement in the end state](./work-control-judge-in-tillr.md#retirement-in-the-end-state)), [agent-runtime.md](./agent-runtime.md) ([§12](./agent-runtime.md#12-the-three-owner-rulings)–[§14](./agent-runtime.md#14-adopting-guilds-graph-algebra), [§28](./agent-runtime.md#28-authority-not-approval), [§30](./agent-runtime.md#30-a-cut-off-is-evidence-about-fit-never-about-priority)), [escalation-ladder.md](./escalation-ladder.md) ([§3](./escalation-ladder.md#3-the-ladder)–[§5.2](./escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit)), [criterion-repair.md](./criterion-repair.md), and companion design `` `docs/design/tillr-autoqa.md` ``.
 
@@ -222,7 +222,7 @@ The same ruling of 2026-11-17 covers the worker seat, the run that builds an ite
 
 | Ending | What moves the item | Built |
 | :--- | :--- | :--- |
-| 1. The gate refuses the candidate, the run commits nothing, the candidate escapes its fence, or the landing is refused | The ending goes back to the item's worker with its evidence, every time and uncounted. The next run's brief has a section on the previous attempt: the refusal's own words, each failing gate check with its log, and the refs that keep the earlier run's work. | Partly. A fresh run with the evidence in its brief is built. Continuing the same worker session, where the adapter can resume one, is [`item-worker-refusal-resumes-session`](../tillr/roadmap.md#route-a-workers-refused-ending-to-its-own-session). |
+| 1. The gate refuses the candidate, the run commits nothing, the candidate escapes its fence, or the landing is refused | The ending goes back to the item's worker with its evidence, every time and uncounted. The next turn continues the same worker session on the retained lane when the adapter can resume it, with a distinct run record and the refusal's own words, each failing gate check with its log, and the refs that keep the earlier run's work. A workflow continues its producing node with the original boundaries and accepted inputs. An unavailable session, unsupported adapter, changed seat or unavailable lane starts a fresh run with that evidence and a recorded reason. | Built. |
 | 2. An identical repeat: the same producer, the same cause and the same evidence as any earlier ending of the item | The item goes to the design seat with both runs' records. Two endings that differ are never a repeat, however many there are. The evidence is the sorted ids of the failing checks with a digest of each check's normalized output, or the uncommitted paths with a digest of their content, or the refusal's normalized words. Normalizing drops the run id, timestamps, durations, full hashes and temporary directories. | Built. |
 | 1a. The landing conflicts (`squash-conflict`) | The conflict goes back to the producer with the conflicting paths, every time and uncounted, on the latest trunk: at once as a conflict-fix run with the three-way markers when the trunk moved under the candidate, and otherwise as the next pass's returned run. An identical repeat — the same conflicting paths and the same digest of the normalized hunks as an earlier conflict ending of the item — is ending 2. The removed rule spent one fix run per candidate and then held the item as `conflict-exhausted`; an item it parked is returned at the next loop start. | Built. |
 | 3. The run exits with uncommitted work inside its fence | Its session is continued, for as long as each continuation changes that work. A continuation that leaves the work as the previous one did is refused as `candidate-no-op` (ending 1), and a repeat of that refusal is ending 2. | Built. |

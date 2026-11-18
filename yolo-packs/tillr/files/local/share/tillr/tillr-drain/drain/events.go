@@ -209,10 +209,11 @@ func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []strin
 // one field the planner reads; the rest are what a reader of `tillr view events` needs to
 // follow the event back to its run.
 type refusalPayload struct {
-	Step   string `json:"step"`
-	ItemID string `json:"item_id,omitempty"`
-	LaneID string `json:"lane_id,omitempty"`
-	TickID string `json:"tick_id,omitempty"`
+	WorkerSession *WorkerSession `json:"worker_session,omitempty"`
+	Step          string         `json:"step"`
+	ItemID        string         `json:"item_id,omitempty"`
+	LaneID        string         `json:"lane_id,omitempty"`
+	TickID        string         `json:"tick_id,omitempty"`
 	// RedSHA, FailingChecks and FixerItem are the trunk-already-red refusal's own fields:
 	// the sha the replay found red, the checks that were red there, and the one fixer item
 	// the item is now held behind. They are empty on every other refusal, so the event's
@@ -252,6 +253,13 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if returnedCauses[step] {
 		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
+		if step != RefusalConflict {
+			var err error
+			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, l.cfg.Now().UTC())
 }

@@ -56,20 +56,15 @@ func workflowOutcomes(r *store.Reader, id string, attempt int) (map[string]strin
 	if !exists {
 		return map[string]string{}, nil
 	}
-	rows, err := r.Query(`SELECT node_id,outcome FROM node_runs WHERE item_id=? AND attempt=?`, id, attempt)
+	rows, err := effectiveNodeRuns(r, id, attempt)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	outcomes := map[string]string{}
-	for rows.Next() {
-		var node, outcome string
-		if err := rows.Scan(&node, &outcome); err != nil {
-			return nil, err
-		}
-		outcomes[node] = outcome
+	for _, n := range rows {
+		outcomes[n.NodeID] = n.Outcome
 	}
-	return outcomes, rows.Err()
+	return outcomes, nil
 }
 func workflowDone(w *Workflow, outcomes map[string]string) bool {
 	for _, id := range requiredWorkflowNodes(w) {

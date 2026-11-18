@@ -25,9 +25,10 @@ import (
 // the step that refused it, the refusal's own words, and the gate checks that failed with
 // where their output is.
 type ReturnedEnding struct {
-	RunID  string `json:"run_id"`
-	Cause  string `json:"cause"`
-	Detail string `json:"detail,omitempty"`
+	WorkerSession *WorkerSession `json:"worker_session,omitempty"`
+	RunID         string         `json:"run_id"`
+	Cause         string         `json:"cause"`
+	Detail        string         `json:"detail,omitempty"`
 	// Checks are the gate checks that failed, for a gate refusal.
 	Checks []EndingCheck `json:"checks,omitempty"`
 }

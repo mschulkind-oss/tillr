@@ -22,8 +22,8 @@ import (
 )
 
 // The trunk the loop stages lanes from and lands onto. It is `main` because design §4.1's
-// landing step is the only thing that moves it (D-UT18), and a lane is always reset to it
-// before a run.
+// landing step is the only thing that moves it (D-UT18). Fresh lanes start there;
+// returned worker sessions retain the original lane and base.
 const TrunkRef = "main"
 
 // Loop stop and historical fault reason spellings. Boundary and gate faults now
@@ -1154,6 +1154,14 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned,
 		}
+		if err := l.stageWorkerSession(&decision, &spec); err != nil {
+			return nil, err
+		}
+		if decision.Reason == ReasonReturned && decision.Returned != nil && decision.Returned.WorkerSession != nil && !request.SessionTurn && decision.LaneID == decision.Returned.WorkerSession.LaneID {
+			if err := l.resetLane(ctx, decision.LaneID); err != nil {
+				return nil, err
+			}
+		}
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
 			return nil, err
 		}
@@ -1164,7 +1172,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				return nil, err
 			}
 			spec.InputPaths = paths
-			spec.Continue = decision.NodeIndex > 0 || decision.WorkflowRestart
+			spec.Continue = spec.Continue || decision.NodeIndex > 0 || decision.WorkflowRestart
 			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
 				previous, err := l.stagedNodeRun(decision)
 				if err != nil {
@@ -1218,7 +1226,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		if decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart {
 			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
 			err = headErr
-			if err == nil && head != decision.NodeBaseSHA {
+			expectedHead := decision.NodeBaseSHA
+			if request.SessionTurn && decision.Returned.WorkerSession != nil {
+				expectedHead = decision.Returned.WorkerSession.HeadSHA
+			}
+			if err == nil && head != expectedHead {
 				err = Externalf("lane %s holds a change nobody landed: %s is not the recorded node start %s, and staging does not reset a candidate", decision.LaneID, head, decision.NodeBaseSHA)
 			}
 		}
@@ -1241,7 +1253,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
-				if decision.NodeIndex == 0 {
+				if decision.NodeIndex == 0 && !request.SessionTurn {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeStartRunID = decision.RunRequest.RunID
@@ -1354,7 +1366,7 @@ func (l *Loop) finishRunBracket(ctx context.Context, worktree string, request ru
 		return "", err
 	}
 	scope := BoundaryScopeRun
-	if request.Resume {
+	if request.Resume || request.SessionTurn {
 		scope = BoundaryScopeResume
 	}
 	if err := l.recordBoundaryCheck(ctx, scope, tick,
@@ -1659,7 +1671,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	if headSHA == baseSHA {
+	noNewCommit := headSHA == baseSHA
+	if decision.Returned != nil && decision.Returned.WorkerSession != nil {
+		previous := decision.Returned.WorkerSession.HeadSHA
+		noNewCommit = noNewCommit || headSHA == previous
+	}
+	if noNewCommit {
 		paths, err := l.uncommittedPaths(ctx, target)
 		if err != nil {
 			return laneOutcome{err: err}
@@ -2545,6 +2562,22 @@ func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons
 	}
 	if headSHA != "" {
 		l.pinQuietly(ctx, runID, headSHA)
+	}
+	if runID != "" {
+		retained, err := l.retainedWorkerSession(ctx, runID)
+		if err != nil {
+			return l.retainUnpreserved(ctx, lane, runID, err)
+		}
+		if retained != nil {
+			// Item-block retirement is loop-owned preparation, not work the
+			// returning worker may inherit as its own change.
+			if retained.HeadSHA != "" && headSHA != "" && retained.HeadSHA != headSHA {
+				if _, err := l.git(ctx, l.laneTarget(lane), "reset", "--hard", retained.HeadSHA); err != nil {
+					return l.retainUnpreserved(ctx, lane, runID, err)
+				}
+			}
+			return ""
+		}
 	}
 	if err := l.resetLane(ctx, lane); err != nil {
 		// The reset is not the tick's outcome: the next tick's own stage step resets the

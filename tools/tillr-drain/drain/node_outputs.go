@@ -126,8 +126,12 @@ func (l *Loop) nodeInputPaths(ctx context.Context, d Decision) (map[string][]Nod
 			if e.To != d.Workflow.Stages[d.NodeIndex].ID || e.ToInput == "" {
 				continue
 			}
+			source, err := nodeSourceAttempt(r, d.ItemID, d.Attempt, e.From)
+			if err != nil {
+				return err
+			}
 			var path string
-			if err := r.QueryRow(`SELECT a.location FROM node_artifacts a JOIN node_runs n ON n.item_id=a.item_id AND n.attempt=a.attempt AND n.node_id=a.node_id AND n.run_id=a.run_id WHERE a.item_id=? AND a.attempt=? AND a.node_id=? AND a.name=? AND n.outcome='passed'`, d.ItemID, d.Attempt, e.From, e.FromOutput).Scan(&path); err != nil {
+			if err := r.QueryRow(`SELECT a.location FROM node_artifacts a JOIN node_runs n ON n.item_id=a.item_id AND n.attempt=a.attempt AND n.node_id=a.node_id AND n.run_id=a.run_id WHERE a.item_id=? AND a.attempt=? AND a.node_id=? AND a.name=? AND n.outcome='passed'`, d.ItemID, source, e.From, e.FromOutput).Scan(&path); err != nil {
 				return fmt.Errorf("node-input-missing: %s.%s from %s.%s: %w", e.To, e.ToInput, e.From, e.FromOutput, err)
 			}
 			paths[e.ToInput] = append(paths[e.ToInput], NodeInput{Producer: e.From, Path: path})
