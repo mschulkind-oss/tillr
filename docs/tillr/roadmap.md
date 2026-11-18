@@ -328,24 +328,50 @@ with the proof for CPU time. Start recovery as soon as a check fails, give check
 recent landings the first turn, and give the proof priority over worker tests. Still require the
 full run to pass before advancing the green pointer, without imposing a time limit.
 
+The work is four items, split by the design seat on 2026-11-18 after three builds stopped on it
+as one. This block is the first and the smallest of them: a proof runs the drain's suite once.
+The three blocks below it then change one thing each: a worker's processes get a lower CPU
+priority, the checks that recent landings reach run first, and a failed check starts its
+recovery while the proof continues. Each lands as its own commit and names the item it waits on.
+
 **Outcomes**
 
-- Start the culprit search and revert as soon as a check fails, while the other checks continue.
-- Run affected checks first and run the drain suite once per proof.
-- Give the proof CPU priority over worker tests without stopping either for time.
+- Run the drain suite once per proof.
 
 **Agent Details**
 
 - **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph; the owner's ruling in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1).
-- **Where:** the heavy runner and its revert in `tools/tillr-drain/drain/` (`heavy.go`,
-  `heavy_revert.go`, `heavy_supervisor.go`), the run order in `tools/tillr-gate/`, the legacy
-  check list in `tools/fork-check.py`, worker process launch in `tools/tillr-run/`, and the
-  parity case in `tests/go-test-shards.test.py`.
-- **Verify:** a fake judge whose first check fails quickly and second runs long: the revert
-  event is recorded before the second check ends, and the pointer does not move until the whole
-  run is green. A plan whose range touches one check's reads runs that check first. Only one
-  whole run of the `tillr-drain` suite appears per proof. A worker test process started during
-  a proof runs at a lower priority than the proof's processes and is never killed for time.
+- **Where:** the parity case `test_drain_name_parity` in `tests/go-test-shards.test.py`, the
+  Go suite cases in `tests/fork-check.test.py`, and the "Time to a revert" paragraph of the gate
+  design. This item changes nothing under `tools/`, though the directive's paths still list
+  those modules from before the split.
+- **Verify:** `python3 tests/go-test-shards.test.py` and `python3 tests/fork-check.test.py`, each
+  with `TMPDIR` set to the run's scratch, and `uvx vantage-check docs/design/gate-rework.md`.
+
+**Why the work is split, settled by the design seat on 2026-11-18.** Three builds stopped on this
+block when it held six criteria across four modules. The first stopped on a path outside the
+item's paths. The next two each reported that the task exceeds the seat, the last of them on the
+last backend the build seat escalates to. That one left a change that ordered the declaration checks, deleted
+the parity case and ran the recovery between two checks of the proof, and it named what it could
+not settle: recovery for a second failure after an earlier revert had moved the trunk, legacy
+verdicts that arrive together, and the CPU priority. The design seat then built all four parts in
+a lane on 2026-11-18 at `332a18704`, to settle those points by measurement. With the changes of
+the third and fourth items, `python3 tools/go-test-shards.py tools/tillr-drain -k 6` passed 2,086
+tests. With the second item's change, the same command for `tools/tillr-run` passed 220. With this
+item's change, `python3 tests/go-test-shards.test.py` ran 15 tests in 10.4 seconds and
+`python3 tests/fork-check.test.py` exited 0. The changes were then discarded, because the design
+seat's commit is this document. Each block below carries what that build found.
+
+**The earlier builds' saved work is not applied by any of the four items.** The change at
+`refs/tillr/preserved/run-item-heavy-revert-time-to-verdict-a3` deletes the parity case, which the
+ruling below keeps, and calls the recovery from inside the proof's own loop, which pauses the
+proof and shares its cleanup guard. Each item states its change in full.
+
+**The criteria were renumbered by the split.** The ruling below was written before it. Its c4 is
+this item's c1, and its c6 is this item's c2 for the part that covers c4. The old c5 is
+[the priority item](#add-a-lower-cpu-priority-for-worker-processes), the old c3 is
+[the order item](#move-the-checks-recent-landings-reach-to-the-front-of-the-proof), and the old
+c1 and c2 are [the recovery item](#add-recovery-for-a-failed-check-while-the-proof-continues).
 
 **Ruling, 2026-11-18 (answers the first run's fence conflict):** the first run stopped on c4
 because the heavy check `go-test-shards-test` runs `python3 tests/go-test-shards.test.py`, and that
@@ -362,7 +388,8 @@ file was outside the item's paths. The run was right to stop. The paths now name
   by a function that records each shard's package and names and returns no events,
   `shards.run` over `tools/tillr-drain` planned 1,171 names with no name twice. They equalled the
   `Test`, `Example` and `Fuzz` names that `go test -json -list . ./...` printed for the module.
-  The listing took 5.7 seconds and the planning 6.1.
+  The listing took 5.7 seconds and the planning 6.1. At `332a18704` the same comparison held over
+  1,179 names.
 
 Three points settle the change:
 
@@ -387,18 +414,760 @@ nor `-c`. A case in `tests/fork-check.test.py` asserts that a heavy plan holds e
 naming `tools/tillr-drain` as a suite to run. The gate design's "Time to a revert" paragraph still
 says the legacy check runs the suite whole; correct it under c6.
 
-The other criteria are not in conflict. The first run's kept work starts affected declared checks
-first and does not order the legacy checks, so it is a partial start on c3 to inspect, not a
-finished part. The criteria below are unchanged.
+**Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of
+a step is not an ending, and the commit is made once, at step 4.
+
+1. **The parity case.** In `tests/go-test-shards.test.py`, add `import re` beside the other
+   imports, change the first line to say that parity lists the real drain suite and runs none of
+   it, and replace the body of `test_drain_name_parity` with the one below. It passed as written
+   on 2026-11-18.
+
+```python
+    def test_drain_name_parity(self):
+        # Lists and plans the real drain suite and runs none of it: the rolling check
+        # go-tool for tools/tillr-drain is the proof's one run of that suite.
+        module = ROOT / 'tools/tillr-drain'
+        listing = subprocess.run(['go', 'test', '-json', '-list', '.', './...'],
+                                 cwd=module, capture_output=True, text=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        native = set()
+        for event in map(json.loads, listing.stdout.splitlines()):
+            name = event.get('Output', '').strip()
+            if event.get('Action') == 'output' and re.match(r'^(Test|Example|Fuzz)\w*$', name):
+                native.add((event['Package'], name))
+        planned = []
+        real_run = subprocess.run
+
+        def refuse_a_test_run(command, *args, **kwargs):
+            words = [str(word) for word in command]
+            self.assertFalse([word for word in words if word.startswith('-test.run')], words)
+            if words[:2] == ['go', 'test']:
+                self.assertTrue('-list' in words or '-c' in words, words)
+            return real_run(command, *args, **kwargs)
+
+        def record(package, cwd, binary, names, *rest):
+            planned.extend((package, name) for name in names)
+            return []
+
+        with patch.object(shards, 'run_shard', record), \
+                patch.object(subprocess, 'run', refuse_a_test_run):
+            shards.run(module, 6, shards.load_durations(shards.DEFAULT_DURATIONS),
+                       self.root / 'parity', '0')
+        self.assertEqual(len(planned), len(set(planned)))
+        self.assertEqual(set(planned), native)
+```
+
+2. **The plan case.** In `tests/fork-check.test.py`, find the loop over
+   `(module.TIER_LANDING, module.TIER_ROLLING)` that ends with
+   `assert selected == expected, (directory, tier, selected)`. Directly after that assertion, add
+   the lines below, at the same indentation as the assertion.
+
+```python
+                # A proof runs the drain's suite once: one rolling command names it, the
+                # sharded one. The parity case in tests/go-test-shards.test.py starts no run of it.
+                if directory == "tools/tillr-drain" and tier == module.TIER_ROLLING:
+                    drain_runs = [check.argv[-1] for check in plan.checks
+                                  if "tools/tillr-drain" in check.argv[-1]
+                                  and ("go-test-shards.py" in check.argv[-1]
+                                       or "go test" in check.argv[-1])]
+                    assert len(drain_runs) == 1 and "go-test-shards.py" in drain_runs[0], drain_runs
+```
+
+3. **The gate design.** In the "Time to a revert" paragraph of `docs/design/gate-rework.md`,
+   replace the statement that the legacy check runs the same suite whole with what is true: the
+   legacy check `go-tool` for `tools/tillr-drain` runs the suite sharded, the parity case ran it
+   twice more until this change, and it now lists and plans the suite and runs none of it. In
+   point 2 of that paragraph, say the duplicate runs are gone. Change the paragraph's last line,
+   which says the changes are filed as one roadmap item, to say they are four items that start at
+   the same link. Leave points 1 and 3 and the words "proposed, not built" for the later items.
+   If `docs/pi/tillr-go-shards-2026-11-17.md` describes the parity case as running the suite,
+   correct that sentence too.
+4. **Finish.** Run the two commands under **Verify** with `TMPDIR` set to the run's scratch, then
+   `uvx vantage-check docs/design/gate-rework.md` and `python3 tests/tillr-docs.test.py`. Make one
+   commit holding all of it. `tests/fork-check.test.py` takes about three minutes and prints many
+   lines; its exit status is the result. No file under `tools/` changes, so `just pack-sync` has
+   nothing to do.
+
+**What does stop this build:** a failing test that needs a file outside the item's paths, or a
+step whose named function or file is not in the tree. Report it with the step number, the command
+and its output. A report that lists the later items' work as missing describes other items.
 
 <!-- tillr: item id="item-heavy-revert-time-to-verdict" paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-run/,tools/fork-check.py,tests/fork-check.test.py,tests/go-test-shards.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A failing heavy check starts its culprit search and automatic revert when it ends, not when the whole heavy run ends.
+- **c1:** Each proof runs the `tillr-drain` test suite once: the parity case in `tests/go-test-shards.test.py` lists and plans the suite and starts no test of it.
+- **c2:** The parity case fails if it launches a test run, a case in `tests/fork-check.test.py` asserts that a rolling plan holds one command that runs the `tillr-drain` suite, and the gate design's "Time to a revert" paragraph says the suite runs once.
+
+### Add a lower CPU priority for worker processes
+
+**Theme:** Heavy runner
+
+**Description:** Every lane's worker runs its own tests while the heavy proof runs the full
+suite on the trunk, and both want every processor. The proof is the one every landing waits on,
+so it should have the processors first. This item gives each worker's process group a lower CPU
+priority at the moment the run starts. The proof is started by the drain and keeps the drain's
+priority. Nothing is given a time limit and nothing is stopped: on a loaded machine the workers
+slow down, and on an idle one the lower priority costs them nothing.
+
+**Outcomes**
+
+- Give the proof CPU priority over worker tests without stopping either for time.
+
+**Agent Details**
+
+- **Ref:** [the first item of this split](#add-faster-recovery-from-red-landings), which this
+  item waits on so that the two do not edit the same paragraph of the gate design at once; point
+  3 of the "Time to a revert" paragraph in
+  [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check).
+- **Where:** `Exec` in `tools/tillr-run/run/exec.go`, directly after the block that handles a
+  failed `cmd.Start()` and before the line `var note string`.
+- **Verify:** `python3 tools/go-test-shards.py tools/tillr-run -k 6`, `just pack-sync`,
+  `yolo pack lint yolo-packs/tillr`, and `uvx vantage-check` on each document changed.
+
+**Rulings, settled by the design seat on 2026-11-18.** These were built and measured at
+`332a18704`, where the test below passed and the `tools/tillr-run` suite passed 220 tests.
+
+- **The priority is lowered for every run, not only while a proof is in progress.** A run outlives
+  many proofs, and a process keeps the priority it was started with, so a rule that followed the
+  proof would have to find and change processes that already exist. A lower priority only matters
+  when processors are short, which is the case the item is about.
+- **The mechanism is one call after the process starts.** The run's command already leads its own
+  process group. `syscall.Setpriority(syscall.PRIO_PGRP, cmd.Process.Pid, WorkerNiceness)` lowers
+  every process in that group, and every process they start later inherits the value. The
+  constant `WorkerNiceness` is 10 and is exported from the `run` package for the test. There is no
+  setting for it. The command is not wrapped in `nice`, because a wrapper changes what a missing
+  adapter reports.
+- **A failure to lower the priority does not fail the run.** The error `syscall.ESRCH` means the
+  group has already ended and is ignored. Any other error is written as one line to the standard
+  error of `tillr-run`, never to the run's log, which holds the adapter's stream.
+- **The proof is not touched.** The drain starts the heavy checks, so they keep its priority. No
+  file under `tools/tillr-drain/drain/` changes.
+
+**Build order.** Do the steps in order in one run, and make the commit once, at step 4.
+
+1. **The constant and the call.** In `tools/tillr-run/run/exec.go`, add the constant above the
+   comment that begins `// Backend is the adapter program`, and add the call directly before
+   `var note string`. The file does not import `fmt`, so the line is written with
+   `os.Stderr.WriteString`.
+
+```go
+// WorkerNiceness is the niceness a run's process group is given, so that worker tests never
+// take the processor from the heavy proof, which the drain runs at its own niceness.
+const WorkerNiceness = 10
+```
+
+```go
+	// A worker and everything it starts yield the processor to the trunk's proof. The
+	// group is lowered once, here: a process it starts later inherits the value. A group
+	// that has already ended has nothing to lower.
+	if err := syscall.Setpriority(syscall.PRIO_PGRP, cmd.Process.Pid, WorkerNiceness); err != nil && err != syscall.ESRCH {
+		os.Stderr.WriteString("tillr-run: the worker's CPU priority was not lowered: " + err.Error() + "\n")
+	}
+```
+
+2. **The test.** Add `tools/tillr-run/run/priority_test.go` in package `run_test`, named
+   `TestExecLowersTheWorkersCPUPriority`. It opens a fixture store the way
+   `TestExecRequestEnvironment` in `environment_test.go` does. It reads its own niceness by
+   running `nice` with no arguments, and expects that value plus `run.WorkerNiceness`, capped at
+   19; when the two are equal it skips, because the process is already at the lowest priority. It
+   runs `run.Exec` with `TimeoutMS: 0` and the command `/bin/sh -c` over the script below, where
+   `OWN` is the test's own niceness and `OUT` is a file in the test's scratch, and asserts that
+   the file holds the expected number. The inner `sh -c nice` is a process started after the
+   group was lowered, so it reports what a worker's test inherits.
+
+```sh
+i=0; while [ "$(nice)" = "OWN" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; sh -c nice > OUT
+```
+
+3. **The documents.** In the run README, add a short section after "Worker child cleanup" that
+   states the rule and the constant. In the drain README's section on after-merge heavy runs, add
+   one sentence that worker processes run at a lower CPU priority than the proof and that nothing
+   is stopped for time. In the gate design, rewrite point 3 of the "Time to a revert" paragraph to
+   say what was built: a niceness of 10 on the worker's process group, for every run, with no
+   control group weight and no time limit.
+4. **Finish.** Run `just pack-sync`, then the commands under **Verify**, and make one commit
+   holding all of it.
+
+<!-- tillr: item id="item-heavy-worker-cpu-priority" paths="tools/tillr-run/,tools/tillr-drain/README.md,yolo-packs/tillr/,docs/" blocked_by="item-heavy-revert-time-to-verdict" prose="2" -->
+
+- **c1:** `tillr-run` lowers the CPU priority of a run's process group by a niceness of 10 when the run starts, so every process a worker starts runs at a lower priority than the heavy proof, which keeps the drain's priority.
+- **c2:** Nothing is stopped for time: the change ends no process and adds no time limit, and a failure to lower the priority does not fail the run.
+- **c3:** A test asserts the niceness that a process started inside a run inherits, and the gate design, the drain README and the run README describe the priority.
+
+### Move the checks recent landings reach to the front of the proof
+
+**Theme:** Heavy runner
+
+**Description:** A proof runs its declaration checks one after another in the order of their
+names and then starts the legacy program, whatever the landings since the last green commit
+changed. A landing that breaks a check late in that order is found late. This item starts the
+checks whose declared reads those landings changed before the others. The same checks run, and
+only their order changes.
+
+**Outcomes**
+
+- Run affected checks first.
+
+**Agent Details**
+
+- **Ref:** [the priority item](#add-a-lower-cpu-priority-for-worker-processes), which this item
+  waits on so that the documents change in one order; point 2 of the "Time to a revert" paragraph
+  in [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check).
+- **Where:** the branch of `JudgeHeavy` in `tools/tillr-drain/drain/heavy_steps.go` that runs when
+  `only` is empty. `legacyCheckWatches` in `legacy_watches.go` already answers each legacy check's
+  watched paths without running a check.
+- **Verify:** `go test ./drain -run 'TestHeavyProcess'` in `tools/tillr-drain`, then
+  `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, `just pack-sync`,
+  `yolo pack lint yolo-packs/tillr`, and `uvx vantage-check` on each document changed.
+
+**Rulings, settled by the design seat on 2026-11-18.** These were built at `332a18704`, where the
+test below passed in its four cases.
+
+- **The changed paths are the difference between the green pointer and the commit under proof.**
+  They are read in the proof's checkout with
+  `git diff --name-only --no-renames -z <green> HEAD --`. With no green pointer there are no
+  changed paths and the order is today's.
+- **A check is affected when a changed path equals one of its reads or lies under a read that
+  ends in a slash.** That is the rule `legacyWatchFiles` already applies to a watch's path.
+- **The order has three groups.** First the affected declaration checks, in name order. Then the
+  legacy program, when a changed path matches a watch of any legacy check. Then the declaration
+  checks that are not affected, in name order. When no legacy watch matches, the legacy program
+  runs last, as it does today.
+- **The order inside the legacy program does not change.** The program runs its checks side by
+  side and starts the longest first, and `tools/fork-check.py` is not edited.
+- **The watches are read only when they can change the order.** `legacyCheckWatches` runs
+  `python3 tools/fork-check.py --registry-json`, which took 1.5 seconds on 2026-11-18. It is called
+  only when there are changed paths and at least one declaration check is not affected. A tree
+  with no `tools/fork-check.py` answers no watches, and the legacy program then runs last.
+- **The returned list keeps the order the checks ran in.** With nothing affected, that is the
+  declaration checks and then the legacy checks, as today.
+
+**Build order.** Do the steps in order in one run, and make the commit once, at step 4.
+
+1. **Two helpers.** Add them to `heavy_steps.go` above `runHeavyLegacy`.
+
+```go
+// heavyChangedPaths answers the paths the landings since the green pointer changed, or
+// none when there is no pointer yet.
+func heavyChangedPaths(ctx context.Context, dir string) ([]string, error) {
+	green, err := heavyGreen(ctx, dir)
+	if err != nil || green == "" {
+		return nil, err
+	}
+	raw, err := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--name-only", "--no-renames", "-z", green, "HEAD", "--").Output()
+	if err != nil {
+		return nil, Externalf("reading the paths changed since %s: %v", green, err)
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00"), nil
+}
+
+// heavyReadsChanged answers whether any changed path is one of reads or under one that
+// names a directory.
+func heavyReadsChanged(reads, paths []string) bool {
+	for _, read := range reads {
+		for _, path := range paths {
+			if path != "" && (path == read || strings.HasSuffix(read, "/") && strings.HasPrefix(path, read)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+```
+
+2. **The order.** In `JudgeHeavy`, the branch for an empty `only` sorts `ids`, runs a loop over
+   them and then calls `runHeavyLegacy` and reports its failing checks. Keep `sort.Strings(ids)`
+   and put the code below directly after it, in place of `result := []HeavyCheck{}` and the
+   `for _, id := range ids {` line. The body of the loop stays as it is. After the loop, replace
+   the call to `runHeavyLegacy`, the lines that report its failing checks and the `return` that
+   follows them with the last five lines below, because `runLegacy` now holds that code.
+
+```go
+		paths, err := heavyChangedPaths(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+		// Checks the landings since the green pointer reach go first: declarations whose
+		// reads they changed, then the legacy program when they changed one of its watches.
+		var first, rest []string
+		for _, id := range ids {
+			if heavyReadsChanged(declared[id].Reads, paths) {
+				first = append(first, id)
+			} else {
+				rest = append(rest, id)
+			}
+		}
+		legacyFirst := false
+		if len(paths) > 0 && len(rest) > 0 {
+			watches, err := legacyCheckWatches(ctx, dir)
+			if err != nil {
+				return nil, err
+			}
+			for _, reads := range watches {
+				if heavyReadsChanged(reads, paths) {
+					legacyFirst = true
+					break
+				}
+			}
+		}
+		result := []HeavyCheck{}
+		var legacy []HeavyCheck
+		runLegacy := func() error {
+			var err error
+			legacy, err = s.runHeavyLegacy(ctx, dir, "")
+			if err == nil {
+				failed := []string{}
+				for _, check := range legacy {
+					if check.Result == "fail" {
+						failed = append(failed, check.CheckID)
+					}
+				}
+				if len(failed) == 0 {
+					failed = append(failed, "none")
+				}
+				heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+			}
+			return err
+		}
+		for position, id := range append(first, rest...) {
+			if legacyFirst && position == len(first) {
+				if err := runLegacy(); err != nil {
+					return nil, err
+				}
+			}
+```
+
+```go
+		if !legacyFirst {
+			if err := runLegacy(); err != nil {
+				return append(result, legacy...), err
+			}
+		}
+		return append(result, legacy...), nil
+```
+
+3. **The test.** Add `TestHeavyProcessRunsAffectedChecksFirst` in a new file
+   `tools/tillr-drain/drain/heavy_order_test.go`. It builds the gate binary and the repository
+   the way `TestHeavyProcessJudgeIncludesDeclarationsAndLegacyAndReplaysOneCheck` in
+   `heavy_steps_test.go` does. The tree holds two heavy tree declarations with `"remember":false`:
+   `a-unaffected` reads `unrelated/`, and `z-affected` reads `late-input`. Each one's command
+   appends its own id to an order file outside the tree. The tree also holds a
+   `tools/fork-check.py` of one line, which prints
+   `{"declarations":[{"id":"legacy","watches":[{"path":"legacy-input"}]}]}`. The rolling program
+   is a script from the `executable` helper that appends `legacy` to the order file and writes a
+   span file with one check `legacy` of status `PASS`. The test commits that tree, points the green
+   pointer at it with `heavyGit(t, root, "update-ref", GreenRef, base)`, commits one more change,
+   runs the runner and asserts a green run and the order file's content. It has four cases:
+
+   | The later commit adds | Order |
+   | :--- | :--- |
+   | `late-input` | `z-affected a-unaffected legacy` |
+   | `legacy-input` | `legacy a-unaffected z-affected` |
+   | both files | `z-affected legacy a-unaffected` |
+   | a file neither reads | `a-unaffected z-affected legacy` |
+
+4. **Finish.** In the drain README's section on after-merge heavy runs, state the three groups.
+   In the gate design, rewrite the first sentence of point 2 of the "Time to a revert" paragraph to
+   say what was built. Run `just pack-sync`, then the commands under **Verify**, and make one
+   commit holding all of it.
+
+**What does stop this build:** a failing test that needs a file outside the item's paths, or a
+step whose named function is not in the tree. An existing test that asserts the old order is
+rewritten to the three groups, and is not a reason to stop.
+
+<!-- tillr: item id="item-heavy-affected-checks-first" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-heavy-worker-cpu-priority" prose="2" -->
+
+- **c1:** Declaration checks whose declared reads intersect the paths changed since the green pointer run before the other declaration checks.
+- **c2:** The legacy program runs after the affected declaration checks and before the others when a changed path matches a watch of one of its checks, and last otherwise.
+- **c3:** With no green pointer, or with no check affected, the checks run in today's order, and the same checks run in every case.
+- **c4:** A regression test covers the four orders, and the gate design and the drain README describe the order.
+
+### Add recovery for a failed check while the proof continues
+
+**Theme:** Heavy runner
+
+**Description:** A revert can start only once the heavy run has named a failed check, and today
+that is when the whole run ends. The landing that broke the trunk stays there, and every later
+landing waits behind it, for as long as the slowest check takes. This item starts the culprit
+search and the automatic revert for a failed check when that check ends, in a second checkout,
+while the proof runs its remaining checks. The green pointer still moves only on a run in which
+every check passed.
+
+**Outcomes**
+
+- Start the culprit search and revert as soon as a check fails, while the other checks continue.
+
+**Agent Details**
+
+- **Ref:** [the order item](#move-the-checks-recent-landings-reach-to-the-front-of-the-proof),
+  which this item waits on because both change `JudgeHeavy`; point 1 of the "Time to a revert"
+  paragraph in [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check); the
+  owner's ruling in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1).
+- **Where:** `judgeTip`, `revert` and `Run` in `tools/tillr-drain/drain/heavy.go`, `JudgeHeavy`
+  and `runHeavyLegacy` in `heavy_steps.go`, the guard check in `restart_rolling.go`, and one new
+  file, `heavy_early.go`.
+- **Verify:** `go test ./drain -race -run 'Heavy|Revert|Restart|Rolling'` in `tools/tillr-drain`,
+  then `python3 tools/go-test-shards.py tools/tillr-drain -k 6`, `just pack-sync`,
+  `yolo pack lint yolo-packs/tillr`, and `uvx vantage-check` on each document changed.
+
+**Rulings, settled by the design seat on 2026-11-18.** The last build named three things it could
+not settle. Each is ruled here, from a build of this change at `332a18704` on which the three
+tests below passed, the command under **Verify** with `-race` passed in 515 seconds, and the
+whole drain suite passed 2,086 tests.
+
+- **Recovery runs beside the proof, one failed check at a time.** The proof's judge reports each
+  check as it ends. A failed one joins a queue, and one goroutine takes the queue in order: the
+  culprit search, then the offer to revert. The proof never waits for it. Two recoveries never
+  run at once, so two reverts never race each other.
+- **Recovery has its own checkout and its own cleanup guard.** Its checkout is the proof's path
+  with `-replay` added. Its guard is `heavy.replay-cleanup-pending`, beside the proof's
+  `heavy.cleanup-pending`. Both are needed and both were measured. With the proof's checkout, a
+  replay removed the tree the proof was running in, and the proof's check ended with
+  `getwd: no such file or directory`. With the proof's guard, the replay's supervisor could not
+  create a guard that already existed, and the run ended after 31 seconds with
+  `cleanup not acknowledged`. A guard of either name left by a killed runner holds the next run.
+- **A second failure after an earlier revert has landed is offered on the run's tip, as today.**
+  This is not a new case. The loop in `revert` already offers each landing in turn with
+  `run.TipSHA` after the reverts before it have landed, and the lander replays the change onto
+  the trunk as it then stands. Recovery passes the same tip.
+- **A landing reverted earlier in the same run is not offered again.** When a later failed check
+  is traced to it, the check records the revert that already landed and gets no fixer. The
+  returned item's ending names the checks of the first offer only. The next proof judges the
+  later check on the new tip.
+- **A landing whose revert was refused can be offered again for a later check.** A refusal
+  changed nothing on the trunk.
+- **Legacy verdicts need no observer.** The last build reported that legacy verdicts arrive
+  together. They do, at the program's first failed check: `run_checks` in `tools/fork-check.py`
+  stops the pass on a red check, ends the checks in flight and names the rest not-run. So the
+  judge reports the legacy checks when the program ends, which is before any declaration check
+  that runs after it. `heavy_legacy_progress.py` and `tools/fork-check.py` are not edited.
+- **Only a check that failed outright is recovered early.** A stalled check is retried at the end
+  of the run, as today, and a second stall names the tip there.
+- **Fixers are filed when the run ends, as today.** Recovery searches and offers the revert. A
+  check whose revert was refused keeps its fixer, filed with the others after the last check.
+- **The pointer rule does not change.** A failed check makes the run red whatever recovery did,
+  and the pointer moves only when every check of one run passed. The next run proves the trunk
+  as the revert left it.
+- **A stop reaches both.** Recovery uses the run's context. `judgeTip` waits for the queue to
+  empty before it answers, on every path, so the runner's lock is never released while a replay
+  is running. A stop or a lost cleanup in recovery ends the run with that error.
+
+**Build order.** Do the steps in order in one run, and make the commit once, at step 6.
+
+1. **The new file.** Create `tools/tillr-drain/drain/heavy_early.go` with the content below.
+
+```go
+package drain
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+const heavyReplayGuard = "heavy.replay-cleanup-pending"
+
+// heavyPendingGuard answers the cleanup guard a killed runner left in dir, the proof's
+// or the recovery's, or "" when there is none.
+func heavyPendingGuard(dir string) string {
+	for _, name := range []string{heavyCleanupGuard, heavyReplayGuard} {
+		guard := filepath.Join(dir, name)
+		if _, err := os.Stat(guard); err == nil || !os.IsNotExist(err) {
+			return guard
+		}
+	}
+	return ""
+}
+
+type heavyCheckEndedKey struct{}
+
+// heavyCheckEnded reports one check of a whole-tier judge the moment it ends, so a red
+// one starts its recovery while the judge runs the rest.
+func heavyCheckEnded(ctx context.Context, check HeavyCheck) {
+	if report, ok := ctx.Value(heavyCheckEndedKey{}).(func(HeavyCheck)); ok {
+		report(check)
+	}
+}
+
+// heavyAttributed is what recovery found for one failing check before the run ended.
+type heavyAttributed struct {
+	check             HeavyCheck
+	against           string
+	bisected, offered bool
+	stillRed          bool
+}
+
+// heavyEarly recovers failing checks one at a time, in the order they ended, in a
+// checkout of its own beside the proof's.
+type heavyEarly struct {
+	ctx      context.Context
+	runner   HeavyRunner
+	run      HeavyRun
+	mu       sync.Mutex
+	cond     *sync.Cond
+	queue    []HeavyCheck
+	closed   bool
+	done     chan struct{}
+	err      error
+	handled  map[string]heavyAttributed
+	reverted map[string]string
+}
+
+func (r HeavyRunner) startEarly(ctx context.Context, run HeavyRun) *heavyEarly {
+	e := &heavyEarly{ctx: ctx, runner: r, run: run, done: make(chan struct{}), handled: map[string]heavyAttributed{}, reverted: map[string]string{}}
+	e.cond = sync.NewCond(&e.mu)
+	e.runner.Work = r.Work + "-replay"
+	if own, ok := ctx.Value(heavyOwnershipKey{}).(heavyOwnership); ok {
+		own.Guard = filepath.Join(filepath.Dir(own.Guard), heavyReplayGuard)
+		e.ctx = context.WithValue(ctx, heavyOwnershipKey{}, own)
+	}
+	go e.loop()
+	return e
+}
+
+func (e *heavyEarly) offer(check HeavyCheck) {
+	if check.Result != "fail" || check.FirstRedLanding != "" {
+		return
+	}
+	e.mu.Lock()
+	if !e.closed {
+		e.queue = append(e.queue, check)
+		e.cond.Signal()
+	}
+	e.mu.Unlock()
+}
+
+func (e *heavyEarly) loop() {
+	defer close(e.done)
+	for {
+		e.mu.Lock()
+		for len(e.queue) == 0 && !e.closed {
+			e.cond.Wait()
+		}
+		if len(e.queue) == 0 {
+			e.mu.Unlock()
+			return
+		}
+		check := e.queue[0]
+		e.queue = e.queue[1:]
+		e.mu.Unlock()
+		if e.err == nil && e.ctx.Err() == nil {
+			e.err = e.recover(check)
+		}
+	}
+}
+
+// wait ends the queue and answers once every check offered has been handled.
+func (e *heavyEarly) wait() error {
+	e.mu.Lock()
+	e.closed = true
+	e.cond.Broadcast()
+	e.mu.Unlock()
+	<-e.done
+	return e.err
+}
+
+func (e *heavyEarly) recover(check HeavyCheck) error {
+	against, bisected, err := e.runner.attribute(e.ctx, e.run, &check)
+	if err != nil {
+		return err
+	}
+	a := heavyAttributed{against: against, bisected: bisected}
+	if bisected && e.runner.Revert != nil {
+		a.offered = true
+		if by := e.reverted[against]; by != "" {
+			check.RevertedBy = by
+		} else {
+			out, err := e.runner.offerRevert(e.ctx, e.run.TipSHA, against, []HeavyCheck{check})
+			if err != nil {
+				return err
+			}
+			check.RevertedBy, check.RevertRefused, a.stillRed = out.Reverted, out.Refused, out.StillRed
+			if out.Reverted != "" {
+				e.reverted[against] = out.Reverted
+			}
+		}
+	}
+	a.check = check
+	e.handled[check.CheckID] = a
+	return nil
+}
+```
+
+2. **`heavy.go`, four changes.** The file does not compile until all four are made. The code
+   below is indented with spaces where it sits inside this list, so run `gofmt -w` on the file
+   afterwards.
+   - **`attribute`.** In `judgeTip`, the loop over `run.Checks` that follows the comment about
+     `bisected` holds, for each failed check, the code from the comment
+     `// The sha a fixer is filed against` down to the `if` that appends
+     `"; attribution unavailable; red batch range "` to the detail. Move that code into a new
+     method with the signature below. In the moved code, `against := check.FirstRedLanding`
+     becomes `against = check.FirstRedLanding`, `return run, err` becomes
+     `return "", false, err`, and `bisected[red] = true` becomes `found = true`. The method ends
+     with `return against, found, nil`.
+
+     ```go
+     func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCheck) (against string, found bool, err error)
+     ```
+
+   - **The loop.** In its place in the loop, directly after the `continue` for a check that did
+     not fail, put the code below. The lines that add the check to `order` and `byLanding` stay
+     after it.
+
+     ```go
+     against := ""
+     if a, ok := early.handled[check.CheckID]; ok && check.FirstRedLanding == "" {
+         // Recovery already ran for this check while the proof continued.
+         check.FirstRedLanding, check.GateFault, check.Detail = a.check.FirstRedLanding, a.check.GateFault, a.check.Detail
+         check.RevertedBy, check.RevertRefused = a.check.RevertedBy, a.check.RevertRefused
+         against = a.against
+         switch {
+         case check.RevertedBy != "":
+             continue
+         case a.offered && a.stillRed && against != run.TipSHA:
+             against = run.TipSHA
+         case !a.offered && a.bisected:
+             bisected[against] = true
+         }
+     } else {
+         var found bool
+         var err error
+         against, found, err = r.attribute(ctx, run, check)
+         if err != nil {
+             return run, err
+         }
+         if found {
+             bisected[against] = true
+         }
+     }
+     ```
+
+   - **`offerRevert` and `revert`.** Add the method below above `one`. In `revert`, add a last
+     parameter `reverted map[string]string`, and replace the call to `r.Revert` together with the
+     two `if` blocks after it, which turn an error into a refusal and fill an empty answer, with
+     the second block below. The call in `judgeTip` becomes
+     `r.revert(ctx, &run, order, byLanding, bisected, early.reverted)`.
+
+     ```go
+     // offerRevert asks Revert about one landing. A revert that failed for its own reasons is
+     // a refusal; only a stop or a lost cleanup is an error.
+     func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []HeavyCheck) (RevertOutcome, error) {
+         out, err := r.Revert(ctx, tip, sha, checks, r.one)
+         if err != nil {
+             if ctx.Err() != nil || cleanupLost(err) {
+                 return out, err
+             }
+             out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
+         }
+         if out.Reverted == "" && out.Refused == "" {
+             out.Refused = "the revert answered neither a landing nor a reason"
+         }
+         return out, nil
+     }
+     ```
+
+     ```go
+     out := RevertOutcome{Reverted: reverted[sha]}
+     if out.Reverted == "" {
+         var err error
+         if out, err = r.offerRevert(ctx, run.TipSHA, sha, byLanding[sha]); err != nil {
+             return nil, err
+         }
+     }
+     ```
+
+   - **The start, the wait and the guard.** At the top of `judgeTip`, add
+     `early := r.startEarly(ctx, run)`. The whole-tier call becomes
+     `r.Judge(context.WithValue(ctx, heavyCheckEndedKey{}, early.offer), dir, "")`; the stall
+     retry's call keeps the plain `ctx`. Directly after the `inTree` call returns and before its
+     error is tested, add the first block below. In `Run`, replace the two lines that build
+     `guard` and test it with `os.Stat` by the one line in the second block; the body of that
+     `if` is unchanged.
+
+     ```go
+     // Recovery owns a second checkout: it ends before the run does, whatever the proof answered.
+     if earlyErr := early.wait(); err == nil {
+         err = earlyErr
+     }
+     ```
+
+     ```go
+     if guard := heavyPendingGuard(dir); guard != "" {
+     ```
+
+3. **`restart_rolling.go`.** The function there that takes the heavy lock tests the proof's
+   guard with `os.Stat` and refuses with "rolling cleanup not acknowledged". Test
+   `heavyPendingGuard(dir)` instead and name the guard it answers in the refusal. Keep the
+   variable `guard` as the proof's guard path, because the ownership value built below it still
+   uses that path.
+4. **`heavy_steps.go`, three lines.** In the loop over declaration checks, directly after the
+   `heavyProgressReport` line that prints `loop: heavy %s %s in %s`, add
+   `heavyCheckEnded(ctx, checks[0])`. In `runLegacy`, directly after the `heavyProgressReport`
+   line that prints the failing checks, add a loop that calls `heavyCheckEnded(ctx, check)` for
+   each check in `legacy`. In `runHeavyLegacy`, directly after the line that sets `spans`, give a
+   replay a span file of its own, so that it can never remove the proof's:
+
+```go
+	if only != "" {
+		// A replay can run beside the proof's own program, whose evidence this must not remove.
+		spans = filepath.Join(s.LaneRoot, ".rolling", "heavy.replay.spans.json")
+	}
+```
+
+5. **Three tests.** Each fails without the change.
+   - `TestHeavyRedCheckIsRevertedWhileTheProofContinues`, in a new file `heavy_early_test.go`,
+     uses `newRevertHarness` from `heavy_revert_test.go`. Its judge answers two checks. `quick`
+     fails while the file `a` exists in the checkout. `slow` always passes. Asked for one check by
+     name, the judge answers that check alone. Asked for the whole tier, it calls
+     `heavyCheckEnded(ctx, quick)`, and on its first whole-tier call it then polls `h.reverts()`
+     every 10 milliseconds, for at most a minute, until one revert with the result `reverted` is
+     on record, and asserts that the green pointer is still the base. It then calls
+     `heavyCheckEnded(ctx, slow)` and answers both checks. The test lands `item-broke` with the
+     file `a` and `item-later` with the file `c`, calls `h.proof()`, and asserts that the revert
+     was seen before `slow` ended, that there is one revert and it names the first landing, that
+     the green pointer equals the trunk and the revert, and that no fixer was filed.
+   - `TestHeavyProcessReplaysAFailedCheckWhileTheNextOneRuns`, in `heavy_early_process_test.go`,
+     uses the real gate binary and `ProcessSteps`, as the order item's test does. The file `value`
+     holds `good` at the base, where the green pointer is, and `bad` at the tip. The declaration
+     `a-quick` passes when `value` is not `bad`. The declaration `b-slow` waits up to 30 seconds
+     for a marker file outside the tree and passes when the marker exists. The runner's `Revert`
+     is a function that records the landing and the check it was offered, calls its `replay`
+     argument for `a-quick` on the base and expects a pass with no error, writes the marker, and
+     answers a refusal. The test asserts one offer, of the tip for `a-quick`, a red run of two
+     checks whose second passed, and a green pointer still on the base. With the proof's guard or
+     the proof's checkout used for recovery, this test fails with the errors quoted in the
+     rulings.
+   - `TestHeavyLegacyFailureRecoversWhileALaterDeclarationRuns`, in
+     `heavy_early_legacy_test.go`, has one declaration `slow`, which reads `unrelated/` and waits
+     for the marker as above. Its `tools/fork-check.py` is one line that prints a registry with
+     one declaration, `legacy`, of kind `fixture` and label `legacy`, watching `value`. The
+     rolling program writes one span for `legacy` with that kind and label and the status `FAIL`,
+     and exits 1. The replay program exits 0 when `value` holds `good`. The base holds `good` and
+     the tip `bad`, so the legacy program runs first by the order item's rule. The `Revert`
+     function records its offer, writes the marker and refuses. The test asserts one offer, of the
+     tip for `legacy` with the read `value`, a red run, an unmoved pointer, and that `slow` passed.
+6. **Finish.** In the drain README's section on after-merge heavy runs, say that a failed check
+   is searched and offered for revert when it ends, in the checkout `worktree-replay` and under
+   the guard `heavy.replay-cleanup-pending`, that the pointer rule is unchanged, and that either
+   guard holds the next run; the sentence there that names `heavy.cleanup-pending` gains the
+   second name. In the gate design, rewrite point 1 of the "Time to a revert" paragraph to say
+   what was built, and change "proposed, not built" in that paragraph's opening words to say it
+   is built. Run `just pack-sync`, then the commands under **Verify**, and make one commit holding
+   all of it.
+
+**What does stop this build:** a failing test that needs a file outside the item's paths, a step
+whose named function is not in the tree, or a test under **Verify** that fails with the change
+made exactly as written. Report it with the step number, the command and its output. An existing
+test that fails because it calls `revert` with the old parameters is updated, and is not a reason
+to stop.
+
+<!-- tillr: item id="item-heavy-early-recovery" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-heavy-affected-checks-first" prose="2" -->
+
+- **c1:** A failing declaration check starts its culprit search and automatic revert when it ends, and a failing legacy check when the legacy program ends, while the proof runs its remaining checks.
 - **c2:** The green pointer still moves only on a heavy run in which every check passed.
-- **c3:** Checks whose declared reads intersect the paths changed since the green pointer start before the other checks.
-- **c4:** Each proof runs the `tillr-drain` test suite once, not both sharded and whole.
-- **c5:** While a heavy run is in progress, worker test processes run at a lower CPU priority than the proof, and nothing is stopped for time.
-- **c6:** Regression tests cover c1 to c5, and the gate design and the drain README describe the order and the priority.
+- **c3:** Recovery handles one failed check at a time, in a checkout and under a cleanup guard of its own, and a guard of either name left behind holds the next run.
+- **c4:** A landing reverted earlier in the same run is not offered again, and fixers are filed when the run ends.
+- **c5:** The three regression tests named in the block cover c1 to c4, and the gate design and the drain README describe the recovery.
 
 ## Filed 2026-11-15: the observatory redesign's remaining slices
 
