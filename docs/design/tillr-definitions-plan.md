@@ -670,6 +670,37 @@ verdicts and names the finished state, and the drain moves the item there with t
 and actor. The drain refuses that move unless every criterion has a recorded verdict, so an item
 never finishes unjudged.
 
+**Start here:** a run of this item runs the two commands below first, in the worktree, before it
+reads anything else. They carry the earlier draft onto the tree as it stands. Do not test the draft
+with `git apply --check`: that command refuses the draft at `pass.go`, and its refusal is the
+expected result of the wrong command, not a blocker and not a reason to report `blocked`.
+
+```bash
+git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- \
+  tools/tillr-drain tools/tillr-item | git apply --3way -
+python3 - <<'RESOLVE'
+import re
+p = "tools/tillr-drain/drain/pass.go"
+s = open(p).read()
+s, n = re.subn(r"<<<<<<< ours\n(.*?)[^\n]*\n=======\n(.*?)>>>>>>> theirs\n", r"\1\2", s, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+RESOLVE
+```
+
+The first command prints `Applied patch to 'tools/tillr-drain/drain/pass.go' with conflicts.`,
+takes the other 16 files cleanly and exits 1. That exit is expected, so the two commands are not
+joined with `&&`. The second resolves that one conflict: it keeps the trunk's lines
+and replaces only the last of them with the draft's line, the one that begins `if !l.nonLanding &&`.
+Measured on 2026-11-18 on the trunk at `c15a5440e`, then discarded: after these two commands
+`gofmt -l` names no file, `go build ./...` and `go vet ./...` exit 0 in `tools/tillr-drain` and
+`tools/tillr-item`, `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in
+`tools/tillr-drain`, and `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion`
+passes in `tools/tillr-item`. The run then does what is left: it removes the 10-second deadline
+from `TestFailedDesignerResumeStartsNewSessionOnce`, runs the full item and drain suites, runs the
+high-effort review, runs `just pack-sync`, and commits once. The rest of this block is the reasoning
+behind those steps and the rulings a run needs when one of them fails.
+
 **Product QA can try:** a finding that runs, is judged, and ends `confirmed` or `rejected` on its own,
 with the reason on the record.
 
@@ -883,6 +914,29 @@ place a run starts, and they were run again, in this order, on 2026-11-18 on the
   gone, or the three-way apply leave conflicts in more than `pass.go`, the run does not stop. It
   builds c1 to c8 from the tree as it stands, using this block's rulings as the design. The draft
   saves work; it is not a requirement of the item.
+
+A third build run on 2026-11-18 changed no file and reported `blocked` in eight seconds, again on
+`git apply --check` at [pass.go](../../tools/tillr-drain/drain/pass.go). Its log shows why the two
+answers above did not reach it. It read the first 22 lines under this block's heading, searched the
+document for the words "Start here" and found nothing, and every command it ran carried a
+10-second limit. The numbered steps were more than 150 lines below the heading, so it never saw
+them. This answers the conflict it raised. No criterion and no ruling changes.
+
+- **The steps now sit at the top of the block, under "Start here".** They are the same steps as
+  the numbered list above, and the conflict in `pass.go` is now resolved by a command and not by
+  hand, so a run has nothing to decide there. Where the two differ, the text under "Start here"
+  is the one a run follows. It was run again on 2026-11-18 on the trunk at `c15a5440e`, with the
+  results it states.
+- **A run reads the whole block before it reports anything but `done`.** The block runs from its
+  heading to the criteria. A report of `blocked` or `failed` names the ruling in this block that
+  does not cover its case. A report that does not is answered by this paragraph and nothing more.
+- **The suites and the build do not fit in ten seconds.** The drain's targeted tests alone took 58
+  seconds in the measurement above. A run gives its build and test commands no time limit, or one
+  of at least ten minutes.
+- **A fourth report of the same refusal goes to the owner, not to another answer.** The design has
+  nothing more to say about this patch. If a run given this text still stops at `git apply
+  --check`, the fault is in how the run is staged or which seat it is given, and the owner rules
+  on that.
 
 <!-- tillr: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
