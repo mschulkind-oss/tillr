@@ -81,7 +81,7 @@ and duplicate ids refuse sync. Blank lines and comments starting with `#` are ig
 Sync places only successful new imports using the record. It places named items
 first, in record order: after the nearest item above already in the order, or
 before the nearest below when none is above, or last when neither exists.
-Remaining imports use their `from` mark or append in block order. Unknown record
+Remaining imports use their `from` mark or append in roadmap order. Unknown record
 ids never create items, and editing the record never moves items the store holds.
 
 ## Moving an item in the order
@@ -242,13 +242,13 @@ The following rules describe Git-landing, including its established refusal name
   same record→row mapping `apply` uses. The directive grammar and the field mapping are
   [the queue-persistence ruling's Section 1](../../docs/design/queue-persistence-ruling.md#1-shared-item-block-shape).
   A new item is `in-queue`, or `not-started` when a roadmap's `## Icebox` or
-  `## Exploration` section links to its document. Only a whole sync can observe an item
+  `## Exploration` section contains its block or links to its document. Only a whole sync can observe an item
   leaving a parked section and return it to `in-queue`. Otherwise, a stored item keeps its state,
   rank, runs and criterion states. A new block may name its source with
   `from="<item id>"`: a keyed source, including a landed one, places it immediately
   after that source and earlier items placed by the same mark, in block order.
-  A malformed source id is a finding; an absent or unkeyed source does not place
-  the item. This mark never moves an existing item. Placement events retain
+  A malformed source id is a finding; an absent or unkeyed source falls back to
+  placing the item last. This mark never moves an existing item. Placement events retain
   `placed_from`, so retiring a sibling's block does not lose its placement history.
   Sync and `place` share key choice and respacing; crowded gaps can change other
   keys while preserving their relative order. A changed block updates the item's definition while no
@@ -260,8 +260,25 @@ The following rules describe Git-landing, including its established refusal name
   Empty keys count after keyed items, in item id order. A writing sync fills those
   empty keys in that same order, one item update each in its own transaction;
   opening or migrating a store never does. New and newly unparked items with no
-  key are added after the last item in the order. Existing records still accept
-  the legacy `rank` field through apply and fixture seeding.
+  key are added after every key the store held when sync began. Existing records
+  still accept the legacy `rank` field through apply and fixture seeding.
+- **First-import order follows the roadmaps.** Every tracked `docs/**/roadmap.md`
+  is a roadmap, taken in path order. Its entries, read top to bottom outside
+  `Icebox` and `Exploration`, are its own item blocks and the first links to
+  tracked documents holding item blocks. A linked document's blocks stay in
+  document order within that entry. Links to other roadmaps are not entries;
+  a document reached by two roadmaps belongs to the first roadmap that reaches it.
+  Sync takes one entry from each roadmap in turn, then the next entry from each;
+  items in documents no roadmap reaches follow in path and document order.
+  A new item without a usable `from` gets its first place last, in that order.
+  Stored items in the order without a key go last before new imports, in item id
+  order. Sync never changes the relative order of items already placed; only
+  insertion by `from` into an exhausted gap may rewrite their keys, without
+  changing that order. Appended keys are allocated as a batch, not extended once
+  per item. The `item.sync` record's `placed` list and text output name each item
+  given a place, ordered by its final place number, with its source when placed
+  by `from`, and never its key. A dry run reports the same planned places and
+  writes nothing.
 - **A whole writing sync saves its residue counts in the same transaction.** The
   item-owned `item_sync_residue` table holds one row: the sync time, ids of open store
   items no document declares (`unshared_open`), the oldest one's last write, and ids

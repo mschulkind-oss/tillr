@@ -2,13 +2,11 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -36,20 +34,9 @@ func TestStagedItemReadsStoredFieldsWithoutIndex(t *testing.T) {
 			}
 			defer s.Close()
 			if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-				env, err := item.Show(tx.Reader(), "item-a", root)
-				if err != nil {
-					return err
-				}
-				var payload map[string]any
-				if err := json.Unmarshal(env.Payload, &payload); err != nil {
-					return err
-				}
-				payload["design_doc"] = "design.md"
-				env.Payload, err = json.Marshal(payload)
-				if err != nil {
-					return err
-				}
-				_, err = item.Apply(context.Background(), tx, env)
+				// This fixture changes a stored field, not a public read record:
+				// Show includes place, which Apply deliberately does not store.
+				_, err := tx.Exec(`UPDATE items SET design_doc=? WHERE item_id=?`, "design.md", "item-a")
 				return err
 			}); err != nil {
 				t.Fatal(err)
