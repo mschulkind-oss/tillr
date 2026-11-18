@@ -14,7 +14,7 @@
   "backends": {
     "pi": {
       "adapter": "tools/tillr-run/backends/pi/run-pi",
-      "model": "amazon-bedrock/global.openai.gpt-6.2-sol",
+      "model": "amazon-bedrock/global.openai.gpt-6.1-sol",
       "effort": "medium"
     },
     "pi-designer": {
