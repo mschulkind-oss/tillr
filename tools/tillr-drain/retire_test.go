@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLandingRetiresItsDocumentBlockBeforeGateOutsideFence(t *testing.T) {
@@ -111,16 +112,37 @@ printf 'RESULT: done\n'
 
 func retirementLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, fence []string, report *strings.Builder) *drain.Loop {
 	t.Helper()
+	return retirementLoopWithSteps(t, f, steps, steps.Now, fence, report)
+}
+
+func retirementLoopWithSteps(t *testing.T, f loopFixture, steps drain.Steps, now func() time.Time, fence []string, report *strings.Builder) *drain.Loop {
+	t.Helper()
 	index := indexStub(t, map[string]any{"path": "docs/fixture.md", "questions": []any{}})
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
 		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: fence},
-		Now: steps.Now, Report: report, QuestionsCmd: strings.Fields(index),
+		Now: now, Report: report, QuestionsCmd: strings.Fields(index),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return loop
+}
+
+// A failed gate step leaves the retirement candidate held for operator repair; unlike
+// a gate that answered no verdict, it cannot be re-gated until the fault is cleared.
+type retirementGateSteps struct {
+	*drain.ProcessSteps
+	fail  bool
+	heads []string
+}
+
+func (s *retirementGateSteps) Gate(ctx context.Context, c drain.Candidate) (drain.GateOutcome, error) {
+	s.heads = append(s.heads, c.HeadSHA)
+	if s.fail {
+		return drain.GateOutcome{}, drain.Externalf("the gate step could not start")
+	}
+	return s.ProcessSteps.Gate(ctx, c)
 }
 
 func TestRestartGatesAndLandsTheRetiredHead(t *testing.T) {
@@ -136,13 +158,7 @@ func TestRestartGatesAndLandsTheRetiredHead(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, "docs", "fixture.md"), "# Fixture\n<!-- tillr: item id=\"item-target\" paths=\"candidate.txt\" -->\n- **c1:** Make candidate.\n")
 	git(t, f.root, "add", "docs/fixture.md")
 	git(t, f.root, "commit", "-m", "fixture")
-	marker := filepath.Join(scratch(t, "gate-marker"), "marker")
-	t.Setenv("RETIRE_GATE_MARKER", marker)
 	gate := stub(t, "gate", counting+`set -eu
-if [ ! -f "$RETIRE_GATE_MARKER" ]; then
- touch "$RETIRE_GATE_MARKER"
- exit 3
-fi
 [ "$(git show HEAD:docs/fixture.md)" = '# Fixture' ]
 `)
 	land := stub(t, "land", counting+`set -eu
@@ -153,16 +169,21 @@ done
 [ "$(git -C "$root" show "$head:docs/fixture.md")" = '# Fixture' ]
 git -C "$root" merge --ff-only "$head" >/dev/null
 `)
-	steps := f.steps(t, gate, land, always(t, "verdict", 0))
+	processSteps := f.steps(t, gate, land, always(t, "verdict", 0))
+	firstSteps := &retirementGateSteps{ProcessSteps: processSteps, fail: true}
 	report := &strings.Builder{}
-	first, err := retirementLoop(t, f, steps, []string{"candidate.txt"}, report).Run(context.Background())
-	if err != nil || first.Stop != drain.StopQueueDrained || first.Landed != 0 {
-		t.Fatalf("first=%+v, err %v; %s", first, err, report)
+	first, err := retirementLoopWithSteps(t, f, firstSteps, processSteps.Now, []string{"candidate.txt"}, report).Run(context.Background())
+	if err != nil || first.Stop != drain.StopQueueDrained || first.Landed != 0 || len(firstSteps.heads) != 1 {
+		t.Fatalf("first=%+v, heads %v, err %v; %s", first, firstSteps.heads, err, report)
 	}
 	clearFault(t, f.store, "item-target")
-	second, err := retirementLoop(t, f, steps, []string{"candidate.txt"}, report).Run(context.Background())
+	secondSteps := &retirementGateSteps{ProcessSteps: f.steps(t, gate, land, always(t, "verdict", 0))}
+	second, err := retirementLoopWithSteps(t, f, secondSteps, secondSteps.Now, []string{"candidate.txt"}, report).Run(context.Background())
 	if err != nil || second.Landed != 1 {
 		t.Fatalf("second=%+v, err %v; %s", second, err, report)
+	}
+	if len(secondSteps.heads) != 1 || firstSteps.heads[0] == "" || firstSteps.heads[0] != secondSteps.heads[0] {
+		t.Fatalf("restart did not gate the same retired head: %v then %v", firstSteps.heads, secondSteps.heads)
 	}
 	if got := git(t, f.root, "show", "HEAD:docs/fixture.md"); got != "# Fixture" {
 		t.Fatal(got)
