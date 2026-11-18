@@ -10,14 +10,14 @@ tags:
   - design
   - queue
 summary: "How a sentence the owner dumps in chat becomes a priority item, flows through scouting, paired design, Vantage question rulings, and fenced implementation to a landed commit, and renders as an evolving tree in the observatory from item and edge data alone."
-next: "Build Slice 1b, the items.kind column and the typed derived_from edge, then Slice 3, the lineage tree; Slices 1a, 2 and 5a are built and Slices 4 and 5b are superseded."
+next: "Build the two units of Section 8, written with no item directive until the owner rules on how documents declare work: Slice 1b (item kinds and the derived_from edge), then Slice 3 (the lineage tree)."
 ---
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
 
 **Status:** 2026-11-13; reconciled against the tree at `dcb76fe41` on 2026-11-18, and partly
 built. [Slice reconciliation](#slice-reconciliation-2026-11-18) under Section 5 names each
-slice's state. In short:
+slice's state, and [Section 8](#8-remaining-work) writes out the two that remain. In short:
 - **Built:** clean intake (Slice 1a, the observatory's idea save), the numbered question hold
   (Slice 2), and the idea's design-seat turn (Slice 5a).
 - **Superseded:** answer return (Slice 4) and `derived-items.json` (Slice 5b).
@@ -172,3 +172,109 @@ None. Every question this design carried is a row of the ledger above.
 - **Spend display, token budgets, or cost-based stopping:** Spend UI remains iceboxed per [OQ-OBD4](./observatory-design.md#11-decision-ledger), and `.tillr/state.db` continues recording `usage_cost_usd` without gating dispatch.
 - **Self-hosted binary compilation and reload mechanics:** Governed by [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) ([OQ-SH1](./tillr-selfhosted-build.md#61-settled-decisions) through [OQ-SH3](./tillr-selfhosted-build.md#61-settled-decisions)), which Slice 1 assumes as its launcher substrate.
 - **Ruling the external owner-blocked queue items:** The Claude-whale counterpart, the pi-roadmap host-render row, and existing open design rulings in sibling specs remain owner decisions rather than automated dispositions.
+## 8. Remaining work
+
+Two units are left of [the five-slice rollout](#5-the-fastest-path-from-the-49-item-store), and
+the second waits on the first. [Slice reconciliation](#slice-reconciliation-2026-11-18) gives
+the state of every other slice. **Neither unit is filed yet.** On the owner's ruling of
+2026-11-18, no document gains a new item directive while the owner reviews how documents
+declare work. Each unit is written to become an item however that ruling lands.
+
+### Add item kinds and a typed derived-from edge to the store
+
+The store cannot yet say what kind of work an item is, or which item it came from. The
+observatory shows an idea as an idea only because it finds the idea's intake record. The
+idea page finds an idea's outcomes only through a placement receipt, which sync writes when it
+first places an item next to the idea it names. That receipt is a note about ordering, not a
+fact about lineage, so nothing else can ask "where did this item come from". `D-IP1` and `D-IP2`
+settle the fix. Every item gets a kind (`idea`, `design` or `build`). The edge table gains a kind
+of its own, so that a `derived_from` edge, an item's single parent, sits beside the existing
+`blocked_by` edges without being mistaken for one. Sync writes the edge from a block's `from`
+attribute when it first imports the block, as
+[observatory actions, Section 5.4](./observatory-actions.md#54-what-the-design-seat-does-with-it)
+already says it will once the store has the table.
+
+**Outcomes:**
+
+- Record each item's kind in the store, with `build` for every existing item.
+- Record which item a new item was derived from, once and for good, when sync first imports it.
+- Keep the planner's dependency checks reading only `blocked_by` edges.
+
+- **c1:** `tillr-item`'s tables give each item a kind of `idea`, `design` or `build`. Existing
+  rows read as `build`, and an idea saved through `tillr-item idea` is stored as `idea`.
+- **c2:** The edge table holds a kind for each edge, `blocked_by` or `derived_from`. Existing
+  rows migrate as `blocked_by` with their target unchanged, and a store opened before the change
+  opens after it with every dependency intact.
+- **c3:** An item can have at most one `derived_from` edge. A second edge, or one that would make
+  a cycle, is refused with a message that names both items.
+- **c4:** When sync first imports a block whose `from` names an item the store holds, it writes
+  that item as the block's `derived_from` edge. A later sync never rewrites the edge, and a
+  `from` naming an item the store does not hold writes nothing and is not a finding.
+- **c5:** The planner, the waiting face and every other reader of dependencies read only
+  `blocked_by` edges, and each module's suite passes unchanged against a migrated store.
+- **c6:** The observatory reads an item's kind from the store, not from the intake record, and
+  this document's Slice 1b entry names where the kind and the edge are built.
+
+**Agent Details:**
+
+- **Proposed id:** `item-ip-kinds-and-derived-edge`.
+- **Paths:** `tools/tillr/`, `tools/tillr-item/`, `tools/tillr-store/`, `tools/tillr-drain/`,
+  `tools/tillr-view/`, the mirror of each under `yolo-packs/tillr/files/local/share/tillr/`
+  (`tillr/`, `tillr-item/`, `tillr-store/`, `tillr-drain/`, `tillr-view/`), and this document.
+- **Ref:** [Section 1](#1-item-kinds-states-and-edges), `D-IP1` and `D-IP2` in
+  [Section 6.1](#61-settled-decisions).
+- **Where:** the item tables are in `tools/tillr-item/item/schema.go`, registered through
+  `RegisterDDL`. `item_edges` is read in `tools/tillr-drain/drain/`, `tools/tillr-view/`,
+  `tools/tillr-store/` and `tools/tillr/store/`, and every one of those queries must name the
+  edge kind. The `from` receipt is written in `tools/tillr-item/item/place.go`. The view's
+  derived kind is set in `tools/tillr-view/serve.go`. Fixtures that build `item_edges` are
+  `tools/tillr-view/testdata/serve-fixture.sql` and `tools/tillr-item/testdata/legacy-autoqa.sql`.
+  Run `just pack-sync` after the last source edit and commit the regenerated mirror.
+- **Verify:** Add `tillr-item` tests for the migration, the single-parent and cycle refusals,
+  and sync's first-import edge. Add a test that a migrated fixture store keeps every dependency.
+  Run `go test ./...` in each of the five modules.
+
+### Show an idea's lineage tree on the item page and in status
+
+Once the store records where each item came from, the owner should be able to open any item
+and see the whole tree it belongs to: the idea it started as, the designs cut from it, the
+builds cut from those, and how many have landed. [Section 4](#4-the-tree-view-in-the-observatory)
+specifies that tree and its truthfulness rules. The queue rail lens that section also asked
+about is withdrawn by [OQ-IP3](#61-settled-decisions), because the redesign removed the rail.
+So the tree goes on the item page and on the dependency graph page of
+[the observatory redesign](./observatory-redesign.md), and a terminal reader gets the same
+counts from the status face.
+
+**Outcomes:**
+
+- Draw an item's full lineage on its page, with finished ancestors kept in view.
+- Draw lineage edges on the dependency graph page, distinct from dependency edges.
+- Give the terminal the same tree and the same counts as the page.
+
+- **c1:** The item snapshot and item page carry `kind`, `derived_from` (an id or null) and
+  `derived_children` (a list of ids) for every item.
+- **c2:** An item with a parent or children shows its whole tree on its page, from the root idea
+  down. Each node shows its kind, its state in word and glyph, and links to its own page. The
+  tree also shows a count of landed leaf items.
+- **c3:** A parent id the store does not hold is drawn as an `unknown parent: <id>` root, and is
+  never dropped. An item with neither parent nor children shows no tree.
+- **c4:** The dependency graph page draws `derived_from` edges in a style distinct from
+  `blocked_by` edges, and its legend names both.
+- **c5:** `tillr view status --tree` prints the same trees, and its counts equal the snapshot's
+  for the same store.
+
+**Agent Details:**
+
+- **Proposed id:** `item-ip-lineage-tree`.
+- **Waits on:** `item-ip-kinds-and-derived-edge`, the unit above.
+- **Paths:** `tools/tillr-view/` (its Go server and `web/`, with `web/tests/`),
+  `yolo-packs/tillr/files/local/share/tillr/tillr-view/`, and this document.
+- **Ref:** [Section 4](#4-the-tree-view-in-the-observatory) and its wire table, without the
+  `pending_answers` field, which went with Slice 4.
+- **Where:** the snapshot and item page are served from `tools/tillr-view/serve.go`. The item
+  page and the dependency graph are `tools/tillr-view/web/src/components/` (`DependencyGraph.tsx`).
+  The status face is `tools/tillr-view/status.go`. Run `just pack-sync` after the last source
+  edit and commit the regenerated mirror.
+- **Verify:** Add Go tests for the wire fields, the unknown-parent root and the `--tree` counts
+  against a fixture store. Add frontend tests for the tree, the hidden empty tree and the two edge
+  styles. Run `go test ./...` and the web test suite in `tools/tillr-view`.
