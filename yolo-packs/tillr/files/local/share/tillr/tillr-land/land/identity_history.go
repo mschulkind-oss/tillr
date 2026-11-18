@@ -116,7 +116,7 @@ func (t *Trunk) CheckIdentities(r rowQueryer, h IdentityHistory, old, tip string
 			return h, Externalf("invalid identities for %s", sha)
 		}
 		if fields[0] != identity.Name || fields[1] != identity.Email || fields[2] != identity.Name || fields[3] != identity.Email {
-			next.Pending = append(next.Pending, ForeignCommit{sha, fields[0] + " <" + fields[1] + ">", fields[2] + " <" + fields[3] + ">"})
+			next.Pending = append(next.Pending, ForeignCommit{SHA: sha, Author: fields[0] + " <" + fields[1] + ">", Committer: fields[2] + " <" + fields[3] + ">"})
 		}
 	}
 	return next, nil

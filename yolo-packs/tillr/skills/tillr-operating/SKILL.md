@@ -278,7 +278,12 @@ It builds each package's test binary once and runs up to six independent test
 processes per package, balancing recorded durations. Tests without a duration are
 spread across shards using the mean recorded cost (or a unit cost when none is
 recorded); no duration entry is required to run a test. Each process has its own
-scratch directory and git global configuration file.
+scratch directory and git global configuration file. A shard has a 480-second
+limit without top-level test starts or completions, including during test setup;
+ordinary output does not reset it. On timeout the runner kills its process group,
+reports the package, shard, active and unfinished tests, and preserves partial
+`--events`. For a genuinely longer test, set `--shard-timeout SECONDS`; `--timeout`
+separately controls Go's own test deadline.
 
 ```bash
 python3 tools/go-test-shards.py tools/tillr-drain -k 6 --scratch "$TMPDIR"
