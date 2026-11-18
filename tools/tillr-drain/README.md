@@ -1070,6 +1070,31 @@ lands in one of three outcomes:
 | Candidate changes outside its fence, or uncommitted work past its candidate | Convicted, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
 | A named store file changing in an adapter-only bracket | Convicted, in the standalone boundary check | The adapter does not own the store. Run brackets omit it because the run face writes its own records. |
 
+Unexpected patch branch observations also hold publication, not the observing run.
+The boundary event stores every such change in `patch_moves`, with `ref`, `old`, and
+`new` commits; an empty endpoint means the ref appeared or was deleted. This list is
+not capped with the diagnostic observations. Assigned deliveries and moves to a
+landing marked during the bracket remain ignored.
+
+`tillr view waiting` shows a `needs you` publication row naming the fork, observing
+run, commits, and observation event sequence. After reviewing the change, the owner
+acknowledges that sequence and fork:
+
+```bash
+tillr drain acknowledge-patch-move --store .tillr/state.db --observation 123 --fork pi --by owner
+```
+
+The acknowledgment records the owner and UTC time without erasing the observation.
+It clears only that observation's fork: a later move or another run's observation
+still needs review. [The patch branch publisher](../../bin/patch-branches-publish)
+reads the same outstanding observations and refuses the affected branches, including
+refs named by `--skip-ref` or `--force-rewritten`; unaffected branches can publish.
+Its default store is the main repository's store, also when invoked from a worktree;
+`--store` selects an explicitly named store. A clone without that default store has no
+observations, but an existing unreadable store refuses publication. Historical
+boundary events written without `patch_moves` remain diagnostic records, not
+retroactively created publication holds.
+
 What this gives up is the stop of a worker whose only escape lies outside the lanes, such
 as a rogue ref or a stray worktree. That escape no longer holds its item, and the
 observation names it for an operator. What still catches an escape that matters is the

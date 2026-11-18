@@ -110,7 +110,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
             <table><thead><tr><th>Rank</th><th>Item</th><th>Class</th><th>Where</th><th>Why</th><th>Since</th></tr></thead>
               <tbody>{group.slice(0, 8).map(row => <tr key={waitingIdentity(row)}>
                 <td>{row.rank || "unranked"}</td>
-                <td>{row.document || <EntityLink kind="item" id={row.item_id} state={row.class} />}
+                <td>{row.observation || row.document || <EntityLink kind="item" id={row.item_id} state={row.class} />}
                   <div className="home__mover">mover: <EntityText value={row.mover} snapshot={snapshot} rows={rows} passes={passes} /></div></td>
                 <td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td><td>{row.since}{row.waited ? ` · waited ${row.waited}` : ""}</td>
               </tr>)}</tbody></table>

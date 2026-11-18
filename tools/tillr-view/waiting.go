@@ -33,15 +33,17 @@ type waitingRow struct {
 	Rank         string             `json:"rank"`
 	ItemID       string             `json:"item_id"`
 	Document     string             `json:"document"`
-	Class        string             `json:"class"`
-	Where        string             `json:"where"`
-	Why          string             `json:"why"`
-	Mover        string             `json:"mover"`
-	Since        string             `json:"since"`
-	Waited       string             `json:"waited"`
-	ClassSource  string             `json:"class_source"`
-	LaneStatus   string             `json:"lane_status,omitempty"`
-	LaneReason   string             `json:"lane_reason,omitempty"`
+	// Observation identifies a publication hold, never an item or design document.
+	Observation string `json:"observation,omitempty"`
+	Class       string `json:"class"`
+	Where       string `json:"where"`
+	Why         string `json:"why"`
+	Mover       string `json:"mover"`
+	Since       string `json:"since"`
+	Waited      string `json:"waited"`
+	ClassSource string `json:"class_source"`
+	LaneStatus  string `json:"lane_status,omitempty"`
+	LaneReason  string `json:"lane_reason,omitempty"`
 }
 
 type waitingRule struct{ class, where, mover string }
@@ -205,6 +207,11 @@ func waitingFace(args []string) (record.Envelope, int) {
 				if e != nil {
 					return e
 				}
+				moves, e := waitingPatchMoves(r, *path)
+				if e != nil {
+					return e
+				}
+				rows = append(rows, moves...)
 				return addGraphRevisionHistory(r, rows)
 			})
 			s.Close()
@@ -599,6 +606,11 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err != nil {
 		return nil, err
 	}
+	moves, err := waitingPatchMoves(r, storePath)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, moves...)
 	all, err := appendWaitingDesigns(r, append(append(append(out, windows...), extra...), laneRows...))
 	if err != nil {
 		return nil, err
@@ -809,6 +821,9 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		identity := row.ItemID
 		if row.Document != "" {
 			identity = row.Document
+		}
+		if row.Observation != "" {
+			identity = row.Observation
 		}
 		cells := []string{rank, identity, row.Class, row.Where, why, row.Mover, row.Since}
 		for i, cell := range cells {
