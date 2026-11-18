@@ -104,11 +104,17 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 		return envelopeOf("item.place", "place-"+id, at, map[string]any{"item_id": id, "place": place, "count": len(order), "event_seq": seq, "event_head_seq": head})
 	}
 	if neighbour == id {
-		return result(old + 1)
+		if order[old].rank != "" {
+			return result(old + 1)
+		}
+		neighbour = ""
 	}
 	target := order[old]
 	rest := append(append([]orderedItem{}, order[:old]...), order[old+1:]...)
 	pos := 0
+	if d.Before == id || d.After == id {
+		pos = old
+	}
 	if d.To == "last" {
 		pos = len(rest)
 	}
@@ -123,7 +129,7 @@ func Place(ctx context.Context, tx *store.Tx, id string, d Destination, at time.
 			}
 		}
 	}
-	if pos == old {
+	if pos == old && target.rank != "" {
 		return result(old + 1)
 	}
 	seq, err = insertOrdered(tx, target, rest, pos, at, by, via, "")

@@ -82,6 +82,46 @@ func TestIdeaBytesDefinitionRetryAndPlace(t *testing.T) {
 		t.Fatalf("retry %d %s", code, out)
 	}
 }
+func TestIdeaEmptyOrderAndAdjacentSaveGetKeys(t *testing.T) {
+	path, s := placeFixture(t)
+	root := scratch(t, "idea-empty")
+	if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte("[intake]\ndir='docs/ideas'\npaths=['docs/design/']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, words := range []string{"First idea", "Second idea"} {
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(words)))
+		id := "item-idea-" + hash[:10]
+		args := []string{"--root", root, "--store", path}
+		if len(ids) == 0 {
+			args = append(args, "--to", "first")
+		} else {
+			args = append(args, "--after", ids[0])
+		}
+		code, out := ideaRun(t, []byte(words), args...)
+		if code != 0 {
+			t.Fatalf("%d %s", code, out)
+		}
+		ids = append(ids, id)
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			var rank string
+			if err := r.QueryRow(`SELECT rank FROM items WHERE item_id=?`, id).Scan(&rank); err != nil {
+				return err
+			}
+			if rank == "" {
+				t.Fatalf("%s has no key", id)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, order := placeRows(t, s)
+	if fmt.Sprint(order) != fmt.Sprint(ids) {
+		t.Fatalf("order %v want %v", order, ids)
+	}
+}
+
 func TestIdeaRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		words []byte

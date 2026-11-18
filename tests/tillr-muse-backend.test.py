@@ -1058,7 +1058,7 @@ def test_claude_argv(workspace):
     # cannot make the case pass by accident.
     bare = workspace.root / "bare-bin"
     bare.mkdir(exist_ok=True)
-    for tool in ("dirname", "grep"):
+    for tool in ("awk", "dirname", "grep", "wc"):
         link = bare / tool
         if not link.exists():
             link.symlink_to(shutil.which(tool))

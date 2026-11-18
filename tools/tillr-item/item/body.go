@@ -19,6 +19,42 @@ func DefinitionBlockExists(file, itemID string, raw []byte) bool {
 	return false
 }
 
+// DefinitionBlockIDs reads declared identities, even when another field needs
+// repair. Fixing or moving an existing declaration does not create a new item.
+func DefinitionBlockIDs(file string, raw []byte) []string {
+	blocks, _ := parseItemBlocks(file, raw)
+	ids := []string{}
+	for _, b := range blocks {
+		if itemIDShape.MatchString(b.payload.ItemID) {
+			ids = append(ids, b.payload.ItemID)
+		}
+	}
+	return ids
+}
+
+// BlocksFrom reads actual item declarations carrying the named source. Code-fenced
+// examples and malformed declarations are not outcomes; sync owns the parsing rules.
+func BlocksFrom(file, from string, raw []byte) []string {
+	blocks, findings := parseItemBlocks(file, raw)
+	ids := []string{}
+	for _, b := range blocks {
+		if b.attributes["from"] != from || from == "" {
+			continue
+		}
+		valid := true
+		for _, finding := range findings {
+			if finding.Line == b.line {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			ids = append(ids, b.payload.ItemID)
+		}
+	}
+	return ids
+}
+
 // DefinitionBody reads the section named by body_ref, excluding unrelated sections.
 // Missing files and anchors are explicit input values: creating the missing source is
 // a change too. Other read errors are returned, never mistaken for unchanged input.

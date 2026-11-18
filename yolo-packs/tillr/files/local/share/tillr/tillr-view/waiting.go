@@ -362,7 +362,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				}
 			}
 		}
-		if found && (last.Reason == "eval-failed" || last.Reason == "judge-unreadable") {
+		if found && (last.Reason == "eval-failed" || last.Reason == "judge-unreadable" || last.Reason == "words-missing" || last.Reason == "words-altered" || last.Reason == "idea-no-outcome") {
 			var detail string
 			err := r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events
  WHERE kind='drain.refusal' AND json_valid(payload) AND json_extract(payload,'$.item_id')=?
@@ -707,6 +707,7 @@ func waitingRecordedStage(r *store.Reader, itemID string, run *storeRun) (string
    WHEN kind = 'gate.verdict' THEN 4
    WHEN kind = 'drain.refusal' THEN CASE json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END, '$.step')
     WHEN 'no-op' THEN 1 WHEN 'fence' THEN 2
+    WHEN 'words-missing' THEN 2 WHEN 'words-altered' THEN 2 WHEN 'idea-no-outcome' THEN 2
     WHEN 'eval-failed' THEN 3 WHEN 'judge-unreadable' THEN 3 WHEN 'gate' THEN 4
     WHEN 'land' THEN 5 WHEN 'conflict' THEN 5 ELSE 0 END
    ELSE 0 END), 0) FROM events

@@ -43,7 +43,15 @@ func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[s
 			if IsGeneratedItem(id) {
 				continue
 			}
-			missing[id] = true
+			intake, err := readIdeaIntake(r, id)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			// Saved ideas deliberately have no block: their turn creates new items,
+			// rather than triaging a declaration of the idea itself.
+			if intake == nil {
+				missing[id] = true
+			}
 		}
 	}
 	for id, notes := range item.ProseRewriteFindings(report) {

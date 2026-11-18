@@ -81,14 +81,27 @@ preflight_brief() {
     if [ ! -s "$1" ]; then
         refuse "the brief '$1' is missing or empty: staging writes it from backends/brief-template.md before launch"
     fi
-    if grep -q '{{[A-Z][A-Z0-9_]*}}' "$1"; then
+    # Saved words are appended after the rendered template. The heading states
+    # exactly how many bytes remain through EOF; even a fake heading inside the
+    # words cannot end this suffix early. Check sections only in the template.
+    if ! template_text=$(LC_ALL=C awk -v total="$(wc -c < "$1")" '
+        /^## Saved idea words \(verbatim; [0-9]+ bytes\)$/ {
+            count=$0; sub(/^.*; /,"",count); sub(/ bytes\)$/,"",count)
+            if (total - prefix - length($0) - 1 != count) exit 2
+            exit
+        }
+        { prefix += length($0) + 1; print }
+    ' "$1"); then
+        refuse "the brief '$1' has a saved words byte count that does not match its suffix"
+    fi
+    if printf '%s\n' "$template_text" | grep -q '{{[A-Z][A-Z0-9_]*}}'; then
         refuse "the brief '$1' still carries an unfilled template placeholder ('{{NAME}}'): the template backends/brief-template.md is the thing to fix, and an unfilled template is not a brief"
     fi
-    if grep -q '{{' "$1"; then
+    if printf '%s\n' "$template_text" | grep -q '{{'; then
         refuse "the brief '$1' carries a literal '{{' that is not a template placeholder: it arrived in an item field (the title, the body reference, a criterion or an allowed path), so the item's record is the thing to fix and backends/brief-template.md is not"
     fi
     while IFS= read -r heading; do
-        if ! grep -q "^## $heading" "$1"; then
+        if ! printf '%s\n' "$template_text" | grep -q "^## $heading"; then
             refuse "the brief '$1' has no '## $heading' section: all nine of the template's sections are load-bearing, and one missing is a brief the driver must not dispatch"
         fi
     done <<EOF

@@ -95,6 +95,14 @@ func TestIdeasHTTPSavesWordsAndShowsIntake(t *testing.T) {
 	if idea["words"] != words || idea["in_tree"] != false {
 		t.Fatal(idea)
 	}
+	h.exec(`INSERT INTO items(item_id,title,state,rank,updated_at) VALUES ('item-outcome-a','Build the first change','in-queue','am',0),('item-outcome-b','Settle the question','landed','amm',0)`)
+	h.exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (0,'item.update','item','item-outcome-a',?), (0,'item.update','item','item-outcome-b',?)`, fmt.Sprintf(`{"item_id":"item-outcome-a","placed_from":%q}`, id), fmt.Sprintf(`{"item_id":"item-outcome-b","placed_from":%q}`, id))
+	outcomesPage := ideaGet(t, srv.URL+"/api/v1/items/"+id)
+	outcomes := outcomesPage["data"].(map[string]any)["idea"].(map[string]any)["outcomes"]
+	list, ok := outcomes.([]any)
+	if !ok || len(list) != 2 || list[0].(map[string]any)["item_id"] != "item-outcome-a" || list[1].(map[string]any)["state"] != "landed" {
+		t.Fatalf("outcomes %v", outcomes)
+	}
 	wordsPath := filepath.Join(h.dir, "docs", "ideas", id+".txt")
 	if err := os.MkdirAll(filepath.Dir(wordsPath), 0700); err != nil {
 		t.Fatal(err)

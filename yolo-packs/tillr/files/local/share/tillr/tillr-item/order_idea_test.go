@@ -23,7 +23,7 @@ func TestOrderFaceIncludesIdeaSavedAtNoOpPlace(t *testing.T) {
 	var seq int64
 	var id string
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		return r.QueryRow("SELECT seq,object_id FROM events WHERE kind='item.add'").Scan(&seq, &id)
+		return r.QueryRow("SELECT seq,object_id FROM events WHERE kind='item.update' AND json_extract(payload,'$.placed_via') <> ''").Scan(&seq, &id)
 	}); err != nil {
 		t.Fatal(err)
 	}
