@@ -3,7 +3,6 @@ package item_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 	"os"
 	"path/filepath"
@@ -51,7 +50,7 @@ func TestSyncJudgeMode(t *testing.T) {
 				runSync(t, s, root, doc("docs/plan.md", block))
 			}
 			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-				env, err := item.Show(r, "item-build-thing", root)
+				env, err := fixtureShow(r, "item-build-thing", root)
 				if err != nil {
 					return err
 				}
@@ -81,7 +80,7 @@ func TestJudgeModeShowLegacy(t *testing.T) {
 	}
 	runSync(t, s, root, doc("docs/plan.md", goodBlock))
 	exec(t, s, `ALTER TABLE items DROP COLUMN judge_mode`)
-	if err := s.ReadTx(context.Background(), func(r *store.Reader) error { _, err := item.Show(r, "item-build-thing", root); return err }); err != nil {
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error { _, err := fixtureShow(r, "item-build-thing", root); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(t, s, `SELECT COUNT(*) FROM pragma_table_info('items') WHERE name='judge_mode'`); n != 0 {

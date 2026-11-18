@@ -103,7 +103,7 @@ func storedProsePayload(t *testing.T, s *store.Store) map[string]any {
 		t.Fatal(err)
 	}
 	err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		env, err := item.Show(r, "item-read-api", root)
+		env, err := fixtureShow(r, "item-read-api", root)
 		if err != nil {
 			return err
 		}
@@ -113,6 +113,28 @@ func storedProsePayload(t *testing.T, s *store.Store) map[string]any {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+// This read tests stored prose, not an installed question index. An ambient uvx
+// must never be invoked, even when the synced item names an existing design document.
+func TestSyncProseReadDoesNotRunExternalIndex(t *testing.T) {
+	root := scratch(t)
+	marker := filepath.Join(root, "invoked")
+	uvx := filepath.Join(root, "uvx")
+	if err := os.WriteFile(uvx, []byte("#!/bin/sh\nprintf invoked > \"$INDEX_MARKER\"\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	t.Setenv("INDEX_MARKER", marker)
+	s := syncStore(t)
+	runSync(t, s, "", doc("docs/api.md", proseBlock))
+	payload := storedProsePayload(t, s)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("external question index ran: %v", err)
+	}
+	if payload["questions_status"] != "known" || payload["prose"] != "2" {
+		t.Fatalf("fixture show: %v", payload)
+	}
 }
 
 func TestSyncProseBoundaryCases(t *testing.T) {
