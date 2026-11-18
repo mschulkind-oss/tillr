@@ -1,0 +1,146 @@
+// Package holdrules is the one table of how a recorded hold reason is shown: its
+// class, where it sits, and what moves it. It is a leaf package (no store, no
+// writer DDL) so the read-only view can import it, and the drain package's own
+// tests require a row for every exported Reason constant, so a reason cannot
+// land without its display rule.
+//
+// Adding a hold reason: declare the Reason constant in the drain package, then add
+// its row to Rules here. TestEveryReasonConstantHasAHoldRule fails until you do.
+package holdrules
+
+import "strings"
+
+// Rule is how one reason is displayed: Class is one of "needs you", "waits on work",
+// "needs a cause", "ready", "moving" or "waits on the loop"; Where is the stage;
+// Mover is what clears it.
+type Rule struct{ Class, Where, Mover string }
+
+// Classes lists the valid Rule.Class spellings.
+var Classes = []string{"needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"}
+
+// Unknown is the rule for a recorded reason with no row.
+var Unknown = Rule{"needs a cause", "queue", "add a history rule for this recorded reason"}
+
+// Rules maps an exact reason spelling to its rule. Entries that no drain pass writes
+// any more stay, because a recorded decision that carries one is history.
+var Rules = map[string]Rule{
+	"Vantage not answering":       {"needs a cause", "queue", "check Vantage availability"},
+	"node-output-missing":         {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
+	"workflow-invalid":            {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
+	"node-failed":                 {"needs you", "lane", "inspect the named node and authorize a retry"},
+	"gate-stall-rerun":            {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
+	"gate-stalled":                {"needs you", "gate", "diagnose the stalled check and clear the fault"},
+	"gate-harness-error":          {"needs you", "gate", "diagnose the gate and clear the fault"},
+	"land-harness-error":          {"needs you", "land", "repair what the lander refused and clear the fault"},
+	"host-boundary-violation":     {"needs you", "fence", "inspect the recorded violation and clear the fault"},
+	"candidate-record-mismatch":   {"needs you", "lane", "restore the recorded candidate and clear the fault"},
+	"definition-sync-failed":      {"needs you", "queue", "correct the definition and clear the fault"},
+	"backend-window":              {"waits on work", "backend", "the reset time"},
+	"lane-holds-unlanded-change":  {"needs you", "lane", "land the change, or reset the lane deliberately"},
+	"lane-branch-held":            {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
+	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
+	"lane-run-children-live":      {"waits on work", "lane", "wait for the named processes to exit, or end them with the recorded kill command"},
+	"preserve-failed":             {"needs you", "lane", "repair why the lane's work could not be preserved and clear the fault"},
+	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
+	"settle-failed":               {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
+	"tooling-defect":              {"waits on work", "queue", "the tooling defect item to land or close"},
+	"triage-no-block":             {"waits on work", "queue", "triage on the design seat"},
+	"conflict-design":             {"waits on work", "queue", "design"},
+	"design-under-comment":        {"waits on work", "queue", "the comment item"},
+	"conflict-owner":              {"needs you", "queue", "owner"},
+	"conflict-answered":           {"ready", "queue", "the next pass"},
+	"restaged: the earlier run's base lacked what made the item ready": {"ready", "queue", "the next pass"},
+	"ready":                        {"ready", "queue", "the next pass"},
+	"blocked":                      {"waits on work", "queue", "cause not recorded"},
+	"not-ready":                    {"needs you", "queue", "the owner"},
+	"run-link-missing":             {"needs a cause", "lane", "cause not recorded"},
+	"boundary-scope-escape":        {"needs you", "fence", "inspect the named node and escaped path, then authorize a retry"},
+	"node-scope-outside-fence":     {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
+	"candidate-no-op":              {"needs a cause", "lane", "cause not recorded"},
+	"complete-item-fault":          {"needs a cause", "lane", "cause not recorded"},
+	"criteria-unjudged":            {"needs a cause", "lane", "cause not recorded"},
+	"run-unjudged":                 {"needs a cause", "lane", "cause not recorded"},
+	"judge-grant-absent":           {"needs you", "queue", "issue a grant covering the item's criteria"},
+	"judge-unreadable":             {"needs a cause", "judge", "inspect the judge run"},
+	"eval-failed":                  {"waits on work", "judge", "amend the candidate against the judge's reason"},
+	"judge-blocked":                {"waits on work", "judge", "the recorded waiter; answer the judge's blocker"},
+	"judge-defective":              {"needs you", "judge", "owner; reopen the closed item only if its premise is corrected"},
+	"gate-failed":                  {"needs a cause", "gate", "cause not recorded"},
+	"red-cap":                      {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
+	"land-refused":                 {"needs you", "land", "inspect the refused landing and authorize a retry"},
+	"no-policy":                    {"needs you", "queue", "the owner"},
+	"capacity":                     {"waits on work", "queue", "the next pass"},
+	"no-lane":                      {"waits on work", "queue", "a free lane"},
+	"waits on a desk":              {"waits on work", "desk", "a design desk to free up"},
+	"waits on the document's desk": {"waits on work", "desk", "the document's desk to finish its current item"},
+	"no-fence":                     {"needs you", "queue", "the owner"},
+	"run-live":                     {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
+	"prose-criteria-count":         {"needs you", "queue", "the owner; reconcile the original criteria"},
+	"awaits-rewrite":               {"waits on work", "queue", "the prose rewrite to land"},
+	"fork-held":                    {"waits on work", "queue", "cause not recorded"},
+	"failover":                     {"ready", "queue", "the next pass"},
+	"seat-degraded":                {"ready", "queue", "the next pass"},
+	"run-infra-exhausted":          {"needs a cause", "lane", "cause not recorded"},
+	"harness-refused":              {"ready", "queue", "the next pass"},
+	// A worker run's refused ending goes back to the item's worker with its evidence,
+	// uncounted (the owner's ruling of 2026-11-17).
+	"returned-with-evidence": {"ready", "queue", "the next pass"},
+	// A landing the full suite proved broke the trunk is reverted by tillr and its item
+	// goes back to its worker, whose next gate runs the failing check (OQ-GP1).
+	"landing-reverted":               {"ready", "queue", "the next pass returns it to its worker with the failing check"},
+	"retry-judged":                   {"needs you", "gate", "the owner"},
+	"retry-unjudged":                 {"needs you", "lane", "the owner"},
+	"question-open":                  {"needs you", "queue", "question not recorded"},
+	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
+	"design-doc-missing":             {"needs you", "queue", "the owner"},
+	"trunk-path-dirty":               {"waits on work", "land", "commit or restore the path"},
+	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
+	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land, or a heavy proof green past its red commit"},
+	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
+	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
+	"conflict-fix":                   {"ready", "land", "the next pass"},
+	"item-unstagleable":              {"needs a cause", "queue", "cause not recorded"},
+	// A terminal item leaves this view, so the rule names the settlement for history reads.
+	"item-already-terminal": {"moving", "lane", "the next pass settles the run without judging it"},
+	// Historical decisions remain readable after a planner removes a reason.
+	"fence-overlap": {"waits on work", "queue", "cause not recorded"},
+	// The owner's ruling of 2026-11-17 removed these three: nothing is re-admitted because
+	// an input changed, and a retry that names an old run no longer holds the item. A
+	// pass writes none of them; a recorded decision that carries one is history.
+	"inputs-changed":        {"ready", "queue", "the next pass"},
+	"readmission-exhausted": {"needs you", "lane", "automatic re-admission failed; run `tillr drain retry` after diagnosis"},
+	"retry-stale":           {"needs you", "lane", "the owner"},
+	// The same ruling removed the one conflict-fix run: a conflict goes back to its worker
+	// on the latest trunk, so an item parked under this reason is returned at the next pass.
+	"conflict-exhausted": {"ready", "queue", "the next pass"},
+}
+
+// For resolves a recorded reason to its rule. Drain appends detail to a few reasons
+// ("node-failed: <node>"), so a declared prefix resolves to its base row; any other
+// unrecognized reason is Unknown, never guessed.
+func For(reason string) Rule {
+	if strings.HasPrefix(reason, "workflow-invalid: ") {
+		return Rules["workflow-invalid"]
+	}
+	for _, named := range []string{"node-failed", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
+		if strings.HasPrefix(reason, named+": ") {
+			return Rules[named]
+		}
+	}
+	if rule, ok := Rules[reason]; ok {
+		return rule
+	}
+	for _, prefix := range []string{"trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat "} {
+		if strings.HasPrefix(reason, prefix) {
+			return Rules[baseOf(prefix)]
+		}
+	}
+	return Unknown
+}
+
+func baseOf(prefix string) string {
+	if i := strings.Index(prefix, ":"); i >= 0 {
+		return prefix[:i]
+	}
+	return prefix
+}
