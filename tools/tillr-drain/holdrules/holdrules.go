@@ -91,6 +91,7 @@ var Rules = map[string]Rule{
 	"landing-reverted":               {"ready", "queue", "the next pass returns it to its worker with the failing check"},
 	"retry-judged":                   {"needs you", "gate", "the owner"},
 	"retry-unjudged":                 {"needs you", "lane", "the owner"},
+	"question-removed":               {"needs you", "queue", "restore the removed question under the item's block and land it"},
 	"question-open":                  {"needs you", "queue", "question not recorded"},
 	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
 	"design-doc-missing":             {"needs you", "queue", "the owner"},

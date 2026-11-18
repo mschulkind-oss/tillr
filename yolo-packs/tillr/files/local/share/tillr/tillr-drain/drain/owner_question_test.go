@@ -420,6 +420,52 @@ func TestOwnerAnswerLedgerEvidence(t *testing.T) {
 				if after.Status != "answered" || next.Action != ActionDispatch {
 					t.Fatalf("compacted ruling did not release: %+v %+v", after, next)
 				}
+			} else if !tc.open {
+				if after.Status != "question" || after.AnswerHead != "" || after.QuestionRemovedHead != runGit(t, f.root, "rev-parse", TrunkRef) || next.Action != ActionHold || next.Reason != ReasonQuestionRemoved || next.Seat != "operator" {
+					t.Fatalf("deleted question did not become an operator hold: %+v %+v", after, next)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					why, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, l.questions)
+					if err != nil {
+						return err
+					}
+					if why.Summary.OperatorNext != 1 || why.Summary.OwnerWaiting != 0 {
+						t.Fatalf("wrong mover counts: %+v", why.Summary)
+					}
+					for _, row := range why.Rows {
+						if row.ItemID == d.ItemID && row.Mover == "operator; restore "+c.QuestionRef+" under the item's block and land it" && strings.Contains(row.Why, c.QuestionRef) && strings.HasSuffix(row.Why, "the question was removed without a ruling") {
+							return nil
+						}
+					}
+					return fmt.Errorf("missing deletion explanation: %+v", why.Rows)
+				})
+				refresh := func(body string) item.Conflict {
+					t.Helper()
+					writeForkFile(t, path, body)
+					runGit(t, f.root, "add", file)
+					runGit(t, f.root, "commit", "-qm", "docs: update removed question")
+					if _, err := l.refreshDocuments(context.Background(), &LoopResult{}); err != nil {
+						t.Fatal(err)
+					}
+					current, _ := conflictOf(t, f, d.ItemID)
+					return current
+				}
+				restored := refresh(string(raw))
+				if next := decisionFor(t, l, d.ItemID).decision; restored.Status != "question" || restored.QuestionRemovedHead != "" || next.Action != ActionHold || next.Reason != ReasonQuestionOpen || next.QuestionID != id {
+					t.Fatalf("restored question did not wait on owner: %+v %+v", restored, next)
+				}
+				document, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if marker := fmt.Sprintf("<!-- tillr-owner-question item=%q run=%q", d.ItemID, c.QuestionRunID); strings.Count(string(document), marker) != 1 {
+					t.Fatalf("expected exactly one origin marker %q in %s", marker, document)
+				}
+				refresh(body)
+				answered := refresh(strings.Replace(string(raw), "💬 **"+id+":", "✅ **"+id+":", 1))
+				if next := decisionFor(t, l, d.ItemID).decision; answered.Status != "answered" || answered.QuestionRemovedHead != "" || next.Action != ActionDispatch {
+					t.Fatalf("restored ruling did not release item: %+v %+v", answered, next)
+				}
 			} else if after.Status != "question" || after.AnswerHead != "" || next.Action != ActionHold || next.Reason != ReasonQuestionOpen {
 				t.Fatalf("question did not stay held: %+v %+v", after, next)
 			}

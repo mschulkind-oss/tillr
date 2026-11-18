@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
@@ -228,6 +229,11 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			}
 		}
 		switch {
+		case d.Reason == ReasonQuestionRemoved:
+			ref := conflicts[it.ItemID].QuestionRef
+			row.WaitingOn = append(row.WaitingOn, ref)
+			row.Why += ": " + ref + ": the question was removed without a ruling"
+			row.Mover = "restore " + ref + " under the item's block and land it"
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
@@ -266,7 +272,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			}
 			row.Why += ": seat " + seat + "; " + strings.Join(row.WaitingOn, ", ")
 		}
-		if len(row.WaitingOn) > 0 {
+		if len(row.WaitingOn) > 0 && d.Reason != ReasonQuestionRemoved {
 			row.Mover = strings.Join(row.WaitingOn, ", ")
 		}
 		if it.State == StateBlocked && d.Reason == ReasonBlocked {
@@ -386,7 +392,11 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 						}
 					}
 				}
-				row.Mover = actor + "; " + nextActorAction(row.Mover)
+				if d.Reason == ReasonQuestionRemoved {
+					row.Mover = actor + "; " + row.Mover
+				} else {
+					row.Mover = actor + "; " + nextActorAction(row.Mover)
+				}
 				switch actor {
 				case "drain":
 					answer.Summary.DrainNext++
@@ -469,6 +479,9 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs a cause", "fence", "inspect the boundary report"
 	case ReasonBackendWindow:
 		return "waits on work", "backend", "the backend reset time"
+	case ReasonQuestionRemoved:
+		rule := holdrules.For(d.Reason)
+		return rule.Class, rule.Where, rule.Mover
 	case ReasonQuestionOpen:
 		return "needs you", where, "answer the design question"
 	case ReasonQuestionsUnknown:

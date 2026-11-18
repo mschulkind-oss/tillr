@@ -31,6 +31,7 @@ var landingHolds = map[string]string{
 	ReasonConflictExhausted:   "",
 	ReasonConflictDesign:      "",
 	ReasonConflictOwner:       "",
+	ReasonQuestionRemoved:     "",
 	ReasonTrunkPathDirty:      definition.PrerequisiteOwnerClean,
 	ReasonTrunkRewritten:      "",
 	ReasonCandidateMismatch:   "",

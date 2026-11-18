@@ -16,6 +16,7 @@ import (
 const (
 	ReasonConflictDesign   = "conflict-design"
 	ReasonConflictOwner    = "conflict-owner"
+	ReasonQuestionRemoved  = "question-removed"
 	ReasonConflictAnswered = "conflict-answered"
 )
 
@@ -32,6 +33,10 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.Status == "question":
 		_, d.QuestionID, _ = strings.Cut(c.QuestionRef, "#")
 		d.Reason = ReasonQuestionOpen
+		if c.QuestionRemovedHead != "" {
+			d.Reason = ReasonQuestionRemoved
+			d.Seat = "operator"
+		}
 	case c.WaitingOn == "owner" && p.tick.ownerMigration:
 		// This is a real command run, not a fabricated terminal record or an
 		// ungated store repair. Its report travels through the same settlement.
