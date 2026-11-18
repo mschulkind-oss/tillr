@@ -29,3 +29,13 @@ func TestWaitingNamesOwnerRetryAfterAutomaticReadmission(t *testing.T) {
 		t.Fatalf("changed input: %+v", rule)
 	}
 }
+
+// The owner's ruling of 2026-11-17 removed the one conflict-fix run: an item a recorded
+// decision still holds as conflict-exhausted is returned at the next pass, so the history
+// read names that, not a missing cause.
+func TestWaitingReadsConflictExhaustedAsHistory(t *testing.T) {
+	rule := waitingRuleFor("conflict-exhausted")
+	if rule.class != "ready" || rule.mover != "the next pass" {
+		t.Fatalf("conflict-exhausted: %+v", rule)
+	}
+}

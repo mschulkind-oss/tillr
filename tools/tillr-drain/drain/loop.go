@@ -382,11 +382,8 @@ type LoopResult struct {
 	// advanced the watermark, a red one filed the fixer for the tip and advanced nothing.
 	RollingGreen int `json:"rolling_green,omitempty"`
 	RollingRed   int `json:"rolling_red,omitempty"`
-	// ConflictFixes is the number of squash conflicts that staged one conflict-fix run.
-	// ConflictExhausted is the number of second conflicts a fix run answered, which hold
-	// the item with ReasonConflictExhausted instead of spending another run.
-	ConflictFixes     int `json:"conflict_fixes,omitempty"`
-	ConflictExhausted int `json:"conflict_exhausted,omitempty"`
+	// ConflictFixes is the number of squash conflicts that staged a conflict-fix run.
+	ConflictFixes int `json:"conflict_fixes,omitempty"`
 	// Rejected is the number of candidates the loop refused. Refusals record a
 	// `drain.refusal` event, never an item verdict.
 	Rejected int `json:"rejected"`

@@ -404,7 +404,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	case ReasonRepairStagingFailed:
 		return "needs you", "land", "correct the reported staging cause"
 	case ReasonConflictExhausted:
-		return "needs a cause", "land", "diagnose the retained candidate"
+		// History only: the owner's ruling of 2026-11-17 returns such an item instead.
+		return "ready", "queue", "the next pass"
 	case ReasonJudgeGrantAbsent:
 		return "needs you", "queue", "issue a grant covering the item's criteria"
 	case ReasonJudgeUnreadable:
