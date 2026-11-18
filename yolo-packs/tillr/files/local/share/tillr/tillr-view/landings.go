@@ -10,7 +10,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// landingRow is a recorded landing, an acquittal (a gate failure attributed to
+// landingRow is a recorded landing, an automatic revert, an acquittal (a gate failure attributed to
 // the trunk rather than the candidate), or a gap between recorded trunk heads.
 // A gap has no clock: neither commit's time is a measurement of the missing move.
 type landingRow struct {
@@ -100,6 +100,28 @@ func readLandingHistory(r *store.Reader) ([]landingRow, error) {
 	for _, e := range events {
 		if e.Kind == "land.landing" {
 			clocks[e.Seq] = e.At.UnixMilli()
+		}
+		if e.Kind == "drain.revert" && e.ObjectID != nil {
+			// The automatic revert of a landing the full suite proved broke the trunk:
+			// reverted (Result "reverted", TrunkAfter the revert) or not possible, with the
+			// reason, the fixer then taking the red.
+			var p struct {
+				Landing string   `json:"landing"`
+				ItemID  string   `json:"item_id"`
+				RunID   string   `json:"run_id"`
+				Tip     string   `json:"tip"`
+				Checks  []string `json:"checks"`
+				Result  string   `json:"result"`
+				Revert  string   `json:"revert"`
+				Reason  string   `json:"reason"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				return nil, fmt.Errorf("event %d: %w", e.Seq, err)
+			}
+			ms := e.At.UnixMilli()
+			out = append(out, landingRow{Kind: "revert", ItemID: p.ItemID, RunID: p.RunID, Result: p.Result, Reason: p.Reason,
+				RedSHA: p.Landing, TrunkBefore: p.Tip, TrunkAfter: p.Revert, FailingChecks: p.Checks, EventSeq: e.Seq, AtMS: &ms, EpistemicState: stateObserved})
+			continue
 		}
 		if e.Kind != "drain.refusal" || e.ObjectType != "run" || e.ObjectID == nil {
 			continue
