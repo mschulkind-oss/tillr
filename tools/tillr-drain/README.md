@@ -1383,6 +1383,14 @@ definition comes from that file is held, not just the item named by the finding.
 A landed design answer whose document, as the trunk holds it, does not declare its
 item is held the same way (`definition-sync-failed`), never a loop stop; a
 prose-rewrite item (`rewrite-<item>`) is read on its original item's block.
+Two holds of this kind stand for the loop's own defects, held on the one item they
+touch so the loop goes on. The owner ruled that the loop never stops on one item's
+condition. `decision-collision` holds an item whose planned decision could not be
+recorded, because its decision id is already recorded with other columns.
+`settle-failed` holds an item whose run could not be settled because of such a
+collision, naming the step and the error. Other settle errors keep their own rules: a
+step's usage refusal is a configuration fault and ends the loop, a judgment the loop
+cannot record fails the step, and a store that refuses the hold itself ends the loop.
 These holds survive a supervisor restart and do not record a failing
 criterion verdict or spend a new model attempt. A retained candidate releases its
 ordinary lane once its pinned commit is read back; worktree-dependent holds keep

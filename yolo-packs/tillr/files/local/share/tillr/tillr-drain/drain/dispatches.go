@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS node_artifacts (
 );
 `
 
+// decisionCollisionError is a decision whose id the store already holds with other columns.
+// It keeps the internal exit code a one-shot face answers, and the loop reads it as the
+// item's condition (applyPlanGeneration).
+type decisionCollisionError struct {
+	*ExitError
+	DecisionID, ItemID string
+}
+
+func (e *decisionCollisionError) Unwrap() error { return e.ExitError }
+
 // recordPassDecision inserts an immutable decision in the tick's transaction. A replay
 // of the same payload is a no-op; its first recording time stays intact. Reusing an
 // identity for different columns is an error, never permission to overwrite history.
@@ -100,7 +110,7 @@ func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 			// semantics without inventing a historical choice.
 			return nil
 		}
-		return Internalf("the decision %s is already recorded with different columns", decision.DecisionID)
+		return &decisionCollisionError{ExitError: Internalf("the decision %s is already recorded with different columns", decision.DecisionID).(*ExitError), DecisionID: decision.DecisionID, ItemID: decision.ItemID}
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return readFailure(err)

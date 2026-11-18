@@ -22,8 +22,12 @@ const (
 // conflictDecision gives the design seat exactly one dispatch for a raised report.
 // The pending-work record takes over after claim. A quota refusal raises the
 // conflict again; other unanswered terminal attempts keep their disposition.
+//
+// The attempt is the planner's one count (nextAttempt), the same one the run id is made
+// from. A count of prior runs alone skips a judged run, so it once named run a13 under
+// attempt 12 and reused the a12 dispatch's decision id.
 func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
-	d := Decision{ItemID: row.ItemID, Seat: c.WaitingOn, ConflictID: c.ConflictID, Attempt: len(p.priors[row.ItemID]) + 1, From: "held", Action: ActionHold, Reason: ReasonConflictDesign}
+	d := Decision{ItemID: row.ItemID, Seat: c.WaitingOn, ConflictID: c.ConflictID, Attempt: p.nextAttempt(row.ItemID), From: "held", Action: ActionHold, Reason: ReasonConflictDesign}
 	switch {
 	case c.WaitingOn == "owner":
 		d.Reason = ReasonConflictOwner

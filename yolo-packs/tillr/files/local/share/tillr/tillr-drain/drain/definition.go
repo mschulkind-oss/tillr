@@ -56,6 +56,7 @@ var generalHolds = map[string]string{
 	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "",
 	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",
 	ReasonRetryJudged: "", ReasonRetryUnjudged: "", ReasonToolingDefect: "",
+	ReasonDecisionCollision: "", ReasonSettleFailed: "",
 	ReasonQuestionOpen:       definition.PrerequisiteDesignQuestions,
 	ReasonQuestionsUnknown:   definition.PrerequisiteDesignQuestions,
 	ReasonDesignDocMissing:   definition.PrerequisiteDesignDocument,
