@@ -87,7 +87,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, "drain.graph-completed", FixerAttachedKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, "drain.graph-completed", FixerAttachedKind, RevertKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -239,6 +239,9 @@ type refusalPayload struct {
 	// neither, and its empty key repeats nothing.
 	Checks   []EndingCheck `json:"checks,omitempty"`
 	Evidence string        `json:"evidence,omitempty"`
+	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
+	// id, kept so the item's next gate can run a check a loop restart forgot.
+	Selectors map[string]string `json:"selectors,omitempty"`
 }
 
 // recordRefusal appends one `drain.refusal`, idempotently by the run it names: a step

@@ -1166,6 +1166,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return ReasonCandidateNoOp
 	case RefusalGate:
 		return ReasonGateFailed
+	case RefusalReverted:
+		return ReasonLandingReverted
 	case RefusalLand:
 		return ReasonLandRefused
 	case RefusalConflict:

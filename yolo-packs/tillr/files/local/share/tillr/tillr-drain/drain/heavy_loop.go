@@ -51,6 +51,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					}
 					if check.Result == "fail" {
 						l.reportf("loop: heavy %s first red landing %s; %s\n", check.CheckID, shortSHA(check.FirstRedLanding), check.Detail)
+						if check.RevertedBy != "" {
+							l.reportf("loop: heavy %s red from %s: reverted by %s\n", check.CheckID, shortSHA(check.FirstRedLanding), shortSHA(check.RevertedBy))
+						}
 					}
 					if check.Result == "unavailable" {
 						l.reportf("loop: heavy %s unavailable; %s\n", check.CheckID, check.Detail)
@@ -68,9 +71,11 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
 						notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
 					}
-				}
-				if l.gatePolicy.AutoRevert {
-					return Externalf("heavy %s is red at %s; automatic revert is not implemented; pointer held", strings.Join(ids, ","), sha)
+					// A fixer filed after the automatic revert ended "not possible" says why,
+					// so its worker does not try the same revert again.
+					if check.RevertRefused != "" {
+						notes = append(notes, "Automatic revert of "+shortSHA(check.FirstRedLanding)+" for "+check.CheckID+" was not possible: "+heavyBrief(check.RevertRefused))
+					}
 				}
 				// Attribution names the culprit, but repair permissions cover every
 				// commit since the last proved green through the current tip.
@@ -92,6 +97,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; ")}, strings.Join(notes, ". "))
 				return err
 			}}
+			if l.gatePolicy.AutoRevert {
+				runner.Revert = l.revertLanding
+			}
 			out, err := runner.Run(ctx)
 			if err != nil && ctx.Err() == nil {
 				l.reportf("loop: heavy runner fault: %v\n", err)

@@ -177,6 +177,11 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		return record.Envelope{}, err
 	}
 	if d.Name == definition.GitLandingName && d.IsFinished(from) && from != d.Closed && from != payload.State {
+		// A record carries no receipt, so it never moves a finished item: the one listed
+		// move out of landed (a reverted landing's return) goes through the state face.
+		if strings.TrimSpace(receipt.Reason) == "" {
+			return record.Envelope{}, terminalRejection(payload.ItemID, from)
+		}
 		if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
 			return record.Envelope{}, err
 		}

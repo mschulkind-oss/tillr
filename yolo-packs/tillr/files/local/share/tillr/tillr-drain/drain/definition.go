@@ -38,6 +38,7 @@ var landingHolds = map[string]string{
 	StopGateHarnessError:      "",
 	ReasonTrunkUnproved:       "",
 	ReasonRedCap:              "",
+	ReasonLandingReverted:     "",
 	ReasonRepairStagingFailed: "",
 	ReasonGateStallRerun:      "",
 	ReasonGateStalled:         "",

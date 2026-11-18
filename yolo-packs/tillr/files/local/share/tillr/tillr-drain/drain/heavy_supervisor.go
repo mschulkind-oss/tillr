@@ -124,6 +124,11 @@ func superviseHeavy(args []string) int {
 	return 4
 }
 func runOwnedHeavy(ctx context.Context, cmd *exec.Cmd, mode string) error {
+	// A required check at a candidate's gate is not the runner's: its process group is
+	// its own, ended before the call returns (runCheckGroup).
+	if unowned, _ := ctx.Value(heavyUnownedKey{}).(bool); unowned {
+		return runCheckGroup(cmd)
+	}
 	ownership, ok := ctx.Value(heavyOwnershipKey{}).(heavyOwnership)
 	if !ok {
 		return Externalf("heavy judge has no runner ownership")
