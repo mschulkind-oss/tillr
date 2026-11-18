@@ -27,6 +27,7 @@ const (
 )
 
 var errJudgeGrantHeld = errors.New("judge settlement waits for a covering grant")
+var errJudgeBackendHeld = errors.New("judge settlement waits for an open review backend")
 
 // JudgeReceipt retains the caller-owned identities and the exact checked bytes.
 // It travels with the gated candidate so a retained landing needs no second judge.
@@ -150,6 +151,16 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		tree, err := l.revParse(ctx, c.Worktree, head+"^{tree}")
 		if err != nil {
 			return c, false, err
+		}
+		if c.Evaluator == nil {
+			selected, open, err := l.selectReviewDispatch(ctx, *req)
+			if err != nil {
+				return c, false, err
+			}
+			if !open {
+				return c, false, errJudgeBackendHeld
+			}
+			req = &selected
 		}
 		receipt = &JudgeReceipt{Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
 		receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers

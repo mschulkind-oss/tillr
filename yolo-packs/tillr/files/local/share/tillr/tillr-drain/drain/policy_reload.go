@@ -157,7 +157,17 @@ func (l *Loop) refreshPolicy() error {
 func (p Policy) MappingLine() string {
 	parts := []string{"default=" + p.DefaultBackend}
 	for _, seat := range p.seatNames() {
-		parts = append(parts, seat+"="+strings.Join(p.seatList(seat), ","))
+		names := append([]string(nil), p.seatList(seat)...)
+		for i, share := range p.SeatShares[seat] {
+			if i < len(names) {
+				names[i] += fmt.Sprintf(":%g", share)
+			}
+		}
+		mapping := seat + "=" + strings.Join(names, ",")
+		if pick := p.SeatPicks[seat]; pick != "" {
+			mapping += " pick=" + pick
+		}
+		parts = append(parts, mapping)
 	}
 	return strings.Join(parts, "; ")
 }

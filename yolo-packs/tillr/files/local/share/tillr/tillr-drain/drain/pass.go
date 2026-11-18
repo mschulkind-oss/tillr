@@ -418,8 +418,21 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if work.Ready {
+		if len(d.Parallel) > 0 && d.WorkflowRestart {
+			for _, node := range parallelNodes(d) {
+				rec, err := terminalRecord(r, node.RunRequest.RunID)
+				if err != nil {
+					return Decision{}, err
+				}
+				if rec == nil && !commandStage(node) && shut[node.RunRequest.Backend] {
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					identifyDecision(&d)
+					return d, nil
+				}
+			}
+		}
 		if len(d.Parallel) > 0 {
-			open, err := dispatchQuotaOpen(r, d, shut)
+			open, err := dispatchQuotaOpen(r, d, shut, policy)
 			if err != nil {
 				return Decision{}, err
 			}
@@ -447,19 +460,28 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			return d, nil
 		}
 		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
+		d.SelectSeat = d.NodeInfraFailures == 0 && !d.WorkflowRestart
 		name := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
 		if d.NodeInfraFailures > 0 {
 			name = d.RunRequest.Backend
 		}
 		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
+		if d.WorkflowRestart {
+			name, degraded = d.RunRequest.Backend, ""
+			ok = !shut[name]
+		}
 		if !ok {
 			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 		} else {
 			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
+			if d.WorkflowRestart {
+				retained := *d.RunRequest
+				request = &retained
+			}
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
 			}
-			if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
+			if !d.WorkflowRestart && d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 				request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
 			}
 			if len(d.Parallel) > 0 {
@@ -489,6 +511,26 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, ReasonRepairStagingFailed
 			identifyDecision(&d)
 			return d, nil
+		}
+	}
+	if work.Candidate != nil && work.Candidate.Judge == nil && work.Candidate.Evaluator == nil && policy != nil {
+		rows, err := readItems(r)
+		if err != nil {
+			return Decision{}, err
+		}
+		for _, row := range rows {
+			if row.ItemID != d.ItemID || row.JudgeMode != "agent" {
+				continue
+			}
+			seat := policy.seatList("review")
+			if len(seat) > 0 {
+				_, open := firstOpenSeatBackend(*policy, "review", shut)
+				if !open {
+					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonBackendWindow
+					identifyDecision(&d)
+					return d, nil
+				}
+			}
 		}
 	}
 	if work.Candidate != nil && work.Candidate.Judge != nil {
@@ -920,7 +962,7 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if err != nil {
 				return err
 			}
-			open, err := dispatchQuotaOpen(tx.Reader(), d, shut)
+			open, err := dispatchQuotaOpen(tx.Reader(), d, shut, l.currentPolicy())
 			if err != nil {
 				return err
 			}
@@ -1099,6 +1141,22 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 			if err := l.claimParallel(tx, &d); err != nil {
 				return err
 			}
+			shut, err := readQuotaShutBackends(tx.Reader(), at, l.currentPolicy())
+			if err != nil {
+				return err
+			}
+			nodes := parallelNodes(d)
+			for i := range nodes {
+				ok, err := selectSeatDispatch(tx, &nodes[i], l.cfg.Policy, shut, at)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return errSeatWindowClosed
+				}
+			}
+			d = nodes[0]
+			d.Parallel = nodes[1:]
 			if err := recordWorkflowSelection(tx, d); err != nil {
 				return err
 			}
@@ -1171,6 +1229,9 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 		applied = d.Action != ActionHold
 		return nil
 	})
+	if err == errSeatWindowClosed {
+		return false, nil, nil
+	}
 	if err == nil && applied {
 		*generation = nextGeneration
 	}

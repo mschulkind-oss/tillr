@@ -144,6 +144,8 @@ type Decision struct {
 	// answers "why this model" without the policy that happened to be live when it was
 	// planned. Empty for an item that asked for no seat.
 	Seat string `json:"seat,omitempty"`
+	// SelectSeat marks a fresh choice, as opposed to an ordered failover or continuation.
+	SelectSeat bool `json:"select_seat,omitempty"`
 }
 
 // itemRow is the item state this face reads: the columns a decision turns on, and the
@@ -850,6 +852,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
+		decision.SelectSeat = !interrupted && (!attempt.failover || retry != nil || changed != "" || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""

@@ -90,6 +90,17 @@ func Once(ctx context.Context, s *store.Store, tick Pass, policy *Policy, questi
 		requests := make([]record.Envelope, 0, len(decisions))
 		for i := range decisions {
 			decision := decisions[i]
+			shut, err := readQuotaShutBackends(tx.Reader(), at, policy)
+			if err != nil {
+				return err
+			}
+			ok, err := selectSeatDispatch(tx, &decision, policy, shut, at)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errSeatWindowClosed
+			}
 			decision.PassID = correlation
 			if decision.RunRequest != nil {
 				decision.RunRequest.CorrelationID = correlation

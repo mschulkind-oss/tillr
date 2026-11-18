@@ -44,8 +44,17 @@ CREATE TABLE IF NOT EXISTS dispatches (
   dispatched_at INTEGER NOT NULL,
   deferred_by   TEXT,
   seat          TEXT,
-  pass_id       TEXT
+  pass_id       TEXT,
+  backend       TEXT
 );
+CREATE TABLE IF NOT EXISTS seat_dispatches (
+  ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL UNIQUE,
+  seat TEXT NOT NULL,
+  backend TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS seat_dispatches_counts ON seat_dispatches(seat, backend);
+CREATE INDEX IF NOT EXISTS seat_dispatches_order ON seat_dispatches(seat, ordinal);
 CREATE TABLE IF NOT EXISTS workflow_selections (
  item_id TEXT PRIMARY KEY,
  workflow TEXT NOT NULL,
@@ -79,14 +88,16 @@ CREATE TABLE IF NOT EXISTS node_artifacts (
 func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 	columns := decisionColumns(decision)
 	var itemID, action, reason string
-	var laneID, runID, deferredBy, seat sql.NullString
-	err := tx.QueryRow(`SELECT item_id, lane_id, run_id, action, reason, deferred_by, seat
+	var laneID, runID, deferredBy, seat, backend sql.NullString
+	err := tx.QueryRow(`SELECT item_id, lane_id, run_id, action, reason, deferred_by, seat, backend
 		FROM dispatches WHERE decision_id = ?`, decision.DecisionID).
-		Scan(&itemID, &laneID, &runID, &action, &reason, &deferredBy, &seat)
+		Scan(&itemID, &laneID, &runID, &action, &reason, &deferredBy, &seat, &backend)
 	if err == nil {
 		if itemID == decision.ItemID && action == decision.Action && reason == decision.Reason &&
 			nullColumn(laneID) == columns.laneID && nullColumn(runID) == columns.runID &&
-			nullColumn(deferredBy) == columns.deferredBy && nullColumn(seat) == columns.seat {
+			nullColumn(deferredBy) == columns.deferredBy && nullColumn(seat) == columns.seat && (!backend.Valid || nullColumn(backend) == columns.backend) {
+			// Pre-share rows have no backend column value. Preserve their replay
+			// semantics without inventing a historical choice.
 			return nil
 		}
 		return Internalf("the decision %s is already recorded with different columns", decision.DecisionID)
@@ -95,12 +106,19 @@ func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 		return readFailure(err)
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO dispatches (decision_id, item_id, lane_id, run_id, action, reason, dispatched_at, deferred_by, seat, pass_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO dispatches (decision_id, item_id, lane_id, run_id, action, reason, dispatched_at, deferred_by, seat, pass_id, backend)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		decision.DecisionID, decision.ItemID, columns.laneID, columns.runID,
-		decision.Action, decision.Reason, at.UnixMilli(), columns.deferredBy, columns.seat, nullablePassID(decision.PassID),
+		decision.Action, decision.Reason, at.UnixMilli(), columns.deferredBy, columns.seat, nullablePassID(decision.PassID), columns.backend,
 	); err != nil {
 		return Internalf("recording the decision for %q: %v", decision.ItemID, err)
+	}
+	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
+		for _, node := range parallelNodes(decision) {
+			if err := recordSeatDispatch(tx, node); err != nil {
+				return err
+			}
+		}
 	}
 	if decision.Inputs != nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
 		if err := appendEffect(tx, inputRecordedKind, decision.RunRequest.RunID, decision, at); err != nil {
@@ -122,7 +140,7 @@ func nullColumn(value sql.NullString) any {
 // names a seat. They are nullable together so a row is a complete account of the decision
 // whether it dispatched anything or not.
 type dispatchColumns struct {
-	laneID, runID, deferredBy, seat any
+	laneID, runID, deferredBy, seat, backend any
 }
 
 // decisionColumns answers the row's nullable columns: a hold has no lane and no run, only a
@@ -137,6 +155,9 @@ func decisionColumns(decision Decision) dispatchColumns {
 	}
 	if decision.RunRequest != nil {
 		columns.runID = decision.RunRequest.RunID
+		if decision.RunRequest.Backend != "" {
+			columns.backend = decision.RunRequest.Backend
+		}
 	}
 	if decision.DeferredBy != "" {
 		columns.deferredBy = decision.DeferredBy
@@ -192,6 +213,9 @@ func init() {
 	}
 	// seat is the same kind of addition: the dispatch's durable account of which seat the
 	// item asked for, added to a table that predates it by the additive-column hook.
+	if err := store.RegisterColumn("drain", "dispatches", "backend", "TEXT"); err != nil {
+		panic(err)
+	}
 	if err := store.RegisterColumn("drain", "dispatches", "seat", "TEXT"); err != nil {
 		panic(err)
 	}

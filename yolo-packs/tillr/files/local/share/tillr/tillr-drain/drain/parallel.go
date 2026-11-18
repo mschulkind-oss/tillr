@@ -22,8 +22,16 @@ func parallelNodes(d Decision) []Decision {
 
 // dispatchQuotaOpen checks only requests this dispatch will start. Retained
 // parallel groups keep completed results; those backends cannot block a retry.
-func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool) (bool, error) {
+func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool, policy *Policy) (bool, error) {
 	for _, node := range parallelNodes(d) {
+		if policy != nil && !node.WorkflowRestart && node.SelectSeat {
+			_, override := policy.Overrides[node.ItemID]
+			pick := policy.SeatPicks[node.Seat]
+			if !override && (len(policy.SeatShares[node.Seat]) > 0 || pick == "round-robin" || pick == "random") {
+				// The proposed backend is only a preview; the claim checks the draw.
+				continue
+			}
+		}
 		if node.RunRequest == nil || node.RunRequest.Backend == "command" {
 			continue
 		}
@@ -116,6 +124,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 		stage := d.Workflow.Stages[i]
 		node.Seat = stage.Seat
 		if i != d.NodeIndex {
+			node.SelectSeat = true
 			id := attemptRunID(d.ItemID, d.Attempt) + "-n" + strconv.Itoa(i+1)
 			if stage.Kind == "command" {
 				node.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, id)

@@ -3,6 +3,7 @@ package drain
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -43,7 +44,7 @@ type Policy struct {
 	//
 	// In the document a seat's value is a backend name or an ordered list of them
 	// (docs/design/tillr-claude-backend.md §4, D-CB3). Seats always holds the seat's first
-	// backend, which is where it dispatches; SeatLists holds the whole list for a seat the
+	// backend for ordered previews; claims apply shares or pick. SeatLists holds the list for a seat the
 	// document spelled as an array. The two fields exist so that a seat which names one
 	// backend reads, decodes and is written in code exactly as it was before lists existed.
 	Seats map[string]string `json:"seats,omitempty"`
@@ -53,6 +54,10 @@ type Policy struct {
 	// rather than to whatever the build seat runs. It is filled by UnmarshalJSON from the
 	// `seats` array form and is never a key of its own in the document.
 	SeatLists map[string][]string `json:"-"`
+	// SeatShares and SeatPicks are decoded from seat entries, not top-level keys.
+	SeatShares map[string][]float64 `json:"-"`
+	SeatPicks  map[string]string    `json:"-"`
+	seatDraw   func() float64
 	// Overrides routes one named item to another backend for its first dispatch. It is the
 	// specific statement next to Seats' general one, so it outranks the seat: an item that
 	// needs one particular harness for one dispatch says so by id without moving the role.
@@ -71,14 +76,25 @@ func (p *Policy) UnmarshalJSON(raw []byte) error {
 	type plain Policy
 	var doc struct {
 		plain
-		Seats map[string]seatValue `json:"seats,omitempty"`
+		Seats map[string]json.RawMessage `json:"seats,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
 	*p = Policy(doc.plain)
 	p.Seats, p.SeatLists = nil, nil
-	for seat, value := range doc.Seats {
+	p.SeatShares, p.SeatPicks = map[string][]float64{}, map[string]string{}
+	for seat, rawValue := range doc.Seats {
+		var value seatValue
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return fmt.Errorf("seat %q: %w", seat, err)
+		}
+		if value.shares != nil {
+			p.SeatShares[seat] = value.shares
+		}
+		if value.pick != "" {
+			p.SeatPicks[seat] = value.pick
+		}
 		if p.Seats == nil {
 			p.Seats = map[string]string{}
 		}
@@ -102,8 +118,10 @@ func (p *Policy) UnmarshalJSON(raw []byte) error {
 // a JSON array of strings (an ordered fallback list). Anything else is a decode error,
 // which readPolicy reports as the usage refusal it reports every malformed document as.
 type seatValue struct {
-	names []string
-	list  bool
+	names  []string
+	list   bool
+	shares []float64
+	pick   string
 }
 
 func (v *seatValue) UnmarshalJSON(raw []byte) error {
@@ -112,14 +130,61 @@ func (v *seatValue) UnmarshalJSON(raw []byte) error {
 		v.names, v.list = []string{name}, false
 		return nil
 	}
-	var names []string
-	if err := json.Unmarshal(raw, &names); err != nil {
-		return fmt.Errorf("a seat names a backend or a list of backends, got %s", raw)
+	var config struct {
+		Backends json.RawMessage `json:"backends"`
+		Pick     string          `json:"pick"`
 	}
-	if names == nil {
-		names = []string{}
+	if len(raw) > 0 && raw[0] == '{' {
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return err
+		}
+		if config.Backends == nil {
+			return fmt.Errorf("a seat object needs backends")
+		}
+		if err := v.UnmarshalJSON(config.Backends); err != nil {
+			return err
+		}
+		v.pick = config.Pick
+		return nil
 	}
-	v.names, v.list = names, true
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return fmt.Errorf("a seat names a backend, a list, or an object with backends and pick, got %s", raw)
+	}
+	v.list = true
+	shared, unshared := false, false
+	for _, entry := range entries {
+		var name string
+		var share float64
+		if err := json.Unmarshal(entry, &name); err == nil {
+			unshared = true
+		} else {
+			var object struct {
+				Backend string          `json:"backend"`
+				Share   json.RawMessage `json:"share"`
+			}
+			if err := json.Unmarshal(entry, &object); err != nil {
+				return err
+			}
+			name = object.Backend
+			if object.Share == nil {
+				unshared = true
+			} else {
+				shared = true
+				if string(object.Share) == "null" || json.Unmarshal(object.Share, &share) != nil || share <= 0 {
+					return fmt.Errorf("backend %q share must be a positive number", name)
+				}
+			}
+		}
+		v.names = append(v.names, name)
+		v.shares = append(v.shares, share)
+	}
+	if shared && unshared {
+		return fmt.Errorf("a seat list must give every backend a share or none")
+	}
+	if !shared {
+		v.shares = nil
+	}
 	return nil
 }
 
@@ -219,6 +284,19 @@ func (p Policy) Check() error {
 				seat, item.SeatList())
 		}
 		list := p.seatList(seat)
+		if pick := p.SeatPicks[seat]; pick != "" && pick != "in-order" && pick != "round-robin" && pick != "random" {
+			return Usagef("seat %q pick %q must be in-order, round-robin, or random", seat, pick)
+		}
+		if shares, ok := p.SeatShares[seat]; ok {
+			if len(shares) != len(list) {
+				return Usagef("seat %q must give every backend a share", seat)
+			}
+			for _, share := range shares {
+				if share <= 0 || math.IsNaN(share) || math.IsInf(share, 0) {
+					return Usagef("seat %q share must be a positive number", seat)
+				}
+			}
+		}
 		if len(list) == 0 {
 			return Usagef("the policy maps seat %q to an empty list: a seat names at least the one backend it dispatches to", seat)
 		}

@@ -1217,13 +1217,7 @@ history used to keep those proportions.
   40 items; selection fixtures check a three-backend round-robin and 300 equal-weight random
   draws with 120–180 dispatches per backend. Check that each dispatch records its draw.
 
-<!-- tillr: item id="item-policy-seat-shares" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A seat's list entry may be a backend name, as today, or a backend with a `share`. With `[{"backend": "claude", "share": 1}, {"backend": "pi", "share": 1}]` the seat's dispatches alternate between the two; shares of 3 and 1 send three of every four to the first. A list with no shares behaves exactly as today: first backend that is open, in order.
-- **c2:** The split is by count of dispatches recorded in the store, so two loops on one store, or one loop restarted, keep the same proportion. A test dispatches 40 fixture items and asserts the counts.
-- **c3:** A backend that is shut by quota or reserve takes no share while it is shut, and its share goes to the others in proportion. A fail-over after a refused run still walks the seat's list in order.
-- **c4:** The policy check refuses a share that is not a positive number and a list that mixes a share on some entries with none on others, naming the seat.
-- **c5:** A seat may set `pick` to `in-order` (today's behavior and the default), `round-robin` (each open backend in turn, which is equal shares) or `random` (one open backend drawn at random per dispatch, weighted by share when shares are given). The draw is recorded on the dispatch, so a run's backend is a fact and never re-derived. A test asserts round-robin over three backends visits each in turn and that 300 random draws over two equal backends land between 120 and 180 on each.
 
 **Ruling, 2026-11-17 (answers the conflict raised by `run-item-policy-seat-shares-a6`):** the work
 is built, and no criterion changes. Run `run-item-policy-seat-shares-a5` reported done with one
