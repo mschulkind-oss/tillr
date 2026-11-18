@@ -84,51 +84,20 @@ only the admission sum, never a deadline. `--tree-overrun keep` remains compatib
 
 The watchdog (the progress observer defined in
 [design Section 6.5](../../docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test))
-samples every 1,000 milliseconds. A byte of log growth or CPU progress resets
-its silent-sample count. Sixty consecutive samples with neither ends the group.
-The result is `stalled`, exit 6, not pass, fail, error or over-budget. The
-verdict entry, check log and summary carry the last output line, group CPU time,
-silent samples and duration.
-
-Linux prefers an
-[inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html),
-attached before exec so it retains descendant CPU even when parents discard exit
-status. Go opens a disabled, inherited counter on the launching thread, enabled
-only when the child executes its program. That thread stays reserved until the
-counter closes, so another check cannot inherit it. Python attaches to a child
-waiting for an exec-release byte. Neither counts the observer's CPU as the check's
-progress.
-
-A refused counter selects **process accounting**, read-only observations of the
-check's existing process group. Each member is identified by PID and start time in
-[process stat](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
-The sample sums its threads' runtime from
-[Linux scheduler accounting](https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html)
-in nanoseconds. Any member's runtime changing, the membership changing, or a
-member disappearing while read is progress, even below the previously reported
-total. A short-lived child that disappears between samples still requires a
-starter to run, or to disappear; following starters back reaches a member of the
-previous sample whose runtime or presence changes.
-
-The reported `cpu_time_ms` is the highest observed sum of member runtime plus
-reaped-child CPU (`cutime` and `cstime` in process stat). Every member's child
-CPU is captured before any thread runtime is read, so a child reaped during a
-sample cannot count in both its own runtime and its parent's child CPU. It is a
-lower bound: children whose exit status is discarded can be absent from the total but still
-count as progress. Processes that leave the check's group are outside this
-observation. Nested watchers read their own groups independently; there is no
-shared service or supervisor, and the fallback never delays, stops or signals a
-check. Both sources observe CPU at finer resolution than reported milliseconds.
-
-The check log prints `watchdog CPU source: kernel task-clock counter` or
-`watchdog CPU source: process accounting`; the verdict carries `cpu_source`.
-The Python checker uses the same source names and sampling rule, and exports
-`cpu_source` in stall observations. If neither source is readable, including an
-unreadable process directory or thread runtime, `watchdog unavailable` is printed
-immediately and detection is off; the check still runs. The source field is absent
-when no sample succeeded. A selected source becoming unreadable also disables
-detection rather than inferring a stall; a kernel counter decrease is likewise
-unavailable. Exit 4 remains a program that could not start or crashed.
+samples every 1,000 milliseconds. A byte of log growth or an increase in process-group
+CPU time, including live and reaped children, resets its silent-sample count. Sixty
+consecutive samples with neither ends the group. The result is `stalled`, exit 6,
+not pass, fail, error or over-budget. The verdict entry, check log and summary carry
+the last output line, group CPU time, silent samples and duration. Unreadable CPU
+accounting disables stall detection explicitly: `watchdog unavailable` appears in
+the verdict and summary. Linux uses an
+[inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html):
+it counts the check and its descendants, retaining CPU when children exit even
+if their parent discards terminated-child status. The clock is attached while the
+check is paused before its first instruction; the check then resumes and can
+create children. A denied attachment or unreadable
+counter reports unavailability immediately in the live log; there is no fallback
+to incomplete `/proc` snapshots. Unrounded nanoseconds determine CPU progress. Exit 4 remains a program that could not start or crashed.
 
 The real gate adapter preserves exit 6 and the check observations. The first stall
 retains the candidate with `gate-stall-rerun`; the drain waits for fewer gates in
@@ -140,7 +109,7 @@ including their budgets, overruns and stalls.
 The `go-build` check builds with `-trimpath`, in `GOFLAGS`, so new checkouts reuse
 the shared Go build cache. The adapter warms it once per Go version before the fast
 tier. The gate program wrapper and the remaining Python checks use the same
-stall rule: output grew or the selected source showed CPU progress in a one-second sample;
+stall rule: output grew or the group's CPU time rose in a one-second sample;
 sixty consecutive samples with neither end the group as `stalled`, exit 6.
 The compatibility flag `--gate-timeout` remains, with a 30-minute default, as a
 reporting target only. An overrun is recorded in the verdict and summary; the

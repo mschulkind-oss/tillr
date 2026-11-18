@@ -2027,8 +2027,8 @@ def _start_cpu_sampler(pid: int):
     """Attach an inherited kernel task clock before the waiting shim execs.
 
     Like tillr-gate's task clock, this retains CPU from exited descendants. A
-    refusal selects read-only process accounting instead. The shim's release
-    pipe prevents an attachment race for the preferred counter.
+    denied counter is explicitly unavailable; incomplete /proc snapshots are
+    never substituted. The shim's release pipe prevents an attachment race.
     """
     number = {"x86_64": 298, "aarch64": 241}.get(platform.machine())
     if sys.platform != "linux" or number is None:
@@ -2048,100 +2048,23 @@ def _start_cpu_sampler(pid: int):
             raise OSError("kernel CPU counter decreased")
         previous = current
         return current
-    sample.cpu_source = "kernel task-clock counter"
     return sample, lambda: os.close(fd)
 
 
-# The release pipe attaches the preferred counter before exec. On refusal it
-# releases immediately; process accounting never supervises or stops the check.
-_CPU_SHIM = r'''import os,sys
-release_fd = int(sys.argv[1])
-os.read(release_fd, 1)
-os.close(release_fd)
+# No requested command runs until its counter is attached (or declared unavailable).
+_CPU_SHIM = '''import os, sys
+fd = int(sys.argv[1])
+os.read(fd, 1)
+os.close(fd)
 try:
-    os.execvp(sys.argv[2], sys.argv[2:])
+    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+except FileNotFoundError:
+    print(sys.argv[2] + ': not found on PATH', file=sys.stderr)
+    sys.exit(127)
 except OSError as error:
-    print(str(error), file=sys.stderr)
-    sys.exit(127 if isinstance(error, FileNotFoundError) else 126)
+    print(sys.argv[2] + ': could not execute: ' + str(error), file=sys.stderr)
+    sys.exit(126)
 '''
-
-
-def _start_process_sampler(denied: Exception, root: Path = Path("/proc")):
-    """Read group members' thread runtime; retain a lower bound including reaped CPU.
-
-    Runtime or membership change is progress even when the reported high-water
-    total does not grow (for example, a child with discarded exit status).
-    """
-    previous = None
-    high = 0
-    tick_ns = 1_000_000_000 // os.sysconf("SC_CLK_TCK")
-    def stat(path):
-        # comm is arbitrary kernel bytes, not necessarily UTF-8.
-        body = path.read_bytes()
-        end = body.rfind(b")")
-        fields = body[end + 1:].split()
-        if end < 0 or len(fields) < 20:
-            raise OSError(f"malformed process stat: {path}")
-        return fields
-    def sample(group):
-        nonlocal previous, high
-        members = {}
-        total = 0
-        changed = False
-        try:
-            # Freeze every member's reaped-child time before reading any live
-            # runtime. A child reaped between phases cannot then be counted in
-            # both its own runtime and its parent's child time.
-            snapshots = []
-            for entry in root.iterdir():
-                if not entry.name.isdigit():
-                    continue
-                try:
-                    fields = stat(entry / "stat")
-                except (FileNotFoundError, ProcessLookupError):
-                    continue
-                if int(fields[2]) != group:
-                    continue
-                snapshots.append((entry, fields))
-            for entry, fields in snapshots:
-                identity = (entry.name, fields[19])
-                ns = 0
-                try:
-                    tasks = list((entry / "task").iterdir())
-                except (FileNotFoundError, ProcessLookupError):
-                    if entry.exists():
-                        raise
-                    changed = True
-                    continue
-                for task in tasks:
-                    try:
-                        ns += int((task / "schedstat").read_text().split()[0])
-                    except (FileNotFoundError, ProcessLookupError):
-                        if task.exists():
-                            raise
-                        changed = True
-                try:
-                    latest = stat(entry / "stat")
-                except (FileNotFoundError, ProcessLookupError):
-                    changed = True
-                    continue
-                if latest[19] != fields[19] or latest[2] != fields[2]:
-                    changed = True
-                    continue
-                children = sum(int(value) for value in fields[13:15])
-                if ns < 0 or children < 0:
-                    raise OSError("negative process CPU")
-                members[identity] = ns
-                total += ns + children * tick_ns
-        except (OSError, ValueError, IndexError) as error:
-            raise OSError(f"{denied}; process accounting: {error}") from error
-        sample.cpu_changed = changed or (previous is not None and members != previous)
-        previous = members
-        high = max(high, total)
-        return high
-    sample.cpu_source = "process accounting"
-    sample.cpu_changed = False
-    return sample, lambda: None
 
 
 def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
@@ -2173,28 +2096,15 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
     warning = ""
     closer = lambda: None
     sampler = None
-    fallback = False
     try:
         sampler, closer = _start_cpu_sampler(proc.pid)
         previous_cpu = sampler(proc.pid)
     except (OSError, ValueError, struct.error) as error:
-        closer()
-        sampler, closer = _start_process_sampler(error)
-        fallback = True
-    os.write(release_w, b"k")
+        warning = f"watchdog unavailable: {error}\n"
+        progress(f"{' '.join(argv)}: {warning.strip()}")
+    os.write(release_w, b"x")
     os.close(release_w)
     cancel.register(proc)
-    cpu_source = getattr(sampler, "cpu_source", "kernel task-clock counter")
-    try:
-        if fallback:
-            previous_cpu = sampler(proc.pid)
-        progress(f"{' '.join(argv)}: watchdog CPU source: {cpu_source}")
-    except (OSError, ValueError, struct.error) as error:
-        warning = f"watchdog unavailable: {error}\n"
-        sampler = None
-        cpu_source = ""
-    if warning:
-        progress(f"{' '.join(argv)}: {warning.strip()}")
     previous_bytes = 0
     silent = 0
     def decode(value):
@@ -2207,7 +2117,7 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
                 return code, decode(out), decode(err), time.monotonic() - started
             except subprocess.TimeoutExpired as pending:
                 out, err = decode(pending.output), decode(pending.stderr)
-                if sampler is None or warning:
+                if warning:
                     continue
                 try:
                     cpu = sampler(proc.pid)
@@ -2216,7 +2126,7 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
                     progress(f"{' '.join(argv)}: {warning.strip()}")
                     continue
                 size = len(pending.output or b"") + len(pending.stderr or b"")
-                silent = 0 if size > previous_bytes or cpu > previous_cpu or getattr(sampler, "cpu_changed", False) else silent + 1
+                silent = 0 if size > previous_bytes or cpu > previous_cpu else silent + 1
                 previous_bytes, previous_cpu = size, cpu
                 if silent >= WATCHDOG_SILENT_SAMPLES:
                     last = (out + err).rstrip().splitlines()
@@ -2226,7 +2136,6 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
                     note += "stall observations: " + json.dumps({
                         "result": "stalled", "duration_ms": int((time.monotonic() - started) * 1000),
                         "silent_samples": silent, "cpu_time_ms": cpu // 1000000,
-                        "cpu_source": cpu_source,
                         "last_output_line": last[-1] if last else "",
                     }) + "\n"
                     _kill_process_group(proc)
