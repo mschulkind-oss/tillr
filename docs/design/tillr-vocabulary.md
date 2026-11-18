@@ -10,7 +10,7 @@ tags:
   - worktrees
   - design
 summary: "Settles one meaning for each word the tillr work queue uses, so that the owner, the documents and the code say the same thing. An item is a tracked piece of work with its own deliverable, whether or not a document declares it yet. The unit of progress is the node, the whole of what happened to an item is its path, and a run is only the bookkeeping of one node. The lane is retired: a worktree is a resource an item acquires, with a lifecycle and collection in place of a fixed pool. Three questions remain for the owner: two names, and whether an item is finished at landing or at proof."
-next: "The owner rules OQ-VO4, OQ-VO5 and OQ-VO6, and reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
+next: "The owner rules OQ-VO5 and OQ-VO6, and reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
 depends-on:
   - tillr-graph-is-the-path.md
   - tillr-item-graphs.md
@@ -26,7 +26,7 @@ depends-on:
 - **The shape:** an **item** has one **graph**; the graph's started nodes are the item's **path**; a **node** has at most one **run**; an agent run speaks in one **session**, which later nodes resume or fork; an item acquires one **worktree**, which is collected and restored.
 - **Cost:** "lane", "attempt", "node run", "hold" and eight other words are retired from documents and from what the owner reads; flags, stored names and paths that carry them stay as aliases ([Section 6](#6-renames)).
 - **Start at:** [Section 4](#4-the-stages-of-a-change) for the stages, then the three sections before it for the three words.
-- **Needs your ruling:** [OQ-VO4](#OQ-VO4), [OQ-VO5](#OQ-VO5), [OQ-VO6](#OQ-VO6).
+- **Needs your ruling:** [OQ-VO5](#OQ-VO5), [OQ-VO6](#OQ-VO6). **Ruled on 2026-11-18:** [OQ-VO4](#OQ-VO4), the charter.
 - **Awaits your review:** the designer's decisions `D-VO1` to `D-VO12` in [the ledger](#decision-ledger). You may overturn any of them.
 - **Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction these words must fit; its own terms are linked here, not redefined), [the direction document](./tillr-core-and-git-landing.md) (whose naming question is asked here as [OQ-VO4](#OQ-VO4) and [OQ-VO5](#OQ-VO5)), [the landing call](./tillr-landing-call.md) (its question on keeping a worktree after landing rests on [Section 3.3](#33-the-life-of-a-worktree)). There is no companion plan: [Section 9](#9-drafted-items) holds the work this design surfaced, as prose.
 
@@ -242,12 +242,12 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | **Generated item** | An item the loop files for work nobody asked for by hand: the mechanic, a defect item, a comment item | Not a rewrite, a revert or an alarm ([Section 1](#1-what-an-item-is)) | An id prefix. Has criteria and no block | The code's generated set also holds `rewrite-`, `revert-main-` and `gate-budget-` |
 | **Mechanic** | The owner's word for the generated item that makes a red trunk green | Not a revert | `fixer-main-` and twelve hex digits of the red commit | Code and ids say "fixer" |
 | **Defect item** | The generated item filed when a worker's objection names broken tooling | Not a failure of the item that reported it | `defect-` and twelve hex digits | — |
-| **Definition** | What an item is to deliver: title, reason, fence, criteria and dependencies | Not the file that turns the core into one use, which shipped code also calls a definition ([OQ-VO4](#OQ-VO4)), and not a node's kind and brief | Belongs to one item. The one in force is the latest revision in the item's graph | Three meanings; see [Section 6](#6-renames) |
+| **Definition** | What an item is to deliver: title, reason, fence, criteria and dependencies | Not the file that turns the core into one use, which the owner named the charter and shipped code still calls a definition ([OQ-VO4](#OQ-VO4)), and not a node's kind and brief | Belongs to one item. The one in force is the latest revision in the item's graph | Three meanings; see [Section 6](#6-renames) |
 | **Block** | The written form of a definition: a heading and an item directive in a tracked document | Not the item. An item can exist without one | The item id in the directive | — |
 | **Criterion** | One testable condition of a definition | Not a gate check | An id within its item | — |
 | **Fence** | The path prefixes an item may change | Not a node's write scope, which is a subset | The block's `paths` attribute | — |
 | **Deliverable** | The one squashed commit an item puts on the trunk | Not a fork's delivery, which is the patch series that deploys | The landing's trunk commit | — |
-| **Definition of a use** *(the shipped stand-in; its name is [OQ-VO4](#OQ-VO4))* | The data file that turns tillr's general machinery into one use: item states, allowed moves, prerequisites and the completion rule, with one hook program beside it | Not an item's definition | A name, such as `git-landing` (that name is [OQ-VO5](#OQ-VO5)) | Shipped as the flag `tillr store init --definition`, the stored key `store.definition`, the event `store.definition.set` and one Go package. Until the owner names it, documents say "the landing definition" for the Git one |
+| **Charter** *(the owner's word, ruled in [OQ-VO4](#OQ-VO4); shipped code still says "definition")* | The statement of one use of tillr: its purpose, and the rules that follow from it. In the tree it is a data file (item states, allowed moves, prerequisites and the completion rule) with one hook program beside it | Not an item's definition | A name, such as `git-landing` (that name is [OQ-VO5](#OQ-VO5)) | Shipped as the flag `tillr store init --definition`, the stored key `store.definition`, the event `store.definition.set` and one Go package. Documents say "the landing charter" for the Git one; the code rename is not built |
 
 ### 5.2 The graph, and what executes
 
@@ -391,7 +391,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | `squash-conflict`, `conflict-fix`, `-cfix` | **Conflict** | Lander result, run-id suffix | Keep. This is the surviving meaning |
 | Hold reasons, `ActionHold`, position `held`, state `blocked` | **Wait** | Planner, view, store | Alias until the rule table is built; the view says "waiting on" now |
 | `rewrite-<id>` item | A rewrite **node** | Sync, store | Alias until the rewrite kind is built |
-| "definition" = the file for one use; `--definition`, `store.definition`, `store.definition.set`, the `definition` package | The name [OQ-VO4](#OQ-VO4) settles | [The direction document](./tillr-core-and-git-landing.md), code, Product QA's worked example | Pending [OQ-VO4](#OQ-VO4). Whatever the name, the shipped flag and stored key keep working |
+| "definition" = the file for one use; `--definition`, `store.definition`, `store.definition.set`, the `definition` package | **Charter** ([OQ-VO4](#OQ-VO4), ruled 2026-11-18) | [The direction document](./tillr-core-and-git-landing.md), code, Product QA's worked example | Not built. The shipped flag and stored key keep working as aliases |
 | "definition" of a node | The node's kind, inputs and brief | The graph design | Reword when that document is next edited |
 | `WorkflowStage`, "stage" | **Step** | Code, item graphs | Alias in code; reword the document |
 | "template" | **Workflow** | The graph design | Reword |
@@ -478,6 +478,7 @@ Each row quotes or cites words the owner said. These are the only rulings in thi
 | :--- | :--- | :--- | :--- | :--- |
 | OQ-VO1 | The lane, as a slot in a fixed pool that work is shuffled through, goes. The owner: "I don't think that means that we just have a hard cap and then shuffle between them. That just means we need a lifecycle, garbage collection policies, that sort of thing"; he has also said he dislikes the concept of a lane. The question asked whether the word might stay with a new meaning; his words leave it nothing to mean. How far the rename reaches is the designer's `D-VO9`. | 2026-11-18 | [Section 3](#3-what-a-lane-was-and-the-worktree-as-a-resource) | — |
 | OQ-VO2 | Outstanding worktrees are bounded, and the bound is met by a lifecycle and collection, not by a cap. The owner: "We do need to bound the number of worktrees that are outstanding because that destroys my disk space and performance. That's important." He named no numbers. Which measures start collection, and their defaults, are the designer's `D-VO10`. | 2026-11-18 | [Section 3.4](#34-the-bound-and-what-happens-at-it) | — |
+| OQ-VO4 | The file that turns tillr into one use is a **charter**. The owner: "I think I like the term charter because basically we're saying like the charter for the base tillr, whatever the git landing is, is basically maintain velocity from coming up with ideas, maintain momentum of that idea through design and implementation, clearing all blockers along the way. And then what falls from that is all of the rules and how we use the tillr tools to get there." He gave a second example: "an AutoQA charter would be find all bugs. How do you do that? And you queue things and you churn through them." So a charter states the purpose of one use, and its rules (item states, allowed moves, prerequisites, the completion rule) follow from that purpose. The shipped flag `--definition` and the stored key keep working as aliases; the rename in code, the view and the documents is not built. "Definition" now means only an item's. | 2026-11-18 | [Section 5.1](#51-the-work-and-its-statement) | — |
 | `R-VO1` | Only what is green is pushed, as a working assumption he asked to keep open: "I think I agree with only pushing on green. Let's assume that for now, but at least keep it in the conversation." | 2026-11-18 | [Section 4](#4-the-stages-of-a-change) | — |
 
 ### The designer's decisions, awaiting the owner's review
@@ -504,28 +505,7 @@ Each `D-VO` row is a decision the designer made on 2026-11-18 from the evidence 
 
 ## Open Questions
 
-Numbering continues from the three questions closed above.
-
-4. 💬 🤷 **OQ-VO4: What do we call the file that turns tillr into one use, such as landing changes in Git?**
-
-   Dana sets up a store for Product QA's findings, which never land in Git. She runs `tillr store init --definition findings.json`, and `tillr view waiting` then prints `definition: findings` where this repository's store prints `definition: git-landing`.
-
-   "Definition" was a stand-in: when it was coined, the direction document said you had not chosen the name. It has since shipped in that flag, in a stored key, in an event name and in one Go package, and Product QA's worked example is written against it. It also collides with the sense tillr's documents use far more often, an item's definition, meaning its fence and criteria. "The definition changed" can mean either.
-
-   Whichever word wins, the shipped flag and stored key keep working, so nothing Dana wrote breaks. The cost of a new word is a rename in one package, one status line and a handful of documents.
-
-   - **A — Keep "definition".** Nothing shipped changes, and Dana reads `definition: findings`. Documents then call an item's fence and criteria its "spec".
-   - **B — "Rulebook".** Dana runs `tillr store init --rulebook findings.json` and reads `rulebook: findings`. "Definition" always means an item's.
-   - **C — "Rig".** She runs `--rig findings.json` and reads `rig: findings`: what sets one hull up for one purpose. It can be read as a test rig.
-   - **D — "Charter".** She runs `--charter findings.json` and reads `charter: findings`: the stated purpose and terms of a voyage. It can be read as a legal document.
-
-   <!-- vantage: question id=OQ-VO4 leaning="Rulebook, weakly and by taste: it says what the file holds (states, allowed moves, prerequisites), and it frees 'definition' for the item, which is the sense used far more often." -->
-
-   _Leaning:_ Rulebook, weakly and by taste: it says what the file holds (states, allowed moves, prerequisites), and it frees 'definition' for the item, which is the sense used far more often.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
+Numbering continues from the four questions closed above.
 
 5. 💬 🤷 **OQ-VO5: What is tillr's first use, landing changes in a Git repository, called?**
 
