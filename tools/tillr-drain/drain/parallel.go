@@ -170,7 +170,11 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return d, err
 		}
-		for _, name := range []string{BriefFile, FenceFile, BaseSHAFile, SessionIDFile} {
+		names := []string{BriefFile, SessionIDFile}
+		if !l.nonLanding {
+			names = append(names, FenceFile, BaseSHAFile)
+		}
+		for _, name := range names {
 			body, err := os.ReadFile(filepath.Join(lane, name))
 			if err != nil {
 				return d, err
@@ -283,6 +287,9 @@ func parallelTerminal(r *store.Reader, d Decision) (bool, error) {
 }
 
 func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *LoopResult, timing *PassTiming, watched []string) laneOutcome {
+	if l.nonLanding {
+		return l.settleHookGroup(ctx, work, result, timing)
+	}
 	d := work.Decision
 	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
 		copy := *work

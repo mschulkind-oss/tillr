@@ -28,12 +28,18 @@ func TestNonLandingLoopStartsWithoutGit(t *testing.T) {
 			d := plannerFixtureDefinition(t)
 			d.Hooks, _ = definitionProgram(t, d.Hooks.Names, "")
 			setPlannerDefinition(t, path, d)
-			// Any Git or document sync invocation is both a failure and visible evidence.
+			// Git and document sync remain forbidden; item state help is now
+			// required to negotiate the transactional verdict guard at startup.
 			count := filepath.Join(scratch(t, "forbidden"), "calls")
 			forbidden := stub(t, "git", "echo invoked >> '"+count+"'\nexit 99")
+			itemBin := stub(t, "item", `if [ "$*" = 'state --help' ]; then
+ echo '--store --item --state --now --reason --by --resolves-via --require-verdicts'
+ exit 0
+fi
+`+"echo invoked >> '"+count+"'\nexit 99")
 			t.Setenv("PATH", filepath.Dir(forbidden)+":"+os.Getenv("PATH"))
 			code, out := invoke(t, "loop", "--root", root, "--store", path,
-				"--policy", policy(t, "true"), "--item-bin", forbidden,
+				"--policy", policy(t, "true"), "--item-bin", itemBin,
 				"--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true",
 				"--rolling", forbidden, "--exit-when-drained")
 			if code != 0 {
@@ -61,7 +67,7 @@ func TestNonLandingLoopRefusesLandingSettings(t *testing.T) {
 			setPlannerDefinition(t, path, d)
 			writeFile(t, filepath.Join(root, ".tillr.toml"), setting+"\n")
 			code, out := invoke(t, "loop", "--root", root, "--store", path, "--policy", policy(t, "true"),
-				"--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--exit-when-drained")
+				"--item-bin", sibling(t, "item"), "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--exit-when-drained")
 			key := strings.Split(setting, " =")[0]
 			if code != 2 || !strings.Contains(string(out), key) || !strings.Contains(string(out), "findings") {
 				t.Fatalf("want named settings refusal: %d %s", code, out)

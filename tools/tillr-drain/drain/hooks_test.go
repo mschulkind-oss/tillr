@@ -47,7 +47,12 @@ func TestDefinitionHookArgumentsAndPreflight(t *testing.T) {
 	names := []string{"gate", "land", "verdict", "replay", "rolling", "fixer-gate", "complete-item", "after-completion", "detail"}
 	hooks, log := hookStub(t, names, "")
 	root := filepath.Dir(log)
-	steps := &ProcessSteps{Root: root, Store: "store"}
+	itemBin := filepath.Join(root, "item")
+	writeForkFile(t, itemBin, "#!/bin/sh\necho '--store --item --state --now --reason --by --resolves-via --require-verdicts'\n")
+	if err := os.Chmod(itemBin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	steps := &ProcessSteps{Root: root, Store: "store", ItemBin: itemBin}
 	steps.ConfigureHooks(hooks, nil)
 	if err := steps.CheckPrograms(context.Background(), nil); err != nil {
 		t.Fatal(err)

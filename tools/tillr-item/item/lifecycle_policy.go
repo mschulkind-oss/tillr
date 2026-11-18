@@ -13,6 +13,8 @@ type MoveReceipt struct {
 	Reason      string
 	By          string
 	ResolvesVia string
+	// RequireVerdicts checks stored text-bound verdicts in the move transaction.
+	RequireVerdicts bool
 	// Flags preserves explicit empty CLI arguments for flag-not-stored refusals.
 	Flags []string
 }

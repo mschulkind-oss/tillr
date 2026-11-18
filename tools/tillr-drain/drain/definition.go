@@ -21,7 +21,6 @@ const (
 // including its gate, conflict repair and retained-candidate checks. A prerequisite
 // entry additionally requires that check to be named by the definition.
 var landingHolds = map[string]string{
-	ReasonCandidateNoOp:       "",
 	ReasonBoundaryScopeEscape: "",
 	ReasonGateFailed:          "",
 	ReasonLandRefused:         "",
@@ -50,6 +49,7 @@ var landingHolds = map[string]string{
 // generalHolds covers execution, capacity, item readiness and optional design
 // checks. These are not landing-specific; the value names an optional prerequisite.
 var generalHolds = map[string]string{
+	ReasonCompleteItemFault: "", ReasonCriteriaUnjudged: "", ReasonCandidateNoOp: "",
 	ReasonBackendWindow: "", ReasonBlocked: "", ReasonNotReady: "",
 	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "",
 	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "",

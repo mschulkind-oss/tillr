@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -148,23 +149,43 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 	if work.Candidate != nil {
 		head = work.Candidate.HeadSHA
 	}
-	if head == "" {
+	if head == "" && !l.nonLanding {
 		head = l.headOf(ctx, d.LaneID)
 	}
 	// No spend is counted here. A run found terminal by the plan is a record an earlier
 	// loop left, and this pass judged nothing; a run found terminal during its settlement
 	// was already counted by that settlement.
-	var stop string
-	if found.Landed {
-		stop = l.abandon(ctx, d.LaneID, "", "")
+	if l.nonLanding {
+		// A hook move can outlive the supervisor before end-of-run records.
+		// Recover its spend without repeating the hook or touching Git.
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return err
+		}
+		var rec *run.Record
+		err = s.ReadTx(ctx, func(r *store.Reader) error { var err error; rec, err = terminalRecord(r, runID); return err })
+		s.Close()
+		if err != nil {
+			return err
+		}
+		if rec != nil {
+			if err := l.recordSettlementSpend(ctx, d.RunRequest.CorrelationID, work.LoopID, *rec); err != nil {
+				return err
+			}
+		}
 	} else {
-		stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
-	}
-	if stop != "" {
-		return Externalf("lane %s retained after preservation failed", d.LaneID)
-	}
-	if err := l.prunePreservedWork(ctx); err != nil {
-		return err
+		var stop string
+		if found.Landed {
+			stop = l.abandon(ctx, d.LaneID, "", "")
+		} else {
+			stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
+		}
+		if stop != "" {
+			return Externalf("lane %s retained after preservation failed", d.LaneID)
+		}
+		if err := l.prunePreservedWork(ctx); err != nil {
+			return err
+		}
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {

@@ -1424,6 +1424,29 @@ The [adapter README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-loo
 names the copy-regeneration command and the missing-field build-mismatch refusal.
 The repository checks the adapter invokes still come from the judged tree, not this copy.
 
+## Completion without landing
+
+For a definition with `completes: "hook"`, an ended run goes directly to
+`complete-item`. No candidate, boundary bracket, gate, lander, Git cleanup, or
+Git command is needed. The hook receives the item, run, store, and root and
+records criterion verdicts before answering. Its single JSON answer names a
+finished `state`, a nonblank `reason`, and an optional `resolves_via` pointer.
+
+The drain moves the item through the item state face with `--require-verdicts`,
+`--reason`, the optional `--resolves-via`, and `--by definition:<name>`. The item
+utility checks every criterion against a recorded verdict for its stored text
+in the move's own write transaction. Missing verdicts hold the item as
+`criteria-unjudged`; other invalid answers or hook errors hold it as
+`complete-item-fault`. The waiting face shows those faults. Exit 1 leaves the
+item unchanged under the existing `candidate-no-op` refusal rule.
+
+Startup checks the hook's description and the item state flags, including
+`--require-verdicts`. After a restart, an already finished item is the durable
+receipt: the drain writes missing end-of-run records without calling the hook
+again or entering Git. If the item is unfinished, completion starts again at
+the hook. The hook and item subprocesses run outside store transactions.
+Definitions completing on `landing` keep the Git-landing path.
+
 ## Step-program argument contract
 
 A store definition may instead name one hook program. Its selected steps supply
