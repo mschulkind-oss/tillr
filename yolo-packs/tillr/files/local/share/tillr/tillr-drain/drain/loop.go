@@ -2641,21 +2641,18 @@ func (l *Loop) laneFile(lane, name string) string {
 	return strings.TrimSpace(string(body))
 }
 
-// stageLanes creates every lane worktree the loop was given, checked out at the trunk. It
-// runs once, before the first tick, because a bracket names its sibling lanes and a lane
-// that is not a registered worktree cannot be watched.
+// stageLanes creates the available lane worktrees before the first tick. A branch held
+// elsewhere leaves its lane out of rotation, not the whole loop; no available lane is
+// still a startup refusal.
 func (l *Loop) stageLanes(ctx context.Context) error {
+	if err := l.recheckLanes(ctx); err != nil {
+		return err
+	}
+	var held []string
 	for _, lane := range l.cfg.Lanes {
 		path := l.lanePath(lane)
 		if err := os.MkdirAll(l.laneDirPath(lane), 0o755); err != nil {
 			return Externalf("creating the lane directory %s: %v", l.laneDirPath(lane), err)
-		}
-		if _, err := os.Stat(path); err == nil {
-			// The worktree is the stager's to reuse or refuse: it resets one that holds
-			// nothing nobody landed and refuses one that does. Creating it here is only
-			// what a bracket needs, since a lane that is not a registered worktree cannot
-			// be watched.
-			continue
 		}
 		// A lane directory that was deleted leaves its registration behind, and that
 		// registration is what makes `worktree add` refuse the branch the lane is on — the
@@ -2677,14 +2674,46 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 			return err
 		}
 		if holder != "" {
-			return refuseBranchHeld(lane, l.cfg.LaneRoot, branch, holder)
+			refusal := asLaneRefusal(refuseBranchHeld(lane, l.cfg.LaneRoot, branch, holder))
+			if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
+				return err
+			}
+			held = append(held, refusal.Msg)
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			// An existing path can be detached or on a different branch, so check
+			// for holders before leaving it to the stager to reuse or refuse.
+			continue
+		}
+		// Removing a holder frees its branch, not the work committed on it.
+		// Startup must protect that work just as dispatch staging does, before
+		// recreating a missing worktree resets the branch to trunk.
+		base, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		if err != nil {
+			return err
+		}
+		stager := &LaneStager{Root: l.cfg.Root, LaneRoot: l.cfg.LaneRoot, Store: l.cfg.Store, Now: l.cfg.Now}
+		if err := stager.refuseUnlandedCommit(ctx, StageSpec{LaneID: lane, BaseSHA: base}, path); err != nil {
+			refusal := asLaneRefusal(err)
+			if refusal == nil {
+				return err
+			}
+			if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
+				return err
+			}
+			held = append(held, refusal.Msg)
+			continue
 		}
 		if err := withWorktreeRegistryLock(ctx, l.cfg.Root, func() error {
-			_, err := l.git(ctx, l.cfg.Root, "worktree", "add", "--force", "-B", branch, path, TrunkRef)
+			_, err := l.git(ctx, l.cfg.Root, "worktree", "add", "--force", "-B", branch, path, base)
 			return err
 		}); err != nil {
 			return err
 		}
+	}
+	if len(held) == len(l.cfg.Lanes) {
+		return Externalf("no lane is available at loop start: %s", strings.Join(held, "\n"))
 	}
 	return nil
 }

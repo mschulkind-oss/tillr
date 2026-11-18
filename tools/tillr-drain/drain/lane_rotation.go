@@ -240,8 +240,9 @@ func (l *Loop) loadLaneConditions(ctx context.Context) error {
 	})
 }
 
-// laneFingerprint is what a re-check compares: the lane worktree's HEAD and status and the
-// lane branch. It reads with optional locks off, so a fingerprint never writes the index.
+// laneFingerprint is what a re-check compares: the lane worktree's HEAD and status,
+// lane branch, and any other worktree holding that branch. It reads with optional locks
+// off, so a fingerprint never writes the index.
 func (l *Loop) laneFingerprint(ctx context.Context, lane string) string {
 	read := func(dir string, args ...string) string {
 		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
@@ -253,10 +254,16 @@ func (l *Loop) laneFingerprint(ctx context.Context, lane string) string {
 		return strings.TrimSpace(string(out))
 	}
 	worktree := l.lanePath(lane)
+	branch := LaneBranch(l.cfg.LaneRoot, lane)
+	holder, err := branchHolder(ctx, l.cfg.Root, branch, worktree)
+	if err != nil {
+		holder = "error"
+	}
 	return strings.Join([]string{
 		read(worktree, "rev-parse", "HEAD"),
 		read(worktree, "status", "--porcelain"),
-		read(l.cfg.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+LaneBranch(l.cfg.LaneRoot, lane)),
+		read(l.cfg.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch),
+		holder,
 	}, "\x00")
 }
 

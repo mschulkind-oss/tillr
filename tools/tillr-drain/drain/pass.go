@@ -1643,6 +1643,14 @@ planned:
 		}
 	}
 	for _, lane := range l.cfg.Lanes {
+		// A refused lane may have no worktree here to snapshot, even after a
+		// re-check offers it again or changes the reason before recreating it.
+		// A holding worktree elsewhere is not a sibling this bracket watches.
+		if c := l.laneConditions[lane]; c != nil {
+			if _, err := os.Stat(l.lanePath(lane)); os.IsNotExist(err) {
+				continue
+			}
+		}
 		if !busy[lane] {
 			watched = append(watched, lane)
 		}
