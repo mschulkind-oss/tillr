@@ -1279,13 +1279,35 @@ missing rather than report that the change failed verification.
   message names both commits; moving the local branch while the record stays changes nothing;
   deleting the local branch changes nothing. Change any other case the same way when it fails
   for the same reason, and leave every case about publishing as it is.
+- **Gate runner tests (2026-11-18, answers the eighth run's report of blocked):** Two tests in
+  [the gate runner's needs test](../../tools/tillr-gate/needs_test.go) assert the old contract, so
+  that file and [the runner's README](../../tools/tillr-gate/README.md) are now inside this item's
+  paths. Change no other file under `tools/tillr-gate/`: the runner's handling of a `ref:` need
+  stays as it is, and the other tests in that file, which use `patch/*` names only as fixtures for
+  that handling, stay unchanged. Rewrite the two tests to assert c2 and c4; do not delete them.
+  - `TestPatchRefProgramJudgesPiBranchContents` builds a fixture repository that records a commit
+    and a fixture remote that holds it. The check judges the build script at the recorded commit.
+    Moving the local `patch/pi` branch changes no answer, and neither does deleting it. A record
+    whose commit the fixture remote lacks exits with the `could not judge` status and names the
+    commit and the remote.
+  - `TestFreshCloneStructuralWithoutPatchBranches` keeps its clone without patch branches and its
+    run of the structural suite. In place of eight `unavailable` outcomes it asserts that none of
+    the eight fork declarations names a `ref:refs/heads/patch/` need and that each one reads its
+    fork's record. It must not contact the network, so it does not run the eight checks against
+    the real remotes.
+  - In the README, the section on optional local refs keeps its description of `ref:` needs. Its
+    last paragraph, which says the eight declarations judge local branches, is rewritten to say
+    they judge the recorded commit.
+  - `tools/tillr-gate/` is also delivered as a copy under `yolo-packs/tillr/`. Run
+    `just pack-sync` after editing and commit the regenerated copy in the same commit; do not
+    edit the copy by hand.
 - **Verify:** Use [fork-check tests](../../tests/fork-check.test.py) and
   [fork export tests](../../tests/pi-forks.test.sh) to check that exporting updates the recorded
   commit, deleting all local `patch/*` branches changes no result, and empty, current, and
   stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
   that a fetch refusal names the missing commit and remote and returns `could not judge`.
 
-<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,bin/pi-forks.list,tests/pi-forks.test.sh,tests/pi-forks/,tests/pi-patch-series.test.sh,yolo-packs/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,bin/pi-forks.list,tests/pi-forks.test.sh,tests/pi-forks/,tests/pi-patch-series.test.sh,tools/tillr-gate/needs_test.go,tools/tillr-gate/README.md,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change. The record is the input a check reads; publishing a branch is not changed.
 - **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
