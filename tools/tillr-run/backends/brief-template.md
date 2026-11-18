@@ -2,8 +2,8 @@
 
 You are running unattended: nobody reads or answers your messages while you work. Your
 first message without a tool call ends the run and is read as your final report, so keep
-working with tools until the goal in **Report shape** is met or a stop condition is
-confirmed.
+working with tools until the goal in **Report shape** is met or one of the obstacles it
+names holds.
 
 <!--
 The brief a lane receives, from design §3 of docs/design/tillr-muse-backend.md.
@@ -66,7 +66,9 @@ The change must not include:
 
 {{OUT_OF_FENCE_PATHS}}
 
-**Outside the fence means stop and report.** Running commands is not touching the fence:
+**A change outside the fence is an obstacle, not a choice.** When the work needs a path
+outside it, name the `fence` obstacle (see **Report shape**) instead of editing the path.
+Running commands is not touching the fence:
 tests, builds, formatters and linters run freely inside the target, and only the paths
 the resulting *change* includes are fenced.
 
@@ -94,8 +96,8 @@ measured on 2026-11-14, on the first item a real drain ever dispatched.
 
 {{SETTLED}}
 
-If this brief is wrong about the tree, stop and report the conflict; do not invent a
-mechanism.
+If this brief is wrong about the tree, name the `definition` obstacle with the evidence;
+do not invent a mechanism.
 
 ## Facts carried
 
@@ -152,47 +154,58 @@ not permission to run the landing gate (`just done`).
 
 The goal of this run is one commit in the target that meets the criteria above (in the
 main-checkout form, the finished change, left uncommitted). Do not end your turn until
-that commit exists and its verification has run, or until a stop condition below is
-confirmed. Ending without the commit and without a named stop condition is not a valid
-ending: there is nobody to hand the work back to.
+that commit exists and its verification has run. Nobody reads a report in the meantime,
+so a report that says the work is unfinished is not an ending: there is nobody to hand the
+work back to.
+
+The only other ending is an **obstacle**: a fact this run cannot change, of one of the
+kinds below, together with what it needs. Each kind leads to a different action, so name
+the one that holds:
+
+| `OBSTACLE:` | When | Required lines | What happens next |
+|---|---|---|---|
+| `definition` | The item's own words are wrong or contradict the tree | `CRITERIA:` the criteria affected; `EVIDENCE:` the contradiction, quoted | The design seat amends the item |
+| `fence` | The change needs paths outside the fence | `PATHS:` the paths; `EVIDENCE:` why each is needed | The design seat widens the fence or splits the item |
+| `trunk` | The base is red, and this change did not cause it | `CHECKS:` the failing gate check ids; `BASE:` the base sha | The loop replays those checks on the base; if they are red there, the item waits on the trunk's repair |
+| `tooling` | A tool or the harness is defective: a hung suite, a broken adapter, a missing binary | `COMMAND:` the command; `EVIDENCE:` its output; `PATHS:` the tool's paths | The loop files a defect item for the tool, and this item waits on it |
+| `seat` | You made the attempt, and it shows the task exceeds what this model can do | `TRIED:` the change you made and what its tests showed; `MISSING:` what you could not do | The item moves to a stronger model, or to the design seat for a plan |
+| `owner` | A decision only the owner can make | `QUESTION:` the question | The design seat answers it from the documents, or asks the owner |
+
+These are not obstacles, and are work to continue: a patch that does not apply cleanly, a
+merge conflict, a test inside the fence that fails, a suite that takes long, and work not
+yet done. An obstacle the loop cannot confirm (a `trunk` claim the base replay does not
+reproduce, for instance) comes back to this run with what the loop found.
 
 Your final message contains, in this order:
 
 1. paths changed;
 2. each verification command with its output;
-3. anything attempted outside the fence;
-4. blockers.
+3. for an obstacle, its `OBSTACLE:` line and its required lines, each on a line of its own.
 
 Its last line is exactly one of:
 
     RESULT: done
     RESULT: blocked
-    RESULT: failed
-    RESULT: trunk-broken
 
-Nothing after it. The extractor refuses a report without that footer, whatever your
-exit code was, so a run that ends without one is recorded as incomplete.
+Nothing after it. `RESULT: done` means the commit exists. `RESULT: blocked` means an
+obstacle is named above it with every required line. Any other last line, or a blocked
+report without a complete obstacle, is a missing output and comes back to this run.
 
-`RESULT: done` means the commit exists. `RESULT: blocked` names the stop condition below
-that holds and its evidence. `RESULT: failed` names the command whose failure you could
-not repair, with its output. Unfinished work is not a failure, and neither is a patch
-that does not apply cleanly or a test you have not yet made pass: those are work to
-continue.
+For example:
 
-`RESULT: trunk-broken` is not a synonym for `failed`. Use it only when you believe the
-base you were staged from is itself red — the failure is in the trunk, not in the change
-you were asked to make — and name the failing checks and the base sha in the body. It is a
-suspect, not a conviction: the driver replays those checks on the base before anything is
-recorded against the candidate, and a failure that is red on the base acquits the item and
-files a fixer for the trunk. A claim the replay does not reproduce stays the candidate's
-problem, so name what you saw rather than guessing.
+    OBSTACLE: fence
+    PATHS: tools/tillr-view/waiting.go
+    EVIDENCE: the criterion asks the view to show the new hold, and the view is outside the fence
+    RESULT: blocked
 
 ## Stop conditions
 
-Stop and report when:
+There is no stop other than the commit and the obstacles in **Report shape**. The
+situations that used to end a run here are each one of those kinds:
 
-- a named file is dirty with someone else's work;
-- a named symbol is gone;
-- the fix needs a file outside the fence;
-- a verification command fails outside this task's scope;
-- in the main-checkout form, the checkout's status moves for reasons that are not yours.
+- a named file is dirty with someone else's work, or, in the main-checkout form, the
+  checkout's status moves for reasons that are not yours: `tooling`;
+- a named symbol is gone, or the brief is otherwise wrong about the tree: `definition`;
+- the fix needs a file outside the fence: `fence`;
+- a verification command fails outside this task's scope: `trunk` when the same check is
+  red on the base, else `tooling` when the tool itself is broken.

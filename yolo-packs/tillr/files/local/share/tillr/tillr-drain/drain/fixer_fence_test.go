@@ -242,7 +242,7 @@ func TestFixerAttachesThreeTipsAndEscalatesFenceReport(t *testing.T) {
 		return err
 	})
 	d := Decision{ItemID: first, RunRequest: &run.Request{RunID: "fixer-run"}}
-	// The fixer reaches the owner only by naming him (blocked.go, FixerNextActorRule).
+	// The fixer reaches the owner only by naming him (blocked.go, GeneratedRepairRule).
 	report := "Fix needs `tests/outside_test.go`, outside the fence.\nNEXT-ACTOR: owner\nRESULT: blocked"
 	if err := l.reportedBlock(context.Background(), d, report); err != nil {
 		t.Fatal(err)

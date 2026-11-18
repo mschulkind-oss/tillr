@@ -61,8 +61,11 @@ type Policy struct {
 	// Overrides routes one named item to another backend for its first dispatch. It is the
 	// specific statement next to Seats' general one, so it outranks the seat: an item that
 	// needs one particular harness for one dispatch says so by id without moving the role.
-	Overrides map[string]string  `json:"overrides,omitempty"`
-	Backends  map[string]Backend `json:"backends"`
+	Overrides map[string]string `json:"overrides,omitempty"`
+	// Escalate lists, per seat, the backends a seat obstacle climbs through
+	// (seat_escalation.go). Past its end the design seat plans or splits the item.
+	Escalate map[string][]string `json:"escalate,omitempty"`
+	Backends map[string]Backend  `json:"backends"`
 }
 
 // UnmarshalJSON reads a policy document whose `seats` values may each be a backend name or
@@ -317,6 +320,9 @@ func (p Policy) Check() error {
 			}
 			seen[name] = true
 		}
+	}
+	if err := p.checkEscalate(); err != nil {
+		return Usagef("%v", err)
 	}
 	return nil
 }

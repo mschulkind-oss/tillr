@@ -162,7 +162,7 @@ func settleBlocked(t *testing.T, f refusalLoopFixture, l *Loop, d Decision, base
 	t.Helper()
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: run.EndNormalExit, ArtifactRefs: []run.ArtifactRef{}}
 	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
-	outcome := l.settle(context.Background(), d, rec, "My item block is missing from the staged base.\n"+ReportFooter+" blocked\n", base, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
+	outcome := l.settle(context.Background(), d, rec, "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: My item block is missing from the staged base.\n"+ReportFooter+" blocked\n", base, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
 	if outcome.err != nil || outcome.stop != "" {
 		t.Fatalf("settle: %+v", outcome)
 	}

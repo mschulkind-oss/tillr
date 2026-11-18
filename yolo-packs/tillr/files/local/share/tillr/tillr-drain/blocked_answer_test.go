@@ -25,7 +25,7 @@ func TestAnIdenticalRepeatDesignAmendmentDispatchesOriginalSeat(t *testing.T) {
 }
 
 func testDesignAmendment(t *testing.T, repeat bool) {
-	failure := "Conflict: c1 contradicts the API\nRESULT: blocked\n"
+	failure := "Conflict: c1 contradicts the API\nOBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the API\nRESULT: blocked\n"
 	if repeat {
 		failure = "c1 impossible contract failed\nRESULT: failed\n"
 	}

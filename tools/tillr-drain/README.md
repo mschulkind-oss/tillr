@@ -786,10 +786,12 @@ attribution failure: it files nothing, and the next run judges again.
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
 second repair. The red-cap hold finds an attached fixer by the checks its criterion
 names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
-clearing an existing owner hold. A blocked fixer reaches the owner only by an objection
-naming him: a report line `NEXT-ACTOR: owner`, with what only the owner can decide or
-grant in the report — a worker whose fix needs paths outside its fence names those paths
-there. A blocked report naming no actor (or `NEXT-ACTOR: build`) is answered back to the
+clearing an existing owner hold. A blocked fixer reaches the owner only by a complete
+obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
+a `fence`, `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
+loop writes from it, because a generated item has no design block to amend. For `fence`,
+the question names the paths and asks whether the fixer's `allowed_paths` may grow. A legacy
+`NEXT-ACTOR: owner` line is still read. Any other blocked report is answered back to the
 fixer's own worker, whose brief states this rule; it never reaches the owner by default.
 
 A green proof releases the trunk whatever the fixer's own state. A green run records
@@ -965,6 +967,43 @@ no timeout. A proven-gone loop's run with no writer is reclaimed like a local on
 next pass. A claim without that evidence, including any whose files cannot be judged,
 remains protected. A normal offline finish is still judged;
 a worker signal without evidence of supervisor interruption is not exempted.
+
+### A worker ends with its commit or a named obstacle
+
+The owner ruled on 2026-11-18 that a worker gets no sanctioned way to end without
+delivering (`D-JL11` in
+[the judge and lifecycle design](../../docs/design/tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)).
+A single-worker build run has two endings: its commit, or `RESULT: blocked` with a line
+`OBSTACLE: <kind>` and the kind's required fields. The kinds route as follows:
+
+- `definition` (`CRITERIA`, `EVIDENCE`): a design-seat conflict.
+- `fence` (`PATHS`, `EVIDENCE`): a design-seat conflict told to widen the block's paths or
+  split the item.
+- `owner` (`QUESTION`): a design-seat conflict carrying the question. The design seat
+  answers from the documents or objects `NEXT-ACTOR: owner`.
+- `trunk` (`CHECKS`, `BASE`): a replay of the named checks on the run's base. When every
+  one is red there, the trunk fixer is filed and the item waits on it, as a red gate's
+  acquittal does. Otherwise the run is returned with what the replay found.
+- `tooling` (`COMMAND`, `EVIDENCE`, `PATHS`): a defect item, `defect-<digest of the
+  command>`, ranked with fixers. The item is held `tooling-defect` behind it and released
+  when the defect item lands in the selected base, or when someone closes it. A second
+  report of the same command attaches to the same defect item.
+- `seat` (`TRIED`, `MISSING`, and an attempt in the worktree: a commit or an uncommitted
+  change; a seat obstacle on an unchanged tree is a missing output): a `drain.seat-escalated`
+  event moving the item to the next
+  backend on the policy's `escalate` list for its seat. Every later run of the item uses
+  that backend, starting fresh because the seat changed. Past the list's end, a design-seat
+  conflict asks for a plan or a split.
+
+`RESULT: failed`, a blocked report without a complete obstacle, and a report with no
+footer are a missing output. With no commit, the run is refused as `no-op`, with the
+missing part and the two endings in its detail. It goes back to its worker by the rule
+below, and an identical repeat goes to the design seat. The code is
+[`drain/obstacle.go`](./drain/obstacle.go) and
+[`drain/obstacle_route.go`](./drain/obstacle_route.go), with tests in
+[`drain/obstacle_test.go`](./drain/obstacle_test.go) and
+[`drain/obstacle_route_test.go`](./drain/obstacle_route_test.go). Workflow nodes still
+send any blocked report to the design seat.
 
 ### A refused run goes back to its worker
 

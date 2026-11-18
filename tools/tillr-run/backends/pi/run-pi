@@ -172,6 +172,32 @@ if [ -n "$goal_base" ]; then
     TILLR_GOAL_BASE=$goal_base
     export TILLR_GOAL_BASE
     set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/keep-going.ts"
+    # The writer's session carries what its work uses and nothing an interactive session
+    # adds. Discovery is off, so no installed package loads by itself: no memory
+    # injection, no web, session-search, todo or code-mode tools and no session recap;
+    # no skills index; and no context-file discovery, so no house briefing written for an
+    # interactive agent. The target's own AGENTS.md is appended instead, because the gate
+    # enforces it. Two packages a worker uses are loaded by name when installed:
+    # sub-agents and background tasks. Every single-file extension in the agent's own
+    # extensions directory is loaded back too, because that is where the provider,
+    # billing tier, usage-ledger and quota plumbing lives (yolo-*, bedrock-*,
+    # usage-capture, quota-resume), and a worker that skipped it would bill and fail
+    # differently from every other session. The one left out is steering-timer, whose
+    # tools are an interactive owner's. Measured 2026-11-18 on one first turn: 23354
+    # prompt tokens before, 9350 after.
+    agent_dir=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
+    set -- "$@" --no-extensions --no-skills --no-context-files --no-prompt-templates
+    for extension in "$agent_dir"/extensions/*.ts "$agent_dir"/extensions/*.js; do
+        case ${extension##*/} in steering-timer.ts) continue ;; esac
+        [ -f "$extension" ] && set -- "$@" -e "$extension"
+    done
+    for package in pi-subagents pi-background-tasks; do
+        [ -d "$agent_dir/yolo-patched/$package" ] && set -- "$@" -e "$agent_dir/yolo-patched/$package"
+    done
+    # The target's own copy, which is the lane's tree, not the trunk's.
+    if [ -r AGENTS.md ]; then
+        set -- "$@" --append-system-prompt "$(pwd -P)/AGENTS.md"
+    fi
 else
     unset TILLR_GOAL_BASE
 fi

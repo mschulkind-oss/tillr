@@ -36,10 +36,10 @@ func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[s
 	}
 	if report.DocumentFed {
 		for _, id := range report.UnsharedOpenIDs {
-			// A trunk fixer is filed by the loop, not requested by anyone: its brief is
+			// A trunk fixer or a tooling-defect item is filed by the loop, not requested by anyone: its brief is
 			// its criteria, and it has no document to declare it in. Triage would send it
 			// to the owner for a document it can never have.
-			if IsTrunkFixer(id) {
+			if IsGeneratedRepair(id) {
 				continue
 			}
 			missing[id] = true

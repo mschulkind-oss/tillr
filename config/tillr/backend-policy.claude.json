@@ -12,6 +12,7 @@
     "review": ["claude", "pi"],
     "scout": ["claude", "pi"]
   },
+  "escalate": {"build": ["claude"]},
   "backends": {
     "claude": {
       "adapter": "tools/tillr-run/backends/claude/run-claude",

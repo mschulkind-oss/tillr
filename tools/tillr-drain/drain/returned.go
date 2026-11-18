@@ -201,7 +201,7 @@ func returnedBrief(e ReturnedEnding) string {
 		}
 	}
 	fmt.Fprintf(&b, "\nThe previous run's committed head, when it committed, is pinned at `refs/tillr/runs/%s`, and uncommitted work it left is kept at `%s%s`. Read them with `git show` or `git diff`, and reuse what is sound; do not move either ref. Commit your own work on this lane as usual.\n", e.RunID, preservedPrefix, e.RunID)
-	b.WriteString("\nIf the item cannot be done as written, end your report with `RESULT: blocked` and say why; it goes to the design seat.\n")
+	b.WriteString("\n" + ObstacleContract + "\n")
 	return b.String()
 }
 
@@ -212,6 +212,9 @@ func returnedBrief(e ReturnedEnding) string {
 // escape and a refused landing by the refusal's own words. Evidence that cannot be read
 // leaves the key built from what could be, never a guess.
 func (l *Loop) endingEvidence(ctx context.Context, c Candidate, step string) ([]EndingCheck, string) {
+	if c.EvidenceKey != "" {
+		return nil, c.EvidenceKey
+	}
 	switch step {
 	case RefusalGate:
 		checks := gateFailingChecks(RunDir(l.cfg.Root, c.RunID), c.RunID)

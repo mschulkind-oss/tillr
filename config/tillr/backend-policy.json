@@ -11,6 +11,7 @@
     "review": "pi",
     "scout": "pi"
   },
+  "escalate": {"build": ["pi"]},
   "backends": {
     "muse": {
       "adapter": "tools/tillr-run/backends/muse/run-muse",

@@ -47,7 +47,7 @@ func routeLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, stage dra
 // The design run objects naming the owner, which is the only way a design conflict
 // reaches the owner (the owner's ruling of 2026-11-17).
 func TestBlockedReportRoutesOnceToDesignThenOwner(t *testing.T) {
-	f := blockedRouteFixture(t, counting+"printf 'Conflict: c1 contradicts the API\nRESULT: blocked\n'", counting+"printf 'Conflict: c1 requires an owner ruling\nNEXT-ACTOR: owner\nRESULT: blocked\n'")
+	f := blockedRouteFixture(t, counting+"printf 'Conflict: c1 contradicts the API\nOBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the API\nRESULT: blocked\n'", counting+"printf 'Conflict: c1 requires an owner ruling\nNEXT-ACTOR: owner\nRESULT: blocked\n'")
 	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt", "docs/work.md"}}}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	// The route is two runs. A third staging means the loop is spinning on the design seat,
@@ -117,7 +117,7 @@ func TestWorkerCannotEditItsOwnBlockBeforeGate(t *testing.T) {
 git add docs/work.md
 git -c user.name=stub -c user.email=stub@example.invalid commit -qm rewrite
 printf 'RESULT: done\n'
-`, counting+"printf 'RESULT: blocked\n'")
+`, counting+"printf 'OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the API\nRESULT: blocked\n'")
 	stage := passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt", "docs/work.md"}}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	var report strings.Builder

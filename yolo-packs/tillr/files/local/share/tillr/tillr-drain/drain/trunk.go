@@ -506,7 +506,8 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 	}
 	for _, check := range gate.FailingChecks {
 		if !redSet[check] {
-			return "", nil, false, nil
+			// The red subset is still answered, so a caller can say what the replay saw.
+			return "", out.Red, false, nil
 		}
 	}
 	return base, out.Red, true, nil
@@ -520,6 +521,12 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate Candidate, g
 	if err != nil || !ok {
 		return false, err
 	}
+	return true, l.acquitRed(ctx, candidate, gate, redSHA, redChecks, result)
+}
+
+// acquitRed records a replay's red base against a candidate: the fixer filed or attached,
+// the trunk refusal recorded, and the item held blocked behind the fixer.
+func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutcome, redSHA string, redChecks []string, result *LoopResult) error {
 	// The candidate's diff starts at its red base; it cannot name the earlier
 	// commits that broke that base. Include the whole range since proved green.
 	var green string
@@ -527,32 +534,32 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate Candidate, g
 		var err error
 		green, err = heavyGreen(ctx, l.cfg.Root)
 		if err != nil {
-			return false, err
+			return err
 		}
 	} else {
 		state, err := l.loadRollingState(ctx)
 		if err != nil {
-			return false, err
+			return err
 		}
 		green = state.WatermarkSHA
 	}
 	gate.SuspectPaths = append(gate.SuspectPaths, l.rangePaths(ctx, green, redSHA)...)
 	fixerID, err := l.fileTrunkFixer(ctx, redSHA, redChecks, gate)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err := l.recordTrunkRefusal(ctx, candidate, redSHA, redChecks, fixerID); err != nil {
-		return false, err
+		return err
 	}
 	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + fixerID, Reason: "trunk-already-red: " + strings.Join(redChecks, ", ")}); err != nil {
-		return false, err
+		return err
 	}
 	l.mu.Lock()
 	result.TrunkAcquitted++
 	l.mu.Unlock()
 	l.reportf("loop: %s acquitted as trunk-already-red: %s is red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
-	return true, nil
+	return nil
 }
 
 // recordTrunkRefusal appends the `drain.refusal` that names the red sha and the failing

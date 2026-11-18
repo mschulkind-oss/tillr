@@ -1103,14 +1103,17 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	requestCriteria := criteria
 	task := taskSection(recorded)
 	facts := "None carried: staging read no code facts for this item, so nothing here is evidence about the tree. Read the fence's paths yourself before editing."
-	settled := "None recorded: this item names no settled decision, so this brief settles nothing. Where this brief is wrong about the tree, stop and report the conflict instead of inventing a mechanism."
+	settled := "None recorded: this item names no settled decision, so this brief settles nothing. Where this brief is wrong about the tree, name the `definition` obstacle with its evidence instead of inventing a mechanism."
 	if spec.Conflict != nil {
 		task = conflictTask(recorded, *spec.Conflict)
 		facts = conflictFacts(*spec.Conflict, durableDir)
 		settled = "This is the one conflict-fix run the item is allowed. The squash conflict is a fact about the moved trunk, not a verdict about the candidate, so do not redesign the item and do not treat the conflict as a failed attempt. Resolve the conflict and commit the resolution."
 	}
 	if IsTrunkFixer(recorded.ItemID) && spec.Conflict == nil {
-		settled = "This is a trunk fixer the loop filed for a red check: its criterion is the whole brief, and it has no design document. " + FixerNextActorRule
+		settled = "This is a trunk fixer the loop filed for a red check: its criterion is the whole brief. A `trunk` obstacle is not open to it, since repairing the trunk is its work. " + GeneratedRepairRule
+	}
+	if IsDefectItem(recorded.ItemID) && spec.Conflict == nil {
+		settled = "This is a tooling-defect item the loop filed for a tool another item's worker could not use: its criterion, with the evidence it quotes, is the whole brief. " + GeneratedRepairRule
 	}
 	if spec.BlockConflict != nil {
 		c := spec.BlockConflict

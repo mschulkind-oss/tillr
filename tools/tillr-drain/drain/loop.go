@@ -179,7 +179,11 @@ type Candidate struct {
 	EvaluatorInputs map[string]string `json:"-"`
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
-	RefusalDetail string         `json:"refusal_detail,omitempty"`
+	RefusalDetail string `json:"refusal_detail,omitempty"`
+	// EvidenceKey, when set, is the returned ending's evidence key in place of the one its
+	// step derives: a seat obstacle keys its return by the backend it leaves, so climbing
+	// to the next backend is never read as an identical repeat (seat_escalation.go).
+	EvidenceKey   string         `json:"-"`
 	BlockConflict *item.Conflict `json:"block_conflict,omitempty"`
 	ItemID        string         `json:"item_id"`
 	LaneID        string         `json:"lane_id"`
@@ -1689,7 +1693,30 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// person to decide, its criteria are left as they were, and nothing is judged.
 	// A design run that names its next actor is an objection whatever its footer, when it
 	// committed nothing: a commit is the answer, and goes to the gate (designObjection).
-	if footer := reportFooter(log); (request.Backend != "command" && footer == "blocked") || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
+	// A worker's run has two endings: the commit, or a complete obstacle (obstacle.go). A
+	// complete trunk, tooling or seat obstacle is acted on here; definition, fence and owner
+	// take the blocked route below. Any other ending is a missing output: with no commit it
+	// is returned to the same session saying what is missing, like a run that committed
+	// nothing, and a commit is a candidate like any other.
+	contract := workerContract(decision, request)
+	endingNote := ""
+	if contract {
+		if problem := workerEndingProblem(log); problem != "" {
+			endingNote = missingOutputDetail(problem)
+		} else if parseObstacle(log).Kind == ObstacleSeat && !l.laneAttempted(ctx, lane, mainSHA) {
+			endingNote = missingOutputDetail(SeatNeedsAttempt)
+		} else if footer := reportFooter(log); footer == "blocked" || footer == "trunk-broken" {
+			if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
+				return laneOutcome{err: err}
+			} else if stale {
+				return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked on a stale base")}
+			}
+			if outcome, handled := l.routeObstacle(ctx, decision, request, lane, tick, mainSHA, parseObstacle(log), result); handled {
+				return outcome
+			}
+		}
+	}
+	if footer := reportFooter(log); (request.Backend != "command" && (footer == "blocked" || (contract && footer == "trunk-broken")) && (!contract || endingNote == "")) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
 		// A report from a run staged on a base that lacked what made the item ready is
 		// about the staging, which neither the design seat nor the owner can change.
 		if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
@@ -1749,7 +1776,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				repeated = l.segmentRepeated(request.RunID, l.uncommittedEvidence(ctx, target))
 			}
 			if len(fenced) > 0 && !repeated {
-				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted fenced paths: " + strings.Join(fenced, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or commit outside the fence. If you cannot finish, report the blocker explicitly."
+				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted fenced paths: " + strings.Join(fenced, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or commit outside the fence. " + ObstacleContract
 				resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, request, worktree, record, tick, at, result, watched)
 				if err != nil || stop != "" {
 					return laneOutcome{err: err, stop: stop}
@@ -1796,8 +1823,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// keeps its criteria and stays in the queue.
 		l.reportf("loop: %s produced no commit: recording a refusal\n", request.ItemID)
 		candidate := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick, Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA}
+		candidate.RefusalDetail = endingNote
 		if len(paths) > 0 {
-			candidate.RefusalDetail = "No commit; uncommitted paths: " + strings.Join(paths, ", ")
+			if candidate.RefusalDetail != "" {
+				candidate.RefusalDetail += " "
+			}
+			candidate.RefusalDetail += "No commit; uncommitted paths: " + strings.Join(paths, ", ")
 			if repeated {
 				candidate.RefusalDetail += "; the last continuation of its session left this work exactly as the one before it did, and no commit was produced"
 			} else if record.Resumed {

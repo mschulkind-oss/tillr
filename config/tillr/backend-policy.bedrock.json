@@ -11,6 +11,7 @@
     "review": "pi",
     "scout": "pi-scout"
   },
+  "escalate": {"build": ["pi-build", "pi"]},
   "backends": {
     "pi": {
       "adapter": "tools/tillr-run/backends/pi/run-pi",

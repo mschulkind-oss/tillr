@@ -1176,7 +1176,7 @@ const noOpAdapter = counting + `printf 'RESULT: done\n'
 
 // blockedAdapter commits what it can and then answers `blocked`: the model's own statement
 // that the item cannot be done as written.
-const blockedAdapter = counting + committingAdapterBody + `printf 'RESULT: blocked\n'
+const blockedAdapter = counting + committingAdapterBody + `printf 'OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the tree\nRESULT: blocked\n'
 `
 
 // wallAdapter is a run a wall cut short: the adapter's own exit 124, which is the harness's
@@ -2038,7 +2038,7 @@ case "$TILLR_RUN_ID" in
     echo candidate > candidate.txt
     git add candidate.txt
     git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
-    printf 'RESULT: blocked\n'
+    printf 'OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the tree\nRESULT: blocked\n'
     ;;
   *item_043*)
     echo candidate > candidate.txt

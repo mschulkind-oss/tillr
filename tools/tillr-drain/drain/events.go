@@ -221,6 +221,9 @@ type refusalPayload struct {
 	RedSHA        string   `json:"red_sha,omitempty"`
 	FailingChecks []string `json:"failing_checks,omitempty"`
 	FixerItem     string   `json:"fixer_item,omitempty"`
+	// DefectItem is the tooling-defect refusal's own field: the generated item the run's
+	// tooling obstacle filed or attached to, which the item is now held behind.
+	DefectItem string `json:"defect_item,omitempty"`
 	// ConflictPaths and FixRunID are the squash-conflict refusal's own fields: the
 	// CONFLICT lines the lander recorded, and the one conflict-fix run staged to answer
 	// them. FixRunID is empty on the second conflict, which is the exhausted hold rather

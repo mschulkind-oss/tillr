@@ -71,3 +71,50 @@ func TestTrunkAcquittalWaitsUntilTheSelectedBaseContainsTheRepair(t *testing.T) 
 	}
 	t.Fatal("released item missing from plan")
 }
+
+// A tooling obstacle's wait holds the item, named for its defect item, until that item
+// lands in the base staging selects; then the item is released and dispatched fresh.
+func TestAToolingWaitHoldsUntilTheDefectItemLands(t *testing.T) {
+	ctx := context.Background()
+	defect := DefectItemID("go test ./...")
+	f, l := passFixture(t, "waiting", defect)
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, base)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.SetState(ctx, tx, "waiting", StateBlocked, l.cfg.Now(), item.WaitingOn{
+			Waiter: "item:" + defect, Reason: RefusalToolingDefect + ": go test ./...",
+		})
+		return err
+	})
+	held := func() Decision {
+		t.Helper()
+		for _, plan := range mustPlan(t, l) {
+			if plan.decision.ItemID == "waiting" {
+				return plan.decision
+			}
+		}
+		t.Fatal("the waiting item is missing from the plan")
+		return Decision{}
+	}
+	if err := l.releaseTrunkAcquittals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := held(); d.Action != ActionHold || d.Reason != ReasonToolingDefect || d.DeferredBy != defect {
+		t.Fatalf("an open defect item did not hold its waiter: %+v", d)
+	}
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "defect repaired")
+	repaired := runGit(t, f.root, "rev-parse", TrunkRef)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, defect); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, defect, "fixture-run", repaired, 1)
+	})
+	runGit(t, f.root, "update-ref", GreenRef, repaired)
+	if err := l.releaseTrunkAcquittals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := held(); d.Action != ActionDispatch {
+		t.Fatalf("the repaired tooling still holds its waiter: %+v", d)
+	}
+}
