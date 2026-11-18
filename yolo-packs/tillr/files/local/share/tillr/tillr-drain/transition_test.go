@@ -126,18 +126,20 @@ func TestPlanTransitionPayloadCountsTerminalRuns(t *testing.T) {
 		runRecord("run-exhausted-first-f1", "item_exhausted", "lane-9", "second", run.StateExited, exitCode(2), ""),
 		runRecord("run-failover-first", "item_failover", "lane-8", "first", run.StateFailedToStart, nil, ""),
 		runRecord(retryRun, "item_retry", "lane-9", "first", run.StateFailedToStart, nil, ""),
+		// A run that ended normally on the second backend leaves it open.
+		runRecord("run-landed-second", "item_landed", "lane-7", "second", run.StateExited, exitCode(0), ""),
 	)
 	seedRetry(t, storePath, "item_retry", retryRun, "the owner", "the harness could not start", "2026-11-09T01:00:00Z")
-	decisions, payloads := transitionPlan(t, storePath, "2026-11-10T00:00:00Z", []string{"lane-1", "lane-2", "lane-3"}, 3, transitionPolicy())
+	decisions, payloads := transitionPlan(t, storePath, "2026-11-10T00:00:00Z", []string{"lane-1", "lane-2", "lane-3", "lane-4"}, 4, transitionPolicy())
 	want := map[string]struct {
 		action, from, to string
 		attempt          int
 	}{
 		"item_dispatch":  {drain.ActionDispatch, "queued", "running", 1},
-		"item_exhausted": {drain.ActionHold, "held", "", 3},
+		"item_exhausted": {drain.ActionDispatch, "queued", "running", 3},
 		"item_failover":  {drain.ActionDispatch, "queued", "running", 2},
 		"item_hold":      {drain.ActionHold, "held", "", 1},
-		"item_landed":    {drain.ActionHold, "landed", "", 1},
+		"item_landed":    {drain.ActionHold, "landed", "", 2},
 		"item_retry":     {drain.ActionRetry, "queued", "running", 2},
 	}
 	if len(decisions) != len(want) {

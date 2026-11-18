@@ -560,15 +560,8 @@ func TestACandidateFailureDoesNotStopTheLoopAndDoesNotFailOver(t *testing.T) {
 	}
 }
 
-// Consecutive infrastructure failures do not stop the loop: it works every item it can and
-// ends where the pile ends. Nothing about an item was learned from a run that ran nothing, so
-// each item is held as `run-infra-exhausted` and each attempt is reported with its reason.
-//
-// This case is the removed circuit breaker's rewrite. It used to stop with
-// `infra-circuit-breaker` at the third failure, which is a stop with work still queued; it
-// now pins that three failures buy three attempts and no stop, and that no backoff was
-// applied — a tick that dispatched a run always has work to be getting on with, so the wait
-// (which belongs to a tick that dispatched nothing) never rations it.
+// An infrastructure failure closes the shared backend. Other queued items wait
+// without redispatching to it; a recorded successful probe permits one new attempt.
 func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", failingAdapter))
 	fixtureAt(t, f.store,
@@ -591,24 +584,35 @@ func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
 		t.Fatalf("the loop stopped %q (%s), want %q: a fault is not a budget",
 			result.Stop, result.Detail, drain.StopQueueDrained)
 	}
-	if result.InfraFailures != 3 || result.Ticks != 6 {
-		t.Fatalf("the loop saw %d infrastructure failure(s) over %d tick(s), want 3 over 3",
+	if result.InfraFailures != 1 {
+		t.Fatalf("the loop saw %d infrastructure failure(s) over %d tick(s), want one before closure",
 			result.InfraFailures, result.Ticks)
 	}
-	if result.Rejected != 0 || result.Dispatched != 3 {
-		t.Fatalf("the loop dispatched %d and rejected %d, want 3 and 0: a failed harness is not a verdict",
+	if result.Rejected != 0 || result.Dispatched != 1 {
+		t.Fatalf("the loop dispatched %d and rejected %d, want 1 and 0: a failed harness is not a verdict",
 			result.Dispatched, result.Rejected)
 	}
 	if gates := lines(t, f.count); countMatching(gates, "gate --item") != 0 {
 		t.Fatalf("the loop gated a run that failed in the infrastructure class: %v", gates)
 	}
-	// One report line per failure, each naming the attempt, and no wait: every tick here had
-	// an item to dispatch, so there was nothing for a backoff to make visible.
-	if countMatching(strings.Split(report.String(), "\n"), "failed in the infrastructure class") != 3 {
+	if countMatching(strings.Split(report.String(), "\n"), "failed in the infrastructure class") != 1 {
 		t.Fatalf("the loop did not report one line per infrastructure failure: %s", report.String())
 	}
-	if strings.Contains(report.String(), "nothing dispatched; waiting ") {
-		t.Fatalf("the loop backed off while it had items it could dispatch: %s", report.String())
+	// Starting another loop and moving its clock cannot reopen the backend.
+	closed := f.newLoopWith(t, 1, f.steps(t, gate, land, verdict),
+		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
+	again, err := closed.Run(context.Background())
+	if err != nil || again.Dispatched != 0 {
+		t.Fatalf("closed backend retried: %+v / %v", again, err)
+	}
+	if err := drain.ProbeBackend(context.Background(), f.store, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := f.newLoopWith(t, 1, f.steps(t, gate, land, verdict),
+		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
+	afterProbe, err := reopened.Run(context.Background())
+	if err != nil || afterProbe.Dispatched != 1 {
+		t.Fatalf("reopened backend did not run once: %+v / %v", afterProbe, err)
 	}
 }
 

@@ -81,8 +81,11 @@ var Rules = map[string]Rule{
 	"fork-held":                    {"waits on work", "queue", "cause not recorded"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},
-	"run-infra-exhausted":          {"needs a cause", "lane", "cause not recorded"},
-	"harness-refused":              {"ready", "queue", "the next pass"},
+	"backend-closed":               {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
+	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},
+	// History only: an infrastructure failure now closes the backend, not the item.
+	"run-infra-exhausted": {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
+	"harness-refused":     {"ready", "queue", "the next pass"},
 	// A worker run's refused ending goes back to the item's worker with its evidence,
 	// uncounted (the owner's ruling of 2026-11-17).
 	"returned-with-evidence": {"ready", "queue", "the next pass"},

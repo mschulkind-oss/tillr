@@ -404,7 +404,8 @@ The command runs through `tillr run exec` in the item's existing worktree with
 backend `command`, no model route, no model spend, and no backend quota window.
 Exit 0 passes and exit 1 fails, irrespective of any report footer. Other exits,
 a program that cannot start, and an explicit `timeout_ms` wall hold the item as
-`run-infra-exhausted`, without backend failover. An omitted wall imposes none.
+`command-fault`, without backend failover. Repair the command process and
+explicitly retry the node. An omitted wall imposes none.
 A failed command follows a matching `when_outcome: fail` edge if one is ready;
 otherwise the item is held as `node-failed: <node>`, later nodes and the gate do
 not run, and the work is preserved for inspection.
@@ -1140,12 +1141,72 @@ counts them; the removed rule spent one fix run per candidate and then held the 
 returned at the next loop start. A conflict's evidence key (`conflictEndingKey` in
 [`drain/returned.go`](./drain/returned.go)) is its sorted conflicting paths and the digest
 of its normalized hunks, so the same conflict against another trunk sha repeats and a trunk
-that moved again inside the hunk does not. A workflow node's refusal keeps its node rule. Machinery failures keep the one failover and `run-infra-exhausted`: the owner ruled
-that each should move to the next open backend and wait when none is open, but the drain
-has no fact that says a backend is open again except a quota window, so a walk with no
-budget would re-dispatch a broken adapter at once and forever. That is the queue item
-`item-backend-open-is-a-fact` in
-[the tillr roadmap](../../docs/tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend).
+that moved again inside the hunk does not. A workflow node's refusal keeps its node rule.
+Machinery failures follow [recorded backend availability](#recorded-backend-availability),
+not a dispatch count.
+
+### Recorded backend availability
+
+An infrastructure failure means the harness could not produce a judgable answer:
+it failed to start, refused before running, or died without a report. The latest
+terminal run on a backend closes that backend only in this class. A later run
+ending in any other class reopens it. Three infrastructure endings are answered
+by another rule and do not close a backend: a run the loop interrupted itself
+(a stop, an orphaned run or a stale base), a refusal with a stated reset time
+(the quota window closes and reopens that backend), and a resumed session that
+is gone (a fresh session replaces it). The loop records the class once, from the
+terminal event and its pinned evidence, in `backend_outcomes` and a
+`drain.backend-outcome` event. It orders terminal events, not mutable run-row
+metadata: spend corrections do not count as new outcomes, and deleting or changing
+a report after classification cannot change availability. These facts include runs
+from other items and judge runs. A restart, policy edit, elapsed time, or successful
+quota reading is not evidence that a broken harness works again.
+
+The loop saves the class where it settles a run, and when a loop starts for
+endings that arrived while none was running. A reader that finds an ending with
+no saved class (`plan`, `why` or the view, before the next save) classifies it
+from the record and the log as they are, and does not save it. Once a class is
+saved it wins over the report.
+This migration does not require an operator to certify an outcome or run a probe.
+
+After a failure, dispatch walks the item's backends in order, wrapping at the end
+and skipping closed backends. A multi-backend seat stays within its own list;
+a single-backend seat keeps its existing fallback to the policy preference.
+When every allowed backend is unavailable, the item waits. An infrastructure hold
+is `backend-closed`, with the closed backend names in `deferred_by` and the mover
+shown by `why` and `waiting`: a successful explicit probe or a later run ending
+outside the infrastructure class. Quota holds remain independent; reopening the
+harness does not erase an unexpired quota refusal. No automatic probe or timer
+spends work on a closed backend. Legacy `max_failovers` policy keys are accepted
+but ignored; `run-infra-exhausted` is readable only as history.
+
+An operator can exercise the repaired backend with a smoke-check command and
+record the result:
+
+```bash
+tillr-drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smoke-check-command> <args>
+```
+
+Use a command that actually exercises that named backend's harness and route,
+not a quota query or a command that merely exits zero. Exit zero records a
+successful `drain.backend-probe` event and reopens the backend; every other exit
+records a failed probe and leaves it closed. Output is discarded to keep credentials
+out of recorded state. The probe does not dispatch an item or consume its criteria.
+Its cost is the command's cost: a harness/model smoke check can spend provider tokens
+and quota, while the event write itself spends no model tokens. It is explicit,
+never automatic. A retry the owner authorized is the only dispatch to a closed
+backend: it starts once on the item's own backend, reopens that backend if it
+ends in any other class, and leaves it closed if it fails in the infrastructure
+class again. A probe completed before a later failed run cannot reopen it.
+A report changed or deleted before the drain first reads the ended run can affect
+that first classification; capturing the class at run completion is outside this
+mechanism, and a successful probe or a later recorded run corrects availability.
+
+A workflow failure retains the same node, attempt, base, and completed siblings.
+Its ready continuation waits on the same backend facts, then walks the same order
+when a backend reopens rather than faulting the graph or restarting earlier nodes.
+The implementation lives in `readInfrastructureClosed`, `ProbeBackend`, and the
+workflow continuation planner in the drain package.
 
 ### Owner decisions in documents
 

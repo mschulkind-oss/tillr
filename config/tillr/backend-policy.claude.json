@@ -5,7 +5,6 @@
     "claude",
     "pi"
   ],
-  "max_failovers": 1,
   "seats": {
     "design": ["claude-designer", "pi-designer"],
     "build": ["claude", "pi"],

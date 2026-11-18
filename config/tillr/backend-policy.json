@@ -4,7 +4,6 @@
   "preference": [
     "pi"
   ],
-  "max_failovers": 1,
   "seats": {
     "design": "pi-designer",
     "build": "pi",

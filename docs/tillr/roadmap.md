@@ -4770,13 +4770,7 @@ The owner ruled on 2026-11-17 that a machinery failure is not counted. Each fail
   - Move each machinery failure to the next open backend, and hold the item waiting on the backend when none is open.
   - Remove the failover budget and the `run-infra-exhausted` hold, for single runs and for workflow nodes.
 
-<!-- tillr: item id="item-backend-open-is-a-fact" paths="tools/tillr-drain/,tools/tillr-view/,config/tillr/,tests/tillr-muse-backend.test.py,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A backend whose latest run failed in the infrastructure class is recorded as closed, and it reopens only on a recorded event: a probe of that backend that succeeds, or a run on it that ends in any other class. The README names the probe and what it costs. A test closes a backend with a failed run and reopens it with each of the two events.
-- **c2:** The planner walks an item's backends in order, wrapping at the end, skipping closed ones and leaving the item's seat list only as it does today. When every backend the item may use is closed, the item is held as waiting on the backend, and the hold names the backend and its reopening event. A test fails the only backend and asserts the item waits and the loop does not dispatch it again until the backend reopens.
-- **c3:** The policy's `max_failovers` is no longer read, and the four policies under `config/tillr/` drop it. A policy that still names it is accepted. `tests/tillr-muse-backend.test.py` asserts that the policies do not name it.
-- **c4:** A workflow node whose backend failed takes the same walk, and a node with no open backend waits rather than faulting into `run-infra-exhausted`. A test covers a node.
-- **c5:** The waiting view classifies the new hold with its mover, and the `run-infra-exhausted` rule stays only as history.
 
 **Build this item with the four steps below. Read this section first; it is the fifth ruling, of
 2026-11-18, and it answers the ninth run's conflict.** Everything in this block after "Agent

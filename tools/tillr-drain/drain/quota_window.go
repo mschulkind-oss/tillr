@@ -153,7 +153,7 @@ func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, er
 }
 
 // Skipping a shut backend walks the same seat order as failover, without starting
-// a run or spending an item's failover budget. Cycles cannot make a shut backend
+// a run. Cycles cannot make a shut backend
 // eligible when an override falls back to the preference head.
 func (p Policy) availableBackend(name, seat string, shut map[string]bool) (string, string, bool) {
 	seen := map[string]bool{}

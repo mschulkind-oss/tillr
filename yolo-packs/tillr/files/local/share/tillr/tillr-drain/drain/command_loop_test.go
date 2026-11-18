@@ -150,7 +150,7 @@ func TestCommandWorkflowOutcomesAndPreservation(t *testing.T) {
 				}
 				want := "node-failed: check"
 				if mode == "fault" || mode == "missing" || mode == "wall" {
-					want = ReasonInfraExhausted
+					want = ReasonCommandFault
 				}
 				if mode == "dirty" || mode == "escape-commit" {
 					want = ScopeEscape

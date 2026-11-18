@@ -473,8 +473,8 @@ def test_policy():
         "agy: an effort key, but its effort lives inside the model id and the "
         "adapter refuses --effort",
     )
-    # D-MM11: failover walks one ordered preference whose head is the default, bounded by
-    # max_failovers; a backend with an ordered model list starts at its own `model`.
+    # Failover walks an ordered preference, skipping backends closed by run facts.
+    # No policy carries the retired dispatch budget.
     preference = policy.get("preference", [])
     check(preference, "the policy names no failover preference")
     check(
@@ -485,10 +485,8 @@ def test_policy():
         all(name in backends for name in preference),
         f"the preference {preference} names a backend with no entry",
     )
-    check(
-        policy.get("max_failovers") == 1,
-        "max_failovers is not 1: an item could be dispatched past the one bounded failover",
-    )
+    for path in (ROOT / "config/tillr").glob("backend-policy*.json"):
+        check("max_failovers" not in json.loads(path.read_text()), f"{path.name}: retired max_failovers key")
     for name, entry in backends.items():
         if "models" in entry:
             check(
@@ -533,7 +531,7 @@ def test_claude_policy(policy):
     backends = policy["backends"]
     check(policy["default_backend"] == "claude", f"the Claude default is {policy['default_backend']!r}")
     check(policy.get("preference") == ["claude", "pi"], f"the Claude preference is {policy.get('preference')}")
-    check(policy.get("max_failovers") == 1, "the Claude policy's max_failovers is not 1")
+    check("max_failovers" not in policy, "the Claude policy names the retired max_failovers key")
     check(
         policy.get("seats") == {
             "design": ["claude-designer", "pi-designer"],

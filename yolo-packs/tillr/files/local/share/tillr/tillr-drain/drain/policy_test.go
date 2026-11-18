@@ -103,10 +103,6 @@ func TestPolicyCheckRefusesADocumentThatCannotBuildARequest(t *testing.T) {
 			mutate: func(p *Policy) { p.Preference = []string{"first", "first"} },
 			names:  "twice",
 		},
-		"negative failover budget": {
-			mutate: func(p *Policy) { n := -1; p.MaxFailovers = &n },
-			names:  "max_failovers",
-		},
 		"backend with no adapter": {
 			mutate: func(p *Policy) {
 				b := p.Backends["second"]
@@ -253,8 +249,8 @@ func TestSelectionFollowsOverrideThenPreference(t *testing.T) {
 	if got, degraded, ok := policy.nextBackend("first", ""); !ok || got != "second" || degraded != "" {
 		t.Fatalf("the failover after first is %q / %q / %v, want second with no seat", got, degraded, ok)
 	}
-	if got, _, ok := policy.nextBackend("second", ""); ok {
-		t.Fatalf("the failover after the last backend is %q, want no hop", got)
+	if got, _, ok := policy.nextBackend("second", ""); !ok || got != "first" {
+		t.Fatalf("the failover after the last backend is %q, want wrapped first", got)
 	}
 	if got, degraded, ok := policy.nextBackend("unlisted", ""); !ok || got != "first" || degraded != "" {
 		t.Fatalf("the failover after an unlisted backend is %q / %q / %v, want the preference head", got, degraded, ok)
@@ -287,17 +283,28 @@ func TestAFailoverOffTheSeatsBackendNamesTheSeat(t *testing.T) {
 	}
 }
 
-// A policy that names no failover budget carries the default, and a policy that names zero
-// walks nowhere: the budget is the policy's, not the code's.
-func TestFailoverBudgetComesFromThePolicy(t *testing.T) {
-	policy := twoBackends()
-	if got := policy.failovers(); got != DefaultMaxFailovers {
-		t.Fatalf("a policy naming no budget has %d failovers, want the default %d", got, DefaultMaxFailovers)
+// Legacy budgets are accepted but ignored, even when their old value was invalid.
+func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
+	raw, err := json.Marshal(twoBackends())
+	if err != nil {
+		t.Fatal(err)
 	}
-	none := 0
-	policy.MaxFailovers = &none
-	if got := policy.failovers(); got != 0 {
-		t.Fatalf("a policy naming zero failovers has %d", got)
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["max_failovers"] = -1
+	raw, _ = json.Marshal(doc)
+	var policy Policy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Check(); err != nil {
+		t.Fatal(err)
+	}
+	next, _, ok := policy.nextBackend("second", "")
+	if !ok || next != "first" {
+		t.Fatalf("legacy budget changed walk: %s %v", next, ok)
 	}
 }
 
@@ -424,13 +431,13 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 		ok                 bool
 	}{
 		{"the design list's next backend", "designer-a", "design", "designer-b", "", true},
-		{"the end of the design list", "designer-b", "design", "", "", false},
+		{"the end of the design list wraps", "designer-b", "design", "designer-a", "", true},
 		{"the build list's next backend", "builder-a", "build", "builder-b", "", true},
-		{"the end of the build list", "builder-b", "build", "", "", false},
+		{"the end of the build list wraps", "builder-b", "build", "builder-a", "", true},
 		{"a backend off the list starts at its head", "builder-b", "design", "designer-a", "", true},
 		{"a one-element seat walks the preference and names the seat", "builder-a", "review", "builder-b", "review", true},
 		{"no seat walks the preference", "builder-a", "", "builder-b", "", true},
-		{"no seat stops at the preference's end", "builder-b", "", "", "", false},
+		{"no seat wraps at the preference's end", "builder-b", "", "builder-a", "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -448,8 +455,8 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 	if !ok || request.Backend != "designer-b" || degraded != "" {
 		t.Fatalf("the loop's failover off designer-a is %+v / %q / %v, want designer-b, not degraded", request, degraded, ok)
 	}
-	if _, _, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); ok {
-		t.Fatalf("the loop's failover walked past the end of the design seat's list")
+	if req, _, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); !ok || req.Backend != "designer-a" {
+		t.Fatalf("the loop's failover did not wrap within the design seat's list")
 	}
 }
 

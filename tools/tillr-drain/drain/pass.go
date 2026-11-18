@@ -41,7 +41,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
+	for _, kind := range []string{backendProbeKind, backendOutcomeKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -432,17 +432,28 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	}
 	if work.Ready {
 		if len(d.Parallel) > 0 && d.WorkflowRestart {
-			for _, node := range parallelNodes(d) {
+			nodes := parallelNodes(d)
+			for i, node := range nodes {
 				rec, err := terminalRecord(r, node.RunRequest.RunID)
 				if err != nil {
 					return Decision{}, err
 				}
-				if rec == nil && !commandStage(node) && shut[node.RunRequest.Backend] {
+				if rec == nil && !commandStage(node) && node.NodeInfraFailures > 0 {
+					name, _, ok := policy.availableBackend(node.RunRequest.Backend, node.Seat, shut)
+					if ok {
+						nodes[i].RunRequest = rerouteNodeRequest(policy, node, name)
+					}
+				}
+				if rec == nil && !commandStage(node) && shut[nodes[i].RunRequest.Backend] {
+					d.Seat = node.Seat
+					d.DeferredBy = nodes[i].RunRequest.Backend
 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 					identifyDecision(&d)
 					return d, nil
 				}
 			}
+			d = nodes[0]
+			d.Parallel = nodes[1:]
 		}
 		if len(d.Parallel) > 0 {
 			open, err := dispatchQuotaOpen(r, d, shut, policy)
@@ -480,7 +491,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			name = d.RunRequest.Backend
 		}
 		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
-		if d.WorkflowRestart {
+		if d.WorkflowRestart && d.NodeInfraFailures == 0 {
 			name, degraded = d.RunRequest.Backend, ""
 			ok = !shut[name]
 		}
@@ -491,6 +502,9 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			if d.WorkflowRestart {
 				retained := *d.RunRequest
 				request = &retained
+				if name != retained.Backend {
+					request = rerouteNodeRequest(policy, d, name)
+				}
 			}
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
@@ -1055,7 +1069,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		}
 		d := p.decision
 		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
-			shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
+			shut, err := readDispatchShut(tx.Reader(), l.cfg.Now(), l.currentPolicy(), d)
 			if err != nil {
 				return err
 			}
@@ -1243,7 +1257,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := l.claimParallel(tx, &d); err != nil {
 				return err
 			}
-			shut, err := readQuotaShutBackends(tx.Reader(), at, l.currentPolicy())
+			shut, err := readDispatchShut(tx.Reader(), at, l.currentPolicy(), d)
 			if err != nil {
 				return err
 			}

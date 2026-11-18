@@ -202,7 +202,7 @@ func init() {
 	// the same statement. A store created before drain_passes or retries existed gains each
 	// on its next write-open, which is what the migration's CREATE TABLE IF NOT EXISTS is
 	// for.
-	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL+backendQuotaDDL); err != nil {
+	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+generationDDL+backendWindowDDL+backendQuotaDDL+backendOutcomesDDL); err != nil {
 		panic(err)
 	}
 	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER"} {

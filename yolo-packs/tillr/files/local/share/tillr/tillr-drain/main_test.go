@@ -1253,10 +1253,8 @@ func TestPlanDoesNotFailOverACandidateFailure(t *testing.T) {
 	}
 }
 
-// The budget: the policy says one failover, and a chain longer than that refuses rather
-// than walking. Two infrastructure failures in the item's history are one failover already
-// spent, so the item holds with the reason day-2's vocabulary names.
-func TestPlanHoldsWhenTheFailoverBudgetIsSpent(t *testing.T) {
+// Both backends have failed: no open backend exists until a recorded reopening.
+func TestPlanHoldsWhenEveryBackendIsClosed(t *testing.T) {
 	storePath := fixture(t,
 		itemRecord("item_042", "in-queue"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-8", "first", run.StateFailedToStart, nil, ""),
@@ -1265,17 +1263,16 @@ func TestPlanHoldsWhenTheFailoverBudgetIsSpent(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 1, nil))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonInfraExhausted {
-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonInfraExhausted)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed {
+		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonBackendClosed)
 	}
 	if got.RunRequest != nil {
-		t.Fatalf("a spent budget still dispatched to %q", got.RunRequest.Backend)
+		t.Fatalf("closed backends still dispatched to %q", got.RunRequest.Backend)
 	}
 }
 
-// The same chain with a budget of zero: the first infrastructure failure already exhausts
-// it, so the policy's number is what decides and not the code's.
-func TestPlanWalksNoFailoverWhenThePolicyBudgetIsZero(t *testing.T) {
+// A legacy zero budget cannot stop the walk to an open backend.
+func TestPlanIgnoresLegacyZeroFailoverBudget(t *testing.T) {
 	storePath := fixture(t,
 		itemRecord("item_042", "in-queue"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "first", run.StateFailedToStart, nil, ""),
@@ -1283,8 +1280,8 @@ func TestPlanWalksNoFailoverWhenThePolicyBudgetIsZero(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 0, nil))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonInfraExhausted {
-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonInfraExhausted)
+	if got.Action != drain.ActionDispatch || got.RunRequest == nil || got.RunRequest.Backend != "second" {
+		t.Fatalf("legacy zero budget changed routing: %+v", got)
 	}
 }
 

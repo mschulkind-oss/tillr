@@ -78,6 +78,10 @@ const (
 	// ReasonBackendWindow holds an item when every backend on its route has a
 	// reported spent window; the reset time releases it without an operator retry.
 	ReasonBackendWindow = "backend-window"
+	// ReasonBackendClosed waits for recorded evidence that the backend works again.
+	ReasonBackendClosed = "backend-closed"
+	// ReasonCommandFault is a command process failure, not an agent backend route.
+	ReasonCommandFault = "command-fault"
 	// ReasonReady is a dispatch's reason: the item is queued, unblocked, and a lane and
 	// a policy were available.
 	ReasonReady = "ready"
@@ -145,8 +149,9 @@ const (
 	// ruling's degraded mode is an allowed, stamped run: the floor may produce the document,
 	// and this is the stamp that keeps it from being read as a full seat's work.
 	ReasonSeatDegraded = "seat-degraded"
-	// ReasonInfraExhausted is a hold's reason: the item's failover chain has no hop left.
-	// Either the policy's max_failovers budget is spent or the preference has no backend
+	// ReasonInfraExhausted is retained for historical records only. New infrastructure
+	// holds use ReasonBackendClosed and wait for evidence, not a budget.
+	// Previously the preference had no backend
 	// after the one that failed, and a chain is refused rather than walked on past what
 	// the policy allows.
 	ReasonInfraExhausted = "run-infra-exhausted"

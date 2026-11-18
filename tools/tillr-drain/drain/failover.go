@@ -156,36 +156,31 @@ type priorRun struct {
 // store and what the store points at, and a log that is gone reads as "no report" rather
 // than as an error.
 func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
-	interrupted, restaged := map[string]bool{}, map[string]bool{}
-	events, err := r.Events(0)
+	interrupted, restaged, err := readInterruptedRuns(r)
 	if err != nil {
 		return nil, err
 	}
-	// An interruption describes the segment it ended. A later continuation of the
-	// same run (run.resume) is that run's new segment, and its outcome is judged.
-	for _, e := range events {
-		if e.ObjectID == nil {
-			continue
-		}
-		switch e.Kind {
-		case loopOrphanedKind:
-			interrupted[*e.ObjectID] = true
-		case staleBaseKind:
-			// A stale base is the staging's failure, not the item's: like a loop stop,
-			// it ends the attempt without an outcome to hold the item on.
-			interrupted[*e.ObjectID], restaged[*e.ObjectID] = true, true
-		case run.ResumeKind:
-			delete(interrupted, *e.ObjectID)
+	// Once the loop observes an ending, routing and availability share that
+	// saved class; a report edit cannot move the item to a different retry rule.
+	outcomes, err := readBackendOutcomes(r)
+	if err != nil {
+		return nil, err
+	}
+	classes := map[string]AttemptClass{}
+	for _, o := range outcomes {
+		if _, seen := classes[o.rec.RunID]; !seen && o.saved {
+			classes[o.rec.RunID] = o.class
 		}
 	}
-	// Timestamp ties follow recording order, not lexical run-id order (a10 sorts
-	// before a9). event_seq is the store event's sequence; SQLite's insertion row
-	// number, rowid, breaks ties for legacy rows with no event sequence.
+	// Endings define run order, not mutable row metadata: a usage correction
+	// can advance runs.event_seq without ending a run again. Legacy rows with
+	// no ending event retain their recorded sequence, timestamp, and row order.
 	rows, err := r.Query(
 		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs
 		   FROM runs WHERE item_id IS NOT NULL AND NOT EXISTS
               (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id)
-           ORDER BY item_id, started_at, event_seq, rowid`)
+           ORDER BY item_id, COALESCE((SELECT MAX(e.seq) FROM events e
+             WHERE e.kind='run.finish' AND e.object_id=runs.run_id), event_seq), started_at, rowid`)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -209,7 +204,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		if err := json.Unmarshal([]byte(artifactRefs), &refs); err != nil {
 			return nil, Internalf("reading the artifact refs of run %q: %v", rec.RunID, err)
 		}
-		class := ClassifyAttempt(rec, logTail(refs))
+		class := classes[rec.RunID]
+		if class == "" {
+			class = ClassifyAttempt(rec, logTail(refs))
+		}
 		if interrupted[rec.RunID] {
 			class = AttemptInterrupted
 		}
