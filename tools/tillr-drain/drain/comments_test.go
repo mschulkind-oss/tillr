@@ -186,6 +186,7 @@ func commentFixture(t *testing.T, mode string) (refusalLoopFixture, *Loop, *comm
 	stage := &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")}
 	steps := &commentSteps{t: t, f: f, mode: mode}
 	l := f.loop(t, steps, stage)
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/design/example.md","stage":"DESIGN","questions":[]}]}}'`}
 	l.cfg.Report = os.Stdout
 	l.cfg.Lanes = []string{"lane-1"}
 	l.cfg.Policy.Seats = map[string]string{"design": "fixture"}

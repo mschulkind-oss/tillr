@@ -3,8 +3,8 @@ package main
 import (
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // storeDomain is the store's own rows, read inside the same read transaction as the

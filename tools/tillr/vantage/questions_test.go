@@ -65,6 +65,21 @@ func TestVantageIndexAnswersPerDocument(t *testing.T) {
 	}
 }
 
+// The index's repository-relative keys also answer absolute references when the
+// caller uses a relative root, including the empty root's current-directory default.
+func TestVantageQuestionsResolvesAbsoluteDocumentAgainstRelativeRoot(t *testing.T) {
+	root := t.TempDir()
+	writeDocument(t, root, "docs/design/open.md")
+	t.Chdir(root)
+	index := ParseIndex([]byte(`{"index":{"documents":[{"path":"docs/design/open.md","questions":[{"id":"OQ-1","state":"open"}]}]}}`), "fixture")
+	for _, relativeRoot := range []string{"", ".", "docs/.."} {
+		answer, err := Preloaded(relativeRoot, index).Document(filepath.Join(root, "docs/design/open.md"))
+		if err != nil || !answer.Present || len(answer.Questions) != 1 || answer.Questions[0].ID != "OQ-1" {
+			t.Fatalf("root %q lost the absolute document's question: %+v / %v", relativeRoot, answer, err)
+		}
+	}
+}
+
 // FirstUnanswered reads only `answered` as settled: an open question, and a state this
 // version does not know, both hold the item.
 func TestFirstUnansweredTreatsEveryStateButAnsweredAsOpen(t *testing.T) {

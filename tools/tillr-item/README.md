@@ -304,6 +304,32 @@ stored item, in any state, has a document block. The drain uses this same compar
 for its [document-fed workflow prerequisite](../tillr-drain/README.md#document-fed-workflow-prerequisite);
 sync itself neither dispatches triage nor changes the queue’s readiness rules.
 
+## Showing a design's questions
+
+```sh
+tillr item show --store .tillr/state.db --item item-042 --root .
+tillr item show --store .tillr/state.db --item item-042 --root . --questions-cmd "my-index index --format json"
+```
+
+When an item names `design_doc`, `show` reads its unanswered questions through the
+shared Vantage index reader in [`tools/tillr/vantage`](../tillr/vantage/), the same
+reader the loop and view use. The default command is
+`uvx vantage-check index --format json`; `--questions-cmd` overrides it with a
+whitespace-separated command and arguments, just as in the loop. It runs at `--root`.
+Questions are read anew at show time and never stored.
+
+`questions_source` names the design document. `questions_status: "known"` means the
+index answered; each unanswered question carries `question_id`, `text` (the index's
+full title) and `state`. Only `answered` is settled: blocked and unfamiliar states
+remain in the list. A successful read with no unanswered questions is known, not
+unknown. With no design reference, all these question fields are omitted.
+
+If the command is missing, fails, or returns a refused or invalid index, `show`
+still prints the item with exit 0, `questions_status: "unknown"` and
+`questions_reason` explaining why. The omitted question list in that case does not
+mean there are none. A missing design document remains a `design-doc-missing`
+rejection, distinct from an index failure.
+
 ## Listing a store's items
 
 ```sh

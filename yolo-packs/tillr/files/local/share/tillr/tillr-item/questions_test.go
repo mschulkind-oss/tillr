@@ -10,9 +10,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// designDoc is the declaration form this lane reads: an open-questions section whose
-// items are bolded, linked, em-dash-led questions. The prose in §1 and the bullet in §3
-// are the negative controls the parser has to survive.
+// designDoc declares questions through Vantage directives. Plain ID mentions and
+// an undeclared bullet are negative controls: only the index declares questions.
 const designDoc = `---
 title: "fixture design"
 status: proposed
@@ -26,8 +25,18 @@ Prose that mentions OQ-9 in passing and must not be surfaced.
 
 ## 2. Open questions
 
-- **[` + "`OQ-1`" + `](#2-open-questions) — the first question.** Its body explains it.
-- **[` + "`OQ-2`" + `](#2-open-questions) — the second question.** Its body explains it.
+- 💬 **[` + "`OQ-1`" + `](#2-open-questions) — the first question.**
+
+  <!-- vantage: question id=OQ-1 -->
+
+  _Leaning:_ Not decided.
+
+- 💬 **[` + "`OQ-2`" + `](#2-open-questions) — the second question.**
+
+  <!-- vantage: question id=OQ-2 -->
+
+  _Leaning:_ Not decided.
+
 
 ## 3. A later section
 
@@ -42,9 +51,24 @@ const designDocEdited = `# Fixture design
 
 ## 2. Open questions
 
-- **[` + "`OQ-1`" + `](#2-open-questions) — the first question, reworded.** Its body explains it.
-- **[` + "`OQ-2`" + `](#2-open-questions) — the second question.** Its body explains it.
-- **[` + "`OQ-4`" + `](#2-open-questions) — a question added later.** Its body explains it.
+- 💬 **[` + "`OQ-1`" + `](#2-open-questions) — the first question, reworded.**
+
+  <!-- vantage: question id=OQ-1 -->
+
+  _Leaning:_ Not decided.
+
+- 💬 **[` + "`OQ-2`" + `](#2-open-questions) — the second question.**
+
+  <!-- vantage: question id=OQ-2 -->
+
+  _Leaning:_ Not decided.
+
+- 💬 **[` + "`OQ-4`" + `](#2-open-questions) — a question added later.**
+
+  <!-- vantage: question id=OQ-4 -->
+
+  _Leaning:_ Not decided.
+
 `
 
 // designDocWithoutQuestions declares no open questions: a finished design, not a broken
@@ -60,6 +84,10 @@ Nothing is open.
 func writeDoc(t *testing.T, name, body string) string {
 	t.Helper()
 	root := scratch(t, "docs")
+	// Pin the index's project root here rather than inheriting the enclosing repo.
+	if err := os.WriteFile(filepath.Join(root, ".vantage.toml"), []byte("[planning]\ninclude = [\"docs/**\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(root, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("creating the document directory failed: %v", err)
@@ -86,9 +114,12 @@ type questionOut struct {
 	Payload struct {
 		ItemID          string `json:"item_id"`
 		QuestionsSource string `json:"questions_source"`
+		QuestionsStatus string `json:"questions_status"`
+		QuestionsReason string `json:"questions_reason"`
 		Questions       []struct {
 			QuestionID string `json:"question_id"`
 			Text       string `json:"text"`
+			State      string `json:"state"`
 		} `json:"questions"`
 		Rule string `json:"rule"`
 	} `json:"payload"`
@@ -118,28 +149,35 @@ func TestShowSurfacesTheDesignDocsOpenQuestions(t *testing.T) {
 	if len(got.Payload.Questions) != 2 {
 		t.Fatalf("show surfaced %d questions, want 2", len(got.Payload.Questions))
 	}
-	if got.Payload.Questions[0].QuestionID != "OQ-1" || got.Payload.Questions[0].Text != "the first question." {
+	if got.Payload.Questions[0].QuestionID != "OQ-1" || got.Payload.Questions[0].Text != "OQ-1 — the first question." {
 		t.Fatalf("the first question is %q / %q", got.Payload.Questions[0].QuestionID, got.Payload.Questions[0].Text)
 	}
-	if got.Payload.Questions[1].QuestionID != "OQ-2" || got.Payload.Questions[1].Text != "the second question." {
+	if got.Payload.Questions[1].QuestionID != "OQ-2" || got.Payload.Questions[1].Text != "OQ-2 — the second question." {
 		t.Fatalf("the second question is %q / %q", got.Payload.Questions[1].QuestionID, got.Payload.Questions[1].Text)
 	}
 }
 
-// designDocIdentifierFirst is the second declaration form in use: the bold run carries
-// only the identifier and the question follows it. The repository's own design documents
-// are written this way, so a parser that read the bold run as the text answered every
-// question with its own identifier (measured 2026-11-11 against
-// docs/design/board-item-state-model.md, whose items are all of that form).
+// designDocIdentifierFirst uses the identifier-first title Vantage recommends.
+// Show must echo the index's title rather than interpret Markdown itself.
 const designDocIdentifierFirst = `# Fixture design
 
 ## 1. Open questions
 
-- **OQ-1:** Is the first question read?
-- **OQ-2:** And the second one, with a [link](#1-open-questions) in it?
+- 💬 **OQ-1: Is the first question read?**
+
+  <!-- vantage: question id=OQ-1 -->
+
+  _Leaning:_ Not decided.
+
+- 💬 **OQ-2: And the second one, with a [link](#1-open-questions) in it?**
+
+  <!-- vantage: question id=OQ-2 -->
+
+  _Leaning:_ Not decided.
+
 `
 
-// Both declaration forms answer with the question, not with the identifier.
+// The item's text is the index's full title, including its identifier.
 func TestShowReadsTheIdentifierFirstDeclarationForm(t *testing.T) {
 	root := writeDoc(t, "docs/design/identifier-first.md", designDocIdentifierFirst)
 	db := filepath.Join(scratch(t, "questions-identifier-first"), "board.sqlite3")
@@ -153,10 +191,10 @@ func TestShowReadsTheIdentifierFirstDeclarationForm(t *testing.T) {
 	if len(got.Payload.Questions) != 2 {
 		t.Fatalf("show surfaced %d questions, want 2", len(got.Payload.Questions))
 	}
-	if got.Payload.Questions[0].QuestionID != "OQ-1" || got.Payload.Questions[0].Text != "Is the first question read?" {
+	if got.Payload.Questions[0].QuestionID != "OQ-1" || got.Payload.Questions[0].Text != "OQ-1: Is the first question read?" {
 		t.Fatalf("the first question is %q / %q", got.Payload.Questions[0].QuestionID, got.Payload.Questions[0].Text)
 	}
-	if got.Payload.Questions[1].QuestionID != "OQ-2" || got.Payload.Questions[1].Text != "And the second one, with a link in it?" {
+	if got.Payload.Questions[1].QuestionID != "OQ-2" || got.Payload.Questions[1].Text != "OQ-2: And the second one, with a link in it?" {
 		t.Fatalf("the second question is %q / %q", got.Payload.Questions[1].QuestionID, got.Payload.Questions[1].Text)
 	}
 }
@@ -182,7 +220,7 @@ func TestShowReadsTheDocumentAtShowTime(t *testing.T) {
 	if len(got.Payload.Questions) != 3 {
 		t.Fatalf("the second show surfaced %d questions, want 3", len(got.Payload.Questions))
 	}
-	if got.Payload.Questions[0].Text != "the first question, reworded." {
+	if got.Payload.Questions[0].Text != "OQ-1 — the first question, reworded." {
 		t.Fatalf("the first question reads %q after the edit", got.Payload.Questions[0].Text)
 	}
 }
@@ -251,8 +289,8 @@ func TestShowOfADocumentWithNoOpenQuestionsExitsZero(t *testing.T) {
 	}
 	var got questionOut
 	decodeAs(t, out, &got)
-	if len(got.Payload.Questions) != 0 {
-		t.Fatalf("show surfaced %d questions from a finished design", len(got.Payload.Questions))
+	if got.Payload.QuestionsStatus != "known" || got.Payload.QuestionsReason != "" || len(got.Payload.Questions) != 0 {
+		t.Fatalf("show did not report known empty questions: %s", out)
 	}
 	if got.Payload.QuestionsSource != "docs/design/finished.md" {
 		t.Fatalf("questions_source is %q", got.Payload.QuestionsSource)
@@ -276,9 +314,8 @@ func TestShowRefusesAMissingDesignDocument(t *testing.T) {
 	}
 }
 
-// Only the open-questions section is read: an OQ- token in prose and a bullet in a
-// later section are not questions.
-func TestShowReadsOnlyTheOpenQuestionsSection(t *testing.T) {
+// A token in prose or a bullet with no directive is not an indexed question.
+func TestShowReadsOnlyIndexedQuestions(t *testing.T) {
 	root := writeDoc(t, "docs/design/fixture-design.md", designDoc)
 	db := filepath.Join(scratch(t, "questions-section"), "board.sqlite3")
 	itemWithDoc(t, db, "docs/design/fixture-design.md")
@@ -291,6 +328,114 @@ func TestShowReadsOnlyTheOpenQuestionsSection(t *testing.T) {
 	for _, q := range got.Payload.Questions {
 		if q.QuestionID == "OQ-3" || q.QuestionID == "OQ-9" {
 			t.Fatalf("show surfaced %q, which is outside the open-questions section", q.QuestionID)
+		}
+	}
+}
+
+// Index failures must preserve the item and distinguish unknown from no questions.
+func TestShowReportsUnknownQuestionsWithoutLosingItem(t *testing.T) {
+	for _, tc := range []struct{ name, body, reason string }{
+		{"missing", "", "no such file"},
+		{"refused", `printf '%s' '{"index":{"refused":true,"documents":[]}}'`, "refused the tree"},
+		{"failed", "echo index-broken >&2; exit 7", "index-broken"},
+		{"invalid", "printf '%s' 'not-json'", "invalid character"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeDoc(t, "docs/design/open.md", designDoc)
+			db := filepath.Join(scratch(t, "unknown"), "board.sqlite3")
+			itemWithDoc(t, db, "docs/design/open.md")
+			command := filepath.Join(root, "index-command")
+			if tc.body != "" {
+				if err := os.WriteFile(command, []byte("#!/bin/sh\n"+tc.body+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, out := run(t, "show", "--store", db, "--item", "item_042", "--root", root, "--questions-cmd", command)
+			var got questionOut
+			decodeAs(t, out, &got)
+			if code != 0 || got.Kind != "item.record" || got.Payload.ItemID != "item_042" || got.Payload.QuestionsStatus != "unknown" || !strings.Contains(got.Payload.QuestionsReason, tc.reason) {
+				t.Fatalf("show lost the item or its unknown reason: exit %d: %s", code, out)
+			}
+			if len(got.Payload.Questions) != 0 {
+				t.Fatalf("unknown index supplied questions: %s", out)
+			}
+		})
+	}
+}
+
+// Use the real index for the declaration the old dash-bullet parser missed.
+func TestShowReadsNumberedVantageQuestion(t *testing.T) {
+	root := writeDoc(t, "docs/design/numbered.md", `---
+title: Numbered design
+status: proposed
+---
+# Numbered design
+
+## Open questions
+
+1. 💬 **OQ-1: Should the numbered question be read?**
+
+   <!-- vantage: question id=OQ-1 -->
+
+   _Leaning:_ Read it.
+
+`)
+	db := filepath.Join(scratch(t, "numbered"), "board.sqlite3")
+	itemWithDoc(t, db, "docs/design/numbered.md")
+	code, out := show(t, db, root, "item_042")
+	var got questionOut
+	decodeAs(t, out, &got)
+	if code != 0 || got.Payload.QuestionsStatus != "known" || len(got.Payload.Questions) != 1 || got.Payload.Questions[0].QuestionID != "OQ-1" || got.Payload.Questions[0].State != "open" {
+		t.Fatalf("numbered question was not reported open: exit %d: %s", code, out)
+	}
+}
+
+// An absolute document must match the relative index key even when --root is
+// omitted or relative. A successful index must not erase its open question.
+func TestShowReadsAbsoluteDocumentWithRelativeRoot(t *testing.T) {
+	root := writeDoc(t, "docs/design/open.md", designDoc)
+	db := filepath.Join(scratch(t, "absolute-document"), "board.sqlite3")
+	itemWithDoc(t, db, filepath.Join(root, "docs/design/open.md"))
+	command := filepath.Join(root, "index-command")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nprintf '%s' '{\"index\":{\"documents\":[{\"path\":\"docs/design/open.md\",\"questions\":[{\"id\":\"OQ-1\",\"state\":\"open\",\"title\":\"Open question\"}]}]}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	for _, rootArgs := range [][]string{nil, {"--root", "."}, {"--root", "docs/.."}} {
+		args := []string{"show", "--store", db, "--item", "item_042", "--questions-cmd", command}
+		code, out := run(t, append(args, rootArgs...)...)
+		var got questionOut
+		decodeAs(t, out, &got)
+		if code != 0 || got.Payload.QuestionsStatus != "known" || len(got.Payload.Questions) != 1 || got.Payload.Questions[0].QuestionID != "OQ-1" {
+			t.Fatalf("absolute document with %v lost its question: exit %d: %s", rootArgs, code, out)
+		}
+	}
+}
+
+// An override is an argv split just as in the loop, runs at root, and uses only
+// answered as settled. Blocked and future states remain unanswered.
+func TestShowUsesIndexCommandOverrideAndFiltersAnswered(t *testing.T) {
+	root := writeDoc(t, "docs/design/open.md", designDoc)
+	db := filepath.Join(scratch(t, "override"), "board.sqlite3")
+	itemWithDoc(t, db, "docs/design/open.md")
+	script := filepath.Join(root, "index-command")
+	body := `#!/bin/sh
+[ "$1" = "index" ] && [ "$2" = "--format" ] && [ "$3" = "json" ] && [ -f docs/design/open.md ] || exit 9
+printf '%s' '{"index":{"documents":[{"path":"docs/design/open.md","questions":[{"id":"OQ-0","state":"answered","title":"Settled"},{"id":"OQ-1","state":"open","title":"Open"},{"id":"OQ-2","state":"blocked","title":"Blocked"},{"id":"OQ-3","state":"future","title":"Future state"}]}]}}'
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, out := run(t, "show", "--store", db, "--item", "item_042", "--root", root, "--questions-cmd", script+" index --format json")
+	var got questionOut
+	decodeAs(t, out, &got)
+	if code != 0 || got.Payload.QuestionsStatus != "known" || len(got.Payload.Questions) != 3 {
+		t.Fatalf("override failed: exit %d: %s", code, out)
+	}
+	for i, want := range []struct{ id, state, title string }{{"OQ-1", "open", "Open"}, {"OQ-2", "blocked", "Blocked"}, {"OQ-3", "future", "Future state"}} {
+		q := got.Payload.Questions[i]
+		if q.QuestionID != want.id || q.State != want.state || q.Text != want.title {
+			t.Fatalf("index's answer was changed: %+v", q)
 		}
 	}
 }

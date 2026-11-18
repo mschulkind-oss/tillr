@@ -18,10 +18,10 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/quota"
 	"github.com/mschulkind-oss/tillr-drain/spend"
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // waitingRow is shared by the terminal and HTTP faces. Since is an absolute UTC

@@ -14,9 +14,10 @@ import (
 	"time"
 )
 
-// This package is the board's and the planner's only source of design-document question
-// state. It reads Vantage's own index rather than parsing the documents here, because the
-// board and the planner must answer "what is still open" the same way: a second parser in
+// This package is the item command's, board's and planner's shared source of
+// design-document question state. It reads Vantage's own index rather than parsing
+// the documents here, because all three must answer "what is still open" the same way:
+// a second parser in
 // this repository is a second answer, and documents that number their questions already
 // produced one disagreement (six queued items the dash-bullet parser reported as carrying
 // none).
@@ -27,7 +28,7 @@ import (
 // The planner reads the identifier and the state; the board reads the title and carries
 // `preference`, `leaning` and `blockedOn` through to its own payload. All of them are the
 // index's fields, decoded once here so the two faces cannot read the same question two
-// ways.
+// ways. The item command likewise reads the identifier, title and state here.
 type Question struct {
 	ID         string   `json:"id"`
 	State      string   `json:"state"`
@@ -133,8 +134,13 @@ func (v *VantageQuestions) Document(path string) (DocumentQuestions, error) {
 	// keyed the way the index spells it.
 	key := path
 	if filepath.IsAbs(key) {
-		if rel, err := filepath.Rel(v.Root, key); err == nil {
-			key = rel
+		root, err := filepath.Abs(v.Root)
+		if err != nil {
+			return DocumentQuestions{}, fmt.Errorf("resolving question index root: %w", err)
+		}
+		key, err = filepath.Rel(root, key)
+		if err != nil {
+			return DocumentQuestions{}, fmt.Errorf("resolving question index document: %w", err)
 		}
 	}
 	questions, err := v.questions(key)

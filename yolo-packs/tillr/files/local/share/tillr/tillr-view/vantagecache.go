@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/vantage"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // The board's one walk of Vantage's index.

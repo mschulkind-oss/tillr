@@ -4,10 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // Show answers the stored item.record for one item, read from the rows rather than
@@ -15,9 +19,16 @@ import (
 // is the history of how it got there.
 //
 // Where the item carries a design_doc reference, the record also carries that
-// document's open questions, read from the document at show time. The board stores no
-// question state, so the document is the only copy and the two cannot drift apart.
+// document's unanswered questions, read through Vantage's index at show time. No
+// question state is stored. An unreadable index is unknown, never an empty answer.
 func Show(r *store.Reader, id, root string) (record.Envelope, error) {
+	return ShowWithQuestions(r, id, root, &vantage.VantageQuestions{Root: root})
+}
+
+// ReadStored answers the item's current stored fields without reading the question
+// index. A design_doc must still name a regular file, resolved against root.
+// Staging and resume use this read so neither starts a program for discarded questions.
+func ReadStored(r *store.Reader, id, root string) (record.Envelope, error) {
 	payload, updatedAt, err := readStoredItem(r, id)
 	if err != nil {
 		return record.Envelope{}, err
@@ -26,16 +37,18 @@ func Show(r *store.Reader, id, root string) (record.Envelope, error) {
 		payload.WaitingOn = &WaitingOn{Waiter: "waiter not recorded"}
 	}
 	if payload.DesignDoc != "" {
-		questions, err := ReadQuestions(root, payload.DesignDoc)
-		if errors.Is(err, ErrDesignDocMissing) {
+		path := payload.DesignDoc
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		info, err := os.Stat(path)
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && !info.Mode().IsRegular()) {
 			return record.Envelope{}, Rejectionf("design-doc-missing", id,
 				"item %q points at %s, which is not there", id, payload.DesignDoc)
 		}
 		if err != nil {
 			return record.Envelope{}, Internalf("reading the design document %s: %v", payload.DesignDoc, err)
 		}
-		payload.Questions = questions
-		payload.QuestionsSource = payload.DesignDoc
 	}
 	places, err := OrderPlaces(r)
 	if err != nil {
@@ -57,6 +70,42 @@ func Show(r *store.Reader, id, root string) (record.Envelope, error) {
 		}
 	}
 	return envelopeOf(RecordKind, "item-"+id, updatedAt, fields)
+}
+
+// ShowWithQuestions shares the same question source as the loop and view. The CLI
+// supplies a source with the caller's command override; Show uses the default.
+func ShowWithQuestions(r *store.Reader, id, root string, source vantage.QuestionSource) (record.Envelope, error) {
+	env, err := ReadStored(r, id, root)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	var payload itemPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return record.Envelope{}, Internalf("reading stored item %q: %v", id, err)
+	}
+	if payload.DesignDoc != "" {
+		answer, err := source.Document(payload.DesignDoc)
+		payload.QuestionsSource = payload.DesignDoc
+		switch {
+		case err != nil:
+			payload.QuestionsStatus = "unknown"
+			payload.QuestionsReason = err.Error()
+		case !answer.Present:
+			return record.Envelope{}, Rejectionf("design-doc-missing", id,
+				"item %q points at %s, which is not there", id, payload.DesignDoc)
+		default:
+			payload.QuestionsStatus = "known"
+			payload.Questions = []Question{}
+			for _, question := range answer.Questions {
+				if question.State != vantage.QuestionAnswered {
+					payload.Questions = append(payload.Questions, Question{
+						QuestionID: question.ID, Text: question.Title, State: question.State,
+					})
+				}
+			}
+		}
+	}
+	return envelopeOf(RecordKind, "item-"+id, env.CreatedAt, payload)
 }
 
 // readStoredItem answers one item's record as the rows hold it, with the clock the row was

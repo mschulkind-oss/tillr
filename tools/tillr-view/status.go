@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // statusPayload is the payload of view.status: the moment, whether the subject is

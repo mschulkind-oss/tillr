@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
-	"github.com/mschulkind-oss/tillr-drain/vantage"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // utility is the producer name every record this binary emits carries.
