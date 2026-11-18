@@ -118,6 +118,7 @@ TILLR_PAUSE_REQUEST       Always: the request-file path in this run's scratch di
 TILLR_PROGRESS_FILE       Always: the progress file in this run's scratch directory; workers append one criterion claim per line.
 TILLR_CHILD_SESSIONS_ROOT Always: the pi-subagents directory in this run's scratch directory, where the pi adapter's child sessions are discovered.
 TILLR_CHILD_SESSIONS_MARKER Always: the child-sessions-recorded marker path in this run's scratch directory; its presence reports child-session recording, and its absence means not recorded.
+TILLR_READ_ONLY_GROUP     Only when read_only_group is nonempty: the group sharing a lane lease; otherwise unset.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
 

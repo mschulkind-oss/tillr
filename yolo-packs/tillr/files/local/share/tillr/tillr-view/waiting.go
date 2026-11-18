@@ -74,6 +74,7 @@ var waitingRules = map[string]waitingRule{
 	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
 	"lane-run-children-live":      {"waits on work", "lane", "wait for the named processes to exit, or end them with the recorded kill command"},
 	"preserve-failed":             {"needs you", "lane", "repair why the lane's work could not be preserved and clear the fault"},
+	"tooling-defect":              {"waits on work", "queue", "the tooling defect item to land or close"},
 	"triage-no-block":             {"waits on work", "queue", "triage on the design seat"},
 	"conflict-design":             {"waits on work", "queue", "design"},
 	"design-under-comment":        {"waits on work", "queue", "the comment item"},
