@@ -3006,14 +3006,16 @@ with tempfile.TemporaryDirectory() as tmp:
                 selected = [check.kind for check in plan.checks
                             if check.watches == module.go_tool_watches(directory, repo)]
                 expected = []
-                if tier == suite_tier:
+                # The rolling tier is the after-merge proof and judges the landing
+                # kinds the range selected too (section 59a).
+                if tier == suite_tier or tier == module.TIER_ROLLING:
                     expected.append(expected_suite_kind)
                 assert selected == expected, (directory, tier, selected)
                 # A proof runs the drain's suite once: one rolling command names it, the
                 # sharded one. The parity case in tests/go-test-shards.test.py starts no run of it.
                 if directory == "tools/tillr-drain" and tier == module.TIER_ROLLING:
                     drain_runs = [check.argv[-1] for check in plan.checks
-                                  if "tools/tillr-drain" in check.argv[-1]
+                                  if check.argv and "tools/tillr-drain" in check.argv[-1]
                                   and ("go-test-shards.py" in check.argv[-1]
                                        or "go test" in check.argv[-1])]
                     assert len(drain_runs) == 1 and "go-test-shards.py" in drain_runs[0], drain_runs
@@ -3566,6 +3568,45 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "run  session-budget " in result.stdout and "FAILED" in result.stdout, result.stdout
     assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
     assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
+
+# 31d. tests/tillr-docs.test.py runs four regression suites as child processes, and they
+#      read `.tillr.toml` and `.justfile`. Each is an input of the tillr-docs check, so a
+#      change to any of them plans it and its watches name them: on 2026-11-18 a
+#      `.tillr.toml` edit broke tests/tillr-roll.test.py, nothing planned the check for it,
+#      and the fixer filed for the red was fenced away from both files.
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp)
+    repo, _, _ = build_repo(base)
+    spec = importlib.util.spec_from_file_location("fork_check_tillr_docs", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / module.TILLR_DOCS_TEST).write_text("")
+    commit(repo, "the tillr documentation suite")
+
+    def docs_checks(changed):
+        planned = module.build_plan(
+            repo, [], module.Record(base / "plan-state.json"), changed, None, True,
+        )
+        return [check for check in planned.checks if check.kind == "tillr-docs"], planned
+
+    if shutil.which("go"):
+        for path in (".tillr.toml", ".justfile", "tests/tillr-roll.test.py",
+                     "tests/tillr-keep.test.py", "tests/tillr-build.test.py",
+                     "tests/tillr-scratch.test.py", "tools/tillr-roll/tillr-roll.py"):
+            checks, planned = docs_checks([path])
+            assert len(checks) == 1, (path, [check.kind for check in planned.checks])
+            assert any(module.watch_matches(path, watch) for watch in checks[0].watches), \
+                (path, checks[0].watches)
+        checks, planned = docs_checks(["bashrc"])
+        assert checks == [], [check.kind for check in planned.checks]
+    # The guard that keeps the list honest: every suite the real documentation test starts
+    # as a child process is one of its watches.
+    started = set(re.findall(r'ROOT / "(tests/[^"]+\.py)"',
+                             (Path(__file__).resolve().parent / "tillr-docs.test.py").read_text()))
+    assert started, "tests/tillr-docs.test.py starts no suite the guard can read"
+    missing = sorted(started - set(module.TILLR_DOCS_WATCHES))
+    assert not missing, f"tests/tillr-docs.test.py runs {missing}, which tillr-docs does not watch"
 
 # 31c. tools/tillr-loop/test.py is the loop adapter's own suite, and it asserted the
 #      adapter a refactor had replaced: the gate's `--no-wait`, the lander's deleted
@@ -7736,15 +7777,38 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [skip.owed for skip in unanswered.skips] == [True], unanswered.skips
     assert unanswered.skips[0].planned is False, unanswered.skips[0].planned
 
+    # The rolling tier is the after-merge proof: it judges the landing kinds the range
+    # selected as well as its own, because the pointer it moves says every check guarding
+    # the trunk passed there. A commit that reached the trunk without the lander carries no
+    # landing verdict; on 2026-11-18 a red `tillr-docs` was left out as "the landing tier's
+    # business" for five green advances. Only a landing step whose verdict reads the
+    # upstream a launch would build (not reusable, and not a fast tree declaration) stays
+    # the landing tier's business.
     rolling = tier_plan()
+    rolling.checks.append(module.Check("series", "a series", ["true"], "why", 1, reusable=False))
+    fast_tree = module.Check("scratch", "a tree declaration", ["true"], "why", 1, reusable=False)
+    fast_tree.fast_tree = True
+    rolling.checks.append(fast_tree)
     module.apply_tier(rolling, module.TIER_ROLLING)
-    assert [check.kind for check in rolling.checks] == ["go-tool"], \
+    assert [check.kind for check in rolling.checks] == ["go-substrate", "go-tool", "file-size",
+                                                        "scratch"], \
         [check.kind for check in rolling.checks]
     assert not any(skip.owed for skip in rolling.skips), rolling.skips
-    # The go-tool step nothing selected stays not-planned; the landing kinds become not
-    # this run's business.
-    assert {skip.kind for skip in rolling.skips} == {"go-tool", "go-substrate", "file-size"}, \
+    # The go-tool step nothing selected stays not-planned; the upstream reader is named as
+    # the landing tier's business, and nothing else is.
+    assert {skip.kind for skip in rolling.skips} == {"go-tool", "series"}, \
         [skip.kind for skip in rolling.skips]
+    assert any(skip.kind == "series" and "reads the upstream" in skip.why
+               for skip in rolling.skips), rolling.skips
+    # A landing kind the range selected that this machine could not answer stays a planned
+    # skip under the proof: unavailable, never someone else's business.
+    unanswered_rolling = tier_plan()
+    unanswered_rolling.skips = [module.Skip("tillr-docs (python3 tests/tillr-docs.test.py)",
+                                            "go is unavailable here", planned=True,
+                                            kind="tillr-docs")]
+    module.apply_tier(unanswered_rolling, module.TIER_ROLLING)
+    assert [(skip.planned, skip.owed) for skip in unanswered_rolling.skips] == [(True, False)], \
+        unanswered_rolling.skips
 
     # 59b. The plan line names the tier, the owed kinds, and the landing-wall model. The
     #      model is `s1_floor` over the landing-tier checks, so a full run prices what the
@@ -7843,6 +7907,10 @@ with tempfile.TemporaryDirectory() as tmp:
     tool = repo / "tools/tillr-drain"
     tool.mkdir(parents=True, exist_ok=True)
     (tool / "audit.go").write_text("package main\n")
+    # The rolling tier now judges the landing kinds too (59a), so the fixture carries a
+    # gate audit suite for its self-suite step to run.
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "fork-check.test.py").write_text("")
     commit(repo, "seed the drain suite for the first rolling audit")
     state = record(repo)
     baseline = {**state["baseline"],
@@ -7864,9 +7932,9 @@ with tempfile.TemporaryDirectory() as tmp:
                    and "changed" in skip["reason"] for skip in spans["skipped_checks"]), spans
 
     # 59h. Gate code never proves itself late (invariant I3). A gate-code diff plans the
-    #      audit suite in the landing tier, and the rolling tier plans nothing extra for
-    #      it: `self-suite` is a landing kind, so a rolling run neither runs it nor owes
-    #      it.
+    #      audit suite in the landing tier, so the landing never owes it. The rolling tier
+    #      is the after-merge proof and judges it again on the trunk (59a): that is a
+    #      re-proof, never a deferral, so it is never owed either.
     gate_state = module.Record(base / "tier-gate-state.json")
     gate_landing = module.build_plan(
         repo, module.read_series(repo), gate_state, ["tools/fork-check.py"], None, True,
@@ -7876,8 +7944,10 @@ with tempfile.TemporaryDirectory() as tmp:
     gate_rolling = module.build_plan(
         repo, module.read_series(repo), gate_state, ["tools/fork-check.py"], None, True,
         tier=module.TIER_ROLLING)
-    assert "self-suite" not in [check.kind for check in gate_rolling.checks], \
+    assert "self-suite" in [check.kind for check in gate_rolling.checks], \
         [check.kind for check in gate_rolling.checks]
+    assert "self-suite" not in [skip.kind for skip in gate_landing.skips if skip.owed], \
+        [(skip.kind, skip.owed) for skip in gate_landing.skips]
     assert "self-suite" not in [skip.kind for skip in gate_rolling.skips if skip.owed], \
         [(skip.kind, skip.owed) for skip in gate_rolling.skips]
 

@@ -1407,12 +1407,29 @@ TILLR_LOOP_TIMEOUT = 300
 # Its rolling-check guard also reads every tracked file, judging the tillr pack's delivered
 # copies as their sources by the rule in tools/pack-docs.py, so a change to that delivered
 # tree or to the rule plans it too.
+#
+# It also runs four regression suites of its own as child processes (TILLR_DOCS_SUITES), and
+# those read the repository's `.tillr.toml` and `.justfile` and the roll tools. Every one of
+# them is an input of this check, so each is a watch: on 2026-11-18 a `.tillr.toml` change
+# left `tests/tillr-roll.test.py` asserting the old key, and because neither file was a watch
+# nothing planned this check for it, the fixer filed for the red was fenced away from both,
+# and the trunk stayed red. tests/fork-check.test.py (31d) refuses a suite this file runs
+# that is not listed here.
 TILLR_DOCS_TEST = "tests/tillr-docs.test.py"
 TILLR_DOCS_SKILL = "yolo-packs/tillr/skills/tillr-operating/"
 TILLR_DOCS_DELIVERED = "yolo-packs/tillr/files/local/share/tillr/"
 TILLR_DOCS_RULE = "tools/pack-docs.py"
+TILLR_DOCS_SUITES = (
+    "tests/tillr-build.test.py",
+    "tests/tillr-scratch.test.py",
+    "tests/tillr-keep.test.py",
+    "tests/tillr-roll.test.py",
+)
+TILLR_DOCS_READS = (".tillr.toml", ".justfile")
 TILLR_DOCS_WATCHES = (
     TILLR_DOCS_TEST,
+    *TILLR_DOCS_SUITES,
+    *TILLR_DOCS_READS,
     TILLR_DOCS_RULE,
     TILLR_DOCS_DELIVERED,
     "tools/tillr/",
@@ -1424,10 +1441,12 @@ TILLR_DOCS_WATCHES = (
     "tools/tillr-run/",
     "tools/tillr-store/",
     "tools/tillr-view/",
+    "tools/tillr-roll/",
     TILLR_DOCS_SKILL,
 )
 TILLR_DOCS_INPUT = (
     re.compile(r"^" + re.escape(TILLR_DOCS_TEST) + r"$"),
+    *(re.compile(r"^" + re.escape(path) + r"$") for path in TILLR_DOCS_SUITES + TILLR_DOCS_READS),
     re.compile(r"^tools/tillr(-[a-z]+)?/"),
     re.compile(r"^" + re.escape(TILLR_DOCS_SKILL)),
     re.compile(r"^" + re.escape(TILLR_DOCS_RULE) + r"$"),
@@ -5098,6 +5117,17 @@ def check_tier(kind: str) -> str:
     return CHECK_TIER.get(kind, TIER_LANDING)
 
 
+def reads_upstream(check: "Check") -> bool:
+    """Whether a check's verdict depends on the upstream a launch would build.
+
+    Such a step declares itself not reusable (its verdict depends on an input outside its
+    watches). The fast tree declarations are also planned not reusable, because a re-gate
+    exists because the tree moved, but their verdict is a property of the tree, so they
+    are not upstream readers.
+    """
+    return not check.reusable and not getattr(check, "fast_tree", False)
+
+
 # The phrase each invariant kind's driver prints when it is refusing the change rather
 # than failing to answer. A kind in this table is a KIND_INVARIANT in CHECK_KIND_GROUP.
 INVARIANT_PHRASES = {
@@ -6444,17 +6474,25 @@ def apply_tier(plan: Plan, tier: str | None) -> None:
     I5), so a landing's coverage contract can tell deferred proof from a step nothing
     selected. A rolling kind the diff did NOT select stays not-planned: nothing owes it.
 
-    `rolling` keeps the rolling-tier kinds and names the landing-tier steps as not this
-    run's business. The landing tier already proved them on the tree that published, and a
-    rolling run that re-ran them would be a full gate on a clock. Go behavior suites
-    outside GO_LANDING_SUITE_DIRS are rolling kinds, planned for every `GO_TOOL_DIRS`
+    `rolling` is the after-merge proof, and it keeps the rolling-tier kinds AND the
+    landing-tier kinds the range selected: the green pointer it moves says every check that
+    guards the trunk passed at that commit, so a check is not left out because a landing
+    tier was supposed to have run it. The landing tier's verdict is about the candidate tree
+    of one landing, and a commit that reached the trunk without the lander -- an operator's
+    direct commit, or a check the landing's diff did not select because a read was missing
+    from its watches -- carries no such verdict. On 2026-11-18 the proof left `tillr-docs`
+    out as "the landing tier's business" for five green advances while it was red at every
+    one of them. The one exception is a landing step whose verdict reads the upstream a
+    launch would build rather than the tree (`reads_upstream`): it is not a property of the
+    trunk commit, so it stays the landing tier's business and is named as such. Go behavior
+    suites outside GO_LANDING_SUITE_DIRS are rolling kinds, planned for every `GO_TOOL_DIRS`
     entry the range touches -- the same watch-based selection the full gate uses,
     which is the design's
     "per touched module" rule (section 4.2), not an unconditional run of every module.
 
     Gate code is landing-tier (`self-suite`), so a gate-code diff under `landing` still
-    plans the audit suite and under `rolling` plans nothing extra: gate code never proves
-    itself late (invariant I3).
+    plans the audit suite, and under `rolling` the proof judges it again on the trunk: gate
+    code never proves itself late (invariant I3), and a re-proof is not a deferral.
     """
     plan.tier = tier
     if tier is None:
@@ -6467,26 +6505,29 @@ def apply_tier(plan: Plan, tier: str | None) -> None:
             plan.owed(check.label,
                       f"the landing tier defers it to the rolling tier "
                       f"({check.kind} is a rolling kind)", kind=check.kind)
+        elif not reads_upstream(check):
+            # The proof judges the landing kinds too: see the docstring.
+            kept.append(check)
         else:
             plan.not_planned(check.label,
-                             f"the landing tier's business; a rolling run plans only the "
-                             f"rolling tier ({check.kind} is a landing kind)",
+                             f"the landing tier's business; its verdict reads the upstream "
+                             f"a launch would build, not the trunk commit ({check.kind} is "
+                             f"a landing kind)",
                              kind=check.kind)
     plan.checks = kept
     # A skip the diff selected for a kind this tier does not plan is the same news as a
-    # check it would have run: under `landing` it is owed, and under `rolling` it is the
-    # landing tier's business. A skip nothing selected stays not-planned.
+    # check it would have run: under `landing` it is owed. Under `rolling` every kind is
+    # planned, so a selected skip stays the planned skip it is: a check the proof could not
+    # answer here is unavailable, never quietly someone else's. A skip nothing selected
+    # stays not-planned.
     for skip in plan.skips:
-        if not skip.planned or not skip.kind or check_tier(skip.kind) == tier:
+        if (not skip.planned or not skip.kind or check_tier(skip.kind) == tier
+                or tier == TIER_ROLLING):
             continue
         skip.planned = False
-        if tier == TIER_LANDING:
-            skip.owed = True
-            skip.why = (f"the landing tier defers it to the rolling tier "
-                        f"({skip.kind} is a rolling kind)")
-        else:
-            skip.why = (f"the landing tier's business; a rolling run plans only the "
-                        f"rolling tier ({skip.kind} is a landing kind)")
+        skip.owed = True
+        skip.why = (f"the landing tier defers it to the rolling tier "
+                    f"({skip.kind} is a rolling kind)")
 
 
 def build_plan(

@@ -44,6 +44,24 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "returned to its worker: "+o.Kind+" obstacle")}
 	}
 	switch o.Kind {
+	case ObstacleFence:
+		if !IsTrunkFixer(req.ItemID) {
+			return laneOutcome{}, false
+		}
+		// A trunk fixer's fence is the loop's own guess at where the red can be repaired
+		// (the red range and the failing checks' watches). A worker that names the path
+		// the repair needs corrects that guess, and nothing in it is the owner's to rule:
+		// the paths are granted and the same worker continues. The gate's own code is never
+		// granted, so a request that names any of it still reaches the owner.
+		added, refused, err := l.widenFixerFence(ctx, req.ItemID, o.List("PATHS"))
+		if err != nil {
+			return laneOutcome{err: err}, true
+		}
+		if len(refused) > 0 || len(added) == 0 {
+			return laneOutcome{}, false
+		}
+		l.reportf("loop: %s named a fence obstacle: its fence grows by %s, and it goes back to its worker\n", req.ItemID, strings.Join(added, ", "))
+		return returnToWorker(fmt.Sprintf("The fence now includes %s, the paths this run named as outside it (%s). Continue the repair and commit. %s", strings.Join(added, ", "), o.Field("EVIDENCE"), ObstacleContract), ""), true
 	case ObstacleTrunk:
 		if IsTrunkFixer(req.ItemID) {
 			return returnToWorker(missingOutputDetail("this item is the trunk's repair, so a red trunk is its work and `trunk` is not an obstacle open to it"), ""), true

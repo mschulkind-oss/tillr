@@ -12,8 +12,9 @@ import (
 )
 
 // repairedTrunkWaiter returns the underlying state only for an acquittal whose
-// own fixer landed in the base staging will select. Closed or otherwise terminal
-// fixers are not repair evidence, nor is a landing newer than the proved base.
+// own fixer landed in the base staging will select, or whose fixer ended by any other
+// route (resolved by a proof, or closed) once a proof has passed its checks on a commit
+// the selected base contains. A landing newer than the proved base is not evidence.
 func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id string) (string, error) {
 	var state string
 	if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
@@ -56,17 +57,23 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 		}
 		return "", nil
 	}
-	if state != StateLanded && state != StateResolvedElsewhere {
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return "", err
+	}
+	if state != StateLanded && !finishedState(declared.Parsed, state) {
 		return "", nil
 	}
 	green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 	if err != nil {
 		return "", err
 	}
-	if state == StateResolvedElsewhere {
-		// A fixer a green heavy proof resolved (resolveProvedFixers) repaired nothing
-		// itself; the proof is the repair evidence. Release once the selected base
-		// contains the proved commit, so the fresh run starts from a green tree.
+	if state != StateLanded {
+		// A fixer a proof resolved (resolveProvedFixers) repaired nothing itself, and
+		// neither did one someone closed: in both the proof of its checks is the repair
+		// evidence, recorded by resolveProvedFixers whatever ended the fixer. Release once
+		// the selected base contains the proved commit, so the fresh run starts from a
+		// green tree. A closed fixer whose checks no proof has passed releases nothing.
 		proved, err := fixerProvedGreen(r, fixer)
 		if err != nil || proved == "" {
 			return "", err

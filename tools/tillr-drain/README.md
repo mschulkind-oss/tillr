@@ -789,6 +789,14 @@ names the declaration judge; `--rolling` still names the legacy program. An expl
 empty `--rolling` disables that legacy coverage, not the declaration checks. Missing
 programs or missing verdict evidence are reported as faults, never silently passed.
 
+The legacy program's rolling tier (`fork-check.py --tier rolling`) judges the landing-tier
+checks as well as its own, so the green pointer means every check that guards the trunk
+passed at that commit. A landing gate's verdict covers only the checks its own diff
+selected, and a commit an operator made directly carries none; on 2026-11-18 the proof
+reported the red `tillr-docs` check as "the landing tier's business" for five green
+advances. The one step it still leaves to the landing gate is a fork step whose verdict
+reads the upstream a launch would build rather than the tree.
+
 The proof compares its commit to the green pointer. It starts declaration checks whose
 reads match changed files or contain them under a directory read ending in `/`, in name
 order. If a changed path matches a legacy watch, the legacy program runs next, before
@@ -850,9 +858,13 @@ second repair. The red-cap hold finds an attached fixer by the checks its criter
 names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
 clearing an existing owner hold. A blocked fixer reaches the owner only by a complete
 obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
-a `fence`, `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
-loop writes from it, because a generated item has no design block to amend. For `fence`,
-the question names the paths and asks whether the fixer's `allowed_paths` may grow. A legacy
+a `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
+loop writes from it, because a generated item has no design block to amend. A trunk
+fixer's `fence` obstacle does not: its fence is the loop's own estimate of where the red
+can be repaired, so the paths it names are added to `allowed_paths` (a
+`drain.fixer-fence-widened` event) and the same worker continues. Only a request that
+names the gate's own code, which no fixer may edit, goes to the owner with the question,
+which names the paths and asks whether the fence may grow. A legacy
 `NEXT-ACTOR: owner` line is still read. Any other blocked report is answered back to the
 fixer's own worker, whose brief states this rule; it never reaches the owner by default. `tillr drain why` shows such a
 hold with the loop's question as its reason and the owner as its mover (answer the conflict,
@@ -872,6 +884,11 @@ and the legacy program's adapter record when each check passed on the tip
 (`heavy-progress.json`, `heavy-legacy-progress.json`), so a stale fixer, one whose named
 checks already pass on a tip containing its red commit, is resolved by those passes
 while the rest of the run is still going or is red for another check. A fixer that names
+a check both by its kind (`tillr-docs`, the replay's selector) and by a labelled id of that
+kind (`tillr-docs/every-face-...`, the only spelling a proof records) is covered by the
+labelled passes. A fixer someone closed, or that ended by any route but a landing, while
+items are still acquitted behind it gets the same proof recorded (its state is left
+alone), and those items are released by it with no operator retry. A fixer that names
 no check needs a whole green run. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.
 With no pointer yet the report says there is no proved baseline to accuse a landing; it
@@ -982,7 +999,8 @@ contains its repair, the next pass restores the item's underlying state and clea
 waiter. With the `green` lane-base policy, an older verified pointer keeps the waiter
 until the heavy runner proves the repair. A fresh run starts from the repaired trunk,
 without an authorized retry; acquitted runs do not consume the failure walk. A fixer
-closed without landing releases nothing. A check green on the base, or a candidate with
+closed without landing releases nothing until a proof passes its checks (see
+[After-merge heavy runs](#after-merge-heavy-runs)). A check green on the base, or a candidate with
 an additional failure of its own, keeps the ordinary refusal.
 
 The red base is only half the question when the trunk has moved past it. Work is always
@@ -997,6 +1015,16 @@ could not judge confirms nothing. A fork-series candidate, whose base is the for
 HEAD, is judged on that base alone. The rule exists because a run cut nine hours before
 it was judged once filed a fixer for a check the trunk had long since repaired, and an
 open fixer holds every ordinary item.
+
+With `landing_strategy` `after-merge`, a confirmed red is then aimed the way the proof aims
+one, unless an open fixer already names every failing check (the red attaches to it): the
+checks are replayed at the green pointer, at the last recorded landing since, and by
+bisection over those landings, and the fixer is filed for the first red landing. A red at
+the green pointer, no recorded landing in the range (an operator's direct commit is not
+one), a green last landing, or a replay with no verdict names no landing; the fixer stays
+on the commit the red was observed on and its brief says why. Its fence holds the paths of
+every commit from the green pointer through that commit, the failing checks' watches and
+the candidate's diff.
 
 ## Nothing re-runs because an input changed
 
