@@ -24,7 +24,7 @@ func TestNormalizeEvidenceKeepsWhatTellsFailuresApart(t *testing.T) {
 	}
 }
 
-func TestReturnedEndingRequiresLandingDefinition(t *testing.T) {
+func TestReturnedEndingReturnsRefusalForEveryDefinition(t *testing.T) {
 	for _, landing := range []bool{true, false} {
 		d := defaultDefinition()
 		if !landing {
@@ -36,11 +36,11 @@ func TestReturnedEndingRequiresLandingDefinition(t *testing.T) {
 			history:    runHistory{refusals: map[string]string{"run-finding": RefusalNoOp}},
 		}
 		ending := p.returnedEnding("finding")
-		if landing && (ending == nil || ending.Cause != RefusalNoOp) {
-			t.Fatalf("Git candidate refusal was not returned: %+v", ending)
-		}
-		if !landing && ending != nil {
-			t.Fatalf("completion-hook refusal was returned as a Git candidate: %+v", ending)
+		// A refused run goes back to its worker uncounted whatever the definition
+		// completes by (the owner's ruling of 2026-11-17): a held refusal with no
+		// mover would leave the item queued with nothing to move it.
+		if ending == nil || ending.Cause != RefusalNoOp {
+			t.Fatalf("refusal was not returned (landing=%v): %+v", landing, ending)
 		}
 	}
 }

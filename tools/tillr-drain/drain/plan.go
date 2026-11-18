@@ -1224,11 +1224,6 @@ func (p *planner) retryHoldReason(itemID string) string {
 // retryHoldReason reads it, for the four outcomes a worker can act on; the refusal's own
 // record supplies the evidence.
 func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
-	// Returning candidate refusals to a Git worker is landing policy. A negative
-	// completion hook has no candidate to repair and keeps its definition's hold.
-	if !p.lands() {
-		return nil
-	}
 	latest := p.latest[itemID]
 	if latest == "" || !p.mayBeARetry(itemID) {
 		return nil
