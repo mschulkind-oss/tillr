@@ -33,7 +33,7 @@ func shownPlace(t *testing.T, s *store.Store, id string) any {
 				return err
 			}
 		}
-		env, err := item.Show(r, id, root)
+		env, err := fixtureShow(r, id, root)
 		if err != nil {
 			return err
 		}

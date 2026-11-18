@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -24,7 +23,7 @@ func TestWorkflowShowReadsAnUnmigratedStore(t *testing.T) {
 	runSync(t, s, root, doc("docs/plan.md", goodBlock))
 	exec(t, s, `ALTER TABLE items DROP COLUMN workflow`)
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		env, err := item.Show(r, "item-build-thing", root)
+		env, err := fixtureShow(r, "item-build-thing", root)
 		if err != nil {
 			return err
 		}
@@ -77,7 +76,7 @@ func TestSyncWorkflow(t *testing.T) {
 				t.Fatalf("workflow %q", got)
 			}
 			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-				env, err := item.Show(r, "item-build-thing", root)
+				env, err := fixtureShow(r, "item-build-thing", root)
 				if err != nil {
 					return err
 				}

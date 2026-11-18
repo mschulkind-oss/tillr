@@ -8,9 +8,17 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
 )
+
+// fixtureShow exercises the public show shape with a deterministic question index.
+// Sync fixtures must not launch uvx or depend on a network-installed checker.
+func fixtureShow(r *store.Reader, id, root string) (record.Envelope, error) {
+	index := vantage.ParseIndex([]byte(`{"index":{"documents":[]}}`), "fixture")
+	return item.ShowWithQuestions(r, id, root, vantage.Preloaded(root, index))
+}
 
 func TestShowWithQuestionsPreservesStoredPlaceWithoutRank(t *testing.T) {
 	s := syncStore(t)
