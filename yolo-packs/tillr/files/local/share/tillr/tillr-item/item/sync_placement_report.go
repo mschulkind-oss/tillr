@@ -102,6 +102,25 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 			newIDs[p.ItemID] = fw.created[p.ItemID]
 		}
 	}
+	// Parking clears the old key, so it cannot remain a source for a new
+	// item's from mark. Unparking appends a new key, even for legacy keyed
+	// parked rows. Remove both transitions' old positions before appending.
+	moves := append(append([]string{}, plan.report.Parked...), plan.report.Unparked...)
+	for _, id := range moves {
+		if _, accepted := payloads[id]; !accepted {
+			continue
+		}
+		delete(keyed, id)
+		delete(available, id)
+		delete(placed, id)
+		rest := []string{}
+		for _, v := range order {
+			if v != id {
+				rest = append(rest, v)
+			}
+		}
+		order = rest
+	}
 	for _, p := range plan.placements {
 		desired, accepted := payloads[p.id]
 		if !accepted || !InOrder(desired.State) || keyed[p.id] {

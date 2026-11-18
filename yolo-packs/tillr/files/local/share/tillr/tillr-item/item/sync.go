@@ -92,6 +92,8 @@ type SyncReport struct {
 	Created   []string        `json:"created"`
 	Updated   []string        `json:"updated"`
 	Unchanged []string        `json:"unchanged"`
+	Parked    []string        `json:"parked"`
+	Unparked  []string        `json:"unparked"`
 	Frozen    []SyncNote      `json:"frozen"`
 
 	CreatedCount   int `json:"created_count"`
@@ -128,7 +130,7 @@ type syncBlock struct {
 	directiveEnd   int
 	criterionLines []int
 	// parked is whether a roadmap's Icebox or Exploration section links to the block's
-	// document, which makes a new item `not-started` rather than `in-queue`.
+	// document, or contains the block itself; queued items become unranked not-started.
 	parked         bool
 	proseParagraph bool
 }
@@ -178,12 +180,14 @@ type fileWrites struct {
 // not hold, `in-queue` or `not-started` when its document is parked; it updates the
 // definition of an item it holds — title, fence, blockers, seat, criteria text, body_ref and
 // design_doc — when no criterion of that item carries a recorded state; and it leaves the
-// item's state, runs and criterion states exactly as the store holds them. The from
+// item's runs and criterion states exactly as the store holds them. Roadmap parking
+// moves only in-queue to unranked not-started; a whole sync unparks not-started items
+// to in-queue at the end of the stored ranks. Other states are preserved. The from
 // mark places new items only; a crowded gap may respace keys while preserving the
 // other items' relative order. An item whose
 // definition differs while a criterion carries a state is reported `definition-frozen` and
-// left alone, because rewriting presented criteria would make a recorded verdict stop meaning
-// what it said.
+// its definition is left alone, because rewriting presented criteria would make a recorded
+// verdict stop meaning what it said. Routing still applies to that stored definition.
 //
 // A file with a finding writes nothing; every other file is written. Each file is applied
 // under its own savepoint, so a refusal Apply makes for one file (an edge cycle, say) rolls
@@ -203,8 +207,13 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	}
 	report := plan.report
 	report.Created, report.Updated = []string{}, []string{}
+	report.Parked, report.Unparked = []string{}, []string{}
 	created := map[string]bool{}
-	keyed, err := keyMissingOrder(ctx, tx, in.At)
+	parking := map[string]bool{}
+	for _, id := range plan.report.Parked {
+		parking[id] = true
+	}
+	keyed, err := keyMissingOrder(ctx, tx, in.At, parking)
 	if err != nil {
 		return SyncReport{}, err
 	}
@@ -238,7 +247,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		for _, payload := range fw.payloads {
 			if payload.Rank == "" && InOrder(payload.State) {
 				// Planning precedes the missing-key writes. Preserve a key supplied above.
-				if !fw.created[payload.ItemID] {
+				if !fw.created[payload.ItemID] && !containsID(plan.report.Unparked, payload.ItemID) {
 					if err := tx.Reader().QueryRow(`SELECT rank FROM items WHERE item_id=?`, payload.ItemID).Scan(&payload.Rank); err != nil {
 						return SyncReport{}, err
 					}
@@ -278,6 +287,12 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 					created[payload.ItemID] = true
 				} else {
 					report.Updated = append(report.Updated, payload.ItemID)
+					if parking[payload.ItemID] {
+						report.Parked = append(report.Parked, payload.ItemID)
+					}
+					if containsID(plan.report.Unparked, payload.ItemID) {
+						report.Unparked = append(report.Unparked, payload.ItemID)
+					}
 				}
 			}
 		}
@@ -401,6 +416,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	report := SyncReport{
 		Root: in.Root, Documents: len(in.Documents),
 		Created: []string{}, Updated: []string{}, Unchanged: []string{}, Frozen: []SyncNote{},
+		Parked: []string{}, Unparked: []string{},
 		Warnings: []SyncNote{}, Findings: []SyncNote{}, SkippedFiles: []string{},
 		UnsharedOpenIDs: []string{}, StaleDocBlockIDs: []string{},
 	}
@@ -680,8 +696,9 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		// Only a whole sync can observe that a roadmap no longer parks this document.
 		unpark := !in.Partial && stored.State == "not-started" && !b.parked
+		park := stored.State == "in-queue" && b.parked && d.HasState("not-started")
 		field := definitionDiff(desired, stored)
-		if field == "" && !unpark {
+		if field == "" && !unpark && !park {
 			report.Unchanged = append(report.Unchanged, desired.ItemID)
 			continue
 		}
@@ -698,7 +715,12 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		if judged := judgedCriterion(stored); judged != "" && definitionDiff(withoutClaims, stored) != "" {
 			report.Frozen = append(report.Frozen, note(b, "definition-frozen",
 				fmt.Sprintf("the block's %s differs from the store's, and criterion %q already carries the state %q, so the stored definition stands: a presented criterion is not rewritten", field, judged, criterionState(stored, judged))))
-			continue
+			if !park && !unpark {
+				continue
+			}
+			// Routing is independent of the frozen definition. Preserve what
+			// the judge read while applying only the state/rank transition.
+			desired = stored
 		}
 		if finished(stored.State) && stored.State != d.Closed {
 			report.Frozen = append(report.Frozen, note(b, "state-terminal",
@@ -707,10 +729,15 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		// The definition is the document's; everything the store learned is the store's.
 		desired.State = stored.State
-		if unpark {
-			desired.State = d.Ready
-		}
 		desired.Rank = stored.Rank
+		if park {
+			desired.State, desired.Rank = "not-started", ""
+			report.Parked = append(report.Parked, desired.ItemID)
+		}
+		if unpark {
+			desired.State, desired.Rank = d.Ready, ""
+			report.Unparked = append(report.Unparked, desired.ItemID)
+		}
 		fw.payloads = append(fw.payloads, desired)
 		if desired.Rank == "" && InOrder(desired.State) {
 			placements = append(placements, sourcePlacement{desired.ItemID, ""})
@@ -1261,6 +1288,12 @@ func SyncText(report SyncReport, at time.Time) string {
 	}
 	for _, id := range report.Updated {
 		fmt.Fprintf(&b, "updated: %s\n", id)
+	}
+	for _, id := range report.Parked {
+		fmt.Fprintf(&b, "parked: %s\n", id)
+	}
+	for _, id := range report.Unparked {
+		fmt.Fprintf(&b, "unparked: %s\n", id)
 	}
 	for _, p := range report.Placed {
 		fmt.Fprintf(&b, "placed: %s at %d", p.ItemID, p.Place)
