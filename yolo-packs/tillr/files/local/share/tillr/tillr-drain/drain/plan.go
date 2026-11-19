@@ -851,10 +851,21 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			attempt.backend = p.firstBackend(item)
 		}
 	}
+	// An answered conflict from an obstacle call reopens the obstacle call's session
+	// when the session is still on its lane, delivering the design answer as the call result.
+	var answeredObstacle *ReturnedEnding
+	if hasConflict && conflict.Status == "answered" && conflict.RunID != "" {
+		if call := p.history.obstacleCalls[conflict.RunID]; call != nil {
+			answeredObstacle = &ReturnedEnding{RunID: conflict.RunID, Cause: RefusalNoOp, Detail: conflict.Text, WorkerSession: call}
+		}
+	}
 	// A gate refusal, a run with no commit, a fence escape and a refused landing go back to
 	// the item's worker with their evidence, every time and uncounted (returned.go). An
 	// operator's retry and the recovery of an interrupted run are their own moves.
 	returned := p.returnedEnding(item.ItemID)
+	if returned == nil && answeredObstacle != nil {
+		returned = answeredObstacle
+	}
 	interrupted, restaged := false, false
 	if priors := p.priors[item.ItemID]; len(priors) > 0 {
 		interrupted = priors[len(priors)-1].Class == AttemptInterrupted
@@ -1067,6 +1078,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		if decision.ConflictID != "" {
 			decision.Reason = ReasonConflictAnswered
+			if returned != nil && answeredObstacle != nil && decision.WorkerSessionReason == "resumed-worker" {
+				decision.RunRequest.SessionTurn = true
+				decision.RunRequest.ResumePrompt = conflict.Text
+			}
 		}
 	}
 	decision.Attempt = p.nextAttempt(item.ItemID)
@@ -1878,7 +1893,8 @@ type runHistory struct {
 	gateResults map[string]string
 	// endings is every refusal's own record, keyed by run id: its detail, its failing
 	// checks and its evidence key. A returned ending is built from it.
-	endings map[string]refusalPayload
+	endings       map[string]refusalPayload
+	obstacleCalls map[string]*WorkerSession
 }
 
 // readRunHistory reads the item-object events and answers, per item, whether its history
@@ -1889,16 +1905,40 @@ type runHistory struct {
 // an item state write is an event about an item that says what state the item is in,
 // whatever kind item chose to append.
 func readRunHistory(r *store.Reader) (runHistory, error) {
-	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind}, ObjectTypes: []string{"item"}})
+	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered}, ObjectTypes: []string{"item"}})
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}
 	history := runHistory{
 		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{},
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
-		endings: map[string]refusalPayload{},
+		endings: map[string]refusalPayload{}, obstacleCalls: map[string]*WorkerSession{},
 	}
 	for _, e := range events {
+		if e.Kind == callOffered && e.ObjectType == "call" {
+			var call landingCall
+			if err := json.Unmarshal(e.Payload, &call); err == nil && call.Tool == "obstacle" && call.RunID != "" && call.SessionID != "" {
+				var reqJSON []byte
+				var backend, route string
+				if row := r.QueryRow(`SELECT json_extract(payload,'$.decision.run_request') FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, call.RunID); row != nil && row.Scan(&reqJSON) == nil && len(reqJSON) > 0 {
+					var req run.Request
+					if json.Unmarshal(reqJSON, &req) == nil {
+						backend = req.Backend
+						route = req.Route()
+					}
+				}
+				history.obstacleCalls[call.RunID] = &WorkerSession{
+					SessionID: call.SessionID,
+					LaneDir:   filepath.Dir(call.RunLog),
+					LaneID:    filepath.Base(filepath.Dir(call.RunLog)),
+					BaseSHA:   call.Base,
+					HeadSHA:   call.Base,
+					Backend:   backend,
+					Route:     route,
+				}
+			}
+			continue
+		}
 		if e.Kind == GateVerdictKind && e.ObjectType == "run" && e.ObjectID != nil {
 			history.judged[*e.ObjectID] = true
 			var payload struct {

@@ -255,7 +255,7 @@ export default function keepGoing(pi: any) {
 			return { continue: true, entries: [...(event?.entries ?? []), {
 				type: "custom_message", customType: "tillr-goal",
 				content: obstacle ? `Your obstacle is incomplete: ${obstacle}. ${OBSTACLE_CONTRACT}` :
-					"You ended without calling `land`. Call `land` with a summary when your commit is ready.", display: true,
+					"You ended without calling `land` or `obstacle`. Call `land` with a summary when your commit is ready, or call `obstacle` when an obstacle holds.", display: true,
 			}] };
 		}
 		const decision = decide({

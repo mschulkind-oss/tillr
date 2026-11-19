@@ -45,7 +45,7 @@ func TestStagePinsWorkerEndingAndPreflightsBothBriefs(t *testing.T) {
 			}
 			brief := string(raw)
 			if capability == run.EndingCallSuspends {
-				if !strings.Contains(brief, finishing) || !strings.Contains(brief, "| `OBSTACLE:` |") || strings.Contains(brief, "Report shape") || strings.Contains(brief, "Stop conditions") || strings.Contains(brief, "RESULT: done") {
+				if !strings.Contains(brief, finishing) || !strings.Contains(brief, "| `OBSTACLE:` |") || !strings.Contains(brief, "Call `obstacle` with `kind`") || strings.Contains(brief, "Report shape") || strings.Contains(brief, "Stop conditions") || strings.Contains(brief, "RESULT: done") {
 					t.Fatalf("wrong call brief:\n%s", brief)
 				}
 			} else if !strings.Contains(brief, "## Report shape\n") || !strings.Contains(brief, "## Stop conditions\n") || strings.Contains(brief, "## Finishing\n") {

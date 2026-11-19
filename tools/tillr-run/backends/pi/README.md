@@ -14,6 +14,7 @@ sections 7 and 9.
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
 | [`land.ts`](./land.ts) | Records a landing offer and parks the call. |
+| [`obstacle.ts`](./obstacle.ts) | Validates and records a named obstacle and parks the call. |
 | [`landing-call-held`](./landing-call-held) | Checks the active transcript branch before a promptless landing continuation. |
 | [`testdata/land.test.mjs`](./testdata/land.test.mjs) | Exercises offer validation, parking and adapter arguments. |
 | [`testdata/landing-call-held.test.py`](./testdata/landing-call-held.test.py) | Checks transcript replay eligibility and fail-closed parsing. |
@@ -326,7 +327,7 @@ with that header yields `session: unknown` rather than a guess.
   by the harness", and the report header reads `result: ended by the harness:
   repeating-call` with `complete: no`. The report's last line names the call and its
   streak. This holds even after an earlier `RESULT:` footer, because the session did not
-  end on that footer. `testdata/extract-report-repeating.test.py` covers this, using the
+  end on that footer. [`testdata/extract-report-repeating.test.py`](./testdata/extract-report-repeating.test.py) covers this, using the
   two `repeating-call-*.jsonl` fixtures cut from the 2026-11-19 runs. The runner records
   such a run's
   [end cause](../../README.md#a-session-pi-ended-for-a-repeating-call).

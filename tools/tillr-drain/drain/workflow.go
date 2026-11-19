@@ -549,7 +549,15 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	}
 	footer := reportFooter(log)
 	if offered {
-		footer = "done"
+		if obs, isObstacle, obsErr := l.offeredObstacle(ctx, rec.RunID); obsErr != nil {
+			return true, obsErr
+		} else if isObstacle {
+			offered = false
+			footer = "blocked"
+			log = formatObstacleReport(obs)
+		} else {
+			footer = "done"
+		}
 	}
 	if stage.Kind == "agent" {
 		if ClassifyAttempt(rec, log) == AttemptUnjudged {

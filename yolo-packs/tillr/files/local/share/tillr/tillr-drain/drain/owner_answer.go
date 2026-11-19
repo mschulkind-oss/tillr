@@ -125,7 +125,13 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 			if answered {
 				latest.Status, latest.WaitingOn, latest.AnswerHead = "answered", "build", sha
 			}
-			return item.RecordConflict(tx, latest, l.cfg.Now().UTC())
+			if err := item.RecordConflict(tx, latest, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+			if latest.Status == "answered" && isObstacleCallRun(tx.Reader(), latest.RunID) {
+				return l.answerLandingRefusal(tx, Candidate{RunID: latest.RunID}, refusalPayload{Step: IdenticalRepeatPrefix, Detail: fmt.Sprintf("Owner answered %s at %s", latest.QuestionRef, sha)}, refusalEvidence{}, l.cfg.Now().UTC())
+			}
+			return nil
 		})
 		writer.Close()
 		if e != nil {

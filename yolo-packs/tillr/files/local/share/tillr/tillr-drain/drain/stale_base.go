@@ -284,6 +284,11 @@ func (l *Loop) releaseStaleBaseConflicts(ctx context.Context) error {
 			if err := item.RecordConflict(tx, c, at); err != nil {
 				return err
 			}
+			if isObstacleCallRun(tx.Reader(), c.RunID) {
+				if err := l.answerLandingRefusal(tx, Candidate{RunID: c.RunID}, refusalPayload{Step: IdenticalRepeatPrefix, Detail: c.Text}, refusalEvidence{}, at); err != nil {
+					return err
+				}
+			}
 			f.stale.ConflictID = c.ConflictID
 			if err := recordStaleBase(tx, f.stale, at); err != nil {
 				return err
@@ -336,6 +341,11 @@ func (l *Loop) staleBlockedReport(ctx context.Context, d Decision) (bool, error)
 			c.Text += "\n\nStale base: run " + finding.RunID + " was staged on " + shortSHA(finding.BaseSHA) + ", which lacks " + finding.Lacks + ". The loop restages the item; design run " + d.RunRequest.RunID + " reported on that run's report."
 			if err := item.RecordConflict(tx, c, at); err != nil {
 				return err
+			}
+			if isObstacleCallRun(tx.Reader(), c.RunID) {
+				if err := l.answerLandingRefusal(tx, Candidate{RunID: c.RunID}, refusalPayload{Step: IdenticalRepeatPrefix, Detail: c.Text}, refusalEvidence{}, at); err != nil {
+					return err
+				}
 			}
 			finding.ConflictID = c.ConflictID
 		}

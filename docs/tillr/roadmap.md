@@ -8865,11 +8865,7 @@ that call's result.
   - Route a tool-call obstacle exactly as the same obstacle in a footer.
   - Return the reply to the worker as the call's result.
 
-<!-- tillr: item id="item-landing-call-obstacle-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** `obstacle` accepts each of the six kinds (`definition`, `fence`, `trunk`, `tooling`, `seat`, `owner`) with that kind's required fields and rejects a call missing one, without ending the run. A test asserts each kind and one rejection.
-- **c2:** An obstacle call is recorded and routed exactly as the same obstacle in a footer is today. A test runs one shared case file of obstacles through both forms and asserts equal routing.
-- **c3:** The reply to an obstacle reaches the session as the call's result. A test asserts it for a design answer and for a `trunk` claim the base replay did not reproduce.
 
 **Agent Details:**
 
