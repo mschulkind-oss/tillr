@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -55,6 +56,7 @@ func isMissingColumn(err error) bool {
 
 // storeItem is one row of the store's items table.
 type storeItem struct {
+	OwnerOwed    *ownercriteria.OwnerCriterion
 	ItemID       string
 	Title        string
 	BodyRef      string
@@ -167,6 +169,13 @@ func readItems(r *store.Reader) ([]storeItem, error) {
 	items, err := readItemsBase(r)
 	if err != nil {
 		return nil, err
+	}
+	owed, err := ownercriteria.ReadOwnerCriteria(r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].OwnerOwed = owed[items[i].ItemID]
 	}
 	rows, err := r.Query(`SELECT item_id, waiting_on FROM items WHERE state = 'blocked'`)
 	if isMissingColumn(err) {

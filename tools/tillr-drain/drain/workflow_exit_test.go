@@ -82,7 +82,7 @@ func exitFixture(t *testing.T, raw string, commit bool, fail int) (refusalLoopFi
 		if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO item_criteria(item_id,criterion_id,text,state,claim_class) VALUES('item-a','verify','node checks','', 'verification-only'),('item-a','judge','human judgment','', 'owner-only')`)
+		_, err := tx.Exec(`INSERT INTO item_criteria(item_id,criterion_id,text,state,claim_class) VALUES('item-a','verify','node checks','', 'verification-only'),('item-a','judge','human judgment','done', 'owner-only')`)
 		return err
 	})
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), raw)
@@ -142,7 +142,7 @@ func TestWorkflowExitCandidatePolicies(t *testing.T) {
 						if steps.gates != 0 || result.Landed != 0 || steps.landedHead != "" || runGit(t, f.root, "rev-parse", "HEAD") != before {
 							t.Fatalf("no-commit graph landed or gated: %+v %+v", result, steps)
 						}
-						assertNoCommitExit(t, f, steps, before)
+						assertNoCommitExit(t, f, steps, before, "done")
 						fixtureWrite(t, f, func(tx *store.Tx) error {
 							var n int
 							err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='drain.graph-completed' AND object_id=? AND json_extract(payload,'$.landed')=0 AND json_extract(payload,'$.reason')='no commit by design'`, steps.runs[0].RunID).Scan(&n)

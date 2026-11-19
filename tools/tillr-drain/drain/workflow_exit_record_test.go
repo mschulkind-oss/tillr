@@ -20,7 +20,7 @@ func (s *exitSteps) ItemState(ctx context.Context, id, runID, state string, wait
 	return s.workflowSteps.ItemState(ctx, id, runID, state, waiting...)
 }
 
-func assertNoCommitExit(t *testing.T, f refusalLoopFixture, steps *exitSteps, base string) {
+func assertNoCommitExit(t *testing.T, f refusalLoopFixture, steps *exitSteps, base, wantJudge string) {
 	t.Helper()
 	if runGit(t, f.root, "rev-parse", "HEAD") != base || steps.gates != 0 || steps.verdicts != 0 {
 		t.Fatal("no-commit exit called gate, land or verdict")
@@ -70,7 +70,7 @@ func assertNoCommitExit(t *testing.T, f refusalLoopFixture, steps *exitSteps, ba
 		if err := tx.QueryRow(`SELECT state FROM item_criteria WHERE item_id='item-a' AND criterion_id='judge'`).Scan(&judge); err != nil {
 			return err
 		}
-		if state != StateLanded || judge != "" {
+		if state != StateLanded || judge != wantJudge {
 			t.Errorf("item %s judge %s", state, judge)
 		}
 		var n int
@@ -89,6 +89,12 @@ func TestWorkflowExitRecordRestart(t *testing.T) {
 	base := runGit(t, f.root, "rev-parse", "HEAD")
 	result := &LoopResult{}
 	graphPass(t, l, result)
+	// An owner criterion added after dispatch remains untouched when the
+	// already-completed graph is settled and its record is replayed.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE item_criteria SET state='' WHERE item_id='item-a' AND criterion_id='judge'`)
+		return err
+	})
 	steps.stateFault = true
 	if _, err := l.pass(context.Background(), result); err != nil {
 		t.Fatal(err)
@@ -113,7 +119,7 @@ func TestWorkflowExitRecordRestart(t *testing.T) {
 	if len(steps.runs) != 1 || result.Landed != 0 {
 		t.Fatalf("restart ran nodes again: %v %+v", steps.runs, result)
 	}
-	assertNoCommitExit(t, f, steps, base)
+	assertNoCommitExit(t, f, steps, base, "")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		var n int
 		err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.verdict' AND json_extract(payload,'$.criterion_id')='verify'`).Scan(&n)

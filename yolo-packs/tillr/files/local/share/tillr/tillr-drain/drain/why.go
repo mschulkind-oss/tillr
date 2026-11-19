@@ -249,6 +249,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
+		case d.Reason == ReasonOwnerOnlyOwed && it.OwnerOwed != nil:
+			row.Why, row.Mover = it.OwnerOwed.Explanation(), it.OwnerOwed.Mover()
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
 				if !finishedState(def, states[id]) {
@@ -375,6 +377,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 						}
 					}
 				}
+				answer.Summary.OwnerWaiting++
+			} else if d.Reason == ReasonOwnerOnlyOwed {
 				answer.Summary.OwnerWaiting++
 			} else {
 				actor := "drain"
