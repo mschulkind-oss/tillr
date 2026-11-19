@@ -1,7 +1,6 @@
-# last_hand_move_event_seq: 1295675
-# hand_move_event_sha256: 03e6d11598f6eeef30240c592a3cbf70d12a87d4b502014278565b98e38fe0d0
-item-request-6eb9931e48
-item-request-b39d680fce
+# last_hand_move_event_seq: 1295979
+# hand_move_event_sha256: c50c5069329e8def3c98c5c4aa1c14202df361bc1ef990546fa9b131144a380f
+item-request-d4c1af6de7
 item-request-458ffc9523
 item-gate-pinned-fork-inputs
 item-agent-default-bmad-superpowers-skills
@@ -9,11 +8,6 @@ item-bedrock-claude-latest-only
 item-landing-call-obstacle-tool
 item-landing-call-pi-switch-on
 item-request-b13084fe3e
-item-request-72f2f70171
-item-request-02cbe46dc3
-item-request-56a0e30be2
-item-request-1188d1dd63
-item-request-f5d9b0978b
 item-request-fd559fa39a
 item-request-becb9f5f64
 item-request-925da0a25c
