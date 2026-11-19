@@ -330,6 +330,9 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	if err := l.stageComment(ctx, &next, &spec); err != nil {
 		return laneOutcome{err: err}
 	}
+	if err := l.stageLandingAnswer(ctx, next, &spec); err != nil {
+		return laneOutcome{err: err}
+	}
 	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
 		return laneOutcome{err: err}
 	}

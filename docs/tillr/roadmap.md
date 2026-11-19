@@ -8705,14 +8705,7 @@ the form on.
   - Stage the "Finishing" brief for a session pinned to the call form, and the footer brief for every other.
   - Have the gate run the adapter's landing-call tests.
 
-<!-- tillr: item id="item-landing-call-land-tool" paths="tools/tillr-run/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-pi-fork-park" prose="2" -->
 
-- **c1:** `probePiEndingCapability` returns `call-suspends` only when the `pi` on the path prints `parked-tool-calls` from the features flag, and `footer` for one that prints other names, rejects the flag or prints malformed output. The loop does not call it: with a stand-in `pi` that prints the feature, the loop still records `footer` for the pi adapter. A test asserts each.
-- **c2:** A session staged with the `call-suspends` pin gets a brief that ends with the "Finishing" text of [the design's Section 3.6](../design/tillr-landing-call.md#36-what-the-brief-says), and `run-pi` loads the tool. A session staged with `footer` keeps the footer brief and today's arguments. A test asserts each.
-- **c3:** Each check of [the design's Section 3.2](../design/tillr-landing-call.md#32-what-is-answered-at-once) returns at once as an error result naming its content and writes no offer file. A test asserts each of the five.
-- **c4:** A worker that ends with a message and no call is told so in the same session. A session that parks is not nudged by `keep-going.ts` and is not ended by the settled-session watcher. A test asserts each.
-- **c5:** A session started under the footer brief, and a call recorded under `footer`, are answered by the turn's prompt when the adapter's capability later reads `call-suspends`. A test asserts each.
-- **c6:** `go test ./...` in `tools/tillr-run/` runs `land.test.mjs`, `keep-going.test.mjs`, `extract-report-park.test.py` and `parked-exit.test.py`, and fails when one of them fails or when `node` is missing.
 
 **Agent Details:**
 
@@ -8752,7 +8745,7 @@ drain record a delivery made as a message. The form stays off.
   - Write that path beside the answer before pi starts.
   - Record a delivery the adapter made as a message.
 
-<!-- tillr: item id="item-landing-call-transcript-path" paths="tools/tillr-run/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-land-tool" prose="2" -->
+<!-- tillr: item id="item-landing-call-transcript-path" paths="tools/tillr-run/,tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The offer file holds a `transcript` field with the session file's path as the tool read it in `execute()`, and the call record keeps it. An offer with no path is valid. A test asserts each.
 - **c2:** When the drain stages an answer file for a call that has a path, it writes that path to the file `landing-transcript` in the same directory, before the answer file. The tool no longer writes that file. A test asserts each.

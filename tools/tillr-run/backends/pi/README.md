@@ -13,6 +13,11 @@ sections 7 and 9.
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
+| [`land.ts`](./land.ts) | Records a landing offer and parks the call. |
+| [`testdata/land.test.mjs`](./testdata/land.test.mjs) | Exercises offer validation, parking and adapter arguments. |
+| [`testdata/keep-going.test.mjs`](./testdata/keep-going.test.mjs) | Checks that a parked call is not nudged. |
+| [`testdata/extract-report-park.test.py`](./testdata/extract-report-park.test.py) | Checks report extraction for parked calls. |
+| [`testdata/parked-exit.test.py`](./testdata/parked-exit.test.py) | Checks the watcher leaves parked sessions alone. |
 | [`testdata/keep-going-driver.mjs`](./testdata/keep-going-driver.mjs) | Drives [`keep-going.ts`](./keep-going.ts) through scripted endings without a model, for `pi_keep_going_test.go`. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete event stream, ending in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer — the negative control. |

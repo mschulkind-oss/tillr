@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -224,9 +226,9 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		return landingCall{}, Externalf("landing offer for %s has no staged session", rec.RunID)
 	}
 	adapter := d.RunRequest.Command[0]
-	capability := l.endingCapabilities[adapter]
-	if capability == "" {
-		capability = run.EndingFooter
+	capability, err := stagedEndingCapability(RunDir(l.cfg.Root, rec.RunID))
+	if err != nil {
+		return landingCall{}, err
 	}
 	call := landingCall{landingOffer: offer, ItemID: d.RunRequest.ItemID, RunID: rec.RunID, TerminalSeq: rec.EventSeq, SessionID: session, RunLog: filepath.Join(artifactDir, rec.RunID+".log"), Worktree: target, Scratch: run.DurableDir(laneDir, rec.RunID), Adapter: adapter, Capability: capability, Tool: "land"}
 	if d.Workflow != nil {
@@ -236,6 +238,27 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 }
 
 const endingCapabilitiesKind = "drain.ending-capabilities"
+
+// Probe the executable, not its version or an adapter declaration: a rejected or
+// malformed feature response means the original footer protocol remains in force.
+func probePiEndingCapability(ctx context.Context) (string, string) {
+	path, err := exec.LookPath("pi")
+	if err != nil {
+		return run.EndingFooter, ""
+	}
+	probe, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probe, path, "--features").Output()
+	var features []string
+	if err == nil && json.Unmarshal(out, &features) == nil {
+		for _, feature := range features {
+			if feature == "parked-tool-calls" {
+				return run.EndingCallSuspends, path
+			}
+		}
+	}
+	return run.EndingFooter, path
+}
 
 func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 	capabilities := make(map[string]string)
@@ -421,26 +444,24 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	return appendLandingCallEvent(tx, callAnswered, call.CallID, answer, at)
 }
 
-// writeLandingAnswer publishes a stored answer before reopening its session.
-// Shipped adapters do not yet call this hand-off.
-func writeLandingAnswer(laneDir, runID string, answer landingAnswer) error {
-	dir := run.DurableDir(laneDir, runID)
+// writeLandingArtifact publishes a complete record before Pi can open the session.
+func writeLandingArtifact(dir, name string, value any) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".landing-answer-*")
+	f, err := os.CreateTemp(dir, ".landing-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	err = json.NewEncoder(f).Encode(answer)
+	err = json.NewEncoder(f).Encode(value)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), filepath.Join(dir, landingAnswerFile))
+	return os.Rename(f.Name(), filepath.Join(dir, name))
 }
 
 type landingCallDelivery struct {
@@ -448,62 +469,226 @@ type landingCallDelivery struct {
 	RunID string `json:"run_id"`
 }
 
-// deliverLandingAnswer is the drain-owned file handoff. The opener reports
-// success only after the harness confirms it consumed the stored result. No
-// shipped adapter is wired to this opener yet.
-func (l *Loop) deliverLandingAnswer(ctx context.Context, callID string, d Decision, open func(context.Context) error) error {
-	req := d.RunRequest
-	if req == nil || !req.SessionTurn {
-		return Usagef("landing answer delivery needs a new session turn")
-	}
-	laneDir := l.laneDirPath(d.LaneID)
-	session, err := ReadSessionID(laneDir)
-	if err != nil {
-		return err
+func (l *Loop) returnedLandingAnswer(ctx context.Context, d Decision) (landingCall, landingAnswer, error) {
+	var call landingCall
+	var answer landingAnswer
+	if d.Returned == nil || d.Returned.RunID == "" {
+		return call, answer, nil
 	}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
-		return err
+		return call, answer, err
 	}
-	var answer landingAnswer
+	defer db.Close()
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		var offerRaw, answerRaw []byte
-		var delivered bool
-		if err := r.QueryRow(`SELECT o.payload,a.payload,EXISTS(SELECT 1 FROM events e WHERE e.object_type='call' AND e.object_id=o.object_id AND e.kind=?)
-   FROM events o JOIN events a ON a.object_type=o.object_type AND a.object_id=o.object_id AND a.kind=?
-   WHERE o.object_type='call' AND o.kind=? AND o.object_id=?`, callDelivered, callAnswered, callOffered, callID).Scan(&offerRaw, &answerRaw, &delivered); err != nil {
-			return fmt.Errorf("reading answer for call %s: %w", callID, err)
+		err := r.QueryRow(`SELECT o.payload,a.payload FROM events o JOIN events a
+   ON a.object_type=o.object_type AND a.object_id=o.object_id AND a.kind=?
+   WHERE o.object_type='call' AND o.kind=? AND json_extract(o.payload,'$.run_id')=?`, callAnswered, callOffered, d.Returned.RunID).Scan(&offerRaw, &answerRaw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
 		}
-		if delivered {
-			return Usagef("landing call %s has already been delivered", callID)
+		if err != nil {
+			return err
 		}
-		var call landingCall
 		if err := json.Unmarshal(offerRaw, &call); err != nil {
 			return err
 		}
-		if req.RunID == call.RunID || req.ItemID != call.ItemID || session != call.SessionID || session == "" || l.laneTarget(d.LaneID) != call.Worktree {
-			return Usagef("delivery run %s does not reopen the session for landing call %s", req.RunID, callID)
+		if err := json.Unmarshal(answerRaw, &answer); err != nil {
+			return err
 		}
-		return json.Unmarshal(answerRaw, &answer)
+		if answer.CallID != call.CallID || call.ItemID != d.ItemID || strings.TrimSpace(answer.Text) == "" {
+			return Externalf("invalid stored landing answer for %s", d.Returned.RunID)
+		}
+		return nil
 	})
-	db.Close()
+	return call, answer, err
+}
+
+func landingAnswerForTurn(answer landingAnswer, runID, dir string) landingAnswer {
+	answer.Text += fmt.Sprintf("\nTurn: %s\nScratch: %s\n", runID, dir)
+	return answer
+}
+
+func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[string]any, error) {
+	state := map[string]any{"open": []landingOffer{}, "refused": []map[string]string{}}
+	db, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT o.payload, a.payload,
+    EXISTS(SELECT 1 FROM events e WHERE e.object_type='call' AND e.object_id=o.object_id AND e.kind IN (?,?))
+    FROM events o LEFT JOIN events a ON a.object_type=o.object_type AND a.object_id=o.object_id AND a.kind=?
+    WHERE o.object_type='call' AND o.kind=? AND json_extract(o.payload,'$.item_id')=? ORDER BY o.seq`,
+			callDelivered, callClosed, callAnswered, callOffered, itemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		open := []landingOffer{}
+		refused := []map[string]string{}
+		for rows.Next() {
+			var raw, answerRaw []byte
+			var finished bool
+			if err := rows.Scan(&raw, &answerRaw, &finished); err != nil {
+				return err
+			}
+			var call landingCall
+			if err := json.Unmarshal(raw, &call); err != nil {
+				return err
+			}
+			if session != "" && call.SessionID == session && !finished {
+				open = append(open, call.landingOffer)
+			}
+			if len(answerRaw) > 0 {
+				var answer landingAnswer
+				if err := json.Unmarshal(answerRaw, &answer); err != nil {
+					return err
+				}
+				if answer.Kind == "refused" || answer.Kind == "reverted" {
+					refused = append(refused, map[string]string{"commit": call.Commit, "answer": answer.Text})
+				}
+			}
+		}
+		state["open"], state["refused"] = open, refused
+		return rows.Err()
+	})
+	return state, err
+}
+
+func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSpec) error {
+	state, err := l.landingState(ctx, d.ItemID, spec.SessionID)
 	if err != nil {
 		return err
 	}
-	if err := writeLandingAnswer(laneDir, req.RunID, answer); err != nil {
+	dir := run.DurableDir(l.laneDirPath(d.LaneID), d.RunRequest.RunID)
+	if err := writeLandingArtifact(dir, "landing-state.json", state); err != nil {
 		return err
 	}
-	if err := open(ctx); err != nil {
+	call, answer, err := l.returnedLandingAnswer(ctx, d)
+	if err != nil || answer.CallID == "" {
 		return err
 	}
-	db, err = store.Open(context.WithoutCancel(ctx), l.cfg.Store, true)
+	answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
+	if !d.RunRequest.SessionTurn {
+		returned := *spec.Returned
+		returned.Detail = answer.Text
+		spec.Returned = &returned
+		return nil
+	}
+	if call.Capability != run.EndingCallSuspends {
+		return nil
+	}
+	if call.ItemID != d.ItemID || spec.SessionID != call.SessionID || call.Worktree != l.laneTarget(d.LaneID) {
+		return Externalf("run %s does not reopen the session for landing call %s", d.RunRequest.RunID, call.CallID)
+	}
+	return writeLandingArtifact(dir, landingAnswerFile, answer)
+}
+
+// Reconcile from Pi's persisted transcript, not from successful process exit.
+// Settlement can be retried after the result is saved but before this transaction.
+func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
+	if !d.RunRequest.SessionTurn || d.Returned == nil || d.Returned.WorkerSession == nil {
+		return nil
+	}
+	dir := run.DurableDir(l.laneDirPath(d.LaneID), d.RunRequest.RunID)
+	call, answer, err := l.returnedLandingAnswer(ctx, d)
+	if err != nil || answer.CallID == "" || call.Capability != run.EndingCallSuspends {
+		return err
+	}
+	session := d.Returned.WorkerSession.SessionID
+	if call.SessionID != session || call.Worktree != l.laneTarget(d.LaneID) || call.ItemID != d.ItemID {
+		return Externalf("landing delivery identity changed for %s", d.RunRequest.RunID)
+	}
+	answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
+	path, err := os.ReadFile(filepath.Join(dir, "landing-transcript"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	live, err := liveRunIDs(l.cfg.Store)
+	if err != nil {
+		return err
+	}
+	if live[d.RunRequest.RunID] {
+		return Externalf("cannot reconcile landing answer for %s while its processes survive", d.RunRequest.RunID)
+	}
+	filename := strings.TrimSuffix(string(path), "\n")
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return Externalf("Pi transcript for %s is not a regular file", d.RunRequest.RunID)
+	}
+	transcript, err := os.ReadFile(filename)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !landingResultPersisted(transcript, session, answer) {
+		return nil
+	}
+	db, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	return db.WriteTx(context.WithoutCancel(ctx), func(tx *store.Tx) error {
-		return appendLandingCallEvent(tx, callDelivered, callID, landingCallDelivery{Form: "tool-result", RunID: req.RunID}, l.cfg.Now().UTC())
+	return db.WriteTx(ctx, func(tx *store.Tx) error {
+		seen, err := judgmentSeen(tx, callDelivered, "call", answer.CallID)
+		if err != nil || seen != 0 {
+			return err
+		}
+		return appendLandingCallEvent(tx, callDelivered, answer.CallID, landingCallDelivery{Form: "tool-result", RunID: d.RunRequest.RunID}, l.cfg.Now().UTC())
 	})
+}
+
+func landingResultPersisted(transcript []byte, session string, answer landingAnswer) bool {
+	type entry struct {
+		Type, ID, ParentID string
+		Message            struct {
+			Role, ToolName, ToolCallID string
+			IsError                    bool
+			Content                    []struct{ Type, Text string }
+			Details                    landingAnswer
+		}
+	}
+	entries := map[string]entry{}
+	var leaf string
+	for i, line := range strings.Split(string(transcript), "\n") {
+		var e entry
+		if json.Unmarshal([]byte(line), &e) != nil {
+			if i == 0 {
+				return false
+			}
+			continue
+		}
+		if i == 0 && (e.Type != "session" || e.ID != session) {
+			return false
+		}
+		if i > 0 && e.ID != "" {
+			entries[e.ID] = e
+			leaf = e.ID
+		}
+	}
+	for remaining := len(entries); leaf != "" && remaining > 0; remaining-- {
+		e := entries[leaf]
+		m := e.Message
+		if e.Type == "message" && m.Role == "toolResult" && m.ToolName == "land" && m.ToolCallID == answer.CallID {
+			return m.IsError && len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].Text == answer.Text && reflect.DeepEqual(m.Details, answer)
+		}
+		leaf = e.ParentID
+	}
+	return false
 }
 
 // Observe the same comparison as markExamined before persisting an irreversible

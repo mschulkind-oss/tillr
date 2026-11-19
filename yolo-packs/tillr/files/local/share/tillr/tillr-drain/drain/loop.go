@@ -1237,9 +1237,14 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			staged = append(staged, decision)
 			continue
 		}
+		var endingCapability string
+		if request.Backend != "command" && len(request.Command) > 0 {
+			endingCapability = l.endingCapabilities[request.Command[0]]
+		}
 		spec := StageSpec{
-			Policy: l.currentPolicy(),
-			LaneID: decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
+			EndingCapability: endingCapability,
+			Policy:           l.currentPolicy(),
+			LaneID:           decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned,
@@ -1249,6 +1254,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.DesignContinuationHead = decision.DesignContinuationHead
 		}
 		if err := l.stageWorkerSession(&decision, &spec); err != nil {
+			return nil, err
+		}
+		if err := l.stageLandingAnswer(ctx, decision, &spec); err != nil {
 			return nil, err
 		}
 		if decision.Reason == ReasonReturned && decision.Returned != nil && decision.Returned.WorkerSession != nil && !request.SessionTurn && decision.LaneID == decision.Returned.WorkerSession.LaneID {
@@ -1528,6 +1536,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
+	if err := l.reconcileLandingDelivery(ctx, decision); err != nil {
+		return laneOutcome{err: err}
+	}
 	intake, err := l.intakeLandingOffer(ctx, decision, record, mainSHA)
 	if err != nil {
 		return laneOutcome{err: err}

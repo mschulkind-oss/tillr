@@ -259,6 +259,8 @@ type StageSpec struct {
 	BaseSHA        string
 	WorkingDir     string
 	TimeoutMS      int
+	// EndingCapability is the adapter probe at dispatch; a retained session keeps its staged form.
+	EndingCapability string
 	// SessionID pins the harness session this dispatch runs under. Empty mints a UUID: a
 	// lane is reused by unrelated runs, so the id beside the brief describes the last run
 	// there and reading it back would hand one item's transcript to the next (sessionIDFor).
@@ -487,9 +489,36 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 		}
 	}
-	brief, err := renderBrief(s.Template, recorded.ItemID, values)
+	capability := run.EndingFooter
+	metadataDir := laneDir
+	if spec.Isolated {
+		metadataDir = run.NodeDir(laneDir, spec.RunID)
+	}
+	if spec.SessionID != "" {
+		previous, err := ReadSessionID(metadataDir)
+		if err != nil {
+			return err
+		}
+		if previous == spec.SessionID {
+			capability, err = stagedEndingCapability(metadataDir)
+			if err != nil {
+				return err
+			}
+		}
+	} else if spec.EndingCapability == run.EndingCallSuspends && !spec.Isolated && !isFork && spec.BlockConflict == nil && !item.IsCommentItem(spec.ItemID) &&
+		((spec.Node == nil && (recorded.Seat == "" || recorded.Seat == "build")) ||
+			(spec.Node != nil && spec.Node.Kind == "agent" && spec.Node.Seat == "build" && spec.Node.Access == "write")) {
+		capability = run.EndingCallSuspends
+	}
+	brief, err := renderBriefWithEnding(s.Template, recorded.ItemID, values, capability)
 	if err != nil {
 		return err
+	}
+	var ending string
+	if capability == run.EndingCallSuspends {
+		// Node instructions and carried context belong before the closing contract.
+		at := strings.LastIndex(brief, "\n## Finishing\n")
+		brief, ending = brief[:at], brief[at:]
 	}
 	if isFork {
 		brief = strings.Replace(brief, "## Method\n", "## Method\n\nCommit the change in the named fork checkout, on its own branch. Do not run `bin/pi-forks export`: the lander alone moves the patch branch after the candidate build gate passes and refreshes the shared cache. Do not edit the shared cache or another lane's checkout.\n", 1)
@@ -498,7 +527,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
 	}
 	if spec.Returned != nil {
-		brief += returnedBrief(*spec.Returned)
+		previous := returnedBrief(*spec.Returned)
+		if capability == run.EndingCallSuspends {
+			previous = strings.TrimSuffix(previous, "\n"+ObstacleContract+"\n")
+		}
+		brief += previous
 	}
 	if !spec.Continue {
 		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {
@@ -514,6 +547,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	brief += ending
 	if ideaWords != nil {
 		// Append only after all node instructions and brief rewrites. Preflight
 		// excludes exactly these bytes through EOF from template checks, never
@@ -539,6 +573,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		{ItemBaseSHAFile, itemBaseSHA + "\n"},
 		{ItemFenceFile, fenceText(itemAllowed)},
 		{SessionIDFile, sessionID + "\n"},
+		{endingCapabilityFile, capability + "\n"},
 	}
 	if spec.BlockConflict != nil {
 		files = append(files, stagedFile{"conflict.json", mustJSON(spec.BlockConflict) + "\n"})
@@ -576,10 +611,6 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 	}
 	runDir := RunDir(s.Root, spec.RunID)
-	metadataDir := laneDir
-	if spec.Isolated {
-		metadataDir = run.NodeDir(laneDir, spec.RunID)
-	}
 	for _, dir := range []string{metadataDir, runDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Externalf("creating the run's directory %s: %v", dir, err)
@@ -1008,6 +1039,10 @@ func (v briefValues) carriesABracePair() (string, string, bool) {
 // block, which carries placeholders of its own) are dropped before filling, because a
 // commented placeholder would fail all of those checks.
 func renderBrief(templatePath, itemID string, values briefValues) (string, error) {
+	return renderBriefWithEnding(templatePath, itemID, values, run.EndingFooter)
+}
+
+func renderBriefWithEnding(templatePath, itemID string, values briefValues, capability string) (string, error) {
 	if templatePath == "" {
 		return "", Usagef("staging needs a brief template: pass --brief-template <path> naming tools/tillr-run/backends/brief-template.md")
 	}
@@ -1017,6 +1052,12 @@ func renderBrief(templatePath, itemID string, values briefValues) (string, error
 	}
 	provided := values.byName()
 	body := dropTemplateComments(string(raw))
+	if capability == run.EndingCallSuspends {
+		body, err = callEndingBrief(body)
+		if err != nil {
+			return "", err
+		}
+	}
 	missing := []string{}
 	for _, found := range placeholder.FindAllStringSubmatch(body, -1) {
 		if _, ok := provided[found[1]]; !ok {

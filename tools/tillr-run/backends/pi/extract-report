@@ -49,7 +49,7 @@ def _blocks_text(message):
     )
 
 
-def dialect(stream_text):
+def dialect(stream_text, live_probe=False):
     records, unparseable = report.records(stream_text)
     deltas, snapshots, settled = [], {}, []
     tokens, cost, saw_tokens, saw_cost = 0, 0.0, False, False
@@ -107,6 +107,11 @@ def dialect(stream_text):
         text = "".join(settled)
     else:
         text = "".join(snapshots.values())
+    # The runner's idle watcher probes a live stream with an unknown exit code.
+    # A stale agent_settled and a footer from an earlier turn do not authorize it
+    # to end a parked call, even when the parked batch has emitted agent_end.
+    if live_probe and any(record.get("type") == "parked" for record in records):
+        text += "\n[land call parked; waiting for the harness to exit]"
     return {
         "usage_details": measurements.details(records, "pi"),
         "text": text,
@@ -122,4 +127,7 @@ def dialect(stream_text):
 
 
 if __name__ == "__main__":
-    sys.exit(report.run(dialect))
+    # readSpend passes unknown only while the process is alive; final extraction
+    # supplies its exit status. Preserve the ordinary final report byte for byte.
+    live = "--exit-code" in sys.argv and sys.argv.index("--exit-code") + 1 < len(sys.argv) and sys.argv[sys.argv.index("--exit-code") + 1] == "unknown"
+    sys.exit(report.run(lambda stream: dialect(stream, live_probe=live)))
