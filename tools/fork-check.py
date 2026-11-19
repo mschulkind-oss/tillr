@@ -1938,7 +1938,8 @@ def git(root: Path, *args: str, check: bool = True) -> str:
 # GIT_DIR or GIT_WORK_TREE inherited from a hook or a harness, those commands act on the
 # real repository instead, and 6f2d9d938 landed a lane's dirty working tree on `main` as
 # `fork-check test` that way.
-GATE_ENV_DROP = ("LAND_BATCH_LIMIT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+# `TILLR_SQLITE_TRACE` belongs to the caller's own store tracing, not the checks it runs.
+GATE_ENV_DROP = ("LAND_BATCH_LIMIT", "TILLR_SQLITE_TRACE", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
                  "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
 
 

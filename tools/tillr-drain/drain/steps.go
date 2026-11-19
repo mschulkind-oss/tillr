@@ -493,9 +493,22 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		// The definition selects this exact executable, even at the legacy
 		// adapter path. Only CLI programs opt into the embedded adapter.
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
-		cmd.Env = append(os.Environ(), env...)
+		baseEnv := os.Environ()
+		if step == "gate" {
+			baseEnv = withoutProcessEnv(baseEnv, "TILLR_SQLITE_TRACE")
+		}
+		cmd.Env = append(baseEnv, env...)
 	} else {
-		cmd = s.stepCommand(ctx, argv, env)
+		baseEnv := env
+		if step == "gate" {
+			// The gate runs candidate checks, not the loop's store: strip
+			// TILLR_SQLITE_TRACE so checks see the same environment as the
+			// trunk proof and a worker's own test runs.
+			cmd = s.stepCommand(ctx, argv, env)
+			cmd.Env = withoutProcessEnv(cmd.Env, "TILLR_SQLITE_TRACE")
+		} else {
+			cmd = s.stepCommand(ctx, argv, baseEnv)
+		}
 	}
 	cmd.Dir = dir
 	var stderr stderrTail
@@ -800,7 +813,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), s.forkRootEnv()...)
+		cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...)
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		runErr := runCheckGroup(cmd)
@@ -987,7 +1000,7 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	_ = os.Remove(spans)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
