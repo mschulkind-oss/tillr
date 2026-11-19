@@ -65,7 +65,8 @@ func startRoll(t *testing.T, lanes int, pauseKind string, harnessBody ...string)
 		adapterDir = copyTo
 		writeFile(t, filepath.Join(adapterDir, "pi", "pause-kind"), pauseKind+"\n")
 	}
-	body := rollHarness
+	body := `[ "${1:-}" != --features ] || exit 2
+` + rollHarness
 	if len(harnessBody) > 0 {
 		body = harnessBody[0]
 	}
