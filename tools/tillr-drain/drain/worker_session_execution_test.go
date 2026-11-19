@@ -81,7 +81,13 @@ git add candidate.txt
 git commit -qm second
 `
 			p.decision.RunRequest.Command = []string{continuationShell(t), "-c", script}
+			// The old session has no pin, and the adapter now supports calls. It
+			// must still receive the refusal as a message, under a footer brief.
+			l.endingCapabilities = map[string]string{p.decision.RunRequest.Command[0]: run.EndingCallSuspends}
 			d := applyReturnedTurn(t, l, p, base)
+			if got, err := stagedEndingCapability(RunDir(f.root, d.RunRequest.RunID)); err != nil || got != run.EndingFooter {
+				t.Fatalf("legacy returned turn was not staged as footer: %q %v", got, err)
+			}
 			if cause == RefusalGate {
 				if !strings.Contains(d.RunRequest.ResumePrompt, "documents") || !strings.Contains(d.RunRequest.ResumePrompt, "documents.log") {
 					t.Fatal(d.RunRequest.ResumePrompt)

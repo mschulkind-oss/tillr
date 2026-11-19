@@ -538,11 +538,21 @@ Never change the worker's candidate.
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), []byte(brief), 0644); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(lane, endingCapabilityFile), []byte(run.EndingFooter+"\n"), 0644); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(lane, SessionIDFile), []byte(session+"\n"), 0644)
 }
 func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 	lane := l.laneDirPath(c.LaneID)
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), r.WorkerBrief, 0644); err != nil {
+		return err
+	}
+	capability, err := stagedEndingCapability(RunDir(l.cfg.Root, c.RunID))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(lane, endingCapabilityFile), []byte(capability+"\n"), 0644); err != nil {
 		return err
 	}
 	return os.WriteFile(filepath.Join(lane, SessionIDFile), r.WorkerSession, 0644)

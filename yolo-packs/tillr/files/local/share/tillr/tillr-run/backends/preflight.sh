@@ -101,12 +101,25 @@ preflight_brief() {
     if printf '%s\n' "$template_text" | grep -q '{{'; then
         refuse "the brief '$1' carries a literal '{{' that is not a template placeholder: it arrived in an item field (the title, the body reference, a criterion or an allowed path), so the item's record is the thing to fix and backends/brief-template.md is not"
     fi
+    headings=$REQUIRED_HEADINGS
+    contract="all ten of the template's sections"
+    capability=$(lane_path "$1" ending-capability)
+    if [ -r "$capability" ] && [ "$(cat "$capability")" = call-suspends ]; then
+        contract="the common sections and Finishing"
+        headings="${REQUIRED_HEADINGS%
+Report shape
+Stop conditions}
+Finishing"
+        if ! printf '%s\n' "$template_text" | grep -qx '## Finishing'; then
+            refuse "the brief '$1' has no '## Finishing' section for its staged call-suspends ending"
+        fi
+    fi
     while IFS= read -r heading; do
         if ! printf '%s\n' "$template_text" | grep -q "^## $heading"; then
-            refuse "the brief '$1' has no '## $heading' section: all ten of the template's sections are load-bearing, and one missing is a brief the driver must not dispatch"
+            refuse "the brief '$1' has no '## $heading' section: $contract are load-bearing, and one missing is a brief the driver must not dispatch"
         fi
     done <<EOF
-$REQUIRED_HEADINGS
+$headings
 EOF
 }
 

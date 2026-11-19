@@ -16,7 +16,7 @@ import (
 
 // The journal pi-background-tasks keeps, reduced to the columns the watcher reads.
 const fakeJournalSchema = `
-CREATE TABLE instances (instance_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, process_id INTEGER NOT NULL, disabled_at INTEGER);
+CREATE TABLE instances (instance_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, process_id INTEGER NOT NULL, disabled_at INTEGER, pi_session_id TEXT);
 CREATE TABLE tasks (task_key TEXT PRIMARY KEY, started_by_instance TEXT, completion_policy TEXT, status TEXT, ended_at INTEGER);
 CREATE TABLE deliveries (delivery_key TEXT PRIMARY KEY, task_key TEXT NOT NULL, wake_requested INTEGER NOT NULL);
 CREATE TABLE delivery_events (event_id INTEGER PRIMARY KEY, delivery_key TEXT NOT NULL, event TEXT NOT NULL, via TEXT);
@@ -33,7 +33,7 @@ sys.stdin.read()
 db = sqlite3.connect(os.environ["PI_BACKGROUND_TASK_JOURNAL"])
 db.executescript(os.environ["FAKE_JOURNAL_SCHEMA"])
 now = int(time.time() * 1000)
-db.execute("INSERT INTO instances VALUES ('inst', ?, ?, NULL)", (now, os.getpid()))
+db.execute("INSERT INTO instances VALUES ('inst', ?, ?, NULL, 'session')", (now, os.getpid()))
 db.execute("INSERT INTO tasks VALUES ('t1', 'inst', 'wake', 'completed', ?)", (now,))
 db.execute("INSERT INTO deliveries VALUES ('d1', 't1', 1)")
 db.execute("INSERT INTO delivery_events (delivery_key, event, via) VALUES ('d1', 'fallback-injected', NULL), ('d1', 'observed', 'fallback')")
@@ -180,7 +180,7 @@ schema = sys.argv[2]
 def journal(rows, pid=4242, started=1000, disabled=None):
     path = tempfile.mktemp(dir=sys.argv[3], suffix=".sqlite")
     db = sqlite3.connect(path); db.executescript(schema)
-    db.execute("INSERT INTO instances VALUES ('i', ?, ?, ?)", (started, pid, disabled))
+    db.execute("INSERT INTO instances VALUES ('i', ?, ?, ?, 'session')", (started, pid, disabled))
     for key, policy, ended, wake, events in rows:
         db.execute("INSERT INTO tasks VALUES (?, 'i', ?, 'x', ?)", (key, policy, ended))
         if wake is not None:

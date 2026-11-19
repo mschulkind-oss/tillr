@@ -56,10 +56,10 @@ def journal_path(env):
     return os.path.join(state, "pi-background-tasks", "journal.sqlite")
 
 
-def owed_work(path, pid, since_ms):
+def owed_wakes(path, pid, since_ms):
     """Whether the session in process `pid` still owes a wake turn.
 
-    Returns True (owed), False (nothing owed) or None (cannot tell). Only a
+    Returns task keys, or None (cannot tell). Only a
     wake-policy task takes a session hold, so only it can owe a turn: one that has
     not ended, or one that ended for a wake and whose completion the session has
     not observed. A stopped task (wake_requested 0) and a delivery that failed to
@@ -73,26 +73,37 @@ def owed_work(path, pid, since_ms):
     except sqlite3.Error:
         return None
     try:
-        instances = db.execute(
-            "SELECT instance_id, disabled_at FROM instances WHERE process_id=? AND started_at>=?",
+        current = db.execute(
+            "SELECT pi_session_id, disabled_at FROM instances WHERE process_id=? AND started_at>=?",
             (pid, since_ms)).fetchall()
-        if not instances or any(disabled is not None for _, disabled in instances):
+        sessions = {session for session, _ in current}
+        # A missing or ambiguous identity cannot prove that the session owes no
+        # wakes. Include earlier processes of this same session: their tasks can
+        # outlive the process that started them.
+        if not current or len(sessions) != 1 or None in sessions or "" in sessions or any(disabled is not None for _, disabled in current):
             return None
+        session = next(iter(sessions))
+        instances = db.execute("SELECT instance_id FROM instances WHERE pi_session_id=?", (session,)).fetchall()
         marks = ",".join("?" * len(instances))
-        ids = [instance for instance, _ in instances]
-        row = db.execute(f"""
-            SELECT COUNT(*) FROM tasks t
+        ids = [instance for (instance,) in instances]
+        rows = db.execute(f"""
+            SELECT t.task_key FROM tasks t
             WHERE t.started_by_instance IN ({marks}) AND t.completion_policy='wake' AND (
               t.ended_at IS NULL OR NOT EXISTS (
                 SELECT 1 FROM deliveries d WHERE d.task_key=t.task_key AND (
                   d.wake_requested=0 OR EXISTS (
                     SELECT 1 FROM delivery_events e WHERE e.delivery_key=d.delivery_key
-                    AND e.event IN ('observed','enqueue-failed')))))""", ids).fetchone()
-        return row[0] > 0
+                    AND e.event IN ('observed','enqueue-failed')))))""", ids).fetchall()
+        return [key for (key,) in rows]
     except sqlite3.Error:
         return None
     finally:
         db.close()
+
+
+def owed_work(path, pid, since_ms):
+    wakes = owed_wakes(path, pid, since_ms)
+    return None if wakes is None else bool(wakes)
 
 
 def seconds(env, name, default):
@@ -119,7 +130,27 @@ def end_settled(child, bound):
     return actions
 
 
+def end_parked(child):
+    """Enforce the absolute park deadline, without extending it for disposal."""
+    actions = []
+    # The second SIGTERM is pi's immediate-exit path. SIGKILL is the final
+    # backstop; signal only pi, never its tool children or the runner.
+    for sig in (signal.SIGTERM, signal.SIGTERM, signal.SIGKILL):
+        if child.poll() is not None:
+            break
+        try:
+            child.send_signal(sig)
+            actions.append(f"{signal.Signals(sig).name} to pi {child.pid}")
+        except ProcessLookupError:
+            break
+    child.wait()
+    return actions
+
+
 def main():
+    if sys.argv[1] == "--owed-wakes":
+        print(json.dumps(owed_wakes(journal_path(os.environ), int(sys.argv[2]), int(sys.argv[3]))))
+        return 0
     request = Path(sys.argv[1])
     launched_ms = int(time.time() * 1000) - 1000
     journal = journal_path(os.environ)
@@ -138,8 +169,11 @@ def main():
     # Only a top-level event begins a line; model text is JSON-escaped inside one.
     head = bytearray()
     settled = False
+    parked_at = None
+    parked_batch_done = False
     next_check = 0.0
     ended = None
+    ended_after = "agent_settled"
     with selectors.DefaultSelector() as selector:
         selector.register(child.stdout, selectors.EVENT_READ)
         while True:
@@ -160,7 +194,15 @@ def main():
                     if len(head) < 64:
                         head.extend(part[:64 - len(head)])
                     if part.endswith(b"\n"):
-                        if head.startswith(b'{"type":"agent_settled"'):
+                        if head.startswith(b'{"type":"parked"'):
+                            settled = False
+                            if parked_at is None:
+                                parked_at = time.monotonic()
+                        elif parked_at is not None and head.startswith(b'{"type":"agent_end"'):
+                            # Unlike parked, agent_end follows persistence of every
+                            # sibling result in this batch.
+                            parked_batch_done = True
+                        elif parked_at is None and head.startswith(b'{"type":"agent_settled"'):
                             settled, next_check = True, time.monotonic() + grace
                         elif head.startswith(b'{"type":"agent_start"'):
                             settled = False
@@ -185,12 +227,16 @@ def main():
                             oversized = False
                             if ready:
                                 break
-            if ready and not sent and request.exists() and child.poll() is None:
+            if parked_at is None and ready and not sent and request.exists() and child.poll() is None:
                 try:
                     child.send_signal(signal.SIGUSR1)
                 except ProcessLookupError:
                     pass  # A natural exit raced the request; wait still reaps it.
                 sent = True
+            if parked_at is not None and child.poll() is None and time.monotonic() >= parked_at + bound:
+                ended = end_parked(child)
+                ended_after = "parked" if parked_batch_done else "parked-batch-incomplete"
+                break
             if settled and not sent and child.poll() is None and time.monotonic() >= next_check:
                 next_check = time.monotonic() + OWED_RECHECK_SECONDS
                 if owed_work(journal, child.pid, launched_ms) is False:
@@ -216,14 +262,16 @@ def main():
     if ended is not None:
         line = json.dumps({
             "type": ENDED_EVENT,
-            "after": "agent_settled",
-            "reason": "pi did not exit after its session settled with no background work owed",
+            "after": ended_after,
+            "reason": ("pi did not exit after parking" if ended_after == "parked" else
+                       "parked batch did not finish before the exit bound" if ended_after == "parked-batch-incomplete" else
+                       "pi did not exit after its session settled with no background work owed"),
             "actions": ended,
             "harness_exit": code,
         })
         sys.stdout.buffer.write((("\n" if head else "") + line + "\n").encode())
         sys.stdout.buffer.flush()
-        return 0
+        return 1 if ended_after == "parked-batch-incomplete" else 0
     return code
 
 

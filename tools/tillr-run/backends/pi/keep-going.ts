@@ -136,6 +136,13 @@ export const SEAT_NEEDS_ATTEMPT =
 export const OBSTACLE_CONTRACT =
 	"A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `fence` (PATHS, EVIDENCE) when the change needs paths outside the fence; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test inside the fence, a long suite and unfinished work are work to continue, not obstacles.";
 
+function goalObstacleProblem(text: string, footer: Footer | undefined, committed: boolean, clean: boolean): string | undefined {
+	if (footer !== "blocked" && footer !== "trunk-broken") return undefined;
+	const problem = obstacleProblem(text);
+	// A seat obstacle's evidence is the attempt itself (obstacle.go's SeatNeedsAttempt).
+	return problem === "" && obstacleKind(text) === "seat" && !committed && clean ? SEAT_NEEDS_ATTEMPT : problem;
+}
+
 export function decide(input: GoalInput): GoalDecision {
 	if (input.paused) return { action: "settle", reason: "a pause was requested" };
 	if (input.outcome !== undefined && input.outcome !== "completed") return { action: "settle", reason: `the run's outcome is ${input.outcome}` };
@@ -143,9 +150,7 @@ export function decide(input: GoalInput): GoalDecision {
 	const footer = footerOf(input.text);
 	const committed = input.tree.head !== "" && input.tree.head !== input.base;
 	const clean = input.tree.status.trim() === "";
-	let obstacle = footer === "blocked" || footer === "trunk-broken" ? obstacleProblem(input.text) : undefined;
-	// A seat obstacle's evidence is the attempt itself (obstacle.go's SeatNeedsAttempt).
-	if (obstacle === "" && obstacleKind(input.text) === "seat" && !committed && clean) obstacle = SEAT_NEEDS_ATTEMPT;
+	const obstacle = goalObstacleProblem(input.text, footer, committed, clean);
 	if (obstacle === "") return { action: "settle", reason: `the worker named a complete obstacle (RESULT: ${footer})` };
 	if (committed && clean && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
 	const fingerprint = createHash("sha256")
@@ -207,6 +212,25 @@ export default function keepGoing(pi: any) {
 	});
 	pi.on("agent_before_settle", async (event: any) => {
 		const pause = process.env.TILLR_PAUSE_REQUEST;
+		if (process.env.TILLR_CALL_SUSPENDS === "1") {
+			if ((pause && existsSync(pause)) || last?.stopReason !== "stop" ||
+				(event?.outcome !== undefined && event.outcome !== "completed")) return;
+			const text = textOf(last);
+			const footer = footerOf(text);
+			let obstacle: string | undefined;
+			if (footer === "blocked" || footer === "trunk-broken") {
+				const tree = await readTree(pi);
+				obstacle = goalObstacleProblem(text, footer, tree.head !== "" && tree.head !== base, tree.status.trim() === "");
+				if (obstacle === "") return;
+			}
+
+			// Pi skips this hook for a parked call. Only a plain ending needs a nudge.
+			return { continue: true, entries: [...(event?.entries ?? []), {
+				type: "custom_message", customType: "tillr-goal",
+				content: obstacle ? `Your obstacle is incomplete: ${obstacle}. ${OBSTACLE_CONTRACT}` :
+					"You ended without calling `land`. Call `land` with a summary when your commit is ready.", display: true,
+			}] };
+		}
 		const decision = decide({
 			base,
 			outcome: event?.outcome,
