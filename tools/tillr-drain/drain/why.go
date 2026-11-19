@@ -545,6 +545,10 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	if strings.HasPrefix(d.Reason, "node-failed: ") {
 		return "needs you", "lane", "inspect the named node and authorize a retry"
 	}
+	if strings.HasPrefix(d.Reason, ReasonStagingFailed+": ") {
+		lane := strings.TrimPrefix(d.Reason, ReasonStagingFailed+": ")
+		return "needs you", "lane", "correct the reported staging cause on " + lane + "; then tillr drain retry or clear the lane condition"
+	}
 	switch d.Reason {
 	case "awaits-rewrite":
 		return "waits on work", where, "the prose rewrite to land"

@@ -485,3 +485,175 @@ func preservedFacts(ctx context.Context, storePath string, spec StageSpec) (stri
 	})
 	return b.String(), err
 }
+
+func (l *Loop) workflowPredecessorRun(ctx context.Context, d Decision) (string, error) {
+	if l.cfg.Store == "" || d.Workflow == nil || d.Attempt <= 0 {
+		return "", nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	current := ""
+	if d.RunRequest != nil {
+		current = d.RunRequest.RunID
+	}
+	var fallback, staged string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var hasNodes bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil || !hasNodes {
+			return err
+		}
+		rows, err := effectiveNodeRuns(r, d.ItemID, d.Attempt)
+		if err != nil {
+			return err
+		}
+		for _, n := range rows {
+			if n.RunID == "" || n.RunID == current {
+				continue
+			}
+			fallback = n.RunID
+			if _, statErr := os.Stat(RunDir(l.cfg.Root, n.RunID)); statErr == nil {
+				staged = n.RunID
+			}
+		}
+		return nil
+	})
+	if staged != "" {
+		return staged, err
+	}
+	return fallback, err
+}
+
+func (l *Loop) preservedWorkForDecision(ctx context.Context, d Decision, runID string) (*PreservedWork, error) {
+	if l.cfg.Store == "" {
+		return nil, nil
+	}
+	itemID := d.ItemID
+	if itemID == "" && d.RunRequest != nil {
+		itemID = d.RunRequest.RunID
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	var found *PreservedWork
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		saved, err := ReadPreservedWork(r)
+		if err != nil {
+			return err
+		}
+		findByRun := func(targetRun string) *PreservedWork {
+			if targetRun == "" {
+				return nil
+			}
+			var match *PreservedWork
+			for i := range saved {
+				p := saved[i]
+				if !p.Pruned && p.RunID == targetRun {
+					copy := p
+					match = &copy
+				}
+			}
+			return match
+		}
+		if found = findByRun(runID); found != nil {
+			return nil
+		}
+		if found = findByRun(d.SupersedesRunID); found != nil {
+			return nil
+		}
+		if d.Workflow != nil && d.Attempt > 0 {
+			var hasNodes bool
+			if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
+				return err
+			}
+			if hasNodes {
+				rows, err := effectiveNodeRuns(r, itemID, d.Attempt)
+				if err != nil {
+					return err
+				}
+				attemptRuns := make(map[string]bool, len(rows))
+				for _, n := range rows {
+					if n.RunID != "" {
+						attemptRuns[n.RunID] = true
+					}
+				}
+				for i := range saved {
+					p := saved[i]
+					if !p.Pruned && attemptRuns[p.RunID] {
+						copy := p
+						found = &copy
+					}
+				}
+				return nil
+			}
+		}
+		if runID == "" && d.Attempt == 0 {
+			for i := range saved {
+				p := saved[i]
+				if !p.Pruned && p.ItemID == itemID {
+					copy := p
+					found = &copy
+				}
+			}
+		}
+		return nil
+	})
+	return found, err
+}
+
+// applyPreservedWork applies preserved uncommitted work (working tree and staged index
+// when IndexRef exists) onto target when a continued step is staged on a different lane.
+func (l *Loop) applyPreservedWork(ctx context.Context, target string, p PreservedWork) error {
+	if p.Ref == "" {
+		return nil
+	}
+	if _, err := l.git(ctx, target, "rev-parse", "--verify", "--quiet", p.Ref); err != nil {
+		return nil
+	}
+	applyDiff := func(from, to string, index bool) error {
+		patch, err := l.git(ctx, target, "diff", "--binary", from, to)
+		if err != nil {
+			return err
+		}
+		if patch == "" {
+			return nil
+		}
+		runApply := func(threeWay bool) error {
+			args := []string{"-C", target, "apply"}
+			if index {
+				args = append(args, "--index")
+			}
+			if threeWay {
+				args = append(args, "--3way")
+			}
+			cmd := exec.CommandContext(ctx, "git", args...)
+			cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+			cmd.Stdin = strings.NewReader(patch)
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				return Externalf("applying preserved work %s (%s..%s): %v: %s", p.Ref, from, to, err, strings.TrimSpace(stderr.String()))
+			}
+			return nil
+		}
+		if err := runApply(false); err != nil {
+			if err3 := runApply(true); err3 != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if p.IndexRef != "" {
+		if _, err := l.git(ctx, target, "rev-parse", "--verify", "--quiet", p.IndexRef); err == nil {
+			if err := applyDiff(p.IndexRef+"^1", p.IndexRef, true); err != nil {
+				return err
+			}
+			return applyDiff(p.IndexRef, p.Ref, false)
+		}
+	}
+	return applyDiff(p.Ref+"^1", p.Ref, false)
+}

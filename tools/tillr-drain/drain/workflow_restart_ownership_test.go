@@ -267,8 +267,11 @@ func TestWorkflowContinuationRefusesUnrecordedHead(t *testing.T) {
 	head := runGit(t, target, "rev-parse", "HEAD")
 	next := replaceGraphLoop(t, f, l, steps)
 	graphPass(t, next, result)
-	if len(steps.runs) != 2 || result.InfraFailures != 1 || runGit(t, target, "rev-parse", "HEAD") != head {
+	if len(steps.runs) != 2 || result.InfraFailures != 0 || runGit(t, target, "rev-parse", "HEAD") != head {
 		t.Fatalf("unrecorded commit adopted or discarded: %+v %+v", steps.runs, result)
+	}
+	if cond := next.laneConditions["lane-1"]; cond == nil || !cond.out || cond.reason != ReasonLaneUnlandedChange {
+		t.Fatalf("lane-1 condition = %+v, want out with %q", cond, ReasonLaneUnlandedChange)
 	}
 }
 

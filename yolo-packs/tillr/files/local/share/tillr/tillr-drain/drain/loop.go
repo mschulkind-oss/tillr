@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -1230,15 +1231,86 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 	if !held {
 		return "", false
 	}
+	drop := func() (string, bool) {
+		if lane, ok := strings.CutPrefix(hold.reason, ReasonStagingFailed+": "); ok {
+			delete(l.infraLines, itemID+"\x00"+lane)
+		} else if hold.reason == ReasonStagingFailed {
+			delete(l.infraLines, itemID+"\x00")
+		}
+		delete(l.held, itemID)
+		return "", false
+	}
 	var updatedAt int64
 	if err := r.QueryRow(`SELECT updated_at FROM items WHERE item_id = ?`, itemID).Scan(&updatedAt); err != nil {
 		return hold.reason, true
 	}
 	if updatedAt > hold.at.UnixMilli() {
-		delete(l.held, itemID)
-		return "", false
+		return drop()
+	}
+	if strings.HasPrefix(hold.reason, ReasonStagingFailed) {
+		var hasRetries bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='retries')`).Scan(&hasRetries); err == nil && hasRetries {
+			var retryAt int64
+			if err := r.QueryRow(`SELECT COALESCE(MAX(requested_at), 0) FROM retries WHERE item_id = ?`, itemID).Scan(&retryAt); err == nil && retryAt > hold.at.UnixMilli() {
+				return drop()
+			}
+		}
+		if lane, ok := strings.CutPrefix(hold.reason, ReasonStagingFailed+": "); ok && lane != "" {
+			var restoredAt int64
+			if err := r.QueryRow(`SELECT COALESCE(MAX(ts), 0) FROM events WHERE kind = ? AND object_type = 'lane' AND object_id = ?`, laneRestoredKind, lane).Scan(&restoredAt); err == nil && restoredAt > hold.at.UnixMilli() {
+				return drop()
+			}
+		}
 	}
 	return hold.reason, true
+}
+
+func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, expectedHead string) error {
+	target := l.laneTarget(decision.LaneID)
+	head, err := l.revParse(ctx, target, "HEAD")
+	if err != nil {
+		return err
+	}
+	if head == expectedHead {
+		return nil
+	}
+	status, err := l.git(ctx, target, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) != "" {
+		first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
+		return laneRefusalf(decision.LaneID, ReasonLaneUncommittedWork,
+			"commit or remove the files, or reset the lane deliberately",
+			"lane %s holds uncommitted work (%s)", decision.LaneID, first)
+	}
+	contained, err := containsCommit(ctx, l.cfg.Root, head, expectedHead)
+	if err != nil {
+		return err
+	}
+	if !contained {
+		contained, err = containsCommit(ctx, l.cfg.Root, head, TrunkRef)
+		if err != nil {
+			return err
+		}
+	}
+	if !contained {
+		stager := &LaneStager{Root: l.cfg.Root, Store: l.cfg.Store, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now}
+		clearable, err := stager.clearableLaneCopy(ctx, decision.LaneID, head)
+		if err != nil {
+			return err
+		}
+		if !clearable {
+			return unlandedLaneRefusal(decision.LaneID, head, expectedHead)
+		}
+	}
+	if _, err := l.git(ctx, target, "reset", "--hard", expectedHead); err != nil {
+		return err
+	}
+	if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // stageDispatches stages the pass's claimed dispatches and returns those that may run.
@@ -1310,6 +1382,20 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if !revertedSession {
 				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry) || decision.WorkflowRestart
 			}
+			if spec.Continue {
+				spec.PreviousRunID = decision.NodeStartRunID
+				if decision.RepeatedCall != nil && decision.RepeatedCall.RunID != "" {
+					spec.PreviousRunID = decision.RepeatedCall.RunID
+				} else if decision.Returned != nil && decision.Returned.RunID != "" {
+					spec.PreviousRunID = decision.Returned.RunID
+				} else if spec.PreviousRunID == "" {
+					if prev, prevErr := l.stagedNodeRun(decision); prevErr == nil && prev != "" {
+						spec.PreviousRunID = prev
+					} else if pred, predErr := l.workflowPredecessorRun(ctx, decision); predErr == nil && pred != "" {
+						spec.PreviousRunID = pred
+					}
+				}
+			}
 			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
 				previous, err := l.stagedNodeRun(decision)
 				if err != nil {
@@ -1360,15 +1446,28 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 		}
 		var err error
-		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart && !revertedSession && !freshRetry {
-			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
-			err = headErr
+		if !l.nonLanding && spec.Continue && !decision.WorkflowRestart && !revertedSession && !freshRetry {
 			expectedHead := decision.NodeBaseSHA
-			if request.SessionTurn && decision.Returned.WorkerSession != nil {
+			if request.SessionTurn && decision.Returned != nil && decision.Returned.WorkerSession != nil && decision.Returned.WorkerSession.HeadSHA != "" {
 				expectedHead = decision.Returned.WorkerSession.HeadSHA
 			}
-			if err == nil && head != expectedHead {
-				err = Externalf("lane %s holds a change nobody landed: %s is not the recorded node start %s, and staging does not reset a candidate", decision.LaneID, head, decision.NodeBaseSHA)
+			if expectedHead != "" {
+				err = l.prepareContinuedLane(ctx, decision, expectedHead)
+			}
+		}
+		if err == nil && !l.nonLanding && spec.Continue {
+			prevRun := spec.PreviousRunID
+			if prevRun == "" {
+				if decision.RepeatedCall != nil && decision.RepeatedCall.RunID != "" {
+					prevRun = decision.RepeatedCall.RunID
+				} else if decision.Returned != nil && decision.Returned.RunID != "" {
+					prevRun = decision.Returned.RunID
+				}
+			}
+			if p, pErr := l.preservedWorkForDecision(ctx, decision, prevRun); pErr != nil {
+				err = pErr
+			} else if p != nil && p.LaneID != "" && p.LaneID != decision.LaneID {
+				err = l.applyPreservedWork(ctx, l.laneTarget(decision.LaneID), *p)
 			}
 		}
 		if err == nil {
@@ -1418,12 +1517,26 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			l.infraStreak++
 			streak := l.infraStreak
 			l.mu.Unlock()
-			// The same refusal on every pass is printed once; the streak still counts.
 			key := request.ItemID + "\x00" + decision.LaneID
 			if l.infraLines[key] != err.Error() {
 				l.infraLines[key] = err.Error()
 				l.reportf("loop: staging %s on %s failed in the infrastructure class (%d consecutive): %v\n",
 					request.ItemID, decision.LaneID, streak, err)
+				continue
+			}
+			reason := ReasonStagingFailed
+			if decision.LaneID != "" {
+				reason = ReasonStagingFailed + ": " + decision.LaneID
+			}
+			_, _, mover := whyPresentation(Decision{Action: ActionHold, Reason: reason})
+			if mover == "" {
+				mover = holdrules.For(reason).Mover
+			}
+			l.held[request.ItemID] = heldItem{reason: reason, at: l.cfg.Now().UTC()}
+			l.reportf("loop: holding %s on %s (%s): staging failure repeated unchanged; mover: %s: %v\n",
+				request.ItemID, decision.LaneID, reason, mover, err)
+			if err := l.recordItemRefusal(ctx, request.ItemID, reason, err.Error()); err != nil {
+				return nil, err
 			}
 			continue
 		}

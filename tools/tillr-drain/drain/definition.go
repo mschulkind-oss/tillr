@@ -68,7 +68,7 @@ var generalHolds = map[string]string{
 	ReasonDesignDocMissing:   definition.PrerequisiteDesignDocument,
 	ReasonDesignUnderComment: definition.PrerequisiteDesignQuestions,
 	ReasonVantageUnavailable: definition.PrerequisiteDesignQuestions,
-	ReasonItemUnstagleable:   "", ReasonDefinitionSyncFailed: "",
+	ReasonItemUnstagleable:   "", ReasonStagingFailed: "", ReasonDefinitionSyncFailed: "",
 	ReasonNodeScopeOutsideFence: "",
 	ReasonLaneUnlandedChange:    "", ReasonLaneBranchHeld: "", ReasonLaneUncommittedWork: "", ReasonLaneChildren: "",
 	ReasonPreserveFailed: "", ReasonRunProcessesLive: "",

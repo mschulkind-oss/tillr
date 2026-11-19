@@ -249,6 +249,7 @@ type StageSpec struct {
 	Policy         *Policy // policy in force at dispatch; seats are brief context, not adapter options
 	Isolated       bool    // parallel readers keep their own adapter metadata
 	Continue       bool
+	PreviousRunID  string
 	Node           *WorkflowStage
 	InputPaths     map[string][]NodeInput
 	PreviousReport string
@@ -409,12 +410,21 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
 	if spec.Node != nil {
 		if spec.Continue {
-			raw, err := os.ReadFile(filepath.Join(laneDir, ItemBaseSHAFile))
+			baseDir := laneDir
+			if spec.PreviousRunID != "" {
+				runDir := RunDir(s.Root, spec.PreviousRunID)
+				if _, statErr := os.Stat(filepath.Join(runDir, ItemBaseSHAFile)); statErr == nil {
+					baseDir = runDir
+				} else if _, statErr := os.Stat(filepath.Join(runDir, BaseSHAFile)); statErr == nil {
+					baseDir = runDir
+				}
+			}
+			raw, err := os.ReadFile(filepath.Join(baseDir, ItemBaseSHAFile))
 			if os.IsNotExist(err) {
 				// Before per-node scopes, base_sha retained the original item
 				// base across nodes. Migrate that recorded legacy boundary;
 				// never substitute the current trunk or target head.
-				raw, err = os.ReadFile(filepath.Join(laneDir, BaseSHAFile))
+				raw, err = os.ReadFile(filepath.Join(baseDir, BaseSHAFile))
 			}
 			if err != nil {
 				return Externalf("reading the item's base: %v", err)
@@ -870,7 +880,9 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 // even when the green pointer has not caught up. Unlanded commits remain refused.
 func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, worktree string) error {
 	candidates := []string{}
+	worktreeExists := false
 	if head, err := s.git(ctx, worktree, "rev-parse", "HEAD"); err == nil {
+		worktreeExists = true
 		candidates = append(candidates, strings.TrimSpace(head))
 	}
 	if branch, err := s.git(ctx, s.Root, "rev-parse", "--verify", "--quiet", "refs/heads/"+LaneBranch(s.LaneRoot, spec.LaneID)); err == nil {
@@ -901,6 +913,15 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 			continue
 		}
 		seen[sha] = true
+		if worktreeExists {
+			status, statusErr := s.git(ctx, worktree, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
+			if statusErr == nil && strings.TrimSpace(status) != "" {
+				first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
+				return laneRefusalf(spec.LaneID, ReasonLaneUncommittedWork,
+					"commit or remove the files, or reset the lane deliberately",
+					"lane %s holds uncommitted work (%s)", spec.LaneID, first)
+			}
+		}
 		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, sha)
 		if err != nil {
 			return err
