@@ -82,7 +82,55 @@ test('process dies before saving the result: replay returns the same answer', (t
   assert.equal(JSON.parse(readFileSync(offer)).transcript, '/session/file.jsonl');
 });
 
-test('registered land passes the session file and never writes landing-transcript', (t) => {
+// Pi's agent loop settles a tool call with `execution.then(...)` on whatever execute returned,
+// so a plain object comes back as "execution.then is not a function" after the offer is
+// already on disk. Drive the registered tools through that same settlement.
+const settle = (execution) => execution.then((result) => ({ kind: 'result', result }), (error) => ({ kind: 'failed', error }));
+
+test('registered land and obstacle settle through pi as promises, parking and refusing', async (t) => {
+  const { cwd, base, change, offer } = landFixture(t);
+  const dir = join(cwd, '..');
+  const old = { ...process.env };
+  t.after(() => { process.env = old; });
+  writeFileSync(join(dir, 'python3'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
+  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), PATH: `${dir}:${old.PATH}` });
+  const ctx = { cwd, sessionManager: { getSessionFile: () => '', getBranch: () => [] } };
+  const tools = {};
+  landTool({ on() {}, registerTool: value => { tools.land = value; } });
+  obstacleTool({ on() {}, registerTool: value => { tools.obstacle = value; } });
+  let settled = await settle(tools.land.execute('call', { summary: 'summary' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+  assert.match(settled.error.message, /no commit/);
+  change();
+  settled = await settle(tools.land.execute('call', { summary: 'summary' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'result');
+  assert.equal(settled.result.park, true);
+  rmSync(offer);
+  settled = await settle(tools.obstacle.execute('call', { kind: 'owner', question: 'which?' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'result');
+  assert.equal(settled.result.park, true);
+  delete process.env.TILLR_GOAL_BASE;
+  settled = await settle(tools.obstacle.execute('call', { kind: 'owner', question: 'which?' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+});
+
+test('an offer whose call already has a result is stale and does not strand the run', (t) => {
+  const { land, offer, change, put } = landFixture(t);
+  const head = change();
+  const dir = join(offer, '..');
+  const stale = { call_id: 'failed', commit: head, base: 'base', summary: 'summary', transcript: '' };
+  put('landing-offer.json', JSON.stringify(stale));
+  assert.throws(() => land('next', () => [], () => false), /open: failed/);
+  assert.equal(land('next', () => [], id => id === 'failed').park, true);
+  assert.equal(JSON.parse(readFileSync(offer)).call_id, 'next');
+  put('landing-offer.json', JSON.stringify(stale));
+  const report = (answered) => executeObstacle('obstacle', { kind: 'owner', question: 'which?' }, join(dir, 'repo'), dir, 'base', () => [], answered);
+  assert.throws(() => report(() => false), /ending call is open: failed/);
+  assert.equal(report(id => id === 'failed').park, true);
+  assert.equal(JSON.parse(readFileSync(offer)).call_id, 'obstacle');
+});
+
+test('registered land passes the session file and never writes landing-transcript', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'land-execute-'));
   const old = { ...process.env };
   t.after(() => { process.env = old; rmSync(dir, { recursive: true, force: true }); });
@@ -98,7 +146,7 @@ test('registered land passes the session file and never writes landing-transcrip
   const handlers = {}; let tool;
   landTool({ on: (name, fn) => { handlers[name] = fn; }, registerTool: value => { tool = value; } });
   const ctx = { cwd, sessionManager: { getSessionFile: () => '/actual/session.jsonl', getBranch: () => [] } };
-  tool.execute('call', { summary: 'summary' }, undefined, undefined, ctx);
+  await tool.execute('call', { summary: 'summary' }, undefined, undefined, ctx);
   assert.equal(JSON.parse(readFileSync(join(dir, 'landing-offer.json'))).transcript, '/actual/session.jsonl');
   writeFileSync(join(dir, 'landing-answer.json'), '{}');
   if (handlers.session_start) handlers.session_start({}, ctx);
