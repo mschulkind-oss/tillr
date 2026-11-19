@@ -57,7 +57,7 @@ frontmatter, and it disagrees with that pass in one place (section 7).
 | 6 | [`tillr-muse-backend.md`](./tillr-muse-backend.md) | fully, 356 lines | 9 |
 | 7 | [`tillr-next-steps.md`](./tillr-next-steps.md) | fully, 181 lines | 10 |
 | 8 | `tillr-today.md` (retired) | fully, 545 lines | 12 |
-| 9 | [`tillr-board-reshape.md`](./tillr-board-reshape.md) | fully, 426 lines | 7 |
+| 9 | `tillr-board-reshape.md` (retired) | fully, 426 lines | 7 |
 | 10 | [`tillr-seed-triage.md`](./tillr-seed-triage.md) | fully, 240 lines | 6 |
 | 11 | [`tillr-drain-acceptance-2026-11-13.md`](./tillr-drain-acceptance-2026-11-13.md) | fully, 167 lines | 12 |
 | 12 | [`work-control-judge-in-tillr.md`](./work-control-judge-in-tillr.md) | fully, 378 lines | 7 |
@@ -215,7 +215,7 @@ that ends it.
 | section 1: the real-drain definition — two items landed and retired | covered | its two open halves are `item-seed-04` (the unjudged lane-2 candidate) and `item-drain-2a` (attribution) |
 | The two "today" questions, whose ledger rows are marked unbuilt | deleted | both are rulings with no build behind them; the second's landing half is `Trunk.Squash` |
 
-### 2.9 [`tillr-board-reshape.md`](./tillr-board-reshape.md) — 7
+### 2.9 `tillr-board-reshape.md` (retired) — 7
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |

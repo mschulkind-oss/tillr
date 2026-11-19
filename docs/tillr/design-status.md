@@ -177,7 +177,6 @@ Kept for their evidence. None is delivered with the pack; each link goes to the 
 | [Day 2](../design/tillr-day2.md) | The plan of 2026-11-12 for the first unattended loop. | Historical: the loop runs unattended | not shipped |
 | [Loop readiness](../design/tillr-loop-readiness.md) | What blocked an overnight burn on 2026-11-12. | Historical | not shipped |
 | [Chunking plan](../design/tillr-chunking-plan.md) | The 2026-11-12 cut of remaining work into lanes. | Historical: replaced by item blocks | not shipped |
-| [Board reshape](../design/tillr-board-reshape.md) | Re-authoring the old board's backlog for tillr. | Historical: done | not shipped |
 | [Seed triage](../design/tillr-seed-triage.md) | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
 | [Coverage 2026-11-13](../design/tillr-coverage-2026-11-13.md) | A walk of fifteen designs for owed work. | Historical record | not shipped |
 | [Drain acceptance 2026-11-13](../design/tillr-drain-acceptance-2026-11-13.md) | The first unattended two-lane run, measured. | Historical record | not shipped |
