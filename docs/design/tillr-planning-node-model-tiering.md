@@ -2,7 +2,7 @@
 title: "Plan first, then spend each model where it is enough"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - graphs
@@ -10,8 +10,8 @@ tags:
   - cost
   - models
   - design
-summary: "A build item can be planned first: a planning node cuts it into pieces, each piece names a seat, the backend policy puts each seat on a model, and a verify node checks the joined result against the item's criteria before the gate. The owner ruled on 2026-11-18 that implementation runs on Terra and scouting on Luna, and the planning stage was built that day. No item uses it yet, so what planning costs and saves is still unmeasured; the run history of 2026-11-17 says the larger savings are in failed runs and in context written to the cache twice."
-next: "Choose ten build items and name the planned-build workflow on each, a roadmap edit the design seat makes, so that the cost report prints the planned-item median OQ-PT8 waits on. The runs whose cost is recorded as unknown are priced first, or that median has nothing to stand beside."
+summary: "A build item can be planned first: a planning node cuts it into pieces, each piece names a seat, the backend policy puts each seat on a model, and a verify node checks the joined result against the item's criteria before the gate. The owner ruled on 2026-11-18 that implementation runs on Terra and scouting on Luna, and the planning stage was built that day. Filed build requests default to planned-build@v1 (`5a5c459de`), and one planned build item has landed on the Copilot policy; document-declared build items still name none, so the ten-item planned median OQ-PT8 waits on is still unmeasured, while the run history of 2026-11-17 says the larger savings are in failed runs and in context written to the cache twice."
+next: "Run nine more build items through planned-build@v1 (choosing document-declared build items on the roadmap or running queued build requests) so that the cost report prints the ten-item planned median OQ-PT8 waits on alongside the last-20 build median."
 depends-on:
   - tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
@@ -19,9 +19,9 @@ depends-on:
 
 # Plan first, then spend each model where it is enough
 
-**Status:** 2026-11-18. Partly built: the plan seat, the ten seats in every backend policy, the piece list, the `planned-build@v1` workflow, its verify node, the seat list in the worker's brief and the cost report all landed that day ([Section 5](#5-the-planning-stage-as-built)). No item selects the workflow, and the size rule and per-piece command checks of [Section 6](#6-what-planning-costs-and-what-would-choose-it) are not built. The [Decision Ledger](#decision-ledger) holds designer's decisions the owner has not reviewed, each labeled as one; the stage stays open until he has. The measurements of [Section 1](#1-what-the-run-history-says) are dated 2026-11-17 and were read against the tree at `424cc9db0`.
+**Status:** 2026-11-19. Partly built: the plan seat, the ten seats in every backend policy, the piece list, the `planned-build@v1` workflow, its verify node, the seat list in the worker's brief and the cost report all landed on 2026-11-18 ([Section 5](#5-the-planning-stage-as-built)). No document-declared item selects the workflow and `.tillr.toml` sets no default workflow, while `tillr item request` defaults `build` filings to `planned-build@v1` (`5a5c459de`): one planned request has landed (without a piece split) and one queued request has split into pieces, on the Copilot policy rather than Bedrock ([Section 5.7](#57-what-nothing-selects-and-what-is-not-built)). The size rule and per-piece command checks of [Section 6](#6-what-planning-costs-and-what-would-choose-it) are not built. The [Decision Ledger](#decision-ledger) holds designer's decisions the owner has not reviewed, each labeled as one; the stage stays open until he has. The measurements of [Section 1](#1-what-the-run-history-says) are dated 2026-11-17 and were read against the tree at `424cc9db0`.
 
-> **In short.** What an item costs depends more on how its failures are caught than on which model runs it. So a large item is planned first and cut into pieces, each piece goes to the cheapest model that is enough for its kind of work, and one stronger model checks the joined result before the gate. The machinery exists and has not run on a real item, so whether it pays is a measurement still to take.
+> **In short.** What an item costs depends more on how its failures are caught than on which model runs it. So a large item is planned first and cut into pieces, each piece goes to the cheapest model that is enough for its kind of work, and one stronger model checks the joined result before the gate. Only one build request has landed through the workflow (without a piece split), so whether planning pays across ten planned builds is a measurement still to take.
 
 **Why it matters.** In the history read on 2026-11-17, 41% of spend went to runs that landed, and the median landed item ran three times (measured). The owner asked on 2026-11-18 for work to be split by kind across seats and for cheaper models wherever they can do the work.
 
@@ -31,7 +31,7 @@ depends-on:
 
 **Start at** [Section 5](#5-the-planning-stage-as-built), what is built and what nothing selects yet.
 
-**Needs your ruling:** None today. Two questions are blocked until planned items have run: [OQ-PT7](#OQ-PT7) and [OQ-PT8](#OQ-PT8).
+**Needs your ruling:** None today. Two questions remain blocked until planned items with splits have landed: [OQ-PT7](#OQ-PT7) (until a planned item with a split has landed and storage's [`OQ-TS1`](./tillr-storage.md#OQ-TS1) is answered) and [OQ-PT8](#OQ-PT8) (until ten planned items have landed).
 
 **Reads with:**
 
@@ -172,7 +172,7 @@ All of this assumes a cheaper model needs the same turns. Nothing in this reposi
 
 | Unmeasured | Why | Consequence |
 | :--- | :--- | :--- |
-| Terra's and Luna's failure rate and turn count on this repository's work | No run had used either when this was measured. Terra has run since ([Section 7](#7-how-the-owner-learns-whether-it-pays)), with no cost figure that can be summed; Luna has not run | Every saving from a cheaper model is still an estimate |
+| Terra's and Luna's failure rate and turn count on this repository's work | No run had used either when this was measured on 2026-11-17. Both have run since ([Section 7](#7-how-the-owner-learns-whether-it-pays)), without a comparison against Sol on equivalent work | Every saving from a cheaper model is still an estimate |
 | What child sessions spend | A run's recorded cost leaves it out: one log sums to its recorded $7.61 and its sub-agent results carry no usage | Spend is understated by an unknown amount |
 | The exact test wait | Background-task waits are capped and partly hidden | The 33% test wall share is a lower bound |
 | Why runs write their context to the cache twice | Inferred from totals here; investigated since in [the cache rewrites finding](../research/pi-cache-rewrites.md) | [Section 1.6](#16-what-the-history-means-three-levers-ranked), lever 2 |
@@ -316,24 +316,24 @@ The worker's brief lists every seat the policy in force maps, one line each with
 - the median cost of the last twenty landed build items;
 - once ten items have landed through `planned-build@v1`, the same median for those items.
 
-A run with no recorded cost makes every sum it belongs to print `unknown`, never zero. Read on 2026-11-18, the build and design seat sums and the build median all print `unknown`, because older landed items include runs with no cost. The comparison this report exists for therefore has no baseline number yet.
+A run with no recorded cost makes every sum it belongs to print `unknown`, never zero. Read on 2026-11-18, the build and design seat sums and the build median all printed `unknown`, because older landed items included runs with no cost. Read on 2026-11-19 after twenty priced build items had landed, the build and design all-time seat sums still print `unknown`, while `plan` prints `$0.58`, `scout` `$1.29`, `verify` `$0.17`, and the last-20 landed build median prints `$2.91`; with one landed `planned-build@v1` item, the ten-item planned median is not yet printed.
 
 ### 5.7 What nothing selects, and what is not built
 
-| Thing | State on 2026-11-18 | Evidence |
+| Thing | State on 2026-11-19 | Evidence |
 | :--- | :--- | :--- |
-| An item that runs through `planned-build@v1` | None. Every stored item runs as one worker | `rg 'planned-build' docs/tillr/roadmap.md` finds only the blocks that built it |
-| A default workflow for the build seat | The settings table that would hold it is built and empty | `rg workflows .tillr.toml` finds nothing |
+| An item that runs through `planned-build@v1` | No document-declared item names it (`rg -n --hidden 'workflow="planned-build@v1"' docs config/tillr` finds only the historical example in [`roadmap.md`](../tillr/roadmap.md)). `tillr item request` defaults `build` filings to `planned-build@v1` ([`request.go`](../../tools/tillr-item/item/request.go), `5a5c459de`): read from the store on 2026-11-19, six filed build requests carry `planned-build@v1`, five have selected it, one (`item-request-6c27d14b15`, commit `90f68aa7b`) has landed on the Copilot policy without a piece split, and one (`item-request-e1016f3a23`) has split `work` into two pieces via `build-pieces@v1`. Document triage (`doc-triage@v1`, `bf59b5be1`) and scouted design (`scouted-design@v1`) also run multi-node workflows | Store `workflow_selections`, `graph_revisions` and `landings`, read 2026-11-19; [`request.go`](../../tools/tillr-item/item/request.go) |
+| A default workflow for the build seat | The settings table that would hold it in `.tillr.toml` is built and empty (only `tillr item request` sets a filing default for CLI requests) | `rg workflows .tillr.toml` finds nothing |
 | A rule that plans only large items | Not built ([Section 6.2](#62-a-size-rule-tested-on-the-history)) | The settings reader accepts a workflows table with the one key `default` |
 | A command that checks each piece the moment it finishes | Not built. The registry of commands a node may run holds one entry, the pack sync | [`commands.json`](../../config/tillr/commands.json) |
 | A size, a file count or an interface sketch on a piece | Not built; a piece has the fields of [Section 5.2](#52-what-a-piece-is-and-what-refuses-one) and no others | The drain's README |
-| A Luna run of any kind | None: no item selects a workflow with a scout or check-running node | `rg -l gpt-6-luna` over the loop's run records finds none |
+| A Luna run of any kind | Luna has run on `scout` in `doc-triage@v1` (47 `node_runs` rows across 44 priced runs totaling $1.12 on `item-doc-triage-2026-11-18-tillr-roadmap-designs`, read 2026-11-19); no run has used `test-run`, and no `planned-build@v1` piece has run on Luna | Store `node_runs` and `runs`, read 2026-11-19 |
 
 ### 5.8 One writer for each piece of state
 
 | State | Its one writer |
 | :--- | :--- |
-| The item, its criteria, fence and place in the queue | The item utility, from the documents. Planning writes none of it |
+| The item, its criteria, fence and place in the queue | The item utility, from the documents or from a store-declared CLI filing (`doc-triage`, `request`). Planning writes none of it |
 | The proposal | The planning node's run, as an output the drain checks and records |
 | The graph and its revisions | The drain, in the one transaction that applies or refuses a proposal ([`D-IG3`](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) |
 | A piece's commits | That piece's node run, in the item's worktree, one writer at a time |
@@ -383,15 +383,15 @@ A proposal is capped at 12 pieces. The estimate above put each added node's seam
 
 ## 7. How the owner learns whether it pays
 
-1. **Price the runs with no recorded cost.** Until the build median prints a number, a planned median has nothing to stand beside.
-2. **Run ten build items through `planned-build@v1`.** Each is chosen by naming the workflow on the item; choosing them is the next step this document owes. The 16%-against-41% split of [Section 6.2](#62-a-size-rule-tested-on-the-history) says where to look: items with five or more criteria, or paths in three or more modules.
+1. **Keep the build baseline priced (and price older runs if all-time seat sums are wanted).** Once twenty priced build items have landed, the last-20 build median prints a dollar figure (`$2.91` on 2026-11-19); older unpriced runs still keep the all-time `build` and `design` seat sums at `unknown`.
+2. **Land ten build items through `planned-build@v1`.** One filed build request has landed so far (`item-request-6c27d14b15`, without a piece split), and `tillr item request` defaults `build` filings to `planned-build@v1`; choosing document-declared build items still takes naming the workflow on each item. The 16%-against-41% split of [Section 6.2](#62-a-size-rule-tested-on-the-history) says where to look: items with five or more criteria, or paths in three or more modules.
 3. **Read the two medians** that `tillr drain why` then prints, and the per-seat sums beside them.
 4. **Ask [OQ-PT8](#OQ-PT8).**
 
-What exists before then, read on 2026-11-18:
+What exists before then, read on 2026-11-19:
 
-- **Terra has built real work.** 46 run requests name the Terra model, all dated 2026-11-18, across 25 items; 16 of those items have landed, five of them items of the planning stage itself, which edit the drain. Those run records carry no cost figure that could be summed, so Terra's dollar cost and turn count here are still unmeasured. This is not a failure rate, and it is not offered as one.
-- **Luna has not run at all.**
+- **Terra has built real work.** On 2026-11-18, 46 run requests named the Terra model across 25 items and 16 of those items had landed (five of them items of the planning stage itself, which edit the drain), before run records carried summed dollar figures; read from the store on 2026-11-19, 63 runs across 35 items name Terra (62 priced, totaling $151.99, and 1 without recorded cost). Turn counts and failure rates against Sol on equivalent work are still unmeasured.
+- **Luna has run on scouting, not in a planned build.** Read from the store on 2026-11-19, 47 `node_runs` rows on the `scout` seat name `gpt-6-luna` in `item-doc-triage-2026-11-18-tillr-roadmap-designs` (`doc-triage@v1`), with 44 priced runs totaling $1.12. No run has used the `test-run` seat, and no `planned-build@v1` item has run a piece on Luna.
 - **A second way to compare models exists on paper:** replaying recorded tasks for several models side by side, in [the model benchmarks design](./model-benchmarks-from-drain-records.md). The cost report compares what landed items cost in production; a replay compares models on the identical task. Neither replaces the other.
 
 One figure is computed inside tillr: the cost medians above. The owner's ruling of 2026-11-15 puts comparisons between backends in a separate project of his, computed from the run records ([the seat-share item](../tillr/roadmap.md#add-backend-shares-to-distribute-seat-work)); that still holds for every rate other than these medians (`D-PT5` in the [Decision Ledger](#decision-ledger)).
@@ -439,7 +439,7 @@ The lessons:
 - It does not split one item into several items, and does not change the queue, the fence, the gate or the landing (P3).
 - It does not let any node edit criteria or widen the fence (P6).
 - It does not count attempts, plans or fixes, and it sets no spending limit (P7; [the graph design's ruling that there is no spend target](./tillr-graph-is-the-path.md#decision-ledger)).
-- It does not turn planning on for any item. That is [OQ-PT8](#OQ-PT8).
+- It does not turn planning on by default in `.tillr.toml` or on document-declared items (`tillr item request` defaults CLI `build` requests to `planned-build@v1`). Defaulting or sizing all build items is [OQ-PT8](#OQ-PT8).
 - It does not route design rulings below the design seat.
 - It does not run writing pieces in parallel ([`OQ-IG3`](./tillr-item-graphs.md#71-decision-ledger)).
 - It does not touch the pi sub-agent seat profiles. They govern child sessions, and this design governs nodes.
@@ -450,12 +450,12 @@ The lessons:
 
 | Risk | What limits it |
 | :--- | :--- |
-| Terra takes many more turns than Sol, so its real price ratio is near 1 | Nothing yet: the run records carry no cost that can be summed ([Section 7](#7-how-the-owner-learns-whether-it-pays)). The cost report shows it once runs are priced |
+| Terra takes many more turns than Sol, so its real price ratio is near 1 | No side-by-side comparison exists yet ([Section 7](#7-how-the-owner-learns-whether-it-pays)); the cost report compares medians once ten planned items have landed |
 | A cheap piece is wrong in a way the verifier misses | The gate still runs, and automatic revert is on for a landing that turns the trunk red. A command check per piece is the unbuilt remedy ([Section 9](#9-alternatives-considered)) |
 | A cheap model's change breaks the loop's own code | The same: the module's suite, the gate and automatic revert, as for any model ([`OQ-PT5`](#OQ-PT5) in the Decision Ledger) |
 | The planner splits along the wrong seams, so pieces fight | The verify node returns the item to the planner with the uncovered criteria named; the same finding twice goes to the design seat |
-| Planning costs more than it saves on most items | It is on for no item until ten have been measured ([OQ-PT8](#OQ-PT8)) |
-| The before-and-after comparison is made against `unknown` | Step 1 of [Section 7](#7-how-the-owner-learns-whether-it-pays) |
+| Planning costs more than it saves on most items | It is not the `.tillr.toml` default for document-declared items until ten planned items have been measured ([OQ-PT8](#OQ-PT8)) |
+| The before-and-after comparison is made against `unknown` | Step 1 of [Section 7](#7-how-the-owner-learns-whether-it-pays) (the last-20 build median prints `$2.91` on 2026-11-19; all-time `build` and `design` seat sums remain `unknown`) |
 
 ---
 
@@ -506,20 +506,20 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
    - **A — The item's page only**, as built. Nothing extra lands with the item.
    - **B — Committed too.** A short plan document rides in the item's one commit.
 
-   <!-- vantage: question id=OQ-PT7 blocked-on="first-planned-item-landed, ./tillr-storage.md#OQ-TS1" leaning="The item's page only (A): a plan records how one attempt went, and the documents hold what must be built." -->
+   <!-- vantage: question id=OQ-PT7 blocked-on="first-planned-item-with-pieces-landed, ./tillr-storage.md#OQ-TS1" leaning="The item's page only (A): a plan records how one attempt went, and the documents hold what must be built." -->
 
    _Leaning:_ The item's page only (A): a plan records how one attempt went, and the documents hold what must be built.
 
-   Blocked until a planned item has landed, so there is a plan to look at, and until [the storage design's first question](./tillr-storage.md#OQ-TS1) says where an item's record lives.
+   Blocked until a planned item that actually split into pieces has landed, so there is a landed plan to look at (`item-request-6c27d14b15` landed without a split, while `item-request-e1016f3a23` split into two pieces and has not landed yet), and until [the storage design's first question](./tillr-storage.md#OQ-TS1) says where an item's record lives.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
 2. 🔒 **OQ-PT8: Should every build item be planned first, or only the ones that ask for it?**
 
-   An author files a build item with five criteria across two Go modules. The loop gives it to one Terra worker, as it does every build item. A second way is built and unused: a Sol planner hands pieces to cheaper workers, and a Sol verifier checks the result. No item has run that way, so its cost is unknown.
+   An author files a document-declared build item with five criteria across two Go modules. The loop gives it to one Terra worker, because `.tillr.toml` sets no default workflow. A second way is built: a planner hands pieces to cheaper workers, and a verifier checks the result (`tillr item request` already defaults CLI `build` requests to `planned-build@v1`, and one has landed without a piece split). Fewer than ten planned items have landed, so the planned-workflow median cost is still unknown.
 
-   - **A — Only when the author asks**, by naming the workflow on the item. Nothing to build. Large items nobody marked keep losing whole runs.
+   - **A — Only when the author asks**, by naming the workflow on the item (with CLI `build` requests defaulting to it unless overridden). Nothing to build. Large document-declared items nobody marked keep losing whole runs.
    - **B — Every build item.** One settings line. Small items pay for a planner and a verifier that cost more than they do.
    - **C — Only large items.** Needs a rule built. The drafted one picked 56 of 85 past items, which held 81% of spend.
 
@@ -527,7 +527,7 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 
    _Leaning:_ Only when the author asks (A) until the figures exist; then C if planning is cheaper only on large items, B if it is cheaper overall.
 
-   Blocked until ten items have landed through the planned workflow. `tillr drain why` then prints their median cost beside the ordinary build median ([Section 7](#7-how-the-owner-learns-whether-it-pays)).
+   Blocked until ten items have landed through the planned workflow (one has landed on 2026-11-19). `tillr drain why` then prints their median cost beside the ordinary build median ([Section 7](#7-how-the-owner-learns-whether-it-pays)).
 
    **Answer:**
    > _(empty — fill in when decided)_
