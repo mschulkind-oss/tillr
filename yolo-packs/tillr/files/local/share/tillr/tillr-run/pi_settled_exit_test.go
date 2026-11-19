@@ -43,14 +43,13 @@ def term(*_):
     terms[0] += 1
     if terms[0] > int(os.environ["IGNORE_TERMS"]):
         Path("disposed").write_text(str(terms[0]))
-        sys.stdout.write('{"type":"session_shutdown_flushed"}\n'); sys.stdout.flush()
+        os.write(1, b'{"type":"session_shutdown_flushed"}\n')
         os._exit(143)
 signal.signal(signal.SIGTERM, term)
-with open(os.environ["FAKE_STREAM"]) as f:
-    sys.stdout.write(f.read())
-sys.stdout.write('{"type":"agent_settled","aborted":false}\n')
-sys.stdout.write('{"type":"session_info_changed","name":"settled"}\n')
-sys.stdout.flush()
+with open(os.environ["FAKE_STREAM"], "rb") as f:
+    os.write(1, f.read())
+os.write(1, b'{"type":"agent_settled","aborted":false}\n')
+os.write(1, b'{"type":"session_info_changed","name":"settled"}\n')
 while True:
     signal.pause()
 `
