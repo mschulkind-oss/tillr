@@ -2,14 +2,14 @@
 title: "Build plan: a tillr core with Git landing as its first definition"
 status: accepted
 stage: DECIDED
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - plan
   - store
   - boundaries
   - product-qa
-summary: "The build hand-off for the owner's 2026-11-17 go-ahead: eighteen queued items that turn tillr into a core that does not assume Git landing, with Git landing supplied by one definition and a second, runnable definition that lands nothing. Each item says what the Product QA pipeline can try once it lands. The next tranche is written in prose, to be filed when this one has landed."
+summary: "The build hand-off for the owner's 2026-11-17 go-ahead: eighteen items, all landed, that turn tillr into a core that does not assume Git landing, with Git landing supplied by one definition and a second, runnable definition that lands nothing. Each item says what the Product QA pipeline can try once it lands. The next tranche is written in prose, still unfiled."
 next: "The first tranche has landed. Product QA's agent runs the worked example and writes round three, and the owner reviews the designer's decisions the build rests on (D-CG1 to D-CG5 in the direction document's ledger); only then is the next tranche filed."
 depends-on:
   - tillr-core-and-git-landing.md
@@ -1016,7 +1016,8 @@ still not filed, on purpose. Two things must happen first, and neither has:
   line between core and definition falls, which unit 1 depends on, is the owner's own ruling
   ([`OQ-CG2`](./tillr-core-and-git-landing.md#OQ-CG2)). The shape of the one file and four other
   choices (`D-CG1` to `D-CG5` there) are the designer's, and the owner has not reviewed them. Unit 4
-  also needs `D-IG4` amended first.
+  also waits on the owner confirming the designer's amendment to `D-IG4` in
+  [item graphs](./tillr-item-graphs.md#71-decision-ledger).
 
 Filing these units now would put work in the queue that rests on decisions the owner has not seen.
 
@@ -1034,16 +1035,22 @@ Filing these units now would put work in the queue that rests on decisions the o
    `D-IG4` is runaway expansion and the spend that follows it. The guard is the refusal of cycles
    among workflow files, which already makes expansion finite, plus the expanded size shown before
    the first node runs, plus a budget a definition may set that leads to a named next step for the
-   owner, never a silent refusal. The queued criteria that carry a cap need amending before they are
-   dispatched (see [the separable-parts table](./tillr-separable-parts.md#7-the-second-round-tillrs-answer)).
+   owner, never a silent refusal. Since this was drafted, the workflow check and stage expansion
+   already report graph size and refuse no graph for its depth or node count
+   ([workflow_check.go](../../tools/tillr-drain/drain/workflow_check.go)), while
+   [design-from-scouts@v1.json](../../config/tillr/workflows/design-from-scouts@v1.json) still bounds
+   scout prompts at `most: 8` and no definition-supplied size budget is built yet (see
+   [the separable-parts table](./tillr-separable-parts.md#7-the-second-round-tillrs-answer)).
 5. **Add an uncertain outward effect as a state that blocks a retry until reconciled** (R2-12).
 6. **Add time and tokens per step attempt, with their source** (R2-13). A command step's record says
    `none` for tokens rather than zero.
 7. **Add an owner acknowledgment point** (R2-14): a recorded "seen" per item, which the morning audit
    advances.
 8. **Route the waiting class through one classifier** (a stable-surface correction). For a blocked
-   item, `tillr view waiting` prints "waits on work" and the served answer "needs you". This joins
-   the queued item that gives every held item a class.
+   item, `tillr view waiting` printed "waits on work" and the served answer "needs you". Both faces
+   now assemble rows through `assembleWaiting` in [waiting.go](../../tools/tillr-view/waiting.go) and
+   the reason table in [holdrules.go](../../tools/tillr-drain/holdrules/holdrules.go), which landed
+   the hold-classification piece; verifying the blocked-item case across both faces remains unfiled.
 9. **Test that a run started from the record sink's own request links to it** (a stable-surface
    correction, read but not re-run). Fix it if the next pass holds it `run-link-missing`.
 10. **Add the `after-completion` hook and the retention rule.** Roll and push become the Git-landing
@@ -1056,15 +1063,22 @@ Clocks and the gate's "could not judge" are filed separately, by the owner's dir
 
 ## 4. Reconciled with what is queued
 
-- **The terminal-state block** (`item-jl-terminal-state-receipts`, queued and blocked): its c2's
-  `--resolves-via` and its c3's refusal are built here by the receipts item and the first item. Its
-  c1, a landing record before `landed`, is not, and stays its own.
-- **The command-node block** (`item-ig-command-node`, queued and ready): unchanged. Its c2 stays
-  right for Git landing; the delta is a new item that depends on it.
-- **The item-page block** (`item-ig-view-nodes`, queued and blocked): unchanged. The item-page
-  history item feeds its c3.
-- **The exit-condition block** (`item-ig-exit-condition`, queued and blocked): unchanged. Completion
-  through the hook is a definition's rule; a workflow's `no_commit` exit still decides when a graph
-  is done.
-- **The unshared-item block** (`item-sync-hold-unshared-items`): unchanged. Its c7 leaves alone a
-  store no document declares, which covers a store fed by `apply`.
+When this plan was written on 2026-11-17, five items already in the queue overlapped with it; all
+five have since landed:
+
+- **The terminal-state block** (`item-jl-terminal-state-receipts`, queued and blocked on 2026-11-17;
+  landed in [terminal_evidence.go](../../tools/tillr-item/item/terminal_evidence.go)): its c2's
+  `--resolves-via` and its c3's refusal were built here by the receipts item and the first item, and
+  its c1, a landing record before `landed`, landed in its own item.
+- **The command-node block** (`item-ig-command-node`, queued and ready on 2026-11-17; landed in
+  [command.go](../../tools/tillr-drain/drain/command.go)): unchanged. Its c2 stayed right for Git
+  landing; the delta was built as a new item that depended on it.
+- **The item-page block** (`item-ig-view-nodes`, queued and blocked on 2026-11-17; landed in
+  [item_nodes.go](../../tools/tillr-view/item_nodes.go)): unchanged. The item-page history item fed
+  its c3.
+- **The exit-condition block** (`item-ig-exit-condition`, queued and blocked on 2026-11-17; landed in
+  [workflow_exit.go](../../tools/tillr-drain/drain/workflow_exit.go)): unchanged. Completion through
+  the hook is a definition's rule; a workflow's `no_commit` exit still decides when a graph is done.
+- **The unshared-item block** (`item-sync-hold-unshared-items`, landed in
+  [document_prerequisite.go](../../tools/tillr-drain/drain/document_prerequisite.go)): unchanged.
+  Its c7 leaves alone a store no document declares, which covers a store fed by `apply`.
