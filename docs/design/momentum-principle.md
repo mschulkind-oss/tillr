@@ -63,28 +63,58 @@ apply while there is a dispatchable item the loop could be running.
 An **operator stop** — a signal, a `tillr drain stop`, a human killing the process. That is the
 owner of the pile deciding to stop, which is the only authority the principle recognizes.
 
-## Consequences to build
+## Consequences, now built in the loop
 
-1. `tillr drain loop` loses `--max-ticks`, `--max-spend-usd` and `--max-tokens`, and the stop
-   reasons `max-ticks-reached`, `max-spend-reached` and `spend-unreported` go with them.
-2. The loop's remaining stops are: the queue is drained (idle, not exited — a supervisor must
-   read that reason as "wait", not "finished"), an operator stop, and a fault it cannot route
-   around.
-3. The infrastructure circuit breaker becomes a backoff with reporting, not an exit.
-4. **Parallelism is the point, not a later optimization.** The loop currently dispatches one run
-   at a time because the boundary primitive spans sibling lane worktrees and every ref. That is a
-   limitation to remove, and it is now the highest-value work in the loop: a service that runs
-   one item at a time is not "as fast as possible" no matter how long it runs.
-5. Spend is still **measured and reported** — per run and in total. Measurement is introspection,
-   not a wall; the owner wants to see what a night cost, and that is a different thing from
-   refusing to spend it.
+1. `tillr drain loop` deleted `--max-ticks`, `--max-spend-usd` and `--max-tokens`, and the stop
+   reasons `max-ticks-reached`, `max-spend-reached` and `spend-unreported` went with them
+   (`TestTheLoopCommandRefusesTheDeletedBudgets` in
+   [`tools/tillr-drain/spend_line_test.go`](../../tools/tillr-drain/spend_line_test.go);
+   `TestTheLoopHasNoTickBudget` in
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)).
+2. By default the loop stays alive waiting when nothing is dispatchable (`Run` in
+   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go)); `--exit-when-drained`
+   opts into exiting with `queue-drained` when nothing is dispatchable and no lane is held. The
+   loop's stops are `queue-drained` (under `--exit-when-drained`; otherwise a wait, not an exit),
+   `operator-stop`, `lanes-leased` when a lane it may dispatch onto is held with no expiry so
+   `tillr run release` is required (`StopLanesLeased` in
+   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
+   `TestALaneHeldWithNoExpiryStopsTheLoopAsLanesLeased` in
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)), and `fault` when a
+   loop step cannot proceed.
+3. The infrastructure circuit breaker is a backoff with reporting, not an exit (`BackoffDelay` in
+   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
+   `TestBackoffDelayDoublesUpToItsCap` in
+   [`tools/tillr-drain/drain/spend_test.go`](../../tools/tillr-drain/drain/spend_test.go)).
+4. **Parallelism is the point, not a later optimization.** When this ruling was written, the loop
+   dispatched one run at a time because its boundary check spanned sibling lane worktrees and every
+   ref. Multi-lane parallel dispatch is now built (`--lanes` in
+   [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go), boundary scoping in
+   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go), and
+   `TestTwoLanesRunConcurrentlyInOneBatch` in
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)): a service that ran one
+   item at a time would not be "as fast as possible" no matter how long it ran.
+5. Spend is still **measured and reported** — per run and in total (`spendLine` in
+   [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go);
+   `TestTheSpendLineNamesTheMeasurement` in
+   [`tools/tillr-drain/spend_line_test.go`](../../tools/tillr-drain/spend_line_test.go)). Measurement
+   is introspection, not a wall; the owner wants to see what a night cost, and that is a different
+   thing from refusing to spend it.
 
 ## What this does not change
 
 - The gate still judges every candidate. Speed comes from parallelism and from not re-running
   what has not changed, never from judging less.
-- A candidate that fails is still a failure, and its item still moves to `in-progress` rather than
-  being retried forever. The principle is about the service's appetite for work, not about
-  pretending bad work is good.
-- The boundary check still stops a tick on a write outside the lane. That is a fault, and it is
-  loud.
+- A candidate that fails is still a failure, not a success, and is never retried blindly forever.
+  Under the 2026-11-17 worker-failure ruling ([`tools/tillr-drain/drain/returned.go`](../../tools/tillr-drain/drain/returned.go)),
+  a gate refusal records no failing criterion verdict and returns with its evidence to the item's
+  worker instead of parking the item in `in-progress`; what stops endless repetition is an
+  identical repeat, which escalates to the `design` seat (or blocks on the owner when no design
+  seat is configured; `TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats` and
+  `TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal` in
+  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)). The principle is about
+  the service's appetite for work, not about pretending bad work is good.
+- The boundary check still catches a write outside the lane, loudly holding the offending item as
+  `host-boundary-violation` without gating its candidate (`StopHostBoundaryViolation` in
+  [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
+  `TestAWriteToALaneOutsideTheRunIsCaught` in
+  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)).
