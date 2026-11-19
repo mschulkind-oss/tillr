@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -170,25 +171,11 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 	if err != nil {
 		return record.Envelope{}, externalf("preparing tree result memory: %v", err)
 	}
+	outcomes, memoryErrs := runPlanChecks(plan.Checks, memory, root, logs, options)
 	var failure error
 	for index, check := range plan.Checks {
-		check.watchdog = options.watchdog
-		if options.Context != nil {
-			sources := realWatchSources()
-			if check.watchdog != nil {
-				*sources = *check.watchdog
-			}
-			sources.Context = options.Context
-			check.watchdog = sources
-		}
-		var outcome VerdictCheck
-		var memoryErr error
-		if options.Context != nil && options.Context.Err() != nil {
-			outcome = VerdictCheck{CheckID: check.CheckID, Result: ResultError}
-			memoryErr = options.Context.Err()
-		} else {
-			outcome, memoryErr = memory.run(check, root, logs, index)
-		}
+		outcome := outcomes[index]
+		memoryErr := memoryErrs[index]
 		if memoryErr != nil {
 			outcome.Result = ResultError
 			if failure == nil {
@@ -225,6 +212,131 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 		return record.Envelope{}, err
 	}
 	return envelope, failure
+}
+
+func runPlanChecks(checks []PlanCheck, memory *treeMemory, root, logs string, options RunOptions) ([]VerdictCheck, []error) {
+	n := len(checks)
+	outcomes := make([]VerdictCheck, n)
+	errs := make([]error, n)
+	if n == 0 {
+		return outcomes, errs
+	}
+
+	byID := make(map[string]int, n)
+	for i, check := range checks {
+		byID[check.CheckID] = i
+	}
+
+	// Build dependency edges so we preserve DependsOn, Exclusive, and overlapping Writes.
+	deps := make([][]int, n)
+	for i, check := range checks {
+		for _, depID := range check.DependsOn {
+			if depIdx, ok := byID[depID]; ok && depIdx != i {
+				deps[i] = append(deps[i], depIdx)
+			}
+		}
+	}
+
+	var mu sync.Mutex
+	completed := make([]bool, n)
+	running := make([]bool, n)
+	doneCount := 0
+	cond := sync.NewCond(&mu)
+
+	canStart := func(i int) bool {
+		if completed[i] || running[i] {
+			return false
+		}
+		for _, dep := range deps[i] {
+			if !completed[dep] {
+				return false
+			}
+		}
+		anyRunning := false
+		for j := 0; j < n; j++ {
+			if running[j] {
+				anyRunning = true
+				if checks[i].Exclusive || checks[j].Exclusive || writesOverlap(checks[i].Writes, checks[j].Writes) {
+					return false
+				}
+			}
+		}
+		_ = anyRunning
+		return true
+	}
+
+	var wg sync.WaitGroup
+	mu.Lock()
+	for doneCount < n {
+		if options.Context != nil && options.Context.Err() != nil {
+			for i := 0; i < n; i++ {
+				if !completed[i] && !running[i] {
+					outcomes[i] = VerdictCheck{CheckID: checks[i].CheckID, Result: ResultError}
+					errs[i] = options.Context.Err()
+					completed[i] = true
+					doneCount++
+				}
+			}
+			break
+		}
+		startedAny := false
+		for i := 0; i < n; i++ {
+			if !canStart(i) {
+				continue
+			}
+			running[i] = true
+			startedAny = true
+			wg.Add(1)
+			go func(index int, check PlanCheck) {
+				defer wg.Done()
+				check.watchdog = options.watchdog
+				if options.Context != nil {
+					sources := realWatchSources()
+					if check.watchdog != nil {
+						*sources = *check.watchdog
+					}
+					sources.Context = options.Context
+					check.watchdog = sources
+				}
+				var outcome VerdictCheck
+				var memoryErr error
+				if options.Context != nil && options.Context.Err() != nil {
+					outcome = VerdictCheck{CheckID: check.CheckID, Result: ResultError}
+					memoryErr = options.Context.Err()
+				} else {
+					outcome, memoryErr = memory.run(check, root, logs, index)
+				}
+				mu.Lock()
+				outcomes[index] = outcome
+				errs[index] = memoryErr
+				running[index] = false
+				completed[index] = true
+				doneCount++
+				cond.Broadcast()
+				mu.Unlock()
+			}(i, checks[i])
+		}
+		if !startedAny && doneCount < n {
+			cond.Wait()
+		}
+	}
+	mu.Unlock()
+	wg.Wait()
+	return outcomes, errs
+}
+
+func writesOverlap(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	for _, wa := range a {
+		for _, wb := range b {
+			if wa == wb || strings.HasPrefix(wa, wb) || strings.HasPrefix(wb, wa) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // prepareRun is the validation both run paths share: the plan's binding fields, the

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -253,8 +254,26 @@ func (store resultStore) publish(key string, result storedResult) error {
 type treeMemory struct {
 	tree    string
 	inputs  []treeInput
+	mu      sync.Mutex
 	binding bindingState
 	store   resultStore
+}
+
+func (memory *treeMemory) currentBinding() bindingState {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	return memory.binding
+}
+
+func (memory *treeMemory) refreshBinding(root string) (bindingState, error) {
+	state, err := readBinding(root, memory.tree)
+	if err != nil {
+		return bindingState{}, err
+	}
+	memory.mu.Lock()
+	memory.binding = state
+	memory.mu.Unlock()
+	return state, nil
 }
 
 func prepareTreeMemory(plan PlanPayload, root string) (*treeMemory, error) {
@@ -323,33 +342,28 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 		if reason != "" {
 			outcome := runCheck(check, root, logs, index)
 			outcome.Memory, outcome.UnboundPath = "not remembered", reason
-			state, err := readBinding(root, memory.tree)
-			memory.binding = state
+			_, err := memory.refreshBinding(root)
 			return outcome, err
 		}
 	}
 	if check.Scope != "tree" || check.Remember != nil && !*check.Remember {
 		outcome := runCheck(check, root, logs, index)
 		if memory != nil {
-			state, err := readBinding(root, memory.tree)
-			if err != nil {
+			if _, err := memory.refreshBinding(root); err != nil {
 				return outcome, err
 			}
-			memory.binding = state
 		}
 		return outcome, nil
 	}
 	outcome := VerdictCheck{CheckID: check.CheckID, Result: ResultError}
-	if path := memory.binding.unboundPath(check.Reads); path != "" {
+	if path := memory.currentBinding().unboundPath(check.Reads); path != "" {
 		outcome = runCheck(check, root, logs, index)
 		outcome.Memory = "not remembered"
 		outcome.UnboundPath = path
 		// Subsequent checks see changes made by this command too.
-		state, err := readBinding(root, memory.tree)
-		if err != nil {
+		if _, err := memory.refreshBinding(root); err != nil {
 			return outcome, err
 		}
-		memory.binding = state
 		return outcome, nil
 	}
 	key, err := treeFingerprint(check, memory.inputs, root)
@@ -368,11 +382,10 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 	}
 	outcome = runCheck(check, root, logs, index)
 	outcome.Fingerprint = key
-	state, err := readBinding(root, memory.tree)
+	state, err := memory.refreshBinding(root)
 	if err != nil {
 		return outcome, err
 	}
-	memory.binding = state
 	if path := state.unboundPath(check.Reads); path != "" {
 		outcome.Memory = "not remembered"
 		outcome.UnboundPath = path
