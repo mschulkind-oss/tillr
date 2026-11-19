@@ -168,17 +168,19 @@ func TestThePiAdapterLoadsKeepGoingOnlyForALaneWorktreeWriter(t *testing.T) {
 	}
 	const base = "3da00ddcfa4e958bb43edd694018da26ba760c8d"
 	for _, tc := range []struct {
-		name     string
-		kind     string
-		baseFile bool
-		readOnly string
-		wantGoal bool
+		name         string
+		kind         string
+		baseFile     bool
+		readOnly     string
+		readOnlyNode bool
+		wantGoal     bool
 	}{
-		{"writer", "lane worktree", true, "", true},
-		{"no base sha", "lane worktree", false, "", false},
-		{"read-only node", "lane worktree", true, "group-review", false},
-		{"fork checkout", "fork checkout", true, "", false},
-		{"plain directory", "plain directory", true, "", false},
+		{"writer", "lane worktree", true, "", false, true},
+		{"no base sha", "lane worktree", false, "", false, false},
+		{"read-only node", "lane worktree", true, "group-review", false, false},
+		{"read-only workflow node", "lane worktree", true, "", true, false},
+		{"fork checkout", "fork checkout", true, "", false, false},
+		{"plain directory", "plain directory", true, "", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := scratch(t, "keep-going-wiring")
@@ -204,6 +206,9 @@ func TestThePiAdapterLoadsKeepGoingOnlyForALaneWorktreeWriter(t *testing.T) {
 				t.Fatal(err)
 			}
 			brief := strings.Replace(filledBrief(t, worktree), "("+briefValues["TARGET_KIND"]+")", "("+tc.kind+")", 1)
+			if tc.readOnlyNode {
+				brief += "\n## Workflow node\n\nRun only node plan on the plan seat; access: read_only.\n"
+			}
 			if err := os.WriteFile(filepath.Join(lane, "brief.md"), []byte(brief), 0o644); err != nil {
 				t.Fatal(err)
 			}
