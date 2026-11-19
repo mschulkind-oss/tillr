@@ -20,7 +20,7 @@ afterEach(cleanup);
 const sources: GateData["sources"] = {
   store: { path: ".tillr/state.db", state: "present" },
   loop_dir: { path: ".tillr/loop", state: "present" },
-  trace_index: { path: "index.db", state: "absent" },
+  trace: { path: "tillr-trace", state: "absent" },
 };
 
 function span(overrides: Partial<GateSpan> & Pick<GateSpan, "span_id" | "check_id" | "label">): GateSpan {

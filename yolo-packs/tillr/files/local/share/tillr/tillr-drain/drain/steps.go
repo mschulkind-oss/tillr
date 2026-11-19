@@ -82,17 +82,6 @@ type ProcessSteps struct {
 	// tier's deferred kinds are exactly what must run here. Empty leaves a fixer on the
 	// ordinary gate program, which is a loop that has not configured the exemption.
 	FixerGateProgram string
-	// TraceBin is the `tillr-trace` program the loop runs after each tick to rebuild its
-	// derived index. It is this utility's neighbour rather than the caller's program: the
-	// index is built from records the loop and its runs already wrote, and the query faces
-	// that read it are the same utility's. An empty TraceBin skips indexing, which is a
-	// step set that named none rather than a tick that silently decided not to index.
-	TraceBin string
-	// TraceRoot is the trace root the indexer writes, named only when the caller wants one
-	// other than the indexer's own default ($TILLR_TRACE_ROOT or the state home). The store
-	// is always passed explicitly, because the indexer derives the run-record directory
-	// `.tillr/loop` from it and a default store would index a different repository.
-	TraceRoot string
 }
 
 // candidateArgs is the candidate as the three programs read it: one flag per field, so a
@@ -455,32 +444,6 @@ func (s *ProcessSteps) itemState(ctx context.Context, itemID, runID, state strin
 		}
 		return Externalf("%s state %s %s: %v: %s %s",
 			s.ItemBin, itemID, state, err, stderr.String(), strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// Index brings the trace index up to date with the artifacts the tick's runs left. `tillr-trace
-// ingest` is the write half of the read model: it syncs `index.db` from the store and the
-// loop's run directories and answers where the index is. It is not a judgment, so a failure
-// is answered to the caller rather than classified as a verdict about a candidate. The loop
-// runs it in the background and cancels ctx when it stops, which kills the ingest; the
-// ingest commits each run as it goes, so the next one resumes where this one was killed.
-func (s *ProcessSteps) Index(ctx context.Context) error {
-	if s.TraceBin == "" {
-		return nil
-	}
-	args := []string{"--store", s.Store}
-	if s.TraceRoot != "" {
-		args = append(args, "--trace-root", s.TraceRoot)
-	}
-	args = append(args, "ingest")
-	cmd := exec.CommandContext(ctx, s.TraceBin, args...)
-	var stderr stderrTail
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return Externalf("%s ingest: %v: %s %s",
-			s.TraceBin, err, stderr.String(), strings.TrimSpace(string(out)))
 	}
 	return nil
 }

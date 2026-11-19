@@ -14,7 +14,7 @@ import (
 func placeServer(t *testing.T, write bool, writer string) (*serveHarness, *httptest.Server) {
 	t.Helper()
 	h := newServeHarness(t)
-	s := newServer(context.Background(), h.store, h.loopDir, h.laneRoot, h.index, h.dir, "", []string{"false"})
+	s := newServer(context.Background(), h.store, h.loopDir, h.laneRoot, h.traceBin, h.dir, "", []string{"false"})
 	s.writeEnabled = write
 	s.itemFlag = writer
 	srv := httptest.NewServer(s.routes())

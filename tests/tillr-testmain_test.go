@@ -150,20 +150,6 @@ func main() { TestMain(&suite{}) }
 		source.WriteString(strings.ReplaceAll(body.String(), "*testing.M", "*suite"))
 		source.WriteString("\n")
 	}
-	if filepath.Base(filepath.Dir(path)) == "tillr-drain" {
-		tracePath := filepath.Join(filepath.Dir(path), "observability_test.go")
-		trace, err := parser.ParseFile(fset, tracePath, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, decl := range trace.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "isolateTraceRoot" {
-				if err := printer.Fprint(&source, fset, fn); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-	}
 	dir := t.TempDir()
 	write := func(name, body string, mode os.FileMode) {
 		t.Helper()

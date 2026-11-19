@@ -25,7 +25,7 @@ tillr store init --store .tillr/state.db --definition definition.json
 tillr item apply --store .tillr/state.db --input findings/finding-confirmed.json --now 2026-11-18T00:00:00Z
 tillr item apply --store .tillr/state.db --input findings/finding-rejected.json --now 2026-11-18T00:00:00Z
 tillr item apply --store .tillr/state.db --input findings/finding-inconclusive.json --now 2026-11-18T00:00:00Z
-tillr drain loop --root "$PWD" --store "$PWD/.tillr/state.db" --lanes 1 --trace-bin= --exit-when-drained
+tillr drain loop --root "$PWD" --store "$PWD/.tillr/state.db" --lanes 1 --exit-when-drained
 tillr item list --store .tillr/state.db
 for state in confirmed rejected inconclusive repeat-of tooling-fault; do
     tillr item list --store .tillr/state.db --state "$state"
@@ -86,6 +86,6 @@ and example output files are example internals, not consumer contracts.
 This example does not yet show real reproduction or model-backed investigation,
 `repeat-of` evidence, a `tooling-fault` result, reopening, blocked-input handling,
 retries after a hook failure, parallel execution, the detail hook, custom views,
-or retention cleanup. Tracing is explicitly disabled so no external trace indexer
-is needed. All store, run, lane and evidence files stay in the copied directory;
+or retention cleanup. The loop runs no trace indexer (it has had none since
+2026-11-18), so no external tracing program is needed. All store, run, lane and evidence files stay in the copied directory;
 there is nothing to deploy or land from this run.

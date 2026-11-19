@@ -52,7 +52,7 @@ func emptyLoopArgs(t *testing.T) []string {
 	return []string{"loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot,
 		"--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"),
 		"--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true",
-		"--rolling", "", "--trace-bin", ""}
+		"--rolling", ""}
 }
 
 func TestExitWhenDrainedKeepsQueueDrainedExitZero(t *testing.T) {

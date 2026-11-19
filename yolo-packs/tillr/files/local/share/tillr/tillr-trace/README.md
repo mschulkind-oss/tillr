@@ -10,13 +10,14 @@ verification), [Section 10.1](https://github.com/mschulkind-oss/tillr/blob/main/
 
 ## What is authoritative, and what this is
 
-**Nothing in this directory is a source of truth.** Every row it writes is derived and
-rebuildable:
+**Nothing in this directory is a source of truth, and nothing it does is written down.**
+Every command parses the artifacts it needs into an in-memory database, answers, and exits;
+no index, cache or other file is created anywhere:
 
 | Fact | Authoritative store | What `tillr-trace` does |
 | --- | --- | --- |
 | item, lane, run, candidate, decision, dispatch state | `.tillr/state.db` | opens it **read-only** (`mode=ro` + `query_only`) and attaches nothing |
-| staged brief, fence, base/tree/head sha | `runs/<run-id>/` under the trace root, or `.tillr/loop/<run-id>/` | copies them into the index |
+| staged brief, fence, base/tree/head sha | `runs/<run-id>/` under the trace root, or `.tillr/loop/<run-id>/` | reads their paths and shas |
 | what the model saw, spent, and called | `<run-id>.log` (`pi --mode json`) | parses `llm.turn` and `tool.call` rows |
 | what actually ran | `proc-exec.jsonl` | parses `proc.exec` rows |
 | what the gate planned and judged | `.tillr/loop/<run-id>/gate.{plan,verdict}.json` | parses `gate.plan` and `gate.verdict` rows |
@@ -49,11 +50,10 @@ sibling directory from this checkout.
 There is no git recorder. The design's second emitter, git's `GIT_TRACE2_EVENT`, was removed
 on 2026-11-17 by the owner's ruling: every test suite a run starts inherits it, and one run
 recorded 918,054 git commands, 906 runs held about 82 GB, and the index built from them was
-32 GB. The indexer no longer reads `git-trace2.jsonl` and writes no `git.trace2` row; a file
-left on disk by the old recorder is ignored. Index layout 4 is the first without those rows,
-and an index of layout 3 is deleted and rebuilt on the next sync. `runs_index.git_path` and
-`git_state` remain only because `tillr-view` selects them by name: the path is always NULL
-and the state is always `retired`.
+32 GB. This tool does not read `git-trace2.jsonl` and produces no `git.trace2` row; a file
+left on disk by the old recorder is ignored. A run's `git_path` and `git_state` remain only
+because `tillr-view` reads them by name: the path is always null and the state is always
+`retired`.
 
 The shim is fail-open
 ([§7.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/session-recording.md#71-four-mechanical-fail-open-guarantees)):
@@ -61,64 +61,56 @@ the shim uses shell builtins only (no `date`, no `jq`, no fork per command, whic
 the ≤ 1.5 ms budget is held), saves `$?` as the trap's first instruction and returns it
 from the EXIT trap, caps each line's command text at 512 bytes, and swallows every write
 failure. A shell with no `TILLR_TRACE_DIR`, or a directory it cannot write, records
-nothing and behaves exactly as it would without the shim. `runs_index.proc_state` is computed from what is on disk, so a run recorded this way reads `ok` and
+nothing and behaves exactly as it would without the shim. A run's `proc_state` is computed from what is on disk, so a run recorded this way reads `ok` and
 one without the emitter still reads `missing` — and so does one whose `proc-exec.jsonl`
 exists but is empty: a writer that touched the path is not a run that ran nothing.
 
-`index.db` (default `$TILLR_TRACE_ROOT/index.db`) is Tier 3 of the design's retention
-policy: drop it and rebuild with `--rebuild`. When an index row and a source file
-disagree, the source file is right. Never cite an index row as evidence of what a run
-did — cite the artifact path it was read from, which every command prints.
+## No index: every answer is read from the artifacts
 
-## How the index stays current
+Until 2026-11-18 the drain loop ran `tillr-trace ingest` after each tick to keep a
+persistent SQLite index, `index.db` under the trace root, which every query read. That day
+the owner ruled that it was cached derived data and should go until a measured performance
+problem asks for a cache. Every table in it could be rebuilt from the store and the run
+artifacts, and its own design deleted a run's rows once that run's source files were gone,
+so it never kept anything the artifacts did not. The loop no longer runs an indexer,
+`ingest` is gone (an unknown command, exit 2), and nothing creates `index.db`. A file left
+by an older build is not read and can be deleted.
 
-`ingest` is incremental. The trap it removes: the store's modification time changes on
-every tick by design, so a watermark that covered the store made every tick rebuild the
-whole corpus — measured on this repository's own corpus (2.7 GB of artifacts, 498,776
-rows), a tick cost 69 s of re-parsing that had nothing new in it.
+Each command now reads only what it needs:
 
-- **The watermark covers artifacts, not the store.** `ingested_files` records each
-  artifact's size, modification time, the last byte parsed and the last row ordinal. The
-  store is read on every sync (it is small, and authoritative for the rows it owns) and
-  never used as a rebuild trigger.
-- **A source is parsed from the last byte it was read to.** A build appends the rows the
-  new lines justify; the rows already stored keep their ids, because an obs id is the
-  source file's stamp plus the row's ordinal in that file. A run with nothing new parses
-  nothing.
-- **One source cannot abort the ingest.** A parser that raises on a source leaves that
-  source `corrupt` with the exception named in its detail, drops that parse's partial rows,
-  and the run reads `unreadable` in the audit; every other run is still indexed. A tool
-  event whose `args`, `result` or `structuredContent` is text instead of an object keeps
-  its row and loses only the field it could not read (2,091 of 5,316 measured tool results
-  carried `structuredContent` as text on 2026-11-17).
-- **A per-source carry crosses the boundary.** A tool call's start can land in one build
-  and its end in the next, and so can a command's start and exit; the args, the last
-  clock, the last turn number, the session id and the running token totals travel in the
-  source's `carry` so neither a pair nor a total is lost or double counted.
-- **A source that shrank is re-read from zero.** Its rows are deleted first, so a
-  rewritten or truncated artifact replaces its rows instead of doubling them. A file that
-  was only appended to is never re-read from the start — a build that resumed is proof
-  the prefix was not touched.
-- **The layout has a version.** `PRAGMA user_version` is the schema's; a mismatch
-  deletes the file and rebuilds rather than migrating, because the index is derived and a
-  half-built one is the one answer this tool must never give. Deleting is deliberate:
-  emptying a large index in place journals every page of it first.
-- **No statement in a sync walks the whole event table.** The row counter is kept in
-  `index_meta` rather than read as `MAX(seq)`, one source's rows are deleted by their id
-  range rather than by the unindexed `source` column, a gate record is re-read only when
-  it changed, and a `tick.decision` already indexed is not written again. The suite asks
-  SQLite's query planner about every statement a sync runs.
-- **Each run is its own transaction, in WAL mode.** A sync stopped part way keeps every
-  run it finished, and the next one starts after them. A killed writer's uncommitted work
-  is ignored by the next open instead of being rolled back, and a reader never meets a
-  hot journal it cannot recover — the defect that turned one killed ingest into a
-  whole-corpus rebuild on 2026-11-17.
-- **One writer at a time, without waiting.** A sync holds an exclusive lock on
-  `index.db.lock` beside the index. An `ingest` that finds it held prints `index: busy`
-  and exits 0 at once: the sync already running, or the next one, reads what is new.
+- **One run** (`audit <run-id>`, and `run <run-id>` for `tillr-view`) reads that run's log,
+  `proc-exec.jsonl`, gate records and staged inputs.
+- **One tick** (`tick`) reads the runs whose manifest names that tick.
+- **Aggregates** (`cost`, `discrepancies`) read the **100 most recent runs** by the store's
+  start time, which is a bounded default, not the whole corpus. `--runs N` reads N of them,
+  and `--runs 0` reads every run. `cost` reads only the `turn_end` lines of each log.
+
+Measured on 2026-11-18 against this repository's corpus (1,204 runs; 6.4 GB of logs and
+2.2 GB of `proc-exec.jsonl`):
+
+| Command | Wall time |
+| --- | --- |
+| `audit` of the largest run (152 MB `proc-exec.jsonl`, 268,000 rows) | 9.6 s |
+| `run` of the same run, as JSON (191 MB of output) | 9.5 s |
+| `audit` of a mid-size run (21 MB `proc-exec.jsonl`) | 1.6 s |
+| `cost` (default 100 runs) | 1.8 s |
+| `cost --runs 0` | 19.7 s |
+| `discrepancies` (default 100 runs) | 21.6 s |
+| `discrepancies --runs 0` | 2 min 31 s |
+| `tick --last` | 0.13 s |
+
+When a row and a source file disagree, the source file is right, and every command prints
+the artifact path each answer was read from. Cite that path, not the row.
+
+A source that cannot be parsed does not abort a command: the parser that raised leaves
+that source `corrupt` with the exception named, drops that source's partial rows, and the
+run reads `unreadable` in the audit, while every other run is still read. A tool event
+whose `args`, `result` or `structuredContent` is text instead of an object keeps its row
+and loses only the field it could not read (2,091 of 5,316 measured tool results carried
+`structuredContent` as text on 2026-11-17).
 
 The parser reads a JSONL source one line at a time, so peak memory is the rows it keeps,
-not the size of the largest file: a 25 MiB log peaks around 450 KiB while parsing.
+not the size of the largest file: a 32 MiB log peaked at 322 KiB while parsing.
 
 The store is never written, opened read-write, or migrated: `Store` in [`tillr_trace.py`](./tillr_trace.py)
 creates its connection with `file:...?mode=ro` and a `PRAGMA query_only` lock behind it,
@@ -129,16 +121,16 @@ that connection raises.
 
 | Command | Answers |
 | --- | --- |
-| `tillr-trace ingest` | the write the drain loop asks for after each tick, in the background: sync `index.db` with the artifacts the tick's runs left — parsing only what changed — and print where it is. Every face below syncs first, so this is the one a supervisor needs when it has no query to make. |
 | `tillr-trace tick <id\|--last>` | acceptance Q4: one unattended tick, in order — every `obs.event` carrying that `tick_id`, plus `tick.decision` rows lifted from the store's `dispatches`. An empty tick says so; it is not reported as a verified quiet one. |
 | `tillr-trace audit <run-id>` | acceptance Q2: the run's lane/item/store state, its preserved `brief.md`/`fence.txt`/`base_sha` locations, its model turns with tokens and cost, the calls it made with exit codes, and every claim verdict. |
-| `tillr-trace cost` | acceptance Q1: per lane, per route, per model — runs, retries, LLM wall time, tokens in / cache-read / out / reasoning, US dollars. |
-| `tillr-trace discrepancies [--since] [--all]` | acceptance Q7: every claim the record does not support. `--all` adds `unverified` rows. |
+| `tillr-trace run <run-id>` | the same run as one JSON document — `run` (its stream states and artifact paths), `events` (every row with its payload) and `claims` — which is what `tillr-view` reads. An unknown run answers `"run": null`. |
+| `tillr-trace cost [--runs N]` | acceptance Q1: per lane, per route, per model — runs, retries, LLM wall time, tokens in / cache-read / out / reasoning, US dollars — over the N most recent runs (default 100; 0 reads every run). |
+| `tillr-trace discrepancies [--since T] [--all] [--runs N]` | acceptance Q7: every claim the record does not support, over the N most recent runs (default 100; 0 reads every run). `--all` adds `unverified` rows. `--since` keeps the claims of runs that finished at or after `T`; a claim's time is its run's finish time, not the time it was read. |
 
-Common flags: `--trace-root` (default `$XDG_STATE_HOME/tillr-trace/v1`, or
-`$TILLR_TRACE_ROOT`), `--store` (default `.tillr/state.db`), `--index`, `--rebuild`.
-The loop passes `--store` explicitly and lets `--trace-root` default unless its own
-`--trace-root` names one, so the index a later read opens is the one the tick built.
+Common flags: `--trace-root`, the recorder directory whose `runs/<run-id>/` is read
+(default `$TILLR_TRACE_ROOT`, or `$XDG_STATE_HOME/tillr-trace/v1`); `--store` (default
+`.tillr/state.db`); and `--loop-dir` (default: the store's sibling `loop`). The trace root
+is only read: a root that does not exist is a root with no runs in it.
 
 ## The real log shape this parser was written against
 
@@ -239,7 +231,7 @@ the manifest the emitters will write; until they land, `tick` shows what the sto
 `dispatches` and the trace rows carry.
 
 One row kind is **not** in the design's twelve: `unreadable`. It records an artifact
-the indexer could not read (missing log, unreadable store, corrupt `proc-exec.jsonl`),
+this tool could not read (missing log, unreadable store, corrupt `proc-exec.jsonl`),
 because the alternative — an empty result — reads as "nothing happened" and that is the
 one answer a recorder must never give by accident.
 

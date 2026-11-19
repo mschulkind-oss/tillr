@@ -1,12 +1,12 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -926,68 +926,144 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 	return p
 }
 
-// traceIndex is the tillr-trace index the observatory reads, or the reason it could not.
-// It is never created here: the index is derived, and a read face that built one would
-// be a second writer of another utility's artifact.
-type traceIndex struct {
-	db    *sql.DB
-	path  string
-	state string
-	note  string
+// traceReader answers a run's recorded observations by asking `tillr-trace run <id>`,
+// which parses that run's artifacts (its log, proc-exec.jsonl and gate records) on demand
+// and prints one JSON document. Nothing is cached and nothing is written: the owner ruled on
+// 2026-11-18 that the persistent trace index was derived data to remove until a measured
+// performance problem asks for a cache. One parser serves the CLI and the observatory, so
+// the claim verdicts the observatory shows are the ones `tillr-trace audit` prints.
+type traceReader struct {
+	bin     string
+	store   string
+	loopDir string
+	state   string
+	note    string
+	// load runs the program for one run and answers its stdout; a test replaces it.
+	load func(runID string) ([]byte, error)
 }
 
-// openTraceIndex opens the trace index read-only. A missing index is an absence the
-// caller reports rather than an error: the store alone answers some of every question.
-func openTraceIndex(ctx context.Context, path string) *traceIndex {
-	t := &traceIndex{path: path}
-	if path == "" {
+// newTraceReader resolves the program once. A missing program is an absence the caller
+// reports rather than an error: the store alone answers some of every question.
+func newTraceReader(bin, storePath, loopDir string) *traceReader {
+	t := &traceReader{bin: bin, store: storePath, loopDir: loopDir}
+	if bin == "" {
 		t.state = "absent"
-		t.note = "no trace index path was named; tillr-trace has not run here"
+		t.note = "no tillr-trace program was named or found, so a run's own recorded streams are not read"
 		return t
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := exec.LookPath(bin); err != nil {
 		t.state = "absent"
-		t.note = fmt.Sprintf("%s is not there: tillr-trace has not ingested this machine's runs", path)
+		t.note = fmt.Sprintf("the tillr-trace program %s is not there: %v", bin, err)
 		return t
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
-	if err != nil {
-		t.state = stateUnreadable
-		t.note = err.Error()
-		return t
-	}
-	db.SetMaxOpenConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		t.state = stateUnreadable
-		t.note = err.Error()
-		return t
-	}
-	t.db = db
 	t.state = "present"
+	t.load = t.exec
 	return t
 }
 
-func (t *traceIndex) Close() {
-	if t.db != nil {
-		t.db.Close()
+// available says whether a run's recorded streams can be read at all.
+func (t *traceReader) available() bool { return t.state == "present" && t.load != nil }
+
+func (t *traceReader) exec(runID string) ([]byte, error) {
+	args := []string{"--store", t.store}
+	if t.loopDir != "" {
+		args = append(args, "--loop-dir", t.loopDir)
 	}
+	cmd := exec.Command(t.bin, append(args, "run", runID)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%s run %s: %v: %s", t.bin, runID, err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
 }
 
-// watermarkNS is the newest source file mtime the index has ingested: the index's own
-// cursor, so a client can tell two index states apart.
-func (t *traceIndex) watermarkNS() *int64 {
-	if t.db == nil {
-		return nil
-	}
-	var ms sql.NullInt64
-	if err := t.db.QueryRow(`SELECT MAX(mtime_ns) FROM ingested_files`).Scan(&ms); err != nil || !ms.Valid {
-		return nil
-	}
-	return &ms.Int64
+// runTrace is one run as tillr-trace read it from the run's artifacts. Found is false for a
+// run whose id neither the store nor a run directory knows.
+type runTrace struct {
+	Found  bool
+	Row    runIndex
+	Events []obsEvent
+	Claims []claimCheck
 }
 
-// runIndex is a run's row in the trace index: which of the run's three artifact streams
+// run reads one run's artifacts. Each call parses them again, so a handler reads once and
+// passes the answer on; a large run (268,000 subprocess rows) takes about ten seconds.
+func (t *traceReader) run(runID string) (runTrace, error) {
+	if !t.available() {
+		return runTrace{}, nil
+	}
+	raw, err := t.load(runID)
+	if err != nil {
+		return runTrace{}, err
+	}
+	var doc struct {
+		Run *struct {
+			RunID     string  `json:"run_id"`
+			LogPath   *string `json:"log_path"`
+			LogState  string  `json:"log_state"`
+			ProcPath  *string `json:"proc_path"`
+			ProcState string  `json:"proc_state"`
+			GitPath   *string `json:"git_path"`
+			GitState  string  `json:"git_state"`
+			BriefPath *string `json:"brief_path"`
+			FencePath *string `json:"fence_path"`
+			BaseSHA   *string `json:"base_sha"`
+			Detail    string  `json:"detail"`
+		} `json:"run"`
+		Events []struct {
+			ObsID      string          `json:"obs_id"`
+			Kind       string          `json:"kind"`
+			TSStart    string          `json:"ts_start"`
+			TSEnd      *string         `json:"ts_end"`
+			DurationMS *int64          `json:"duration_ms"`
+			Seam       string          `json:"seam"`
+			SpanID     string          `json:"span_id"`
+			Summary    string          `json:"summary"`
+			Payload    json.RawMessage `json:"payload"`
+		} `json:"events"`
+		Claims []struct {
+			ClaimID           string  `json:"claim_id"`
+			ClaimKind         string  `json:"claim_kind"`
+			ClaimText         string  `json:"claim_text"`
+			ObservedStatus    string  `json:"observed_status"`
+			DiscrepancyReason *string `json:"discrepancy_reason"`
+			ObservedAt        string  `json:"observed_at"`
+		} `json:"claims"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return runTrace{}, fmt.Errorf("%s run %s answered a document that is not the run shape: %v", t.bin, runID, err)
+	}
+	if doc.Run == nil {
+		return runTrace{}, nil
+	}
+	nonEmpty := func(v *string) *string {
+		if v == nil || *v == "" {
+			return nil
+		}
+		return v
+	}
+	r := doc.Run
+	out := runTrace{Found: true, Row: runIndex{RunID: runID, LogPath: nonEmpty(r.LogPath), LogState: r.LogState,
+		ProcPath: nonEmpty(r.ProcPath), ProcState: r.ProcState, GitPath: nonEmpty(r.GitPath), GitState: r.GitState,
+		BriefPath: nonEmpty(r.BriefPath), FencePath: nonEmpty(r.FencePath), BaseSHA: nonEmpty(r.BaseSHA), Detail: r.Detail}}
+	for _, e := range doc.Events {
+		out.Events = append(out.Events, obsEvent{ObsID: e.ObsID, Kind: e.Kind, TSStart: e.TSStart, TSEnd: e.TSEnd,
+			DurationMS: e.DurationMS, Seam: e.Seam, SpanID: e.SpanID, Summary: e.Summary, Payload: string(e.Payload)})
+	}
+	for _, c := range doc.Claims {
+		reason := ""
+		if c.DiscrepancyReason != nil {
+			reason = *c.DiscrepancyReason
+		}
+		out.Claims = append(out.Claims, claimCheck{ClaimID: c.ClaimID, ClaimKind: c.ClaimKind, ClaimText: c.ClaimText,
+			ObservedStatus: c.ObservedStatus, DiscrepancyReason: reason, ObservedAt: c.ObservedAt})
+	}
+	return out, nil
+}
+
+// runIndex is a run's row as tillr-trace reads it: which of the run's artifact streams
 // exist, and at what paths. missing is the honest answer for a file no emitter wrote.
 type runIndex struct {
 	RunID     string
@@ -1003,44 +1079,9 @@ type runIndex struct {
 	Detail    string
 }
 
-// runRow answers one run's index row, and whether the index carries it.
-func (t *traceIndex) runRow(runID string) (runIndex, bool, error) {
-	if t.db == nil {
-		return runIndex{}, false, nil
-	}
-	var (
-		row                           runIndex
-		logPath, procPath, gitPath    sql.NullString
-		briefPath, fencePath, baseSHA sql.NullString
-	)
-	err := t.db.QueryRow(`SELECT run_id, log_path, log_state, proc_path, proc_state, git_path, git_state,
-		brief_path, fence_path, base_sha, COALESCE(detail, '') FROM runs_index WHERE run_id = ?`, runID).
-		Scan(&row.RunID, &logPath, &row.LogState, &procPath, &row.ProcState, &gitPath, &row.GitState,
-			&briefPath, &fencePath, &baseSHA, &row.Detail)
-	if errors.Is(err, sql.ErrNoRows) {
-		return runIndex{}, false, nil
-	}
-	if err != nil {
-		return runIndex{}, false, err
-	}
-	assign := func(dst **string, src sql.NullString) {
-		if src.Valid && src.String != "" {
-			v := src.String
-			*dst = &v
-		}
-	}
-	assign(&row.LogPath, logPath)
-	assign(&row.ProcPath, procPath)
-	assign(&row.GitPath, gitPath)
-	assign(&row.BriefPath, briefPath)
-	assign(&row.FencePath, fencePath)
-	assign(&row.BaseSHA, baseSHA)
-	row.RunID = runID
-	return row, true, nil
-}
-
 // obsEvent is one recorded observation of a run: a model turn, a tool call, a process
-// execution or a git trace2 region.
+// execution or a gate record. Events are in the recorded order; an empty list means
+// nothing was recorded and is not evidence that nothing ran.
 type obsEvent struct {
 	ObsID      string
 	Kind       string
@@ -1053,43 +1094,8 @@ type obsEvent struct {
 	Payload    string
 }
 
-// runEvents answers the recorded observations of one run, in the recorded order. It is
-// the index's answer to "what went between the tools"; an empty list means nothing was
-// recorded and is not evidence that nothing ran.
-func (t *traceIndex) runEvents(runID string) ([]obsEvent, error) {
-	if t.db == nil {
-		return nil, nil
-	}
-	rows, err := t.db.Query(`SELECT obs_id, kind, ts_start, ts_end, duration_ms, COALESCE(seam, ''),
-		COALESCE(span_id, ''), COALESCE(summary, ''), payload FROM obs_events
-		WHERE run_id = ? ORDER BY ts_start, seq`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []obsEvent
-	for rows.Next() {
-		var e obsEvent
-		var end sql.NullString
-		var duration sql.NullInt64
-		if err := rows.Scan(&e.ObsID, &e.Kind, &e.TSStart, &end, &duration, &e.Seam, &e.SpanID,
-			&e.Summary, &e.Payload); err != nil {
-			return nil, err
-		}
-		if end.Valid {
-			e.TSEnd = &end.String
-		}
-		if duration.Valid {
-			d := duration.Int64
-			e.DurationMS = &d
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
-// claimCheck is one of the four temporal verification predicates the trace index
-// answers for a run.
+// claimCheck is one of the four temporal verification predicates tillr-trace answers for
+// a run.
 type claimCheck struct {
 	ClaimID           string
 	ClaimKind         string
@@ -1097,29 +1103,6 @@ type claimCheck struct {
 	ObservedStatus    string
 	DiscrepancyReason string
 	ObservedAt        string
-}
-
-// runClaims answers the claim checks the index holds for one run.
-func (t *traceIndex) runClaims(runID string) ([]claimCheck, error) {
-	if t.db == nil {
-		return nil, nil
-	}
-	rows, err := t.db.Query(`SELECT claim_id, claim_kind, claim_text, observed_status,
-		COALESCE(discrepancy_reason, ''), observed_at FROM claim_checks WHERE run_id = ? ORDER BY claim_id`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []claimCheck
-	for rows.Next() {
-		var c claimCheck
-		if err := rows.Scan(&c.ClaimID, &c.ClaimKind, &c.ClaimText, &c.ObservedStatus,
-			&c.DiscrepancyReason, &c.ObservedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
 }
 
 // allocation is the run.allocate event a lane claim appends: the run's start as recorded

@@ -37,7 +37,7 @@ const snapshot: SnapshotData = {
   sources: {
     store: { path: ".tillr/state.db", state: "present" },
     loop_dir: { path: ".tillr/loop", state: "present" },
-    trace_index: { path: "index.db", state: "absent", note: "no index at this path" },
+    trace: { path: "tillr-trace", state: "absent", note: "no tillr-trace program at this path" },
   },
   counts: {
     by_state: { blocked: 1 },

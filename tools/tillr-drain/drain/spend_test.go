@@ -169,7 +169,6 @@ func (stubSteps) Land(_ context.Context, _ Candidate) (LandOutcome, error) {
 }
 func (stubSteps) Verdict(_ context.Context, _ Candidate, _ string) error                 { return nil }
 func (stubSteps) ItemState(_ context.Context, _, _, _ string, _ ...item.WaitingOn) error { return nil }
-func (stubSteps) Index(_ context.Context) error                                          { return nil }
 func (stubSteps) Sync(_ context.Context) (SyncOutcome, error) {
 	return SyncOutcome{Skipped: "a stub step set reads no documents"}, nil
 }

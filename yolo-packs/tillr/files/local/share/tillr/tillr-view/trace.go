@@ -36,7 +36,7 @@ func traceFace(args []string, out io.Writer) int {
 	passID := fs.String("pass", "", "export runs dispatched in this UTC pass (YYYYMMDDTHHMMSSZ)")
 	format := fs.String("format", "otlp-json", "otlp-json or chrome-trace")
 	loop := fs.String("loop-dir", "", "the loop record directory (default: store sibling loop)")
-	index := fs.String("trace-index", defaultTraceIndex(), "the tillr-trace index to read")
+	traceBin := fs.String("trace-bin", "", traceBinHelp)
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		if code == helpExit {
 			return record.ExitOK
@@ -61,7 +61,7 @@ func traceFace(args []string, out io.Writer) int {
 		}
 	}
 	ctx := context.Background()
-	s := newServer(ctx, *path, *loop, "", *index, ".", "", nil)
+	s := newServer(ctx, *path, *loop, "", resolveTraceBin(".", *traceBin), ".", "", nil)
 	defer s.close()
 	if s.problem != nil {
 		fmt.Fprintf(os.Stderr, "tillr-view: %s\n", s.problem.note)
@@ -164,7 +164,7 @@ func tracePass(r *store.Reader, runID string) (string, error) {
 }
 
 // runSpans is shared by the waterfall and exports. The store's gate measurements
-// supplement the observation index; their exact nanoseconds must not round-trip via ms.
+// supplement the run's recorded observations; their exact nanoseconds must not round-trip via ms.
 func (s *server) runSpans(r *store.Reader, run storeRun) ([]span, error) {
 	spans := s.obs.timeline(run)
 	gates, err := readGateSpans(r, run.RunID)

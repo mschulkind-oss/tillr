@@ -16,8 +16,9 @@ export type Tab = "transcript" | "exchanges" | "timeline" | "gate";
 
 /** The tab a selection lands on: the run's own transcript, because it is the one record that
  * answers "what did this run actually do" for a live run and a finished one alike, and it is
- * the one that does not need the trace index. The exchanges and the timeline are the
- * supervisor's and the index's views of the same run, one click away. */
+ * the one that does not need tillr-trace to read the run's artifacts. The exchanges and the
+ * timeline are the supervisor's and the run's recorded streams' views of the same run, one
+ * click away. */
 export const DEFAULT_TAB: Tab = "transcript";
 
 export interface Selection {

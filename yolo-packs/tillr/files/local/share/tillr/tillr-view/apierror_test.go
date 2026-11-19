@@ -116,7 +116,7 @@ func TestTheStoreConditionsAreDistinctCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			storePath := tc.store(t)
 			srv := newServer(context.Background(), storePath, filepath.Join(dir, "loop"),
-				filepath.Join(dir, "lanes"), filepath.Join(dir, "no-index.db"), dir, "", nil)
+				filepath.Join(dir, "lanes"), filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 			t.Cleanup(srv.close)
 			if srv.problem == nil {
 				t.Fatalf("a %s store answered no problem: the face thinks it can read it", tc.name)

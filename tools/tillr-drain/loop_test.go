@@ -673,7 +673,6 @@ printf 'RESULT: done\n'
 		"--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"),
 		"--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"),
 		"--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0),
-		"--trace-bin", "/bin/true",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

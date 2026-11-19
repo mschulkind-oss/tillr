@@ -239,7 +239,7 @@ func drainEmptyStore(t *testing.T, dir, path string) {
 	out := invokeUtility(t, drain, 0, "loop", "--root", root, "--store", path,
 		"--lane-root", filepath.Join(dir, "lanes"), "--lanes", "1", "--policy", policy,
 		"--item-bin", item, "--run-bin", run, "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true",
-		"--trace-bin=", "--rolling=", "--replay=", "--exit-when-drained")
+		"--rolling=", "--replay=", "--exit-when-drained")
 	if !strings.Contains(string(out), "queue-drained") || !strings.Contains(string(out), "dispatched 0") {
 		t.Fatalf("empty store did not drain: %s", out)
 	}

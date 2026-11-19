@@ -18,16 +18,16 @@ import (
 )
 
 // serveHarness is one fixture: a store with a two-item drain in it, a loop directory with
-// one run's record files, a lane directory, and a trace index path that is not there —
-// which is the state of the world until OBS-4 lands, and must be answered, not papered
-// over.
+// one run's record files, a lane directory, and a tillr-trace program path that is not
+// there — an observatory with no reader for a run's recorded streams, which must be
+// answered, not papered over.
 type serveHarness struct {
 	t        *testing.T
 	dir      string
 	store    string
 	loopDir  string
 	laneRoot string
-	index    string
+	traceBin string
 	// vantageBase is the user-scope Vantage base URL the face was started with; the
 	// default harness configures none, which is the state the board must still draw a link
 	// in.
@@ -69,7 +69,7 @@ func newServeHarnessWithQuestions(t *testing.T, vantageBase string, questionsCmd
 		store:        filepath.Join(dir, "state.db"),
 		loopDir:      filepath.Join(dir, "loop"),
 		laneRoot:     filepath.Join(dir, "lanes"),
-		index:        filepath.Join(dir, "no-such-index.db"),
+		traceBin:     filepath.Join(dir, "no-such-tillr-trace"),
 		vantageBase:  vantageBase,
 		questionsCmd: questionsCmd,
 	}
@@ -218,7 +218,7 @@ func (h *serveHarness) seedLoopDir() {
 // start opens the read-only face and serves it.
 func (h *serveHarness) start() {
 	h.t.Helper()
-	srv := newServer(context.Background(), h.store, h.loopDir, h.laneRoot, h.index, h.dir, h.vantageBase, h.questionsCmd)
+	srv := newServer(context.Background(), h.store, h.loopDir, h.laneRoot, h.traceBin, h.dir, h.vantageBase, h.questionsCmd)
 	if srv.problem != nil {
 		h.t.Fatalf("opening the serve face answered %s: %s", srv.problem.code, srv.problem.note)
 	}
@@ -635,7 +635,7 @@ var serveCases = []serveCase{
 			t.Fatalf("%d unobserved seams; want the subprocess and git streams named", seams)
 		}
 	}},
-	{"the_timeline_says_the_trace_index_is_absent", func(t *testing.T, h *serveHarness) {
+	{"the_timeline_says_the_trace_reader_is_absent", func(t *testing.T, h *serveHarness) {
 		status, body, raw := h.get("/api/v1/runs/run-1/timeline")
 		if status != http.StatusOK {
 			t.Fatalf("timeline answered %d", status)
@@ -643,22 +643,22 @@ var serveCases = []serveCase{
 		data := body["data"].(map[string]any)
 		note, _ := data["note"].(string)
 		if note == "" {
-			t.Fatalf("the timeline claims no absence although the index is missing: %s", raw)
+			t.Fatalf("the timeline claims no absence although the trace reader is missing: %s", raw)
 		}
 		sources := data["sources"].(map[string]any)
-		index := sources["trace_index"].(map[string]any)
-		if index["state"] != "absent" {
-			t.Fatalf("the trace index reads as %q, want absent", index["state"])
+		trace := sources["trace"].(map[string]any)
+		if trace["state"] != "absent" {
+			t.Fatalf("the trace reader reads as %q, want absent", trace["state"])
 		}
 		for _, rawSpan := range data["spans"].([]any) {
 			span := rawSpan.(map[string]any)
 			if span["category"] == "llm_turn" || span["category"] == "tool_call" {
-				t.Fatalf("an invented observation: %s with no index to read it from", span)
+				t.Fatalf("an invented observation: %s with no reader to read it with", span)
 			}
 		}
 		// The store alone still answers the run: the absence must not swallow it.
 		if len(data["spans"].([]any)) == 0 {
-			t.Fatal("no spans at all: the store's run row must survive a missing index")
+			t.Fatal("no spans at all: the store's run row must survive a missing trace reader")
 		}
 	}},
 	{"an_absent_artifact_says_where_it_looked", func(t *testing.T, h *serveHarness) {

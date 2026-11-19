@@ -56,7 +56,7 @@ func TestHotJournalDiagnosisAndRetryAfterRecoveryOnSameServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newServer(ctx, path, "", "", filepath.Join(dir, "no-index"), dir, "", nil)
+	srv := newServer(ctx, path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 	defer srv.close()
 	handler := srv.routes()
 	request := func() *httptest.ResponseRecorder {
@@ -128,7 +128,7 @@ func TestLiveSocketDoesNotHoldStoreOpenLock(t *testing.T) {
 func TestAbsentStoreRetryFindsNewStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.db")
-	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-index"), dir, "", nil)
+	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 	defer srv.close()
 	handler := srv.routes()
 	for _, method := range []string{http.MethodGet, http.MethodHead} {

@@ -307,11 +307,11 @@ func (obs *observations) readLoopResult() (reason, note string, build *drainBuil
 }
 
 // observations is the on-disk evidence beside the store: where a run's record files and
-// preserved staging inputs are, and where the trace index is.
+// preserved staging inputs are, and the reader of each run's recorded streams.
 type observations struct {
 	loopDir  string
 	laneRoot string
-	trace    *traceIndex
+	trace    *traceReader
 }
 
 // readRunArtifact answers one artifact kind for one run. The kinds OBS-1 preserves
@@ -400,20 +400,21 @@ func (obs *observations) readVerdictArtifacts(runID string) artifactPayload {
 	return p
 }
 
-// readTraceArtifact answers a turn or tool kind from the trace index. The index is the
-// only place those observations exist; with no index the answer says so.
+// readTraceArtifact answers a turn or tool kind from the run's own log, which tillr-trace
+// reads on demand. With no tillr-trace program the answer says so.
 func (obs *observations) readTraceArtifact(runID, kind string) artifactPayload {
-	p := artifactPayload{Kind: kind, SearchedPaths: []string{obs.trace.path}}
-	if obs.trace.db == nil {
+	p := artifactPayload{Kind: kind, SearchedPaths: []string{obs.trace.bin}}
+	if !obs.trace.available() {
 		p.EpistemicState = "absent"
-		p.Note = "no trace index: " + obs.trace.note
+		p.Note = obs.trace.note
 		return p
 	}
 	kinds := []string{"llm.turn"}
 	if kind == "tool" {
 		kinds = []string{"tool.call"}
 	}
-	events, err := obs.trace.runEvents(runID)
+	read, err := obs.trace.run(runID)
+	events := read.Events
 	if err != nil {
 		p.EpistemicState = stateUnreadable
 		p.Note = err.Error()
@@ -432,7 +433,7 @@ func (obs *observations) readTraceArtifact(runID, kind string) artifactPayload {
 	}
 	if len(kept) == 0 {
 		p.EpistemicState = "absent"
-		p.Note = "the trace index recorded no " + strings.Join(kinds, "/") + " row for this run"
+		p.Note = "the run's recorded artifacts hold no " + strings.Join(kinds, "/") + " row"
 		return p
 	}
 	encoded, err := json.MarshalIndent(kept, "", " ")
@@ -476,7 +477,7 @@ type exchange struct {
 }
 
 // exchanges answers the ordered inter-tool edges of one run: the Layer A record files the
-// tick left, the Layer B observations the trace index holds, and an explicit
+// tick left, the Layer B observations tillr-trace reads from the run's artifacts, and an explicit
 // unobserved_seam row for every stream no emitter wrote.
 func (obs *observations) exchanges(runID string) []exchange {
 	out := []exchange{}
@@ -523,33 +524,32 @@ func (obs *observations) exchanges(runID string) []exchange {
 	}
 
 	// Layer B: what the harness recorded inside the run.
-	row, indexed, _ := obs.trace.runRow(runID)
-	if obs.trace.db != nil && indexed {
-		events, err := obs.trace.runEvents(runID)
-		if err == nil {
-			for _, e := range events {
-				channel, layer, caller, callee := layerBOf(e.Kind)
-				if channel == "" {
-					continue
-				}
-				seq++
-				start := parseEpochMS(e.TSStart)
-				end := parseEpochMS(derefString(e.TSEnd))
-				state := stateObserved
-				if channel == channelJSONLTurn && start == nil {
-					state = stateDerivedClock
-				}
-				out = append(out, exchange{
-					ExchangeID: e.ObsID, Seq: seq, Layer: layer, Caller: caller, Callee: callee,
-					Channel: channel, StartedAtMS: start, FinishedAtMS: end,
-					TSSource: "obs_event", EpistemicState: state, Summary: e.Summary,
-				})
+	read, err := obs.trace.run(runID)
+	indexed := err == nil && read.Found
+	row := read.Row
+	if indexed {
+		for _, e := range read.Events {
+			channel, layer, caller, callee := layerBOf(e.Kind)
+			if channel == "" {
+				continue
 			}
+			seq++
+			start := parseEpochMS(e.TSStart)
+			end := parseEpochMS(derefString(e.TSEnd))
+			state := stateObserved
+			if channel == channelJSONLTurn && start == nil {
+				state = stateDerivedClock
+			}
+			out = append(out, exchange{
+				ExchangeID: e.ObsID, Seq: seq, Layer: layer, Caller: caller, Callee: callee,
+				Channel: channel, StartedAtMS: start, FinishedAtMS: end,
+				TSSource: "obs_event", EpistemicState: state, Summary: e.Summary,
+			})
 		}
 	}
 
 	// The seams: a stream no emitter wrote is a row, so the gap is visible as a gap.
-	for _, seam := range obs.seams(runID, row, indexed) {
+	for _, seam := range obs.seams(runID, row, indexed, err) {
 		seq++
 		seam.Seq = seq
 		out = append(out, seam)
@@ -576,25 +576,32 @@ func layerBOf(kind string) (channel, layer, caller, callee string) {
 // seams answers the unobserved seams of one run: the Layer B stream that no emitter
 // wrote. Before OBS-4 lands there are always two — the subprocess and the git stream —
 // and the rows say exactly that rather than rendering zero.
-func (obs *observations) seams(runID string, row runIndex, indexed bool) []exchange {
+//
+// readErr is the reader's failure, if it had one: a run tillr-trace could not read is a
+// seam with the reason, not an empty run.
+func (obs *observations) seams(runID string, row runIndex, indexed bool, readErr error) []exchange {
 	var out []exchange
-	if obs.trace.db == nil {
+	if !obs.trace.available() {
 		out = append(out, exchange{
 			ExchangeID: runID + "/seam/proc", Layer: "harness", Caller: "pi", Callee: "subprocess",
 			Channel: channelSubprocess, TSSource: "none", EpistemicState: stateUnobservedSeam,
-			Summary: "no trace index: the subprocess stream was never ingested, so nothing inside bash is observable",
+			Summary: "the run's recorded streams were not read (" + obs.trace.note + "), so nothing inside bash is observable",
 		}, exchange{
 			ExchangeID: runID + "/seam/git2", Layer: "harness", Caller: "git", Callee: "git-trace2",
 			Channel: channelGitTrace2, TSSource: "none", EpistemicState: stateUnobservedSeam,
-			Summary: "no trace index: the git trace2 stream was never ingested",
+			Summary: "the run's recorded streams were not read, so the git trace2 stream is unobserved",
 		})
 		return out
 	}
 	if !indexed {
+		summary := "tillr-trace knows no record of this run: every Layer B row is unknown, not empty"
+		if readErr != nil {
+			summary = "tillr-trace could not read this run (" + readErr.Error() + "): every Layer B row is unknown, not empty"
+		}
 		out = append(out, exchange{
 			ExchangeID: runID + "/seam/index", Layer: "harness", Caller: "tillr-trace", Callee: runID,
 			Channel: channelSubprocess, TSSource: "none", EpistemicState: stateUnobservedSeam,
-			Summary: "tillr-trace has not indexed this run: every Layer B row is unknown, not empty",
+			Summary: summary,
 		})
 		return out
 	}
@@ -644,7 +651,9 @@ type span struct {
 // Spans with no clock are kept and carry a null start rather than a made-up one.
 func (obs *observations) timeline(run storeRun) []span {
 	out := []span{}
-	row, indexed, _ := obs.trace.runRow(run.RunID)
+	read, readErr := obs.trace.run(run.RunID)
+	indexed := readErr == nil && read.Found
+	row := read.Row
 	lane := run.LaneID
 	runID := run.RunID
 	finished := run.FinishedAtMS
@@ -681,39 +690,37 @@ func (obs *observations) timeline(run storeRun) []span {
 		})
 	}
 
-	if obs.trace.db != nil && indexed {
-		if events, err := obs.trace.runEvents(runID); err == nil {
-			for _, e := range events {
-				category := ""
-				switch e.Kind {
-				case "llm.turn":
-					category = "llm_turn"
-				case "tool.call":
-					category = "tool_call"
-				case "proc.exec":
-					category = "proc_exec"
-				case "git.trace2":
-					category = "git_trace2"
-				case "gate.check":
-					category = "gate_check"
-				}
-				if category == "" {
-					continue
-				}
-				parent := runID + "/run"
-				spanID := e.ObsID
-				out = append(out, span{
-					SpanID: spanID, ParentSpanID: &parent, LaneID: lane, Category: category,
-					Label: labelOf(e), StartedAtMS: parseEpochMS(e.TSStart), FinishedAtMS: parseEpochMS(derefString(e.TSEnd)),
-					StartUnixNano: parseEpochNS(e.TSStart), EndUnixNano: parseEpochNS(derefString(e.TSEnd)),
-					TSSource: "obs_event", EpistemicState: stateObserved, Status: statusOfEvent(e),
-				})
+	if indexed {
+		for _, e := range read.Events {
+			category := ""
+			switch e.Kind {
+			case "llm.turn":
+				category = "llm_turn"
+			case "tool.call":
+				category = "tool_call"
+			case "proc.exec":
+				category = "proc_exec"
+			case "git.trace2":
+				category = "git_trace2"
+			case "gate.check":
+				category = "gate_check"
 			}
+			if category == "" {
+				continue
+			}
+			parent := runID + "/run"
+			spanID := e.ObsID
+			out = append(out, span{
+				SpanID: spanID, ParentSpanID: &parent, LaneID: lane, Category: category,
+				Label: labelOf(e), StartedAtMS: parseEpochMS(e.TSStart), FinishedAtMS: parseEpochMS(derefString(e.TSEnd)),
+				StartUnixNano: parseEpochNS(e.TSStart), EndUnixNano: parseEpochNS(derefString(e.TSEnd)),
+				TSSource: "obs_event", EpistemicState: stateObserved, Status: statusOfEvent(e),
+			})
 		}
 	}
 
 	// One gap span per seam, so the waterfall shows the hole where the work happened.
-	for _, seam := range obs.seams(runID, row, obs.trace.db != nil && indexed) {
+	for _, seam := range obs.seams(runID, row, indexed, readErr) {
 		id := seam.ExchangeID
 		out = append(out, span{
 			SpanID: id + "/gap", LaneID: lane, Category: "gap", Label: seam.Summary,

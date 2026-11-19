@@ -482,7 +482,6 @@ func (s *recordingSteps) Verdict(_ context.Context, _ Candidate, _ string) error
 func (s *recordingSteps) ItemState(_ context.Context, _, _, _ string, _ ...item.WaitingOn) error {
 	return nil
 }
-func (s *recordingSteps) Index(_ context.Context) error { return nil }
 func (s *recordingSteps) Sync(_ context.Context) (SyncOutcome, error) {
 	return SyncOutcome{Skipped: "a recording step set reads no documents"}, nil
 }

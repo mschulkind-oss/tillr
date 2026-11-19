@@ -90,7 +90,9 @@ The build item asked for a Python program with one exact output line. Its commit
 failed before implementation and passed afterward. The scratch gate checked that test
 through the real gate adapter, and the real lander recorded the landing. This was not the
 repository's full landing gate: rolling checks, base replay, and trace indexing were
-disabled, and no `just done` was run.
+disabled, and no `just done` was run. (The loop has had no trace indexing step since
+2026-11-18, so the `--trace-bin ''` below is how that step was disabled then; today's loop
+refuses the flag, and the command runs without it.)
 
 With `ROOT` naming the scratch clone, `STORE` its new store, and `SCRATCH` the experiment's
 directory, the loop command was:

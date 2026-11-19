@@ -18,7 +18,6 @@ export const cursor: ServerSnapshot = {
   store_path: ".tillr/state.db",
   schema_version: 3,
   event_head_seq: 48,
-  trace_watermark_ns: null,
   generated_at: "2026-11-12T20:31:14Z",
 };
 
@@ -47,7 +46,7 @@ export const snapshotData: SnapshotData = {
   sources: {
     store: { path: ".tillr/state.db", state: "present" },
     loop_dir: { path: ".tillr/loop", state: "present" },
-    trace_index: { path: "index.db", state: "absent", note: "no index at this path" },
+    trace: { path: "tillr-trace", state: "absent", note: "no tillr-trace program at this path" },
   },
   drain_summary: {
     active: false,
@@ -213,9 +212,9 @@ export const runData: RunData = {
   completeness: {
     log_state: "indexed",
     proc_state: "missing",
-    git_state: "unindexed",
+    git_state: "unread",
     brief_state: "absent",
-    note: "stream states are tillr-trace's index of this run's artifacts",
+    note: "stream states are what tillr-trace read from this run's artifacts just now",
   },
 };
 

@@ -77,7 +77,7 @@ func invokeSyncScopeLoop(t *testing.T, f loopFixture, itemBin string) (int, []by
 	writeFile(t, policy, string(raw))
 	return invoke(t, "loop", "--root", f.root, "--store", f.store, "--policy", policy,
 		"--lane-root", f.laneRoot, "--item-bin", itemBin, "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true",
-		"--questions-cmd", indexStub(t), "--trace-bin=", "--rolling=", "--exit-when-drained")
+		"--questions-cmd", indexStub(t), "--rolling=", "--exit-when-drained")
 }
 
 func TestLoopSyncRoadmapsPathRefusal(t *testing.T) {
