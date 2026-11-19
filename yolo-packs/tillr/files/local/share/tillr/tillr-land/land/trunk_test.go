@@ -144,6 +144,34 @@ func TestSquashWritesOneCommitWithNoItemTrailerAndTheDeployedIdentity(t *testing
 	}
 }
 
+// TestSquashTitlesAMultiCommitChangeAfterTheFirstCommitAndListsTheRest: when an item's
+// change spans more than one commit, the squashed commit carries the first commit's subject
+// and lists the remaining commits' subjects in its body.
+func TestSquashTitlesAMultiCommitChangeAfterTheFirstCommitAndListsTheRest(t *testing.T) {
+	r := newRepo(t)
+	git(t, r.dir, "checkout", "candidate")
+	write(t, filepath.Join(r.dir, "second.txt"), "second\n")
+	git(t, r.dir, "add", "second.txt")
+	git(t, r.dir, "commit", "-m", "test(tillr): cover edge cases")
+	write(t, filepath.Join(r.dir, "third.txt"), "third\n")
+	git(t, r.dir, "add", "third.txt")
+	git(t, r.dir, "commit", "-m", "docs(tillr): note new behavior")
+	head := git(t, r.dir, "rev-parse", "HEAD")
+	git(t, r.dir, "checkout", "main")
+
+	squash, err := r.trunk(t).Squash(r.base, r.base, head, time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("squashing: %v", err)
+	}
+	if got, want := git(t, r.dir, "log", "-1", "--format=%s", squash.Commit), "candidate"; got != want {
+		t.Fatalf("the squash subject is %q, want %q", got, want)
+	}
+	wantBody := "- test(tillr): cover edge cases\n- docs(tillr): note new behavior"
+	if got := git(t, r.dir, "log", "-1", "--format=%b", squash.Commit); got != wantBody {
+		t.Fatalf("the squash body is %q, want %q", got, wantBody)
+	}
+}
+
 // TestSquashStampsTheCommitterDateInTheMachinesLocalZone: the landing's committer date is
 // the landing instant written in the zone of the machine that landed it, not in UTC, so a
 // landed commit reads in the same zone as a commit made by hand on that machine (owner

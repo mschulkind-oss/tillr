@@ -71,7 +71,9 @@ since green with both bounds disabled.
   remain usable.
 - **One trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
-  with the repository's scope-checked identity and the head's own message. The commit
+  with the repository's scope-checked identity and the candidate's message: a single-commit
+  change keeps its message unchanged, while a multi-commit change uses the first commit's
+  subject and lists the remaining commits' subjects in the body. The commit
   names no queue item: there is no `Tillr-Item:` trailer (ruling `D-RS3` in
   [`queue-persistence-ruling.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict

@@ -185,8 +185,9 @@ type LandingRequest struct {
 	// Empty is a manual landing with no loop observation to compare.
 	ObservedTrunk string
 	HeadSHA       string
-	// MessageFrom selects the message and author date, never the gated tree.
-	// Empty keeps the head's message; an explicit source must belong to base..head.
+	// MessageFrom bounds the worker commit range in base..head, excluding any
+	// loop-owned commits after it (such as document-block retirement), never the
+	// gated tree. Empty uses base..head; an explicit bound must belong to base..head.
 	MessageFrom string
 	// RunDir is the commit-list directory; empty uses <git-common-dir>/tillr/runs/<run-id>.
 	RunDir  string
@@ -220,7 +221,7 @@ type LandingRequest struct {
 //
 // The squash is the landing: `git merge-tree --write-tree --merge-base=<base>` re-applies
 // the change onto the tip, `git commit-tree` writes one commit with the repository's
-// scope-checked identity and the selected source commit's message, naming no item, and `Trunk.Move`
+// scope-checked identity and the candidate range's message, naming no item, and `Trunk.Move`
 // fast-forwards the trunk onto it. A squash that conflicts is its own outcome, not a repair: the verdict
 // stands, the head is pinned, and a repair lane reads the conflict paths from the row.
 //
