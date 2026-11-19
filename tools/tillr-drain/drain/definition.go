@@ -11,6 +11,10 @@ const (
 	ReasonDesignUnderComment = "design-under-comment"
 	ReasonWorkflowInvalid    = "workflow-invalid"
 	ReasonNodeFailed         = "node-failed"
+	// ReasonNodeAnswerUnread holds a workflow item at a node recorded blocked whose
+	// retained report does not say blocked: its answer was misread, not given
+	// (workflow_order.go, unreadAnswerHold). It is written "node-answer-unread: <node>".
+	ReasonNodeAnswerUnread   = "node-answer-unread"
 	ReasonVantageUnavailable = "Vantage not answering"
 	ReasonNodeOutputMissing  = "node-output-missing"
 	ReasonAwaitsRewrite      = "awaits-rewrite"
@@ -69,7 +73,7 @@ var generalHolds = map[string]string{
 	ReasonLaneUnlandedChange:    "", ReasonLaneBranchHeld: "", ReasonLaneUncommittedWork: "", ReasonLaneChildren: "",
 	ReasonPreserveFailed:      "",
 	StopHostBoundaryViolation: "",
-	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeOutputMissing: "",
+	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeAnswerUnread: "", ReasonNodeOutputMissing: "",
 	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
 	ReasonJudgeBlocked: "", ReasonJudgeDefective: "",
 }

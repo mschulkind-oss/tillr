@@ -3,7 +3,10 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -76,7 +79,7 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
  WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
  AND n.outcome IN ('failed','fault','refused','unjudged') ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &outcome, &runID)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return unreadAnswerHold(r, id)
 	}
 	if err != nil {
 		return "", err
@@ -101,4 +104,83 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 		return RefusalNodeOutput, nil
 	}
 	return fmt.Sprintf("%s: %s", ReasonNodeFailed, node), nil
+}
+
+// unreadAnswerHold names a node recorded `blocked` whose own report does not say blocked.
+// A settlement that misread a footer — `**RESULT: done**` read as "done**" before
+// reportFooter read through emphasis — recorded exactly that, raised no conflict and
+// recorded no cause, so the planner had nothing to name but run-link-missing. The run's
+// recorded report is the node's answer, so it is the evidence read here; the hold names
+// the node, and its row names the retry that keeps every read-only node that passed.
+func unreadAnswerHold(r *store.Reader, id string) (string, error) {
+	var node, refs string
+	err := r.QueryRow(`SELECT n.node_id,r.artifact_refs FROM node_runs n JOIN runs r ON r.run_id=n.run_id
+ WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
+ AND n.outcome='blocked' ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &refs)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var artifacts []run.ArtifactRef
+	if err := json.Unmarshal([]byte(refs), &artifacts); err != nil {
+		return "", nil
+	}
+	report := logTail(artifacts)
+	if report == "" {
+		return "", nil
+	}
+	switch reportFooter(report) {
+	case "blocked", "trunk-broken":
+		return "", nil
+	}
+	return fmt.Sprintf("%s: %s", ReasonNodeAnswerUnread, node), nil
+}
+
+// retainedReaders answers what a retry of a workflow item keeps from attempt prev: every
+// read-only node that passed there, provided no write node of that attempt had run. A
+// read-only node changed no file, so its retained outputs are still the answer to its
+// brief; a write node's work is the candidate a retry replaces, and whatever read the tree
+// for it is read again. The new attempt starts at the first node not kept. An attempt with
+// nothing to keep, or with a write node run, keeps nothing and starts at node 0.
+func retainedReaders(r *store.Reader, id string, prev int, w *Workflow) (int, []string, error) {
+	if prev < 1 {
+		return 0, nil, nil
+	}
+	outcomes, err := workflowOutcomes(r, id, prev)
+	if err != nil {
+		return 0, nil, err
+	}
+	kept, first := []string{}, -1
+	for i, stage := range w.Stages {
+		if stage.Access != "read_only" && outcomes[stage.ID] != "" {
+			return 0, nil, nil
+		}
+		if stage.Access == "read_only" && outcomes[stage.ID] == "passed" {
+			kept = append(kept, stage.ID)
+		} else if first < 0 {
+			first = i
+		}
+	}
+	if len(kept) == 0 || first < 0 {
+		return 0, nil, nil
+	}
+	return first, kept, nil
+}
+
+// carryRetainedReaders records a retry's kept nodes against the new attempt at claim, each
+// pointing at the attempt whose run passed it, so outcomes, sibling selection and input
+// paths read them as this attempt's own (effectiveNodeRuns, nodeInputPaths).
+func carryRetainedReaders(tx *store.Tx, d Decision) error {
+	for _, id := range d.ReusedNodes {
+		source, err := nodeSourceAttempt(tx.Reader(), d.ItemID, d.ReusedAttempt, id)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO node_reused(item_id,attempt,node_id,source_attempt) VALUES(?,?,?,?) ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, id, source); err != nil {
+			return err
+		}
+	}
+	return nil
 }

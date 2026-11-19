@@ -201,6 +201,20 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		}
 		return *design, nil
 	}
+	// The plan honors a build retry only while the run it names is the item's latest
+	// finished run (retryFor), so an authorization naming an earlier one is recorded and
+	// then silently ignored. Refuse it here, naming the run the plan would accept.
+	var latest string
+	if err := tx.QueryRow(
+		`SELECT run_id FROM runs WHERE item_id = ? AND state IN (?, ?, ?)
+		  ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
+		req.ItemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
+	).Scan(&latest); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Retry{}, readFailure(err)
+	}
+	if latest != "" && latest != req.RunID {
+		return Retry{}, Usagef("run %q is not item %q's latest finished run, and a build retry supersedes the latest: %s", req.RunID, req.ItemID, latestRunCommand(tx.Reader(), req.ItemID))
+	}
 	if exitCode.Valid {
 		code := int(exitCode.Int64)
 		rec.ExitCode = &code

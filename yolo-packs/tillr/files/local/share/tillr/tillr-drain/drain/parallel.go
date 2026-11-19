@@ -415,7 +415,9 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		} else {
 			class := ClassifyAttempt(rec, log)
 			switch {
-			case class == AttemptInfrastructure || reportFooter(log) == "":
+			case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
+				// No footer, or one naming no ending, is no answer: this reader alone runs
+				// again and its finished siblings are kept.
 				updated, ok, e := l.parallelFailover(ctx, node, rec, result)
 				if e != nil {
 					return laneOutcome{err: e}

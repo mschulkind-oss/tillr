@@ -30,11 +30,14 @@ type parallelSteps struct {
 	builderSuffix string
 	badReportNode string
 	badReport     string
-	failedStart   bool
-	writerFirst   bool
-	wallNode      string
-	wallAgain     bool
-	resumes       int
+	// badReports maps a run-id suffix to the report that reader writes instead of the
+	// plain `RESULT: done` one, for cases with more than one odd reader.
+	badReports  map[string]string
+	failedStart bool
+	writerFirst bool
+	wallNode    string
+	wallAgain   bool
+	resumes     int
 }
 
 func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -90,6 +93,11 @@ func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	report := "Scout findings.\nRESULT: done\n"
 	if s.badReportNode != "" && strings.HasSuffix(req.RunID, s.badReportNode) {
 		report = s.badReport
+	}
+	for suffix, bad := range s.badReports {
+		if strings.HasSuffix(req.RunID, suffix) {
+			report = bad
+		}
 	}
 	dir := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {

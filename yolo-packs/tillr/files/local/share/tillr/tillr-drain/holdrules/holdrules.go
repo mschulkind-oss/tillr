@@ -32,8 +32,12 @@ var Rules = map[string]Rule{
 	"owner-only-owed":       {"needs you", "queue", "the owner"},
 	"workflow-invalid":      {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
 	"node-failed":           {"needs you", "lane", "inspect the named node and authorize a retry"},
-	"gate-stall-rerun":      {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
-	"gate-stalled":          {"needs you", "gate", "diagnose the stalled check and clear the fault"},
+	// A node recorded blocked whose own report does not say blocked: a misread answer
+	// left by a loop built before footers were read through Markdown emphasis. No
+	// settlement writes it now; the retry keeps every read-only node that passed.
+	"node-answer-unread": {"needs you", "lane", "authorize a retry: `tillr drain retry --item <item> --run <its latest finished run>`; read-only nodes that passed are kept"},
+	"gate-stall-rerun":   {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
+	"gate-stalled":       {"needs you", "gate", "diagnose the stalled check and clear the fault"},
 	// A gate that ran and reached no verdict judged nothing: the next pass gates the same
 	// candidate again, uncounted, with no operator.
 	"gate-no-verdict": {"waits on the loop", "gate", "the next pass gates the same candidate again on its lane"},
@@ -136,7 +140,7 @@ func For(reason string) Rule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return Rules["workflow-invalid"]
 	}
-	for _, named := range []string{"node-failed", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
+	for _, named := range []string{"node-failed", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
 		if strings.HasPrefix(reason, named+": ") {
 			return Rules[named]
 		}
