@@ -130,11 +130,24 @@ func StopExitCode(reason string) int {
 
 // The gate's candidate verdicts and harness error. A recorded stall is the
 // distinct exit 6 outcome declared with its retry handling in gate_stall.go.
+// GatePassedInherited is the second passing verdict (design §8.2, OQ-GP7): the
+// candidate's only failing checks also fail on the trunk tip, each recorded as
+// inherited with its output.
 const (
-	GatePassed  = "pass"
-	GateFailed  = "fail"
-	GateErrored = "error"
+	GatePassed          = "pass"
+	GatePassedInherited = "pass-inherited"
+	GateFailed          = "fail"
+	GateErrored         = "error"
 )
+
+// InheritedFailure records one check that failed on both the candidate and the trunk tip,
+// with the tip commit and output that acquitted the candidate.
+type InheritedFailure struct {
+	CheckID string `json:"check_id"`
+	TipSHA  string `json:"tip_sha,omitempty"`
+	LogRef  string `json:"log_ref,omitempty"`
+	Output  string `json:"output,omitempty"`
+}
 
 // The land outcomes the loop distinguishes. `landed` is the positive decision; `refused`
 // is the land step declining to move the trunk, which the loop records as the item's
@@ -235,8 +248,11 @@ type GateOutcome struct {
 	StallHeld     bool // first-stall transition committed atomically with the judgment
 	StalledChecks []StallObservation
 
-	// Outcome is GatePassed, GateFailed, GateErrored or GateStalled.
+	// Outcome is GatePassed, GatePassedInherited, GateFailed, GateErrored or GateStalled.
 	Outcome string
+	// InheritedFailures records the trunk-red checks that acquitted a GatePassedInherited
+	// candidate, each with its tip sha and output.
+	InheritedFailures []InheritedFailure
 	// DurationMS is the gate program's wall time in milliseconds.
 	DurationMS int64
 	// FailingChecks is the check ids the gate recorded as failed. It is the set the
@@ -250,6 +266,12 @@ type GateOutcome struct {
 	CheckWatches map[string][]string
 	// RepairDetail carries an unattributable heavy batch's endpoints into its fixer.
 	RepairDetail string
+	// CandidateChangedPaths records the candidate's changed paths (base..head) for
+	// OQ-GP7 path intersection against failing red checks' declared reads.
+	CandidateChangedPaths []string
+	// CheckReads maps a check id to its declared `reads` (defaulting to ["."] when
+	// undeclared, matching checkfiles.go) for OQ-GP7 path intersection.
+	CheckReads map[string][]string
 }
 
 // Steps is what the loop drives and does not own: one run on a lane, then the gate, land
@@ -2409,7 +2431,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	switch gate.Outcome {
 	case GateStalled:
 		return "", false, l.holdGateStall(ctx, candidate, gate, stalledGateCount)
-	case GatePassed:
+	case GatePassed, GatePassedInherited:
 		// An item whose landing was reverted must pass the check that proved it broke
 		// the trunk: the fast gate has shown it cannot see that failure.
 		detail, err := l.judgeRequired(ctx, candidate)
@@ -2426,13 +2448,23 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 	case GateFailed:
 		// A red gate is a suspect, not a conviction. Replay the failing checks on the base
-		// first: a failure that is red there and on the trunk tip is the trunk's, and the
-		// item is acquitted with no failing verdict. Only a failure the base does not
-		// reproduce is the candidate's; one the tip has repaired goes back to its worker on
-		// the tip.
-		acquitted, err := l.acquitTrunkAlreadyRed(ctx, &candidate, gate, result)
+		// and trunk tip first:
+		// - If repaired on tip, send back to worker on tip.
+		// - If red on base and tip (OQ-GP7):
+		//   * Compare the candidate's changed paths against each red check's declared
+		//     `reads` (defaulting to ["."] when undeclared, matching checkfiles.go).
+		//   * If disjoint from every red check's declared reads, promote the gate outcome
+		//     to GatePassedInherited (and update gate.verdict.json if present) so the
+		//     candidate lands with inherited failures recorded.
+		//   * Otherwise, acquit and hold behind the fixer naming the check, fixer, and
+		//     intersecting paths.
+		outcome, acquitted, err := l.settleTrunkAlreadyRed(ctx, &candidate, gate, result)
 		if err != nil {
 			return "", false, err
+		}
+		if outcome == GatePassedInherited {
+			gate.Outcome = GatePassedInherited
+			break
 		}
 		if acquitted {
 			return "", false, nil

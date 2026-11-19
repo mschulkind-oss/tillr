@@ -125,7 +125,7 @@ func judge(t *Trunk, req OneRequest, base, head string) (Verdict, error) {
 	}
 	switch code {
 	case record.ExitOK:
-		if verdict.Result != VerdictPass {
+		if verdict.Result != VerdictPass && verdict.Result != VerdictPassInherited {
 			return Verdict{}, Usagef("the gate %q exited 0 but recorded result %q", argv[0], verdict.Result)
 		}
 	case record.ExitNegative:

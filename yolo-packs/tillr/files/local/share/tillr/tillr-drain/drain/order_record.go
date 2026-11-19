@@ -237,7 +237,7 @@ func (l *Loop) recordOrder(ctx context.Context, base string, result *LoopResult,
 		if gateErr != nil {
 			return refuse("gate: " + gateErr.Error())
 		}
-		if gate.Outcome != GatePassed {
+		if gate.Outcome != GatePassed && gate.Outcome != GatePassedInherited {
 			return refuse("gate: " + gate.Outcome)
 		}
 		work.Phase = "gated"

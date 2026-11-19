@@ -1014,13 +1014,13 @@ A red that names no landing still gets a mover. When the check is red at the poi
 there is no pointer, or when attribution itself answers no verdict, the runner files one
 fixer against the tip. Its brief says why no landing is named, in the runner's words, with
 the judge's recorded output. The run stays `red` and the pointer holds; such a red is never
-`unknown`, and the red-cap hold names that fixer. Attribution replays the check with
+`unknown`, and the fixer is filed against the tip. Attribution replays the check with
 `fork-check.py --replay`, which plans over every tracked path; it once planned from the
 record's baseline and found nothing to replay on a verified pointer. A stopped loop is not an
 attribution failure: it files nothing, and the next run judges again.
 
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
-second repair. The red-cap hold finds an attached fixer by the checks its criterion
+second repair, matching an open fixer by the checks its criterion
 names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
 clearing an existing owner hold. A blocked fixer reaches the owner only by a complete
 obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
@@ -1157,17 +1157,31 @@ suite, files one deduplicated trunk fixer naming the failing check ids. A declar
 whole-tree read becomes the tracked file set at the red commit, excluding the gate's own
 code; it never grants an unrestricted root edit permission.
 
-A candidate refused only by checks that also fail on its base is acquitted: the loop
-records `trunk-already-red`, naming the red commit and checks, and blocks the item on
-`item:<fixer id>` without a failing item verdict or a design conflict. The planner reports
-`trunk-broken` and names that fixer. Once the fixer has landed and the selected lane base
-contains its repair, the next pass restores the item's underlying state and clears its
-waiter. With the `green` lane-base policy, an older verified pointer keeps the waiter
-until the heavy runner proves the repair. A fresh run starts from the repaired trunk,
-without an authorized retry; acquitted runs do not consume the failure walk. A fixer
-closed without landing releases nothing until a proof passes its checks (see
-[After-merge heavy runs](#after-merge-heavy-runs)). A check green on the base, or a candidate with
-an additional failure of its own, keeps the ordinary refusal.
+While a trunk check is red and a fixer is open, every non-fixer item may still start and
+run (the blanket `trunk-broken` hold on dispatch is removed per [`OQ-GP7`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP7)); a non-fixer run
+staged while a fixer is open carries a trunk-state notice in its brief naming the red
+checks and open fixer so the worker does not spend its run on a failure it did not cause.
+Only landing waits, based on path intersection:
+
+A candidate refused only by checks that also fail on its base and on the trunk tip is
+checked against each red check's declared `reads` (defaulting to `["."]` — whole-tree —
+where undeclared, matching `tools/tillr-gate/checkfiles.go`). When the candidate's changed
+paths do not intersect any red check's declared `reads`, its verdict is promoted to
+`pass-inherited` ("passed, with inherited failures", recording the inherited failures)
+and it lands. When its changed paths
+do intersect a red check's declared `reads` (including any whole-tree `"."` check) and
+that check does not pass with it, the loop records `trunk-already-red`, naming the red
+commit, checks, fixer, and intersecting paths, and blocks the item on `item:<fixer id>`
+without a failing item verdict or a design conflict. The planner reports `trunk-broken`
+and names that fixer. Once the fixer has landed and the selected lane base contains its
+repair, the next pass restores the item's underlying state and clears its waiter. With the
+`green` lane-base policy, an older verified pointer keeps the waiter until the heavy
+runner proves the repair. A fresh run starts from the repaired trunk, without an
+authorized retry; acquitted runs do not consume the failure walk. A fixer closed without
+landing releases nothing until a proof passes its checks (see
+[After-merge heavy runs](#after-merge-heavy-runs)). A check green on the base, or a
+candidate with an additional failure of its own, keeps the ordinary refusal. There is no
+landing cap (`red_cap` is removed per [`OQ-GP7`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP7)).
 
 The red base is only half the question when the trunk has moved past it. Work is always
 built against the latest trunk (the owner's ruling of 2026-11-18), so the failing checks
@@ -1179,8 +1193,7 @@ worker's commits onto the tip and records the tip as the lane's base, and the or
 refusal goes back to the worker saying the trunk is repaired at the tip. A tip the replay
 could not judge confirms nothing. A fork-series candidate, whose base is the fork's own
 HEAD, is judged on that base alone. The rule exists because a run cut nine hours before
-it was judged once filed a fixer for a check the trunk had long since repaired, and an
-open fixer holds every ordinary item.
+it was judged once filed a fixer for a check the trunk had long since repaired.
 
 With `landing_strategy` `after-merge`, a confirmed red is then aimed the way the proof aims
 one, unless an open fixer already names every failing check (the red attaches to it): the
@@ -2155,7 +2168,7 @@ lane lease is still reported separately as `lanes-leased`, not a drained queue.
 
 A held candidate is retained under `refs/tillr/runs/<run>`, independently of its
 lane. Gate stalls, ordinary item faults, held conflict-repair staging, dirty-trunk
-waits, red-cap waits for green proof, and rewritten-trunk waits release an ordinary
+waits, trunk-broken waits for a fixer, and rewritten-trunk waits release an ordinary
 lane only after the drain
 writes that pin and reads it back as the exact candidate commit. It saves the
 original fence, preserves uncommitted work, and records

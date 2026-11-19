@@ -660,15 +660,74 @@ func repairedAtTipDetail(checks []string, base, tip, moved string) string {
 	return detail + fmt.Sprintf(" The loop could not rebase this lane onto %s without a conflict, so the lane stays on %s.", shortSHA(tip), shortSHA(base))
 }
 
+// openTrunkRedNotice returns a brief notice naming any open trunk fixers and their
+// failing checks when staging a non-fixer run while the trunk is red (OQ-GP7).
+// Opened read-only, never under the store write lock.
+func openTrunkRedNotice(ctx context.Context, storePath string) (string, error) {
+	r, err := store.OpenRead(ctx, storePath)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	var lines []string
+	err = r.ReadTx(ctx, func(reader *store.Reader) error {
+		declared, err := definition.ForReader(reader)
+		if err != nil {
+			return err
+		}
+		rows, err := reader.Query(`SELECT i.item_id, i.state, COALESCE(c.text, '') FROM items i LEFT JOIN item_criteria c ON i.item_id = c.item_id AND c.criterion_id = 'trunk-green' WHERE i.item_id LIKE 'fixer-main-%' ORDER BY i.item_id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, state, text string
+			if err := rows.Scan(&id, &state, &text); err != nil {
+				return err
+			}
+			if finishedState(declared.Parsed, state) {
+				continue
+			}
+			checks := fixerChecks(text)
+			checkText := "unknown check"
+			if len(checks) > 0 {
+				checkText = strings.Join(checks, ", ")
+			}
+			lines = append(lines, fmt.Sprintf("- Trunk check red on %s; remedy fixer: %s. Do not spend your run on this pre-existing trunk failure.", checkText, id))
+		}
+		return rows.Err()
+	})
+	if err != nil || len(lines) == 0 {
+		return "", err
+	}
+	return "Trunk state notice (pre-existing red check; not caused by this item):\n" + strings.Join(lines, "\n"), nil
+}
+
 // acquitTrunkAlreadyRed is the gate-failure fork: it answers true when the failure was
 // the trunk's and the item has been acquitted (a refusal recorded, a fixer filed, the
 // item held blocked), and false when the ordinary gate refusal should stand. A failure red
 // only on a base the trunk has repaired since files no fixer: the lane is brought onto the
 // tip and the ordinary refusal goes back to its worker saying so.
 func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate *Candidate, gate GateOutcome, result *LoopResult) (bool, error) {
+	_, acquitted, err := l.settleTrunkAlreadyRed(ctx, candidate, gate, result)
+	return acquitted, err
+}
+
+// settleTrunkAlreadyRed implements OQ-GP7:
+//   - If the failing checks are not confirmed red on base and trunk tip, returns ("", false, nil)
+//     (or updates candidate with repairedAtTipDetail when repaired on tip).
+//   - If confirmed red on trunk tip:
+//   - Compare candidate's changed paths against each red check's declared `reads`
+//     (defaulting to ["."] when undeclared, matching checkfiles.go).
+//   - If disjoint from every red check's declared reads, promote gate.verdict.json (if
+//     present) to pass-inherited and return (GatePassedInherited, false, nil) so the
+//     candidate lands.
+//   - Otherwise, file/attach the fixer and hold the item behind the fixer with a reason
+//     naming the check, fixer, and intersecting paths.
+func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, gate GateOutcome, result *LoopResult) (string, bool, error) {
 	reading, err := l.trunkAlreadyRed(ctx, *candidate, gate)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if reading.RepairedAt != "" {
 		from := candidate.WorkerHeadSHA
@@ -677,7 +736,7 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		}
 		moved, err := l.moveLaneOntoTip(ctx, candidate.LaneID, from, reading.RepairedAt)
 		if err != nil {
-			return false, err
+			return "", false, err
 		}
 		oldBase := candidate.BaseSHA
 		detail := repairedAtTipDetail(gate.FailingChecks, oldBase, reading.RepairedAt, moved)
@@ -686,17 +745,150 @@ func (l *Loop) acquitTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		}
 		candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
 		l.reportf("loop: %s's gate failure is red only on its base %s; the trunk is repaired at %s, so no fixer is filed\n", candidate.ItemID, shortSHA(oldBase), shortSHA(reading.RepairedAt))
-		return false, nil
+		return "", false, nil
 	}
 	if !reading.Confirmed {
-		return false, nil
+		return "", false, nil
 	}
-	return true, l.acquitRed(ctx, *candidate, gate, reading.RedSHA, reading.Red, result)
+	changedPaths := gate.CandidateChangedPaths
+	if len(changedPaths) == 0 {
+		changedPaths = gate.SuspectPaths
+	}
+	if len(changedPaths) == 0 && candidate.BaseSHA != "" && candidate.Worktree != "" {
+		if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
+			changedPaths = ps.changedPaths(*candidate)
+		}
+	}
+	checkReads := gate.CheckReads
+	if checkReads == nil {
+		checkReads = gate.CheckWatches
+	}
+	intersecting := intersectingRedPaths(reading.Red, checkReads, changedPaths)
+	if len(intersecting) == 0 && len(changedPaths) > 0 {
+		if err := l.promoteVerdictPassInherited(ctx, *candidate, reading.RedSHA, reading.Red); err != nil {
+			return "", false, err
+		}
+		l.reportf("loop: %s acquitted as pass-inherited: red checks (%s) on %s do not read %s\n",
+			candidate.ItemID, strings.Join(reading.Red, ", "), shortSHA(reading.RedSHA), strings.Join(changedPaths, ", "))
+		return GatePassedInherited, false, nil
+	}
+	return "", true, l.acquitRedWithPaths(ctx, *candidate, gate, reading.RedSHA, reading.Red, intersecting, result)
+}
+
+// intersectingRedPaths returns the sorted unique candidate paths that intersect any red
+// check's declared `reads`. Where a check declares no `reads` (empty slice or absent),
+// checkfiles.go defaults it to ["."] (whole-tree), so every candidate path intersects.
+func intersectingRedPaths(redChecks []string, checkReads map[string][]string, changedPaths []string) []string {
+	if len(changedPaths) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, checkID := range redChecks {
+		var reads []string
+		if checkReads != nil {
+			reads = checkReads[checkID]
+		}
+		if len(reads) == 0 {
+			// Undeclared reads default to ["."] (whole-tree), matching checkfiles.go.
+			reads = []string{"."}
+		}
+		for _, path := range changedPaths {
+			if seen[path] {
+				continue
+			}
+			if readsCoverPath(reads, path) {
+				seen[path] = true
+				out = append(out, path)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func readsCoverPath(reads []string, path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	for _, r := range reads {
+		r = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(r)), "./")
+		if r == "." || r == "" || path == r || strings.HasPrefix(path, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// promoteVerdictPassInherited rewrites <runDir>/gate.verdict.json (when present) from
+// "fail" to "pass-inherited" so tillr-land accepts the candidate with inherited failures
+// recorded. If no verdict file exists (e.g. a stubbed test without verdict files), it is
+// a no-op.
+func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidate, tipSHA string, redChecks []string) error {
+	if l.cfg.Root == "" || candidate.RunID == "" {
+		return nil
+	}
+	verdictPath := filepath.Join(RunDir(l.cfg.Root, candidate.RunID), GateVerdictRecord)
+	raw, err := os.ReadFile(verdictPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	env, err := record.Decode(raw)
+	if err != nil {
+		return err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return err
+	}
+	if res, _ := payload["result"].(string); res != GateFailed {
+		return nil
+	}
+	redSet := map[string]bool{}
+	for _, c := range redChecks {
+		redSet[c] = true
+	}
+	if checksRaw, ok := payload["checks"].([]any); ok {
+		for _, item := range checksRaw {
+			if m, ok := item.(map[string]any); ok {
+				if id, _ := m["check_id"].(string); redSet[id] {
+					if r, _ := m["result"].(string); r == GateFailed {
+						m["result"] = "inherited"
+					}
+				}
+			}
+		}
+	}
+	inherited := make([]InheritedFailure, 0, len(redChecks))
+	for _, c := range redChecks {
+		inherited = append(inherited, InheritedFailure{
+			CheckID: c,
+			TipSHA:  tipSHA,
+			Output:  fmt.Sprintf("%s failed on trunk tip %s", c, shortSHA(tipSHA)),
+		})
+	}
+	payload["result"] = GatePassedInherited
+	payload["inherited_failures"] = inherited
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	env.Payload = encodedPayload
+	encodedEnv, err := record.Encode(env)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(verdictPath, encodedEnv, 0o644)
 }
 
 // acquitRed records a replay's red base against a candidate: the fixer filed or attached,
 // the trunk refusal recorded, and the item held blocked behind the fixer.
 func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutcome, redSHA string, redChecks []string, result *LoopResult) error {
+	return l.acquitRedWithPaths(ctx, candidate, gate, redSHA, redChecks, nil, result)
+}
+
+func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate Candidate, gate GateOutcome, redSHA string, redChecks []string, intersectingPaths []string, result *LoopResult) error {
 	// The candidate's diff starts at its red base; it cannot name the earlier
 	// commits that broke that base. Include the whole range since proved green.
 	var green string
@@ -736,7 +928,11 @@ func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutc
 	if err := l.recordTrunkRefusal(ctx, candidate, redSHA, redChecks, fixerID); err != nil {
 		return err
 	}
-	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + fixerID, Reason: "trunk-already-red: " + strings.Join(redChecks, ", ")}); err != nil {
+	reason := "trunk-already-red: " + strings.Join(redChecks, ", ")
+	if len(intersectingPaths) > 0 {
+		reason += " (fixer " + fixerID + "; paths: " + strings.Join(intersectingPaths, ", ") + ")"
+	}
+	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + fixerID, Reason: reason}); err != nil {
 		return err
 	}
 	l.mu.Lock()

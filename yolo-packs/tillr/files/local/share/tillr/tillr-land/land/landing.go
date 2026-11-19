@@ -65,8 +65,6 @@ const (
 	// A retry of this run's own unrecorded landing is not this refusal: that is recorded as
 	// the landing it was.
 	ReasonAlreadyOnTrunk = "already-on-trunk"
-	// ReasonRedCap is a repository proof-range hold, not a candidate failure.
-	ReasonRedCap = redcap.Reason
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -82,7 +80,6 @@ func Reasons() []string {
 		ReasonTrunkRewritten,
 		ReasonForeignIdentity,
 		ReasonAlreadyOnTrunk,
-		ReasonRedCap,
 	}
 }
 
@@ -703,27 +700,6 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		if err != nil {
 			return p, err
 		}
-		// A cap limits trunk movement, not a finding that no movement is needed.
-		// Compute the squash first so superseded candidates settle even while red.
-		if !p.squash.Empty && !p.squash.Conflicted() {
-			err = s.ReadTx(ctx, func(r *store.Reader) error {
-				clock := req.CapNow
-				if clock == nil {
-					clock = time.Now
-				}
-				hold, err := redcap.Check(ctx, r, t.repo, req.BaseRef, trunkBefore, req.ItemID, clock())
-				if err != nil {
-					return Externalf("checking red cap: %v", err)
-				}
-				if hold != nil {
-					p.landing.Result, p.landing.Reason, p.landing.RedCap = ResultRefused, ReasonRedCap, hold
-				}
-				return nil
-			})
-			if err != nil {
-				return p, err
-			}
-		}
 		if p.squash.Empty {
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonAlreadyOnTrunk
 		} else if p.squash.Conflicted() {
@@ -1147,7 +1123,7 @@ func decide(req LandingRequest, tree string) (result, reason string) {
 		return ResultRefused, ReasonVerdictMismatch
 	}
 	switch req.Verdict.Result {
-	case VerdictPass:
+	case VerdictPass, VerdictPassInherited:
 		if PatchRef(req.BaseRef) != "" {
 			built := false
 			for _, check := range req.Verdict.Checks {

@@ -13,7 +13,6 @@ type GatePolicy struct {
 	LandingStrategy string
 	AutoRevert      bool
 	BudgetMS        int64
-	RedCap          struct{ Landings, Minutes int64 }
 	LaneBase        string
 }
 
@@ -22,7 +21,6 @@ type GatePolicy struct {
 func ReadGatePolicy(root string) (policy GatePolicy, absent bool, err error) {
 	policy.LandingStrategy = "before-merge"
 	policy.BudgetMS = 10000
-	policy.RedCap.Landings, policy.RedCap.Minutes = 20, 60
 	policy.LaneBase = "green"
 	path := filepath.Join(root, "config", "tillr", "gate-policy.json")
 	raw, err := os.ReadFile(path)
@@ -73,29 +71,13 @@ func ReadGatePolicy(root string) (policy GatePolicy, absent bool, err error) {
 	if err := integer(fields, "budget_ms", "budget_ms", &policy.BudgetMS, 1); err != nil {
 		return policy, false, err
 	}
-	if value, ok := fields["red_cap"]; ok {
-		var capFields map[string]json.RawMessage
-		if json.Unmarshal(value, &capFields) != nil || capFields == nil {
-			return policy, false, invalid("red_cap", value, "an object with landings and minutes")
-		}
-		if err := integer(capFields, "landings", "red_cap.landings", &policy.RedCap.Landings, 0); err != nil {
-			return policy, false, err
-		}
-		if err := integer(capFields, "minutes", "red_cap.minutes", &policy.RedCap.Minutes, 0); err != nil {
-			return policy, false, err
-		}
-	}
 	return policy, false, nil
 }
 
-// StartupLine prints all five effective settings, including the safe absent-file
-// defaults. Zero disables each cap bound; both zero means no cap.
+// StartupLine prints all four effective settings, including the safe absent-file
+// defaults.
 func (p GatePolicy) StartupLine(absent bool) string {
-	cap := fmt.Sprintf("%d landings/%d minutes", p.RedCap.Landings, p.RedCap.Minutes)
-	if p.RedCap.Landings == 0 && p.RedCap.Minutes == 0 {
-		cap = "no cap"
-	}
-	line := fmt.Sprintf("loop: gate policy landing_strategy=%s auto_revert=%t budget_ms=%d red_cap=%s lane_base=%s", p.LandingStrategy, p.AutoRevert, p.BudgetMS, cap, p.LaneBase)
+	line := fmt.Sprintf("loop: gate policy landing_strategy=%s auto_revert=%t budget_ms=%d lane_base=%s", p.LandingStrategy, p.AutoRevert, p.BudgetMS, p.LaneBase)
 	if absent {
 		line += " (file absent)"
 	}

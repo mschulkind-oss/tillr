@@ -278,6 +278,10 @@ type StageSpec struct {
 	// RepeatedCall is the repeating-call ending this dispatch answers
 	// (Decision.RepeatedCall). A non-nil value appends its note to the brief.
 	RepeatedCall *RepeatedCall
+	// TrunkRedNotice carries open trunk-fixer notices when staging a non-fixer run
+	// while the trunk is red (OQ-GP7), so the worker does not spend its run on a failure
+	// it did not cause.
+	TrunkRedNotice string
 }
 
 // ConflictBrief is the conflict a conflict-fix run is asked to resolve: the paths git
@@ -493,6 +497,19 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	earlier, err := preservedFacts(ctx, s.Store, spec)
 	if err != nil {
 		return err
+	}
+	trunkNotice := spec.TrunkRedNotice
+	if trunkNotice == "" && !IsTrunkFixer(spec.ItemID) && s.Store != "" {
+		if n, noticeErr := openTrunkRedNotice(ctx, s.Store); noticeErr == nil {
+			trunkNotice = n
+		}
+	}
+	if trunkNotice != "" {
+		if earlier != "" {
+			earlier += "\n\n" + trunkNotice
+		} else {
+			earlier = trunkNotice
+		}
 	}
 	for i := range values {
 		if values[i].placeholder == "FACTS" && earlier != "" {

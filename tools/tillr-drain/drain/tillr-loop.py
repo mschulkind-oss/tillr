@@ -482,10 +482,10 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
 
 def compose_verdict(ctx: Ctx, dry: bool) -> list[Step]:
     """Record mechanical verdicts only for stored verification-only criteria."""
-    if ctx.verdict != "pass":
+    if ctx.verdict not in ("pass", "pass-inherited"):
         raise Refusal(
             EXIT_USAGE,
-            f"--verdict {ctx.verdict!r} is refused: only pass after a landing is allowed; "
+            f"--verdict {ctx.verdict!r} is refused: only pass or pass-inherited after a landing is allowed; "
             "a failed attempt must not freeze criteria. See "
             "docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria",
         )
@@ -724,10 +724,10 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
     if kind == "verdict":
         # Required: the verdict is the loop's judgment, so a missing one is refused rather
         # than defaulted to a pass.
-        parser.add_argument("--verdict", required=True, choices=("pass", "fail"),
+        parser.add_argument("--verdict", required=True, choices=("pass", "pass-inherited", "fail"),
                             help="the verdict to record")
     elif kind == "self-check":
-        parser.add_argument("--verdict", default="pass", choices=("pass", "fail"),
+        parser.add_argument("--verdict", default="pass", choices=("pass", "pass-inherited", "fail"),
                             help="the verdict to show (default: pass)")
     return parser
 

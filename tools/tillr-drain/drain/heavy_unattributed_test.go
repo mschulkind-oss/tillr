@@ -143,9 +143,6 @@ func TestHeavyUnattributedRedGivesTheHoldAMover(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if hold == nil {
-			t.Fatal("the red cap did not hold")
-		}
 		return hold
 	}
 	heavyOnce(tip)
@@ -158,8 +155,8 @@ func TestHeavyUnattributedRedGivesTheHoldAMover(t *testing.T) {
 	if id != TrunkFixerID(tip) || !strings.Contains(text, "unit") || !strings.Contains(text, "attribution failed") || !strings.Contains(text, replayNoMatch) {
 		t.Fatalf("fixer=%s criteria=%s", id, text)
 	}
-	if hold := holdAt(tip); hold.FixerItem != id || strings.Contains(hold.Detail, "no open fixer") {
-		t.Fatalf("hold names no mover: %+v", hold)
+	if hold := holdAt(tip); hold != nil {
+		t.Fatalf("expected no red-cap hold after OQ-GP7: %+v", hold)
 	}
 	newer := heavyCommit(t, root, "worse")
 	heavyOnce(newer)
@@ -169,8 +166,8 @@ func TestHeavyUnattributedRedGivesTheHoldAMover(t *testing.T) {
 	}); err != nil || count != 1 {
 		t.Fatalf("the later red filed a second repair: count=%d %v", count, err)
 	}
-	if hold := holdAt(newer); hold.FixerItem != id {
-		t.Fatalf("hold at the newer tip lost its mover: %+v", hold)
+	if hold := holdAt(newer); hold != nil {
+		t.Fatalf("expected no red-cap hold at newer tip: %+v", hold)
 	}
 	status, err := ReadHeavyStatus(context.Background(), root, s.Path())
 	if err != nil || status.Result != "red" {

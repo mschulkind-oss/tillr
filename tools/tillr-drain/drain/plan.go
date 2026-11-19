@@ -820,6 +820,9 @@ type plannedFork struct {
 // fixes, first match wins: the item's own properties, then the tick's configuration,
 // then the per-item resource answers. A caller asking "why won't this dispatch" gets the
 // answer that would still hold if every resource were free.
+//
+// Under OQ-GP7, work that a red check does not read may start and run while a fixer is
+// open; only landing waits (via path intersection at gate-acquittal time).
 func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	decision := Decision{ItemID: item.ItemID, Seat: item.Seat}
 	conflict, hasConflict := p.conflicts[item.ItemID]
@@ -946,13 +949,6 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
 	case p.lands() && p.unproved[item.ItemID]:
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkUnproved
-	case p.lands() && p.fixerOpen != "" && !IsTrunkFixer(item.ItemID):
-		// The trunk is red and a fixer owns the repair. Every ordinary item waits: a run
-		// staged from a base that never passed would produce a candidate the same red gate
-		// refuses, and the queue would spend itself proving the same breakage one item at a
-		// time. The fixer itself is exempt and dispatches normally.
-		decision.Action, decision.Reason = ActionHold, ReasonTrunkBroken
-		decision.DeferredBy = p.fixerOpen
 	case item.State != p.rules().Ready:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
 	case item.JudgeMode == "agent" && item.JudgeGrant == "":

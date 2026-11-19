@@ -39,10 +39,11 @@ const (
 // plus `none` for a gate that produced no verdict at all -- which is not `error`: `error`
 // is a gate that judged and could not, `none` is a gate that never got that far.
 const (
-	VerdictPass  = ResultPass
-	VerdictFail  = ResultFail
-	VerdictError = ResultError
-	VerdictNone  = "none"
+	VerdictPass          = ResultPass
+	VerdictPassInherited = ResultPassInherited
+	VerdictFail          = ResultFail
+	VerdictError         = ResultError
+	VerdictNone          = "none"
 )
 
 // The disagreement kinds. Each names one way two gates can differ, so a reader can count

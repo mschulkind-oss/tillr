@@ -32,11 +32,10 @@ func gatePolicyStartup(t *testing.T, raw string) (string, string) {
 
 func TestGatePolicyStartupValues(t *testing.T) {
 	for _, tc := range []struct{ name, raw, want string }{
-		{"absent", "", "landing_strategy=before-merge auto_revert=false budget_ms=10000 red_cap=20 landings/60 minutes lane_base=green (file absent)"},
-		{"configured", `{"landing_strategy":"after-merge","auto_revert":false,"budget_ms":10000,"red_cap":{"landings":20,"minutes":60},"lane_base":"green"}`, "landing_strategy=after-merge auto_revert=false budget_ms=10000 red_cap=20 landings/60 minutes lane_base=green"},
-		{"missing keys", `{}`, "landing_strategy=before-merge auto_revert=false budget_ms=10000 red_cap=20 landings/60 minutes lane_base=green"},
-		{"partial cap", `{"red_cap":{"landings":0}}`, "landing_strategy=before-merge auto_revert=false budget_ms=10000 red_cap=0 landings/60 minutes lane_base=green"},
-		{"no cap", `{"landing_strategy":"before-merge","auto_revert":true,"budget_ms":1,"red_cap":{"landings":0,"minutes":0},"lane_base":"tip"}`, "landing_strategy=before-merge auto_revert=true budget_ms=1 red_cap=no cap lane_base=tip"},
+		{"absent", "", "landing_strategy=before-merge auto_revert=false budget_ms=10000 lane_base=green (file absent)"},
+		{"configured", `{"landing_strategy":"after-merge","auto_revert":false,"budget_ms":10000,"lane_base":"green"}`, "landing_strategy=after-merge auto_revert=false budget_ms=10000 lane_base=green"},
+		{"missing keys", `{}`, "landing_strategy=before-merge auto_revert=false budget_ms=10000 lane_base=green"},
+		{"legacy red_cap ignored", `{"landing_strategy":"before-merge","auto_revert":true,"budget_ms":1,"red_cap":{"landings":20,"minutes":60},"lane_base":"tip"}`, "landing_strategy=before-merge auto_revert=true budget_ms=1 lane_base=tip"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, detail := gatePolicyStartup(t, tc.raw)
@@ -56,19 +55,12 @@ func TestGatePolicyRefusesInvalidValuesBeforeDispatch(t *testing.T) {
 		{"auto_revert", `"false"`}, {"auto_revert", `0`}, {"auto_revert", `null`},
 		{"budget_ms", `0`}, {"budget_ms", `-1`}, {"budget_ms", `1.5`},
 		{"budget_ms", `"10000"`}, {"budget_ms", `true`}, {"budget_ms", `null`},
-		{"red_cap.landings", `-1`}, {"red_cap.landings", `1.5`}, {"red_cap.landings", `"20"`},
-		{"red_cap.minutes", `-1`}, {"red_cap.minutes", `false`}, {"red_cap.minutes", `null`},
-		{"red_cap", `[]`}, {"red_cap", `null`},
 		{"lane_base", `"latest"`}, {"lane_base", `null`},
 	} {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
-			key := tc.key
-			raw := `{"` + key + `":` + tc.value + `}`
-			if strings.HasPrefix(key, "red_cap.") {
-				raw = `{"red_cap":{"` + strings.TrimPrefix(key, "red_cap.") + `":` + tc.value + `}}`
-			}
+			raw := `{"` + tc.key + `":` + tc.value + `}`
 			out, detail := gatePolicyStartup(t, raw)
-			want := key + "=" + tc.value
+			want := tc.key + "=" + tc.value
 			if !strings.Contains(detail, want) {
 				t.Fatalf("refusal does not name %s: %s", want, detail)
 			}

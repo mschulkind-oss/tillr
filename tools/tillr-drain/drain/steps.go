@@ -287,6 +287,18 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	switch code {
 	case record.ExitOK:
 		outcome.Outcome = GatePassed
+		if s.Root != "" {
+			if payload, ok := readRecordPayload(filepath.Join(RunDir(s.Root, candidate.RunID), GateVerdictRecord)); ok {
+				var v struct {
+					Result            string             `json:"result"`
+					InheritedFailures []InheritedFailure `json:"inherited_failures"`
+				}
+				if json.Unmarshal(payload, &v) == nil && v.Result == GatePassedInherited {
+					outcome.Outcome = GatePassedInherited
+					outcome.InheritedFailures = v.InheritedFailures
+				}
+			}
+		}
 	case GateStallExit:
 		outcome.Outcome = GateStalled
 		outcome.StalledChecks, err = s.gateStallContext(candidate)
@@ -299,6 +311,8 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		// here, from the records the gate just wrote, keeps the loop from re-parsing a
 		// program's stdout to find out what it judged.
 		outcome.FailingChecks, outcome.SuspectPaths, outcome.CheckWatches = s.gateFailureContext(candidate)
+		outcome.CandidateChangedPaths = outcome.SuspectPaths
+		outcome.CheckReads = s.gateCheckReads(candidate, outcome.CheckWatches)
 	}
 	var firstStall *gateStallHold
 	if outcome.Outcome == GateStalled {
@@ -680,6 +694,55 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 		}
 	}
 	return checks, s.changedPaths(candidate), watches
+}
+
+// gateCheckReads resolves declared `reads` per check for OQ-GP7 path intersection.
+// Checks in tools/gate/checks/*.json default undeclared `reads` to ["."] (whole-tree),
+// matching tools/tillr-gate/checkfiles.go.
+func (s *ProcessSteps) gateCheckReads(candidate Candidate, watches map[string][]string) map[string][]string {
+	reads := map[string][]string{}
+	for id, w := range watches {
+		if len(w) > 0 {
+			reads[id] = append([]string(nil), w...)
+		}
+	}
+	if s.Root != "" {
+		if payload, ok := readRecordPayload(filepath.Join(RunDir(s.Root, candidate.RunID), GatePlanRecord)); ok {
+			var plan struct {
+				Checks []struct {
+					CheckID string   `json:"check_id"`
+					Reads   []string `json:"reads"`
+				} `json:"checks"`
+			}
+			if err := json.Unmarshal(payload, &plan); err == nil {
+				for _, check := range plan.Checks {
+					if len(check.Reads) > 0 {
+						reads[check.CheckID] = append([]string(nil), check.Reads...)
+					} else {
+						reads[check.CheckID] = []string{"."}
+					}
+				}
+			}
+		}
+	}
+	if candidate.Worktree != "" {
+		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, "tools/gate/checks/*.json"))
+		for _, path := range declarations {
+			body, err := os.ReadFile(path)
+			var decl struct {
+				ID    string   `json:"id"`
+				Reads []string `json:"reads"`
+			}
+			if err == nil && json.Unmarshal(body, &decl) == nil && decl.ID != "" {
+				if len(decl.Reads) == 0 {
+					reads[decl.ID] = []string{"."}
+				} else {
+					reads[decl.ID] = decl.Reads
+				}
+			}
+		}
+	}
+	return reads
 }
 
 // readRecordPayload decodes one record file and answers its payload.
