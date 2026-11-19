@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -128,8 +129,13 @@ func TestLandingStateIncludesPriorRefusalsAndOpenCalls(t *testing.T) {
 	}
 }
 
-func TestReturnedLandingAnswerStaging(t *testing.T) {
-	f, l, steps, first := continuationDispatchFixture(t, "set -- first\n"+standInLandingOffer, false)
+func returnedLandingFixture(t *testing.T, transcript string) (refusalLoopFixture, *Loop, Decision, string) {
+	t.Helper()
+	script := "set -- first\n" + standInLandingOffer
+	if transcript != "" {
+		script = strings.Replace(script, `"summary":"candidate"`, `"summary":"candidate","transcript":"`+transcript+`"`, 1)
+	}
+	f, l, steps, first := continuationDispatchFixture(t, script, false)
 	for _, dir := range []string{l.laneDirPath(first.LaneID), RunDir(l.cfg.Root, first.RunRequest.RunID)} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -150,19 +156,98 @@ func TestReturnedLandingAnswerStaging(t *testing.T) {
 	l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
 	d := applyReturnedTurn(t, l, p, l.laneBase(first.LaneID))
 	dir := run.DurableDir(l.laneDirPath(d.LaneID), d.RunRequest.RunID)
-	raw, err := os.ReadFile(filepath.Join(dir, landingAnswerFile))
-	if err != nil {
+	return f, l, d, dir
+}
+
+func TestReturnedLandingAnswerStaging(t *testing.T) {
+	for _, transcript := range []string{"", "/session/file.jsonl"} {
+		t.Run(map[bool]string{true: "path", false: "no-path"}[transcript != ""], func(t *testing.T) {
+			f, l, d, dir := returnedLandingFixture(t, transcript)
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var raw []byte
+				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, callOffered).Scan(&raw); err != nil {
+					return err
+				}
+				var c struct {
+					Transcript string `json:"transcript"`
+				}
+				if err := json.Unmarshal(raw, &c); err != nil {
+					return err
+				}
+				if c.Transcript != transcript {
+					t.Fatalf("record transcript = %q, want %q", c.Transcript, transcript)
+				}
+				return nil
+			})
+			path, pathErr := os.ReadFile(filepath.Join(dir, "landing-transcript"))
+			if transcript == "" {
+				if !os.IsNotExist(pathErr) {
+					t.Fatalf("unexpected transcript: %q, %v", path, pathErr)
+				}
+			} else if pathErr != nil || string(path) != transcript+"\n" {
+				t.Fatalf("staged transcript = %q, %v", path, pathErr)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, landingAnswerFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answer landingAnswer
+			if err := json.Unmarshal(raw, &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer.CallID != "first" || answer.Kind != "refused" || answer.Stage != "gate" || !strings.Contains(answer.Text, d.RunRequest.RunID) {
+				t.Fatalf("wrong staged answer: %+v", answer)
+			}
+			if err := l.reconcileLandingDelivery(context.Background(), d); err != nil {
+				t.Fatal(err)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var count int
+				if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, callDelivered).Scan(&count); err != nil {
+					return err
+				}
+				if count != 0 {
+					t.Fatal("staging alone recorded a delivery")
+				}
+				return nil
+			})
+		})
+	}
+}
+
+func TestLandingTranscriptIsWrittenBeforeAnswer(t *testing.T) {
+	_, l, d, dir := returnedLandingFixture(t, "/session/file.jsonl")
+	if err := os.Remove(filepath.Join(dir, landingAnswerFile)); err != nil {
 		t.Fatal(err)
 	}
-	var answer landingAnswer
-	if err := json.Unmarshal(raw, &answer); err != nil {
+	if err := os.Remove(filepath.Join(dir, "landing-transcript")); err != nil {
 		t.Fatal(err)
 	}
-	if answer.CallID != "first" || answer.Kind != "refused" || answer.Stage != "gate" || !strings.Contains(answer.Text, d.RunRequest.RunID) {
-		t.Fatalf("wrong staged answer: %+v", answer)
-	}
-	if err := l.reconcileLandingDelivery(context.Background(), d); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "landing-transcript"), 0700); err != nil {
 		t.Fatal(err)
+	}
+	spec := StageSpec{SessionID: d.Returned.WorkerSession.SessionID}
+	if err := l.stageLandingAnswer(context.Background(), d, &spec); err == nil {
+		t.Fatal("staging should fail when the transcript path cannot be written")
+	}
+	if _, err := os.Stat(filepath.Join(dir, landingAnswerFile)); !os.IsNotExist(err) {
+		t.Fatalf("answer published before transcript: %v", err)
+	}
+}
+
+func TestLandingMessageWaitsForRunEnd(t *testing.T) {
+	f, l, d, dir := returnedLandingFixture(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "landing-delivery"), []byte("message\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sleep", "60")
+	cmd.Env = append(os.Environ(), "TILLR_RUN_ID="+d.RunRequest.RunID, "TILLR_LOOP_STORE="+f.storePath)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	if err := l.reconcileLandingDelivery(context.Background(), d); err == nil || !strings.Contains(err.Error(), "processes survive") {
+		t.Fatalf("live run: %v", err)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var count int
@@ -170,10 +255,82 @@ func TestReturnedLandingAnswerStaging(t *testing.T) {
 			return err
 		}
 		if count != 0 {
-			t.Fatal("staging alone recorded a delivery")
+			t.Fatalf("delivered while live: %d", count)
 		}
 		return nil
 	})
+}
+
+func TestLandingDeliveryForms(t *testing.T) {
+	for _, form := range []string{"message", "tool-result", "absent"} {
+		t.Run(form, func(t *testing.T) {
+			f, l, d, dir := returnedLandingFixture(t, "")
+			if form != "absent" {
+				if err := os.WriteFile(filepath.Join(dir, "landing-delivery"), []byte(form+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A directory is not a readable transcript: message must not inspect it.
+			if err := os.WriteFile(filepath.Join(dir, "landing-transcript"), []byte(dir+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if form == "message" {
+				if err := l.reconcileLandingDelivery(context.Background(), d); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := l.reconcileLandingDelivery(context.Background(), d); err == nil {
+					t.Fatal("tool-result must inspect transcript")
+				}
+				var answer landingAnswer
+				raw, err := os.ReadFile(filepath.Join(dir, landingAnswerFile))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(raw, &answer); err != nil {
+					t.Fatal(err)
+				}
+				details, err := json.Marshal(answer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				text, err := json.Marshal(answer.Text)
+				if err != nil {
+					t.Fatal(err)
+				}
+				session := d.Returned.WorkerSession.SessionID
+				transcript := `{"type":"session","id":"` + session + `"}` + "\n" + `{"type":"message","id":"r","parentId":null,"message":{"role":"toolResult","toolName":"land","toolCallId":"first","isError":true,"content":[{"type":"text","text":` + string(text) + `}],"details":` + string(details) + `}}` + "\n"
+				path := filepath.Join(dir, "session.jsonl")
+				if err := os.WriteFile(path, []byte(transcript), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "landing-transcript"), []byte(path+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := l.reconcileLandingDelivery(context.Background(), d); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := l.reconcileLandingDelivery(context.Background(), d); err != nil {
+				t.Fatal(err)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var count int
+				var got string
+				if err := r.QueryRow(`SELECT count(*), COALESCE(MAX(json_extract(payload,'$.form')),'') FROM events WHERE kind=?`, callDelivered).Scan(&count, &got); err != nil {
+					return err
+				}
+				want := "tool-result"
+				if form == "message" {
+					want = form
+				}
+				if count != 1 || got != want {
+					t.Fatalf("delivery count=%d form=%q, want 1 %q", count, got, want)
+				}
+				return nil
+			})
+		})
+	}
 }
 
 func TestLandingCallLoopRecordsShippedCapabilities(t *testing.T) {

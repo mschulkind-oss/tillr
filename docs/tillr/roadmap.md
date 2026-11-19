@@ -8745,11 +8745,7 @@ drain record a delivery made as a message. The form stays off.
   - Write that path beside the answer before pi starts.
   - Record a delivery the adapter made as a message.
 
-<!-- tillr: item id="item-landing-call-transcript-path" paths="tools/tillr-run/,tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The offer file holds a `transcript` field with the session file's path as the tool read it in `execute()`, and the call record keeps it. An offer with no path is valid. A test asserts each.
-- **c2:** When the drain stages an answer file for a call that has a path, it writes that path to the file `landing-transcript` in the same directory, before the answer file. The tool no longer writes that file. A test asserts each.
-- **c3:** When the file `landing-delivery` in the turn's scratch holds `message`, the drain appends `call.delivered` with form `message` once the run has ended, without reading the transcript. When the file is absent or holds `tool-result`, the drain does what it does today. A test asserts each.
 
 **Agent Details:**
 
@@ -8772,7 +8768,7 @@ refusal as a second line. The form stays off.
   - Deliver the answer as a message in every other case, with no model request made without it.
   - Say which form was used, in a file the drain reads.
 
-<!-- tillr: item id="item-landing-call-transcript-check" paths="tools/tillr-run/,docs/" blocked_by="item-landing-call-transcript-path" prose="2" -->
+<!-- tillr: item id="item-landing-call-transcript-check" paths="tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The program `landing-call-held` takes a session file path and a call id and exits 0 when the transcript holds the call, as defined under "The transcript check" below, and 1 otherwise. A test asserts six files: the call unanswered (0); the call's result saved and last (0); a different call's result last (1); a compaction entry after the call (1); an unparseable file (1); no file (1).
 - **c2:** With an answer file staged, `run-pi` starts pi with no prompt when the check passes and with the answer's text as the prompt when it fails, and writes `tool-result` or `message` to the file `landing-delivery` before pi starts. For the two failing transcripts of c1 a stand-in `pi` is started exactly once, with a prompt. A test asserts each.

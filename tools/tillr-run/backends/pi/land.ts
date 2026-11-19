@@ -17,7 +17,7 @@ const park = { content: [], details: {}, park: true };
 
 export function executeLand(
 	callId: string, summary: string, cwd: string, durable: string, base: string, fenceFile: string,
-	owedWakes: () => string[], answered: (id: string) => boolean = () => false,
+	owedWakes: () => string[], answered: (id: string) => boolean = () => false, transcript = "",
 ) {
 	if (!durable || !base || !fenceFile) throw new Error("The run's scratch, base or fence is not staged.");
 	const answer = readRecord(join(durable, "landing-answer.json"));
@@ -56,7 +56,7 @@ export function executeLand(
 
 	const temp = `${path}.${randomUUID()}`;
 	try {
-		writeFileSync(temp, JSON.stringify({ call_id: callId, commit, base, summary }) + "\n", { mode: 0o600, flag: "wx" });
+		writeFileSync(temp, JSON.stringify({ call_id: callId, commit, base, summary, transcript }) + "\n", { mode: 0o600, flag: "wx" });
 		renameSync(temp, path);
 	} finally {
 		try { unlinkSync(temp); } catch (error: any) { if (error.code !== "ENOENT") throw error; }
@@ -66,23 +66,12 @@ export function executeLand(
 
 export default function land(pi: any) {
 	const since = Math.floor(Date.now() - process.uptime() * 1000) - 1000;
-	pi.on("session_start", (_event: unknown, ctx: any) => {
-		const durable = process.env.YOLO_DURABLE_DIR;
-		if (!durable || !readRecord(join(durable, "landing-answer.json"))) return;
-		const transcript = ctx.sessionManager.getSessionFile();
-		if (!transcript) throw new Error("Landing answer replay requires a persisted Pi session.");
-		const path = join(durable, "landing-transcript");
-		const temp = `${path}.${randomUUID()}`;
-		writeFileSync(temp, transcript + "\n", { mode: 0o600, flag: "wx" });
-		renameSync(temp, path);
-	});
-
 	pi.registerTool({
 		name: "land",
 		label: "Land",
 		description: "Offer the commit at HEAD for landing, ending this run. Include what changed and which verification ran.",
 		parameters: { type: "object", required: ["summary"], properties: { summary: { type: "string", maxLength: 2000 } }, additionalProperties: false },
-		execute(callId: string, args: { summary: string }, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
+		execute(callId: string, args: { summary: string }, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
 			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE, BOARD_DRAIN_BRIEF } = process.env;
 			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE || !BOARD_DRAIN_BRIEF) throw new Error("The run's scratch, base or brief is not staged.");
 			return executeLand(callId, args.summary, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE,
@@ -92,7 +81,7 @@ export default function land(pi: any) {
 					if (!Array.isArray(wakes)) throw new Error("Cannot determine whether this Pi session owes a background task wake; check its journal before offering.");
 					return wakes;
 				}, (id) => ctx.sessionManager.getBranch().some((entry) =>
-					entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId === id));
+					entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId === id), ctx.sessionManager.getSessionFile() ?? "");
 		},
 	});
 }

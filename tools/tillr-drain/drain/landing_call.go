@@ -31,10 +31,11 @@ const (
 )
 
 type landingOffer struct {
-	CallID  string `json:"call_id"`
-	Commit  string `json:"commit"`
-	Base    string `json:"base"`
-	Summary string `json:"summary"`
+	CallID     string `json:"call_id"`
+	Commit     string `json:"commit"`
+	Base       string `json:"base"`
+	Summary    string `json:"summary"`
+	Transcript string `json:"transcript,omitempty"`
 }
 
 type landingCall struct {
@@ -584,10 +585,15 @@ func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSp
 	if call.ItemID != d.ItemID || spec.SessionID != call.SessionID || call.Worktree != l.laneTarget(d.LaneID) {
 		return Externalf("run %s does not reopen the session for landing call %s", d.RunRequest.RunID, call.CallID)
 	}
+	if call.Transcript != "" {
+		if err := os.WriteFile(filepath.Join(dir, "landing-transcript"), []byte(call.Transcript+"\n"), 0600); err != nil {
+			return err
+		}
+	}
 	return writeLandingArtifact(dir, landingAnswerFile, answer)
 }
 
-// Reconcile from Pi's persisted transcript, not from successful process exit.
+// Reconcile from the adapter's delivery marker or Pi's persisted transcript.
 // Settlement can be retried after the result is saved but before this transaction.
 func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 	if !d.RunRequest.SessionTurn || d.Returned == nil || d.Returned.WorkerSession == nil {
@@ -602,13 +608,23 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 	if call.SessionID != session || call.Worktree != l.laneTarget(d.LaneID) || call.ItemID != d.ItemID {
 		return Externalf("landing delivery identity changed for %s", d.RunRequest.RunID)
 	}
-	answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
-	path, err := os.ReadFile(filepath.Join(dir, "landing-transcript"))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+	marker, err := os.ReadFile(filepath.Join(dir, "landing-delivery"))
+	if err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	form := "tool-result"
+	if strings.TrimSpace(string(marker)) == "message" {
+		form = "message"
+	}
+	var path []byte
+	if form == "tool-result" {
+		path, err = os.ReadFile(filepath.Join(dir, "landing-transcript"))
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 	live, err := liveRunIDs(l.cfg.Store)
 	if err != nil {
@@ -617,26 +633,29 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 	if live[d.RunRequest.RunID] {
 		return Externalf("cannot reconcile landing answer for %s while its processes survive", d.RunRequest.RunID)
 	}
-	filename := strings.TrimSuffix(string(path), "\n")
-	info, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return Externalf("Pi transcript for %s is not a regular file", d.RunRequest.RunID)
-	}
-	transcript, err := os.ReadFile(filename)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !landingResultPersisted(transcript, session, answer) {
-		return nil
+	if form == "tool-result" {
+		answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
+		filename := strings.TrimSuffix(string(path), "\n")
+		info, err := os.Stat(filename)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return Externalf("Pi transcript for %s is not a regular file", d.RunRequest.RunID)
+		}
+		transcript, err := os.ReadFile(filename)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !landingResultPersisted(transcript, session, answer) {
+			return nil
+		}
 	}
 	db, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -648,7 +667,7 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 		if err != nil || seen != 0 {
 			return err
 		}
-		return appendLandingCallEvent(tx, callDelivered, answer.CallID, landingCallDelivery{Form: "tool-result", RunID: d.RunRequest.RunID}, l.cfg.Now().UTC())
+		return appendLandingCallEvent(tx, callDelivered, answer.CallID, landingCallDelivery{Form: form, RunID: d.RunRequest.RunID}, l.cfg.Now().UTC())
 	})
 }
 
