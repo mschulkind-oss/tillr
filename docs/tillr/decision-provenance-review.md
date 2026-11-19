@@ -88,6 +88,14 @@ Read the counts with five cautions; the first four are the audits' own:
 - **Vantage:** the owner's document viewer, where he reads designs and answers questions.
 - **Live:** running in the loop on the owner's machine today.
 
+### 1.5. Evidence behind each question
+
+Each question in [Section 2](#2-questions-for-the-owner) states its situation and its choices only. Who made the earlier decision, whether it is running today and what undoing it costs are kept here.
+
+| Question | Who decided, and when | Running today | Cost to undo |
+| --- | --- | --- | --- |
+| [OQ-PR1](#OQ-PR1) | A design agent, 2026-11-15, as `D-RS1`, `D-RS3` and `D-RS5` of [the "ruling"](../design/queue-persistence-ruling.md), under "Needs your ruling: None". Its stated reason was "the owner's no-tillr-in-commits rule", cited and not quoted; the audits did not find those words of the owner's in the tree. | Yes, since `cd68c87e3` and `1cdb67809`. After each landing the loop also makes a second commit, `chore: retire landed document block`, deleting its hidden comment and the step's pass conditions from the design (33 times so far). That deleting ends with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). | Moderate. The lander writes the line again and the loop's delete step goes. The 72 past landings cannot be re-attributed. |
+
 ## 2. Questions for the owner
 
 Each question has the same three answers. **Keep** makes the decision his ruling: its ledger rows are relabeled with his words and the date. **Overturn** removes or replaces it, and the question says what that touches. **Ask properly** sends it back to its own design as a full question with alternatives, and it runs as it is until he answers there.
@@ -100,22 +108,16 @@ They are ordered by how much is built on each and how hard it is to undo, hardes
 - **The file format that defines a kind of queue**, built at `f04088fb0` on a choice "recommended here and chosen by Product QA" (another project's agent), is now listed for his review in [the core and landing design](../design/tillr-core-and-git-landing.md) as the designer's decisions `D-CG1` to `D-CG5`, labeled as such. Who owns an item's states is recorded there in his own words, and the two names are asked in [the vocabulary](../design/tillr-vocabulary.md).
 - **The second copy of every tillr program, kept inside the pack,** is open as [OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2).
 
-1. 💬 **OQ-PR1: Should a commit name the work it built, or should the record of what landed stay only in tillr's private store?**
+1. 💬 **OQ-PR1: Should each landed commit say which piece of work it built?**
 
-   You approve a design with six build steps, and each step gets tillr's hidden comment. When a step lands, the loop makes a second commit, `chore: retire landed document block`, that deletes the comment and the step's pass conditions from your document. It has done so 33 times. No commit names the step it built. The list of what landed lives only in the private store on one machine, so a fresh checkout cannot say which commit built which step.
+   You clone this repository on your laptop and want to know which commit built the third step of a design. You run `git log`. Today no commit says: a landed commit carries an ordinary message, and the list of which commit built which step exists only in tillr's database on the desktop. The line that used to name the work was dropped by a design agent on 2026-11-15, citing a rule of yours against tillr text in commits; no such rule was found in your words ([evidence](#15-evidence-behind-each-question)). So the choice is yours for the first time.
 
-   **Who decided:** a design agent, 2026-11-15, as `D-RS1`, `D-RS3` and `D-RS5` of [the "ruling"](../design/queue-persistence-ruling.md), under "Needs your ruling: None". Its reason for dropping the commit line is "the owner's no-tillr-in-commits rule", cited and not quoted. The audits could not find those words of yours in the tree.
+   - **A — The commit names its work.** Every landed commit ends with one line naming the piece of work it built. `git log --grep` answers on any machine, and the answer survives losing tillr's database. Every landed commit carries a tillr line from then on; the 72 commits already landed stay unnamed.
+   - **B — Only tillr knows.** Commits carry no tillr text. You ask tillr on the desktop which commit built what; a fresh clone, or a lost database, cannot answer.
 
-   **Live:** yes, since `cd68c87e3` and `1cdb67809`. **Undo: moderate.** The lander writes the line again and the loop's delete step goes. The 72 past landings cannot be re-attributed.
+   <!-- vantage: question id=OQ-PR1 leaning="A: the repository should be able to say what built what without one machine's database. Choose B only if keeping tillr out of commit messages is a rule you hold." -->
 
-   **What goes away without this question:** the deleting. If your answer to [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) removes the hidden comment from your documents (every option there except keeping it), the loop has nothing to delete and stops editing your documents after a landing. What is left for you here is only where the record of a landing lives, and whether "no tillr in commits" is your rule.
-
-   - **Keep.** The record stays only in the store. While the hidden comment exists, the loop goes on deleting it from your documents after each landing.
-   - **Overturn.** A commit names the work it built in one trailing line, and the loop never edits a document after a landing.
-
-   <!-- vantage: question id=OQ-PR1 leaning="Overturn: a commit names the work it built in one trailing line, so any checkout can say which commit built which step. The deleting goes away with the hidden comment under OQ-QM1. Say whether the no-tillr-in-commits rule is yours, because it is the only reason the line was dropped." -->
-
-   _Leaning:_ Overturn: a commit names the work it built in one trailing line, so any checkout can say which commit built which step. The deleting goes away with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). Say whether the no-tillr-in-commits rule is yours, because it is the only reason the line was dropped.
+   _Leaning:_ A: the repository should be able to say what built what without one machine's database. Choose B only if keeping tillr out of commit messages is a rule you hold.
 
    **Answer:**
 
