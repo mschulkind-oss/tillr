@@ -95,7 +95,7 @@ waiting:
 }
 
 func TestHeavyUnattributableRangeFilesFixerWithBothEndpoints(t *testing.T) {
-	for _, kind := range []string{"base-red", "last-landing-green", "no-landings", "multiple-last-green"} {
+	for _, kind := range []string{"base-red", "no-touching-commits", "multiple-last-green"} {
 		t.Run(kind, func(t *testing.T) {
 			root, base := heavyRepo(t)
 			heavyGit(t, root, "update-ref", GreenRef, base)
@@ -104,13 +104,23 @@ func TestHeavyUnattributableRangeFilesFixerWithBothEndpoints(t *testing.T) {
 			if kind == "multiple-last-green" {
 				last = heavyCommit(t, root, "last-green")
 			}
-			tip := heavyCommit(t, root, "red")
+			var tip string
+			if kind == "no-touching-commits" {
+				if err := os.WriteFile(filepath.Join(root, "unrelated"), []byte("unrelated"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				heavyGit(t, root, "add", ".")
+				heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "unrelated")
+				tip = heavyGit(t, root, "rev-parse", "HEAD")
+			} else {
+				tip = heavyCommit(t, root, "red")
+			}
 			s, err := store.InitFixture(context.Background(), filepath.Join(scratchUnderDurable(t), "store.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if kind != "no-landings" {
+			if kind != "no-touching-commits" {
 				if err := s.WriteTx(context.Background(), func(tx *store.Tx) error { return recordFixtureLanding(tx, "fixture", "fixture-run", landing, 0) }); err != nil {
 					t.Fatal(err)
 				}
@@ -121,6 +131,10 @@ func TestHeavyUnattributableRangeFilesFixerWithBothEndpoints(t *testing.T) {
 				}
 			}
 			replayed := []string{}
+			reads := []string{"value"}
+			if kind == "no-touching-commits" {
+				reads = []string{"other"}
+			}
 			steps := heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
 				sha := heavyGit(t, dir, "rev-parse", "HEAD")
 				if only != "" {
@@ -130,7 +144,10 @@ func TestHeavyUnattributableRangeFilesFixerWithBothEndpoints(t *testing.T) {
 				if sha == tip || kind == "base-red" || (kind == "multiple-last-green" && sha == landing) {
 					result = "fail"
 				}
-				return []HeavyCheck{{CheckID: "unit", Result: result, Reads: []string{"value"}}}, nil
+				if only != "" && kind == "multiple-last-green" && sha == tip {
+					result = "pass"
+				}
+				return []HeavyCheck{{CheckID: "unit", Result: result, Reads: reads}}, nil
 			}}
 			var log bytes.Buffer
 			l := &Loop{gatePolicy: GatePolicy{LandingStrategy: "after-merge"}, cfg: LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: &log}}
@@ -138,8 +155,8 @@ func TestHeavyUnattributableRangeFilesFixerWithBothEndpoints(t *testing.T) {
 				t.Fatal(err)
 			}
 			l.heavyWG.Wait()
-			if kind == "multiple-last-green" && (len(replayed) != 2 || replayed[0] != base || replayed[1] != last) {
-				t.Fatalf("last landing was not checked before narrowing: %v", replayed)
+			if kind == "multiple-last-green" && (len(replayed) != 2 || replayed[0] != base || replayed[1] != tip) {
+				t.Fatalf("last candidate was not checked before narrowing: %v", replayed)
 			}
 			var text string
 			if err := s.ReadTx(context.Background(), func(r *store.Reader) error { return r.QueryRow(`SELECT text FROM item_criteria`).Scan(&text) }); err != nil {

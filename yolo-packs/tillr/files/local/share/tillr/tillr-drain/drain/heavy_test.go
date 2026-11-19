@@ -151,6 +151,141 @@ func TestHeavyAttributesFirstRedAndGateFault(t *testing.T) {
 		})
 	}
 }
+func TestHeavyFirstRedFindsUnrecordedCommitWithoutAutoRevert(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	if err := os.WriteFile(filepath.Join(h.root, "a"), []byte("broken\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	heavyGit(t, h.root, "add", "a")
+	heavyGit(t, h.root, "commit", "-qm", "manual: break a")
+	manual := heavyGit(t, h.root, "rev-parse", "HEAD")
+	if err := os.MkdirAll(filepath.Join(h.root, "docs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	h.land("item-docs", "docs/queue-order.txt", "unrelated\n")
+	h.proof()
+	if r := h.reverts(); len(r) != 0 {
+		t.Fatalf("unrecorded commit triggered revert: %+v", r)
+	}
+	fixers := h.fixers()
+	if len(fixers) != 1 || fixers[0] != TrunkFixerID(manual) {
+		t.Fatalf("fixers=%v, want one against unrecorded commit %s (%s)", fixers, TrunkFixerID(manual), shortSHA(manual))
+	}
+	if text := h.fixerText(fixers[0]); !strings.Contains(text, shortSHA(manual)) {
+		t.Fatalf("fixer brief does not name unrecorded commit %s: %s", shortSHA(manual), text)
+	}
+	if !strings.Contains(h.report.String(), "has no landing record; not reverting automatically") {
+		t.Fatalf("log does not say unrecorded commit is not reverted automatically:\n%s", h.report.String())
+	}
+}
+
+func TestHeavyFirstRedSkipsCommitsNotTouchingReadsAndFilesAgainstTipWhenNoneTouch(t *testing.T) {
+	t.Run("skips non-intersecting commits", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		if err := os.WriteFile(filepath.Join(root, "docs.md"), []byte("one\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		heavyGit(t, root, "add", "docs.md")
+		heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "docs1")
+		doc1 := heavyGit(t, root, "rev-parse", "HEAD")
+
+		culprit := heavyCommit(t, root, "bad")
+
+		if err := os.WriteFile(filepath.Join(root, "docs.md"), []byte("two\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		heavyGit(t, root, "add", "docs.md")
+		heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "docs2")
+		doc2 := heavyGit(t, root, "rev-parse", "HEAD")
+
+		var replayed []string
+		var fixes []string
+		runner := heavyFixture(t, root, func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+			sha := heavyGit(t, dir, "rev-parse", "HEAD")
+			if only != "" {
+				replayed = append(replayed, sha)
+			}
+			value, err := os.ReadFile(filepath.Join(dir, "value"))
+			if err != nil {
+				return nil, err
+			}
+			result := "pass"
+			if string(value) != "good" {
+				result = "fail"
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: result, Reads: []string{"value"}}}, nil
+		})
+		runner.Fix = func(_ context.Context, sha string, _ []HeavyCheck) error {
+			fixes = append(fixes, sha)
+			return nil
+		}
+		out, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Runs[0].Checks[0].FirstRedLanding != culprit {
+			t.Fatalf("firstRed=%s, want %s", out.Runs[0].Checks[0].FirstRedLanding, culprit)
+		}
+		if len(fixes) != 1 || fixes[0] != culprit {
+			t.Fatalf("fixes=%v, want [%s]", fixes, culprit)
+		}
+		for _, sha := range replayed {
+			if sha == doc1 || sha == doc2 {
+				t.Fatalf("replayed commit %s that did not touch check reads; replayed=%v", sha, replayed)
+			}
+		}
+	})
+
+	t.Run("no commit touches reads", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		if err := os.WriteFile(filepath.Join(root, "docs.md"), []byte("one\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		heavyGit(t, root, "add", "docs.md")
+		heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "docs1")
+		tip := heavyGit(t, root, "rev-parse", "HEAD")
+
+		var replayed []string
+		var fixes []string
+		var fixedChecks []HeavyCheck
+		runner := heavyFixture(t, root, func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+			sha := heavyGit(t, dir, "rev-parse", "HEAD")
+			if only != "" {
+				replayed = append(replayed, sha)
+			}
+			result := "pass"
+			if sha == tip {
+				result = "fail"
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: result, Reads: []string{"value"}}}, nil
+		})
+		runner.Fix = func(_ context.Context, sha string, checks []HeavyCheck) error {
+			fixes = append(fixes, sha)
+			fixedChecks = append(fixedChecks, checks...)
+			return nil
+		}
+		out, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(replayed) != 0 {
+			t.Fatalf("expected no replays when no commit touches reads, got %v", replayed)
+		}
+		check := out.Runs[0].Checks[0]
+		if !check.GateFault || check.FirstRedLanding != "" {
+			t.Fatalf("expected gate fault with no named landing, got %+v", check)
+		}
+		if !strings.Contains(check.Detail, "touches the check's declared reads") {
+			t.Fatalf("detail does not explain no commit touches reads: %q", check.Detail)
+		}
+		if len(fixes) != 1 || fixes[0] != tip || len(fixedChecks) != 1 {
+			t.Fatalf("fixes=%v checks=%+v, want one against tip %s", fixes, fixedChecks, tip)
+		}
+	})
+}
+
 func TestHeavyOverrunIsReportedButGreen(t *testing.T) {
 	root, tip := heavyRepo(t)
 	var runner HeavyRunner

@@ -2,14 +2,18 @@ package drain
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 const GreenRef = heavy.GreenRef
@@ -368,15 +372,15 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	// never left holding landings while nobody acts.
 	against = check.FirstRedLanding
 	if check.FirstRedLanding == "" {
-		r.progressf("loop: heavy %s failed at tip %s; searching for the first red landing since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
-		red, fault, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID)
+		r.progressf("loop: heavy %s failed at tip %s; searching for the first red commit since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+		red, fault, reason, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID, check.Reads)
 		switch {
 		case err != nil && ctx.Err() == nil && !cleanupLost(err):
 			r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
 		case err == nil && fault:
-			r.progressf("loop: heavy %s culprit search names no landing (red at the green base, or the recorded landings do not explain the tip); the fixer is filed against the tip\n", check.CheckID)
+			r.progressf("loop: heavy %s culprit search names no commit (%s); the fixer is filed against the tip\n", check.CheckID, reason)
 		case err == nil:
-			r.progressf("loop: heavy %s first red landing %s\n", check.CheckID, shortSHA(red))
+			r.progressf("loop: heavy %s first red commit %s\n", check.CheckID, shortSHA(red))
 		}
 		if err != nil {
 			// A stop or a lost cleanup is the run's own fault, not attribution's.
@@ -391,7 +395,7 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 			if run.BaseSHA == "" {
 				check.Detail = "no proved baseline; attribution unavailable"
 			} else {
-				check.Detail = "cannot establish a single red landing: baseline or recorded landing range does not explain the red tip"
+				check.Detail = "cannot establish a single red commit: " + reason + "; attribution unavailable"
 			}
 			check.Detail += "; needs=" + strings.Join(check.Needs, ",") + " tools=" + strings.Join(check.Tools, ",")
 			check.Detail += "; fixer filed against the tip"
@@ -400,7 +404,16 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 		if against == "" {
 			against = run.TipSHA
 		} else if !fault {
-			found = true
+			recorded, err := r.hasLandingRecord(ctx, red)
+			if err != nil {
+				return "", false, err
+			}
+			if recorded {
+				found = true
+			} else {
+				r.progressf("loop: heavy %s first red commit %s has no landing record; not reverting automatically, filing a fixer against it\n", check.CheckID, shortSHA(red))
+				check.Detail = joinDetail(check.Detail, "commit "+shortSHA(red)+" has no landing record; not reverted automatically")
+			}
 		}
 	}
 	if check.FirstRedLanding == "" {
@@ -524,6 +537,64 @@ func joinDetail(old, add string) string {
 func heavyLandings(ctx context.Context, root, storePath, base, tip string) ([]string, error) {
 	return heavy.Landings(ctx, root, storePath, base, tip)
 }
+func heavyFirstParentCommits(ctx context.Context, root, base, tip string) ([]string, error) {
+	raw, err := heavyGitOutput(ctx, root, "rev-list", "--first-parent", "--reverse", base+".."+tip)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(raw), nil
+}
+func heavyCommitChangedPaths(ctx context.Context, root, sha string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", "--first-parent", sha)
+	raw, err := cmd.Output()
+	if err != nil {
+		return nil, Externalf("reading changed paths for %s: %v", sha, err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"), nil
+}
+func commitTouchesReads(ctx context.Context, root, sha string, reads []string) (bool, error) {
+	paths, err := heavyCommitChangedPaths(ctx, root, sha)
+	if err != nil {
+		return false, err
+	}
+	if len(paths) == 0 {
+		return false, nil
+	}
+	effective := reads
+	if len(effective) == 0 {
+		effective = []string{"."}
+	}
+	for _, p := range paths {
+		if readsCoverPath(effective, p) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+func (r HeavyRunner) hasLandingRecord(ctx context.Context, sha string) (bool, error) {
+	if r.Store == "" {
+		return true, nil
+	}
+	s, err := store.OpenRead(ctx, r.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	var found bool
+	err = s.ReadTx(ctx, func(reader *store.Reader) error {
+		var one int
+		err := reader.QueryRow(`SELECT 1 FROM landings WHERE trunk_after = ? AND result = 'landed' LIMIT 1`, sha).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		found = err == nil
+		return err
+	})
+	return found, err
+}
 
 // replay is one attribution replay with its outcome on the progress log: what was
 // replayed where and why, how long it took, and its verdict or why it gave none.
@@ -544,39 +615,49 @@ func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, err
 	return red, err
 }
 
-func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string, bool, error) {
+func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads []string) (string, bool, string, error) {
 	if base == "" {
-		return "", true, nil
-	} // no proved baseline: never accuse a landing without one
-	red, err := r.replay(ctx, base, id, "the green base")
+		return "", true, "no proved baseline", nil
+	} // no proved baseline: never accuse a commit without one
+	allCommits, err := heavyFirstParentCommits(ctx, r.Root, base, tip)
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
-	if red {
-		return "", true, nil
-	}
-	commits, err := heavyLandings(ctx, r.Root, r.Store, base, tip)
-	if err != nil {
-		return "", false, err
+	commits := make([]string, 0, len(allCommits))
+	for _, c := range allCommits {
+		touches, err := commitTouchesReads(ctx, r.Root, c, reads)
+		if err != nil {
+			return "", false, "", err
+		}
+		if touches {
+			commits = append(commits, c)
+		}
 	}
 	if len(commits) == 0 {
-		return "", true, nil
+		return "", true, fmt.Sprintf("no commit in %s..%s touches the check's declared reads", shortSHA(base), shortSHA(tip)), nil
 	}
-	// The search needs a red upper bound. A later green landing means this
-	// range cannot explain the tip, even if an earlier landing was red.
-	red, err = r.replay(ctx, commits[len(commits)-1], id, fmt.Sprintf("the last of %d recorded landings since green", len(commits)))
+	red, err := r.replay(ctx, base, id, "the green base")
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
+	}
+	if red {
+		return "", true, "red at the green base", nil
+	}
+	// The search needs a red upper bound. A later green commit means this
+	// range cannot explain the tip, even if an earlier commit was red.
+	red, err = r.replay(ctx, commits[len(commits)-1], id, fmt.Sprintf("the last of %d candidate commits since green", len(commits)))
+	if err != nil {
+		return "", false, "", err
 	}
 	if !red {
-		return "", true, nil
+		return "", true, "the last candidate commit touching the check's reads is green", nil
 	}
 	low, high := 0, len(commits)-1
 	for low < high {
 		mid := (low + high) / 2
-		red, err := r.replay(ctx, commits[mid], id, fmt.Sprintf("landing %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
+		red, err := r.replay(ctx, commits[mid], id, fmt.Sprintf("commit %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
 		if err != nil {
-			return "", false, err
+			return "", false, "", err
 		}
 		if red {
 			high = mid
@@ -584,7 +665,7 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string) (string
 			low = mid + 1
 		}
 	}
-	return commits[low], false, nil
+	return commits[low], false, "", nil
 }
 
 func ReadHeavyStatus(ctx context.Context, root, storePath string) (HeavyStatus, error) {

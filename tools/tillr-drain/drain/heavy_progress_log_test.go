@@ -18,13 +18,12 @@ func TestHeavyCulpritSearchLogsEachReplayAsItEnds(t *testing.T) {
 	h.proof()
 	log := h.report.String()
 	want := []string{
-		"loop: heavy unit failed at tip " + shortSHA(tip) + "; searching for the first red landing since green " + shortSHA(h.base),
+		"loop: heavy unit failed at tip " + shortSHA(tip) + "; searching for the first red commit since green " + shortSHA(h.base),
 		"loop: heavy unit replaying at " + shortSHA(h.base) + " (the green base)",
 		"loop: heavy unit at " + shortSHA(h.base) + ": green after",
-		"loop: heavy unit replaying at " + shortSHA(tip) + " (the last of 2 recorded landings since green)",
-		"loop: heavy unit at " + shortSHA(tip) + ": red after",
-		"loop: heavy unit replaying at " + shortSHA(culprit) + " (landing 1 of 2, between 1 and 2)",
-		"loop: heavy unit first red landing " + shortSHA(culprit),
+		"loop: heavy unit replaying at " + shortSHA(culprit) + " (the last of 1 candidate commits since green)",
+		"loop: heavy unit at " + shortSHA(culprit) + ": red after",
+		"loop: heavy unit first red commit " + shortSHA(culprit),
 	}
 	last := -1
 	for _, line := range want {
