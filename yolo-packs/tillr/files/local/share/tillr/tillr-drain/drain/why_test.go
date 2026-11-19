@@ -203,3 +203,65 @@ func TestWhyPlacesFollowKeysNotPlannerPromotions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// On 2026-11-19 the trunk fixer's candidate sat in lane-4 while the loop's gate examined
+// it there, under the examination's no-expiry lease. The plan held it no-lane behind
+// that lease, and `why` answered "drain; lane-2, lane-3, lane-4" — every busy lane — so
+// a fixer that could only ever continue in its own worktree read as waiting for any of
+// three lanes while seventeen were idle. Work bound to its lane waits on that lane alone.
+func TestWhyNamesOnlyTheOwnLaneOfWorkHeldBehindItsLease(t *testing.T) {
+	f, l := passFixture(t, "cand", "other")
+	p := mustPlan(t, l)[0]
+	if p.decision.ItemID != "cand" {
+		t.Fatalf("fixture: first dispatch is %s", p.decision.ItemID)
+	}
+	deadOwnerClaim(t, f, l, p)
+	id, lane := p.decision.RunRequest.RunID, p.decision.LaneID
+	owner, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now().Format("2006-01-02T15:04:05Z07:00")
+		if err := applyTerminal(tx, run.Record{RunID: id, ItemID: "cand", LaneID: lane, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit}); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, examinationOwnerKind, id, owner, l.cfg.Now()); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, id, lane); err != nil {
+			return err
+		}
+		other := "lane-2"
+		if lane == other {
+			other = "lane-1"
+		}
+		_, err := run.ClaimLease(context.Background(), tx, run.Request{RunID: "run-other-live", ItemID: "other", Backend: "fixture"}, other, l.cfg.Now())
+		return err
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	err = s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID != "cand" {
+				continue
+			}
+			if row.Reason != ReasonNoLane {
+				t.Fatalf("fixture: cand planned %s, want no-lane behind its own lease: %+v", row.Reason, row.Decision)
+			}
+			if len(row.WaitingOn) != 1 || row.WaitingOn[0] != lane || row.Mover != "drain; "+lane {
+				t.Fatalf("cand waits on %v (mover %q), want only its own %s", row.WaitingOn, row.Mover, lane)
+			}
+			return nil
+		}
+		t.Fatal("no row for cand")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
