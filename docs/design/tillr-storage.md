@@ -17,7 +17,7 @@ depends-on:
 
 # The item graph's record is a log per item, written by one process
 
-**Status:** 2026-11-18. None of it is built, and the case for it is not made. Two things undercut what was written on 2026-11-17. The lock held across a git ref move, which the question this design answers leaned on, is a usage fault that no structure fixes ([Section 1](#1-the-verdict)). And the trials ran on a host whose btrfs file system was afterwards found unhealthy, so every latency, wall time and stall in [Section 3](#3-what-was-measured) is void. The recommended structure was measured only in parts, and the prototypes are not in the repository; [Section 10](#10-trials-owed-before-building) says what is owed. The `D-TS` rows of the ledger are the designer's decisions and await the owner's review. The design was written to the owner's direction on [OQ-GP2 of the graph design](./tillr-graph-is-the-path.md#OQ-GP2): "do the right thing here, not the easy thing."
+**Status:** 2026-11-18. None of it is built, and the case for it is not made. Two things undercut what was written on 2026-11-17. The lock held across a git ref move, which the question this design answers leaned on, was a usage fault that no structure fixes ([Section 1](#1-the-verdict)) and was fixed on 2026-11-18 ([Section 9.1](#91-what-is-fixed-first-whatever-is-ruled)). And the trials ran on a host whose btrfs file system was afterwards found unhealthy, so every latency, wall time and stall in [Section 3](#3-what-was-measured) is void. The recommended structure was measured only in parts, and the prototypes are not in the repository; [Section 10](#10-trials-owed-before-building) says what is owed. The `D-TS` rows of the ledger are the designer's decisions and await the owner's review. The design was written to the owner's direction on [OQ-GP2 of the graph design](./tillr-graph-is-the-path.md#OQ-GP2): "do the right thing here, not the easy thing."
 
 > **In short.** The model already says a graph is a history, so the record should be that history: one append-only log per item, where a change and its event are a single line. One process applies every write, which turns the fog-of-war checks and every cross-item check into ordinary code with nothing to lock. SQL survives as an index that can be deleted at any moment.
 
@@ -37,7 +37,7 @@ depends-on:
 
 ## 1. The verdict
 
-**What no structure fixes.** A landing holds the store's write lock while git moves a ref, and every other writer waits behind it. That is a usage fault. One writer process would not remove it: the writer would block in the same place, and every other write would queue behind it. The repair is to do nothing else under the lock, which is the owner's standing rule (minimal work under locks; every lock failure gets a root cause and a fix). It is being fixed now, separately from this design and ahead of it. The same holds for the other usage faults of [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled). None of them is a reason for any structure here.
+**What no structure fixes.** A landing used to hold the store's write lock while git moved a ref, and every other writer waited behind it. That was a usage fault. One writer process would not remove it: the writer would block in the same place, and every other write would queue behind it. The repair is to do nothing else under the lock, which is the owner's standing rule (minimal work under locks; every lock failure gets a root cause and a fix). That landing fault was fixed on 2026-11-18, separately from this design and ahead of it (`5f84c5f8d`). The same holds for the other usage faults of [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled). None of them is a reason for any structure here.
 
 **A status command is a read.** It needs no write lock, and a writer does not block it. It answered "database is locked" because every open of the store took the write lock for a migration check, which was fixed on 2026-11-17 (commit `ef7ed5ff1`). One run of `tillr view status` beside the running loop on 2026-11-18 returned no lock error; that is one observation, not a proof.
 
@@ -95,7 +95,7 @@ Three of the five in the first row were reachable only because a multi-second fl
 
 **Two more causes, fixed on 2026-11-18.** Both are tillr's usage. A planning step folded the whole event log, 228,806 events, two or three times inside its write transaction, for 2 to 3 seconds each time; commit `517c31a3e` added an event cache and an in-process write queue. An unindexed poll kept a reader slot busy, so no checkpoint could finish and the write-ahead log passed 3 GB; commit `8ab93d9ac` added two indexes.
 
-**Usage faults.** Three were found and fixed in place on 2026-11-17: a migration write transaction on every open; a history scan held under the write lock for 4.8 seconds; one lane's failure faulting the loop. Three remain on 2026-11-18, and [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled) lists them with their state. Separately, the trace index, a derived index in a file of its own, grew to 32 GB and stalled the loop because the loop waited for it.
+**Usage faults.** Three were found and fixed in place on 2026-11-17: a migration write transaction on every open; a history scan held under the write lock for 4.8 seconds; one lane's failure faulting the loop. Of the four defects recorded on 2026-11-18, landing's ref move under a write lock was fixed on 2026-11-18 (`5f84c5f8d`), and three remain; [Section 9.1](#91-what-is-fixed-first-whatever-is-ruled) lists all four with their state. Separately, the trace index, a derived index in a file of its own, grew to 32 GB and stalled the loop because the loop waited for it; it was removed on 2026-11-18 ([Section 7](#7-derived-data)).
 
 ## 3. What was measured
 
@@ -344,11 +344,11 @@ Three rules, for the view's index and any later one. The trace index this sectio
 
 ### 9.1 What is fixed first, whatever is ruled
 
-Four defects stand on 2026-11-18. Each is a defect under R6 and under the owner's standing rule that a lock failure gets a root cause and a fix, and none waits on anything in this document.
+Four defects were listed on 2026-11-18; one (item 3) was fixed that day, and three remain. Each is a defect under R6 and under the owner's standing rule that a lock failure gets a root cause and a fix, and none waits on anything in this document.
 
 1. **One store handle per process**, shared. The drain opens the store on 116 lines outside tests (counted 2026-11-18). The in-process write queue of 2026-11-18 puts one process's writers in order; the opens remain.
 2. **The planning step computes outside the write** and holds the lock only to apply its result. The event cache of 2026-11-18 removed its worst case, the fold of the whole event log; the step still computes inside the write.
-3. **The landing moves the git ref with no write open.** Today `finishLanding` in `tools/tillr-land/land/landing.go` moves the ref with the transaction open, and two tests pin that exclusion: `TestFinalMoveExcludesCloseUntilReceipt` and `TestGitPreparationAllowsHeartbeatAndClose`. The exclusion between closing and landing becomes a short write that marks the landing begun, the git move, then a short write that records it, with the existing marker ref making a repeat harmless. This one is being fixed now, separately from this design.
+3. **The landing moves the git ref with no write open (fixed 2026-11-18, `5f84c5f8d`).** `publishLanding` in `tools/tillr-land/land/landing.go` now separates a short claim write (`claimLanding`), the git move with nothing held, and a short receipt write (`recordPublished`), with the existing marker ref making a repeat harmless; `TestFinalMoveHoldsNoStoreWriteAndTheClaimRefusesClose` and `TestGitPreparationAllowsHeartbeatAndClose` in `tools/tillr-land/contention_test.go` pin it.
 4. **The child-session flood.** One event kind was written 1.27 million times on 2026-11-18 ([Section 2.3](#23-what-todays-store-does-and-where-it-failed)). Its cause is found and fixed where the event is written; no structure should absorb it.
 
 The first three are the same change the interface later makes structural, so none is thrown away.
@@ -528,7 +528,7 @@ The `D-TS` rows are the designer's decisions of 2026-11-17, made so that the pro
 
    <!-- vantage: question id=OQ-TS1 blocked-on="the usage faults fixed, then the storage trials run again on a healthy file system from the repository" -->
 
-   Waits on two things. First the usage faults are fixed. No structure fixes those; the first of them, the lock held while git moves a ref, is being fixed now. Then today's store and the proposed structures are run through one workload on a healthy file system, from a harness kept in the repository, counting lock failures and stalls. The timings of 2026-11-17 are void, so nothing here can be chosen from them. If today's store shows no failure left, you are asked nothing and the work stops at the interface. If it does, you are asked one thing: whether tillr keeps one writer process over today's SQLite file, or owns a small storage layer of its own, a text log per item. Nothing built before then depends on the answer.
+   Waits on two things. First the remaining usage faults are fixed. No structure fixes those; the first of them, the lock held while git moves a ref, was fixed on 2026-11-18 (`5f84c5f8d`). Then today's store and the proposed structures are run through one workload on a healthy file system, from a harness kept in the repository, counting lock failures and stalls. The timings of 2026-11-17 are void, so nothing here can be chosen from them. If today's store shows no failure left, you are asked nothing and the work stops at the interface. If it does, you are asked one thing: whether tillr keeps one writer process over today's SQLite file, or owns a small storage layer of its own, a text log per item. Nothing built before then depends on the answer.
 
    **Answer:**
    > _(empty — fill in when decided)_
