@@ -1,6 +1,7 @@
-# last_hand_move_event_seq: 1301244
-# hand_move_event_sha256: aa71f2131fba35d85488497e2249d2c5527588e3f3b8d1a068256b54969af263
-defect-ca1e50c51e13
+# last_hand_move_event_seq: 1302638
+# hand_move_event_sha256: 591698c84960ea3b18ca87583775936635e3c7dc9045857fe540df295221188a
+item-request-ec02a81949
+item-request-ab90e5da8f
 item-request-2656e7289b
 item-request-b205fbd881
 item-request-ae67aa405d
@@ -15,7 +16,6 @@ item-request-5be951c300
 item-request-c04ea25d47
 item-request-bb7e39762f
 item-request-e406ec3b31
-item-request-3ff3e4c2b8
 item-request-4ca25155ff
 item-gate-pinned-fork-inputs
 item-agent-default-bmad-superpowers-skills
