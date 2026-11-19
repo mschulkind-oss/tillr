@@ -51,9 +51,12 @@ def report(old, new, answers, live):
     return int(failed)
 
 
-def roll(root, live, no_request):
+def roll(root, live, no_request, build_pi=False):
     if git('status', '--porcelain'):
         raise RuntimeError('refusing a dirty checkout')
+    if build_pi:
+        run(str(root / 'bin/pi-forks'), 'build-pi', cwd=root)
+        return 0
     store = root / '.tillr/state.db'
     old = builds(store)
     tip = git('rev-parse', 'HEAD')
@@ -130,11 +133,13 @@ def main():
     parser = argparse.ArgumentParser(description='Test and install the committed tillr tools.')
     parser.add_argument('--no-request', action='store_true',
                         help='install without requesting restarts; the drain will request them')
+    parser.add_argument('--pi', action='store_true',
+                        help='build the keyed pi fork binary and update current.json')
     args = parser.parse_args()
     try:
         root = Path(git('rev-parse', '--show-toplevel'))
         live = Path(os.environ['YOLO_DURABLE_DIR']).resolve() / 'bin'
-        return roll(root, live, args.no_request)
+        return roll(root, live, args.no_request, build_pi=args.pi)
     except (OSError, RuntimeError, KeyError, sqlite3.Error, subprocess.CalledProcessError) as exc:
         parser.exit(1, f'tillr-roll: {exc}\n')
 

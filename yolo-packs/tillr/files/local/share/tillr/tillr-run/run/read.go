@@ -137,6 +137,7 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 		payload    Record
 		itemID     sql.NullString
 		route      sql.NullString
+		harness    sql.NullString
 		exitCode   sql.NullInt64
 		startedAt  int64
 		finishedAt int64
@@ -145,18 +146,25 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 		costUSD    sql.NullFloat64
 		endCause   sql.NullString
 	)
-	read := func(causeColumn string) error {
+	read := func(causeColumn, harnessColumn string) error {
 		return r.QueryRow(
-			`SELECT run_id, item_id, lane_id, backend, route, state, exit_code, started_at, finished_at, artifact_refs, event_seq,
+			`SELECT run_id, item_id, lane_id, backend, route, `+harnessColumn+`, state, exit_code, started_at, finished_at, artifact_refs, event_seq,
 			        usage_tokens, usage_cost_usd, `+causeColumn+`
 			   FROM runs WHERE run_id = ?`, runID,
-		).Scan(&payload.RunID, &itemID, &payload.LaneID, &payload.Backend, &route, &payload.State, &exitCode,
+		).Scan(&payload.RunID, &itemID, &payload.LaneID, &payload.Backend, &route, &harness, &payload.State, &exitCode,
 			&startedAt, &finishedAt, &refs, &payload.EventSeq, &tokens, &costUSD, &endCause)
 	}
-	err := read("end_cause")
-	// Read-only opens cannot migrate a store written before the field existed.
-	if err != nil && strings.Contains(err.Error(), "no such column: end_cause") {
-		err = read("NULL")
+	causeCol, harnessCol := "end_cause", "harness"
+	err := read(causeCol, harnessCol)
+	// Read-only opens cannot migrate a store written before optional columns existed.
+	for i := 0; i < 2 && err != nil; i++ {
+		if strings.Contains(err.Error(), "no such column: end_cause") {
+			causeCol = "NULL"
+			err = read(causeCol, harnessCol)
+		} else if strings.Contains(err.Error(), "no such column: harness") {
+			harnessCol = "NULL"
+			err = read(causeCol, harnessCol)
+		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return statusEnvelope(statusPayload{RunID: runID}, time.Now().UTC())
@@ -177,6 +185,9 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 	// omits the key rather than carrying an empty route.
 	if route.Valid {
 		payload.Route = route.String
+	}
+	if harness.Valid {
+		payload.Harness = harness.String
 	}
 	if exitCode.Valid {
 		code := int(exitCode.Int64)
@@ -215,6 +226,9 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 				payload.Usage.Details = finish.Usage.Details
 			}
 			payload.SpendNote = finish.SpendNote
+			if payload.Harness == "" {
+				payload.Harness = finish.Harness
+			}
 			payload.EndingException = finish.EndingException
 			payload.RepeatingCall = finish.RepeatingCall
 			payload.SettledAt = finish.SettledAt

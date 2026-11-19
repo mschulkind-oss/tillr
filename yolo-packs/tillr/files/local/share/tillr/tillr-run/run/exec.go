@@ -262,6 +262,10 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := os.Remove(pausePath); err != nil && !os.IsNotExist(err) {
 		return record.Envelope{}, Internalf("clearing prior pause request: %v", err)
 	}
+	harnessPath := filepath.Join(durableDir, "harness")
+	if err := os.Remove(harnessPath); err != nil && !os.IsNotExist(err) {
+		return record.Envelope{}, Internalf("clearing prior harness record: %v", err)
+	}
 	// The new id exists only in memory until the handoff is durably claimed.
 	if freshSession != "" {
 		sessionID = freshSession
@@ -335,11 +339,21 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// a nested run must never claim its parent's item or node. Scratch is isolated by
 	// default, but an explicit opt-out preserves the caller's assignment (or absence).
 	cmd.Env = os.Environ()
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP"} {
+	piBuildsDir, hasPiBuilds := os.LookupEnv("TILLR_PI_BUILDS_DIR")
+	if !hasPiBuilds {
+		if callerDurable := os.Getenv("YOLO_DURABLE_DIR"); callerDurable != "" {
+			piBuildsDir = filepath.Join(callerDurable, "pi-builds")
+			hasPiBuilds = true
+		}
+	}
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE"} {
 		cmd.Env = withoutEnv(cmd.Env, key)
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
 		cmd.Env = append(withoutEnv(cmd.Env, "YOLO_DURABLE_DIR"), "YOLO_DURABLE_DIR="+durableDir)
+	}
+	if hasPiBuilds {
+		cmd.Env = append(cmd.Env, "TILLR_PI_BUILDS_DIR="+piBuildsDir)
 	}
 	if req.NodeID != "" {
 		cmd.Env = append(cmd.Env, "TILLR_NODE_ID="+req.NodeID)
@@ -353,6 +367,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_SESSION_MODE="+mode,
 		"TILLR_RESUME_PROMPT_FILE="+prompt,
 		"TILLR_PAUSE_REQUEST="+pausePath,
+		"TILLR_HARNESS_RECORD_FILE="+harnessPath,
 		"TILLR_PROGRESS_FILE="+filepath.Join(durableDir, "progress"),
 		"TILLR_CHILD_SESSIONS_ROOT="+filepath.Join(durableDir, "pi-subagents"),
 		"TILLR_CHILD_SESSIONS_MARKER="+filepath.Join(durableDir, "child-sessions-recorded"),
@@ -484,6 +499,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	payload.StartedAt = startedAt.Format(time.RFC3339)
 	payload.FinishedAt = finishedAt.Format(time.RFC3339)
+	if rawHarness, err := os.ReadFile(harnessPath); err == nil {
+		payload.Harness = strings.TrimSpace(string(rawHarness))
+	}
 	// The spend is read after the process is done and before the record is written, so
 	// the record that says how the run ended also says what it cost. A failed extraction
 	// leaves the usage unknown and travels as a note, never as a run failure: a run that

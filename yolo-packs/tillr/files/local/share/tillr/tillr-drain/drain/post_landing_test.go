@@ -365,3 +365,210 @@ func TestAfterGreenNeedsGreenMode(t *testing.T) {
 		t.Fatalf("no pointer must not be a failure: %q", d)
 	}
 }
+
+type landStepsStub struct {
+	Steps
+	land func(context.Context, Candidate) (LandOutcome, error)
+}
+
+func (s landStepsStub) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	return s.land(ctx, c)
+}
+
+func TestPostLandingPiSeriesRoll(t *testing.T) {
+	l, git, commit := actionFixture(t)
+	ctx := context.Background()
+	script := filepath.Join(l.cfg.Root, "roll.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"args:$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding.Roll = settings.Roll{
+		Paths:   []string{"tools/tillr*/"},
+		Command: "./roll.sh --no-request",
+	}
+
+	var nextTip string
+	l.cfg.Steps = landStepsStub{land: func(context.Context, Candidate) (LandOutcome, error) {
+		return LandOutcome{Result: LandLanded, TrunkAfter: nextTip}, nil
+	}}
+
+	// Unrelated trunk landing does not trigger any roll.
+	nextTip = commit("docs/unrelated")
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-doc", RunID: "run-doc"}); err != nil {
+		t.Fatal(err)
+	}
+	if l.rollAction.busy() || l.piRollAction.busy() {
+		t.Fatal("unrelated landing started a roll")
+	}
+
+	// patch/pi landing triggers --pi roll without diffing TrunkAfter in root or requesting drain/view restarts.
+	nextTip = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-patch", RunID: "run-pi-patch", BaseRef: "refs/heads/patch/pi"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+
+	// Trunk landing touching yolo-packs/pi-fork/ triggers --pi roll.
+	nextTip = commit("yolo-packs/pi-fork/pack.json")
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-pack", RunID: "run-pi-pack"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+
+	// Trunk landing touching bin/pi-forks.list triggers --pi roll.
+	nextTip = commit("bin/pi-forks.list")
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-list", RunID: "run-pi-list"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+
+	runsFile := filepath.Join(l.cfg.Root, "runs")
+	b, err := os.ReadFile(runsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRuns := "args:--no-request --pi\nargs:--no-request --pi\nargs:--no-request --pi\n"
+	if string(b) != wantRuns {
+		t.Fatalf("runs = %q, want %q", string(b), wantRuns)
+	}
+
+	// Pi-series rolls must not request drain or view restarts.
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.Events(ctx, 0)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Kind == restart.RequestKind {
+			t.Fatalf("pi roll unexpectedly requested restart: %s", string(e.Payload))
+		}
+	}
+
+	// Trunk landing touching both tools/tillr* and yolo-packs/pi-fork/ triggers both rolls.
+	patchFile := filepath.Join(l.cfg.Root, "yolo-packs/pi-fork/patches/0001.patch")
+	if err := os.MkdirAll(filepath.Dir(patchFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(patchFile, []byte("p"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "--", "yolo-packs/pi-fork/patches/0001.patch")
+	nextTip = commit("tools/tillr-one/both")
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-both", RunID: "run-both"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.rollAction.busy() && !l.piRollAction.busy() })
+}
+
+func TestPostLandingPiRollFailurePreservesWorkingPiAndRecordsAction(t *testing.T) {
+	l, _, _ := actionFixture(t)
+	ctx := context.Background()
+	workingPi := filepath.Join(l.cfg.Root, "working-pi")
+	if err := os.WriteFile(workingPi, []byte("working-v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(l.cfg.Root, "roll.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ ! -f allow ]; then echo 'pi build failed' >&2; exit 9; fi\necho 'working-v2' > working-pi\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding.Roll = settings.Roll{
+		Paths:   []string{"tools/tillr*/"},
+		Command: "./roll.sh --no-request",
+	}
+	failedTip := "1111111111111111111111111111111111111111"
+	succeededTip := "2222222222222222222222222222222222222222"
+	tip := failedTip
+	l.cfg.Steps = landStepsStub{land: func(context.Context, Candidate) (LandOutcome, error) {
+		return LandOutcome{Result: LandLanded, TrunkAfter: tip}, nil
+	}}
+
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-fail", RunID: "run-pi-fail", BaseRef: "refs/heads/patch/pi"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+
+	// Working pi is preserved on failure.
+	if b, err := os.ReadFile(workingPi); err != nil || string(b) != "working-v1" {
+		t.Fatalf("working pi = %q, %v; want working-v1", string(b), err)
+	}
+
+	// Failure is recorded in drain.post-landing-action.
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events WHERE kind='drain.post-landing-action' AND json_extract(payload,'$.action')='roll' AND object_id=?`, failedTip).Scan(&detail)
+	})
+	s.Close()
+	if err != nil || !strings.Contains(detail, "pi build failed") {
+		t.Fatalf("failure = %q, %v", detail, err)
+	}
+
+	// Loop is not stopped: a subsequent landing clears the held condition on success.
+	if err := os.WriteFile(filepath.Join(l.cfg.Root, "allow"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	tip = succeededTip
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-ok", RunID: "run-pi-ok", BaseRef: "refs/heads/patch/pi"}); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	if b, err := os.ReadFile(workingPi); err != nil || string(b) != "working-v2\n" {
+		t.Fatalf("working pi = %q, %v; want working-v2", string(b), err)
+	}
+	s, err = store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events WHERE kind='drain.post-landing-action' AND json_extract(payload,'$.action')='roll' AND object_id=?`, succeededTip).Scan(&detail)
+	})
+	if err != nil || detail != "" {
+		t.Fatalf("cleared detail = %q, %v", detail, err)
+	}
+}
+
+func TestPostLandingPiRollCoalesces(t *testing.T) {
+	l, _, _ := actionFixture(t)
+	ctx := context.Background()
+	script := filepath.Join(l.cfg.Root, "roll.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding.Roll = settings.Roll{
+		Paths:   []string{"tools/tillr*/"},
+		Command: "./roll.sh --no-request",
+	}
+	tip := "1111111111111111111111111111111111111111"
+	l.cfg.Steps = landStepsStub{land: func(context.Context, Candidate) (LandOutcome, error) {
+		return LandOutcome{Result: LandLanded, TrunkAfter: tip}, nil
+	}}
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-1", RunID: "run-1", BaseRef: "refs/heads/patch/pi"}); err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(l.cfg.Root, "runs")
+	waitAction(t, func() bool { b, _ := os.ReadFile(runs); return string(b) == "--no-request --pi\n" })
+	for _, id := range []string{"2", "3", "4"} {
+		tip = strings.Repeat(id, 40)
+		if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-" + id, RunID: "run-" + id, BaseRef: "refs/heads/patch/pi"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	if b, err := os.ReadFile(runs); err != nil || string(b) != "--no-request --pi\n--no-request --pi\n" {
+		t.Fatalf("runs = %q, %v", b, err)
+	}
+}

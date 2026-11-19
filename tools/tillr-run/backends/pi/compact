@@ -20,7 +20,9 @@ def main():
         parser.error("--backend must name pi or a pi seat alias")
     if args.timeout < 0:
         parser.error("--timeout must be zero or positive")
-    argv = ["pi", "--mode", "rpc", "--session", args.session_id, "--model", args.model]
+    self_dir = os.path.dirname(os.path.abspath(__file__))
+    argv = [os.path.join(self_dir, "pi-harness.sh"), "--exec", "--",
+            "--mode", "rpc", "--session", args.session_id, "--model", args.model]
     if args.effort:
         argv += ["--thinking", args.effort]
     process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)

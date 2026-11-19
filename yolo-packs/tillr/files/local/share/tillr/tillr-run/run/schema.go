@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS runs (
   lane_id       TEXT NOT NULL REFERENCES lanes(lane_id),
   backend       TEXT NOT NULL,
   route         TEXT,
+  harness       TEXT,
   state         TEXT NOT NULL,
   exit_code     INTEGER,
   end_cause     TEXT,
@@ -154,6 +155,12 @@ func init() {
 	}
 	// Legacy rows stay NULL: their termination cannot be inferred from state.
 	if err := store.RegisterColumn(Utility, "runs", "end_cause", "TEXT"); err != nil {
+		panic(err)
+	}
+	// harness records which binary built or installed served the run (for pi: rebuilt
+	// path and series key, or installed path and version). Nullable for other backends
+	// and legacy rows.
+	if err := store.RegisterColumn(Utility, "runs", "harness", "TEXT"); err != nil {
 		panic(err)
 	}
 	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, CopiedUsageKind, ReleaseKind, ResumeKind, PauseRequestKind, "run.progress", "run.child-session", "run.children-recorded", "run.observation-error"} {

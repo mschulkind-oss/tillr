@@ -68,29 +68,47 @@ func (a *landingAction) submit(landing string, run func(string)) {
 	}(landing)
 }
 
+const piForkPatchRef = "refs/heads/patch/pi"
+
+var piSeriesPaths = []string{"yolo-packs/pi-fork/", "bin/pi-forks.list"}
+
 func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOutcome, error) {
 	out, err := l.cfg.Steps.Land(ctx, candidate)
 	if err == nil && out.Result == LandLanded && out.TrunkAfter != "" {
-		l.afterLanding(context.WithoutCancel(ctx), out.TrunkAfter)
+		l.afterLandingCandidate(context.WithoutCancel(ctx), candidate, out.TrunkAfter)
 	}
 	return out, err
 }
 
 func (l *Loop) afterLanding(ctx context.Context, tip string) {
-	if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
-		l.pushAction.submit(tip, func(tip string) {
-			l.recordPush(ctx, settings.PushTip, tip, pushTrunk(ctx, l.cfg.Root, p))
-		})
+	l.afterLandingCandidate(ctx, Candidate{}, tip)
+}
+
+func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, tip string) {
+	if candidate.BaseRef == "" {
+		if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
+			l.pushAction.submit(tip, func(tip string) {
+				l.recordPush(ctx, settings.PushTip, tip, pushTrunk(ctx, l.cfg.Root, p))
+			})
+		}
 	}
-	if r := l.cfg.PostLanding.Roll; r.Command != "" {
-		changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")
-		if err != nil {
-			l.recordAction(ctx, "roll", tip, err)
-			return
-		}
-		if !matchesRollPaths(changed, r.Paths) {
-			return
-		}
+	r := l.cfg.PostLanding.Roll
+	if r.Command == "" {
+		return
+	}
+	if candidate.BaseRef == piForkPatchRef {
+		l.submitPiRoll(ctx, r.Command, tip)
+		return
+	}
+	if candidate.BaseRef != "" {
+		return
+	}
+	changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")
+	if err != nil {
+		l.recordAction(ctx, "roll", tip, err)
+		return
+	}
+	if matchesRollPaths(changed, r.Paths) {
 		l.rollAction.submit(tip, func(tip string) {
 			_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", r.Command)
 			if err == nil {
@@ -103,6 +121,16 @@ func (l *Loop) afterLanding(ctx context.Context, tip string) {
 			l.recordAction(ctx, "roll", tip, err)
 		})
 	}
+	if matchesRollPaths(changed, piSeriesPaths) {
+		l.submitPiRoll(ctx, r.Command, tip)
+	}
+}
+
+func (l *Loop) submitPiRoll(ctx context.Context, command, tip string) {
+	l.piRollAction.submit(tip, func(tip string) {
+		_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", command+" --pi")
+		l.recordActionWhat(ctx, "roll", "pi", tip, err)
+	})
 }
 
 // afterGreen runs when the green pointer advances. In green mode it pushes the pointer's
