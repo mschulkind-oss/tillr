@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-18
 tags: [tillr, review, provenance, decisions, design]
-summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Twenty questions ask him to keep, overturn or reopen the ones that are built and live; two more ask how to stop it happening again. The rest is lists: rows that are simply false now, high-significance decisions in designs that are not built, and the medium and low ones."
+summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Twenty questions each put one built, running decision to him as a situation and the choices it leaves, with what he would see and what it costs under each; two more ask how to stop it happening again. The rest is lists: rows that are simply false now, high-significance decisions in designs that are not built, and the medium and low ones."
 next: "The owner answers OQ-PR1 to OQ-PR22. Each answer relabels or rewrites the ledger rows its question names; the corrections in Section 3 were applied on 2026-11-18."
 depends-on:
   - ../design/tillr-queue-mirrors-designs.md#OQ-QM1
@@ -18,7 +18,7 @@ depends-on:
 
 - **Why it matters:** on 2026-11-18 the owner found that tillr reads a hidden comment of its own from his documents, a product decision he never made, and asked whether other decisions had come in the same way. They had.
 - **The shape:** [twenty-two questions](#2-questions-for-the-owner), hardest to undo first; then lists that need no ruling.
-- **Cost:** reading time. A "keep" costs nothing more. An "overturn" becomes work, sized in each question.
+- **Cost:** reading time. An answer that leaves things as they run today costs nothing more. An answer that changes them becomes work, sized for each question in [Section 1.5](#15-evidence-behind-each-question).
 - **Start at:** [OQ-PR1](#OQ-PR1).
 - **Needs your ruling:** [OQ-PR1](#OQ-PR1), [OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5), [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR12](#OQ-PR12), [OQ-PR13](#OQ-PR13), [OQ-PR14](#OQ-PR14), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19), [OQ-PR20](#OQ-PR20), [OQ-PR21](#OQ-PR21), [OQ-PR22](#OQ-PR22).
 - **Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (reopens how work in a document becomes an item, as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); this page does not ask that again).
@@ -119,9 +119,13 @@ Each question in [Section 2](#2-questions-for-the-owner) states its situation an
 
 ## 2. Questions for the owner
 
-Each question has the same three answers. **Keep** makes the decision his ruling: its ledger rows are relabeled with his words and the date. **Overturn** removes or replaces it, and the question says what that touches. **Ask properly** sends it back to its own design as a full question with alternatives, and it runs as it is until he answers there.
+Each question tells one situation: what you do, what tillr does today, and the choice that leaves. Its options say what you would see and what each costs you. Who made the earlier decision, whether it runs today and what undoing it costs are in [Section 1.5](#15-evidence-behind-each-question).
 
-They are ordered by how much is built on each and how hard it is to undo, hardest first. Questions [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) are about the process and are explained in [Section 6](#6-how-this-stops-happening).
+**Best read first:** [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), at the end of the list. They set the rule for all the rest: whether work may be built on decisions you have not seen, and when an agent may answer a question addressed to you. [Section 6](#6-how-this-stops-happening) explains them. The others are ordered by how much is built on each and how hard it is to undo, hardest first.
+
+**Already ruled, and asking only that you confirm:** [OQ-PR2](#OQ-PR2), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) and [OQ-PR20](#OQ-PR20). Each quotes the ruling of yours that appears to settle it, and stays open until you say it does.
+
+**Waiting on another question:** [OQ-PR14](#OQ-PR14), which cannot be answered until [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) is.
 
 **Already asked elsewhere, so not asked again here:**
 
