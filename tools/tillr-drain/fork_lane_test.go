@@ -3,12 +3,16 @@ package main_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/patchmoves"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // forkLaneFixture is a trunk repository, a lane root, and a fork checkout under the
@@ -116,100 +120,185 @@ func TestAForkLaneRefusesAMissingCheckoutByName(t *testing.T) {
 	}
 }
 
-// The movement the review names: a run exports its fork commit to refs/heads/patch/<fork>,
-// and the bracket excuses that ref for the lane whose fence names the fork checkout. Once
-// the boundary excuses it, land pass moves the trunk and leaves the patch ref where the
-// run put it, so the patch ref moved exactly once and the trunk only through the landing.
-func TestAForkLaneBoundaryExcusesItsPatchRefAndLandMovesOnlyTheTrunk(t *testing.T) {
+// A fork lane's assigned patch ref (refs/heads/patch/<fork>) is no longer excused during
+// a run unless the new commit is named by a refs/tillr/landed/ marker written during the
+// bracket. A worker-style fetch into refs/heads/patch/pi is observed (not convicted),
+// recorded in patch_moves on boundary.check, and holds publication until acknowledged.
+func TestAForkLaneBoundaryObservesItsPatchRefAndIgnoresMarkedLandings(t *testing.T) {
 	f := newForkLaneFixture(t)
 	if err := f.stager().Stage(context.Background(), f.spec("lane-1")); err != nil {
 		t.Fatalf("staging a fork item failed: %v", err)
 	}
+	loadSnap := func(path string) *drain.Boundary {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading snapshot %s: %v", path, err)
+		}
+		var b drain.Boundary
+		if err := json.Unmarshal(raw, &b); err != nil {
+			t.Fatalf("decoding snapshot %s: %v", path, err)
+		}
+		return &b
+	}
 	before := f.snapshot(t, "before")
 
-	// The run: one commit in the fork checkout, then the export that moves the repository's
-	// patch branch to it. The export fetches the commit into the trunk repository, which is
-	// exactly what bin/pi-forks export --lane does.
+	// The run: one commit in the fork checkout, then a worker-style fetch that moves the
+	// repository's patch branch to it (what bin/pi-forks export --lane does).
 	writeFile(t, filepath.Join(f.fork, "fork.txt"), "the fork's change\n")
 	git(t, f.fork, "add", "fork.txt")
 	git(t, f.fork, "commit", "-m", "the fork's change")
 	forkHead := git(t, f.fork, "rev-parse", "HEAD")
-	forkTree := git(t, f.fork, "rev-parse", "HEAD^{tree}")
 	git(t, f.root, "fetch", "--no-tags", f.fork, "refs/heads/main:refs/heads/patch/pi")
 	if got := git(t, f.root, "rev-parse", "refs/heads/patch/pi"); got != forkHead {
 		t.Fatalf("the export left the patch ref at %s, want %s", got, forkHead)
 	}
 	after := f.snapshot(t, "after")
-	if code, output := invoke(t, "boundary", "check", "--before", before, "--after", after); code != 0 {
-		t.Fatalf("the patch ref's move was reported as a boundary violation: exit %d\n%s", code, output)
+
+	// CompareRunObserved does not convict the run (owner's 2026-11-17 ruling), and observes
+	// the move of the assigned patch ref.
+	violations, observed, err := drain.CompareRunObserved(loadSnap(before), loadSnap(after))
+	if err != nil {
+		t.Fatalf("CompareRunObserved: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("assigned patch ref move convicted the run: %+v", violations)
+	}
+	if len(observed) != 1 || observed[0].Ref != "refs/heads/patch/pi" || observed[0].Old != f.forkBase || observed[0].New != forkHead {
+		t.Fatalf("observed = %+v, want one observation for refs/heads/patch/pi %s -> %s", observed, f.forkBase, forkHead)
 	}
 
-	// Land: the run already delivered the patch branch, so the landing refuses to move it a
-	// second time and the trunk has not moved.
-	land := sibling(t, "land")
-	store := filepath.Join(scratch(t, "fork-store"), "board.sqlite3")
-	globalConfig := filepath.Join(scratch(t, "fork-identity"), "gitconfig")
-	writeFile(t, globalConfig, "[user]\n\tname = Fixture Landing\n\temail = landing@example.invalid\n")
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
-
-	verdict := filepath.Join(scratch(t, "fork-records"), "patch-verdict.json")
-	writeFile(t, verdict, envelope("gate.verdict", "verdict_patch", map[string]any{
-		"verdict_id": "verdict_patch", "plan_id": "plan_patch",
-		"registry_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		"base_sha":        f.forkBase, "tree_sha": forkTree, "result": "pass",
-		"checks": []map[string]any{{"check_id": "fork-build", "result": "pass"}},
-	}))
-	code, output := driveRecord(t, land, "pass", "--store", store, "--repo", f.root,
-		"--item", "item_041", "--run", "run-patch", "--base", f.forkBase, "--head", forkHead,
-		"--base-ref", "refs/heads/patch/pi", "--verdict", verdict, "--now", "2026-11-10T00:00:00Z")
-	if code != 1 {
-		t.Fatalf("land pass on an already-delivered patch branch exited %d, want 1 (refused): %s", code, output)
-	}
-	var attempt struct {
-		Payload struct {
-			Result string `json:"result"`
-			Reason string `json:"reason"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(output, &attempt); err != nil {
-		t.Fatalf("land pass emitted no record: %v\n%s", err, output)
-	}
-	if attempt.Payload.Result != "refused" || attempt.Payload.Reason != "patch-at-head" {
-		t.Fatalf("the attempt is %q/%q, want refused/patch-at-head", attempt.Payload.Result, attempt.Payload.Reason)
-	}
-	if got := git(t, f.root, "rev-parse", "refs/heads/patch/pi"); got != forkHead {
-		t.Fatalf("the refused landing moved the patch ref to %s, want it left at %s", got, forkHead)
-	}
-	if got := git(t, f.root, "rev-parse", "main"); got != f.base {
-		t.Fatalf("the patch-branch landing moved the trunk to %s, want it left at %s", got, f.base)
+	// Standalone boundary check (Compare) reports the unexcused move as a violation.
+	if code, output := invoke(t, "boundary", "check", "--before", before, "--after", after); code != 1 || !strings.Contains(string(output), "refs/heads/patch/pi") || !strings.Contains(string(output), forkHead) {
+		t.Fatalf("boundary check exited %d, want 1 naming refs/heads/patch/pi and %s:\n%s", code, forkHead, output)
 	}
 
-	// The trunk moves only through land pass: a second candidate, on the trunk this time,
-	// is the one that advances main.
-	git(t, f.root, "checkout", "-b", "trunk-candidate", f.base)
-	writeFile(t, filepath.Join(f.root, "trunk.txt"), "the trunk's change\n")
-	git(t, f.root, "add", "trunk.txt")
-	git(t, f.root, "commit", "-m", "the trunk's change")
-	trunkHead := git(t, f.root, "rev-parse", "HEAD")
-	trunkTree := git(t, f.root, "rev-parse", "HEAD^{tree}")
-	git(t, f.root, "checkout", "main")
+	// A move to a commit named by a refs/tillr/landed/ marker written during the bracket
+	// stays ignored in both CompareRunObserved and standalone boundary check.
+	git(t, f.root, "update-ref", "refs/tillr/landed/run-sibling", forkHead)
+	afterMarked := f.snapshot(t, "after-marked")
+	violations, observed, err = drain.CompareRunObserved(loadSnap(before), loadSnap(afterMarked))
+	if err != nil || len(violations) != 0 || len(observed) != 0 {
+		t.Fatalf("marked landing was not ignored in CompareRunObserved: violations=%+v observed=%+v err=%v", violations, observed, err)
+	}
+	if code, output := invoke(t, "boundary", "check", "--before", before, "--after", afterMarked); code != 0 || len(output) != 0 {
+		t.Fatalf("marked landing was not ignored in boundary check: exit %d\n%s", code, output)
+	}
 
-	trunkVerdict := filepath.Join(scratch(t, "fork-records"), "trunk-verdict.json")
-	writeFile(t, trunkVerdict, envelope("gate.verdict", "verdict_trunk", map[string]any{
-		"verdict_id": "verdict_trunk", "plan_id": "plan_trunk",
-		"registry_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		"base_sha":        f.base, "tree_sha": trunkTree, "result": "pass",
-		"checks": []map[string]any{},
-	}))
-	driveOK(t, land, "pass", "--store", store, "--repo", f.root,
-		"--item", "item_trunk", "--run", "run-trunk", "--base", f.base, "--head", trunkHead,
-		"--base-ref", "main", "--verdict", trunkVerdict, "--now", "2026-11-10T00:00:00Z")
-	if got := git(t, f.root, "rev-parse", "main^{tree}"); got != trunkTree {
-		t.Fatalf("the trunk carries tree %s, want the landed tree %s", got, trunkTree)
+	// End-to-end loop run: a worker-style fetch into refs/heads/patch/pi during the run
+	// shows up in patch_moves on boundary.check, prints as observed, holds publication,
+	// and clears when tillr drain acknowledge-patch-move is invoked.
+	lf := newForkLaneFixture(t)
+	writeFile(t, filepath.Join(lf.root, ".git", "info", "exclude"), ".tillr/\n.forks/\n")
+	adapter := stub(t, "fork-export-adapter", fmt.Sprintf(`cd %q
+echo "the fork's change" > fork.txt
+git add fork.txt
+git -c user.name=stub -c user.email=stub@example.invalid commit -q -m "the fork's change"
+git -C %q fetch --no-tags %q refs/heads/main:refs/heads/patch/pi
+printf 'RESULT: done\n'
+`, lf.fork, lf.root, lf.fork))
+	now := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+	steps := &drain.ProcessSteps{
+		RunBin: sibling(t, "run"), ItemBin: sibling(t, "item"), Store: lf.store, LaneRoot: lf.laneRoot,
+		Root: lf.root, Now: func() time.Time { return now },
+		GateProgram: always(t, "gate", 0), LandProgram: always(t, "land", 0), VerdictProgram: always(t, "verdict", 0),
 	}
-	if got := git(t, f.root, "rev-parse", "refs/heads/patch/pi"); got != forkHead {
-		t.Fatalf("the trunk landing moved the patch ref to %s, want it left at %s", got, forkHead)
+	report := &strings.Builder{}
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		ExitWhenDrained: true,
+		Root:            lf.root,
+		Store:           lf.store,
+		LaneRoot:        lf.laneRoot,
+		Lanes:           []string{"lane-1"},
+		Policy: &drain.Policy{
+			DefaultBackend: "fixture",
+			Preference:     []string{"fixture"},
+			Backends:       map[string]drain.Backend{"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 60}},
+		},
+		Steps:  &forkTestSteps{&evidenceProcessSteps{steps}},
+		Stage:  lf.stager(),
+		Now:    func() time.Time { return now },
+		Report: report,
+	})
+	if err != nil {
+		t.Fatalf("building the loop failed: %v", err)
 	}
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("the loop failed: %v", err)
+	}
+	if result.Stop != drain.StopQueueDrained {
+		t.Fatalf("loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopQueueDrained)
+	}
+	if !strings.Contains(report.String(), "refs/heads/patch/pi") || !strings.Contains(report.String(), "not attributed to the run") {
+		t.Fatalf("the observation was not reported:\n%s", report.String())
+	}
+	loopForkHead := git(t, lf.fork, "rev-parse", "HEAD")
+	var foundMove bool
+	for _, ev := range eventsOf(t, lf.store) {
+		if ev.Kind != drain.BoundaryCheckKind {
+			continue
+		}
+		var payload struct {
+			Clean      bool              `json:"clean"`
+			PatchMoves []patchmoves.Move `json:"patch_moves"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("decoding boundary.check: %v", err)
+		}
+		if !payload.Clean {
+			t.Fatalf("boundary.check was not clean: %s", ev.Payload)
+		}
+		for _, m := range payload.PatchMoves {
+			if m.Ref == "refs/heads/patch/pi" && m.Old == lf.forkBase && m.New == loopForkHead {
+				foundMove = true
+			}
+		}
+	}
+	if !foundMove {
+		t.Fatalf("boundary.check did not record refs/heads/patch/pi (%s -> %s) in patch_moves", lf.forkBase, loopForkHead)
+	}
+	s, err := store.Open(context.Background(), lf.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var holds []patchmoves.Hold
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var err error
+		holds, err = patchmoves.Pending(r)
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+	if len(holds) != 1 || holds[0].Fork() != "pi" || holds[0].New != loopForkHead {
+		t.Fatalf("pending publication holds = %+v, want one hold for pi -> %s", holds, loopForkHead)
+	}
+	if code, output := invoke(t, "acknowledge-patch-move", "--store", lf.store, "--observation", fmt.Sprint(holds[0].Observation), "--fork", "pi", "--by", "owner"); code != 0 {
+		t.Fatalf("acknowledge-patch-move exited %d: %s", code, output)
+	}
+	s, err = store.Open(context.Background(), lf.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var err error
+		holds, err = patchmoves.Pending(r)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(holds) != 0 {
+		t.Fatalf("pending publication holds after acknowledge = %+v, want none", holds)
+	}
+}
+
+type forkTestSteps struct{ *evidenceProcessSteps }
+
+func (s *forkTestSteps) Gate(context.Context, drain.Candidate) (drain.GateOutcome, error) {
+	return drain.GateOutcome{Outcome: drain.GatePassed}, nil
 }
 
 // The negative control: a bracket that does not name the patch ref reports the same move as

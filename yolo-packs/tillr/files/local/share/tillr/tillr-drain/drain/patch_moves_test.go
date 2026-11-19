@@ -100,21 +100,24 @@ func TestUnexpectedPatchMovesAreDurablyHeldWithoutConvictingRun(t *testing.T) {
 }
 
 func TestLegitimatePatchMovesNeverHoldPublication(t *testing.T) {
-	for _, mode := range []string{"own-delivery", "marked-landing"} {
+	for _, mode := range []string{"marked-landing", "assigned-marked-landing"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
 			own := Worktree{Path: l.lanePath("lane-1"), Head: "aaa", Branch: "refs/heads/tillr/x/lane-1"}
 			before := &Boundary{Repo: f.root, Targets: []string{own.Path}, Worktrees: []Worktree{own}, Refs: map[string]string{"refs/heads/patch/pi": "old"}}
 			after := &Boundary{Repo: f.root, Targets: before.Targets, Worktrees: before.Worktrees, Refs: map[string]string{"refs/heads/patch/pi": "new"}}
-			if mode == "own-delivery" {
+			if mode == "assigned-marked-landing" {
 				before.PatchRefs = []string{"refs/heads/patch/pi"}
 				after.PatchRefs = before.PatchRefs
-			} else {
-				after.Refs["refs/tillr/landed/sibling"] = "new"
 			}
+			after.Refs["refs/tillr/landed/sibling"] = "new"
 			violations, observed, err := CompareRunObserved(before, after)
 			if err != nil || len(violations) != 0 || len(observed) != 0 {
-				t.Fatalf("legitimate move: %v %v %v", violations, observed, err)
+				t.Fatalf("legitimate move (CompareRunObserved): %v %v %v", violations, observed, err)
+			}
+			compareViolations, err := Compare(before, after)
+			if err != nil || len(compareViolations) != 0 {
+				t.Fatalf("legitimate move (Compare): %v %v", compareViolations, err)
 			}
 			if err := l.recordBoundaryCheck(context.Background(), BoundaryScopeRun, "tick", []runRef{{RunID: "run-item-a-a1"}}, before.Targets, violations, l.cfg.Now(), observed...); err != nil {
 				t.Fatal(err)
