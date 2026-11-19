@@ -12,7 +12,7 @@ tags:
   - landing
   - design
 summary: "A proposal that every act on a tillr item (build, rewrite, design answer, judge, gate, landing, revert, owner question, sub-agent) is a node in that item's graph, that a node is fixed once it starts and done once it ends, and that one pure function over the graph and a short list of facts adds whatever nodes are needed next. Counts, clocks, hash triggers and item-level holds are replaced by stated endings and named waits."
-next: "The owner ruled OQ-GP7 on 2026-11-18: while a check is red, work lands only if it does not touch what that check reads, with no landing cap. The designer's decisions D-GP1 to D-GP15 await the owner's review, and no migration step is filed."
+next: "The owner ruled OQ-GP7 on 2026-11-18: while a check is red, work lands only if it does not touch what that check reads, with no landing cap. The designer's decisions D-GP1 to D-GP15 await the owner's review (the waiting rule of D-GP14 is now ruled as OQ-GP7), and no migration step is filed."
 depends-on:
   - tillr-item-graphs.md
   - tillr-drain-successor.md
@@ -22,11 +22,11 @@ depends-on:
 
 # The item graph is the whole path, and one pure function decides what comes next
 
-**Status:** 2026-11-18. The graph model is not built: `.tillr.toml` names no default workflow, so every item still runs as one implicit single worker (read 2026-11-18). Four of its rules are built outside the graph, as rules of the single-run drain, and [Section 12](#12-what-this-replaces) lists them. The `D-GP` rows of the ledger are the designer's decisions and await the owner's review; the `OQ-GP` rows record what the owner said. The design is written to his direction of 2026-11-17, restated in [Section 1](#1-the-direction-and-the-rules). What was not verified is marked so.
+**Status:** 2026-11-19. The static per-attempt workflow machinery ([item graphs](./tillr-item-graphs.md)) is built (`config/tillr/workflows/` holds six workflow files and `tools/tillr-drain/drain/` runs multi-node workflows), though `.tillr.toml` names no default workflow per seat so items without a `workflow` attribute still run as one implicit single worker. This document's whole-life graph model (gate, judge, landing and later acts as nodes, and the pure policy function) is not built. Eight of its rules are built outside the graph, as rules of the single-run drain, and [Section 12](#12-what-this-replaces) lists them. The `D-GP` rows of the ledger are the designer's decisions and await the owner's review, except that the waiting rule of `D-GP14` is now ruled as [OQ-GP7](#OQ-GP7); the `OQ-GP` rows record what the owner said. The design is written to his direction of 2026-11-17, restated in [Section 1](#1-the-direction-and-the-rules). What was not verified is marked so.
 
 > **In short.** An item's graph stops being a template for its build and becomes the record of everything that happened to it. Nothing routes work except one pure function that reads the graph and adds the nodes it lacks, so every "what next" is a table row with a test, and every repetition has a stated cause.
 
-**Why it matters.** The graph ends before the gate, and no live item runs on it at all. What follows the gate (refusals, conflicts, design conflicts, rewrites, a red trunk) is routed by separate mechanisms of the drain, each with its own state, so no one place says what happens next or why. A scout counted from the store on 2026-11-17 (the query was not kept): 65 conflict-fix runs, 30 runs of 22 rewrite items, and no node run among 801 runs. The drain has since dropped most of its counts and hash triggers; the structure is unchanged.
+**Why it matters.** The built graph ends before the gate, and `.tillr.toml` sets no default workflow per seat, so items without an explicit `workflow` attribute still run as one worker. What follows the gate (refusals, conflicts, design conflicts, rewrites, a red trunk) is routed by separate mechanisms of the drain, each with its own state, so no one place says what happens next or why. A scout counted from the store on 2026-11-17 (the query was not kept): 65 conflict-fix runs, 30 runs of 22 rewrite items, and no node run among 801 runs. The drain has since dropped most of its counts and hash triggers; the structure is unchanged.
 
 **The shape.** Four parts: a per-item graph of nodes with stated endings; the fog-of-war invariant (a node that has started can never change), which the store enforces; a pure policy function that transforms only what has not started; and a scheduler that chooses who runs each ready node. A queue-level pass and the trunk's proof sit above the items under the same invariant.
 
@@ -949,7 +949,7 @@ When a worker reports that the design is unclear, the design seat answers today 
 
 ## Decision Ledger
 
-The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a question was closed without a ruling. The `D-GP` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. `D-GP1`, `D-GP2`, `D-GP3`, `D-GP5`, `D-GP7`, `D-GP8`, `D-GP9`, `D-GP10` and `D-GP12` carry out a direction quoted in [Section 1](#1-the-direction-and-the-rules); `D-GP4`, `D-GP6`, `D-GP11`, `D-GP13`, `D-GP14` and `D-GP15` are the designer's own. The waiting rule of `D-GP14` has since been ruled by the owner, as [OQ-GP7](#OQ-GP7). The Built column was read from the tree on 2026-11-18.
+The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a question was closed without a ruling. The `D-GP` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete. None of them is the owner's ruling; the owner may overturn any of them, and all await his review except the waiting rule of `D-GP14`, which the owner ruled on 2026-11-18 as [OQ-GP7](#OQ-GP7). `D-GP1`, `D-GP2`, `D-GP3`, `D-GP5`, `D-GP7`, `D-GP8`, `D-GP9`, `D-GP10` and `D-GP12` carry out a direction quoted in [Section 1](#1-the-direction-and-the-rules); `D-GP4`, `D-GP6`, `D-GP11`, `D-GP13`, `D-GP14` and `D-GP15` are the designer's own. The Built column was read from the tree on 2026-11-18.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
