@@ -10,7 +10,7 @@ tags:
   - worktrees
   - design
 summary: "Settles one meaning for each word the tillr work queue uses, so that the owner, the documents and the code say the same thing. An item is a tracked piece of work with its own deliverable, whether or not a document declares it yet. The unit of progress is the node, the whole of what happened to an item is its path, and a run is only the bookkeeping of one node. The lane is retired: a worktree is a resource an item acquires, with a lifecycle and collection in place of a fixed pool. Three questions remain for the owner: two names, and whether an item is finished at landing or at proof."
-next: "The owner rules OQ-VO5 and OQ-VO6, and reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
+next: "The owner ruled OQ-VO4, OQ-VO5 and OQ-VO6 on 2026-11-18. He reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
 depends-on:
   - tillr-graph-is-the-path.md
   - tillr-item-graphs.md
@@ -26,7 +26,7 @@ depends-on:
 - **The shape:** an **item** has one **graph**; the graph's started nodes are the item's **path**; a **node** has at most one **run**; an agent run speaks in one **session**, which later nodes resume or fork; an item acquires one **worktree**, which is collected and restored.
 - **Cost:** "lane", "attempt", "node run", "hold" and eight other words are retired from documents and from what the owner reads; flags, stored names and paths that carry them stay as aliases ([Section 6](#6-renames)).
 - **Start at:** [Section 4](#4-the-stages-of-a-change) for the stages, then the three sections before it for the three words.
-- **Needs your ruling:** [OQ-VO5](#OQ-VO5), [OQ-VO6](#OQ-VO6). **Ruled on 2026-11-18:** [OQ-VO4](#OQ-VO4), the charter.
+- **Needs your ruling:** nothing now. **Ruled on 2026-11-18:** [OQ-VO4](#OQ-VO4), the charter; [OQ-VO5](#OQ-VO5), `git-landing`; [OQ-VO6](#OQ-VO6), an item is finished when the suite has passed on it. The designer's decisions in the ledger still await your review.
 - **Awaits your review:** the designer's decisions `D-VO1` to `D-VO12` in [the ledger](#decision-ledger). You may overturn any of them.
 - **Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction these words must fit; its own terms are linked here, not redefined), [the direction document](./tillr-core-and-git-landing.md) (whose naming question is asked here as [OQ-VO4](#OQ-VO4) and [OQ-VO5](#OQ-VO5)), [the landing call](./tillr-landing-call.md) (its question on keeping a worktree after landing rests on [Section 3.3](#33-the-life-of-a-worktree)). There is no companion plan: [Section 9](#9-drafted-items) holds the work this design surfaced, as prose.
 
@@ -214,7 +214,7 @@ flowchart TD
     P -. reverted .-> W
 ```
 
-**Landed and proven are different, because the landing strategy is after-merge.** Whether the item is *finished* at the first or at the second is the owner's to rule, [OQ-VO6](#OQ-VO6); the table and the stages above are written to that question's leaning, finished when proven.
+**Landed and proven are different, because the landing strategy is after-merge.** The owner ruled on 2026-11-18 that the item is *finished* at the second, [OQ-VO6](#OQ-VO6); the table and the stages above are written to that question's leaning, finished when proven.
 
 | | Landed | Proven |
 | :--- | :--- | :--- |
@@ -385,7 +385,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | `lane-<n>`, `express-<n>`, `desk-<doc>`, `lanes` table, `.tillr/lanes/`, `--lanes`, `lanes leased: M/K`, `drain.lane-*` | Worktree, scratch, running-agent limit | Flags, store, paths, events, view | **Rename the flag and the view label** when the worktree lifecycle is built; alias stored rows and old events |
 | `--lane-root`, `TILLR_LANE_ID`, `tillr run lanes` | Worktree, scratch | The surface [promised to Product QA](./tillr-separable-parts.md#21-the-stable-surface) | **Alias, and say so in that contract.** A consumer was told to rely on them |
 | `<lane>/durable/<run_id>` | **Scratch** | Paths, the worker's brief | **Rename with the lifecycle.** It is the directory that fills the disk |
-| Item state `landed` as final | **Landed** (provisional), then **proven** | The landing definition, view | **Worth changing, if [OQ-VO6](#OQ-VO6) is ruled that way:** a derived "proven" shown in the view first; a stored state is the landing definition's to add |
+| Item state `landed` as final | **Landed** (provisional), then **proven** | The landing definition, view | **To change, as [OQ-VO6](#OQ-VO6) was ruled on 2026-11-18:** a derived "proven" shown in the view first; a stored state is the landing definition's to add |
 | `fixer-main-…`, "trunk fixer" | **Mechanic** | Ids, code, events `drain.fixer-*` | Alias the id; say mechanic in the view and in documents |
 | `item.Conflict`, `conflict-<run id>`, reasons `conflict-design`, `conflict-owner` | **Objection** | Store, ids, hold reasons | Alias. They disappear when waits replace holds |
 | `squash-conflict`, `conflict-fix`, `-cfix` | **Conflict** | Lander result, run-id suffix | Keep. This is the surviving meaning |
@@ -479,6 +479,8 @@ Each row quotes or cites words the owner said. These are the only rulings in thi
 | OQ-VO1 | The lane, as a slot in a fixed pool that work is shuffled through, goes. The owner: "I don't think that means that we just have a hard cap and then shuffle between them. That just means we need a lifecycle, garbage collection policies, that sort of thing"; he has also said he dislikes the concept of a lane. The question asked whether the word might stay with a new meaning; his words leave it nothing to mean. How far the rename reaches is the designer's `D-VO9`. | 2026-11-18 | [Section 3](#3-what-a-lane-was-and-the-worktree-as-a-resource) | — |
 | OQ-VO2 | Outstanding worktrees are bounded, and the bound is met by a lifecycle and collection, not by a cap. The owner: "We do need to bound the number of worktrees that are outstanding because that destroys my disk space and performance. That's important." He named no numbers. Which measures start collection, and their defaults, are the designer's `D-VO10`. | 2026-11-18 | [Section 3.4](#34-the-bound-and-what-happens-at-it) | — |
 | OQ-VO4 | The file that turns tillr into one use is a **charter**. The owner: "I think I like the term charter because basically we're saying like the charter for the base tillr, whatever the git landing is, is basically maintain velocity from coming up with ideas, maintain momentum of that idea through design and implementation, clearing all blockers along the way. And then what falls from that is all of the rules and how we use the tillr tools to get there." He gave a second example: "an AutoQA charter would be find all bugs. How do you do that? And you queue things and you churn through them." So a charter states the purpose of one use, and its rules (item states, allowed moves, prerequisites, the completion rule) follow from that purpose. The shipped flag `--definition` and the stored key keep working as aliases; the rename in code, the view and the documents is not built. "Definition" now means only an item's. | 2026-11-18 | [Section 5.1](#51-the-work-and-its-statement) | — |
+| OQ-VO5 | tillr's first use, landing changes in a Git repository, is called **`git-landing`**. The owner took the stated leaning in review: "git-landing, by taste: it is what shipped, it says what the use does, and nothing argues for the other two." With [OQ-VO4](#OQ-VO4) this reads "the `git-landing` charter". Nothing changes in the tree. | 2026-11-18 | [Section 5.1](#51-the-work-and-its-statement) | Built (the name is the shipped one) |
+| OQ-VO6 | **An item is finished when the full test suite has passed on a trunk commit that contains its change, not when it lands.** The owner took the stated leaning in review: "A, finished when the suite has passed: a finished count that can go back down is one you stop trusting, and it matches pushing only what is green." Until then the item shows under "draining" as landed and awaiting its proof; a revert never takes a finished item back; work that depends on the item still starts when it lands. To build: a "proven" mark derived in the view first, a stored state later. | 2026-11-18 | [Section 4](#4-the-stages-of-a-change) | — |
 | `R-VO1` | Only what is green is pushed, as a working assumption he asked to keep open: "I think I agree with only pushing on green. Let's assume that for now, but at least keep it in the conversation." | 2026-11-18 | [Section 4](#4-the-stages-of-a-change) | — |
 
 ### The designer's decisions, awaiting the owner's review
@@ -493,7 +495,7 @@ Each `D-VO` row is a decision the designer made on 2026-11-18 from the evidence 
 | `D-VO4` | "Resume" is a node; carrying on the same node after an exception is "recovery". **Rejected:** one word for both, which is today's usage. The owner may overturn this. | 2026-11-18 | [Section 5.2](#52-the-graph-and-what-executes) | — |
 | `D-VO5` | A worktree and its scratch belong to an item. They are collected at three moments (a node ends, an item ends, before a claim that needs a worktree) and on no timer, in the order ended items, then items waiting on the owner or another item, then least recently used; a landed item's worktree is idle, not ended; a collected worktree is restored on demand at the same path; the bound never fails work. **Evidence:** the owner's worktree ruling, and scratch being 99 percent of the bytes. **Rejected:** a fixed pool that any node may take, which is the shuffling the owner ruled out; and a lifecycle for worktrees alone, which leaves 99 percent of the disk. The owner may overturn this. | 2026-11-18 | [Section 3](#3-what-a-lane-was-and-the-worktree-as-a-resource) | — |
 | `D-VO6` | How many agents run at once is a setting of its own, the running-agent limit, defaulting to today's `--lanes` value. **Rejected:** deriving it from the worktree bound. The owner may overturn this. | 2026-11-18 | [Section 3.5](#35-what-limits-how-many-agents-run-at-once) | — |
-| `D-VO7` | **Not a decision.** "Landed is provisional and proven is final; the item ends at proven" changes what the owner reads as finished, and he has not seen it. It is asked as [OQ-VO6](#OQ-VO6), and the body is written to that question's leaning. | 2026-11-18 | [Section 4](#4-the-stages-of-a-change) | — |
+| `D-VO7` | **Not a decision.** "Landed is provisional and proven is final; the item ends at proven" changes what the owner reads as finished, and he has not seen it. It was asked as [OQ-VO6](#OQ-VO6), which the owner ruled on 2026-11-18 for "finished at proven", and the body is written to that question's leaning. | 2026-11-18 | [Section 4](#4-the-stages-of-a-change) | — |
 | `D-VO8` | "Stage" names the eight stages of a change, and a workflow's unit is a "step". "Conflict" means a merge conflict, and the worker's "no" is an objection. "Verdict", "policy" and "plan" are never used bare. The owner may overturn this. | 2026-11-18 | [Section 5](#5-the-words) | — |
 | `D-VO9` | The word "lane" leaves documents, the view and every new flag, record and event. Existing flags, stored rows, paths and events keep it as documented aliases, and so do the three names promised to Product QA (`--lane-root`, `TILLR_LANE_ID`, `tillr run lanes`). **Evidence:** on 2026-11-18 the word is on 4,439 non-test Go lines in the drain alone and on 4,196 lines of 271 documents, so a rename everywhere is weeks of churn for no change in behavior. **Rejected:** keeping the word for "a running agent's use of its item's worktree", which gives every old record a second reading; and renaming stored data, which breaks a consumer. Closes the remainder of [OQ-VO1](#OQ-VO1). The owner may overturn this. | 2026-11-18 | [Section 6](#6-renames) | — |
 | `D-VO10` | Collection starts at whichever of two settings is reached first: a disk budget defaulting to 4 GB times the running-agent limit, and a worktree count defaulting to twice that limit. **Evidence:** the measurements of [Section 3.1](#31-where-the-disk-goes). **Rejected:** disk only, which leaves the performance cost the owner named unbounded; count only, which lets a few items with large scratch fill the disk; and the fixed 25 GB and 40 first proposed, because 25 GB is below what twenty running agents hold in use. Closes the remainder of [OQ-VO2](#OQ-VO2). The owner may overturn this. | 2026-11-18 | [Section 3.4](#34-the-bound-and-what-happens-at-it) | — |
@@ -505,41 +507,4 @@ Each `D-VO` row is a decision the designer made on 2026-11-18 from the evidence 
 
 ## Open Questions
 
-Numbering continues from the four questions closed above.
-
-5. 💬 🤷 **OQ-VO5: What is tillr's first use, landing changes in a Git repository, called?**
-
-   You run `tillr view waiting` in this repository and the first line reads `definition: git-landing`. Dana runs it on her findings store and reads `definition: findings`.
-
-   On 2026-11-16 you said of "the core Git landing use case" that "we should probably give [it] a name in Tiller because there's going to be more of them". `git-landing` was the stand-in the build used so it could proceed. It sits in one data file and one Go constant, and a store that recorded no name is read as this one, so a different name is a one-line change plus an alias for stores that already recorded the old one.
-
-   - **A — `git-landing`.** Nothing changes. It says what the use does.
-   - **B — `trunk-landing`.** You read `definition: trunk-landing`. It names where changes go, in a word only tillr's readers know.
-   - **C — `docs-to-trunk`.** You read `definition: docs-to-trunk`. It names both ends, work written in documents and the trunk, and it is long.
-
-   <!-- vantage: question id=OQ-VO5 leaning="git-landing, by taste: it is what shipped, it says what the use does, and nothing argues for the other two." -->
-
-   _Leaning:_ git-landing, by taste: it is what shipped, it says what the use does, and nothing argues for the other two.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-6. 💬 **OQ-VO6: Is an item finished when its change lands, or only once the full test suite has passed on it?**
-
-   An item's change passes the fast checks and lands on the local trunk at 2:00. The full test suite runs on the trunk afterwards. Today the item becomes `landed` at 2:00 and every view counts it as finished; whether the suite later passed shows only in a separate marker of the newest fully tested commit.
-
-   If the suite fails and names that change, tillr reverts it by itself, which you approved ("Automatic revert approved"), and sends the failure back to the session that wrote it. So an item you saw as finished at 2:00 is back in the queue at 2:20. You also said to push only what is green, as an assumption to keep open. How often a landing is reverted has not been measured.
-
-   Either way, work that depends on the item starts as soon as it lands, as it does today.
-
-   - **A — Finished when the suite has passed.** From 2:00 the item shows under "draining" as landed and awaiting its proof, and it shows as finished only once the suite passes on a trunk commit that contains it. A revert never takes a finished item back. The finished count trails the trunk by one suite run. What gets built: a "proven" mark derived in the view first, and a stored state later.
-   - **B — Finished when it lands, as today.** The item shows as finished at 2:00. If the suite reverts it, it reappears as unfinished, with an event saying why. Nothing is built.
-
-   <!-- vantage: question id=OQ-VO6 leaning="A, finished when the suite has passed: a finished count that can go back down is one you stop trusting, and it matches pushing only what is green." -->
-
-   _Leaning:_ A, finished when the suite has passed: a finished count that can go back down is one you stop trusting, and it matches pushing only what is green.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
+None open. [OQ-VO4](#OQ-VO4), [OQ-VO5](#OQ-VO5) and [OQ-VO6](#OQ-VO6) were ruled by the owner on 2026-11-18 and are rows of the ledger above.

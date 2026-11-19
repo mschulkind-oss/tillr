@@ -12,7 +12,7 @@ tags:
   - landing
   - design
 summary: "A proposal that every act on a tillr item (build, rewrite, design answer, judge, gate, landing, revert, owner question, sub-agent) is a node in that item's graph, that a node is fixed once it starts and done once it ends, and that one pure function over the graph and a short list of facts adds whatever nodes are needed next. Counts, clocks, hash triggers and item-level holds are replaced by stated endings and named waits."
-next: "Rule OQ-GP7: what may land while a check is red on the trunk. The designer's decisions D-GP1 to D-GP15 await the owner's review, and no migration step is filed."
+next: "The owner ruled OQ-GP7 on 2026-11-18: while a check is red, work lands only if it does not touch what that check reads, with no landing cap. The designer's decisions D-GP1 to D-GP15 await the owner's review, and no migration step is filed."
 depends-on:
   - tillr-item-graphs.md
   - tillr-drain-successor.md
@@ -34,7 +34,7 @@ depends-on:
 
 **Start at [Section 5.3](#53-the-starting-rule-table)**, the rule table. The model before it exists to make that table safe, and everything after it is a consequence.
 
-**Needs your ruling:** [OQ-GP7](#OQ-GP7). **Ruled by the owner on 2026-11-17:** [OQ-GP1](#OQ-GP1), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5), [OQ-GP6](#OQ-GP6). **Closed as superseded:** [OQ-GP2](#OQ-GP2), which [the storage design](./tillr-storage.md) now asks.
+**Needs your ruling:** nothing now. **Ruled by the owner on 2026-11-18:** [OQ-GP7](#OQ-GP7). **Ruled by the owner on 2026-11-17:** [OQ-GP1](#OQ-GP1), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5), [OQ-GP6](#OQ-GP6). **Closed as superseded:** [OQ-GP2](#OQ-GP2), which [the storage design](./tillr-storage.md) now asks.
 
 **Reads with:** [item graphs](./tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](./tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against), [early design landing](./tillr-early-design-landing.md) (how a question and its design reach the trunk ahead of their item), [the landing call](./tillr-landing-call.md) (how a worker states its ending), [the storage design](./tillr-storage.md) (the structure behind the store), [the vocabulary](./tillr-vocabulary.md) (one meaning for item, node, run, session and worktree; [Section 6](#6-scheduling) carries its text on worktrees).
 
@@ -519,7 +519,7 @@ The trunk's health is a set of facts written by proof nodes. Nothing else may ca
 4. **How the two combine.** The mechanic is filed only when the revert path has ended in "not possible", so no model run is spent on a red that a revert clears. If a mechanic is already running when another candidate clears the red, its node finishes; its next take-in finds nothing left to do, and it says so.
 5. **A mechanic that cannot proceed objects like any other actor.** It names the design seat, L's item, the tooling, or the owner with a question. It never goes to the owner by default (R3). The drain already works this way for one case: a fixer whose obstacle is its fence has the fence widened and returns to its worker.
 
-**What may land while the trunk is red or unproven.** The table is the rule this design proposes (`D-GP14`). Whether it, the drain's rule today, or the operator's proposal of 2026-11-18 is the one to build is the owner's choice, [OQ-GP7](#OQ-GP7).
+**What may land while the trunk is red or unproven.** The table is the rule this design proposes (`D-GP14`). The owner ruled on 2026-11-18 that this is the rule to build ([OQ-GP7](#OQ-GP7)), over the drain's rule today and the operator's proposal of 2026-11-18.
 
 | The candidate | Unproven trunk | Red on K |
 | :--- | :--- | :--- |
@@ -966,24 +966,10 @@ The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a qu
 | `OQ-GP4` | **Owner ruling.** The queue planner's agent runs on evidence that crosses items (a conflict between items, a worker naming another item) and on the owner's request, not at intake. | 2026-11-17 | [Section 8.1](#81-the-queue-planner) | — |
 | `OQ-GP5` | **Owner ruling.** tillr watches every sub-agent it can see and starts scouts and writers itself; the rest are watched only. | 2026-11-17 | [Section 9](#9-subagent-hoisting) | — |
 | `OQ-GP6` | **Owner ruling.** A question for the owner lands on the trunk with the design text that changed: "we definitely need to land the questions and the designs that changed when they have questions for me." The operation is designed in [early design landing](./tillr-early-design-landing.md). Whether every design answer lands this way was left open ("We may even want to do this all the time") and is [that document's first question](./tillr-early-design-landing.md#OQ-EL1). | 2026-11-17 | [Section 3.7](#37-the-item-branch-and-the-latest-trunk) | — |
+| `OQ-GP7` | **Owner ruling.** When a check is already red on the trunk, finished work that did not cause it lands only if it does not touch what the red check reads. Each check declares the paths it reads; an item whose changes fall outside them lands, and one that changes them waits unless it makes the check pass. There is no 20-landing stop. A waiting item is shown with the paths that put it there. The owner took the stated leaning in review: "C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then." To build: a verdict "passed, with inherited failures" that the gate, the loop and the lander agree on, and the comparison of an item's changed paths with the red check's declared paths. A red on a whole-tree check still holds every item. This is the rule of `D-GP14`, now his. | 2026-11-18 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
 
 ---
 
 ## Open Questions
 
-1. 💬 **OQ-GP7: When a check is already red on the trunk, should finished work that did not cause it still land?**
-
-   Say six items are built, and each passes every check except `tillr-docs`, which was already failing on the trunk before any of them started. You run `tillr view status`. Each of the six shows blocked on the fixer (the high-priority item tillr files to repair the trunk) with the reason `trunk-broken`, and none lands until the fixer does. tillr already knows these items are not at fault: it runs the same checks on the commit each was built on and records the refusal as inherited. You asked on 2026-11-18 why a red check holds a queue. The choice is what such an item does while the repair is under way.
-
-   How many items this has held, and for how long, was not counted. Of 803 landings recorded since 2026-11-15, the full suite reverted four, all on 2026-11-18, the day automatic revert was turned on.
-
-   - **A — It waits for the repair, as today.** You see it blocked on the fixer, by name. Nothing new is built. Every item that trips the red check waits as long as the repair takes, so one slow repair can stop most of the queue.
-   - **B — It lands, and the red is recorded as inherited.** Items whose only failures were already red land at once, while the fixer, the search for the landing at fault and the revert run beside them. The queue stops only when 20 landings sit past the last commit the full suite passed. It costs a new verdict, "passed, with inherited failures", that the gate, the loop and the lander must all agree on, because the lander accepts only a pass today. And while a check is red, an item that breaks that same check further lands unnoticed, so a later red is harder to pin on one landing. It also keeps the 20-landing stop, which the rules of 2026-11-17 set out to remove.
-   - **C — It lands only if it does not touch what the red check reads.** Each check declares the paths it reads. An item whose changes fall outside them lands; one that changes them waits, unless it makes the check pass. There is no 20-landing stop. You see each waiting item with the paths that put it there. It costs the same new verdict as B, plus the comparison of paths. Eight of the 25 checks read the whole tree, so a red on one of those holds every item, as A does.
-
-   <!-- vantage: question id=OQ-GP7 leaning="C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then." -->
-
-   _Leaning:_ C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None open. [OQ-GP7](#OQ-GP7) was ruled by the owner on 2026-11-18 and is a row of the ledger above.
