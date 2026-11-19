@@ -557,6 +557,9 @@ type Loop struct {
 	reportedLockError bool
 	beforeCheckpoint  func()
 	checkpointed      func(store.Checkpointed)
+	// sessionStop cancels Run's context as an operator stop when drain_sessions
+	// records stop_requested > 0.
+	sessionStop func()
 	// beforeSessionOpen is a test seam, run just before a session write opens the store,
 	// with whether that open creates and migrates it.
 	beforeSessionOpen func(create bool)
@@ -729,6 +732,19 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	cancel := func() { cancelCause(nil) }
+	l.sessionStop = func() { cancelCause(errStopRequested) }
+	defer func() { l.sessionStop = nil }()
+	if stopped, err := l.stopRequested(ctx); err != nil {
+		if stoppedByOperator(ctx, err) {
+			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+			return result, nil
+		}
+		return faultResult(result, err)
+	} else if stopped {
+		l.sessionStop()
+		result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+		return result, nil
+	}
 	stopHeartbeat := l.keepSessionAlive(ctx, func() { cancelCause(errHeartbeatFailed) })
 	defer func() {
 		// The heartbeat's failure is reported beside the error Run already has, labelled
@@ -976,6 +992,10 @@ func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
 // error is kept and reported beside the heartbeat's.
 var errHeartbeatFailed = errors.New("the session heartbeat failed")
 
+// errStopRequested is the cause Run's context is canceled with when drain_sessions
+// records stop_requested > 0.
+var errStopRequested = errors.New("the loop session was asked to stop")
+
 // operatorStopped answers whether ctx was canceled by the operator (a signal, or the
 // caller's own cancel) rather than by a failed heartbeat.
 func operatorStopped(ctx context.Context) bool {
@@ -994,7 +1014,7 @@ var signalGrace = 5 * time.Second
 // ctx to be canceled. If it never is, the signal was aimed at the child alone and the error
 // is a fault after all.
 func stoppedByOperator(ctx context.Context, err error) bool {
-	if operatorStopped(ctx) {
+	if operatorStopped(ctx) || errors.Is(err, errStopRequested) {
 		return true
 	}
 	if err == nil || !diedOfStopSignal(err) {
@@ -2368,6 +2388,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.gatesInFlight--
 	l.mu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", false, err
+		}
 		if ExitCode(err) == record.ExitExternal {
 			return "", false, l.gateFault(ctx, candidate, err.Error())
 		}
@@ -2525,6 +2548,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		l.mu.Unlock()
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", false, err
+		}
 		if ExitCode(err) == record.ExitExternal {
 			return "", false, l.landFault(ctx, candidate, err.Error())
 		}

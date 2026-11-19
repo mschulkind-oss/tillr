@@ -3,10 +3,12 @@ package main_test
 import (
 	"encoding/json"
 	"github.com/mschulkind-oss/tillr/event"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -40,7 +42,11 @@ func startStopFixtureWithRun(t *testing.T, f loopFixture, lanes int, runBin stri
 	if len(gateOverride) > 0 {
 		gate = gateOverride[0]
 	}
-	cmd := exec.Command(bin, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", fmtInt(lanes), "--policy", policy, "--run-bin", runBin, "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"), "--gate", gate, "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
+	land := always(t, "land", 0)
+	if len(gateOverride) > 1 {
+		land = gateOverride[1]
+	}
+	cmd := exec.Command(bin, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", fmtInt(lanes), "--policy", policy, "--run-bin", runBin, "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"), "--gate", gate, "--land", land, "--verdict", always(t, "verdict", 0))
 	out := new(strings.Builder)
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -172,5 +178,80 @@ while [ ! -f "$STOP_MARKERS/release" ]; do sleep 0.02; done
 		if strings.Contains(line, "--resume") {
 			t.Fatal("stop consumed a wall continuation")
 		}
+	}
+}
+
+func TestStopFaceDuringInFlightGateEndsPromptlyAndNextLoopLandsCandidate(t *testing.T) {
+	markers := scratch(t, "stop-gate-face")
+	ready := filepath.Join(markers, "gate.ready")
+	pidsFile := filepath.Join(markers, "gate.pids")
+	allowPass := filepath.Join(markers, "gate.pass")
+
+	gateProg := stub(t, "gate-session-tree", `[ "$1" = --help ] && exit 0
+`+counting+`python3 - <<'PY'
+import os, pathlib, subprocess, sys
+
+allow = pathlib.Path("`+allowPass+`")
+if allow.exists():
+    sys.exit(0)
+
+group = subprocess.Popen(
+    ['python3', '-c', '''
+import os, pathlib, subprocess
+leaf = subprocess.Popen(["sleep", "300"], start_new_session=True)
+pathlib.Path("`+pidsFile+`.part").write_text(f"{os.getpid()} {leaf.pid}\\n")
+os.replace("`+pidsFile+`.part", "`+pidsFile+`")
+pathlib.Path("`+ready+`").touch()
+leaf.wait()
+'''],
+    start_new_session=True,
+)
+sys.exit(group.wait())
+PY`)
+
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
+	fixtureAt(t, f.store, itemRecordWithFence("item_a", "in-queue", "candidate.txt"))
+
+	cmd, out := startStopFixture(t, f, 1, gateProg)
+	waitForFile(t, ready, hangGuard)
+	rawPids, err := os.ReadFile(pidsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, field := range strings.Fields(string(rawPids)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, pid)
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	}
+
+	stopFixture(t, f, cmd, out, false)
+
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, 0); err == nil {
+			t.Fatalf("separate-session gate descendant %d outlived tillr drain stop", pid)
+		}
+	}
+	if n := len(stopEventsOf(t, f.store, "gate.verdict")); n != 0 {
+		t.Fatalf("stopped gate recorded %d gate.verdict event(s), want 0", n)
+	}
+
+	landDone := filepath.Join(markers, "land.done")
+	landProg := stub(t, "land-marker", `[ "$1" = --help ] && exit 0
+`+counting+`touch "`+landDone+`"
+exit 0`)
+
+	writeFile(t, allowPass, "ok")
+	nextCmd, nextOut := startStopFixture(t, f, 1, gateProg, landProg)
+	waitForFile(t, landDone, hangGuard)
+	stopFixture(t, f, nextCmd, nextOut, false)
+	if n := len(callsNamed(lines(t, f.count), "land")); n != 1 {
+		t.Fatalf("land calls=%d, want 1", n)
+	}
+	if n := len(runsForItem(t, f.store, "item_a")); n != 1 {
+		t.Fatalf("runs=%d, want 1 (resumed existing candidate without re-running worker)", n)
 	}
 }

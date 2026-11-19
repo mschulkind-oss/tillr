@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -500,8 +501,32 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		}
 	}
 	started := time.Now().UnixMilli()
-	out, err := cmd.Output()
-	span := stepSpan(step, cmd.Args, cmd, started, stderr.String())
+	var stdout bytes.Buffer
+	var err error
+	recordedArgv := append([]string(nil), cmd.Args...)
+	if step == "gate" {
+		cmd.Stdout = &stdout
+		err = runSupervisedTree(cmd)
+	} else {
+		var outBytes []byte
+		outBytes, err = cmd.Output()
+		stdout.Write(outBytes)
+	}
+	out := stdout.Bytes()
+	var notStarted *heavyCommandNotStarted
+	if errors.As(err, &notStarted) {
+		span := stepSpan(step, recordedArgv, &exec.Cmd{Dir: cmd.Dir}, started, stderr.String())
+		if observation.Step != "" {
+			if obsErr := pipelineFinish(s.Root, candidate.RunID, observation); obsErr != nil {
+				return 0, "", span, obsErr
+			}
+		}
+		if spanErr := s.recordStep(candidate.RunID, span); spanErr != nil {
+			return 0, "", span, spanErr
+		}
+		return 0, "", span, Externalf("running %q in %s: %s: %s", argv[0], dir, notStarted.detail, stderr.String())
+	}
+	span := stepSpan(step, recordedArgv, cmd, started, stderr.String())
 	if observation.Step != "" {
 		if err := pipelineFinish(s.Root, candidate.RunID, observation); err != nil {
 			return 0, "", span, err
@@ -510,8 +535,14 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	if spanErr := s.recordStep(candidate.RunID, span); spanErr != nil {
 		return 0, "", span, spanErr
 	}
+	if step != "land" && ctx.Err() != nil {
+		return 0, "", span, ctx.Err()
+	}
 	if cmd.ProcessState == nil {
 		return 0, "", span, Externalf("running %q in %s: %v: %s", argv[0], dir, err, stderr.String())
+	}
+	if step == "land" && ctx.Err() != nil && cmd.ProcessState.ExitCode() != record.ExitOK && cmd.ProcessState.ExitCode() != record.ExitNegative {
+		return 0, "", span, ctx.Err()
 	}
 	if cmd.ProcessState.ExitCode() == record.ExitUsage {
 		return record.ExitUsage, string(out), span, Usagef("configuration fault: %s program %q refused its arguments for %s%s", step, program, candidate.ItemID, stderrReason(span))
@@ -710,6 +741,9 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		runErr := runCheckGroup(cmd)
+		if ctx.Err() != nil {
+			return ReplayOutcome{Rev: rev, Known: false}, ctx.Err()
+		}
 		if cmd.ProcessState == nil {
 			return ReplayOutcome{Rev: rev, Known: false}, Externalf("replaying %s on %s: %v: %s",
 				check, shortSHA(rev), runErr, stderr.String())
@@ -894,6 +928,9 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
+	if ctx.Err() != nil {
+		return RollingOutcome{}, ctx.Err()
+	}
 	var notStarted *heavyCommandNotStarted
 	if cmd.ProcessState == nil || errors.As(runErr, &notStarted) {
 		return RollingOutcome{Known: false, ExitCode: -1,
