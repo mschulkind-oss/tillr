@@ -25,7 +25,7 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 26 by `vantage-check index` on
+The questions below are left for the owner on this page: 27 by `vantage-check index` on
 2026-11-18, 21 of them the provenance review's. Each has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
 designer, at the owner's request, and each is the owner's to overturn. Not every one of them says
@@ -47,8 +47,8 @@ written on 2026-11-18 to the owner's words of that evening, is the documents' co
 review: a cheap agent that holds work to a written policy, never to logic, with design-document
 style as its first policy. The owner ruled its three questions that evening: a design change
 lands only after it passes, the whole document is checked each time a designer touches it, and
-the name is his. It sits here because it shares the review's return route; its designer's
-decisions await his review, and none of it is built.
+the name is his. It asks one more: whether a worker's edit to a design document is checked. It sits here
+because it shares the review's return route, and none of it is built.
 
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
